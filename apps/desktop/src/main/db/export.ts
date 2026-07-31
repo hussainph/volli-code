@@ -21,6 +21,15 @@ import { prepared } from "./prepared";
 /** Top-level format marker — lets a future importer/reader recognize the document before touching its shape. */
 export const EXPORT_FORMAT = "volli-export";
 
+/** Any value SQLite's `json_valid` columns can carry after parsing. */
+export type ExportJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly ExportJsonValue[]
+  | { readonly [key: string]: ExportJsonValue };
+
 export interface ExportProject {
   id: string;
   name: string;
@@ -123,14 +132,59 @@ export interface ExportSession {
   projectId: string;
   /** `null` for a project-scoped scratch session. */
   ticketId: string | null;
-  harnessId: string;
-  harnessSessionId: string | null;
-  launchKind: string;
-  placement: string;
-  title: string;
-  cwd: string;
+  title: string | null;
   createdAt: number;
-  endedAt: number | null;
+}
+
+export interface ExportSessionAttachment {
+  id: string;
+  sessionId: string;
+  adapterId: string;
+  venueId: string;
+  venueKind: string;
+  continuity: string;
+  nativeId: string | null;
+  /** Parsed adapter-native metadata. */
+  nativeDetail: ExportJsonValue;
+  observedKind: string;
+  /** Parsed structured attachment failure. */
+  failure: ExportJsonValue;
+  createdSequence: number;
+}
+
+export interface ExportSessionEvent {
+  id: string;
+  sessionId: string;
+  sequence: number;
+  occurredAt: number;
+  recordedAt: number;
+  /** Parsed structured audit provenance. */
+  provenance: unknown;
+  attachmentId: string | null;
+  commandId: string | null;
+  /** Parsed immutable Session fact. */
+  payload: unknown;
+}
+
+export interface ExportSessionCommand {
+  id: string;
+  sessionId: string;
+  createdAt: number;
+  /** Parsed explicit intent. */
+  intent: unknown;
+  /** Parsed frozen delivery route, or `null` for Session-level intent. */
+  route: ExportJsonValue;
+}
+
+export interface ExportSessionCommandReceipt {
+  id: string;
+  sessionId: string;
+  commandId: string;
+  sequence: number;
+  recordedAt: number;
+  /** Parsed durable receipt. */
+  receipt: unknown;
+  receiptEventId: string | null;
 }
 
 export interface ExportTicketComment {
@@ -162,6 +216,10 @@ export interface ExportDocument {
   ticketLabels: ExportTicketLabel[];
   ticketEvents: ExportTicketEvent[];
   sessions: ExportSession[];
+  sessionAttachments: ExportSessionAttachment[];
+  sessionEvents: ExportSessionEvent[];
+  sessionCommands: ExportSessionCommand[];
+  sessionCommandReceipts: ExportSessionCommandReceipt[];
   ticketComments: ExportTicketComment[];
   appState: ExportAppState[];
 }
@@ -342,30 +400,148 @@ interface SessionRow {
   id: string;
   project_id: string;
   ticket_id: string | null;
-  harness_id: string;
-  harness_session_id: string | null;
-  launch_kind: string;
-  placement: string;
-  title: string;
-  cwd: string;
+  title: string | null;
   created_at: number;
-  ended_at: number | null;
 }
 
 function exportSessions(db: Database.Database): ExportSession[] {
-  const rows = prepared<[], SessionRow>(db, "SELECT * FROM sessions ORDER BY id").all();
-  return rows.map((row) => ({
-    id: row.id,
-    projectId: row.project_id,
-    ticketId: row.ticket_id,
-    harnessId: row.harness_id,
-    harnessSessionId: row.harness_session_id,
-    launchKind: row.launch_kind,
-    placement: row.placement,
-    title: row.title,
-    cwd: row.cwd,
-    createdAt: row.created_at,
-    endedAt: row.ended_at,
+  const rows = prepared<[], SessionRow>(
+    db,
+    `SELECT id, project_id, ticket_id, title, created_at
+       FROM sessions ORDER BY id COLLATE BINARY`,
+  ).all();
+  return rows.map((session) => ({
+    id: session.id,
+    projectId: session.project_id,
+    ticketId: session.ticket_id,
+    title: session.title,
+    createdAt: session.created_at,
+  }));
+}
+
+interface SessionAttachmentRow {
+  id: string;
+  session_id: string;
+  adapter_id: string;
+  venue_id: string;
+  venue_kind: string;
+  continuity: string;
+  native_id: string | null;
+  native_detail: string | null;
+  observed_kind: string;
+  failure: string | null;
+  created_sequence: number;
+}
+
+function exportSessionAttachments(db: Database.Database): ExportSessionAttachment[] {
+  const rows = prepared<[], SessionAttachmentRow>(
+    db,
+    `SELECT id, session_id, adapter_id, venue_id, venue_kind, continuity, native_id,
+            native_detail, observed_kind, failure, created_sequence
+       FROM session_attachments
+      ORDER BY session_id COLLATE BINARY, created_sequence, id COLLATE BINARY`,
+  ).all();
+  return rows.map((attachment) => ({
+    id: attachment.id,
+    sessionId: attachment.session_id,
+    adapterId: attachment.adapter_id,
+    venueId: attachment.venue_id,
+    venueKind: attachment.venue_kind,
+    continuity: attachment.continuity,
+    nativeId: attachment.native_id,
+    nativeDetail:
+      attachment.native_detail === null
+        ? null
+        : (JSON.parse(attachment.native_detail) as ExportJsonValue),
+    observedKind: attachment.observed_kind,
+    failure:
+      attachment.failure === null ? null : (JSON.parse(attachment.failure) as ExportJsonValue),
+    createdSequence: attachment.created_sequence,
+  }));
+}
+
+interface SessionEventRow {
+  id: string;
+  session_id: string;
+  sequence: number;
+  occurred_at: number;
+  recorded_at: number;
+  provenance: string;
+  attachment_id: string | null;
+  command_id: string | null;
+  payload: string;
+}
+
+function exportSessionEvents(db: Database.Database): ExportSessionEvent[] {
+  const rows = prepared<[], SessionEventRow>(
+    db,
+    `SELECT id, session_id, sequence, occurred_at, recorded_at, provenance,
+            attachment_id, command_id, payload
+       FROM session_events
+      ORDER BY session_id COLLATE BINARY, sequence, id COLLATE BINARY`,
+  ).all();
+  return rows.map((event) => ({
+    id: event.id,
+    sessionId: event.session_id,
+    sequence: event.sequence,
+    occurredAt: event.occurred_at,
+    recordedAt: event.recorded_at,
+    provenance: JSON.parse(event.provenance) as unknown,
+    attachmentId: event.attachment_id,
+    commandId: event.command_id,
+    payload: JSON.parse(event.payload) as unknown,
+  }));
+}
+
+interface SessionCommandRow {
+  id: string;
+  session_id: string;
+  created_at: number;
+  intent: string;
+  route: string | null;
+}
+
+function exportSessionCommands(db: Database.Database): ExportSessionCommand[] {
+  const rows = prepared<[], SessionCommandRow>(
+    db,
+    `SELECT id, session_id, created_at, intent, route
+       FROM session_commands
+      ORDER BY session_id COLLATE BINARY, created_at, id COLLATE BINARY`,
+  ).all();
+  return rows.map((command) => ({
+    id: command.id,
+    sessionId: command.session_id,
+    createdAt: command.created_at,
+    intent: JSON.parse(command.intent) as unknown,
+    route: command.route === null ? null : (JSON.parse(command.route) as ExportJsonValue),
+  }));
+}
+
+interface SessionCommandReceiptRow {
+  id: string;
+  session_id: string;
+  command_id: string;
+  sequence: number;
+  recorded_at: number;
+  receipt: string;
+  receipt_event_id: string | null;
+}
+
+function exportSessionCommandReceipts(db: Database.Database): ExportSessionCommandReceipt[] {
+  const rows = prepared<[], SessionCommandReceiptRow>(
+    db,
+    `SELECT id, session_id, command_id, sequence, recorded_at, receipt, receipt_event_id
+       FROM session_command_receipts
+      ORDER BY session_id COLLATE BINARY, command_id COLLATE BINARY, sequence, id COLLATE BINARY`,
+  ).all();
+  return rows.map((receipt) => ({
+    id: receipt.id,
+    sessionId: receipt.session_id,
+    commandId: receipt.command_id,
+    sequence: receipt.sequence,
+    recordedAt: receipt.recorded_at,
+    receipt: JSON.parse(receipt.receipt) as unknown,
+    receiptEventId: receipt.receipt_event_id,
   }));
 }
 
@@ -431,6 +607,10 @@ export function buildExportDocument(
     ticketLabels: exportTicketLabels(db),
     ticketEvents: exportTicketEvents(db),
     sessions: exportSessions(db),
+    sessionAttachments: exportSessionAttachments(db),
+    sessionEvents: exportSessionEvents(db),
+    sessionCommands: exportSessionCommands(db),
+    sessionCommandReceipts: exportSessionCommandReceipts(db),
     ticketComments: exportTicketComments(db),
     appState: exportAppState(db),
   };

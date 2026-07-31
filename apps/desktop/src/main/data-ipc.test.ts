@@ -12,6 +12,7 @@ import type {
   TicketCommentResult,
   TicketCommentsResult,
   TicketEventsResult,
+  TicketLatestSignalsResult,
   TicketResult,
   TicketsResult,
   VolliIpcChannel,
@@ -83,7 +84,8 @@ vi.mock("./worktree", () => ({
 }));
 
 import { registerDataIpcHandlers } from "./data-ipc";
-import { insertSession } from "./db/sessions-repo";
+import { createDesktopControlPlane } from "./session-control";
+import { insertSession } from "./session-control/test-support";
 import { openTestDb, testSession } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { resetOrphanSweepForTest } from "./orphan-sweep";
@@ -634,26 +636,22 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
     });
   }
 
-  function interruptedEvent(ticketId: string) {
-    const events = invoke<TicketEventsResult>("volli:ticket-events", { ticketId });
-    if (!events.ok) throw new Error("expected events");
-    return events.events.find((event) => event.payload.kind === "sessions_interrupted");
-  }
-
-  it("interrupts the ticket's agent sessions and records sessions_interrupted on a doing→todo move", () => {
+  it("interrupts the ticket's agent attachments on a doing→todo move without planner history", () => {
     const interrupt = withInterrupt(["s1", "s2"]);
     const projectId = createProject();
     const ticket = createTicket(projectId);
     move(projectId, ticket.id, "doing");
     interrupt.mockClear();
+    const before = invoke<TicketEventsResult>("volli:ticket-events", { ticketId: ticket.id });
+    if (!before.ok) throw new Error("expected events");
 
     const result = move(projectId, ticket.id, "todo");
 
     expect(result.ok).toBe(true);
     expect(interrupt).toHaveBeenCalledExactlyOnceWith(ticket.id);
-    const event = interruptedEvent(ticket.id);
-    expect(event?.payload).toEqual({ kind: "sessions_interrupted", sessionIds: ["s1", "s2"] });
-    expect(event?.actor).toBe("user");
+    const events = invoke<TicketEventsResult>("volli:ticket-events", { ticketId: ticket.id });
+    if (!events.ok) throw new Error("expected events");
+    expect(events.events).toHaveLength(before.events.length + 1); // just the board move
   });
 
   it("interrupts on a needs_review→done move (completion still exits the active columns)", () => {
@@ -667,7 +665,6 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
     move(projectId, ticket.id, "done");
 
     expect(interrupt).toHaveBeenCalledExactlyOnceWith(ticket.id);
-    expect(interruptedEvent(ticket.id)).toBeDefined();
   });
 
   it("does not interrupt a doing→needs_review move (still an active column)", () => {
@@ -680,7 +677,6 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
     move(projectId, ticket.id, "needs_review");
 
     expect(interrupt).not.toHaveBeenCalled();
-    expect(interruptedEvent(ticket.id)).toBeUndefined();
   });
 
   it("does not interrupt a todo→backlog move (never was an active column)", () => {
@@ -693,7 +689,6 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
     move(projectId, ticket.id, "backlog");
 
     expect(interrupt).not.toHaveBeenCalled();
-    expect(interruptedEvent(ticket.id)).toBeUndefined();
   });
 
   it("records nothing when the interrupt finds no live agent sessions", () => {
@@ -706,7 +701,30 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
     move(projectId, ticket.id, "todo");
 
     expect(interrupt).toHaveBeenCalledExactlyOnceWith(ticket.id);
-    expect(interruptedEvent(ticket.id)).toBeUndefined();
+  });
+
+  it("keeps the committed move successful when the asynchronous interrupt rejects", async () => {
+    const interruptTicketSessions = vi.fn(async () => {
+      throw new Error("terminal interrupt unavailable");
+    });
+    const logFailure = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { interruptTicketSessions });
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    move(projectId, ticket.id, "doing");
+
+    const result = await invoke<Promise<TicketsResult>>("volli:ticket-move", {
+      projectId,
+      ticketId: ticket.id,
+      toStatus: "todo",
+      toIndex: 0,
+    });
+
+    expect(result.ok && result.tickets[0]?.status).toBe("todo");
+    expect(logFailure).toHaveBeenCalledWith(
+      "[volli] failed to interrupt ticket sessions after committed move: terminal interrupt unavailable",
+    );
   });
 });
 
@@ -797,23 +815,25 @@ describe("volli:comment-* channels", () => {
 });
 
 describe("volli:session-list / volli:session-list-for-ticket", () => {
-  it("session-list returns every session in a project, newest first", () => {
+  it("session-list returns every session in a project, newest first", async () => {
     const projectId = createProject();
     const ticket = createTicket(projectId);
     insertSession(ctx.db, testSession(projectId, null, { id: "s1", createdAt: 100 }));
     insertSession(ctx.db, testSession(projectId, ticket.id, { id: "s2", createdAt: 200 }));
 
-    const result = invoke<SessionsResult>("volli:session-list", { projectId });
+    const result = await invoke<Promise<SessionsResult>>("volli:session-list", { projectId });
     expect(result.ok && result.sessions.map((s) => s.id)).toEqual(["s2", "s1"]);
   });
 
-  it("session-list-for-ticket scopes to just that ticket", () => {
+  it("session-list-for-ticket scopes to just that ticket", async () => {
     const projectId = createProject();
     const ticket = createTicket(projectId);
     insertSession(ctx.db, testSession(projectId, null, { id: "scratch" }));
     insertSession(ctx.db, testSession(projectId, ticket.id, { id: "scoped" }));
 
-    const result = invoke<SessionsResult>("volli:session-list-for-ticket", { ticketId: ticket.id });
+    const result = await invoke<Promise<SessionsResult>>("volli:session-list-for-ticket", {
+      ticketId: ticket.id,
+    });
     expect(result.ok && result.sessions.map((s) => s.id)).toEqual(["scoped"]);
   });
 
@@ -829,18 +849,69 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
   });
 });
 
+describe("volli:ticket-latest-signals", () => {
+  it("uses the ControlPlane's bounded latest-signal query with a deterministic session-id tie-break", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const controlPlane = createDesktopControlPlane(ctx.db, { now: () => 500 });
+    insertSession(ctx.db, testSession(projectId, ticket.id, { id: "session-a" }));
+    insertSession(ctx.db, testSession(projectId, ticket.id, { id: "session-z" }));
+    await controlPlane.submit({
+      commandId: "signal-a",
+      sessionId: "session-a",
+      intent: { kind: "session.signal", signal: "done", reason: "Earlier id" },
+      provenance: {
+        source: { kind: "user", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+    await controlPlane.submit({
+      commandId: "signal-z",
+      sessionId: "session-z",
+      intent: { kind: "session.signal", signal: "blocked", reason: "Later id" },
+      provenance: {
+        source: { kind: "user", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+    const listSessions = vi
+      .spyOn(controlPlane, "listSessions")
+      .mockRejectedValue(new Error("should not project every session"));
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { controlPlane });
+
+    const result = await invoke<Promise<TicketLatestSignalsResult>>("volli:ticket-latest-signals", {
+      projectId,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      signals: [
+        {
+          ticketId: ticket.id,
+          sessionId: "session-z",
+          signal: "blocked",
+          reason: "Later id",
+          createdAt: 500,
+        },
+      ],
+    });
+    expect(listSessions).not.toHaveBeenCalled();
+  });
+});
+
 describe("volli:session-rename", () => {
-  it("renames a session and persists the trimmed title", () => {
+  it("renames a session and persists the trimmed title", async () => {
     const projectId = createProject();
     insertSession(ctx.db, testSession(projectId, null, { id: "s1", title: "Session 1" }));
 
-    const result = invoke<SessionRenameResult>("volli:session-rename", {
+    const result = await invoke<Promise<SessionRenameResult>>("volli:session-rename", {
       sessionId: "s1",
       title: "  Renamed  ",
     });
     expect(result).toEqual({ ok: true });
 
-    const list = invoke<SessionsResult>("volli:session-list", { projectId });
+    const list = await invoke<Promise<SessionsResult>>("volli:session-list", { projectId });
     expect(list.ok && list.sessions[0]?.title).toBe("Renamed");
   });
 
@@ -850,11 +921,35 @@ describe("volli:session-rename", () => {
     ).toEqual({ ok: false, error: "Invalid session title" });
   });
 
-  it("reports an unknown session", () => {
+  it("reports an unknown session", async () => {
     createProject();
     expect(
-      invoke<SessionRenameResult>("volli:session-rename", { sessionId: "ghost", title: "X" }),
+      await invoke<Promise<SessionRenameResult>>("volli:session-rename", {
+        sessionId: "ghost",
+        title: "X",
+      }),
     ).toEqual({ ok: false, error: "Unknown session" });
+  });
+
+  it("reports a durable rejection instead of acknowledging an archived session rename", async () => {
+    const projectId = createProject();
+    insertSession(ctx.db, testSession(projectId, null, { id: "s1", title: "Session 1" }));
+    await createDesktopControlPlane(ctx.db).submit({
+      commandId: "archive-s1",
+      sessionId: "s1",
+      intent: { kind: "session.archive" },
+      provenance: {
+        source: { kind: "user", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+
+    expect(
+      await invoke<Promise<SessionRenameResult>>("volli:session-rename", {
+        sessionId: "s1",
+        title: "Renamed",
+      }),
+    ).toEqual({ ok: false, error: "Session rename was not completed" });
   });
 });
 

@@ -1,6 +1,5 @@
 import * as React from "react";
 import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
 import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
@@ -13,13 +12,10 @@ import { GitPullRequestIcon } from "@phosphor-icons/react/dist/csr/GitPullReques
 import { NotePencilIcon } from "@phosphor-icons/react/dist/csr/NotePencil";
 import { PaperclipIcon } from "@phosphor-icons/react/dist/csr/Paperclip";
 import { PaperPlaneTiltIcon } from "@phosphor-icons/react/dist/csr/PaperPlaneTilt";
-import { PauseCircleIcon } from "@phosphor-icons/react/dist/csr/PauseCircle";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { PlusCircleIcon } from "@phosphor-icons/react/dist/csr/PlusCircle";
 import { RobotIcon } from "@phosphor-icons/react/dist/csr/Robot";
 import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
-import { TerminalIcon } from "@phosphor-icons/react/dist/csr/Terminal";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { TrashSimpleIcon } from "@phosphor-icons/react/dist/csr/TrashSimple";
 import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
 import {
@@ -71,18 +67,13 @@ const EVENT_ICON: Record<TicketEventKind, PhosphorIcon> = {
   archived: ArchiveIcon,
   unarchived: ArrowCounterClockwiseIcon,
   commented: ChatCircleIcon,
-  session_started: TerminalIcon,
-  session_ended: TerminalWindowIcon,
   worktree_changed: GitBranchIcon,
   worktree_failed: WarningCircleIcon,
   worktree_committed: GitCommitIcon,
   pr_opened: GitPullRequestIcon,
   pr_merged: GitMergeIcon,
-  session_signal: FlagIcon,
   attachment_added: PaperclipIcon,
   attachment_removed: TrashSimpleIcon,
-  sessions_interrupted: PauseCircleIcon,
-  session_resumed: ArrowClockwiseIcon,
 };
 
 /** The single muted line for one property-change event: icon + sentence + time. */

@@ -25,18 +25,13 @@ describe("TICKET_EVENT_KINDS", () => {
       "archived",
       "unarchived",
       "commented",
-      "session_started",
-      "session_ended",
       "worktree_changed",
       "worktree_failed",
       "worktree_committed",
       "pr_opened",
       "pr_merged",
-      "session_signal",
       "attachment_added",
       "attachment_removed",
-      "sessions_interrupted",
-      "session_resumed",
     ]);
   });
 
@@ -65,18 +60,13 @@ describe("TicketEventPayload", () => {
       { kind: "archived" },
       { kind: "unarchived" },
       { kind: "commented", commentId: "comment-1" },
-      { kind: "session_started", sessionId: "session-1", title: "Fix bug", harnessId: "codex" },
-      { kind: "session_ended", sessionId: "session-1" },
       { kind: "worktree_changed", from: worktreeA, to: worktreeB },
       { kind: "worktree_failed", stage: "copy", stderr: "fatal: could not copy" },
       { kind: "worktree_committed", message: "chore(VC-12): commit remaining work" },
       { kind: "pr_opened", url: "https://github.com/acme/repo/pull/7" },
       { kind: "pr_merged", url: "https://github.com/acme/repo/pull/7" },
-      { kind: "session_signal", signal: "blocked", reason: "Waiting for credentials" },
       { kind: "attachment_added", attachmentId: "attach-1", label: "spec.pdf" },
       { kind: "attachment_removed", attachmentId: "attach-1", label: "spec.pdf" },
-      { kind: "sessions_interrupted", sessionIds: ["session-1", "session-2"] },
-      { kind: "session_resumed", sessionId: "session-3", previousSessionId: "session-1" },
     ];
     expect(payloads.map((p) => p.kind)).toEqual(TICKET_EVENT_KINDS);
   });

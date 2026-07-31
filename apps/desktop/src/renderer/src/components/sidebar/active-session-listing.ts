@@ -5,7 +5,7 @@ import {
   type SessionHarnessState,
   type SessionRecord,
   type Ticket,
-  type TicketEvent,
+  type LatestSessionSignal,
 } from "@volli/shared";
 
 import { canResumeSession, sessionSourceLabel } from "../ticket/session-history";
@@ -88,7 +88,8 @@ export interface ActiveSessionListing {
 export interface BuildActiveSessionListingInput {
   tickets: readonly Ticket[];
   containers: Readonly<Record<string, SessionContainer>>;
-  eventsByTicket: Readonly<Record<string, readonly TicketEvent[]>>;
+  /** Latest durable Session signal by ticket, fetched from Control Plane projections. */
+  signalsByTicket: Readonly<Record<string, LatestSessionSignal>>;
   records: readonly SessionRecord[];
   lastOutputAt: Readonly<Record<string, number>>;
   parkState: Readonly<Record<string, { parked: boolean; keepAwake: boolean }>>;
@@ -287,18 +288,9 @@ interface NeedsYouEntry {
   recency: number;
 }
 
-function latestSessionSignal(events: readonly TicketEvent[]): TicketEvent | undefined {
-  let latest: TicketEvent | undefined;
-  for (const event of events) {
-    if (event.payload.kind !== "session_signal") continue;
-    if (latest === undefined || event.createdAt >= latest.createdAt) latest = event;
-  }
-  return latest;
-}
-
 /**
  * Builds the project sidebar's attention-first session list from already-loaded
- * board, terminal, durable-session, and event state. The result is pure: view
+ * board, terminal, durable-session, and Session-signal state. The result is pure: view
  * code owns fetching and navigation, while this module owns truthful tiering and
  * lifecycle ordering — Needs You (blocked → done → bare), then Active (working →
  * idle → parked → concluded), where every Doing ticket is guaranteed a row:
@@ -344,8 +336,8 @@ export function buildActiveSessionListing(
   for (const ticket of input.tickets) {
     const container = input.containers[ticket.id];
     if (ticket.status === "needs_review") {
-      const signal = latestSessionSignal(input.eventsByTicket[ticket.id] ?? []);
-      const signaledPaneId = signal?.actorContext?.sessionId;
+      const signal = input.signalsByTicket[ticket.id];
+      const signaledPaneId = signal?.sessionId ?? undefined;
       const signaledTab = container?.tabs.find(
         (tab) =>
           signaledPaneId !== undefined &&
@@ -358,10 +350,8 @@ export function buildActiveSessionListing(
         liveTabs.find((tab) => tab.sessionId === container?.activeSessionId) ?? liveTabs.at(-1);
       const attentionTab = signaledTab ?? fallbackTab;
       const exactSignal =
-        signaledTab !== undefined &&
-        signaledPaneId !== undefined &&
-        signal?.payload.kind === "session_signal"
-          ? { payload: signal.payload, paneId: signaledPaneId, createdAt: signal.createdAt }
+        signaledTab !== undefined && signaledPaneId !== undefined && signal !== undefined
+          ? { signal, paneId: signaledPaneId, createdAt: signal.createdAt }
           : null;
       if (attentionTab !== undefined) {
         const paneStates = tabPaneStates(attentionTab, input);
@@ -377,7 +367,7 @@ export function buildActiveSessionListing(
         // that a human is needed, but only the CLI signal knows what for.
         const attention: SessionAttention | null =
           exactSignal !== null
-            ? { signal: exactSignal.payload.signal, reason: exactSignal.payload.reason }
+            ? { signal: exactSignal.signal.signal, reason: exactSignal.signal.reason }
             : subject.activity === "waiting"
               ? { signal: "waiting", reason: null }
               : null;

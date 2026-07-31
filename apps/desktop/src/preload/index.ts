@@ -297,7 +297,7 @@ const api = {
     /** A ticket's full event history, chronological — backs the Activity feed. */
     events: (input: TicketIdInput): Promise<TicketEventsResult> =>
       invoke("volli:ticket-events", input),
-    /** The latest session_signal per ticket in the project — one batched read backing the sidebar's attention tiers. */
+    /** The latest durable Session outcome per ticket — one batched read backing the sidebar's attention tiers. */
     latestSignals: (input: ProjectIdInput): Promise<TicketLatestSignalsResult> =>
       invoke("volli:ticket-latest-signals", input),
   },

@@ -27,6 +27,7 @@
     "@shikijs/monaco": "4.3.1",
     "@shikijs/themes": "4.3.1",
     "@shikijs/vscode-textmate": "10.0.2",
+    "@volli/control-plane": "workspace:*",
     "@volli/shared": "workspace:*",
     "better-sqlite3": "^12.4.1",
     "class-variance-authority": "^0.7.1",

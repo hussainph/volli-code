@@ -169,32 +169,20 @@ export function moveTicketCommand(
 /**
  * The backward-move side effect (issue #78, CONCEPT #20): a board move that
  * leaves the active columns ({@link leavesActiveColumns}) interrupts every live
- * agent session of the ticket and records ONE `sessions_interrupted` event
- * naming them, attributed to the same actor as the move. Called AFTER the move
- * commits at each choke point — the move is the truth, the interrupt its
- * consequence — so a failed move never interrupts. A missing seam
- * (`interruptTicketSessions` undefined: tests, degraded boot) is a clean no-op,
- * and an empty interrupt (no live agent sessions) records nothing. Returns the
- * interrupted session ids so the caller can surface them if it wants.
+ * agent attachment of the ticket. Called AFTER the move commits at each choke
+ * point — the move is the truth, the interrupt its consequence — so a failed
+ * move never interrupts. Delivery is recorded as Session command/receipt
+ * evidence, rather than a ticket lifecycle event, because Esc leaves the PTY
+ * and its durable Session alive. A missing seam (tests, degraded boot) is a
+ * clean no-op. Returns the Session ids whose delivery was durably confirmed.
  */
 export function interruptOnBackwardMove(
-  db: Database.Database,
   input: { ticketId: string; fromStatus: TicketStatus; toStatus: TicketStatus },
-  context: TicketCommandContext,
-  interruptTicketSessions: ((ticketId: string) => string[]) | undefined,
-): string[] {
+  interruptTicketSessions: ((ticketId: string) => string[] | Promise<string[]>) | undefined,
+): string[] | Promise<string[]> {
   if (interruptTicketSessions === undefined) return [];
   if (!leavesActiveColumns(input.fromStatus, input.toStatus)) return [];
-  const sessionIds = interruptTicketSessions(input.ticketId);
-  if (sessionIds.length === 0) return [];
-  recordTicketEvent(
-    db,
-    input.ticketId,
-    { kind: "sessions_interrupted", sessionIds },
-    context.now,
-    context.actor,
-  );
-  return sessionIds;
+  return interruptTicketSessions(input.ticketId);
 }
 
 export function setTicketPriorityCommand(

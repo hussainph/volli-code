@@ -8,7 +8,6 @@ import {
   type SessionActivityState,
   type SessionRecord,
   type Ticket,
-  type TicketEvent,
 } from "@volli/shared";
 
 import {
@@ -42,30 +41,13 @@ const ACTIVITY_LABEL: Record<SessionActivityState, string> = {
   exited: "Exited",
 };
 
-/**
- * Rehydrates the batched `latestSignals` read into the `eventsByTicket` shape
- * the pure listing model already consumes — one synthetic session_signal event
- * per ticket. Keeps the tested model untouched while the fetch collapses from a
- * per-needs-review-ticket fan-out to a single project query.
- */
-function signalsToEventsByTicket(
+/** Re-indexes the batched durable Session projection for the pure listing model. */
+function indexSignalsByTicket(
   signals: readonly LatestSessionSignal[],
-): Record<string, TicketEvent[]> {
-  const byTicket: Record<string, TicketEvent[]> = {};
+): Record<string, LatestSessionSignal> {
+  const byTicket: Record<string, LatestSessionSignal> = {};
   for (const signal of signals) {
-    byTicket[signal.ticketId] = [
-      {
-        id: `signal:${signal.ticketId}`,
-        ticketId: signal.ticketId,
-        actor: signal.sessionId === null ? "automation" : "session",
-        actorContext:
-          signal.sessionId === null
-            ? null
-            : { ticketId: signal.ticketId, sessionId: signal.sessionId },
-        createdAt: signal.createdAt,
-        payload: { kind: "session_signal", signal: signal.signal, reason: signal.reason },
-      },
-    ];
+    byTicket[signal.ticketId] = signal;
   }
   return byTicket;
 }
@@ -241,7 +223,9 @@ export function ActiveSessions({ project }: { project: Project }) {
   const openTicketWorkspace = useWorkspaceStore((state) => state.openTicketWorkspace);
   const openTicketSession = useWorkspaceStore((state) => state.openTicketSession);
   const [records, setRecords] = React.useState<SessionRecord[]>([]);
-  const [eventsByTicket, setEventsByTicket] = React.useState<Record<string, TicketEvent[]>>({});
+  const [signalsByTicket, setSignalsByTicket] = React.useState<Record<string, LatestSessionSignal>>(
+    {},
+  );
   const [now, setNow] = React.useState(() => Date.now());
 
   const projectTicketIds = React.useMemo(
@@ -312,7 +296,7 @@ export function ActiveSessions({ project }: { project: Project }) {
   const loadAttentionSignals = React.useCallback(() => {
     const token = signalsFetch.claim();
     if (needsReviewIds.length === 0) {
-      setEventsByTicket({});
+      setSignalsByTicket({});
       return;
     }
     window.api.tickets
@@ -323,7 +307,7 @@ export function ActiveSessions({ project }: { project: Project }) {
           toastError(`Couldn't load session attention: ${result.error}`);
           return;
         }
-        setEventsByTicket(signalsToEventsByTicket(result.signals));
+        setSignalsByTicket(indexSignalsByTicket(result.signals));
       })
       .catch((error: unknown) => {
         if (signalsFetch.isCurrent(token))
@@ -369,14 +353,14 @@ export function ActiveSessions({ project }: { project: Project }) {
       buildActiveSessionListing({
         tickets,
         containers,
-        eventsByTicket,
+        signalsByTicket,
         records,
         lastOutputAt,
         parkState,
         harness,
         now,
       }),
-    [tickets, containers, eventsByTicket, records, lastOutputAt, parkState, harness, now],
+    [tickets, containers, signalsByTicket, records, lastOutputAt, parkState, harness, now],
   );
   const rowCount = listing.needsYou.length + listing.active.length;
   const activeTabId =

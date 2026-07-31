@@ -10,7 +10,7 @@
  *   - Deliberate-move parity (CONTEXT "Deliberate move"): an explicit move
  *     applies and records identically regardless of the actor issuing it.
  *   - interruptOnBackwardMove (CONCEPT #20, issue #78): a move leaving the active
- *     columns interrupts live sessions and records ONE `sessions_interrupted`;
+ *     columns interrupts live sessions without adding a planner lifecycle fact;
  *     automation only de-escalates; a missing seam / no live sessions is a clean
  *     no-op.
  *   - Guard edges — unknown ticket, archived ticket, invalid branch names.
@@ -290,33 +290,27 @@ describe("ticket-commands deliberate-move parity", () => {
 });
 
 describe("interruptOnBackwardMove", () => {
-  it("interrupts live sessions and records one sessions_interrupted on a move out of the active columns", () => {
+  it("interrupts live sessions on a move out of the active columns without planner history", () => {
     seed();
     createTicket("t1", "doing");
 
     const interrupted = interruptOnBackwardMove(
-      ctx.db,
       { ticketId: "t1", fromStatus: "doing", toStatus: "todo" },
-      { now: 2, actor: USER },
       () => ["s1", "s2"],
     );
 
     expect(interrupted).toEqual(["s1", "s2"]);
-    const event = eventOfKind("t1", "sessions_interrupted")!;
-    expect(event.payload).toEqual({ kind: "sessions_interrupted", sessionIds: ["s1", "s2"] });
+    expect(listTicketEvents(ctx.db, "t1").map((event) => event.payload.kind)).toEqual(["created"]);
   });
 
-  it("attributes the interrupt to automation when automation drives the de-escalation", () => {
+  it("does not add a planner event when automation drives the de-escalation", () => {
     seed();
     createTicket("t1", "doing");
 
-    interruptOnBackwardMove(
-      ctx.db,
-      { ticketId: "t1", fromStatus: "doing", toStatus: "backlog" },
-      { now: 2, actor: AUTOMATION },
-      () => ["s1"],
-    );
-    expect(eventOfKind("t1", "sessions_interrupted")!.actor).toBe("automation");
+    interruptOnBackwardMove({ ticketId: "t1", fromStatus: "doing", toStatus: "backlog" }, () => [
+      "s1",
+    ]);
+    expect(listTicketEvents(ctx.db, "t1").map((event) => event.payload.kind)).toEqual(["created"]);
   });
 
   it("also interrupts on a completion move to done (leaves the active columns)", () => {
@@ -324,13 +318,10 @@ describe("interruptOnBackwardMove", () => {
     createTicket("t1", "doing");
 
     const interrupted = interruptOnBackwardMove(
-      ctx.db,
       { ticketId: "t1", fromStatus: "doing", toStatus: "done" },
-      { now: 2, actor: USER },
       () => ["s1"],
     );
     expect(interrupted).toEqual(["s1"]);
-    expect(eventOfKind("t1", "sessions_interrupted")).toBeDefined();
   });
 
   it("does nothing when the move stays inside the active columns (doing ⇄ needs_review)", () => {
@@ -338,13 +329,10 @@ describe("interruptOnBackwardMove", () => {
     createTicket("t1", "doing");
 
     const interrupted = interruptOnBackwardMove(
-      ctx.db,
       { ticketId: "t1", fromStatus: "doing", toStatus: "needs_review" },
-      { now: 2, actor: USER },
       () => ["s1"],
     );
     expect(interrupted).toEqual([]);
-    expect(eventOfKind("t1", "sessions_interrupted")).toBeUndefined();
   });
 
   it("is a clean no-op when the interrupt seam is absent (tests / degraded boot)", () => {
@@ -352,13 +340,10 @@ describe("interruptOnBackwardMove", () => {
     createTicket("t1", "doing");
 
     const interrupted = interruptOnBackwardMove(
-      ctx.db,
       { ticketId: "t1", fromStatus: "doing", toStatus: "todo" },
-      { now: 2, actor: USER },
       undefined,
     );
     expect(interrupted).toEqual([]);
-    expect(eventOfKind("t1", "sessions_interrupted")).toBeUndefined();
   });
 
   it("records nothing when a backward move interrupts no live sessions", () => {
@@ -366,13 +351,22 @@ describe("interruptOnBackwardMove", () => {
     createTicket("t1", "doing");
 
     const interrupted = interruptOnBackwardMove(
-      ctx.db,
       { ticketId: "t1", fromStatus: "doing", toStatus: "todo" },
-      { now: 2, actor: USER },
       () => [],
     );
     expect(interrupted).toEqual([]);
-    expect(eventOfKind("t1", "sessions_interrupted")).toBeUndefined();
+  });
+
+  it("passes through the Session ids from an asynchronous interrupt seam", async () => {
+    seed();
+    createTicket("t1", "doing");
+
+    await expect(
+      interruptOnBackwardMove(
+        { ticketId: "t1", fromStatus: "doing", toStatus: "todo" },
+        async () => ["session-a", "session-b"],
+      ),
+    ).resolves.toEqual(["session-a", "session-b"]);
   });
 });
 

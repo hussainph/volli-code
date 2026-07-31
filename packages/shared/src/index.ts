@@ -23,6 +23,7 @@ export * from "./errors";
 export * from "./terminal";
 export * from "./ghostty-config";
 export * from "./session";
+export * from "./session-ledger";
 export * from "./park";
 export * from "./volli-dir";
 export * from "./retention";

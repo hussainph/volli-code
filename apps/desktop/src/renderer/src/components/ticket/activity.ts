@@ -61,8 +61,6 @@ export const EVENT_KIND_PRIORITY: readonly TicketEventKind[] = [
   "status_changed",
   "pr_merged",
   "pr_opened",
-  "session_started",
-  "session_ended",
   "created",
   "retitled",
   "priority_changed",
@@ -73,9 +71,6 @@ export const EVENT_KIND_PRIORITY: readonly TicketEventKind[] = [
   "worktree_changed",
   "archived",
   "unarchived",
-  "session_signal",
-  "sessions_interrupted",
-  "session_resumed",
   "body_edited",
 ];
 
@@ -203,10 +198,6 @@ export function describeEvent(payload: TicketEventPayload): string | null {
       return "archived the ticket";
     case "unarchived":
       return "restored the ticket";
-    case "session_started":
-      return `started session ${payload.title}`;
-    case "session_ended":
-      return "ended a session";
     case "worktree_changed":
       return describeWorktreeChange(payload.from, payload.to);
     case "worktree_failed": {
@@ -222,18 +213,6 @@ export function describeEvent(payload: TicketEventPayload): string | null {
       return "opened a draft pull request";
     case "pr_merged":
       return "pull request merged";
-    case "session_signal":
-      return payload.reason === null
-        ? `reported ${payload.signal}`
-        : `reported ${payload.signal}: ${payload.reason}`;
-    case "sessions_interrupted":
-      return payload.sessionIds.length === 1
-        ? "interrupted a session"
-        : `interrupted ${payload.sessionIds.length} sessions`;
-    case "session_resumed":
-      // "earlier", not "interrupted" — resume works for any ENDED agent
-      // session (exited on its own, closed by the user), not only Esc'd ones.
-      return "resumed an earlier session";
     case "commented":
       return null;
     case "attachment_added":

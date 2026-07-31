@@ -95,16 +95,23 @@ vi.mock("./worktree-runtime", () => ({
 }));
 
 import { confirmDestructiveClose, PtyManager, registerTerminalIpcHandlers } from "./pty";
+import { createAgentCommandService } from "./agent-commands";
 import type { ParkConfig, ProcessInspector } from "./park";
 import { attachmentsRoot, importAttachmentFile } from "./attachment-store";
 import { createAttachment } from "./db/attachments-repo";
 import { listTicketEvents } from "./db/events-repo";
 import { insertProject } from "./db/projects-repo";
-import { getSession, insertSession, listSessions, listTicketSessions } from "./db/sessions-repo";
+import {
+  getSession,
+  insertSession,
+  listSessions,
+  listTicketSessions,
+} from "./session-control/test-support";
 import { openTestDb, testProject, testSession, testTicket, type TestDb } from "./db/test-helpers";
 import type { HarnessId } from "@volli/shared";
 import { deleteTicket, insertTicket } from "./db/tickets-repo";
 import { syncProjectRoots } from "./project-roots";
+import { createDesktopControlPlane } from "./session-control";
 
 let ptyPidSeq = 1000;
 /** A distinct fake pid per session, so park-tree assertions can't collide. */
@@ -285,6 +292,47 @@ afterEach(() => {
 });
 
 describe("volli:terminal-create", () => {
+  it("preserves the new Session without inventing an attachment when executor.start is rejected", async () => {
+    const controlPlane = createDesktopControlPlane(testDb.db);
+    const submit = controlPlane.submit.bind(controlPlane);
+    controlPlane.submit = async (request) => {
+      const result = await submit(request);
+      if (request.intent.kind !== "executor.start") return result;
+      return {
+        ...result,
+        receipt: {
+          id: "rejected-start",
+          commandId: result.command.id,
+          status: "rejected" as const,
+          code: "test_rejection",
+          detail: "The test rejected terminal startup",
+          recordedAt: 1,
+          sequence: 2,
+        },
+      };
+    };
+    manager = registerTerminalIpcHandlers(
+      { ok: true, db: testDb.db },
+      { socketPath: "/profile/volli.sock", binDir: "/profile/bin" },
+      controlPlane,
+    );
+
+    const result = await invokeCreate(makeWebContents(), {
+      workspaceId: "w",
+      cwd: root,
+      cols: 80,
+      rows: 24,
+    });
+    const projection = (await controlPlane.listSessions({ projectId: "w", scope: "all" }))[0];
+
+    expect(result).toEqual({
+      ok: false,
+      error: "The Session cannot accept another terminal attachment",
+    });
+    expect(projection?.attachments).toEqual([]);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it("spawns a login shell in the requested cwd with a 256-color TERM", async () => {
     const { sessionId } = await createSession();
     expect(typeof sessionId).toBe("string");
@@ -1075,7 +1123,7 @@ describe("ticket sessions", () => {
     insertTicket(testDb.db, testTicket("w", { id: "tk1", ticketNumber: 12, usesWorktree: false }));
   });
 
-  it("persists a ticket-scoped record, records session_started, and injects ticket env", async () => {
+  it("persists a ticket-scoped ledger projection and injects ticket env", async () => {
     const { result } = await createTicketSession("tk1");
     if (!result.ok) throw new Error(`expected session, got ${result.error}`);
 
@@ -1112,18 +1160,8 @@ describe("ticket sessions", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ id: result.sessionId, ticketId: "tk1", title: "Session 1" });
 
-    // session_started event in the same transaction.
-    const started = listTicketEvents(testDb.db, "tk1").filter(
-      (event) => event.payload.kind === "session_started",
-    );
-    expect(started).toHaveLength(1);
-    expect(started[0]?.payload).toEqual({
-      kind: "session_started",
-      sessionId: result.sessionId,
-      title: "Session 1",
-      launchKind: "shell",
-      placement: "tab",
-    });
+    // Session evidence is private ledger history, never a planner event.
+    expect(listTicketEvents(testDb.db, "tk1")).toEqual([]);
   });
 
   it("persists split placement for a pane created inside an existing tab", async () => {
@@ -1154,18 +1192,14 @@ describe("ticket sessions", () => {
     expect(second.result.session.title).toBe("Session 2");
   });
 
-  it("ends the record and records session_ended when a ticket session exits", async () => {
+  it("closes the terminal attachment when a ticket session exits", async () => {
     const { result, pty } = await createTicketSession("tk1");
     if (!result.ok) throw new Error(`expected session, got ${result.error}`);
 
     pty.emitExit(0);
 
-    expect(listTicketSessions(testDb.db, "tk1")[0]?.endedAt).not.toBeNull();
-    const ended = listTicketEvents(testDb.db, "tk1").filter(
-      (event) => event.payload.kind === "session_ended",
-    );
-    expect(ended).toHaveLength(1);
-    expect(ended[0]?.payload).toEqual({ kind: "session_ended", sessionId: result.sessionId });
+    await vi.waitFor(() => expect(listTicketSessions(testDb.db, "tk1")[0]?.endedAt).not.toBeNull());
+    expect(listTicketEvents(testDb.db, "tk1")).toEqual([]);
   });
 
   it("fails with a surfaced error (never resurrecting the root) when the project folder is gone", async () => {
@@ -1237,14 +1271,17 @@ describe("ticket sessions", () => {
 
     // Ticket deleted while the session is live → sessions.ticket_id is SET NULL
     // and the ticket's events are cascade-deleted. The stale in-memory ticketId
-    // must NOT be used to record session_ended (that would violate the FK and
+    // must NOT be used to close the durable Session (that would violate the FK and
     // roll back the whole close-out, stranding the row as falsely-live).
     deleteTicket(testDb.db, "tk1");
 
     expect(() => pty.emitExit(0)).not.toThrow();
 
-    const row = listSessions(testDb.db, "w").find((session) => session.id === result.sessionId);
-    expect(row?.endedAt).not.toBeNull();
+    await vi.waitFor(() =>
+      expect(
+        listSessions(testDb.db, "w").find((session) => session.id === result.sessionId)?.endedAt,
+      ).not.toBeNull(),
+    );
     expect(listTicketEvents(testDb.db, "tk1")).toEqual([]);
     expect(sender.send).toHaveBeenCalledWith("volli:terminal-exit", {
       sessionId: result.sessionId,
@@ -1276,7 +1313,7 @@ describe("ticket sessions", () => {
       ok: false,
       error: "Unknown terminal session",
     });
-    expect(errorSpy).toHaveBeenCalled();
+    await vi.waitFor(() => expect(errorSpy).toHaveBeenCalled());
     errorSpy.mockRestore();
   });
 
@@ -1385,15 +1422,7 @@ describe("ticket sessions", () => {
     expect(result.session.placement).toBe("tab");
     const rows = listTicketSessions(testDb.db, "tk1");
     expect(rows[0]?.harnessId).toBe("opencode");
-    // session_started records the kickoff harness too.
-    const started = listTicketEvents(testDb.db, "tk1").find(
-      (event) => event.payload.kind === "session_started",
-    );
-    expect(started?.payload).toMatchObject({
-      harnessId: "opencode",
-      launchKind: "agent",
-      placement: "tab",
-    });
+    expect(listTicketEvents(testDb.db, "tk1")).toEqual([]);
   });
 });
 
@@ -1408,7 +1437,7 @@ describe("PtyManager.interruptTicketSessions", () => {
     if (!agent.result.ok) throw new Error(`expected session, got ${agent.result.error}`);
     agent.pty.write.mockClear(); // drop the kickoff launch write
 
-    const interrupted = manager.interruptTicketSessions("itk1");
+    const interrupted = await manager.interruptTicketSessions("itk1");
 
     expect(interrupted).toEqual([agent.result.sessionId]);
     expect(agent.pty.write).toHaveBeenCalledTimes(1);
@@ -1419,7 +1448,7 @@ describe("PtyManager.interruptTicketSessions", () => {
     const shell = await createTicketSession("itk1"); // no kickoff → launchKind shell
     if (!shell.result.ok) throw new Error(`expected session, got ${shell.result.error}`);
 
-    expect(manager.interruptTicketSessions("itk1")).toEqual([]);
+    expect(await manager.interruptTicketSessions("itk1")).toEqual([]);
     expect(shell.pty.write).not.toHaveBeenCalled();
   });
 
@@ -1430,18 +1459,24 @@ describe("PtyManager.interruptTicketSessions", () => {
     mine.pty.write.mockClear();
     other.pty.write.mockClear();
 
-    const interrupted = manager.interruptTicketSessions("itk1");
+    const interrupted = await manager.interruptTicketSessions("itk1");
 
     expect(interrupted).toEqual([mine.result.sessionId]);
     expect(mine.pty.write).toHaveBeenCalledWith("\x1b");
     expect(other.pty.write).not.toHaveBeenCalled();
   });
 
-  it("returns an empty array for a ticket with no live sessions", () => {
-    expect(manager.interruptTicketSessions("itk1")).toEqual([]);
+  it("returns an empty array for a ticket with no live sessions", async () => {
+    expect(await manager.interruptTicketSessions("itk1")).toEqual([]);
   });
 
   it("keeps interrupting the rest when one session's pty write throws", async () => {
+    const controlPlane = createDesktopControlPlane(testDb.db);
+    manager = registerTerminalIpcHandlers(
+      { ok: true, db: testDb.db },
+      { socketPath: "/profile/volli.sock", binDir: "/profile/bin" },
+      controlPlane,
+    );
     const broken = await createKickoffSession("itk1", { harnessId: "codex", prompt: "go" });
     const healthy = await createKickoffSession("itk1", { harnessId: "codex", prompt: "go" });
     if (!broken.result.ok || !healthy.result.ok) throw new Error("expected two sessions");
@@ -1453,10 +1488,19 @@ describe("PtyManager.interruptTicketSessions", () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
     try {
-      const interrupted = manager.interruptTicketSessions("itk1");
+      const interrupted = await manager.interruptTicketSessions("itk1");
 
       expect(interrupted).toEqual([healthy.result.sessionId]);
       expect(healthy.pty.write).toHaveBeenCalledWith("\x1b");
+      const events = await controlPlane.listEvents({ sessionId: broken.result.sessionId });
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            kind: "command.receipt.recorded",
+            receipt: expect.objectContaining({ status: "unreconciled" }),
+          }),
+        }),
+      );
     } finally {
       consoleError.mockRestore();
     }
@@ -1539,20 +1583,103 @@ describe("resume launch (issue #78)", () => {
     expect(row?.harnessSessionId).toBe("seed-xyz");
   });
 
-  it("records a session_resumed event linking the new session to the previous one", async () => {
+  it("keeps the latest linked native id and active harness when a terminal exits before resume", async () => {
+    const controlPlane = createDesktopControlPlane(testDb.db);
+    // Re-register the PTY door with the SAME writer the socket service uses.
+    manager = registerTerminalIpcHandlers(
+      { ok: true, db: testDb.db },
+      { socketPath: "/profile/volli.sock", binDir: "/profile/bin" },
+      controlPlane,
+    );
+    const { result: launched, pty: launchedPty } = await createKickoffSession("rtk1", {
+      harnessId: "claude-code",
+      prompt: "go",
+    });
+    if (!launched.ok) throw new Error(`expected session, got ${launched.error}`);
+    const service = createAgentCommandService({
+      db: testDb.db,
+      controlPlane,
+      appVersion: "1.2.3",
+    });
+    const request = (cmd: "session.harness" | "session.link", args: Record<string, unknown>) =>
+      service.execute({
+        v: 1,
+        cmd,
+        args,
+        ctx: { cwd: root, env: { session: launched.sessionId, ticket: "VC-50" } },
+      });
+
+    await request("session.harness", { id: "codex" });
+    await request("session.link", { id: "latest-native-id" });
+    expect(getSession(testDb.db, launched.sessionId)).toMatchObject({
+      activeHarnessId: "codex",
+      harnessSessionId: "latest-native-id",
+    });
+
+    launchedPty.emitExit(0);
+    await vi.waitFor(() =>
+      expect(getSession(testDb.db, launched.sessionId)?.endedAt).not.toBeNull(),
+    );
+    expect(getSession(testDb.db, launched.sessionId)).toMatchObject({
+      activeHarnessId: "codex",
+      harnessSessionId: "latest-native-id",
+    });
+
+    const { result: resumed } = await resumeSession("rtk1", launched.sessionId);
+    expect(resumed).toMatchObject({
+      ok: true,
+      session: { id: launched.sessionId, harnessId: "codex", harnessSessionId: "latest-native-id" },
+    });
+  });
+
+  it("serializes concurrent PTY exit and agent signal through the injected Control Plane", async () => {
+    const controlPlane = createDesktopControlPlane(testDb.db);
+    manager = registerTerminalIpcHandlers(
+      { ok: true, db: testDb.db },
+      { socketPath: "/profile/volli.sock", binDir: "/profile/bin" },
+      controlPlane,
+    );
+    const { result: launched, pty } = await createKickoffSession("rtk1", {
+      harnessId: "claude-code",
+      prompt: "go",
+    });
+    if (!launched.ok) throw new Error(`expected session, got ${launched.error}`);
+    const service = createAgentCommandService({
+      db: testDb.db,
+      controlPlane,
+      appVersion: "1.2.3",
+    });
+
+    const signal = service.execute({
+      v: 1,
+      cmd: "session.done",
+      args: {},
+      ctx: { cwd: root, env: { session: launched.sessionId, ticket: "VC-50" } },
+    });
+    pty.emitExit(0);
+    await expect(signal).resolves.toMatchObject({ ok: true, data: { signal: "done" } });
+    await vi.waitFor(() =>
+      expect(getSession(testDb.db, launched.sessionId)?.endedAt).not.toBeNull(),
+    );
+
+    const projection = await controlPlane.getSession({ sessionId: launched.sessionId });
+    const events = await controlPlane.listEvents({ sessionId: launched.sessionId });
+    expect(events.map((event) => event.sequence)).toEqual(
+      Array.from({ length: events.length }, (_value, index) => index + 1),
+    );
+    expect(projection).toMatchObject({
+      signal: { signal: "done", reason: null },
+      attachments: [expect.objectContaining({ status: "closed" })],
+    });
+  });
+
+  it("continues the same durable Session without planner history", async () => {
     const prior = insertEndedAgent("rtk1", "abc-123");
     const { result } = await resumeSession("rtk1", prior.id);
     if (!result.ok) throw new Error(`expected session, got ${result.error}`);
 
-    const resumed = listTicketEvents(testDb.db, "rtk1").filter(
-      (event) => event.payload.kind === "session_resumed",
-    );
-    expect(resumed).toHaveLength(1);
-    expect(resumed[0]?.payload).toEqual({
-      kind: "session_resumed",
-      sessionId: result.sessionId,
-      previousSessionId: prior.id,
-    });
+    expect(result.sessionId).toBe(prior.id);
+    expect(listTicketEvents(testDb.db, "rtk1")).toEqual([]);
   });
 
   it("rejects resuming an unknown session", async () => {
@@ -2003,13 +2130,14 @@ describe("scratch session persistence", () => {
   it("ends a scratch record on exit without recording any ticket event", async () => {
     const { sessionId, pty } = await createSession();
     pty.emitExit(0);
-    const row = listSessions(testDb.db, "w").find((session) => session.id === sessionId);
-    expect(row?.endedAt).not.toBeNull();
+    await vi.waitFor(() =>
+      expect(
+        listSessions(testDb.db, "w").find((session) => session.id === sessionId)?.endedAt,
+      ).not.toBeNull(),
+    );
   });
 
-  it("kills the pty and errors when persistence fails (workspace is not a real project)", async () => {
-    const pty = makeFakePty();
-    spawn.mockReturnValueOnce(pty);
+  it("fails before spawning when the Session cannot be created for an unknown workspace", async () => {
     const result = await invokeCreate(makeWebContents(), {
       workspaceId: "ghost", // no project row → the session insert violates its FK
       cwd: root,
@@ -2017,7 +2145,7 @@ describe("scratch session persistence", () => {
       rows: 24,
     });
     expect(result.ok).toBe(false);
-    expect(pty.kill).toHaveBeenCalledTimes(1);
+    expect(spawn).not.toHaveBeenCalled();
   });
 });
 
@@ -2357,7 +2485,7 @@ describe("warm park", () => {
       await parkManager.park(created.sessionId, { manual: true });
       pty.write.mockClear();
 
-      const interrupted = parkManager.interruptTicketSessions("itk-park");
+      const interrupted = await parkManager.interruptTicketSessions("itk-park");
 
       expect(interrupted).toEqual([created.sessionId]);
       expect(contCalls()).toEqual([pty.pid]); // woken before the write

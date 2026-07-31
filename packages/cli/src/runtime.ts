@@ -11,6 +11,8 @@ export interface LaunchAppOptions {
   appEntry: string | undefined;
   userDataPath?: string;
   rendererUrl?: string;
+  /** Platform is explicit so the launch contract remains testable without host-dependent tests. */
+  platform: NodeJS.Platform;
   timeoutMs: number;
   env: NodeJS.ProcessEnv;
 }
@@ -46,6 +48,27 @@ function appLaunchEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return env;
 }
 
+function appLaunchCommand(options: LaunchAppOptions): { executable: string; args: string[] } {
+  const appArgs = [
+    ...(options.appEntry ? [options.appEntry] : []),
+    ...(options.userDataPath ? [`--user-data-dir=${options.userDataPath}`] : []),
+  ];
+  // Launching an Electron Mach-O directly can abort in macOS's AppKit
+  // registration before main has a chance to create the agent socket. Keep the
+  // app bundle's LaunchServices contract intact when the generated launcher
+  // identifies an `.app` executable; arbitrary/non-bundle executables retain
+  // the direct cross-platform launch path.
+  const marker = ".app/Contents/MacOS/";
+  const bundleEnd = options.executable.indexOf(marker);
+  if (options.platform === "darwin" && bundleEnd >= 0) {
+    return {
+      executable: "/usr/bin/open",
+      args: ["-n", options.executable.slice(0, bundleEnd + ".app".length), "--args", ...appArgs],
+    };
+  }
+  return { executable: options.executable, args: appArgs };
+}
+
 /**
  * Resolves the socket path `app launch` needs to probe/wait on. A shim that
  * never got VOLLI_SOCKET baked in (or is being run outside a Volli-generated
@@ -77,14 +100,8 @@ export async function launchApp(
 
   const env = appLaunchEnvironment(options.env);
   if (options.rendererUrl) env.ELECTRON_RENDERER_URL = options.rendererUrl;
-  dependencies.spawnDetached(
-    options.executable,
-    [
-      ...(options.appEntry ? [options.appEntry] : []),
-      ...(options.userDataPath ? [`--user-data-dir=${options.userDataPath}`] : []),
-    ],
-    env,
-  );
+  const command = appLaunchCommand(options);
+  dependencies.spawnDetached(command.executable, command.args, env);
 
   const deadline = dependencies.now() + options.timeoutMs;
   while (dependencies.now() < deadline) {

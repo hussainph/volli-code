@@ -8,7 +8,7 @@ import {
   type SessionHarnessState,
   type SessionRecord,
   type Ticket,
-  type TicketEvent,
+  type LatestSessionSignal,
 } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -84,6 +84,16 @@ function container(activeSessionId: string | null, tabs: ReturnType<typeof paneT
   return { activeSessionId, tabs };
 }
 
+function signal(
+  ticketId: string,
+  sessionId: string,
+  outcome: "done" | "blocked",
+  reason: string | null,
+  createdAt: number,
+): LatestSessionSignal {
+  return { ticketId, sessionId, signal: outcome, reason, createdAt };
+}
+
 describe("buildActiveSessionListing", () => {
   it("lists every live tab on a Doing ticket as its own active destination", () => {
     const result = buildActiveSessionListing({
@@ -109,7 +119,7 @@ describe("buildActiveSessionListing", () => {
           ],
         },
       },
-      eventsByTicket: {},
+      signalsByTicket: {},
       records: [],
       lastOutputAt: { s1: 99_000 },
       parkState: {},
@@ -125,14 +135,7 @@ describe("buildActiveSessionListing", () => {
   });
 
   it("routes the latest Needs Review signal to its exact session while keeping sibling tabs active", () => {
-    const signal: TicketEvent = {
-      id: "e1",
-      ticketId: "t1",
-      actor: "automation",
-      actorContext: { ticketId: "t1", sessionId: "s2" },
-      createdAt: 80_000,
-      payload: { kind: "session_signal", signal: "blocked", reason: "Approve access" },
-    };
+    const latest = signal("t1", "s2", "blocked", "Approve access", 80_000);
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "needs_review" })],
       containers: {
@@ -156,7 +159,7 @@ describe("buildActiveSessionListing", () => {
           ],
         },
       },
-      eventsByTicket: { t1: [signal] },
+      signalsByTicket: { t1: latest },
       records: [],
       lastOutputAt: { s1: 99_000 },
       parkState: {},
@@ -206,7 +209,7 @@ describe("buildActiveSessionListing", () => {
           ],
         },
       },
-      eventsByTicket: {},
+      signalsByTicket: {},
       records: [],
       lastOutputAt: {},
       parkState: {},
@@ -222,22 +225,7 @@ describe("buildActiveSessionListing", () => {
   });
 
   it("maps the latest signal from a split pane back to its containing tab and exact pane", () => {
-    const older: TicketEvent = {
-      id: "old",
-      ticketId: "t1",
-      actor: "automation",
-      actorContext: { ticketId: "t1", sessionId: "root" },
-      createdAt: 10,
-      payload: { kind: "session_signal", signal: "done", reason: null },
-    };
-    const latest: TicketEvent = {
-      id: "latest",
-      ticketId: "t1",
-      actor: "automation",
-      actorContext: { ticketId: "t1", sessionId: "split" },
-      createdAt: 20,
-      payload: { kind: "session_signal", signal: "blocked", reason: "Choose an option" },
-    };
+    const latest = signal("t1", "split", "blocked", "Choose an option", 20);
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "needs_review" })],
       containers: {
@@ -261,7 +249,7 @@ describe("buildActiveSessionListing", () => {
           ],
         },
       },
-      eventsByTicket: { t1: [older, latest] },
+      signalsByTicket: { t1: latest },
       records: [],
       lastOutputAt: {},
       parkState: {},
@@ -313,7 +301,7 @@ describe("buildActiveSessionListing", () => {
           ],
         },
       },
-      eventsByTicket: {},
+      signalsByTicket: {},
       records: [],
       lastOutputAt: { working: 99_000 },
       parkState: { parked: { parked: true, keepAwake: false } },
@@ -335,7 +323,7 @@ describe("buildActiveSessionListing", () => {
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
       containers: {},
-      eventsByTicket: {},
+      signalsByTicket: {},
       records: [
         record({
           id: "old",
@@ -394,7 +382,7 @@ describe("buildActiveSessionListing", () => {
           paneTab("quit", "Quit the agent", 1),
         ]),
       },
-      eventsByTicket: {},
+      signalsByTicket: {},
       records: [
         record({ id: "quit", ticketId: "t1", title: "Quit the agent", endedAt: now - 5_000 }),
       ],
@@ -424,7 +412,7 @@ describe("buildActiveSessionListing", () => {
         // carries that 1 out as its own status on Ctrl-D.
         t1: container("s1", [paneTab("s1", "Quit the agent", 1)]),
       },
-      eventsByTicket: {},
+      signalsByTicket: {},
       records: [
         record({ id: "s1", ticketId: "t1", title: "Quit the agent", endedAt: now - 1_000 }),
       ],
@@ -446,7 +434,7 @@ describe("buildActiveSessionListing", () => {
         // exits 129, so this code is the app closing a tab the user asked it to.
         t1: container("s1", [paneTab("s1", "Closed the tab", 129)]),
       },
-      eventsByTicket: {},
+      signalsByTicket: {},
       records: [
         record({ id: "s1", ticketId: "t1", title: "Closed the tab", endedAt: now - 1_000 }),
       ],
@@ -482,7 +470,7 @@ describe("buildActiveSessionListing", () => {
           ],
         },
       },
-      eventsByTicket: {},
+      signalsByTicket: {},
       records: [
         record({
           id: "r-done",
@@ -529,7 +517,7 @@ describe("buildActiveSessionListing", () => {
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing", title: "Just moved here" })],
       containers: {},
-      eventsByTicket: {},
+      signalsByTicket: {},
       records: [],
       lastOutputAt: {},
       parkState: {},
@@ -544,20 +532,13 @@ describe("buildActiveSessionListing", () => {
 
   it("gives a promoted Needs Review attention session no duplicate active row", () => {
     const now = 1_000_000;
-    const signal: TicketEvent = {
-      id: "e1",
-      ticketId: "t1",
-      actor: "automation",
-      actorContext: { ticketId: "t1", sessionId: "s1" },
-      createdAt: now - 2_000,
-      payload: { kind: "session_signal", signal: "blocked", reason: "Approve" },
-    };
+    const latest = signal("t1", "s1", "blocked", "Approve", now - 2_000);
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "needs_review" })],
       containers: {
         t1: container("s1", [paneTab("s1", "Agent", 1)]),
       },
-      eventsByTicket: { t1: [signal] },
+      signalsByTicket: { t1: latest },
       records: [record({ id: "s1", ticketId: "t1", title: "Agent", endedAt: now - 1_000 })],
       lastOutputAt: {},
       parkState: {},
@@ -571,34 +552,12 @@ describe("buildActiveSessionListing", () => {
     expect(result.active).toEqual([]);
   });
 
-  it("ignores a non-signal event and follows the true latest signal by timestamp, not array order", () => {
-    const newerButFirst: TicketEvent = {
-      id: "newer",
-      ticketId: "t1",
-      actor: "automation",
-      actorContext: { ticketId: "t1", sessionId: "s1" },
-      createdAt: 50,
-      payload: { kind: "session_signal", signal: "blocked", reason: "Approve access" },
-    };
-    const olderButSecond: TicketEvent = {
-      id: "older",
-      ticketId: "t1",
-      actor: "automation",
-      actorContext: { ticketId: "t1", sessionId: "s1" },
-      createdAt: 10,
-      payload: { kind: "session_signal", signal: "done", reason: null },
-    };
-    const unrelated: TicketEvent = {
-      id: "comment",
-      ticketId: "t1",
-      actor: "user",
-      createdAt: 999,
-      payload: { kind: "commented", commentId: "c1" },
-    };
+  it("uses the Control Plane's projected latest signal", () => {
+    const latest = signal("t1", "s1", "blocked", "Approve access", 50);
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "needs_review" })],
       containers: { t1: container("s1", [paneTab("s1", "Agent review")]) },
-      eventsByTicket: { t1: [newerButFirst, olderButSecond, unrelated] },
+      signalsByTicket: { t1: latest },
       records: [],
       lastOutputAt: {},
       parkState: {},
@@ -606,8 +565,7 @@ describe("buildActiveSessionListing", () => {
       now: 100,
     });
 
-    // The non-signal event is skipped entirely, and the earlier-in-array signal
-    // never overwrites the later-timestamped one it follows.
+    // The Control Plane has already reduced durable Session evidence to the latest signal.
     expect(result.needsYou[0]).toMatchObject({
       attention: { signal: "blocked", reason: "Approve access" },
     });
@@ -618,7 +576,7 @@ describe("buildActiveSessionListing", () => {
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
       containers: {},
-      eventsByTicket: {},
+      signalsByTicket: {},
       records: [
         record({ id: "later", ticketId: "t1", title: "Actually latest", endedAt: now - 1_000 }),
         record({ id: "earlier", ticketId: "t1", title: "Really earlier", endedAt: now - 5_000 }),
@@ -652,7 +610,7 @@ describe("buildActiveSessionListing", () => {
           ],
         },
       },
-      eventsByTicket: {},
+      signalsByTicket: {},
       records: [
         record({
           id: "s1",
@@ -696,7 +654,7 @@ describe("buildActiveSessionListing", () => {
           ],
         },
       },
-      eventsByTicket: {},
+      signalsByTicket: {},
       records: [],
       lastOutputAt: {},
       parkState: {},
@@ -731,7 +689,7 @@ describe("buildActiveSessionListing", () => {
       containers: {
         "t-recent": container("s-recent", [paneTab("s-recent", "Recently exited", 0)]),
       },
-      eventsByTicket: {},
+      signalsByTicket: {},
       records: [],
       lastOutputAt: {},
       parkState: {},
@@ -748,22 +706,8 @@ describe("buildActiveSessionListing", () => {
 
   it("orders needsYou blocked before done before a bare review prompt", () => {
     const now = 1_000_000;
-    const blocked: TicketEvent = {
-      id: "b",
-      ticketId: "t-blocked",
-      actor: "automation",
-      actorContext: { ticketId: "t-blocked", sessionId: "sb" },
-      createdAt: now - 100,
-      payload: { kind: "session_signal", signal: "blocked", reason: null },
-    };
-    const done: TicketEvent = {
-      id: "d",
-      ticketId: "t-done",
-      actor: "automation",
-      actorContext: { ticketId: "t-done", sessionId: "sd" },
-      createdAt: now - 100,
-      payload: { kind: "session_signal", signal: "done", reason: null },
-    };
+    const blocked = signal("t-blocked", "sb", "blocked", null, now - 100);
+    const done = signal("t-done", "sd", "done", null, now - 100);
     const result = buildActiveSessionListing({
       tickets: [
         ticket({ id: "t-done", status: "needs_review", ticketNumber: 1, title: "Done work" }),
@@ -796,7 +740,7 @@ describe("buildActiveSessionListing", () => {
           ],
         },
       },
-      eventsByTicket: { "t-blocked": [blocked], "t-done": [done] },
+      signalsByTicket: { "t-blocked": blocked, "t-done": done },
       records: [],
       lastOutputAt: {},
       parkState: {},
@@ -839,7 +783,7 @@ describe("buildActiveSessionListing — harness-reported attention", () => {
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
       containers: { t1: container("s1", [paneTab("s1", "Implement UI")]) },
-      eventsByTicket: {},
+      signalsByTicket: {},
       records: [],
       lastOutputAt: {},
       parkState: {},
@@ -857,7 +801,7 @@ describe("buildActiveSessionListing — harness-reported attention", () => {
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "needs_review" })],
       containers: { t1: container("s1", [paneTab("s1", "Agent review")]) },
-      eventsByTicket: {},
+      signalsByTicket: {},
       records: [],
       lastOutputAt: {},
       parkState: {},
@@ -887,7 +831,7 @@ describe("buildActiveSessionListing — harness-reported attention", () => {
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
       containers: { t1: container("s1", [paneTab("s1", "Implement UI")]) },
-      eventsByTicket: {},
+      signalsByTicket: {},
       records: [],
       lastOutputAt: {},
       parkState: {},
@@ -900,14 +844,7 @@ describe("buildActiveSessionListing — harness-reported attention", () => {
   });
 
   it("lets the agent's own blocked signal outrank a hook-declared wait", () => {
-    const signal: TicketEvent = {
-      id: "e1",
-      ticketId: "t2",
-      actor: "session",
-      actorContext: { ticketId: "t2", sessionId: "s2" },
-      createdAt: 80_000,
-      payload: { kind: "session_signal", signal: "blocked", reason: "Approve the deploy" },
-    };
+    const latest = signal("t2", "s2", "blocked", "Approve the deploy", 80_000);
     const result = buildActiveSessionListing({
       tickets: [
         // The waiting one is the more recently touched, so only priority can
@@ -919,7 +856,7 @@ describe("buildActiveSessionListing — harness-reported attention", () => {
         t1: container("s1", [paneTab("s1", "Implement UI")]),
         t2: container("s2", [paneTab("s2", "Ship it")]),
       },
-      eventsByTicket: { t2: [signal] },
+      signalsByTicket: { t2: latest },
       records: [],
       lastOutputAt: {},
       parkState: {},
@@ -943,7 +880,7 @@ describe("buildActiveSessionListing — harness-reported attention", () => {
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
       containers: { t1: container("s1", [paneTab("s1", "Implement UI")]) },
-      eventsByTicket: {},
+      signalsByTicket: {},
       records: [],
       lastOutputAt: {},
       parkState: {},
@@ -975,7 +912,7 @@ describe("buildActiveSessionListing — harness-reported attention", () => {
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
       containers: { t1: { activeSessionId: "s1", tabs: [split] } },
-      eventsByTicket: {},
+      signalsByTicket: {},
       records: [
         record({ id: "s1", ticketId: "t1", launchKind: "shell", placement: "split" }),
         record({ id: "s2", ticketId: "t1", launchKind: "agent" }),
@@ -1021,7 +958,7 @@ describe("buildActiveSessionListing — fed by a real launch", () => {
       buildActiveSessionListing({
         tickets: [ticket({ id: "t1", status: "doing" })],
         containers: useSessionsStore.getState().byOwner,
-        eventsByTicket: {},
+        signalsByTicket: {},
         records: [],
         lastOutputAt: {},
         parkState: {},
@@ -1053,7 +990,7 @@ describe("buildActiveSessionListing — fed by a real launch", () => {
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
       containers: useSessionsStore.getState().byOwner,
-      eventsByTicket: {},
+      signalsByTicket: {},
       records: [],
       lastOutputAt: {},
       parkState: {},
@@ -1104,7 +1041,7 @@ describe("buildActiveSessionListing — fed by the live harness channel", () => 
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
       containers: useSessionsStore.getState().byOwner,
-      eventsByTicket: {},
+      signalsByTicket: {},
       records: [],
       lastOutputAt: {},
       parkState: {},

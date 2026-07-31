@@ -11,6 +11,7 @@ import {
   isTicketStatus,
   type ArchivedTicket,
   type Ticket,
+  type HarnessId,
   type TicketPriority,
   type TicketStatus,
 } from "@volli/shared";
@@ -506,4 +507,50 @@ export function unarchiveTicket(
  */
 export function deleteTicket(db: Database.Database, ticketId: string): void {
   prepared(db, "DELETE FROM tickets WHERE id = ?").run(ticketId);
+}
+
+/** Everything terminal scope resolution needs from the ticket/project boundary. */
+export interface TicketSessionContext {
+  projectId: string;
+  projectPath: string;
+  ticketPrefix: string;
+  ticketNumber: number;
+  preferredHarnessId: HarnessId;
+  usesWorktree: boolean;
+  setupCommand: string | null;
+}
+
+export function getTicketSessionContext(
+  db: Database.Database,
+  ticketId: string,
+): TicketSessionContext | undefined {
+  const row = prepared<
+    [string],
+    {
+      projectId: string;
+      projectPath: string;
+      ticketPrefix: string;
+      ticketNumber: number;
+      preferredHarnessId: HarnessId;
+      usesWorktree: number;
+      setupCommand: string | null;
+    }
+  >(
+    db,
+    `SELECT t.project_id AS projectId, p.path AS projectPath, p.ticket_prefix AS ticketPrefix,
+            t.ticket_number AS ticketNumber, t.preferred_harness_id AS preferredHarnessId,
+            t.uses_worktree AS usesWorktree, p.setup_command AS setupCommand
+       FROM tickets t JOIN projects p ON p.id = t.project_id WHERE t.id = ?`,
+  ).get(ticketId);
+  return row === undefined
+    ? undefined
+    : {
+        projectId: row.projectId,
+        projectPath: row.projectPath,
+        ticketPrefix: row.ticketPrefix,
+        ticketNumber: row.ticketNumber,
+        preferredHarnessId: row.preferredHarnessId,
+        usesWorktree: row.usesWorktree !== 0,
+        setupCommand: row.setupCommand,
+      };
 }

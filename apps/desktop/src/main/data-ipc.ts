@@ -2,10 +2,12 @@ import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import type Database from "better-sqlite3";
+import type { ControlPlane } from "@volli/control-plane";
 import {
   DATA_CHANNELS,
   DATA_IPC,
   derivePrefix,
+  errorMessage,
   LEGACY_BACKUP_APP_STATE_KEY,
   PROJECT_COLORS,
   sanitizeLegacyProjects,
@@ -77,7 +79,7 @@ import type {
 } from "@volli/shared";
 import { getAllAppState, setAppState } from "./db/app-state-repo";
 import { deleteComment, getComment, listComments, updateComment } from "./db/comments-repo";
-import { latestSessionSignalsByProject, listTicketEvents } from "./db/events-repo";
+import { listTicketEvents } from "./db/events-repo";
 import { listAllLabels, setLabelColor } from "./db/labels-repo";
 import {
   countProjects,
@@ -90,7 +92,7 @@ import {
   updateProjectBaseBranch,
   updateProjectSetupCommand,
 } from "./db/projects-repo";
-import { listSessions, listTicketSessions, updateTitle } from "./db/sessions-repo";
+import { createDesktopControlPlane, terminalSessionRecord } from "./session-control";
 import {
   getTicketRow,
   listAllTickets,
@@ -196,13 +198,14 @@ export function registerDataIpcHandlers(
      */
     liveSessionCwds?: () => string[];
     /**
-     * Interrupts every live agent session of a ticket, returning their ids (from
-     * the PtyManager). The backward-move choke point (issue #78): after a
-     * user-initiated move that leaves the active columns commits, its ticket's
-     * running agents are Esc'd and one `sessions_interrupted` event is recorded.
-     * Absent (tests, degraded boot) means the interrupt is a no-op.
+     * Interrupts every live agent attachment of a ticket after a committed
+     * backward move. The manager records intent and confirmed Esc delivery in
+     * each Session ledger; it does not close the attachment or emit a planner
+     * lifecycle event. Absent (tests, degraded boot) means a no-op.
      */
-    interruptTicketSessions?: (ticketId: string) => string[];
+    interruptTicketSessions?: (ticketId: string) => string[] | Promise<string[]>;
+    /** The app's single durable Session control plane. */
+    controlPlane?: ControlPlane;
   } = {},
 ): void {
   if (!handle.ok) {
@@ -211,6 +214,7 @@ export function registerDataIpcHandlers(
   }
 
   const db = handle.db;
+  const controlPlane = options.controlPlane ?? createDesktopControlPlane(db);
   const changeWatchManager = new WorktreeChangeWatchManager();
   const coalesceChangeSet = createCoalescer();
 
@@ -334,7 +338,7 @@ export function registerDataIpcHandlers(
       };
     },
 
-    "volli:ticket-move": (input: TicketMoveInput): TicketsResult => {
+    "volli:ticket-move": (input: TicketMoveInput): TicketsResult | Promise<TicketsResult> => {
       const now = Date.now();
       const actor = { kind: "user" } as const;
       // Snapshot the pre-move status BEFORE the move so the backward-move
@@ -345,16 +349,28 @@ export function registerDataIpcHandlers(
       // The move committed above (its own transaction); the interrupt is the
       // side effect, fired only for a real backward move (issue #78).
       if (before !== undefined) {
-        interruptOnBackwardMove(
-          db,
+        const interrupt = interruptOnBackwardMove(
           {
             ticketId: input.ticketId,
             fromStatus: before.status as TicketStatus,
             toStatus: input.toStatus,
           },
-          { now, actor },
           options.interruptTicketSessions,
         );
+        if (interrupt instanceof Promise) {
+          return interrupt.then(
+            () => ({ ok: true, tickets }),
+            (error: unknown) => {
+              // The board mutation already committed. An after-the-fact Esc
+              // delivery failure is operational evidence, not grounds to lie
+              // to the renderer that its deliberate move failed.
+              console.error(
+                `[volli] failed to interrupt ticket sessions after committed move: ${errorMessage(error)}`,
+              );
+              return { ok: true, tickets };
+            },
+          );
+        }
       }
       return { ok: true, tickets };
     },
@@ -410,8 +426,13 @@ export function registerDataIpcHandlers(
       return { ok: true, events: listTicketEvents(db, input.ticketId) };
     },
 
-    "volli:ticket-latest-signals": (input: ProjectIdInput): TicketLatestSignalsResult => {
-      return { ok: true, signals: latestSessionSignalsByProject(db, input.projectId) };
+    "volli:ticket-latest-signals": async (
+      input: ProjectIdInput,
+    ): Promise<TicketLatestSignalsResult> => {
+      return {
+        ok: true,
+        signals: [...(await controlPlane.listLatestTicketSignals({ projectId: input.projectId }))],
+      };
     },
 
     "volli:comment-list": (input: TicketIdInput): TicketCommentsResult => {
@@ -451,17 +472,40 @@ export function registerDataIpcHandlers(
       return { ok: true };
     },
 
-    "volli:session-list": (input: ProjectIdInput): SessionsResult => {
-      return { ok: true, sessions: listSessions(db, input.projectId) };
+    "volli:session-list": async (input: ProjectIdInput): Promise<SessionsResult> => {
+      const sessions = await controlPlane.listSessions({
+        projectId: input.projectId,
+        scope: "all",
+      });
+      return { ok: true, sessions: sessions.map(terminalSessionRecord) };
     },
 
-    "volli:session-list-for-ticket": (input: TicketIdInput): SessionsResult => {
-      return { ok: true, sessions: listTicketSessions(db, input.ticketId) };
+    "volli:session-list-for-ticket": async (input: TicketIdInput): Promise<SessionsResult> => {
+      const ticket = getTicketRow(db, input.ticketId);
+      if (ticket === undefined) return { ok: true, sessions: [] };
+      const sessions = await controlPlane.listSessions({
+        projectId: ticket.project_id,
+        scope: "ticket",
+        ticketId: input.ticketId,
+      });
+      return { ok: true, sessions: sessions.map(terminalSessionRecord) };
     },
 
-    "volli:session-rename": (input: SessionRenameInput): SessionRenameResult => {
-      const changed = updateTitle(db, input.sessionId, input.title.trim());
-      if (changed === 0) return { ok: false, error: "Unknown session" };
+    "volli:session-rename": async (input: SessionRenameInput): Promise<SessionRenameResult> => {
+      const existing = await controlPlane.getSession({ sessionId: input.sessionId });
+      if (existing === null) return { ok: false, error: "Unknown session" };
+      const submitted = await controlPlane.submit({
+        commandId: randomUUID(),
+        sessionId: input.sessionId,
+        intent: { kind: "session.retitle", title: input.title.trim() },
+        provenance: {
+          source: { kind: "user", id: "renderer", detail: null },
+          venue: { id: "local", kind: "local" },
+        },
+      });
+      if (submitted.receipt?.status !== "completed") {
+        return { ok: false, error: "Session rename was not completed" };
+      }
       return { ok: true };
     },
 

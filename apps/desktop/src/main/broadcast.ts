@@ -58,7 +58,7 @@ export function broadcastSystemAppearance(prefersDark: boolean): void {
  * window: automation may de-escalate a ticket's agents, but never silently —
  * the renderer toasts this where the mover is looking. Callers fire it only
  * when sessions were actually interrupted (`sessionIds` non-empty), mirroring
- * the `sessions_interrupted` event-log rule.
+ * the durable Session interrupt-receipt rule.
  */
 /**
  * Fans one canonical harness event out to every window (harness-events). The

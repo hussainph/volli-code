@@ -1,33 +1,39 @@
 # Volli Code — Agent Instructions
 
-Volli Code is a macOS desktop app built with Electron, React, and TypeScript. It merges Linear-style kanban planning with cmux-style embedded terminal agents. A ticket is a terminal workspace: moving it to **Doing** boots a coding agent (Claude Code, Codex, Opencode, or another CLI harness) in an isolated git worktree. The agent lifecycle drives the board and native notifications.
-
-This is a rewrite of the native Swift original at `../volli-swift`; agent-driven development proved slower in SwiftUI than in TypeScript.
+Volli Code is a local-first macOS workspace for planning and running coding sessions, built with Electron, React, and TypeScript. The current app combines a Linear-style board, isolated ticket worktrees, durable local history, and embedded terminal harnesses. The product direction is a chat-first Session UI backed by structured SDK/ACP adapters, with the terminal and bring-your-own TUI harnesses retained as secondary execution surfaces.
 
 ## Required context
 
-Read `docs/CONCEPT.md` before making any product or architecture decision. It contains the full concept and settled decision log; do not casually relitigate those decisions.
-
-Use `docs/SWIFT-REFERENCE.md` for the Swift app's feature-parity and data-model reference.
+Use `CONTEXT.md` for canonical domain language and `docs/DESIGN.md` for the living visual language. The code and tests are authoritative for current behavior. Treat future architecture described here as direction, not as already-implemented behavior.
 
 ## Structure
 
-- `apps/desktop/src/main/` — Electron main process: node-pty, SQLite, git/worktree execution, the `volli` CLI socket, and notifications. This is the only place Node APIs run.
+- `apps/desktop/src/main/` — Electron main process: SQLite, adapter hosting, node-pty, git/worktree execution, the `volli` CLI socket, and notifications. This is the only place Node APIs run.
 - `apps/desktop/src/preload/` — the typed `contextBridge` API and the only bridge between renderer and main. Keep it thin and explicit.
-- `apps/desktop/src/renderer/` — React UI and Zustand stores. Do not import Node APIs.
+- `apps/desktop/src/renderer/` — React UI and Zustand stores. UI state is a projection of durable main-process state plus ephemeral view state. Do not import Node APIs.
 - `apps/desktop/scripts/` — Node build and development orchestration.
-- `packages/shared/` (`@volli/shared`) — pure, unit-tested domain code: models, ticket state machine, event-log types, and branch/slug rules. Do not import Electron, Node, or DOM APIs. Put all automatic ticket transitions here.
+- `packages/shared/` (`@volli/shared`) — pure, unit-tested domain code: models, ticket rules, event types, adapter capability definitions, and branch/slug rules. Do not import Electron, Node, or DOM APIs.
 - `apps/desktop/src/renderer/lab/` — the UI lab (`pnpm lab`): browser-only scratches for trying interactions against real components and tokens with fixture data, before they become app features. Dev-server only, never built; it imports the app, never the reverse.
 
-App data lives under Electron's `userData` directory as a fresh start, separate from the Swift app's data. The agent-facing `volli` CLI is planned but not yet built; it will be a separate binary over a Unix socket.
+App data lives under Electron's `userData` directory. The agent-facing `volli` CLI communicates with main over a Unix socket.
+
+## Architecture direction
+
+- A Session is durable and owns identity and ordered local history before any adapter attaches. Adapters, processes, terminal panes, and UI views never own Session lifetime.
+- Commands are explicit user intent. Persist intent before delivery; make acceptance idempotent and observable through durable receipts.
+- Events are immutable facts. Local durable history is canonical; renderer stores project it into UI state and structured attention.
+- Adapter capabilities are specific and may be negative. Do not force parity across SDK, ACP, or TUI harnesses.
+- Keep resume, terminal recreation, and history navigation as distinct semantics.
+- Retry transient transport failures without duplicating accepted work. Authentication, permissions, configuration, and quota failures require explicit user recovery.
+- Existing hooks and terminal markers are compatibility evidence for TUI adapters, not the canonical source of Session truth.
 
 ## Conventions
 
-- Keep the ticket state machine and all automatic movement logic pure, tested TypeScript in `@volli/shared`; the UI only observes it.
-- Route terminal access through the `TerminalEngine` interface over the preload bridge. `node-pty` never leaves `src/main`; xterm.js never leaves renderer terminal components.
-- Name ticket worktree branches `volli/<TICKET-ID>-<slug>`, for example `volli/VC-12-mcp-server`.
+- Keep ticket rules and automatic movement logic pure, tested TypeScript in `@volli/shared`; the UI only observes it.
+- Route terminal access through the `TerminalEngine` interface over the preload bridge. `node-pty` never leaves `src/main`; restty never leaves renderer terminal components.
+- Name ticket worktree branches `volli/<DISPLAY-ID>-<slug>`, for example `volli/VC-12-mcp-server`.
 - Use a branch, commit, and PR workflow. Never commit directly to `main`.
-- Surface every failed mutation to the user with an alert or toast. Never silently swallow errors; this was the Swift app's main systemic defect.
+- Surface every failed mutation to the user with an alert or toast. Never silently swallow errors.
 - Keep canonical design tokens in `apps/desktop/src/renderer/src/globals.css` as shadcn-style CSS variables. The color ones are **generated, never hand-authored**: a scope stores a canvas, the token set is derived from it at render time, and the two blocks between the BEGIN/END markers (`:root, :root.dark` and `:root.light`) are regenerated together with `node apps/desktop/scripts/generate-theme-css.mjs`. The app is not dark-only and `class="dark"` is not pinned — appearance resolves to light, dark or the system's choice, and preload stamps the resolved mode before the first frame.
 - Keep TypeScript-consumable domain colors, including the project-tile palette, in `@volli/shared`.
 - Use ember orange `#E8652A` as the accent and preserve the frosted/dark two-tier sidebar direction.
@@ -52,19 +58,17 @@ App data lives under Electron's `userData` directory as a fresh start, separate 
 
 The global `vp` toolchain CLI is used by this repository. Node and pnpm versions are pinned in the root `package.json`.
 
-## Settled stack
-
-The rationale for these decisions lives in `docs/CONCEPT.md`; do not reach for alternatives without reviewing it.
+## Retained foundations
 
 - **Data:** local SQLite via better-sqlite3, WAL mode, owned by the main process. Store transcripts as indexed files on disk. The product is local-first and single-player.
-- **Agents:** one worktree per ticket by default, with agent-agnostic command templates and first-class Claude Code, Codex, and Opencode adapters. Agents communicate with the planner through the bundled `volli` CLI, not MCP.
-- **Board:** fixed columns Backlog, Todo, Doing, Needs Review, and Done. One primary session per ticket drives automation. Manual moves override stale hook events. Automation never destroys data; archive worktrees instead of deleting them.
+- **Adapters:** preserve the manifest registry, exact-hash trust, capability evidence, launch configuration, and honest resume support already used by Claude Code, Codex, OpenCode, and custom TUI harnesses. Structured SDK/ACP adapters will attach at the same Session seam later.
+- **Execution:** one worktree per ticket by default. Agents may communicate with the planner through the bundled `volli` CLI. Terminal wrappers and hooks remain compatibility mechanisms for TUI harnesses.
+- **Board:** fixed columns Backlog, Todo, Doing, Needs Review, and Done. Explicit moves win over stale lifecycle evidence. Automation never destroys data; archive worktrees instead of deleting them.
 
 ## Reference implementations
 
 Check these before inventing a new solution:
 
-- `../volli-swift` — parity reference and currently further along.
 - [T3 Code](https://github.com/pingdotgg/t3code) — closest TypeScript/Electron sibling and validation of the stack.
 - [cmux](https://github.com/manaflow-ai/cmux) — resume commands, notifications, and socket scriptability.
 - [Vibe Kanban](https://github.com/BloopAI/vibe-kanban).
