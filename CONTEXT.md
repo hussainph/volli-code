@@ -1,7 +1,6 @@
 # Volli Code
 
-Local-first planner where a ticket is its terminal workspace. This glossary is the canonical
-project language; `docs/CONCEPT.md` holds the decision log behind it.
+Local-first planner and execution workspace. This glossary is the canonical project language. The Session terms below define the target architecture; code and tests remain authoritative for current behavior until the migration lands.
 
 ## Language
 
@@ -33,8 +32,49 @@ The ticket-workspace view of files in that ticket's worktree.
 _Avoid_: Project Files, artifact files
 
 **Session**:
-One continuous terminal interaction with its own history and resume identity, whether shown alone or alongside other surfaces.
-_Avoid_: pane session, split session
+The durable identity and locally ordered history of an agentic conversation. A Session is created before any executor attaches and outlives terminal panes, processes, adapters, UI surfaces, and execution venues. It remains openable after an attachment, turn, or Run completes; only explicit archival changes its availability. A Session may belong to one Ticket or be ticketless.
+_Avoid_: pane session, split session, harness process, terminal pane, UI tab
+
+**Session Event**:
+An immutable fact in a Session's locally ordered ledger: an attachment outcome,
+native observation, command outcome, message/turn boundary, or recovery signal.
+The control plane assigns the per-Session sequence; timestamps are metadata, not
+ledger order. Session Events are not Ticket Events, although a planner event may
+cite a Session as provenance.
+_Avoid_: session state, hook state, terminal state
+
+**Session Attachment**:
+One historical association between an existing Session and an executor or
+transport: its adapter identity, native conversation identity where available,
+venue, and attach/detach outcome. A Session keeps many historical attachments
+but has at most one live executor attachment. A terminal pane is a view of an
+attachment, not the attachment itself.
+_Avoid_: Session, terminal, harness state
+
+**Command**:
+Durable, explicit user intent directed at a Session, recorded before an adapter
+is asked to act. A Command does not imply that a transport accepted or completed
+the work; ambiguous delivery is reconciled before it is retried.
+_Avoid_: action, keystroke, request (when referring to accepted work)
+
+**Receipt**:
+The durable adapter-boundary record of a Command's observed outcome: accepted,
+rejected, completed, or unreconciled. A Receipt makes delivery observable
+without claiming an unsupported native guarantee.
+_Avoid_: event, acknowledgement (when no durable outcome exists)
+
+**Control Plane**:
+The UI- and adapter-agnostic interface that owns Session commands, facts,
+projections, and their durable storage contract. Electron main is its only
+SQLite writer in the initial local deployment; the interface is deliberately
+portable to a future daemon, cloud sandbox, or mobile client.
+_Avoid_: Electron main, adapter host, renderer store
+
+**Attention**:
+A reconstructible projection of committed Session facts that tells the user
+whether recovery or input is needed. It is not a source of truth and never
+turns silence alone into an agent lifecycle fact.
+_Avoid_: waiting flag, notification state
 
 **Split Tab**:
 One returnable tab-strip item that presents multiple independently owned surfaces together.
@@ -53,7 +93,10 @@ A first-class, project-scoped entity attached to tickets: a name plus an optiona
 _Avoid_: tag (the pre-persistence term for ad-hoc strings)
 
 **Ticket event**:
-One append-only history record of something that happened to a ticket (created, status changed, …). The event log is never rewritten; session and comment events join it in later milestones.
+One append-only planner-history record of something that happened to a Ticket
+(created, status changed, comment added, …). It records Ticket facts and
+planner-level consequences only; executor conversation facts live in the
+Session Event ledger. A Ticket Event may cite a Session as provenance.
 
 **Project**:
 A tracked codebase folder: name, path, ticket prefix, rail position. Removing one from Volli never touches the folder on disk.

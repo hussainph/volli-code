@@ -1,50 +1,27 @@
 # Volli Code
 
-**Where tickets become terminal workspaces.**
+**A local-first workspace for planning and running coding sessions.**
 
-Volli Code brings kanban planning and coding agents into one local-first macOS app. Each ticket carries the brief, branch, worktree, terminal sessions, and history of the work.
+Volli Code brings tickets, isolated worktrees, coding harnesses, and local history into one macOS app.
 
 > [!NOTE]
-> Volli Code is under active development. The tracker, SQLite persistence, ticket detail, and embedded terminal are working; the automatic ticket → worktree → agent lifecycle is being built now.
+> Volli Code is under active development. The current app is terminal-first; the planned architecture is a chat-first Session UI backed by structured SDK/ACP adapters, with the terminal retained as a secondary surface and bring-your-own TUI fallback.
 
 ![Volli Code kanban board](docs/assets/volli-code-board.png)
 
-## One loop from plan to pull request
+## What works today
 
-Most agent workflows split context between a tracker and a pile of terminals. The tracker does not know what the agents are doing, and the terminal does not know what the plan is.
+- A local SQLite-backed tracker with tickets, comments, activity, labels, and project settings.
+- Isolated ticket worktrees, Change Sets, publishing flows, and project file editing.
+- Embedded terminal sessions with tabs, splits, history, interruption, parking, and harness-specific resume support.
+- A capability-aware harness registry with exact-manifest trust, launch configuration, wrapper generation, hook evidence, and custom TUI adapters.
+- The bundled `volli` CLI for explicit ticket, session, notification, and diagnostic commands.
 
-Volli Code is built around a simpler loop:
+## Where it is going
 
-1. Write the ticket — its description and attachments become the agent's brief.
-2. Move it to **Doing** — Volli creates an isolated worktree and starts the coding agent you choose.
-3. Follow the board — agent activity moves the ticket between **Doing** and **Needs Review**.
-4. Review and ship — the branch, terminal history, and pull request stay attached to the ticket.
+The target Session model is durable independently of any live executor. A Session will own its local ordered event history before an adapter connects; SDK, ACP, and TUI adapters will attach according to their real capabilities rather than pretending to have feature parity.
 
-## Built for agent-driven work
-
-### The ticket is the workspace
-
-Planning and execution live together. Open a ticket to see its specification, live terminal sessions, comments, and full activity history.
-
-### The board reflects reality
-
-Volli's fixed workflow — **Backlog**, **Todo**, **Doing**, **Needs Review**, and **Done** — shows whose turn it is. Native notifications bring you back when an agent needs attention.
-
-### Parallel work stays isolated
-
-Each ticket gets its own git worktree and `volli/<ticket>-<slug>` branch by default, so multiple agents can work across projects without colliding.
-
-### Local-first by design
-
-Projects, tickets, preferences, and the event log live in SQLite on your Mac. Session transcripts stay as indexed local files. No account or cloud service is required.
-
-Volli Code is designed for Claude Code, Codex, OpenCode, and other CLI coding agents.
-
-## Why Volli Code?
-
-Coding agents now do long stretches of real engineering work, but the tools around them still treat planning and execution as separate jobs. That leaves the human syncing tickets, branches, terminal sessions, and review state by hand.
-
-Volli Code makes the ticket the durable unit of work. The board organizes the plan, the terminal executes it, and the event history records what happened — all in one place.
+That redesign still needs an immutable Session event ledger, idempotent command delivery and receipts, retry reconciliation, and structured attention states. The existing terminal infrastructure remains useful compatibility machinery, but it is not the future source of Session truth.
 
 ## Development
 
@@ -70,6 +47,4 @@ vp run -r test
 vp check
 ```
 
-Read the [product concept and decision log](docs/CONCEPT.md) for the full vision, or the [Swift reference](docs/SWIFT-REFERENCE.md) for the original app's parity target.
-
-Volli Code is an Electron, React, and TypeScript rewrite of the native Swift original.
+Canonical domain language lives in [`CONTEXT.md`](CONTEXT.md); the living visual language lives in [`docs/DESIGN.md`](docs/DESIGN.md).
