@@ -21,6 +21,15 @@ import { prepared } from "./prepared";
 /** Top-level format marker — lets a future importer/reader recognize the document before touching its shape. */
 export const EXPORT_FORMAT = "volli-export";
 
+/** Any value SQLite's `json_valid` columns can carry after parsing. */
+export type ExportJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly ExportJsonValue[]
+  | { readonly [key: string]: ExportJsonValue };
+
 export interface ExportProject {
   id: string;
   name: string;
@@ -136,10 +145,10 @@ export interface ExportSessionAttachment {
   continuity: string;
   nativeId: string | null;
   /** Parsed adapter-native metadata. */
-  nativeDetail: unknown | null;
+  nativeDetail: ExportJsonValue;
   observedKind: string;
   /** Parsed structured attachment failure. */
-  failure: unknown | null;
+  failure: ExportJsonValue;
   createdSequence: number;
 }
 
@@ -164,7 +173,7 @@ export interface ExportSessionCommand {
   /** Parsed explicit intent. */
   intent: unknown;
   /** Parsed frozen delivery route, or `null` for Session-level intent. */
-  route: unknown | null;
+  route: ExportJsonValue;
 }
 
 export interface ExportSessionCommandReceipt {
@@ -398,7 +407,8 @@ interface SessionRow {
 function exportSessions(db: Database.Database): ExportSession[] {
   const rows = prepared<[], SessionRow>(
     db,
-    "SELECT * FROM sessions ORDER BY id COLLATE BINARY",
+    `SELECT id, project_id, ticket_id, title, created_at
+       FROM sessions ORDER BY id COLLATE BINARY`,
   ).all();
   return rows.map((session) => ({
     id: session.id,
@@ -426,7 +436,9 @@ interface SessionAttachmentRow {
 function exportSessionAttachments(db: Database.Database): ExportSessionAttachment[] {
   const rows = prepared<[], SessionAttachmentRow>(
     db,
-    `SELECT * FROM session_attachments
+    `SELECT id, session_id, adapter_id, venue_id, venue_kind, continuity, native_id,
+            native_detail, observed_kind, failure, created_sequence
+       FROM session_attachments
       ORDER BY session_id COLLATE BINARY, created_sequence, id COLLATE BINARY`,
   ).all();
   return rows.map((attachment) => ({
@@ -438,9 +450,12 @@ function exportSessionAttachments(db: Database.Database): ExportSessionAttachmen
     continuity: attachment.continuity,
     nativeId: attachment.native_id,
     nativeDetail:
-      attachment.native_detail === null ? null : (JSON.parse(attachment.native_detail) as unknown),
+      attachment.native_detail === null
+        ? null
+        : (JSON.parse(attachment.native_detail) as ExportJsonValue),
     observedKind: attachment.observed_kind,
-    failure: attachment.failure === null ? null : (JSON.parse(attachment.failure) as unknown),
+    failure:
+      attachment.failure === null ? null : (JSON.parse(attachment.failure) as ExportJsonValue),
     createdSequence: attachment.created_sequence,
   }));
 }
@@ -460,7 +475,9 @@ interface SessionEventRow {
 function exportSessionEvents(db: Database.Database): ExportSessionEvent[] {
   const rows = prepared<[], SessionEventRow>(
     db,
-    `SELECT * FROM session_events
+    `SELECT id, session_id, sequence, occurred_at, recorded_at, provenance,
+            attachment_id, command_id, payload
+       FROM session_events
       ORDER BY session_id COLLATE BINARY, sequence, id COLLATE BINARY`,
   ).all();
   return rows.map((event) => ({
@@ -487,7 +504,8 @@ interface SessionCommandRow {
 function exportSessionCommands(db: Database.Database): ExportSessionCommand[] {
   const rows = prepared<[], SessionCommandRow>(
     db,
-    `SELECT * FROM session_commands
+    `SELECT id, session_id, created_at, intent, route
+       FROM session_commands
       ORDER BY session_id COLLATE BINARY, created_at, id COLLATE BINARY`,
   ).all();
   return rows.map((command) => ({
@@ -495,7 +513,7 @@ function exportSessionCommands(db: Database.Database): ExportSessionCommand[] {
     sessionId: command.session_id,
     createdAt: command.created_at,
     intent: JSON.parse(command.intent) as unknown,
-    route: command.route === null ? null : (JSON.parse(command.route) as unknown),
+    route: command.route === null ? null : (JSON.parse(command.route) as ExportJsonValue),
   }));
 }
 
@@ -512,7 +530,8 @@ interface SessionCommandReceiptRow {
 function exportSessionCommandReceipts(db: Database.Database): ExportSessionCommandReceipt[] {
   const rows = prepared<[], SessionCommandReceiptRow>(
     db,
-    `SELECT * FROM session_command_receipts
+    `SELECT id, session_id, command_id, sequence, recorded_at, receipt, receipt_event_id
+       FROM session_command_receipts
       ORDER BY session_id COLLATE BINARY, command_id COLLATE BINARY, sequence, id COLLATE BINARY`,
   ).all();
   return rows.map((receipt) => ({
@@ -570,10 +589,10 @@ function exportAppState(db: Database.Database): ExportAppState[] {
  * (`app.getVersion()`/`Date.now()` in main) and passed in here so this stays
  * a pure, easily-testable function of its arguments.
  */
-export async function buildExportDocument(
+export function buildExportDocument(
   db: Database.Database,
   options: BuildExportDocumentOptions,
-): Promise<ExportDocument> {
+): ExportDocument {
   const schemaVersion = db.pragma("user_version", { simple: true }) as number;
   const projects = exportProjects(db);
   const ticketPrefixById = new Map(projects.map((project) => [project.id, project.ticketPrefix]));

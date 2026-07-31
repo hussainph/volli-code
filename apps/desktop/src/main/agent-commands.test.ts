@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type {
   AgentRequest,
@@ -415,6 +415,32 @@ describe("agent command service", () => {
       await exec("ticket.move", { id: "VC-1", to: "todo" });
 
       expect(interruptedTickets).toEqual(["ticket-1"]);
+    });
+
+    it("keeps a committed move successful when its asynchronous interrupt rejects", async () => {
+      const { exec } = serviceWithInterrupt([]);
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await exec("ticket.create", { title: "T", status: "doing" });
+        const service = createAgentCommandService({
+          db: ctx.db,
+          appVersion: "1.2.3",
+          interruptTicketSessions: async () => {
+            throw new Error("pty unavailable");
+          },
+        });
+
+        const moved = await service.execute({
+          v: 1,
+          cmd: "ticket.move",
+          args: { id: "VC-1", to: "todo" },
+          ctx: { cwd: "/repo/volli", env: {} },
+        });
+
+        expect(moved).toMatchObject({ ok: true, data: { ticket: { status: "todo" } } });
+      } finally {
+        consoleError.mockRestore();
+      }
     });
   });
 
@@ -1414,6 +1440,63 @@ describe("agent command service", () => {
     controlPlane.submit = submit;
   });
 
+  it("does not claim a signal was recorded when its durable receipt is rejected", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+    insertSession(ctx.db, testSession("project-one", null, { id: sessionId }));
+    const controlPlane = createDesktopControlPlane(ctx.db);
+    await controlPlane.submit({
+      commandId: "archive-before-signal",
+      sessionId,
+      intent: { kind: "session.archive" },
+      provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
+    });
+    const mutations: unknown[] = [];
+    const service = createAgentCommandService({
+      db: ctx.db,
+      controlPlane,
+      appVersion: "1.2.3",
+      onMutation: (change) => mutations.push(change),
+    });
+
+    const response = await service.execute({
+      v: 1,
+      cmd: "session.done",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+    });
+
+    expect(response).toMatchObject({ ok: false, error: { code: "MUTATION_FAILED" } });
+    expect(mutations).toEqual([]);
+  });
+
+  it("does not list every project session for a hook addressed by VOLLI_SESSION", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+    insertSession(ctx.db, testSession("project-one", null, { id: sessionId }));
+    const controlPlane = createDesktopControlPlane(ctx.db);
+    const listed = vi.spyOn(controlPlane, "listSessions");
+    const service = createAgentCommandService({ db: ctx.db, controlPlane, appVersion: "1.2.3" });
+
+    const response = await service.execute({
+      v: 1,
+      cmd: "hook",
+      args: { harness: "claude-code", event: "turn.started" },
+      ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+    });
+
+    expect(response).toMatchObject({ ok: true, data: { session: "abcdef12" } });
+    expect(listed).not.toHaveBeenCalled();
+  });
+
   it("records scratch-session signals in the ledger and requires session context", async () => {
     ctx = openTestDb();
     insertProject(
@@ -1479,6 +1562,47 @@ describe("agent command service", () => {
 
       await link("second-uuid");
       expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBe("second-uuid");
+    });
+
+    it("preserves independent native fields when a wrapper announce races a session link", async () => {
+      linkService();
+      const controlPlane = createDesktopControlPlane(ctx.db);
+      const observe = controlPlane.observe.bind(controlPlane);
+      let delayFirstNativeWrite = true;
+      controlPlane.observe = async (observation) => {
+        if (delayFirstNativeWrite && observation.kind === "attachment.native_referenced") {
+          delayFirstNativeWrite = false;
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        }
+        return observe(observation);
+      };
+      const service = createAgentCommandService({
+        db: ctx.db,
+        controlPlane,
+        appVersion: "1.2.3",
+      });
+      const link = (id: string) =>
+        service.execute({
+          v: 1,
+          cmd: "session.link",
+          args: { id },
+          ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+        });
+      const announce = service.execute({
+        v: 1,
+        cmd: "session.harness",
+        args: { id: "claude-code" },
+        ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+      });
+
+      const [linked, announced] = await Promise.all([link("native-seed"), announce]);
+
+      expect(linked).toMatchObject({ ok: true });
+      expect(announced).toMatchObject({ ok: true });
+      expect(getSession(ctx.db, sessionId)).toMatchObject({
+        activeHarnessId: "claude-code",
+        harnessSessionId: "native-seed",
+      });
     });
 
     it("requires VOLLI_SESSION context (same wording style as session.done)", async () => {
@@ -1579,8 +1703,8 @@ describe("agent command service", () => {
       const response = await announce("claude-code");
 
       expect(response).toMatchObject({ ok: true, data: { changed: false } });
-      // Every launch updates the terminal-native reference, even when the
-      // effective harness did not change.
+      // The first announce makes the effective launch harness explicit in the
+      // terminal-native reference even though its semantic identity agrees.
       expect(getSession(ctx.db, sessionId)?.activeHarnessId).toBe("claude-code");
       expect(notices).toEqual([
         {
@@ -1611,6 +1735,23 @@ describe("agent command service", () => {
       expect(back).toMatchObject({ ok: true, data: { changed: true } });
       expect(getSession(ctx.db, sessionId)?.activeHarnessId).toBe("opencode");
       expect(notices).toHaveLength(2);
+    });
+
+    it("computes concurrent harness changes from each serialized native update", async () => {
+      const { announce, notices } = announceService("claude-code");
+
+      const [toCodex, backToClaude] = await Promise.all([
+        announce("codex"),
+        announce("claude-code"),
+      ]);
+
+      expect(toCodex).toMatchObject({ ok: true, data: { changed: true } });
+      expect(backToClaude).toMatchObject({ ok: true, data: { changed: true } });
+      expect(getSession(ctx.db, sessionId)?.activeHarnessId).toBe("claude-code");
+      expect(notices).toEqual([
+        expect.objectContaining({ harnessId: "codex", changed: true }),
+        expect.objectContaining({ harnessId: "claude-code", changed: true }),
+      ]);
     });
 
     it("requires VOLLI_SESSION context", async () => {
@@ -1679,6 +1820,47 @@ describe("agent command service", () => {
       // launch under an id no future resume could find.
       expect(first).toMatchObject({ ok: true, data: { harnessSessionId: firstId } });
       expect(second).toMatchObject({ ok: true, data: { harnessSessionId: secondId } });
+    });
+
+    it("does not report a minted id when its native write loses the live attachment", async () => {
+      announceService("cursor");
+      const controlPlane = createDesktopControlPlane(ctx.db);
+      const observe = controlPlane.observe.bind(controlPlane);
+      let closeAfterHarnessWrite = true;
+      controlPlane.observe = async (observation) => {
+        const event = await observe(observation);
+        if (closeAfterHarnessWrite && observation.kind === "attachment.native_referenced") {
+          closeAfterHarnessWrite = false;
+          await observe({
+            id: "close-before-mint",
+            kind: "attachment.closed",
+            sessionId,
+            attachmentId: observation.attachmentId,
+            occurredAt: 5000,
+            provenance: {
+              source: { kind: "system", id: "test", detail: null },
+              venue: { id: "local", kind: "local" },
+            },
+            outcome: "interrupted",
+          });
+        }
+        return event;
+      };
+      const service = createAgentCommandService({
+        db: ctx.db,
+        controlPlane,
+        appVersion: "1.2.3",
+      });
+
+      const response = await service.execute({
+        v: 1,
+        cmd: "session.harness",
+        args: { id: "cursor", mint: true },
+        ctx: { cwd: "/repo/volli", env: { session: sessionId } },
+      });
+
+      expect(response).toMatchObject({ ok: false, error: { code: "SESSION_ENDED" } });
+      expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBeNull();
     });
 
     // The one honest launch count. A PTY spawn would also count a harness the

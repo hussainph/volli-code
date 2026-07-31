@@ -3,7 +3,9 @@ import type {
   CommandReceipt,
   CommandReceiptResult,
   ListSessionEventsQuery,
+  ListLatestTicketSignalsQuery,
   ListSessionsQuery,
+  LatestSessionSignal,
   Session,
   SessionAttachment,
   SessionAttachmentFailure,
@@ -68,6 +70,8 @@ export function createSqliteSessionLedger(db: Database.Database): SessionLedger 
 }
 
 class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
+  readonly #touchedSessionIds = new Set<string>();
+
   constructor(
     private readonly db: Database.Database,
     private readonly isOpen: () => boolean,
@@ -100,6 +104,71 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     return rows.map((row) => decodeSession(row, "sessions row"));
   }
 
+  countSessions(query: ListSessionsQuery): number {
+    this.assertOpen();
+    const scope =
+      query.scope === "ticket"
+        ? " AND ticket_id = @ticketId"
+        : query.scope === "scratch"
+          ? " AND ticket_id IS NULL"
+          : "";
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS count
+           FROM sessions
+          WHERE project_id = @projectId${scope}`,
+      )
+      .get(query.scope === "ticket" ? query : { projectId: query.projectId }) as unknown;
+    return readInteger(rowValue(row, "count", "session count"), "session count");
+  }
+
+  listLatestTicketSignals(query: ListLatestTicketSignalsQuery): readonly LatestSessionSignal[] {
+    this.assertOpen();
+    const rows = this.db
+      .prepare(
+        `WITH latest_session_signals AS (
+           SELECT s.ticket_id AS ticket_id,
+                  s.id AS session_id,
+                  json_extract(e.payload, '$.signal') AS signal,
+                  json_extract(e.payload, '$.reason') AS reason,
+                  e.occurred_at AS occurred_at,
+                  ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY e.sequence DESC) AS session_rank
+             FROM sessions s
+             JOIN session_events e ON e.session_id = s.id
+            WHERE s.project_id = @projectId
+              AND s.ticket_id IS NOT NULL
+              AND json_extract(e.payload, '$.kind') = 'session.signaled'
+         ), latest_ticket_signals AS (
+           SELECT ticket_id,
+                  session_id,
+                  signal,
+                  reason,
+                  occurred_at,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY ticket_id
+                    ORDER BY occurred_at DESC, session_id COLLATE BINARY DESC
+                  ) AS ticket_rank
+             FROM latest_session_signals
+            WHERE session_rank = 1
+         )
+         SELECT ticket_id, session_id, signal, reason, occurred_at
+           FROM latest_ticket_signals
+          WHERE ticket_rank = 1
+          ORDER BY ticket_id COLLATE BINARY ASC`,
+      )
+      .all(query) as unknown[];
+    return rows.map((row) => {
+      const value = asRecord(row, "latest ticket signal row");
+      return {
+        ticketId: readString(value.ticket_id, "latest ticket signal row.ticket_id"),
+        sessionId: readString(value.session_id, "latest ticket signal row.session_id"),
+        signal: enumValue(value.signal, ["done", "blocked"], "latest ticket signal row.signal"),
+        reason: readNullableString(value.reason, "latest ticket signal row.reason"),
+        createdAt: readInteger(value.occurred_at, "latest ticket signal row.occurred_at"),
+      };
+    });
+  }
+
   insertSession(session: Session): void {
     this.assertOpen();
     assertSession(session, "Session");
@@ -127,6 +196,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
   appendEvent(event: SessionEvent): void {
     this.assertOpen();
     assertEvent(event, "Session event");
+    this.#touchedSessionIds.add(event.sessionId);
     this.assertGloballyUnusedId(event.id);
     const prior = this.db
       .prepare(
@@ -269,6 +339,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     this.assertGloballyUnusedId(receipt.id);
     const command = this.getCommand(receipt.commandId);
     if (!command) throw new Error(`Command ${receipt.commandId} was not found`);
+    this.#touchedSessionIds.add(command.sessionId);
     this.db
       .prepare(
         `INSERT INTO session_command_receipts
@@ -288,42 +359,46 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
   /** Called at the transaction boundary, after every append has happened. */
   assertReceiptEventPairs(): void {
     this.assertOpen();
-    const unpaired = this.db
-      .prepare(
-        `SELECT r.id
-           FROM session_command_receipts r
-           JOIN session_commands c ON c.id = r.command_id
-           LEFT JOIN session_events e ON e.id = r.receipt_event_id
-          WHERE r.receipt_event_id IS NULL
-             OR e.id IS NULL
-             OR e.session_id <> r.session_id
-             OR c.session_id <> r.session_id
-             OR e.command_id <> r.command_id
-             OR e.sequence <> r.sequence
-             OR e.recorded_at <> r.recorded_at
-          LIMIT 1`,
-      )
-      .get() as unknown;
-    if (unpaired !== undefined) {
-      throw new Error(
-        `Receipt ${readString(rowValue(unpaired, "id", "receipt"), "receipt id")} has no matching event`,
-      );
-    }
-    const orphanEvent = this.db
-      .prepare(
-        `SELECT e.id
-           FROM session_events e
-           LEFT JOIN session_command_receipts r
-             ON r.id = json_extract(e.payload, '$.receipt.id')
-          WHERE json_extract(e.payload, '$.kind') = 'command.receipt.recorded'
-            AND (r.id IS NULL OR r.session_id <> e.session_id OR r.command_id <> e.command_id)
-          LIMIT 1`,
-      )
-      .get() as unknown;
-    if (orphanEvent !== undefined) {
-      throw new Error(
-        `Receipt event ${readString(rowValue(orphanEvent, "id", "receipt event"), "receipt event id")} has no matching receipt`,
-      );
+    for (const sessionId of this.#touchedSessionIds) {
+      const unpaired = this.db
+        .prepare(
+          `SELECT r.id
+             FROM session_command_receipts r
+             JOIN session_commands c ON c.id = r.command_id
+             LEFT JOIN session_events e ON e.id = r.receipt_event_id
+            WHERE r.session_id = @sessionId
+              AND (r.receipt_event_id IS NULL
+                   OR e.id IS NULL
+                   OR e.session_id <> r.session_id
+                   OR c.session_id <> r.session_id
+                   OR e.command_id <> r.command_id
+                   OR e.sequence <> r.sequence
+                   OR e.recorded_at <> r.recorded_at)
+            LIMIT 1`,
+        )
+        .get({ sessionId }) as unknown;
+      if (unpaired !== undefined) {
+        throw new Error(
+          `Receipt ${readString(rowValue(unpaired, "id", "receipt"), "receipt id")} has no matching event`,
+        );
+      }
+      const orphanEvent = this.db
+        .prepare(
+          `SELECT e.id
+             FROM session_events e
+             LEFT JOIN session_command_receipts r
+               ON r.id = json_extract(e.payload, '$.receipt.id')
+            WHERE e.session_id = @sessionId
+              AND json_extract(e.payload, '$.kind') = 'command.receipt.recorded'
+              AND (r.id IS NULL OR r.session_id <> e.session_id OR r.command_id <> e.command_id)
+            LIMIT 1`,
+        )
+        .get({ sessionId }) as unknown;
+      if (orphanEvent !== undefined) {
+        throw new Error(
+          `Receipt event ${readString(rowValue(orphanEvent, "id", "receipt event"), "receipt event id")} has no matching receipt`,
+        );
+      }
     }
   }
 

@@ -788,6 +788,7 @@ function sessionForPublicId(
 }
 
 async function updateTerminalNative(
+  locks: Map<string, Promise<void>>,
   controlPlane: ControlPlane,
   session: SessionRecord,
   update: (
@@ -795,28 +796,46 @@ async function updateTerminalNative(
   ) => ReturnType<typeof readTerminalAttachmentDetail>,
   occurredAt: number,
 ): Promise<SessionRecord | null> {
-  const projection = await controlPlane.getSession({ sessionId: session.id });
-  if (projection === null) return null;
-  const attachment = latestTerminalAttachment(projection.attachments);
-  if (attachment === null || attachment.status !== "open") return null;
-  const detail = readTerminalAttachmentDetail(attachment.native);
-  if (detail === null) return null;
-  const next = update(detail);
-  if (next === null) return null;
-  await controlPlane.observe({
-    id: randomUUID(),
-    kind: "attachment.native_referenced",
-    sessionId: session.id,
-    attachmentId: attachment.id,
-    occurredAt,
-    provenance: {
-      source: { kind: "adapter", id: "terminal", detail: null },
-      venue: { id: "local", kind: "local" },
-    },
-    native: terminalNativeReference(next),
+  // `attachment.native_referenced` replaces the opaque native detail rather
+  // than patching it. Hooks and wrapper announces use separate socket
+  // connections, so their read → observe pairs can overlap and otherwise drop
+  // each other's field. Serialize that tiny read-modify-write critical section
+  // per durable Session; different Sessions still proceed independently.
+  const previous = locks.get(session.id) ?? Promise.resolve();
+  let release: (() => void) | undefined;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
   });
-  const updated = await controlPlane.getSession({ sessionId: session.id });
-  return updated === null ? null : terminalSessionRecord(updated);
+  locks.set(session.id, current);
+  await previous;
+  try {
+    const projection = await controlPlane.getSession({ sessionId: session.id });
+    if (projection === null) return null;
+    const attachment = latestTerminalAttachment(projection.attachments);
+    if (attachment === null || attachment.status !== "open") return null;
+    const detail = readTerminalAttachmentDetail(attachment.native);
+    if (detail === null) return null;
+    const next = update(detail);
+    if (next === null) return null;
+    if (next === detail) return terminalSessionRecord(projection);
+    await controlPlane.observe({
+      id: randomUUID(),
+      kind: "attachment.native_referenced",
+      sessionId: session.id,
+      attachmentId: attachment.id,
+      occurredAt,
+      provenance: {
+        source: { kind: "adapter", id: "terminal", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+      native: terminalNativeReference(next),
+    });
+    const updated = await controlPlane.getSession({ sessionId: session.id });
+    return updated === null ? null : terminalSessionRecord(updated);
+  } finally {
+    release?.();
+    if (locks.get(session.id) === current) locks.delete(session.id);
+  }
 }
 
 /**
@@ -874,17 +893,29 @@ export function createAgentCommandService(
   const git = options.git ?? runGitCapturing;
   const worktreeExists = options.worktreeExists ?? existsSync;
   const controlPlane = options.controlPlane;
+  const terminalUpdateLocks = new Map<string, Promise<void>>();
 
   return {
     async execute(request): Promise<AgentResponse> {
       const projects = listProjects(options.db);
-      const sessions = (
-        await Promise.all(
-          projects.map((project) =>
-            controlPlane.listSessions({ projectId: project.id, scope: "all" }),
-          ),
-        )
-      ).flatMap((projections) => projections.map(terminalSessionRecord));
+      // Hooks arrive on a process-per-event hot path. They address one durable
+      // Session directly, so avoid taking a complete multi-project snapshot
+      // merely to find it. Other commands retain the established list snapshot
+      // until their own command-specific resolution is made lazy.
+      const sessions =
+        request.cmd === "hook" ||
+        request.cmd === "session.done" ||
+        request.cmd === "session.blocked" ||
+        request.cmd === "session.link" ||
+        request.cmd === "session.harness"
+          ? []
+          : (
+              await Promise.all(
+                projects.map((project) =>
+                  controlPlane.listSessions({ projectId: project.id, scope: "all" }),
+                ),
+              )
+            ).flatMap((projections) => projections.map(terminalSessionRecord));
       if (request.cmd === "identify") {
         const sessionId = request.ctx.env.session;
         if (sessionId) {
@@ -1069,7 +1100,8 @@ export function createAgentCommandService(
             "session done and blocked require VOLLI_SESSION context.",
           );
         }
-        const session = sessions.find((candidate) => candidate.id === sessionId);
+        const projection = await controlPlane.getSession({ sessionId });
+        const session = projection === null ? null : terminalSessionRecord(projection);
         if (!session) return failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`);
         const reasonValue = request.args["reason"];
         if (reasonValue !== undefined && typeof reasonValue !== "string") {
@@ -1077,7 +1109,7 @@ export function createAgentCommandService(
         }
         const reason = typeof reasonValue === "string" ? reasonValue : null;
         const signal = request.cmd === "session.done" ? "done" : "blocked";
-        await controlPlane.submit({
+        const submitted = await controlPlane.submit({
           commandId: newId(),
           sessionId: session.id,
           intent: { kind: "session.signal", signal, reason },
@@ -1086,6 +1118,9 @@ export function createAgentCommandService(
             venue: { id: "local", kind: "local" },
           },
         });
+        if (submitted.receipt?.status !== "completed") {
+          return failure("MUTATION_FAILED", "The Session signal was not durably completed.");
+        }
         options.onMutation?.({
           ...(session.ticketId === null ? {} : { ticketId: session.ticketId }),
           projectId: session.projectId,
@@ -1111,7 +1146,8 @@ export function createAgentCommandService(
         if (!sessionId) {
           return failure("CONTEXT_REQUIRED", "session link requires VOLLI_SESSION context.");
         }
-        const session = sessions.find((candidate) => candidate.id === sessionId);
+        const projection = await controlPlane.getSession({ sessionId });
+        const session = projection === null ? null : terminalSessionRecord(projection);
         if (!session) return failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`);
         const idValue = request.args["id"];
         if (typeof idValue !== "string") {
@@ -1125,6 +1161,7 @@ export function createAgentCommandService(
           return failure("INVALID_REQUEST", "The harness session id is too long (max 200 chars).");
         }
         const updated = await updateTerminalNative(
+          terminalUpdateLocks,
           controlPlane,
           session,
           (detail) => ({ ...detail, harnessSessionId }),
@@ -1169,7 +1206,8 @@ export function createAgentCommandService(
         if (!sessionId) {
           return failure("CONTEXT_REQUIRED", "session harness requires VOLLI_SESSION context.");
         }
-        const session = sessions.find((candidate) => candidate.id === sessionId);
+        const projection = await controlPlane.getSession({ sessionId });
+        const session = projection === null ? null : terminalSessionRecord(projection);
         if (!session) return failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`);
         // Ended is ended, the same rule `hook` applies and for the same reason:
         // `VOLLI_SESSION` is exported into the terminal's environment, so a tmux
@@ -1214,11 +1252,17 @@ export function createAgentCommandService(
         // `delivered` channel, and could never be judged silent. `changed`
         // stays ON the notice — the renderer still needs it to decide whether
         // to repoint the durable record's labels — but it stops being the gate.
-        const changed = harnessId !== effectiveHarnessId(session);
+        let changed = false;
         const nativeUpdate = await updateTerminalNative(
+          terminalUpdateLocks,
           controlPlane,
           session,
-          (detail) => ({ ...detail, activeHarnessId: harnessId }),
+          (detail) => {
+            changed = harnessId !== (detail.activeHarnessId ?? detail.harnessId);
+            return detail.activeHarnessId === harnessId
+              ? detail
+              : { ...detail, activeHarnessId: harnessId };
+          },
           now(),
         );
         if (nativeUpdate === null)
@@ -1246,12 +1290,16 @@ export function createAgentCommandService(
         if (minted !== null) {
           // Overwrites, always. The seed belongs to the launch that is starting
           // now; the previous one describes an agent this terminal has quit.
-          await updateTerminalNative(
+          const mintedUpdate = await updateTerminalNative(
+            terminalUpdateLocks,
             controlPlane,
             nativeUpdate,
             (detail) => ({ ...detail, harnessSessionId: minted }),
             now(),
           );
+          if (mintedUpdate === null) {
+            return failure("SESSION_ENDED", `Session ${shortSessionId(session.id)} has ended.`);
+          }
         }
         return {
           v: 1,
@@ -1273,7 +1321,8 @@ export function createAgentCommandService(
         if (!sessionId) {
           return failure("CONTEXT_REQUIRED", "hook requires VOLLI_SESSION context.");
         }
-        const session = sessions.find((candidate) => candidate.id === sessionId);
+        const projection = await controlPlane.getSession({ sessionId });
+        const session = projection === null ? null : terminalSessionRecord(projection);
         if (!session) return failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`);
         // A session row outlives its PTY, and `VOLLI_SESSION` outlives both: it
         // is exported into the session's environment, so anything that escapes
@@ -1332,6 +1381,7 @@ export function createAgentCommandService(
         // arrival is not newest, and this row seeds every future resume.
         if (harnessSessionId !== null && !superseded) {
           await updateTerminalNative(
+            terminalUpdateLocks,
             controlPlane,
             session,
             (detail) => ({ ...detail, harnessSessionId }),
@@ -1799,16 +1849,20 @@ export function createAgentCommandService(
           // Backward-move interrupt (issue #78): the move committed above, so the
           // interrupt runs as its side effect. `resolved.ticket.status` is the
           // pre-move status (same-column no-ops already returned above).
-          await interruptOnBackwardMove(
-            options.db,
-            {
-              ticketId: resolved.ticket.id,
-              fromStatus: resolved.ticket.status,
-              toStatus: to,
-            },
-            { now: movedAt, actor: actor.actor },
-            options.interruptTicketSessions,
-          );
+          try {
+            await interruptOnBackwardMove(
+              {
+                ticketId: resolved.ticket.id,
+                fromStatus: resolved.ticket.status,
+                toStatus: to,
+              },
+              options.interruptTicketSessions,
+            );
+          } catch (error) {
+            console.error(
+              `[volli] failed to interrupt sessions after moving ${resolved.ticket.id}: ${errorMessage(error)}`,
+            );
+          }
           // Guardrail is visibility, not caps (decision 2): an agent- or
           // automation-initiated entry into Doing fires a native notification.
           // A plain CLI move (no session env → user actor, "the door not the

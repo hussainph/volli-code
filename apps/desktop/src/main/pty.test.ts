@@ -292,6 +292,47 @@ afterEach(() => {
 });
 
 describe("volli:terminal-create", () => {
+  it("preserves the new Session without inventing an attachment when executor.start is rejected", async () => {
+    const controlPlane = createDesktopControlPlane(testDb.db);
+    const submit = controlPlane.submit.bind(controlPlane);
+    controlPlane.submit = async (request) => {
+      const result = await submit(request);
+      if (request.intent.kind !== "executor.start") return result;
+      return {
+        ...result,
+        receipt: {
+          id: "rejected-start",
+          commandId: result.command.id,
+          status: "rejected" as const,
+          code: "test_rejection",
+          detail: "The test rejected terminal startup",
+          recordedAt: 1,
+          sequence: 2,
+        },
+      };
+    };
+    manager = registerTerminalIpcHandlers(
+      { ok: true, db: testDb.db },
+      { socketPath: "/profile/volli.sock", binDir: "/profile/bin" },
+      controlPlane,
+    );
+
+    const result = await invokeCreate(makeWebContents(), {
+      workspaceId: "w",
+      cwd: root,
+      cols: 80,
+      rows: 24,
+    });
+    const projection = (await controlPlane.listSessions({ projectId: "w", scope: "all" }))[0];
+
+    expect(result).toEqual({
+      ok: false,
+      error: "The Session cannot accept another terminal attachment",
+    });
+    expect(projection?.attachments).toEqual([]);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it("spawns a login shell in the requested cwd with a 256-color TERM", async () => {
     const { sessionId } = await createSession();
     expect(typeof sessionId).toBe("string");
@@ -1430,6 +1471,12 @@ describe("PtyManager.interruptTicketSessions", () => {
   });
 
   it("keeps interrupting the rest when one session's pty write throws", async () => {
+    const controlPlane = createDesktopControlPlane(testDb.db);
+    manager = registerTerminalIpcHandlers(
+      { ok: true, db: testDb.db },
+      { socketPath: "/profile/volli.sock", binDir: "/profile/bin" },
+      controlPlane,
+    );
     const broken = await createKickoffSession("itk1", { harnessId: "codex", prompt: "go" });
     const healthy = await createKickoffSession("itk1", { harnessId: "codex", prompt: "go" });
     if (!broken.result.ok || !healthy.result.ok) throw new Error("expected two sessions");
@@ -1445,6 +1492,15 @@ describe("PtyManager.interruptTicketSessions", () => {
 
       expect(interrupted).toEqual([healthy.result.sessionId]);
       expect(healthy.pty.write).toHaveBeenCalledWith("\x1b");
+      const events = await controlPlane.listEvents({ sessionId: broken.result.sessionId });
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            kind: "command.receipt.recorded",
+            receipt: expect.objectContaining({ status: "unreconciled" }),
+          }),
+        }),
+      );
     } finally {
       consoleError.mockRestore();
     }

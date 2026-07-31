@@ -295,9 +295,7 @@ describe("interruptOnBackwardMove", () => {
     createTicket("t1", "doing");
 
     const interrupted = interruptOnBackwardMove(
-      ctx.db,
       { ticketId: "t1", fromStatus: "doing", toStatus: "todo" },
-      { now: 2, actor: USER },
       () => ["s1", "s2"],
     );
 
@@ -309,12 +307,9 @@ describe("interruptOnBackwardMove", () => {
     seed();
     createTicket("t1", "doing");
 
-    interruptOnBackwardMove(
-      ctx.db,
-      { ticketId: "t1", fromStatus: "doing", toStatus: "backlog" },
-      { now: 2, actor: AUTOMATION },
-      () => ["s1"],
-    );
+    interruptOnBackwardMove({ ticketId: "t1", fromStatus: "doing", toStatus: "backlog" }, () => [
+      "s1",
+    ]);
     expect(listTicketEvents(ctx.db, "t1").map((event) => event.payload.kind)).toEqual(["created"]);
   });
 
@@ -323,9 +318,7 @@ describe("interruptOnBackwardMove", () => {
     createTicket("t1", "doing");
 
     const interrupted = interruptOnBackwardMove(
-      ctx.db,
       { ticketId: "t1", fromStatus: "doing", toStatus: "done" },
-      { now: 2, actor: USER },
       () => ["s1"],
     );
     expect(interrupted).toEqual(["s1"]);
@@ -336,9 +329,7 @@ describe("interruptOnBackwardMove", () => {
     createTicket("t1", "doing");
 
     const interrupted = interruptOnBackwardMove(
-      ctx.db,
       { ticketId: "t1", fromStatus: "doing", toStatus: "needs_review" },
-      { now: 2, actor: USER },
       () => ["s1"],
     );
     expect(interrupted).toEqual([]);
@@ -349,9 +340,7 @@ describe("interruptOnBackwardMove", () => {
     createTicket("t1", "doing");
 
     const interrupted = interruptOnBackwardMove(
-      ctx.db,
       { ticketId: "t1", fromStatus: "doing", toStatus: "todo" },
-      { now: 2, actor: USER },
       undefined,
     );
     expect(interrupted).toEqual([]);
@@ -362,12 +351,22 @@ describe("interruptOnBackwardMove", () => {
     createTicket("t1", "doing");
 
     const interrupted = interruptOnBackwardMove(
-      ctx.db,
       { ticketId: "t1", fromStatus: "doing", toStatus: "todo" },
-      { now: 2, actor: USER },
       () => [],
     );
     expect(interrupted).toEqual([]);
+  });
+
+  it("passes through the Session ids from an asynchronous interrupt seam", async () => {
+    seed();
+    createTicket("t1", "doing");
+
+    await expect(
+      interruptOnBackwardMove(
+        { ticketId: "t1", fromStatus: "doing", toStatus: "todo" },
+        async () => ["session-a", "session-b"],
+      ),
+    ).resolves.toEqual(["session-a", "session-b"]);
   });
 });
 

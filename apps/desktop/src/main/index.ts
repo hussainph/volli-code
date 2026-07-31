@@ -400,18 +400,27 @@ app.whenReady().then(async () => {
               attachment.venue.kind === "local" &&
               attachment.status === "open"
             ) {
-              await controlPlane.observe({
-                id: randomUUID(),
-                kind: "attachment.closed",
-                sessionId: projection.session.id,
-                attachmentId: attachment.id,
-                occurredAt: Date.now(),
-                provenance: {
-                  source: { kind: "system", id: "desktop-recovery", detail: null },
-                  venue: { id: "local", kind: "local" },
-                },
-                outcome: "interrupted",
-              });
+              try {
+                await controlPlane.observe({
+                  id: randomUUID(),
+                  kind: "attachment.closed",
+                  sessionId: projection.session.id,
+                  attachmentId: attachment.id,
+                  occurredAt: Date.now(),
+                  provenance: {
+                    source: { kind: "system", id: "desktop-recovery", detail: null },
+                    venue: { id: "local", kind: "local" },
+                  },
+                  outcome: "interrupted",
+                });
+              } catch (error) {
+                // One malformed or concurrently-closed attachment must not
+                // leave every later stale terminal falsely open after relaunch.
+                console.error(
+                  `[volli] failed to recover attachment ${attachment.id}:`,
+                  errorMessage(error),
+                );
+              }
             }
           }
         }
@@ -459,7 +468,12 @@ app.whenReady().then(async () => {
   // the ref: registration below runs before the PtyManager is built, but the
   // seam only ever fires at invoke time, long after boot.
   const interruptTicketSessionsAnnounced = async (ticketId: string): Promise<string[]> => {
-    const sessionIds = (await ptyManagerRef?.interruptTicketSessions(ticketId)) ?? [];
+    let sessionIds: string[] = [];
+    try {
+      sessionIds = (await ptyManagerRef?.interruptTicketSessions(ticketId)) ?? [];
+    } catch (error) {
+      console.error(`[volli] failed to interrupt ticket ${ticketId}:`, errorMessage(error));
+    }
     if (sessionIds.length > 0) broadcastSessionsInterrupted(ticketId, sessionIds);
     return sessionIds;
   };

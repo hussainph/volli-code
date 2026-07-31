@@ -30,7 +30,7 @@ App data lives under Electron's `userData` directory. The agent-facing `volli` C
 ## Conventions
 
 - Keep ticket rules and automatic movement logic pure, tested TypeScript in `@volli/shared`; the UI only observes it.
-- Route terminal access through the `TerminalEngine` interface over the preload bridge. `node-pty` never leaves `src/main`; xterm.js never leaves renderer terminal components.
+- Route terminal access through the `TerminalEngine` interface over the preload bridge. `node-pty` never leaves `src/main`; restty never leaves renderer terminal components.
 - Name ticket worktree branches `volli/<DISPLAY-ID>-<slug>`, for example `volli/VC-12-mcp-server`.
 - Use a branch, commit, and PR workflow. Never commit directly to `main`.
 - Surface every failed mutation to the user with an alert or toast. Never silently swallow errors.

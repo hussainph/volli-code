@@ -12,6 +12,7 @@ import type {
   TicketCommentResult,
   TicketCommentsResult,
   TicketEventsResult,
+  TicketLatestSignalsResult,
   TicketResult,
   TicketsResult,
   VolliIpcChannel,
@@ -83,6 +84,7 @@ vi.mock("./worktree", () => ({
 }));
 
 import { registerDataIpcHandlers } from "./data-ipc";
+import { createDesktopControlPlane } from "./session-control";
 import { insertSession } from "./session-control/test-support";
 import { openTestDb, testSession } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
@@ -700,6 +702,30 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
 
     expect(interrupt).toHaveBeenCalledExactlyOnceWith(ticket.id);
   });
+
+  it("keeps the committed move successful when the asynchronous interrupt rejects", async () => {
+    const interruptTicketSessions = vi.fn(async () => {
+      throw new Error("terminal interrupt unavailable");
+    });
+    const logFailure = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { interruptTicketSessions });
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    move(projectId, ticket.id, "doing");
+
+    const result = await invoke<Promise<TicketsResult>>("volli:ticket-move", {
+      projectId,
+      ticketId: ticket.id,
+      toStatus: "todo",
+      toIndex: 0,
+    });
+
+    expect(result.ok && result.tickets[0]?.status).toBe("todo");
+    expect(logFailure).toHaveBeenCalledWith(
+      "[volli] failed to interrupt ticket sessions after committed move: terminal interrupt unavailable",
+    );
+  });
 });
 
 describe("volli:ticket-events", () => {
@@ -823,6 +849,57 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
   });
 });
 
+describe("volli:ticket-latest-signals", () => {
+  it("uses the ControlPlane's bounded latest-signal query with a deterministic session-id tie-break", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const controlPlane = createDesktopControlPlane(ctx.db, { now: () => 500 });
+    insertSession(ctx.db, testSession(projectId, ticket.id, { id: "session-a" }));
+    insertSession(ctx.db, testSession(projectId, ticket.id, { id: "session-z" }));
+    await controlPlane.submit({
+      commandId: "signal-a",
+      sessionId: "session-a",
+      intent: { kind: "session.signal", signal: "done", reason: "Earlier id" },
+      provenance: {
+        source: { kind: "user", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+    await controlPlane.submit({
+      commandId: "signal-z",
+      sessionId: "session-z",
+      intent: { kind: "session.signal", signal: "blocked", reason: "Later id" },
+      provenance: {
+        source: { kind: "user", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+    const listSessions = vi
+      .spyOn(controlPlane, "listSessions")
+      .mockRejectedValue(new Error("should not project every session"));
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { controlPlane });
+
+    const result = await invoke<Promise<TicketLatestSignalsResult>>("volli:ticket-latest-signals", {
+      projectId,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      signals: [
+        {
+          ticketId: ticket.id,
+          sessionId: "session-z",
+          signal: "blocked",
+          reason: "Later id",
+          createdAt: 500,
+        },
+      ],
+    });
+    expect(listSessions).not.toHaveBeenCalled();
+  });
+});
+
 describe("volli:session-rename", () => {
   it("renames a session and persists the trimmed title", async () => {
     const projectId = createProject();
@@ -852,6 +929,27 @@ describe("volli:session-rename", () => {
         title: "X",
       }),
     ).toEqual({ ok: false, error: "Unknown session" });
+  });
+
+  it("reports a durable rejection instead of acknowledging an archived session rename", async () => {
+    const projectId = createProject();
+    insertSession(ctx.db, testSession(projectId, null, { id: "s1", title: "Session 1" }));
+    await createDesktopControlPlane(ctx.db).submit({
+      commandId: "archive-s1",
+      sessionId: "s1",
+      intent: { kind: "session.archive" },
+      provenance: {
+        source: { kind: "user", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+
+    expect(
+      await invoke<Promise<SessionRenameResult>>("volli:session-rename", {
+        sessionId: "s1",
+        title: "Renamed",
+      }),
+    ).toEqual({ ok: false, error: "Session rename was not completed" });
   });
 });
 

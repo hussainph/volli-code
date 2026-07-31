@@ -1,6 +1,6 @@
 /**
- * Hand-rolled migration runner (`PRAGMA user_version`, no ORM): each pending
- * migration runs in its own transaction that also bumps `user_version`, and
+ * Hand-rolled migration runner (`PRAGMA user_version`, no ORM): all pending
+ * migrations run in one transaction that also bumps `user_version`, and
  * migrating an existing (non-fresh) database — `user_version > 0` — first
  * checkpoints the WAL and copies the db file to `<dbPath>.backup-v<from>`,
  * so a bad migration never destroys the pre-migration data. A brand-new
@@ -684,21 +684,21 @@ export function migrate(db: Database.Database, dbPath: string): void {
     copyFileSync(dbPath, `${dbPath}.backup-v${currentVersion}`);
   }
 
-  for (const migration of pending) {
-    const applyMigration = db.transaction(() => {
+  const applyPendingMigrations = db.transaction(() => {
+    for (const migration of pending) {
       db.exec(migration.sql);
       // Interpolated, not bound: PRAGMA statements don't accept `?`
       // parameters, and `migration.version` is an internal integer literal
       // from MIGRATIONS above, never renderer-supplied input.
       db.pragma(`user_version = ${migration.version}`);
-    });
-    applyMigration();
-  }
+    }
 
-  const foreignKeyViolations = db.pragma("foreign_key_check") as unknown[];
-  if (foreignKeyViolations.length > 0) {
-    throw new Error(
-      `Foreign-key check failed after migrations: ${JSON.stringify(foreignKeyViolations)}`,
-    );
-  }
+    const foreignKeyViolations = db.pragma("foreign_key_check") as unknown[];
+    if (foreignKeyViolations.length > 0) {
+      throw new Error(
+        `Foreign-key check failed after migrations: ${JSON.stringify(foreignKeyViolations)}`,
+      );
+    }
+  });
+  applyPendingMigrations();
 }

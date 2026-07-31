@@ -356,19 +356,7 @@ export class PtyManager {
       return { ok: false, error: errorMessage(error) };
     }
     const attachmentId = randomUUID();
-    const start = await controlPlane.submit({
-      commandId: randomUUID(),
-      sessionId,
-      intent: {
-        kind: "executor.start",
-        adapterId: "terminal",
-        continuity: scope.resume === null ? "fresh" : "native_resume",
-      },
-      provenance: terminalSystemProvenance(),
-    });
-    if (start.receipt !== null) {
-      return { ok: false, error: "The Session cannot accept another terminal attachment" };
-    }
+    let startCommandId: string | undefined;
     const recordAttachmentFailure = async (failure: unknown, cwd: string): Promise<void> => {
       const detail = terminalDetailFor(scope, cwd, scope.resume?.harnessSessionId ?? null, null);
       try {
@@ -376,7 +364,7 @@ export class PtyManager {
           id: randomUUID(),
           kind: "attachment.failed",
           sessionId,
-          commandId: start.command.id,
+          ...(startCommandId === undefined ? {} : { commandId: startCommandId }),
           occurredAt: Date.now(),
           provenance: terminalSystemProvenance(),
           attachment: {
@@ -399,6 +387,30 @@ export class PtyManager {
         );
       }
     };
+    let start: Awaited<ReturnType<ControlPlane["submit"]>>;
+    try {
+      start = await controlPlane.submit({
+        commandId: randomUUID(),
+        sessionId,
+        intent: {
+          kind: "executor.start",
+          adapterId: "terminal",
+          continuity: scope.resume === null ? "fresh" : "native_resume",
+        },
+        provenance: terminalSystemProvenance(),
+      });
+      startCommandId = start.command.id;
+    } catch (error) {
+      // `submit` never durably accepted this start, so there is no attachment
+      // attempt to project. Keep the newly-created Session open for recovery
+      // rather than inventing a failed attachment without a command context.
+      return { ok: false, error: errorMessage(error) };
+    }
+    if (start.receipt !== null) {
+      // A non-null submit receipt is a control-plane rejection: the adapter was
+      // never asked to start and there is no attachment attempt to record.
+      return { ok: false, error: "The Session cannot accept another terminal attachment" };
+    }
 
     // Worktree ticket sessions materialize (or reuse) their isolated worktree
     // BEFORE anything spawns. `ensure` is single-flight and idempotent; on
@@ -968,11 +980,12 @@ export class PtyManager {
       // it before the write, exactly as write() does.
       session.lastActivityAt = Date.now();
       if (session.parkedPids !== null) this.parkController.wake(sessionId);
+      let command: Awaited<ReturnType<ControlPlane["submit"]>> | undefined;
       try {
         // Record the exact Session-level interrupt intent before writing Esc.
         // It is deliberately not an attachment close: a TUI may keep its PTY
         // alive and continue emitting history after receiving the interrupt.
-        const command = await controlPlane.submit({
+        command = await controlPlane.submit({
           commandId: randomUUID(),
           sessionId,
           intent: { kind: "executor.interrupt", attachmentId: session.attachmentId },
@@ -996,6 +1009,31 @@ export class PtyManager {
         });
         interrupted.push(sessionId);
       } catch (error) {
+        // A write can fail after the durable intent has been accepted. Preserve
+        // that ambiguity as a receipt rather than leaving the command looking
+        // accepted forever; a failed write cannot honestly claim interrupted.
+        if (command?.receipt === null) {
+          try {
+            await controlPlane.observe({
+              id: randomUUID(),
+              sessionId,
+              occurredAt: Date.now(),
+              provenance: terminalAdapterProvenance(),
+              kind: "command.receipt",
+              attachmentId: session.attachmentId,
+              receipt: {
+                id: randomUUID(),
+                commandId: command.command.id,
+                status: "unreconciled",
+                detail: errorMessage(error),
+              },
+            });
+          } catch (receiptError) {
+            console.error(
+              `[volli] failed to record interrupt receipt for ${sessionId}: ${errorMessage(receiptError)}`,
+            );
+          }
+        }
         // One session's dead pty must never block interrupting the rest; it
         // simply isn't reported as interrupted.
         console.error(`[volli] failed to interrupt session ${sessionId}: ${errorMessage(error)}`);

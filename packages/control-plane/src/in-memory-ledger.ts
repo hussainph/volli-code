@@ -1,6 +1,8 @@
 import type {
   CommandReceipt,
+  ListLatestTicketSignalsQuery,
   ListSessionsQuery,
+  LatestSessionSignal,
   ListSessionEventsQuery,
   Session,
   SessionCommand,
@@ -8,6 +10,8 @@ import type {
   SessionLedger,
   SessionLedgerTransaction,
 } from "@volli/shared";
+
+type ConcreteLatestSessionSignal = Omit<LatestSessionSignal, "sessionId"> & { sessionId: string };
 
 /**
  * A transactional test adapter. Production composition supplies SQLite (and,
@@ -56,6 +60,14 @@ class InMemorySessionLedger implements SessionLedger {
       listSessions: (query) => {
         assertOpen();
         return this.#listSessions(query);
+      },
+      countSessions: (query) => {
+        assertOpen();
+        return this.#countSessions(query);
+      },
+      listLatestTicketSignals: (query) => {
+        assertOpen();
+        return this.#listLatestTicketSignals(query);
       },
       insertSession: (session) => {
         assertOpen();
@@ -119,6 +131,47 @@ class InMemorySessionLedger implements SessionLedger {
           right.createdAt - left.createdAt || compareSqliteBinaryText(right.id, left.id),
       )
       .map(clone);
+  }
+
+  #countSessions(query: ListSessionsQuery): number {
+    return [...this.#sessions.values()].filter((session) => {
+      if (session.projectId !== query.projectId) return false;
+      switch (query.scope) {
+        case "all":
+          return true;
+        case "ticket":
+          return session.ticketId === query.ticketId;
+        case "scratch":
+          return session.ticketId === null;
+      }
+    }).length;
+  }
+
+  #listLatestTicketSignals(query: ListLatestTicketSignalsQuery): readonly LatestSessionSignal[] {
+    const byTicket = new Map<string, ConcreteLatestSessionSignal>();
+    for (const session of this.#sessions.values()) {
+      if (session.projectId !== query.projectId || session.ticketId === null) continue;
+      const event = this.#eventsFor(session.id).findLast(isSessionSignalEvent);
+      if (event === undefined) continue;
+      const candidate: ConcreteLatestSessionSignal = {
+        ticketId: session.ticketId,
+        sessionId: session.id,
+        signal: event.payload.signal,
+        reason: event.payload.reason,
+        createdAt: event.occurredAt,
+      };
+      const prior = byTicket.get(candidate.ticketId);
+      if (
+        prior === undefined ||
+        candidate.createdAt > prior.createdAt ||
+        (candidate.createdAt === prior.createdAt && candidate.sessionId > prior.sessionId)
+      ) {
+        byTicket.set(candidate.ticketId, candidate);
+      }
+    }
+    return [...byTicket.values()].toSorted((left, right) =>
+      compareSqliteBinaryText(left.ticketId, right.ticketId),
+    );
   }
 
   #insertSession(session: Session): void {
@@ -215,6 +268,12 @@ class InMemorySessionLedger implements SessionLedger {
     this.#commands = checkpoint.commands;
     this.#receipts = checkpoint.receipts;
   }
+}
+
+function isSessionSignalEvent(event: SessionEvent): event is SessionEvent & {
+  payload: Extract<SessionEvent["payload"], { kind: "session.signaled" }>;
+} {
+  return event.payload.kind === "session.signaled";
 }
 
 interface LedgerCheckpoint {

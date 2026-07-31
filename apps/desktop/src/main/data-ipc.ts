@@ -7,6 +7,7 @@ import {
   DATA_CHANNELS,
   DATA_IPC,
   derivePrefix,
+  errorMessage,
   LEGACY_BACKUP_APP_STATE_KEY,
   PROJECT_COLORS,
   sanitizeLegacyProjects,
@@ -349,16 +350,27 @@ export function registerDataIpcHandlers(
       // side effect, fired only for a real backward move (issue #78).
       if (before !== undefined) {
         const interrupt = interruptOnBackwardMove(
-          db,
           {
             ticketId: input.ticketId,
             fromStatus: before.status as TicketStatus,
             toStatus: input.toStatus,
           },
-          { now, actor },
           options.interruptTicketSessions,
         );
-        if (interrupt instanceof Promise) return interrupt.then(() => ({ ok: true, tickets }));
+        if (interrupt instanceof Promise) {
+          return interrupt.then(
+            () => ({ ok: true, tickets }),
+            (error: unknown) => {
+              // The board mutation already committed. An after-the-fact Esc
+              // delivery failure is operational evidence, not grounds to lie
+              // to the renderer that its deliberate move failed.
+              console.error(
+                `[volli] failed to interrupt ticket sessions after committed move: ${errorMessage(error)}`,
+              );
+              return { ok: true, tickets };
+            },
+          );
+        }
       }
       return { ok: true, tickets };
     },
@@ -417,40 +429,10 @@ export function registerDataIpcHandlers(
     "volli:ticket-latest-signals": async (
       input: ProjectIdInput,
     ): Promise<TicketLatestSignalsResult> => {
-      const sessions = await controlPlane.listSessions({
-        projectId: input.projectId,
-        scope: "all",
-      });
-      const byTicket = new Map<
-        string,
-        {
-          ticketId: string;
-          sessionId: string;
-          signal: "done" | "blocked";
-          reason: string | null;
-          createdAt: number;
-        }
-      >();
-      for (const projection of sessions) {
-        const signal = projection.signal;
-        const ticketId = projection.session.ticketId;
-        if (signal === null || ticketId === null) continue;
-        const prior = byTicket.get(ticketId);
-        if (
-          prior === undefined ||
-          signal.occurredAt > prior.createdAt ||
-          (signal.occurredAt === prior.createdAt && projection.session.id > prior.sessionId)
-        ) {
-          byTicket.set(ticketId, {
-            ticketId,
-            sessionId: projection.session.id,
-            signal: signal.signal,
-            reason: signal.reason,
-            createdAt: signal.occurredAt,
-          });
-        }
-      }
-      return { ok: true, signals: [...byTicket.values()] };
+      return {
+        ok: true,
+        signals: [...(await controlPlane.listLatestTicketSignals({ projectId: input.projectId }))],
+      };
     },
 
     "volli:comment-list": (input: TicketIdInput): TicketCommentsResult => {
@@ -512,7 +494,7 @@ export function registerDataIpcHandlers(
     "volli:session-rename": async (input: SessionRenameInput): Promise<SessionRenameResult> => {
       const existing = await controlPlane.getSession({ sessionId: input.sessionId });
       if (existing === null) return { ok: false, error: "Unknown session" };
-      await controlPlane.submit({
+      const submitted = await controlPlane.submit({
         commandId: randomUUID(),
         sessionId: input.sessionId,
         intent: { kind: "session.retitle", title: input.title.trim() },
@@ -521,6 +503,9 @@ export function registerDataIpcHandlers(
           venue: { id: "local", kind: "local" },
         },
       });
+      if (submitted.receipt?.status !== "completed") {
+        return { ok: false, error: "Session rename was not completed" };
+      }
       return { ok: true };
     },
 

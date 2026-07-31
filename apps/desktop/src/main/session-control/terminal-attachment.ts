@@ -5,7 +5,7 @@ import type {
   SessionProjection,
 } from "@volli/shared";
 import type { HarnessId, SessionLaunchKind, SessionPlacement, SessionRecord } from "@volli/shared";
-import { isSessionLaunchKind, isSessionPlacement } from "@volli/shared";
+import { isSessionLaunchKind, isSessionPlacement, parseHarnessId } from "@volli/shared";
 
 /** The terminal adapter's opaque native payload. It never becomes a Session column. */
 export interface TerminalAttachmentDetail {
@@ -30,10 +30,17 @@ export function readTerminalAttachmentDetail(
   if (native === null || native.detail === null) return null;
   const value = native.detail;
   if (!isRecord(value) || value.kind !== "volli.terminal.v1") return null;
+  const harnessId = typeof value.harnessId === "string" ? parseHarnessId(value.harnessId) : null;
+  const activeHarnessId =
+    value.activeHarnessId === null
+      ? null
+      : typeof value.activeHarnessId === "string"
+        ? parseHarnessId(value.activeHarnessId)
+        : null;
   if (
     typeof value.cwd !== "string" ||
-    typeof value.harnessId !== "string" ||
-    (value.activeHarnessId !== null && typeof value.activeHarnessId !== "string") ||
+    harnessId === null ||
+    (activeHarnessId === null && value.activeHarnessId !== null) ||
     (value.harnessSessionId !== null && typeof value.harnessSessionId !== "string") ||
     !isSessionLaunchKind(value.launchKind) ||
     !isSessionPlacement(value.placement) ||
@@ -45,8 +52,8 @@ export function readTerminalAttachmentDetail(
   return {
     kind: "volli.terminal.v1",
     cwd: value.cwd,
-    harnessId: value.harnessId as HarnessId,
-    activeHarnessId: value.activeHarnessId as HarnessId | null,
+    harnessId,
+    activeHarnessId,
     harnessSessionId: value.harnessSessionId,
     launchKind: value.launchKind,
     placement: value.placement,

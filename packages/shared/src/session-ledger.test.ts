@@ -208,6 +208,18 @@ describe("observationPayload", () => {
       "attention.cleared",
       "adapter.observed",
     ]);
+    expect(
+      observationPayload({
+        id: "10-session-wide",
+        sessionId: session.id,
+        occurredAt: 10,
+        provenance,
+        kind: "adapter.observed",
+        attachmentId: null,
+        name: "native.session-signal",
+        native: null,
+      }),
+    ).toMatchObject({ kind: "adapter.observed", attachmentId: null });
     expect(() =>
       observationPayload({
         id: "11",

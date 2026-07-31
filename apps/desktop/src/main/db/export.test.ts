@@ -47,6 +47,15 @@ afterEach(() => {
 });
 
 describe("buildExportDocument — empty db", () => {
+  it("builds synchronously because every database read is synchronous", () => {
+    ctx = openTestDb();
+
+    const document = buildExportDocument(ctx.db, { appVersion: "1.2.3", now: 0 });
+
+    expect(document).not.toBeInstanceOf(Promise);
+    expect(document.format).toBe(EXPORT_FORMAT);
+  });
+
   it("emits the metadata envelope and an empty array for every table", async () => {
     ctx = openTestDb();
 

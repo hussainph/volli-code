@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { createControlPlane } from "@volli/control-plane";
 import type { SessionLedger } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
-import { openTestDb, testProject } from "../db/test-helpers";
+import { openTestDb, testProject, testTicket } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
+import { insertTicket } from "../db/tickets-repo";
 import { createSqliteSessionLedger } from "./sqlite-ledger";
 
 let ctx: TestDb;
@@ -117,6 +118,71 @@ describe("SqliteSessionLedger", () => {
       }),
     ).rejects.toThrow("sequence must be monotonic");
     expect(await control.listEvents({ sessionId: created.session.id })).toHaveLength(3);
+  });
+
+  it("does not make an unrelated append transaction fail on pre-existing receipt corruption", async () => {
+    const { control, projectId } = setup();
+    const first = await control.createSession({
+      commandId: "create-corrupt-prior",
+      projectId,
+      ticketId: null,
+      title: "Prior",
+      provenance,
+    });
+    ctx.db
+      .prepare("UPDATE session_command_receipts SET receipt_event_id = NULL WHERE id = ?")
+      .run(first.receipt.id);
+
+    await expect(
+      control.createSession({
+        commandId: "create-unrelated",
+        projectId,
+        ticketId: null,
+        title: "Unrelated",
+        provenance,
+      }),
+    ).resolves.toMatchObject({ session: { title: "Unrelated" } });
+  });
+
+  it("reads only the latest explicit signal for each ticket without projecting all Session history", async () => {
+    const { control, projectId } = setup();
+    insertTicket(ctx.db, testTicket(projectId, { id: "ticket-a", usesWorktree: false }));
+    const first = await control.createSession({
+      commandId: "create-signal-first",
+      projectId,
+      ticketId: "ticket-a",
+      title: "First",
+      provenance,
+    });
+    await control.submit({
+      commandId: "signal-first",
+      sessionId: first.session.id,
+      intent: { kind: "session.signal", signal: "done", reason: "First result" },
+      provenance,
+    });
+    const second = await control.createSession({
+      commandId: "create-signal-second",
+      projectId,
+      ticketId: "ticket-a",
+      title: "Second",
+      provenance,
+    });
+    await control.submit({
+      commandId: "signal-second",
+      sessionId: second.session.id,
+      intent: { kind: "session.signal", signal: "blocked", reason: "Latest result" },
+      provenance,
+    });
+
+    await expect(control.listLatestTicketSignals({ projectId })).resolves.toEqual([
+      {
+        ticketId: "ticket-a",
+        sessionId: second.session.id,
+        signal: "blocked",
+        reason: "Latest result",
+        createdAt: 114,
+      },
+    ]);
   });
 
   it("persists attachment evidence atomically and refuses a corrupt JSON row on read", async () => {

@@ -869,6 +869,45 @@ describe("migrate — 016 to 017 upgrade path (harness channel)", () => {
 });
 
 describe("migrate — 017 to 018 Session ledger reset", () => {
+  it("rolls back every pending migration when the session-ledger reset fails", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    for (const migration of MIGRATIONS.filter((entry) => entry.version <= 16)) {
+      db.exec(migration.sql);
+    }
+    db.pragma("user_version = 16");
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+       VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+       VALUES ('t1', 'p1', 1, 'Ticket', '', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO ticket_events (id, ticket_id, kind, actor, payload, created_at)
+       VALUES ('e1', 't1', 'session_started', 'user', '{}', 0)`,
+    ).run();
+    // Migration 018 deletes legacy session events. Fail precisely there, after
+    // 017 would have created harness_channel under the old per-step runner.
+    db.exec(`
+      CREATE TRIGGER reject_session_ledger_reset
+      BEFORE DELETE ON ticket_events
+      BEGIN
+        SELECT RAISE(ABORT, 'forced session-ledger migration failure');
+      END;
+    `);
+
+    expect(() => migrate(db, dbPath)).toThrow("forced session-ledger migration failure");
+
+    expect(db.pragma("user_version", { simple: true })).toBe(16);
+    expect(tableExists(db, "harness_channel")).toBe(false);
+    expect(db.prepare("SELECT id FROM ticket_events").all()).toEqual([{ id: "e1" }]);
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+    db.close();
+  });
+
   it("backs up v17, keeps planner/comment content, and removes only legacy Session facts", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);

@@ -164,6 +164,17 @@ async function killSession(page, sessionId) {
   return page.evaluate((id) => window.api.terminal.kill(id), sessionId);
 }
 
+async function waitForSessionEnded(page, ticketId, sessionId) {
+  return waitUntil(
+    "the durable Session records its ended attachment before resume",
+    async () => {
+      const rows = await sessionsForTicket(page, ticketId);
+      return rows.find((row) => row.id === sessionId && row.endedAt !== null) ?? null;
+    },
+    { timeout: 10000 },
+  ).catch(() => null);
+}
+
 /**
  * Boot one ticket through the real composer kickoff flow, forcing it into
  * Doing with a live fake agent session. Returns the ticket's identity plus the
@@ -265,6 +276,36 @@ async function triggerResume(page, displayId) {
   await resetProbe();
   await menuItem.click();
   return "context-menu";
+}
+
+/**
+ * A real resume has two durable transitions: its old attachment must first be
+ * ended, then the same Session must become live again. Keep that ordering in
+ * one helper so every resume scenario proves the same lifecycle rather than
+ * racing an exited pane against the previous row's asynchronous close.
+ */
+async function resumeEndedSession(page, ticketId, displayId, sessionId) {
+  const ended = await waitForSessionEnded(page, ticketId, sessionId);
+  if (ended === null) return { ended, surface: null, resumedSameSession: null, error: null };
+  try {
+    const surface = await triggerResume(page, displayId);
+    const resumedSameSession = await waitUntil(
+      "the same durable Session gains a live resumed attachment",
+      async () => {
+        const rows = await sessionsForTicket(page, ticketId);
+        return rows.find((row) => row.id === sessionId && row.endedAt === null) ?? null;
+      },
+      { timeout: 15000 },
+    ).catch(() => null);
+    return { ended, surface, resumedSameSession, error: null };
+  } catch (error) {
+    return {
+      ended,
+      surface: null,
+      resumedSameSession: null,
+      error: error?.message ?? String(error),
+    };
+  }
 }
 
 // ---- main --------------------------------------------------------------
@@ -403,8 +444,16 @@ async function main() {
           };
         }
 
-        // Give a buggy interrupt a real window to show up before asserting its
-        // absence (worktree-smoke.mjs's same settle-then-assert discipline).
+        // Settle the committed move while the agent stays live, then give a
+        // buggy asynchronous interrupt a real window before asserting absence.
+        const settledLive = await waitUntil(
+          "non-interrupt move settles with the agent still live",
+          async () => {
+            const rows = await sessionsForTicket(page, ticketId);
+            return rows.find((row) => row.id === session.id && row.endedAt === null) ?? null;
+          },
+          { timeout: 8000 },
+        ).catch(() => null);
         await sleep(1500);
         const buf = await readStdinLog(harness.interactiveDir, session.id);
         const noEsc = buf !== null && !buf.includes(0x1b);
@@ -419,10 +468,11 @@ async function main() {
         // scenario 1's own toast (8s lifetime) may still be on screen.
         const noToast = (await page.getByText(`${displayId}: interrupted`).count()) === 0;
 
-        const ok = noEsc && stillAlive && interruptedEvent === undefined && noToast;
+        const ok =
+          settledLive !== null && noEsc && stillAlive && interruptedEvent === undefined && noToast;
         return {
           ok,
-          detail: `noEsc=${noEsc} stillAlive=${stillAlive} interruptedEventPresent=${interruptedEvent !== undefined} noToast=${noToast}`,
+          detail: `settledLive=${settledLive !== null} noEsc=${noEsc} stillAlive=${stillAlive} interruptedEventPresent=${interruptedEvent !== undefined} noToast=${noToast}`,
         };
       },
     );
@@ -448,25 +498,16 @@ async function main() {
 
         const kill = await killSession(page, session.id);
         const killOk = kill.ok === true;
-
-        let surface;
-        try {
-          surface = await triggerResume(page, displayId);
-        } catch (error) {
+        const transition = killOk
+          ? await resumeEndedSession(page, ticketId, displayId, session.id)
+          : { ended: null, surface: null, resumedSameSession: null, error: null };
+        if (transition.error !== null) {
           return {
             ok: false,
-            detail: `linkOk=${linkOk} killOk=${killOk} resume trigger failed: ${error?.message ?? error}`,
+            detail: `linkOk=${linkOk} killOk=${killOk} resume trigger failed: ${transition.error}`,
           };
         }
-
-        const resumedSameSession = await waitUntil(
-          "the same durable Session gains a live resumed attachment",
-          async () => {
-            const rows = await sessionsForTicket(page, ticketId);
-            return rows.find((row) => row.id === session.id && row.endedAt === null) ?? null;
-          },
-          { timeout: 15000 },
-        ).catch(() => null);
+        await sleep(250);
         const plannerHistoryClean = !(await eventsFor(page, ticketId)).some(
           (event) => event.payload.kind === "session_resumed",
         );
@@ -485,11 +526,16 @@ async function main() {
           .catch(() => false);
 
         const ok =
-          linkOk && killOk && resumedSameSession !== null && plannerHistoryClean && probeText;
+          linkOk &&
+          killOk &&
+          transition.ended !== null &&
+          transition.resumedSameSession !== null &&
+          plannerHistoryClean &&
+          probeText;
         return {
           ok,
           detail:
-            `linkOk=${linkOk} killOk=${killOk} surface=${surface} sameSession=${resumedSameSession !== null} plannerHistoryClean=${plannerHistoryClean} ` +
+            `linkOk=${linkOk} killOk=${killOk} ended=${transition.ended !== null} surface=${transition.surface} sameSession=${transition.resumedSameSession !== null} plannerHistoryClean=${plannerHistoryClean} ` +
             `resumeProbe=${probeText}`,
         };
       },
@@ -529,25 +575,16 @@ async function main() {
 
         const kill = await killSession(page, session.id);
         const killOk = kill.ok === true;
-
-        let surface;
-        try {
-          surface = await triggerResume(page, displayId);
-        } catch (error) {
+        const transition = killOk
+          ? await resumeEndedSession(page, ticketId, displayId, session.id)
+          : { ended: null, surface: null, resumedSameSession: null, error: null };
+        if (transition.error !== null) {
           return {
             ok: false,
-            detail: `killOk=${killOk} resume trigger failed: ${error?.message ?? error}`,
+            detail: `killOk=${killOk} resume trigger failed: ${transition.error}`,
           };
         }
-
-        const resumedSameSession = await waitUntil(
-          "the same durable Session gains a live resumed attachment",
-          async () => {
-            const rows = await sessionsForTicket(page, ticketId);
-            return rows.find((row) => row.id === session.id && row.endedAt === null) ?? null;
-          },
-          { timeout: 15000 },
-        ).catch(() => null);
+        await sleep(250);
         const plannerHistoryClean = !(await eventsFor(page, ticketId)).some(
           (event) => event.payload.kind === "session_resumed",
         );
@@ -568,12 +605,17 @@ async function main() {
           .catch(() => false);
 
         const ok =
-          noSeed && killOk && resumedSameSession !== null && plannerHistoryClean && probeText;
+          noSeed &&
+          killOk &&
+          transition.ended !== null &&
+          transition.resumedSameSession !== null &&
+          plannerHistoryClean &&
+          probeText;
         return {
           ok,
           detail:
-            `noSeed=${noSeed}${noSeed ? "" : `(seed=${seed})`} killOk=${killOk} surface=${surface} ` +
-            `sameSession=${resumedSameSession !== null} plannerHistoryClean=${plannerHistoryClean} resumeProbe=${probeText}`,
+            `noSeed=${noSeed}${noSeed ? "" : `(seed=${seed})`} killOk=${killOk} ended=${transition.ended !== null} surface=${transition.surface} ` +
+            `sameSession=${transition.resumedSameSession !== null} plannerHistoryClean=${plannerHistoryClean} resumeProbe=${probeText}`,
         };
       },
     );
@@ -621,25 +663,16 @@ async function main() {
 
         const kill = await killSession(page, session.id);
         const killOk = kill.ok === true;
-
-        let surface;
-        try {
-          surface = await triggerResume(page, displayId);
-        } catch (error) {
+        const transition = killOk
+          ? await resumeEndedSession(page, ticketId, displayId, session.id)
+          : { ended: null, surface: null, resumedSameSession: null, error: null };
+        if (transition.error !== null) {
           return {
             ok: false,
-            detail: `minted=${minted} killOk=${killOk} resume trigger failed: ${error?.message ?? error}`,
+            detail: `minted=${minted} killOk=${killOk} resume trigger failed: ${transition.error}`,
           };
         }
-
-        const resumedSameSession = await waitUntil(
-          "the same durable Session gains a live resumed attachment",
-          async () => {
-            const rows = await sessionsForTicket(page, ticketId);
-            return rows.find((row) => row.id === session.id && row.endedAt === null) ?? null;
-          },
-          { timeout: 15000 },
-        ).catch(() => null);
+        await sleep(250);
         const plannerHistoryClean = !(await eventsFor(page, ticketId)).some(
           (event) => event.payload.kind === "session_resumed",
         );
@@ -658,12 +691,17 @@ async function main() {
           .catch(() => false);
 
         const ok =
-          freshUuid && killOk && resumedSameSession !== null && plannerHistoryClean && probeOk;
+          freshUuid &&
+          killOk &&
+          transition.ended !== null &&
+          transition.resumedSameSession !== null &&
+          plannerHistoryClean &&
+          probeOk;
         return {
           ok,
           detail:
-            `minted=${minted} freshUuid=${freshUuid} killOk=${killOk} surface=${surface} ` +
-            `sameSession=${resumedSameSession !== null} plannerHistoryClean=${plannerHistoryClean} resumeProbe=${probeOk}`,
+            `minted=${minted} freshUuid=${freshUuid} killOk=${killOk} ended=${transition.ended !== null} surface=${transition.surface} ` +
+            `sameSession=${transition.resumedSameSession !== null} plannerHistoryClean=${plannerHistoryClean} resumeProbe=${probeOk}`,
         };
       },
     );

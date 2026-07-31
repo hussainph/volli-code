@@ -111,12 +111,12 @@ export async function resolveScope(
     const kickoff = request.ticket.kickoff;
     const resume = request.ticket.resume;
     const usesWorktree = ctx.usesWorktree;
-    const existingSessions = await controlPlane.listSessions({
+    const sessionCount = await controlPlane.countSessions({
       projectId: ctx.projectId,
       scope: "ticket",
       ticketId: request.ticket.ticketId,
     });
-    const title = `Session ${existingSessions.length + 1}`;
+    const title = `Session ${sessionCount + 1}`;
     // Resume launch (issue #78, CONCEPT #21): pick up an ENDED agent session
     // of this same ticket. Kickoff and resume are mutually exclusive — reject
     // both present outright rather than silently preferring one.
@@ -259,6 +259,10 @@ export async function resolveScope(
   // injected the same way a ticket session gets it (decision #9). A project
   // that can't be resolved still spawns (no artifacts env) rather than failing.
   const project = getProjectById(db, request.workspaceId);
+  const sessionCount = await controlPlane.countSessions({
+    projectId: request.workspaceId,
+    scope: "scratch",
+  });
   return {
     ok: true,
     scope: {
@@ -269,7 +273,7 @@ export async function resolveScope(
       placement,
       cwd: request.cwd,
       env: project ? projectSessionEnv(project.path) : {},
-      title: `Terminal ${(await controlPlane.listSessions({ projectId: request.workspaceId, scope: "scratch" })).length + 1}`,
+      title: `Terminal ${sessionCount + 1}`,
       artifactsRoot: project?.path ?? null,
       // Scratch sessions never auto-launch a harness — just a bare shell.
       launchCommand: null,

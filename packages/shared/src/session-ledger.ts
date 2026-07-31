@@ -296,7 +296,9 @@ export function observationPayload(observation: SessionObservation): SessionEven
     case "adapter.observed":
       return {
         kind: observation.kind,
-        attachmentId: observation.attachmentId,
+        // Observations may omit this optional envelope field; persist the
+        // explicit null canonical form so replays have a stable payload.
+        attachmentId: observation.attachmentId ?? null,
         name: observation.name,
         native: observation.native,
       };
@@ -417,6 +419,11 @@ export type ListSessionsQuery =
   | { projectId: string; scope: "all" }
   | { projectId: string; scope: "ticket"; ticketId: string }
   | { projectId: string; scope: "scratch" };
+
+/** One project-wide, bounded sidebar read over explicit Session outcome facts. */
+export interface ListLatestTicketSignalsQuery {
+  projectId: string;
+}
 
 export interface ListSessionEventsQuery {
   sessionId: string;
@@ -626,6 +633,12 @@ export interface SessionLedgerTransaction {
   getSession(sessionId: string): Session | null;
   /** Returns immutable base Sessions ordered by creation time descending, then id descending. */
   listSessions(query: ListSessionsQuery): readonly Session[];
+  /** Counts base Sessions without reading their event histories or building projections. */
+  countSessions(query: ListSessionsQuery): number;
+  /** Latest explicit outcome per ticket, selected by occurred time then Session id. */
+  listLatestTicketSignals(
+    query: ListLatestTicketSignalsQuery,
+  ): readonly import("./ticket-events").LatestSessionSignal[];
   insertSession(session: Session): void;
   getEvent(eventId: string): SessionEvent | null;
   appendEvent(event: SessionEvent): void;

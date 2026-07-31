@@ -13,6 +13,7 @@ import type {
   CommandReceiptResult,
   GetSessionQuery,
   ListSessionsQuery,
+  ListLatestTicketSignalsQuery,
   ListSessionEventsQuery,
   Session,
   SessionAttachment,
@@ -29,6 +30,7 @@ import type {
   SessionLedgerTransaction,
   SessionObservation,
   SessionProjection,
+  LatestSessionSignal,
   UnstampedCommandReceipt,
 } from "@volli/shared";
 
@@ -71,6 +73,10 @@ export interface ControlPlane {
   submit(request: SubmitSessionCommandRequest): Promise<SubmitSessionCommandResult>;
   getSession(query: GetSessionQuery): Promise<SessionProjection | null>;
   listSessions(query: ListSessionsQuery): Promise<readonly SessionProjection[]>;
+  countSessions(query: ListSessionsQuery): Promise<number>;
+  listLatestTicketSignals(
+    query: ListLatestTicketSignalsQuery,
+  ): Promise<readonly LatestSessionSignal[]>;
   listEvents(query: ListSessionEventsQuery): Promise<readonly SessionEvent[]>;
 }
 
@@ -221,8 +227,11 @@ export function createControlPlane(ports: ControlPlanePorts): ControlPlane {
         }
 
         const payload = observationPayload(observation);
-        const attachmentId = observationAttachmentId(observation);
-        const commandId = observation.commandId;
+        // SQLite stores both omitted optional envelope ids and explicit null as
+        // NULL. Normalize at this boundary so replay identity matches the
+        // durable representation across every ledger implementation.
+        const attachmentId = observationAttachmentId(observation) ?? null;
+        const commandId = observation.commandId ?? null;
         assertObservationCausation(transaction, session, observation);
         assertAttachmentStartRoute(transaction, observation);
         const existingEvent = transaction.getEvent(observation.id);
@@ -376,6 +385,14 @@ export function createControlPlane(ports: ControlPlanePorts): ControlPlane {
             projectSession(session, transaction.listEvents({ sessionId: session.id })),
           ),
       );
+    },
+
+    async countSessions(query) {
+      return ports.ledger.transaction((transaction) => transaction.countSessions(query));
+    },
+
+    async listLatestTicketSignals(query) {
+      return ports.ledger.transaction((transaction) => transaction.listLatestTicketSignals(query));
     },
 
     async listEvents(query) {

@@ -14,6 +14,7 @@ import type {
   SessionLedgerIds,
   SessionLedger,
   SessionLedgerTransaction,
+  SessionObservation,
   UnstampedCommandReceipt,
 } from "@volli/shared";
 
@@ -441,6 +442,97 @@ describe("ControlPlane creation and explicit commands", () => {
     await expect(
       plane.listSessions({ projectId: "project-1", scope: "scratch" }),
     ).resolves.toMatchObject([{ session: { id: scratch.session.id, ticketId: null } }]);
+    await expect(plane.countSessions({ projectId: "project-1", scope: "all" })).resolves.toBe(3);
+    await expect(
+      plane.countSessions({ projectId: "project-1", scope: "ticket", ticketId: "ticket-1" }),
+    ).resolves.toBe(2);
+    await expect(plane.countSessions({ projectId: "project-1", scope: "scratch" })).resolves.toBe(
+      1,
+    );
+    await plane.submit({
+      commandId: "command-signal-ticket-first",
+      sessionId: ticketFirst.session.id,
+      intent: { kind: "session.signal", signal: "done", reason: "Earlier Session" },
+      provenance: userProvenance,
+    });
+    await plane.submit({
+      commandId: "command-signal-ticket-later",
+      sessionId: ticketLater.session.id,
+      intent: { kind: "session.signal", signal: "blocked", reason: "Later Session" },
+      provenance: userProvenance,
+    });
+    await plane.submit({
+      commandId: "command-signal-scratch",
+      sessionId: scratch.session.id,
+      intent: { kind: "session.signal", signal: "done", reason: "Not ticket scoped" },
+      provenance: userProvenance,
+    });
+    await expect(plane.listLatestTicketSignals({ projectId: "project-1" })).resolves.toEqual([
+      {
+        ticketId: "ticket-1",
+        sessionId: ticketLater.session.id,
+        signal: "blocked",
+        reason: "Later Session",
+        createdAt: 100,
+      },
+    ]);
+  });
+
+  it("lists each ticket's latest signal in stable ticket order without projecting unsignaled Sessions", async () => {
+    const { plane } = composition();
+    const ticketBFirst = await plane.createSession({
+      ...createRequest("command-latest-b-first"),
+      ticketId: "ticket-b",
+    });
+    const ticketBLatest = await plane.createSession({
+      ...createRequest("command-latest-b-latest"),
+      ticketId: "ticket-b",
+    });
+    const ticketBOlderIgnored = await plane.createSession({
+      ...createRequest("command-latest-b-older-ignored"),
+      ticketId: "ticket-b",
+    });
+    const ticketA = await plane.createSession({
+      ...createRequest("command-latest-a"),
+      ticketId: "ticket-a",
+    });
+    await plane.createSession({
+      ...createRequest("command-latest-unsignaled"),
+      ticketId: "ticket-c",
+    });
+
+    await plane.submit({
+      commandId: "signal-latest-b-older-ignored",
+      sessionId: ticketBOlderIgnored.session.id,
+      intent: { kind: "session.signal", signal: "done", reason: "Oldest" },
+      provenance: userProvenance,
+    });
+    await plane.submit({
+      commandId: "signal-latest-b-first",
+      sessionId: ticketBFirst.session.id,
+      intent: { kind: "session.signal", signal: "done", reason: "Older" },
+      provenance: userProvenance,
+    });
+    await plane.submit({
+      commandId: "signal-latest-b-latest",
+      sessionId: ticketBLatest.session.id,
+      intent: { kind: "session.signal", signal: "blocked", reason: "Newer" },
+      provenance: userProvenance,
+    });
+    await plane.submit({
+      commandId: "signal-latest-a",
+      sessionId: ticketA.session.id,
+      intent: { kind: "session.signal", signal: "done", reason: "Alphabetical first" },
+      provenance: userProvenance,
+    });
+
+    const signals = await plane.listLatestTicketSignals({ projectId: "project-1" });
+
+    expect(signals.map(({ ticketId }) => ticketId)).toEqual(["ticket-a", "ticket-b"]);
+    expect(signals).toMatchObject([
+      { sessionId: ticketA.session.id, signal: "done", reason: "Alphabetical first" },
+      { sessionId: ticketBLatest.session.id, signal: "blocked", reason: "Newer" },
+    ]);
   });
 
   it("records native continuation evidence only for known open attachments and replays it exactly", async () => {
@@ -1062,7 +1154,9 @@ describe("ControlPlane attachment facts", () => {
         kind: "attachment.opened",
         attachment: attachment(session.id, "attachment-wrong-command-b"),
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(
+      "Attachment attachment-wrong-command-b does not match command command-start-reserved-b route",
+    );
 
     const opened = attachment(session.id, "attachment-bound-a");
     await plane.observe({
@@ -1320,6 +1414,27 @@ describe("ControlPlane idempotency and defensive ledger reads", () => {
         }),
       }),
     ).rejects.toThrow("does not belong");
+  });
+
+  it("replays omitted and null envelope identifiers as the same durable evidence", async () => {
+    const { plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+    const observation = {
+      id: "signal-null-equivalent",
+      sessionId: session.id,
+      occurredAt: 1,
+      provenance: adapterProvenance,
+      kind: "adapter.observed" as const,
+      name: "idle",
+      native: null,
+    };
+
+    // Simulate a legacy/untyped adapter omitting optional envelope fields at
+    // runtime while keeping the public TypeScript contract canonical.
+    const recorded = await plane.observe(observation as SessionObservation);
+    await expect(
+      plane.observe({ ...observation, attachmentId: null, commandId: null }),
+    ).resolves.toEqual(recorded);
   });
 
   it("uses sequence one for a ledger-seeded Session and exposes missing history as null", async () => {

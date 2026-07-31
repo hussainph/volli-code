@@ -174,12 +174,10 @@ export function moveTicketCommand(
  * move never interrupts. Delivery is recorded as Session command/receipt
  * evidence, rather than a ticket lifecycle event, because Esc leaves the PTY
  * and its durable Session alive. A missing seam (tests, degraded boot) is a
- * clean no-op. Returns the attachments whose delivery was durably confirmed.
+ * clean no-op. Returns the Session ids whose delivery was durably confirmed.
  */
 export function interruptOnBackwardMove(
-  _db: Database.Database,
   input: { ticketId: string; fromStatus: TicketStatus; toStatus: TicketStatus },
-  _context: TicketCommandContext,
   interruptTicketSessions: ((ticketId: string) => string[] | Promise<string[]>) | undefined,
 ): string[] | Promise<string[]> {
   if (interruptTicketSessions === undefined) return [];
