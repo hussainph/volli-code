@@ -27,7 +27,7 @@ import {
 } from "./comments-repo";
 import { listTicketEvents } from "./events-repo";
 import { insertProject } from "./projects-repo";
-import { insertSession } from "./sessions-repo";
+import { insertSession } from "../session-control/test-support";
 import { openTestDb, testProject, testSession, testTicket } from "./test-helpers";
 import type { TestDb } from "./test-helpers";
 import { insertTicket } from "./tickets-repo";

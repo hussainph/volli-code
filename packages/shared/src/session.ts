@@ -50,7 +50,7 @@ export interface SessionRecord {
    * What the session was LAUNCHED with — durable history, never overwritten.
    * A terminal outlives the agent that opened it: quit opencode, run claude in
    * the same pane, and the launch is still a true statement about how this
-   * session began (it is what the `session_started` event recorded, and the
+   * session began (it is the immutable creation timestamp, and the
    * only harness a session that never announced anything can be judged by).
    * What is RUNNING is {@link SessionRecord.activeHarnessId}; read the two
    * together through {@link effectiveHarnessId} rather than either alone.

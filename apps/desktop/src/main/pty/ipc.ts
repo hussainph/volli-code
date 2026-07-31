@@ -6,6 +6,7 @@
 
 import { app, dialog, ipcMain } from "electron";
 import type { BrowserWindow } from "electron";
+import type { ControlPlane } from "@volli/control-plane";
 import { isFirstClassHarnessId, parseHarnessId } from "@volli/shared";
 import type {
   CreateTerminalSessionRequest,
@@ -17,6 +18,7 @@ import type {
 } from "@volli/shared";
 import { attachmentsRoot } from "../attachment-store";
 import type { DbHandle } from "../data-ipc";
+import { createDesktopControlPlane } from "../session-control";
 import type { AgentRuntimeEnvironment } from "./manager";
 import { PtyManager } from "./manager";
 
@@ -161,6 +163,7 @@ function isCreateRequest(
 export function registerTerminalIpcHandlers(
   handle: DbHandle,
   agentRuntime: AgentRuntimeEnvironment | null = null,
+  controlPlane: ControlPlane | null = handle.ok ? createDesktopControlPlane(handle.db) : null,
 ): PtyManager {
   // Same resolution as worktree-runtime.ts's `worktreeDeps`: one production
   // seam, `app.getPath("userData")`-derived.
@@ -169,7 +172,15 @@ export function registerTerminalIpcHandlers(
   // it failed to open, `create` reports the open error (write/kill/etc. operate
   // on the — necessarily empty — live map and stay harmless no-ops).
   const manager = handle.ok
-    ? new PtyManager(handle.db, "", undefined, undefined, agentRuntime, attachmentsRootPath)
+    ? new PtyManager(
+        handle.db,
+        "",
+        undefined,
+        undefined,
+        agentRuntime,
+        attachmentsRootPath,
+        controlPlane,
+      )
     : new PtyManager(null, handle.error, undefined, undefined, agentRuntime, attachmentsRootPath);
 
   // Closed over the live runtime object rather than a snapshot of it: the

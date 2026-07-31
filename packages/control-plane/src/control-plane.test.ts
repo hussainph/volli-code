@@ -363,6 +363,30 @@ describe("ControlPlane creation and explicit commands", () => {
     });
   });
 
+  it("records an explicit Session signal as an immutable fact with an internal receipt", async () => {
+    const { plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+
+    const signaled = await plane.submit({
+      commandId: "command-signal",
+      sessionId: session.id,
+      intent: { kind: "session.signal", signal: "blocked", reason: "Needs input" },
+      provenance: userProvenance,
+    });
+
+    expect(signaled).toMatchObject({
+      commandEvent: { payload: { kind: "command.recorded" } },
+      receipt: {
+        status: "completed",
+        result: { kind: "session.signaled", sessionId: session.id },
+      },
+      receiptEvent: { payload: { kind: "command.receipt.recorded" } },
+    });
+    await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+      signal: { signal: "blocked", reason: "Needs input" },
+    });
+  });
+
   it("lists deep Session projections through explicit project scopes in stable descending order", async () => {
     const ledger = createInMemorySessionLedger();
     const plane = createControlPlane({ ledger, clock: { now: () => 100 }, ids: ids() });

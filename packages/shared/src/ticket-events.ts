@@ -5,7 +5,6 @@
  * arrive with the volli CLI.
  */
 
-import type { SessionLaunchKind, SessionPlacement } from "./session";
 import type { HarnessId, TicketPriority, TicketStatus } from "./ticket";
 
 export const TICKET_EVENT_KINDS = [
@@ -23,13 +22,9 @@ export const TICKET_EVENT_KINDS = [
   // vanish together in the FK cascade.
   "archived",
   "unarchived",
-  // Sessions & comments (ticket-detail-mvp #18/#22): a comment's body lives
-  // in `ticket_comments` (`ticket-comment.ts`) — this event only makes it
-  // discoverable from the event log without duplicating it. Session events
-  // are recorded from main on PTY boot/exit.
+  // Comments live in `ticket_comments` (`ticket-comment.ts`); this fact only
+  // makes one discoverable from planner history without duplicating it.
   "commented",
-  "session_started",
-  "session_ended",
   // Worktree identity (ticket-detail-mvp #14 vision anchor): settable now,
   // automated later — `from`/`to` snapshot the ticket's worktree identity
   // fields (`ticket.ts`) around the change.
@@ -53,26 +48,12 @@ export const TICKET_EVENT_KINDS = [
   // (no session — the system-level watch), exactly once per branch (a dedup set
   // guards re-firing), and paired with the single native "PR merged" notification.
   "pr_merged",
-  // Session lifecycle signal (`session done|blocked`, volli CLI): the agent
-  // reporting its own outcome on the ticket it's working. Written with an
-  // `automation` actor; `reason` becomes the Needs Review badge when the loop
-  // milestone lands.
-  "session_signal",
   // Attachments (`ticket_attachments`, migration 011, issue #77): spec
   // material — a file or URL — attached to a ticket. Mirrors `commented`'s
   // shape (the attachment itself lives in `ticket_attachments`, `label` here
   // is just enough for the event log to read without a join).
   "attachment_added",
   "attachment_removed",
-  // Backward-move interrupt/resume (issue #78, CONCEPT #20): a board move
-  // that exits the active columns (`leavesActiveColumns` in `ticket.ts`)
-  // interrupts every still-live session on the ticket — `sessions_interrupted`
-  // records the interrupted session ids in one event. `session_resumed` is
-  // written when a ticket re-enters an active column and a new session picks
-  // up where an interrupted one left off — `sessionId` is the new session's
-  // record id, `previousSessionId` the ended session it resumes.
-  "sessions_interrupted",
-  "session_resumed",
 ] as const;
 
 export type TicketEventKind = (typeof TICKET_EVENT_KINDS)[number];
@@ -126,28 +107,13 @@ export type TicketEventPayload =
   | { kind: "archived" }
   | { kind: "unarchived" }
   | { kind: "commented"; commentId: string }
-  | {
-      kind: "session_started";
-      sessionId: string;
-      title: string;
-      /** Optional for records written before migration 006. */
-      launchKind?: SessionLaunchKind;
-      /** Optional for records written before migration 006. */
-      placement?: SessionPlacement;
-      /** Present only when the session actually launched an agent harness. */
-      harnessId?: HarnessId;
-    }
-  | { kind: "session_ended"; sessionId: string }
   | { kind: "worktree_changed"; from: WorktreeIdentity; to: WorktreeIdentity }
   | { kind: "worktree_failed"; stage: WorktreeFailureStage; stderr: string }
   | { kind: "worktree_committed"; message: string }
   | { kind: "pr_opened"; url: string }
   | { kind: "pr_merged"; url: string }
-  | { kind: "session_signal"; signal: "done" | "blocked"; reason: string | null }
   | { kind: "attachment_added"; attachmentId: string; label: string }
-  | { kind: "attachment_removed"; attachmentId: string; label: string }
-  | { kind: "sessions_interrupted"; sessionIds: string[] }
-  | { kind: "session_resumed"; sessionId: string; previousSessionId: string };
+  | { kind: "attachment_removed"; attachmentId: string; label: string };
 
 /**
  * The `ensure`-pipeline stage a `worktree_failed` event aborted at
@@ -222,10 +188,9 @@ export interface TicketEvent {
 }
 
 /**
- * The latest `session_signal` for one ticket, denormalized for the sidebar's
- * batched attention read (`api.tickets.latestSignals`): one project-wide query
- * replaces the per-needs-review-ticket event fan-out. `sessionId` is the
- * signaling session when the event carried a session/automation actor context.
+ * The latest durable Session outcome for one ticket, denormalized for the
+ * sidebar's batched attention read. It crosses the existing IPC seam without
+ * making immutable Session facts planner history.
  */
 export interface LatestSessionSignal {
   ticketId: string;

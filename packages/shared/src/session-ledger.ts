@@ -124,6 +124,8 @@ export type SessionEventPayload =
   | { kind: "session.created"; session: Session }
   | { kind: "session.archived" }
   | { kind: "session.retitled"; title: string | null }
+  /** An adapter-neutral outcome signal; it is not a Ticket lifecycle event. */
+  | { kind: "session.signaled"; signal: "done" | "blocked"; reason: string | null }
   | { kind: "attachment.opened"; attachment: SessionAttachment }
   | {
       kind: "attachment.native_referenced";
@@ -305,8 +307,11 @@ export type SessionCommandIntent =
   | { kind: "session.create"; projectId: string; ticketId: string | null; title: string | null }
   | { kind: "session.archive" }
   | { kind: "session.retitle"; title: string | null }
+  | { kind: "session.signal"; signal: "done" | "blocked"; reason: string | null }
   | { kind: "executor.start"; adapterId: string; continuity: SessionAttachmentContinuity }
   | { kind: "executor.stop"; attachmentId: string }
+  /** A non-destructive adapter interrupt (for example terminal Esc); the attachment remains live. */
+  | { kind: "executor.interrupt"; attachmentId: string }
   | { kind: "message.submit"; reference: TranscriptReference };
 
 /**
@@ -340,8 +345,10 @@ export type CommandReceiptResult =
   | { kind: "session.created"; sessionId: string }
   | { kind: "session.archived"; sessionId: string }
   | { kind: "session.retitled"; sessionId: string }
+  | { kind: "session.signaled"; sessionId: string }
   | { kind: "executor.start.requested"; sessionId: string }
   | { kind: "executor.stop.requested"; sessionId: string }
+  | { kind: "executor.interrupted"; sessionId: string }
   | { kind: "message.submitted"; sessionId: string };
 
 interface CommandReceiptDetailsAccepted {
@@ -440,6 +447,8 @@ export interface SessionProjection {
   attachments: readonly SessionAttachmentProjection[];
   liveExecutor: SessionAttachmentProjection | null;
   attention: SessionAttentionProjection;
+  /** Latest explicit generic outcome signal, independent of planner history. */
+  signal: { signal: "done" | "blocked"; reason: string | null; occurredAt: number } | null;
 }
 
 /**
@@ -457,6 +466,7 @@ export function projectSession(
   const pendingExecutorStarts = new Map<string, SessionCommand>();
   let status: SessionProjection["status"] = "open";
   let title = session.title;
+  let signal: SessionProjection["signal"] = null;
 
   const ordered = [...events]
     .filter((event) => event.sessionId === session.id)
@@ -475,6 +485,13 @@ export function projectSession(
         break;
       case "session.retitled":
         title = event.payload.title;
+        break;
+      case "session.signaled":
+        signal = {
+          signal: event.payload.signal,
+          reason: event.payload.reason,
+          occurredAt: event.occurredAt,
+        };
         break;
       case "attachment.native_referenced": {
         const existing = attachments.get(event.payload.attachmentId);
@@ -556,6 +573,7 @@ export function projectSession(
       active: activeAttention,
       primary: activeAttention.at(-1) ?? null,
     },
+    signal,
   };
 }
 

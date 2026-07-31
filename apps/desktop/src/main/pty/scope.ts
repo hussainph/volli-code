@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import type { ControlPlane } from "@volli/control-plane";
 import {
   buildHarnessCommand,
   buildHarnessResumeCommand,
@@ -19,12 +20,8 @@ import type {
 } from "@volli/shared";
 import { materializeAttachments } from "../attachment-materialize";
 import { getProjectById } from "../db/projects-repo";
-import {
-  countProjectScratchSessions,
-  countTicketSessions,
-  getSession,
-  getTicketSessionContext,
-} from "../db/sessions-repo";
+import { getTicketSessionContext } from "../db/tickets-repo";
+import { terminalSessionRecord } from "../session-control";
 
 /** The db-resolved shape a PTY is spawned + persisted from (ticket or scratch). */
 export interface SessionScope {
@@ -77,13 +74,10 @@ export interface SessionScope {
     resumeCommand: string | null;
   } | null;
   /**
-   * Present ONLY for a RESUME launch (issue #78, CONCEPT #21): the ended agent
-   * session this one picks up from. `previousSessionId` is recorded in the
-   * `session_resumed` event; `harnessSessionId` is that session's best-known
-   * resume seed, inherited by the new row so a follow-up interrupt/resume chain
-   * keeps a valid seed until the harness re-`link`s a fresh one.
+   * Present ONLY for native resume. It reuses the durable Session and opens a
+   * new terminal attachment; history never becomes a fabricated new Session.
    */
-  resume: { previousSessionId: string; harnessSessionId: string | null } | null;
+  resume: { sessionId: string; harnessSessionId: string | null } | null;
 }
 
 /** A resolved scope, or the one failure: a ticket request naming a ticket that does not exist. */
@@ -99,13 +93,14 @@ export type ScopeResolution = { ok: true; scope: SessionScope } | { ok: false; e
  * answers belong to main's harness runtime, and a launch line built from one
  * without the other would name the right binary while getting its flags wrong.
  */
-export function resolveScope(
+export async function resolveScope(
   db: Database.Database,
+  controlPlane: ControlPlane,
   request: CreateTerminalSessionRequest,
   attachmentsRootPath: string,
   wrapperFor: HarnessWrapperLookup,
   adapterFor: HarnessAdapterLookup,
-): ScopeResolution {
+): Promise<ScopeResolution> {
   // Presentation metadata is non-security-sensitive, but still normalize the
   // IPC value so an untyped caller cannot persist arbitrary vocabulary.
   const placement = request.placement === "split" ? "split" : "tab";
@@ -116,7 +111,12 @@ export function resolveScope(
     const kickoff = request.ticket.kickoff;
     const resume = request.ticket.resume;
     const usesWorktree = ctx.usesWorktree;
-    const title = `Session ${countTicketSessions(db, request.ticket.ticketId) + 1}`;
+    const existingSessions = await controlPlane.listSessions({
+      projectId: ctx.projectId,
+      scope: "ticket",
+      ticketId: request.ticket.ticketId,
+    });
+    const title = `Session ${existingSessions.length + 1}`;
     // Resume launch (issue #78, CONCEPT #21): pick up an ENDED agent session
     // of this same ticket. Kickoff and resume are mutually exclusive — reject
     // both present outright rather than silently preferring one.
@@ -124,8 +124,9 @@ export function resolveScope(
       if (kickoff !== undefined) {
         return { ok: false, error: "A session cannot both start a kickoff and resume another" };
       }
-      const prior = getSession(db, resume.sessionId);
-      if (prior === undefined) return { ok: false, error: "Cannot resume an unknown session" };
+      const priorProjection = await controlPlane.getSession({ sessionId: resume.sessionId });
+      if (priorProjection === null) return { ok: false, error: "Cannot resume an unknown session" };
+      const prior = terminalSessionRecord(priorProjection);
       if (prior.ticketId !== request.ticket.ticketId) {
         return { ok: false, error: "Cannot resume a session that belongs to another ticket" };
       }
@@ -168,7 +169,7 @@ export function resolveScope(
           placement,
           cwd: ctx.projectPath,
           env: ticketSessionEnv(ctx.projectPath, displayId),
-          title,
+          title: prior.title,
           artifactsRoot: ctx.projectPath,
           // Non-worktree resumes launch the resume line directly; a worktree
           // resume defers the write to create() (post-`ensure`, setup-gated).
@@ -183,7 +184,7 @@ export function resolveScope(
               }
             : null,
           resume: {
-            previousSessionId: prior.id,
+            sessionId: prior.id,
             harnessSessionId: prior.harnessSessionId,
           },
         },
@@ -268,7 +269,7 @@ export function resolveScope(
       placement,
       cwd: request.cwd,
       env: project ? projectSessionEnv(project.path) : {},
-      title: `Terminal ${countProjectScratchSessions(db, request.workspaceId) + 1}`,
+      title: `Terminal ${(await controlPlane.listSessions({ projectId: request.workspaceId, scope: "scratch" })).length + 1}`,
       artifactsRoot: project?.path ?? null,
       // Scratch sessions never auto-launch a harness — just a bare shell.
       launchCommand: null,

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 
 import type Database from "better-sqlite3";
+import type { ControlPlane } from "@volli/control-plane";
 import {
   applyTicketBodyMutation,
   attachmentsSectionInput,
@@ -36,7 +37,7 @@ import type {
   AgentErrorCode,
   AgentRequest,
   AgentResponse,
-  DataChangeKind,
+  DataChangedEvent,
   DoctorFacts,
   DoctorObservation,
   HarnessEventNotice,
@@ -53,18 +54,18 @@ import type {
 } from "@volli/shared";
 
 import { listAttachments } from "./db/attachments-repo";
-import { listTicketEvents, recordTicketEvent } from "./db/events-repo";
+import { listTicketEvents } from "./db/events-repo";
 import { listComments } from "./db/comments-repo";
 import { recordHarnessChannelEvent, recordHarnessLaunch } from "./db/harness-channel-repo";
 import { getRegisteredHarness } from "./db/harness-registry-repo";
 import { listAllLabels } from "./db/labels-repo";
 import { listProjects } from "./db/projects-repo";
 import {
-  getSession,
-  listSessions,
-  setActiveHarnessId,
-  setHarnessSessionId,
-} from "./db/sessions-repo";
+  latestTerminalAttachment,
+  readTerminalAttachmentDetail,
+  terminalNativeReference,
+  terminalSessionRecord,
+} from "./session-control";
 import { getTicket, listArchivedTicketsByProject, listTicketsByProject } from "./db/tickets-repo";
 import { recordHarnessDelivery } from "./harness-registry";
 import { readWorktreeDiff, readWorktreeStatus, runGitCapturing } from "./worktree";
@@ -83,6 +84,8 @@ import {
 
 export interface AgentCommandServiceOptions {
   db: Database.Database;
+  /** The app composition root's one durable Session control plane. */
+  controlPlane: ControlPlane;
   appVersion: string;
   now?: () => number;
   newId?: () => string;
@@ -107,22 +110,21 @@ export interface AgentCommandServiceOptions {
   ) => { status: SessionActivityState; output: string } | undefined;
   notify?: (title: string, message: string) => void;
   /**
-   * Interrupts every live agent session of a ticket, returning their ids (from
-   * the PtyManager). The socket-side backward-move choke point (issue #78):
-   * after a `ticket.move` that leaves the active columns commits, its ticket's
-   * running agents are Esc'd and one `sessions_interrupted` event is recorded.
-   * Absent (tests) means the interrupt is a no-op.
+   * Interrupts every live agent attachment of a ticket after a committed
+   * backward move. Its command and receipt are Session evidence; Esc leaves
+   * the terminal attachment alive. Absent (tests) means a no-op.
    */
-  interruptTicketSessions?: (ticketId: string) => string[];
+  interruptTicketSessions?: (ticketId: string) => string[] | Promise<string[]>;
   /**
    * Called after a socket command COMMITS a planning mutation, with the exact
    * ticket it resolved and touched — the scope index.ts broadcasts as
    * `volli:data-changed` so the renderer refreshes the right surfaces promptly.
    * Never called for a read-only command or a no-op (e.g. a same-column
-   * `ticket.move`, or a scratch session's `session.done` that records nothing).
+   * `ticket.move`). A ticketless Session mutation is project-scoped rather than
+   * targeted, so every reader refreshes conservatively.
    * Absent (tests) means the broadcast is a no-op.
    */
-  onMutation?: (change: { ticketId: string; projectId: string; kind: DataChangeKind }) => void;
+  onMutation?: (change: Omit<DataChangedEvent, "entity">) => void;
   /**
    * Called for every canonical harness event this door ingests (harness-events),
    * after any session-record write it implies has committed — the notice
@@ -270,6 +272,7 @@ function finalizeContext(
 function projectForCreate(
   db: Database.Database,
   projects: readonly Project[],
+  sessions: readonly SessionRecord[],
   request: AgentRequest,
 ): ProjectResolution {
   const selector = request.args["project"];
@@ -293,7 +296,7 @@ function projectForCreate(
   }
   const envSession = request.ctx.env.session;
   if (envSession !== undefined) {
-    const session = getSession(db, envSession);
+    const session = sessions.find((candidate) => candidate.id === envSession);
     if (!session) {
       return {
         ok: false,
@@ -452,6 +455,7 @@ function ticketForDisplayId(
 function resolveWorktreeTicket(
   db: Database.Database,
   projects: readonly Project[],
+  sessions: readonly SessionRecord[],
   request: AgentRequest,
 ): { ok: true; ticket: Ticket; project: Project } | { ok: false; response: AgentResponse } {
   if (request.args["id"] !== undefined) {
@@ -489,15 +493,11 @@ function resolveWorktreeTicket(
       displayId: ticketDisplayById.get(ticket.id)!,
       projectId: ticket.projectId,
     })),
-    sessions: projects.flatMap((project) =>
-      listSessions(db, project.id).map((session) => ({
-        id: session.id,
-        projectId: project.id,
-        ticketDisplayId: session.ticketId
-          ? (ticketDisplayById.get(session.ticketId) ?? null)
-          : null,
-      })),
-    ),
+    sessions: sessions.map((session) => ({
+      id: session.id,
+      projectId: session.projectId,
+      ticketDisplayId: session.ticketId ? (ticketDisplayById.get(session.ticketId) ?? null) : null,
+    })),
   });
   if (ladder.ok && ladder.context.ticketDisplayId !== null) {
     return ticketForDisplayId(db, projects, ladder.context.ticketDisplayId, {
@@ -572,19 +572,7 @@ function publicEvent(
   const contextProject = contextTicket
     ? projects.find(({ id }) => id === contextTicket.projectId)
     : undefined;
-  const payload =
-    event.payload.kind === "commented"
-      ? { kind: "commented" }
-      : event.payload.kind === "session_started"
-        ? {
-            kind: "session_started",
-            session: shortSessionId(event.payload.sessionId),
-            title: event.payload.title,
-            harnessId: event.payload.harnessId,
-          }
-        : event.payload.kind === "session_ended"
-          ? { kind: "session_ended", session: shortSessionId(event.payload.sessionId) }
-          : event.payload;
+  const payload = event.payload.kind === "commented" ? { kind: "commented" } : event.payload;
   return {
     actor: event.actor,
     actorContext: event.actorContext
@@ -602,12 +590,12 @@ function publicEvent(
 }
 
 function requestActor(
-  db: Database.Database,
   request: AgentRequest,
+  sessions: readonly SessionRecord[],
 ): { ok: true; actor: TicketEventActor } | { ok: false; response: AgentResponse } {
   const sessionId = request.ctx.env.session;
   if (!sessionId) return { ok: true, actor: { kind: "user" } };
-  const session = getSession(db, sessionId);
+  const session = sessions.find((candidate) => candidate.id === sessionId);
   return session
     ? {
         ok: true,
@@ -774,12 +762,9 @@ function isBodyMutation(value: unknown): value is TicketBodyMutation {
 }
 
 function sessionForPublicId(
-  db: Database.Database,
-  projects: readonly Project[],
+  sessions: readonly SessionRecord[],
   selector: unknown,
-):
-  | { ok: true; session: NonNullable<ReturnType<typeof getSession>> }
-  | { ok: false; response: AgentResponse } {
+): { ok: true; session: SessionRecord } | { ok: false; response: AgentResponse } {
   if (typeof selector !== "string") {
     return { ok: false, response: failure("INVALID_REQUEST", "A session id is required.") };
   }
@@ -787,9 +772,7 @@ function sessionForPublicId(
   // prints them and `session peek` addresses by them. Full UUIDs never cross
   // the socket as an input — only requestActor's env `VOLLI_SESSION` uses them,
   // and that's the door contract, resolved separately.
-  const matches = projects
-    .flatMap((project) => listSessions(db, project.id))
-    .filter((session) => shortSessionId(session.id) === selector);
+  const matches = sessions.filter((session) => shortSessionId(session.id) === selector);
   if (matches.length > 1) {
     return {
       ok: false,
@@ -802,6 +785,38 @@ function sessionForPublicId(
         ok: false,
         response: failure("SESSION_NOT_FOUND", `No session matches ${selector}.`),
       };
+}
+
+async function updateTerminalNative(
+  controlPlane: ControlPlane,
+  session: SessionRecord,
+  update: (
+    detail: NonNullable<ReturnType<typeof readTerminalAttachmentDetail>>,
+  ) => ReturnType<typeof readTerminalAttachmentDetail>,
+  occurredAt: number,
+): Promise<SessionRecord | null> {
+  const projection = await controlPlane.getSession({ sessionId: session.id });
+  if (projection === null) return null;
+  const attachment = latestTerminalAttachment(projection.attachments);
+  if (attachment === null || attachment.status !== "open") return null;
+  const detail = readTerminalAttachmentDetail(attachment.native);
+  if (detail === null) return null;
+  const next = update(detail);
+  if (next === null) return null;
+  await controlPlane.observe({
+    id: randomUUID(),
+    kind: "attachment.native_referenced",
+    sessionId: session.id,
+    attachmentId: attachment.id,
+    occurredAt,
+    provenance: {
+      source: { kind: "adapter", id: "terminal", detail: null },
+      venue: { id: "local", kind: "local" },
+    },
+    native: terminalNativeReference(next),
+  });
+  const updated = await controlPlane.getSession({ sessionId: session.id });
+  return updated === null ? null : terminalSessionRecord(updated);
 }
 
 /**
@@ -858,14 +873,22 @@ export function createAgentCommandService(
   const newId = options.newId ?? randomUUID;
   const git = options.git ?? runGitCapturing;
   const worktreeExists = options.worktreeExists ?? existsSync;
+  const controlPlane = options.controlPlane;
 
   return {
     async execute(request): Promise<AgentResponse> {
       const projects = listProjects(options.db);
+      const sessions = (
+        await Promise.all(
+          projects.map((project) =>
+            controlPlane.listSessions({ projectId: project.id, scope: "all" }),
+          ),
+        )
+      ).flatMap((projections) => projections.map(terminalSessionRecord));
       if (request.cmd === "identify") {
         const sessionId = request.ctx.env.session;
         if (sessionId) {
-          const session = getSession(options.db, sessionId);
+          const session = sessions.find((candidate) => candidate.id === sessionId);
           if (!session) {
             return failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`);
           }
@@ -894,7 +917,7 @@ export function createAgentCommandService(
         if (ticket && !ticket.ok) return ticket.response;
         const resolved = ticket?.ok
           ? { ok: true as const, project: ticket.project }
-          : projectForCreate(options.db, projects, request);
+          : projectForCreate(options.db, projects, sessions, request);
         if (!resolved.ok) return resolved.response;
         return {
           v: 1,
@@ -916,7 +939,7 @@ export function createAgentCommandService(
         };
       }
       if (request.cmd === "board") {
-        const resolved = projectForCreate(options.db, projects, request);
+        const resolved = projectForCreate(options.db, projects, sessions, request);
         return resolved.ok
           ? { v: 1, ok: true, data: boardData(options.db, resolved.project) }
           : resolved.response;
@@ -937,7 +960,7 @@ export function createAgentCommandService(
         };
       }
       if (request.cmd === "label.list") {
-        const resolved = projectForCreate(options.db, projects, request);
+        const resolved = projectForCreate(options.db, projects, sessions, request);
         if (!resolved.ok) return resolved.response;
         const projectTickets = listTicketsByProject(options.db, resolved.project.id);
         const labels = listAllLabels(options.db)
@@ -960,7 +983,7 @@ export function createAgentCommandService(
         // let the ticket's project win over what the caller explicitly asked
         // for. When both are present and disagree, refuse and name both.
         if (request.args["project"] !== undefined && ticketResolution?.ok) {
-          const selected = projectForCreate(options.db, projects, request);
+          const selected = projectForCreate(options.db, projects, sessions, request);
           if (!selected.ok) return selected.response;
           if (selected.project.id !== ticketResolution.project.id) {
             return failure(
@@ -971,13 +994,14 @@ export function createAgentCommandService(
         }
         const resolvedProject = ticketResolution?.ok
           ? ticketResolution.project
-          : projectForCreate(options.db, projects, request);
+          : projectForCreate(options.db, projects, sessions, request);
         if (!("id" in resolvedProject)) {
           if (!resolvedProject.ok) return resolvedProject.response;
         }
         const project = "id" in resolvedProject ? resolvedProject : resolvedProject.project;
         const projectById = new Map(projects.map((entry) => [entry.id, entry]));
-        const sessions = listSessions(options.db, project.id)
+        const projectSessions = sessions
+          .filter((session) => session.projectId === project.id)
           .filter(
             (session) => !ticketResolution?.ok || session.ticketId === ticketResolution.ticket.id,
           )
@@ -1000,10 +1024,10 @@ export function createAgentCommandService(
               ageMs: Math.max(0, now() - session.createdAt),
             };
           });
-        return { v: 1, ok: true, data: { sessions } };
+        return { v: 1, ok: true, data: { sessions: projectSessions } };
       }
       if (request.cmd === "session.peek") {
-        const resolved = sessionForPublicId(options.db, projects, request.args["id"]);
+        const resolved = sessionForPublicId(sessions, request.args["id"]);
         if (!resolved.ok) return resolved.response;
         const lines = positiveIntOr(request.args["lines"], 60);
         const observation = options.observeSession?.(resolved.session.id, lines);
@@ -1045,7 +1069,7 @@ export function createAgentCommandService(
             "session done and blocked require VOLLI_SESSION context.",
           );
         }
-        const session = getSession(options.db, sessionId);
+        const session = sessions.find((candidate) => candidate.id === sessionId);
         if (!session) return failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`);
         const reasonValue = request.args["reason"];
         if (reasonValue !== undefined && typeof reasonValue !== "string") {
@@ -1053,25 +1077,20 @@ export function createAgentCommandService(
         }
         const reason = typeof reasonValue === "string" ? reasonValue : null;
         const signal = request.cmd === "session.done" ? "done" : "blocked";
-        // A scratch session has no ticket to record against — the signal is a
-        // no-op beyond acknowledging it. When the session drives a ticket, the
-        // outcome is written to that ticket's event log as an `automation`
-        // actor (the door, not the keyboard), in one transaction.
-        const ticketId = session.ticketId;
-        if (ticketId !== null) {
-          options.db.transaction(() => {
-            recordTicketEvent(
-              options.db,
-              ticketId,
-              { kind: "session_signal", signal, reason },
-              now(),
-              { kind: "automation", sessionId: session.id, ticketId },
-            );
-          })();
-          // A Needs-Review signal landed on the ticket this session drives — a
-          // scratch session (ticketId null) records nothing, so it never fires.
-          options.onMutation?.({ ticketId, projectId: session.projectId, kind: "session" });
-        }
+        await controlPlane.submit({
+          commandId: newId(),
+          sessionId: session.id,
+          intent: { kind: "session.signal", signal, reason },
+          provenance: {
+            source: { kind: "adapter", id: "terminal", detail: null },
+            venue: { id: "local", kind: "local" },
+          },
+        });
+        options.onMutation?.({
+          ...(session.ticketId === null ? {} : { ticketId: session.ticketId }),
+          projectId: session.projectId,
+          kind: "session",
+        });
         return {
           v: 1,
           ok: true,
@@ -1079,7 +1098,7 @@ export function createAgentCommandService(
             session: shortSessionId(session.id),
             signal,
             reason,
-            recorded: ticketId !== null,
+            recorded: true,
           },
         };
       }
@@ -1092,7 +1111,7 @@ export function createAgentCommandService(
         if (!sessionId) {
           return failure("CONTEXT_REQUIRED", "session link requires VOLLI_SESSION context.");
         }
-        const session = getSession(options.db, sessionId);
+        const session = sessions.find((candidate) => candidate.id === sessionId);
         if (!session) return failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`);
         const idValue = request.args["id"];
         if (typeof idValue !== "string") {
@@ -1105,9 +1124,14 @@ export function createAgentCommandService(
         if (harnessSessionId.length > 200) {
           return failure("INVALID_REQUEST", "The harness session id is too long (max 200 chars).");
         }
-        // Idempotent overwrite — a later link wins, so a re-run (or a harness that
-        // rotates its id mid-session) always leaves the newest resume seed.
-        setHarnessSessionId(options.db, session.id, harnessSessionId);
+        const updated = await updateTerminalNative(
+          controlPlane,
+          session,
+          (detail) => ({ ...detail, harnessSessionId }),
+          now(),
+        );
+        if (updated === null)
+          return failure("SESSION_ENDED", `Session ${shortSessionId(session.id)} has ended.`);
         return {
           v: 1,
           ok: true,
@@ -1145,7 +1169,7 @@ export function createAgentCommandService(
         if (!sessionId) {
           return failure("CONTEXT_REQUIRED", "session harness requires VOLLI_SESSION context.");
         }
-        const session = getSession(options.db, sessionId);
+        const session = sessions.find((candidate) => candidate.id === sessionId);
         if (!session) return failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`);
         // Ended is ended, the same rule `hook` applies and for the same reason:
         // `VOLLI_SESSION` is exported into the terminal's environment, so a tmux
@@ -1191,7 +1215,14 @@ export function createAgentCommandService(
         // stays ON the notice — the renderer still needs it to decide whether
         // to repoint the durable record's labels — but it stops being the gate.
         const changed = harnessId !== effectiveHarnessId(session);
-        if (changed) setActiveHarnessId(options.db, session.id, harnessId);
+        const nativeUpdate = await updateTerminalNative(
+          controlPlane,
+          session,
+          (detail) => ({ ...detail, activeHarnessId: harnessId }),
+          now(),
+        );
+        if (nativeUpdate === null)
+          return failure("SESSION_ENDED", `Session ${shortSessionId(session.id)} has ended.`);
         options.onSessionHarness?.({
           sessionId: session.id,
           projectId: session.projectId,
@@ -1215,7 +1246,12 @@ export function createAgentCommandService(
         if (minted !== null) {
           // Overwrites, always. The seed belongs to the launch that is starting
           // now; the previous one describes an agent this terminal has quit.
-          setHarnessSessionId(options.db, session.id, minted);
+          await updateTerminalNative(
+            controlPlane,
+            nativeUpdate,
+            (detail) => ({ ...detail, harnessSessionId: minted }),
+            now(),
+          );
         }
         return {
           v: 1,
@@ -1237,7 +1273,7 @@ export function createAgentCommandService(
         if (!sessionId) {
           return failure("CONTEXT_REQUIRED", "hook requires VOLLI_SESSION context.");
         }
-        const session = getSession(options.db, sessionId);
+        const session = sessions.find((candidate) => candidate.id === sessionId);
         if (!session) return failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`);
         // A session row outlives its PTY, and `VOLLI_SESSION` outlives both: it
         // is exported into the session's environment, so anything that escapes
@@ -1295,7 +1331,12 @@ export function createAgentCommandService(
         // is precisely why a superseded one may not be written: newest by
         // arrival is not newest, and this row seeds every future resume.
         if (harnessSessionId !== null && !superseded) {
-          setHarnessSessionId(options.db, session.id, harnessSessionId);
+          await updateTerminalNative(
+            controlPlane,
+            session,
+            (detail) => ({ ...detail, harnessSessionId }),
+            now(),
+          );
         }
         // The event arrived, so the harness can plainly deliver it: the ledger
         // learns that here, at the one place a delivery is observed, and before
@@ -1428,7 +1469,7 @@ export function createAgentCommandService(
         };
       }
       if (request.cmd === "ticket.list") {
-        const resolved = projectForCreate(options.db, projects, request);
+        const resolved = projectForCreate(options.db, projects, sessions, request);
         if (!resolved.ok) return resolved.response;
         const status = request.args["status"];
         const priority = request.args["priority"];
@@ -1525,7 +1566,7 @@ export function createAgentCommandService(
         // Context resolution (which ticket the agent means) stays this door's
         // concern; the git compose + the no-worktree / stamped-but-deleted
         // discrimination live behind the ticketId-in read verb (CONCEPT #42).
-        const resolved = resolveWorktreeTicket(options.db, projects, request);
+        const resolved = resolveWorktreeTicket(options.db, projects, sessions, request);
         if (!resolved.ok) return resolved.response;
         const read = readWorktreeStatus(
           { db: options.db, git, worktreeExists },
@@ -1560,7 +1601,7 @@ export function createAgentCommandService(
         }
       }
       if (request.cmd === "worktree.diff") {
-        const resolved = resolveWorktreeTicket(options.db, projects, request);
+        const resolved = resolveWorktreeTicket(options.db, projects, sessions, request);
         if (!resolved.ok) return resolved.response;
         // Merge-base ("what the PR would contain") is the default; --working-tree
         // switches to the uncommitted view. Same two-mode diff.ts the rail uses.
@@ -1612,7 +1653,7 @@ export function createAgentCommandService(
       if (request.cmd === "ticket.update") {
         const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
         if (!resolved.ok) return resolved.response;
-        const actor = requestActor(options.db, request);
+        const actor = requestActor(request, sessions);
         if (!actor.ok) return actor.response;
         const title = request.args["title"];
         const priority = request.args["priority"];
@@ -1693,7 +1734,7 @@ export function createAgentCommandService(
       if (request.cmd === "ticket.archive") {
         const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
         if (!resolved.ok) return resolved.response;
-        const actor = requestActor(options.db, request);
+        const actor = requestActor(request, sessions);
         if (!actor.ok) return actor.response;
         try {
           const archivedAt = now();
@@ -1724,7 +1765,7 @@ export function createAgentCommandService(
       if (request.cmd === "ticket.move") {
         const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
         if (!resolved.ok) return resolved.response;
-        const actor = requestActor(options.db, request);
+        const actor = requestActor(request, sessions);
         if (!actor.ok) return actor.response;
         const to = request.args["to"];
         if (!isTicketStatus(to)) {
@@ -1758,7 +1799,7 @@ export function createAgentCommandService(
           // Backward-move interrupt (issue #78): the move committed above, so the
           // interrupt runs as its side effect. `resolved.ticket.status` is the
           // pre-move status (same-column no-ops already returned above).
-          interruptOnBackwardMove(
+          await interruptOnBackwardMove(
             options.db,
             {
               ticketId: resolved.ticket.id,
@@ -1804,7 +1845,7 @@ export function createAgentCommandService(
       if (request.cmd === "ticket.comment") {
         const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
         if (!resolved.ok) return resolved.response;
-        const actor = requestActor(options.db, request);
+        const actor = requestActor(request, sessions);
         if (!actor.ok) return actor.response;
         const message = request.args["message"];
         if (typeof message !== "string" || message.trim().length === 0) {
@@ -1858,7 +1899,7 @@ export function createAgentCommandService(
       if (request.cmd !== "ticket.create") {
         return failure("UNSUPPORTED_COMMAND", `Unsupported command ${request.cmd}`);
       }
-      const resolved = projectForCreate(options.db, projects, request);
+      const resolved = projectForCreate(options.db, projects, sessions, request);
       if (!resolved.ok) return resolved.response;
       const createPriorityError = invalidPriorityResponse(request.args["priority"]);
       if (createPriorityError) return createPriorityError;
@@ -1883,7 +1924,7 @@ export function createAgentCommandService(
 
       try {
         const createdAt = now();
-        const actor = requestActor(options.db, request);
+        const actor = requestActor(request, sessions);
         if (!actor.ok) return actor.response;
         const ticket = createTicketCommand(
           options.db,

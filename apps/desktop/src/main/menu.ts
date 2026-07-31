@@ -51,7 +51,7 @@ async function handleExportDatabase(dbHandle: DbHandle): Promise<void> {
   if (result.canceled || !result.filePath) return;
 
   try {
-    const document = buildExportDocument(dbHandle.db, {
+    const document = await buildExportDocument(dbHandle.db, {
       appVersion: app.getVersion(),
       now: now.getTime(),
     });

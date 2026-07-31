@@ -3,9 +3,9 @@ import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import type Database from "better-sqlite3";
+import type { ControlPlane } from "@volli/control-plane";
 import {
   agentSessionEnv,
-  createSessionRecord,
   errorMessage,
   getHarnessAdapter,
   harnessAdapters,
@@ -43,8 +43,14 @@ import { composeWorktreeLaunchCommand } from "./launch";
 import { createOutputPipeline } from "./output";
 import type { OutputPipeline, OutputSink } from "./output";
 import { ParkController } from "./park-controller";
-import { closeOutSession, persistSessionStart } from "./persistence";
+import {
+  createDesktopControlPlane,
+  terminalNativeReference,
+  terminalSessionRecord,
+  type TerminalAttachmentDetail,
+} from "../session-control";
 import { resolveScope } from "./scope";
+import type { SessionScope } from "./scope";
 
 // Structural subset of node-pty we depend on — declared here so nothing in
 // this module needs a value import of node-pty (whose native binary is built
@@ -144,6 +150,43 @@ interface Session {
    * terminal a live shell with the failure visible and never launches the harness.
    */
   setupRun: SetupRun | null;
+  /** The durable terminal attachment, not Session-owned terminal state. */
+  attachmentId: string;
+  terminalDetail: TerminalAttachmentDetail;
+}
+
+const TERMINAL_VENUE = { id: "local", kind: "local" as const };
+
+function terminalSystemProvenance() {
+  return {
+    source: { kind: "system" as const, id: "desktop-terminal", detail: null },
+    venue: TERMINAL_VENUE,
+  };
+}
+
+function terminalAdapterProvenance() {
+  return {
+    source: { kind: "adapter" as const, id: "terminal", detail: null },
+    venue: TERMINAL_VENUE,
+  };
+}
+
+function terminalDetailFor(
+  scope: Pick<SessionScope, "harnessId" | "launchKind" | "placement">,
+  cwd: string,
+  harnessSessionId: string | null,
+  exitCode: number | null,
+): TerminalAttachmentDetail {
+  return {
+    kind: "volli.terminal.v1",
+    cwd,
+    harnessId: scope.harnessId,
+    activeHarnessId: null,
+    harnessSessionId,
+    launchKind: scope.launchKind,
+    placement: scope.placement,
+    exitCode,
+  };
 }
 
 /**
@@ -155,6 +198,8 @@ interface Session {
  */
 export class PtyManager {
   private readonly sessions = new Map<string, Session>();
+  /** One app-owned durable Session control plane; tests may lazily compose one around their test db. */
+  private readonly controlPlane: ControlPlane | null;
   /**
    * The warm-park duty cycle (park/wake + breathe/sweep), extracted per issue
    * #99. It reads this manager's live `sessions` map (the SAME instance) and
@@ -187,7 +232,9 @@ export class PtyManager {
     private readonly parkConfig: ParkConfig = parkConfigFromEnv(process.env, process.platform),
     private readonly agentRuntime: AgentRuntimeEnvironment | null = null,
     private readonly attachmentsRootPath: string = "",
+    controlPlane: ControlPlane | null = null,
   ) {
+    this.controlPlane = controlPlane ?? (db === null ? null : createDesktopControlPlane(db));
     // The controller shares this manager's live session map and mutates each
     // session's park fields in place. `flush` and `pushParkState` stay here —
     // they touch the output pipeline and webContents — and every current
@@ -274,9 +321,12 @@ export class PtyManager {
   ): Promise<CreateTerminalSessionResult> {
     const db = this.db;
     if (db === null) return { ok: false, error: this.dbError };
+    const controlPlane = this.controlPlane;
+    if (controlPlane === null) return { ok: false, error: "Session control plane is unavailable" };
 
-    const resolved = resolveScope(
+    const resolved = await resolveScope(
       db,
+      controlPlane,
       request,
       this.attachmentsRootPath,
       this.wrapperFor,
@@ -284,6 +334,71 @@ export class PtyManager {
     );
     if (!resolved.ok) return resolved;
     const scope = resolved.scope;
+
+    // A Session is durable before any worktree or PTY attempt. A new terminal
+    // gets its identity from the control plane; native resume deliberately
+    // retains the prior durable Session and starts another attachment on it.
+    let sessionId: string;
+    try {
+      if (scope.resume === null) {
+        const created = await controlPlane.createSession({
+          commandId: randomUUID(),
+          projectId: scope.projectId,
+          ticketId: scope.ticketId,
+          title: scope.title,
+          provenance: terminalSystemProvenance(),
+        });
+        sessionId = created.session.id;
+      } else {
+        sessionId = scope.resume.sessionId;
+      }
+    } catch (error) {
+      return { ok: false, error: errorMessage(error) };
+    }
+    const attachmentId = randomUUID();
+    const start = await controlPlane.submit({
+      commandId: randomUUID(),
+      sessionId,
+      intent: {
+        kind: "executor.start",
+        adapterId: "terminal",
+        continuity: scope.resume === null ? "fresh" : "native_resume",
+      },
+      provenance: terminalSystemProvenance(),
+    });
+    if (start.receipt !== null) {
+      return { ok: false, error: "The Session cannot accept another terminal attachment" };
+    }
+    const recordAttachmentFailure = async (failure: unknown, cwd: string): Promise<void> => {
+      const detail = terminalDetailFor(scope, cwd, scope.resume?.harnessSessionId ?? null, null);
+      try {
+        await controlPlane.observe({
+          id: randomUUID(),
+          kind: "attachment.failed",
+          sessionId,
+          commandId: start.command.id,
+          occurredAt: Date.now(),
+          provenance: terminalSystemProvenance(),
+          attachment: {
+            id: attachmentId,
+            sessionId,
+            adapterId: "terminal",
+            venue: TERMINAL_VENUE,
+            continuity: scope.resume === null ? "fresh" : "native_resume",
+            native: terminalNativeReference(detail),
+          },
+          failure: {
+            code: "terminal_start_failed",
+            detail: errorMessage(failure),
+            diagnostic: null,
+          },
+        });
+      } catch (recordError) {
+        console.error(
+          `[volli] failed to record terminal attachment failure for ${sessionId}: ${errorMessage(recordError)}`,
+        );
+      }
+    };
 
     // Worktree ticket sessions materialize (or reuse) their isolated worktree
     // BEFORE anything spawns. `ensure` is single-flight and idempotent; on
@@ -293,7 +408,10 @@ export class PtyManager {
     let worktreeOutcome: EnsureOutcome | null = null;
     if (scope.worktree !== null) {
       const result = await ensure(worktreeDeps(db), scope.worktree.ticketId);
-      if (!result.ok) return { ok: false, error: result.error };
+      if (!result.ok) {
+        await recordAttachmentFailure(new Error(result.error), scope.cwd);
+        return { ok: false, error: result.error };
+      }
       worktreeOutcome = result.value;
       // A fresh `git worktree add` just stamped worktree_path/branch/base_branch
       // on the ticket — tell every window so the Branch/Base fields refresh from
@@ -320,15 +438,18 @@ export class PtyManager {
     if (worktreeOutcome !== null) {
       const worktreePath = worktreeOutcome.identity.worktreePath;
       if (worktreePath === null) {
+        await recordAttachmentFailure(new Error("Worktree path was not resolved"), scope.cwd);
         return { ok: false, error: "Worktree path was not resolved" };
       }
       cwd = resolve(worktreePath);
       if (!isInside(worktreesHome(), cwd) && !isPathWithinRoots(cwd)) {
+        await recordAttachmentFailure(new Error("Worktree path is outside the worktree home"), cwd);
         return { ok: false, error: "Worktree path is outside the worktree home" };
       }
     } else {
       cwd = resolve(scope.cwd);
       if (!isPathWithinRoots(cwd)) {
+        await recordAttachmentFailure(new Error("cwd is outside known projects"), cwd);
         return { ok: false, error: "cwd is outside known projects" };
       }
     }
@@ -349,6 +470,10 @@ export class PtyManager {
       // event has already fired, so a once() attached below would never run
       // and the shell would idle as an orphan until quit. Bail before spawning.
       if (webContents.isDestroyed()) {
+        await recordAttachmentFailure(
+          new Error("Window was closed before the terminal could start"),
+          cwd,
+        );
         return { ok: false, error: "Window was closed before the terminal could start" };
       }
       // Ensure the project's `.volli/artifacts` dir exists up front so an agent
@@ -368,6 +493,10 @@ export class PtyManager {
           rootStat = null;
         }
         if (rootStat === null || !rootStat.isDirectory()) {
+          await recordAttachmentFailure(
+            new Error(`Project folder no longer exists at ${scope.artifactsRoot}`),
+            cwd,
+          );
           return {
             ok: false,
             error: `Project folder no longer exists at ${scope.artifactsRoot}`,
@@ -376,7 +505,6 @@ export class PtyManager {
         await ensureProjectArtifactsDir(scope.artifactsRoot);
       }
       const { file, args } = resolveShell(process.env);
-      const sessionId = randomUUID();
       const now = Date.now();
       // The harness configuration goes UNDER the agent contract, so nothing a
       // wrapper reads can shadow VOLLI_SESSION/VOLLI_SOCKET/PATH — the three
@@ -429,28 +557,38 @@ export class PtyManager {
       // whose `destroyed` event already fired.
       if (webContents.isDestroyed()) {
         pty.kill();
+        await recordAttachmentFailure(
+          new Error("Window was closed before the terminal could start"),
+          cwd,
+        );
         return { ok: false, error: "Window was closed before the terminal could start" };
       }
-
-      // Persist the durable trace before wiring the session in; a ticket session
-      // also records `session_started` in the same transaction. A persist
-      // failure (e.g. workspaceId isn't a real project) must not leave an orphan
-      // shell — kill it and surface the error.
-      const record = createSessionRecord({
-        id: sessionId,
-        projectId: scope.projectId,
-        ticketId: scope.ticketId,
-        harnessId: scope.harnessId,
-        launchKind: scope.launchKind,
-        placement: scope.placement,
-        title: scope.title,
+      const terminalDetail = terminalDetailFor(
+        scope,
         cwd,
-        now,
-      });
+        scope.resume?.harnessSessionId ?? null,
+        null,
+      );
       try {
-        persistSessionStart(db, record, scope.resume, now);
+        await controlPlane.observe({
+          id: randomUUID(),
+          kind: "attachment.opened",
+          sessionId,
+          commandId: start.command.id,
+          occurredAt: now,
+          provenance: terminalSystemProvenance(),
+          attachment: {
+            id: attachmentId,
+            sessionId,
+            adapterId: "terminal",
+            venue: TERMINAL_VENUE,
+            continuity: scope.resume === null ? "fresh" : "native_resume",
+            native: terminalNativeReference(terminalDetail),
+          },
+        });
       } catch (error) {
         pty.kill();
+        await recordAttachmentFailure(error, cwd);
         return { ok: false, error: errorMessage(error) };
       }
 
@@ -490,6 +628,8 @@ export class PtyManager {
         parkedManually: false,
         quietCpuSamples: 0,
         setupRun: null,
+        attachmentId,
+        terminalDetail,
       };
       this.sessions.set(sessionId, session);
 
@@ -586,20 +726,55 @@ export class PtyManager {
           watchedSession.setupRun = null;
           armedRun.handleExit(exitCode);
         }
-        // Close out the durable record (and, for a still-linked ticket session,
-        // record `session_ended`) — runs whether the shell exited on its own or
-        // was killed, so the row never lingers as falsely-live. Never throws.
-        closeOutSession(db, sessionId, Date.now(), exitCode);
+        // Terminal liveness and the renderer's exit notification cannot wait
+        // on SQLite: a close write may be slow or unavailable, but a dead PTY
+        // must disappear from the live map immediately. The ledger close is
+        // durable best-effort evidence for that already-observed fact.
         if (!webContents.isDestroyed()) {
           const payload: TerminalExitEvent = { sessionId, exitCode };
           webContents.send("volli:terminal-exit" satisfies VolliIpcEvent, payload);
         }
         this.forget(sessionId);
+        void this.closeTerminalAttachment(controlPlane, sessionId, session, exitCode);
       });
-
-      return { ok: true, sessionId, session: record };
+      const projection = await controlPlane.getSession({ sessionId });
+      if (projection === null) {
+        pty.kill();
+        return { ok: false, error: "Session was not found after terminal attachment opened" };
+      }
+      return { ok: true, sessionId, session: terminalSessionRecord(projection) };
     } catch (error) {
+      await recordAttachmentFailure(error, scope.cwd);
       return { ok: false, error: errorMessage(error) };
+    }
+  }
+
+  /** Closing a PTY closes only its terminal attachment; the durable Session remains navigable. */
+  private async closeTerminalAttachment(
+    controlPlane: ControlPlane,
+    sessionId: string,
+    session: Session,
+    exitCode: number,
+  ): Promise<void> {
+    const occurredAt = Date.now();
+    try {
+      // `session.terminalDetail` is the launch snapshot. The hook/socket path
+      // may have since linked a newer harness id or active harness to this
+      // attachment; re-emitting that snapshot on exit would overwrite that
+      // newer evidence. Closing is the only fact the PTY itself observed.
+      await controlPlane.observe({
+        id: randomUUID(),
+        kind: "attachment.closed",
+        sessionId,
+        attachmentId: session.attachmentId,
+        occurredAt,
+        provenance: terminalSystemProvenance(),
+        outcome: exitCode === 0 ? "completed" : "failed",
+      });
+    } catch (error) {
+      console.error(
+        `[volli] failed to close terminal attachment ${session.attachmentId}: ${errorMessage(error)}`,
+      );
     }
   }
 
@@ -783,8 +958,10 @@ export class PtyManager {
    * consume input), mirroring {@link write}'s discipline. Returns the ids of
    * the sessions actually interrupted.
    */
-  interruptTicketSessions(ticketId: string): string[] {
+  async interruptTicketSessions(ticketId: string): Promise<string[]> {
     const interrupted: string[] = [];
+    const controlPlane = this.controlPlane;
+    if (controlPlane === null) return interrupted;
     for (const [sessionId, session] of this.sessions) {
       if (session.ticketId !== ticketId || session.launchKind !== "agent") continue;
       // User-equivalent input: keep the session out of the idle window and wake
@@ -792,7 +969,31 @@ export class PtyManager {
       session.lastActivityAt = Date.now();
       if (session.parkedPids !== null) this.parkController.wake(sessionId);
       try {
+        // Record the exact Session-level interrupt intent before writing Esc.
+        // It is deliberately not an attachment close: a TUI may keep its PTY
+        // alive and continue emitting history after receiving the interrupt.
+        const command = await controlPlane.submit({
+          commandId: randomUUID(),
+          sessionId,
+          intent: { kind: "executor.interrupt", attachmentId: session.attachmentId },
+          provenance: terminalSystemProvenance(),
+        });
+        if (command.receipt !== null) continue;
         session.pty.write("\x1b");
+        await controlPlane.observe({
+          id: randomUUID(),
+          sessionId,
+          occurredAt: Date.now(),
+          provenance: terminalAdapterProvenance(),
+          kind: "command.receipt",
+          attachmentId: session.attachmentId,
+          receipt: {
+            id: randomUUID(),
+            commandId: command.command.id,
+            status: "completed",
+            result: { kind: "executor.interrupted", sessionId },
+          },
+        });
         interrupted.push(sessionId);
       } catch (error) {
         // One session's dead pty must never block interrupting the rest; it

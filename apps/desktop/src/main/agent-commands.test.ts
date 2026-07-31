@@ -17,30 +17,37 @@ import { createAttachment } from "./db/attachments-repo";
 import { listHarnessChannels } from "./db/harness-channel-repo";
 import { getRegisteredHarness, recordHarnessTrust } from "./db/harness-registry-repo";
 import { insertProject } from "./db/projects-repo";
-import { endSession, getSession, insertSession, setActiveHarnessId } from "./db/sessions-repo";
+import {
+  endSession,
+  getSession,
+  insertSession,
+  setActiveHarnessId,
+} from "./session-control/test-support";
 import { insertTicket } from "./db/tickets-repo";
 import { openTestDb, testProject, testSession, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
-import { createAgentCommandService } from "./agent-commands";
+import {
+  createAgentCommandService as createAgentCommandServiceBase,
+  type AgentCommandServiceOptions,
+} from "./agent-commands";
+import { createDesktopControlPlane } from "./session-control";
 import { updateTicketFieldsCommand } from "./ticket-commands";
 import { scriptedGit } from "./worktree/scripted-git";
+import type { ControlPlane } from "@volli/control-plane";
+
+/** Main composes the service with its one Control Plane; tests do the same. */
+function createAgentCommandService(
+  options: Omit<AgentCommandServiceOptions, "controlPlane"> & { controlPlane?: ControlPlane },
+) {
+  return createAgentCommandServiceBase({
+    ...options,
+    controlPlane: options.controlPlane ?? createDesktopControlPlane(options.db),
+  });
+}
 
 let ctx: TestDb;
 
 afterEach(() => ctx.cleanup());
-
-/** The `sessions_interrupted` event payload for VC-1, if the backward move recorded one. */
-async function interruptedEventPayload(
-  exec: (cmd: AgentRequest["cmd"], args: Record<string, unknown>) => Promise<unknown>,
-): Promise<{ kind: string; sessionIds?: string[] } | undefined> {
-  const events = (await exec("ticket.events", { id: "VC-1", limit: 10 })) as {
-    ok: boolean;
-    data: { events: { payload: { kind: string; sessionIds?: string[] } }[] };
-  };
-  return events.data.events
-    .map((event) => event.payload)
-    .find((p) => p.kind === "sessions_interrupted");
-}
 
 describe("agent command service", () => {
   it("creates a ticket through display-id-only input and output", async () => {
@@ -364,7 +371,7 @@ describe("agent command service", () => {
       return { exec, interruptedTickets };
     }
 
-    it("interrupts and records sessions_interrupted on a doing→todo move", async () => {
+    it("interrupts live terminals without adding planner history on a doing→todo move", async () => {
       const { exec, interruptedTickets } = serviceWithInterrupt(["s1", "s2"]);
       await exec("ticket.create", { title: "T", status: "doing" });
 
@@ -372,10 +379,6 @@ describe("agent command service", () => {
 
       expect((moved as { ok: boolean }).ok).toBe(true);
       expect(interruptedTickets).toEqual(["ticket-1"]);
-      expect(await interruptedEventPayload(exec)).toEqual({
-        kind: "sessions_interrupted",
-        sessionIds: ["s1", "s2"],
-      });
     });
 
     it("interrupts on a needs_review→done move", async () => {
@@ -385,7 +388,6 @@ describe("agent command service", () => {
       await exec("ticket.move", { id: "VC-1", to: "done" });
 
       expect(interruptedTickets).toEqual(["ticket-1"]);
-      expect(await interruptedEventPayload(exec)).toBeDefined();
     });
 
     it("does not interrupt a doing→needs_review move (still active)", async () => {
@@ -395,7 +397,6 @@ describe("agent command service", () => {
       await exec("ticket.move", { id: "VC-1", to: "needs_review" });
 
       expect(interruptedTickets).toEqual([]);
-      expect(await interruptedEventPayload(exec)).toBeUndefined();
     });
 
     it("does not interrupt a todo→backlog move (never active)", async () => {
@@ -405,7 +406,6 @@ describe("agent command service", () => {
       await exec("ticket.move", { id: "VC-1", to: "backlog" });
 
       expect(interruptedTickets).toEqual([]);
-      expect(await interruptedEventPayload(exec)).toBeUndefined();
     });
 
     it("records nothing when the interrupt finds no live agent sessions", async () => {
@@ -415,7 +415,6 @@ describe("agent command service", () => {
       await exec("ticket.move", { id: "VC-1", to: "todo" });
 
       expect(interruptedTickets).toEqual(["ticket-1"]);
-      expect(await interruptedEventPayload(exec)).toBeUndefined();
     });
   });
 
@@ -1313,18 +1312,20 @@ describe("agent command service", () => {
     expect(notifications).toEqual([{ title: "Agent", message: "Needs input" }]);
   });
 
-  it("records lifecycle signals on the session's ticket as an automation actor", async () => {
+  it("records lifecycle signals in the Session ledger without changing planner history", async () => {
     ctx = openTestDb();
     insertProject(
       ctx.db,
       testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
     );
     let timestamp = 100;
+    const mutations: Array<{ ticketId?: string; projectId?: string; kind?: string }> = [];
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.2.3",
       now: () => timestamp++,
       newId: () => "ticket-one",
+      onMutation: (change) => mutations.push(change),
     });
     await service.execute({
       v: 1,
@@ -1332,6 +1333,7 @@ describe("agent command service", () => {
       args: { title: "Ship CLI" },
       ctx: { cwd: "/repo/volli", env: {} },
     });
+    mutations.length = 0;
     const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
     insertSession(
       ctx.db,
@@ -1363,25 +1365,56 @@ describe("agent command service", () => {
     });
     expect(events).toMatchObject({
       ok: true,
-      data: {
-        events: [
-          { payload: { kind: "created" } },
-          {
-            actor: "automation",
-            actorContext: { session: "abcdef12", ticket: "VC-1" },
-            payload: {
-              kind: "session_signal",
-              signal: "blocked",
-              reason: "Waiting for credentials",
-            },
-          },
-        ],
-      },
+      data: { events: [{ payload: { kind: "created" } }] },
     });
+    expect((events as { data: { events: unknown[] } }).data.events).toHaveLength(1);
     expect(JSON.stringify(events)).not.toContain(sessionId);
+    expect(
+      (await createDesktopControlPlane(ctx.db).getSession({ sessionId }))?.signal,
+    ).toMatchObject({
+      signal: "blocked",
+      reason: "Waiting for credentials",
+    });
+    expect(mutations).toEqual([
+      { ticketId: "ticket-one", projectId: "project-one", kind: "session" },
+    ]);
   });
 
-  it("acknowledges a scratch-session signal without recording, and requires session context", async () => {
+  it("does not invalidate readers when a session signal cannot be durably recorded", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    insertTicket(ctx.db, testTicket("project-one", { id: "ticket-one", ticketNumber: 1 }));
+    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+    insertSession(ctx.db, testSession("project-one", "ticket-one", { id: sessionId }));
+    const controlPlane = createDesktopControlPlane(ctx.db);
+    const mutations: Array<{ ticketId?: string; projectId?: string; kind?: string }> = [];
+    const submit = controlPlane.submit.bind(controlPlane);
+    controlPlane.submit = async () => {
+      throw new Error("disk full");
+    };
+    const service = createAgentCommandService({
+      db: ctx.db,
+      controlPlane,
+      appVersion: "1.2.3",
+      onMutation: (change) => mutations.push(change),
+    });
+
+    await expect(
+      service.execute({
+        v: 1,
+        cmd: "session.done",
+        args: {},
+        ctx: { cwd: "/repo/volli", env: { session: sessionId, ticket: "VC-1" } },
+      }),
+    ).rejects.toThrow("disk full");
+    expect(mutations).toEqual([]);
+    controlPlane.submit = submit;
+  });
+
+  it("records scratch-session signals in the ledger and requires session context", async () => {
     ctx = openTestDb();
     insertProject(
       ctx.db,
@@ -1407,7 +1440,7 @@ describe("agent command service", () => {
     expect(done).toEqual({
       v: 1,
       ok: true,
-      data: { session: "abcdef12", signal: "done", reason: null, recorded: false },
+      data: { session: "abcdef12", signal: "done", reason: null, recorded: true },
     });
     expect(missing).toMatchObject({ ok: false, error: { code: "CONTEXT_REQUIRED" } });
   });
@@ -1546,9 +1579,9 @@ describe("agent command service", () => {
       const response = await announce("claude-code");
 
       expect(response).toMatchObject({ ok: true, data: { changed: false } });
-      // The write is still gated: re-storing the value already there buys
-      // nothing.
-      expect(getSession(ctx.db, sessionId)?.activeHarnessId).toBeNull();
+      // Every launch updates the terminal-native reference, even when the
+      // effective harness did not change.
+      expect(getSession(ctx.db, sessionId)?.activeHarnessId).toBe("claude-code");
       expect(notices).toEqual([
         {
           sessionId,

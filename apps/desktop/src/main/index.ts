@@ -9,6 +9,7 @@ import {
   session,
   shell,
 } from "electron";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -33,7 +34,8 @@ import { isInternalNavigationTarget } from "./navigation";
 import type { DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
-import { endLiveSessions } from "./db/sessions-repo";
+import { listProjects } from "./db/projects-repo";
+import { createDesktopControlPlane } from "./session-control";
 import { listRegisteredHarnesses } from "./db/harness-registry-repo";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
@@ -116,9 +118,9 @@ let agentSocket: AgentSocketServer | undefined;
 
 // Dev gets its OWN userData directory. dev and packaged otherwise share one
 // (app.setName above unifies them so the SQLite db survives across launches) —
-// but that shared dir means a `pnpm dev` boot's endLiveSessions sweep marks the
-// PACKAGED app's still-live sessions as ended (and vice versa), two instances
-// corrupting each other's session rows. Skipped when an explicit
+// but that shared dir means a `pnpm dev` boot's stale-attachment recovery closes
+// the PACKAGED app's terminal attachments (and vice versa), two instances
+// corrupting each other's terminal projection. Skipped when an explicit
 // `--user-data-dir` was passed (e2e/tests already isolate their profile that
 // way, and assert getPath("userData") equals it); VOLLI_DB_PATH still wins for
 // the db path regardless.
@@ -384,14 +386,38 @@ app.whenReady().then(async () => {
     dbHandle = { ok: false, error: errorMessage(error) };
     console.error("[volli] failed to open database:", dbHandle.error);
   }
-  // Boot recovery: no PTY survives a relaunch, so close out any session row
-  // still marked live before the renderer lists them — the table must never
-  // accumulate phantom "live" sessions.
-  if (dbHandle.ok) {
+  const controlPlane = dbHandle.ok ? createDesktopControlPlane(dbHandle.db) : null;
+  // Boot recovery: no PTY survives a relaunch. Close only stale local terminal
+  // attachments; the durable Session itself intentionally remains open.
+  if (dbHandle.ok && controlPlane !== null) {
     try {
-      endLiveSessions(dbHandle.db, Date.now());
+      for (const project of listProjects(dbHandle.db)) {
+        const sessions = await controlPlane.listSessions({ projectId: project.id, scope: "all" });
+        for (const projection of sessions) {
+          for (const attachment of projection.attachments) {
+            if (
+              attachment.adapterId === "terminal" &&
+              attachment.venue.kind === "local" &&
+              attachment.status === "open"
+            ) {
+              await controlPlane.observe({
+                id: randomUUID(),
+                kind: "attachment.closed",
+                sessionId: projection.session.id,
+                attachmentId: attachment.id,
+                occurredAt: Date.now(),
+                provenance: {
+                  source: { kind: "system", id: "desktop-recovery", detail: null },
+                  venue: { id: "local", kind: "local" },
+                },
+                outcome: "interrupted",
+              });
+            }
+          }
+        }
+      }
     } catch (error) {
-      console.error("[volli] failed to sweep stale sessions:", errorMessage(error));
+      console.error("[volli] failed to recover stale terminal attachments:", errorMessage(error));
     }
   }
   // Read fresh per call rather than once at boot: `activate` can re-create the
@@ -432,8 +458,8 @@ app.whenReady().then(async () => {
   // (issue #78 — automation de-escalates, but never silently). Lazy through
   // the ref: registration below runs before the PtyManager is built, but the
   // seam only ever fires at invoke time, long after boot.
-  const interruptTicketSessionsAnnounced = (ticketId: string): string[] => {
-    const sessionIds = ptyManagerRef?.interruptTicketSessions(ticketId) ?? [];
+  const interruptTicketSessionsAnnounced = async (ticketId: string): Promise<string[]> => {
+    const sessionIds = (await ptyManagerRef?.interruptTicketSessions(ticketId)) ?? [];
     if (sessionIds.length > 0) broadcastSessionsInterrupted(ticketId, sessionIds);
     return sessionIds;
   };
@@ -442,6 +468,7 @@ app.whenReady().then(async () => {
   // (rather than up with the other pre-window setup) because File > Export
   // Database needs `dbHandle`, which doesn't exist yet at that point.
   registerDataIpcHandlers(dbHandle, {
+    controlPlane: controlPlane ?? undefined,
     liveSessionCwds: () => ptyManagerRef?.liveSessionCwds() ?? [],
     // Backward-move interrupt (issue #78): a user move that leaves the active
     // columns Esc's the ticket's live agent sessions, announced via toast.
@@ -609,7 +636,7 @@ app.whenReady().then(async () => {
     });
   };
 
-  const ptyManager = registerTerminalIpcHandlers(dbHandle, agentRuntime);
+  const ptyManager = registerTerminalIpcHandlers(dbHandle, agentRuntime, controlPlane);
   ptyManagerRef = ptyManager;
   const mainWindow = createWindow(ptyManager, currentFirstPaint());
 
@@ -820,6 +847,7 @@ app.whenReady().then(async () => {
     const execute = dbHandle.ok
       ? createAgentCommandService({
           db: dbHandle.db,
+          controlPlane: controlPlane!,
           appVersion: app.getVersion(),
           observeSession: (sessionId, lines) => ptyManager.peek(sessionId, lines),
           notify: (title, message) => new Notification({ title, body: message }).show(),

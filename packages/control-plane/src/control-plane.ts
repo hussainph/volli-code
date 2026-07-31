@@ -309,7 +309,8 @@ export function createControlPlane(ports: ControlPlanePorts): ControlPlane {
 
         if (
           command.intent.kind !== "session.archive" &&
-          command.intent.kind !== "session.retitle"
+          command.intent.kind !== "session.retitle" &&
+          command.intent.kind !== "session.signal"
         ) {
           return { command, commandEvent, receipt: null, receiptEvent: null };
         }
@@ -325,7 +326,13 @@ export function createControlPlane(ports: ControlPlanePorts): ControlPlane {
           payload:
             command.intent.kind === "session.archive"
               ? { kind: "session.archived" }
-              : { kind: "session.retitled", title: command.intent.title },
+              : command.intent.kind === "session.retitle"
+                ? { kind: "session.retitled", title: command.intent.title }
+                : {
+                    kind: "session.signaled",
+                    signal: command.intent.signal,
+                    reason: command.intent.reason,
+                  },
         };
         transaction.appendEvent(sessionEvent);
         const receiptEvent = receiptRecordedEvent(
@@ -341,7 +348,9 @@ export function createControlPlane(ports: ControlPlanePorts): ControlPlane {
             ports.clock.now(),
             command.intent.kind === "session.archive"
               ? { kind: "session.archived", sessionId: session.id }
-              : { kind: "session.retitled", sessionId: session.id },
+              : command.intent.kind === "session.retitle"
+                ? { kind: "session.retitled", sessionId: session.id }
+                : { kind: "session.signaled", sessionId: session.id },
           ),
         );
         transaction.appendReceipt(receiptEvent.payload.receipt);
@@ -616,7 +625,8 @@ function resolveCommandRoute(
             },
           };
     }
-    case "executor.stop": {
+    case "executor.stop":
+    case "executor.interrupt": {
       const attachment = projection.attachments.find(
         (candidate) => candidate.id === intent.attachmentId,
       );
@@ -635,6 +645,7 @@ function resolveCommandRoute(
     }
     case "session.archive":
     case "session.retitle":
+    case "session.signal":
       return { route: null, rejection: null };
   }
 }
@@ -744,7 +755,8 @@ function assertReceiptCommandOwnership(
   if (
     command.intent.kind === "session.create" ||
     command.intent.kind === "session.archive" ||
-    command.intent.kind === "session.retitle"
+    command.intent.kind === "session.retitle" ||
+    command.intent.kind === "session.signal"
   ) {
     throw new ControlPlaneConflictError(
       `Receipt ${observation.receipt.id} cannot be externally observed`,
@@ -826,7 +838,9 @@ function assertAdapterReceiptRoute(
     );
   }
   if (
-    (command.intent.kind === "message.submit" || command.intent.kind === "executor.stop") &&
+    (command.intent.kind === "message.submit" ||
+      command.intent.kind === "executor.stop" ||
+      command.intent.kind === "executor.interrupt") &&
     observationAttachmentId(observation) !== route.attachmentId
   ) {
     throw new ControlPlaneConflictError(
@@ -840,8 +854,10 @@ function expectedResultKind(intent: SessionCommandIntent["kind"]): CommandReceip
     "session.create": "session.created",
     "session.archive": "session.archived",
     "session.retitle": "session.retitled",
+    "session.signal": "session.signaled",
     "executor.start": "executor.start.requested",
     "executor.stop": "executor.stop.requested",
+    "executor.interrupt": "executor.interrupted",
     "message.submit": "message.submitted",
   };
   return resultKinds[intent];

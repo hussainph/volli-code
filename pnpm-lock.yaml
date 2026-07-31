@@ -85,6 +85,9 @@ importers:
       '@shikijs/vscode-textmate':
         specifier: 10.0.2
         version: 10.0.2
+      '@volli/control-plane':
+        specifier: workspace:*
+        version: link:../../packages/control-plane
       '@volli/shared':
         specifier: workspace:*
         version: link:../../packages/shared

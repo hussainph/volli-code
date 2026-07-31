@@ -466,6 +466,124 @@ CREATE TABLE harness_channel (
 );
 `;
 
+/**
+ * Migration 018: Sessions become an identity-only durable ledger.
+ *
+ * Versions 003–017 treated a Session as a terminal row.  That made a PTY's
+ * launch configuration, exit status, and the Session itself one mutable
+ * thing.  The control plane now owns the latter as immutable facts; a terminal
+ * is simply one attachment to that Session.  This is an explicitly authorised
+ * pre-release reset, so old terminal-shaped rows and the ticket lifecycle
+ * facts derived from them are removed rather than invented into a new history.
+ * Planner rows, comment bodies, and every non-Session ticket fact survive.
+ */
+const MIGRATION_018_SESSION_LEDGER = `
+-- A comment is planner content, not a Session fact.  Preserve it while
+-- deliberately clearing legacy session provenance before the old table goes.
+UPDATE ticket_comments SET session_id = NULL WHERE session_id IS NOT NULL;
+DELETE FROM ticket_events
+ WHERE kind IN (
+   'session_started',
+   'session_ended',
+   'session_resumed',
+   'sessions_interrupted',
+   'session_signal'
+ );
+
+CREATE TABLE sessions_v18 (
+  id         TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  ticket_id  TEXT REFERENCES tickets(id) ON DELETE SET NULL,
+  title      TEXT,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE ticket_comments_v18 (
+  id         TEXT PRIMARY KEY,
+  ticket_id  TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  session_id TEXT REFERENCES sessions_v18(id) ON DELETE SET NULL,
+  actor      TEXT NOT NULL,
+  body       TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+INSERT INTO ticket_comments_v18 (id, ticket_id, session_id, actor, body, created_at, updated_at)
+  SELECT id, ticket_id, NULL, actor, body, created_at, updated_at
+    FROM ticket_comments;
+DROP TABLE ticket_comments;
+DROP TABLE sessions;
+ALTER TABLE sessions_v18 RENAME TO sessions;
+ALTER TABLE ticket_comments_v18 RENAME TO ticket_comments;
+CREATE INDEX ticket_comments_ticket ON ticket_comments(ticket_id, created_at);
+
+CREATE INDEX sessions_project_created ON sessions(project_id, created_at DESC, id DESC);
+CREATE INDEX sessions_ticket_created ON sessions(ticket_id, created_at DESC, id DESC);
+
+CREATE TABLE session_attachments (
+  id                 TEXT PRIMARY KEY,
+  session_id         TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  adapter_id         TEXT NOT NULL CHECK (adapter_id <> ''),
+  venue_id           TEXT NOT NULL CHECK (venue_id <> ''),
+  venue_kind         TEXT NOT NULL CHECK (venue_kind IN ('local','cloud','remote','unknown')),
+  continuity         TEXT NOT NULL CHECK (continuity IN ('fresh','native_resume','context_replay','recreate')),
+  native_id          TEXT,
+  native_detail      TEXT CHECK (native_detail IS NULL OR json_valid(native_detail)),
+  observed_kind      TEXT NOT NULL CHECK (observed_kind IN ('opened','failed')),
+  failure            TEXT CHECK (failure IS NULL OR json_valid(failure)),
+  created_sequence   INTEGER NOT NULL CHECK (created_sequence > 0),
+  UNIQUE (session_id, id)
+);
+CREATE INDEX session_attachments_session ON session_attachments(session_id, created_sequence, id);
+
+CREATE TABLE session_commands (
+  id         TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  intent     TEXT NOT NULL CHECK (json_valid(intent)),
+  route      TEXT CHECK (route IS NULL OR json_valid(route)),
+  UNIQUE (session_id, id)
+);
+CREATE INDEX session_commands_session ON session_commands(session_id, created_at, id);
+
+CREATE TABLE session_events (
+  id            TEXT PRIMARY KEY,
+  session_id    TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  sequence      INTEGER NOT NULL CHECK (sequence > 0),
+  occurred_at   INTEGER NOT NULL,
+  recorded_at   INTEGER NOT NULL,
+  provenance    TEXT NOT NULL CHECK (json_valid(provenance)),
+  attachment_id TEXT,
+  command_id    TEXT,
+  payload       TEXT NOT NULL CHECK (json_valid(payload)),
+  UNIQUE (session_id, sequence),
+  UNIQUE (session_id, id),
+  FOREIGN KEY (session_id, attachment_id)
+    REFERENCES session_attachments(session_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
+  FOREIGN KEY (session_id, command_id)
+    REFERENCES session_commands(session_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED
+);
+CREATE INDEX session_events_session_sequence ON session_events(session_id, sequence);
+CREATE INDEX session_events_command ON session_events(command_id);
+CREATE INDEX session_events_attachment ON session_events(attachment_id);
+
+CREATE TABLE session_command_receipts (
+  id          TEXT PRIMARY KEY,
+  session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  command_id  TEXT NOT NULL REFERENCES session_commands(id) ON DELETE CASCADE,
+  sequence    INTEGER NOT NULL CHECK (sequence > 0),
+  recorded_at INTEGER NOT NULL,
+  receipt     TEXT NOT NULL CHECK (json_valid(receipt)),
+  receipt_event_id TEXT,
+  UNIQUE (command_id, sequence),
+  FOREIGN KEY (session_id, command_id)
+    REFERENCES session_commands(session_id, id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
+  FOREIGN KEY (session_id, receipt_event_id)
+    REFERENCES session_events(session_id, id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED
+);
+CREATE INDEX session_receipts_command_sequence ON session_command_receipts(command_id, sequence);
+CREATE INDEX session_receipts_session_sequence ON session_command_receipts(session_id, sequence);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -544,6 +662,11 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "harness_channel — is this harness's event channel working right now",
     sql: MIGRATION_017_HARNESS_CHANNEL,
   },
+  {
+    version: 18,
+    name: "session control plane ledger — terminal attachments are evidence, not Session state",
+    sql: MIGRATION_018_SESSION_LEDGER,
+  },
 ];
 
 /** Applies every migration whose `version` is greater than the db's current `user_version`, in order. */
@@ -570,5 +693,12 @@ export function migrate(db: Database.Database, dbPath: string): void {
       db.pragma(`user_version = ${migration.version}`);
     });
     applyMigration();
+  }
+
+  const foreignKeyViolations = db.pragma("foreign_key_check") as unknown[];
+  if (foreignKeyViolations.length > 0) {
+    throw new Error(
+      `Foreign-key check failed after migrations: ${JSON.stringify(foreignKeyViolations)}`,
+    );
   }
 }

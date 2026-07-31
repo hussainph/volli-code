@@ -53,19 +53,6 @@ describe("describeEvent", () => {
     expect(describeEvent({ kind: "body_edited" })).toBe("edited the description");
     expect(describeEvent({ kind: "archived" })).toBe("archived the ticket");
     expect(describeEvent({ kind: "unarchived" })).toBe("restored the ticket");
-    expect(
-      describeEvent({ kind: "session_started", sessionId: "s1", title: "fix", harnessId: "codex" }),
-    ).toBe("started session fix");
-    expect(describeEvent({ kind: "session_ended", sessionId: "s1" })).toBe("ended a session");
-    expect(describeEvent({ kind: "sessions_interrupted", sessionIds: ["s1"] })).toBe(
-      "interrupted a session",
-    );
-    expect(describeEvent({ kind: "sessions_interrupted", sessionIds: ["s1", "s2", "s3"] })).toBe(
-      "interrupted 3 sessions",
-    );
-    expect(
-      describeEvent({ kind: "session_resumed", sessionId: "s2", previousSessionId: "s1" }),
-    ).toBe("resumed an earlier session");
   });
 
   it("returns null for a commented event (rendered as its comment instead)", () => {
@@ -137,15 +124,6 @@ describe("describeEvent", () => {
     );
   });
 
-  it("describes session lifecycle signals with and without a reason", () => {
-    expect(describeEvent({ kind: "session_signal", signal: "done", reason: null })).toBe(
-      "reported done",
-    );
-    expect(
-      describeEvent({ kind: "session_signal", signal: "blocked", reason: "needs creds" }),
-    ).toBe("reported blocked: needs creds");
-  });
-
   it("describes a worktree_failed event with the last non-blank stderr line, truncated at 160 chars", () => {
     // Git's real diagnosis lands last; blank progress lines around it are skipped.
     expect(
@@ -200,8 +178,6 @@ describe("EVENT_KIND_PRIORITY", () => {
       "status_changed",
       "pr_merged",
       "pr_opened",
-      "session_started",
-      "session_ended",
       "created",
       "retitled",
       "priority_changed",
@@ -212,9 +188,6 @@ describe("EVENT_KIND_PRIORITY", () => {
       "worktree_changed",
       "archived",
       "unarchived",
-      "session_signal",
-      "sessions_interrupted",
-      "session_resumed",
       "body_edited",
     ];
     expect(EVENT_KIND_PRIORITY).toEqual(expected);

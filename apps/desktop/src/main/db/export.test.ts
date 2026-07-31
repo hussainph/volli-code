@@ -16,7 +16,8 @@ import {
   updateProjectCanvas,
   updateProjectThemeOverride,
 } from "./projects-repo";
-import { insertSession } from "./sessions-repo";
+import { createDesktopControlPlane } from "../session-control";
+import { insertSession } from "../session-control/test-support";
 import { openTestDb, testProject, testSession, testTicket } from "./test-helpers";
 import type { TestDb } from "./test-helpers";
 import { archiveTicket, insertTicket } from "./tickets-repo";
@@ -46,10 +47,13 @@ afterEach(() => {
 });
 
 describe("buildExportDocument — empty db", () => {
-  it("emits the metadata envelope and an empty array for every table", () => {
+  it("emits the metadata envelope and an empty array for every table", async () => {
     ctx = openTestDb();
 
-    const document = buildExportDocument(ctx.db, { appVersion: "1.2.3", now: 1_700_000_000_000 });
+    const document = await buildExportDocument(ctx.db, {
+      appVersion: "1.2.3",
+      now: 1_700_000_000_000,
+    });
 
     expect(document.format).toBe(EXPORT_FORMAT);
     expect(document.format).toBe("volli-export");
@@ -64,22 +68,26 @@ describe("buildExportDocument — empty db", () => {
     expect(document.ticketLabels).toEqual([]);
     expect(document.ticketEvents).toEqual([]);
     expect(document.sessions).toEqual([]);
+    expect(document.sessionAttachments).toEqual([]);
+    expect(document.sessionEvents).toEqual([]);
+    expect(document.sessionCommands).toEqual([]);
+    expect(document.sessionCommandReceipts).toEqual([]);
     expect(document.ticketComments).toEqual([]);
     expect(document.appState).toEqual([]);
   });
 
-  it("schemaVersion tracks the db's own PRAGMA user_version, not a hardcoded constant", () => {
+  it("schemaVersion tracks the db's own PRAGMA user_version, not a hardcoded constant", async () => {
     ctx = openTestDb();
     ctx.db.pragma("user_version = 7");
 
-    const document = buildExportDocument(ctx.db, { appVersion: "0.0.1", now: 0 });
+    const document = await buildExportDocument(ctx.db, { appVersion: "0.0.1", now: 0 });
 
     expect(document.schemaVersion).toBe(7);
   });
 });
 
 describe("buildExportDocument — populated db", () => {
-  it("dumps every table, camelCased, with the ticket displayId reused from displayTicketId", () => {
+  it("dumps every table, camelCased, with the ticket displayId reused from displayTicketId", async () => {
     ctx = openTestDb();
     const project = testProject({
       id: "proj-1",
@@ -138,8 +146,36 @@ describe("buildExportDocument — populated db", () => {
       15,
     );
 
+    const earlierSession = testSession(project.id, liveTicket.id, {
+      id: "session-0",
+      createdAt: 29,
+    });
+    insertSession(ctx.db, earlierSession);
     const session = testSession(project.id, liveTicket.id, { id: "session-1", createdAt: 30 });
     insertSession(ctx.db, session);
+    const generatedIds = [
+      "signal-command-event",
+      "signal-fact-event",
+      "signal-receipt-event",
+      "signal-receipt",
+    ];
+    const controlPlane = createDesktopControlPlane(ctx.db, {
+      now: () => 35,
+      nextId: () => {
+        const id = generatedIds.shift();
+        if (id === undefined) throw new Error("unexpected generated id");
+        return id;
+      },
+    });
+    await controlPlane.submit({
+      commandId: "signal-command",
+      sessionId: session.id,
+      intent: { kind: "session.signal", signal: "blocked", reason: "Needs approval" },
+      provenance: {
+        source: { kind: "adapter", id: "terminal", detail: { hook: "blocked" } },
+        venue: { id: "local", kind: "local" },
+      },
+    });
 
     createComment(
       ctx.db,
@@ -151,7 +187,10 @@ describe("buildExportDocument — populated db", () => {
       .prepare("INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?)")
       .run("ui:zoom", '{"level":0}', 50);
 
-    const document = buildExportDocument(ctx.db, { appVersion: "9.9.9", now: 1_700_000_000_000 });
+    const document = await buildExportDocument(ctx.db, {
+      appVersion: "9.9.9",
+      now: 1_700_000_000_000,
+    });
 
     // projects
     expect(document.projects).toEqual([
@@ -225,20 +264,86 @@ describe("buildExportDocument — populated db", () => {
       createdAt: 15,
     });
 
-    // sessions
+    // Canonical Session ledger tables — identity is separate from terminal
+    // attachment metadata, and every stored JSON field is decoded.
     expect(document.sessions).toEqual([
+      {
+        id: earlierSession.id,
+        projectId: project.id,
+        ticketId: liveTicket.id,
+        title: earlierSession.title,
+        createdAt: 29,
+      },
       {
         id: session.id,
         projectId: project.id,
         ticketId: liveTicket.id,
-        harnessId: session.harnessId,
-        harnessSessionId: null,
-        launchKind: session.launchKind,
-        placement: session.placement,
         title: session.title,
-        cwd: session.cwd,
         createdAt: 30,
-        endedAt: null,
+      },
+    ]);
+    expect(document.sessionAttachments.map(({ id }) => id)).toEqual([
+      `test-terminal:${earlierSession.id}`,
+      `test-terminal:${session.id}`,
+    ]);
+    expect(document.sessionAttachments[1]).toMatchObject({
+      sessionId: session.id,
+      adapterId: "terminal",
+      venueId: "local",
+      venueKind: "local",
+      continuity: "fresh",
+      nativeId: null,
+      nativeDetail: {
+        kind: "volli.terminal.v1",
+        cwd: session.cwd,
+        harnessId: session.harnessId,
+      },
+      observedKind: "opened",
+      failure: null,
+      createdSequence: 1,
+    });
+    expect(document.sessionEvents.map(({ sessionId, sequence }) => [sessionId, sequence])).toEqual([
+      [earlierSession.id, 1],
+      [session.id, 1],
+      [session.id, 2],
+      [session.id, 3],
+      [session.id, 4],
+    ]);
+    expect(document.sessionEvents[3]).toMatchObject({
+      id: "signal-fact-event",
+      sessionId: session.id,
+      sequence: 3,
+      provenance: {
+        source: { kind: "adapter", id: "terminal", detail: { hook: "blocked" } },
+      },
+      commandId: "signal-command",
+      payload: { kind: "session.signaled", signal: "blocked", reason: "Needs approval" },
+    });
+    expect(document.sessionCommands).toEqual([
+      {
+        id: "signal-command",
+        sessionId: session.id,
+        createdAt: 35,
+        intent: { kind: "session.signal", signal: "blocked", reason: "Needs approval" },
+        route: null,
+      },
+    ]);
+    expect(document.sessionCommandReceipts).toEqual([
+      {
+        id: "signal-receipt",
+        sessionId: session.id,
+        commandId: "signal-command",
+        sequence: 4,
+        recordedAt: 35,
+        receipt: {
+          id: "signal-receipt",
+          commandId: "signal-command",
+          status: "completed",
+          result: { kind: "session.signaled", sessionId: session.id },
+          recordedAt: 35,
+          sequence: 4,
+        },
+        receiptEventId: "signal-receipt-event",
       },
     ]);
 
@@ -257,7 +362,7 @@ describe("buildExportDocument — populated db", () => {
     expect(document.appState).toEqual([{ key: "ui:zoom", value: '{"level":0}', updatedAt: 50 }]);
   });
 
-  it("falls back to the raw project id as displayId prefix for a ticket with no matching project row", () => {
+  it("falls back to the raw project id as displayId prefix for a ticket with no matching project row", async () => {
     ctx = openTestDb();
     const project = testProject({ id: "proj-1", ticketPrefix: "VC" });
     insertProject(ctx.db, project);
@@ -270,7 +375,7 @@ describe("buildExportDocument — populated db", () => {
     ctx.db.pragma("foreign_keys = OFF");
     ctx.db.prepare("DELETE FROM projects WHERE id = ?").run(project.id);
 
-    const document = buildExportDocument(ctx.db, { appVersion: "1.0.0", now: 0 });
+    const document = await buildExportDocument(ctx.db, { appVersion: "1.0.0", now: 0 });
 
     expect(document.tickets).toHaveLength(1);
     expect(document.tickets[0]?.displayId).toBe(`${project.id}-1`);
@@ -283,11 +388,11 @@ describe("buildExportDocument — populated db", () => {
    * `PRAGMA table_info` rather than a hand-written list, so the NEXT migration
    * that forgets the export fails here instead of shipping.
    */
-  it("carries every projects column, so a migration cannot silently drop one from the export", () => {
+  it("carries every projects column, so a migration cannot silently drop one from the export", async () => {
     ctx = openTestDb();
     insertProject(ctx.db, testProject({ id: "proj-1" }));
 
-    const document = buildExportDocument(ctx.db, { appVersion: "1.0.0", now: 0 });
+    const document = await buildExportDocument(ctx.db, { appVersion: "1.0.0", now: 0 });
 
     const columns = ctx.db
       .prepare("SELECT name FROM pragma_table_info('projects')")
@@ -300,7 +405,114 @@ describe("buildExportDocument — populated db", () => {
     }
   });
 
-  it("orders every table by a stable, data-derived key rather than insertion order", () => {
+  it("carries every column from each canonical Session ledger table", async () => {
+    ctx = openTestDb();
+    const project = testProject({ id: "proj-1" });
+    insertProject(ctx.db, project);
+    const session = testSession(project.id, null, { id: "session-1" });
+    insertSession(ctx.db, session);
+    const ids = [
+      "failure-session",
+      "failure-command-event",
+      "failure-created-event",
+      "failure-receipt-event",
+      "failure-receipt",
+      "command-event",
+      "signal-event",
+      "receipt-event",
+      "receipt",
+      "message-event",
+    ];
+    const controlPlane = createDesktopControlPlane(ctx.db, {
+      now: () => 1,
+      nextId: () => {
+        const id = ids.shift();
+        if (id === undefined) throw new Error("unexpected generated id");
+        return id;
+      },
+    });
+    const failedSession = await controlPlane.createSession({
+      commandId: "failure-create-command",
+      projectId: project.id,
+      ticketId: null,
+      title: "Failed attachment",
+      provenance: {
+        source: { kind: "system", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+    await controlPlane.observe({
+      id: "attachment-failed-event",
+      kind: "attachment.failed",
+      sessionId: failedSession.session.id,
+      occurredAt: 1,
+      provenance: {
+        source: { kind: "adapter", id: "terminal", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+      attachment: {
+        id: "failed-attachment",
+        sessionId: failedSession.session.id,
+        adapterId: "terminal",
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+        native: null,
+      },
+      failure: { code: "spawn_failed", detail: "shell missing", diagnostic: null },
+    });
+    await controlPlane.submit({
+      commandId: "command",
+      sessionId: session.id,
+      intent: { kind: "session.signal", signal: "done", reason: null },
+      provenance: {
+        source: { kind: "system", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+    await controlPlane.submit({
+      commandId: "message-command",
+      sessionId: session.id,
+      intent: {
+        kind: "message.submit",
+        reference: { id: "prompt-1", mediaType: "text/plain", digest: "sha256:1" },
+      },
+      provenance: {
+        source: { kind: "user", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+
+    const document = await buildExportDocument(ctx.db, { appVersion: "1.0.0", now: 0 });
+    const tables = [
+      ["sessions", document.sessions],
+      ["session_attachments", document.sessionAttachments],
+      ["session_events", document.sessionEvents],
+      ["session_commands", document.sessionCommands],
+      ["session_command_receipts", document.sessionCommandReceipts],
+    ] as const;
+    for (const [table, rows] of tables) {
+      const columns = ctx.db
+        .prepare(`SELECT name FROM pragma_table_info('${table}')`)
+        .all() as Array<{
+        name: string;
+      }>;
+      const exported = rows[0];
+      expect(exported).toBeDefined();
+      for (const { name } of columns) {
+        expect(Object.hasOwn(exported as object, camelCase(name))).toBe(true);
+      }
+    }
+    expect(document.sessionAttachments.find(({ id }) => id === "failed-attachment")).toMatchObject({
+      nativeDetail: null,
+      failure: { code: "spawn_failed", detail: "shell missing", diagnostic: null },
+    });
+    expect(document.sessionCommands.find(({ id }) => id === "message-command")?.route).toEqual({
+      adapterId: "terminal",
+      attachmentId: `test-terminal:${session.id}`,
+    });
+  });
+
+  it("orders every table by a stable, data-derived key rather than insertion order", async () => {
     ctx = openTestDb();
     const projectB = testProject({ id: "proj-b", ticketPrefix: "PB" });
     const projectA = testProject({ id: "proj-a", ticketPrefix: "PA" });
@@ -308,33 +520,33 @@ describe("buildExportDocument — populated db", () => {
     insertProject(ctx.db, projectB);
     insertProject(ctx.db, projectA);
 
-    const document = buildExportDocument(ctx.db, { appVersion: "1.0.0", now: 0 });
+    const document = await buildExportDocument(ctx.db, { appVersion: "1.0.0", now: 0 });
 
     expect(document.projects.map((p) => p.id)).toEqual(["proj-a", "proj-b"]);
   });
 });
 
 describe("buildExportDocument — determinism", () => {
-  it("two calls with the same now/appVersion against an unchanged db are deep-equal", () => {
+  it("two calls with the same now/appVersion against an unchanged db are deep-equal", async () => {
     ctx = openTestDb();
     const project = testProject();
     insertProject(ctx.db, project);
     const ticket = testTicket(project.id);
     insertTicket(ctx.db, ticket);
 
-    const first = buildExportDocument(ctx.db, { appVersion: "2.0.0", now: 500 });
-    const second = buildExportDocument(ctx.db, { appVersion: "2.0.0", now: 500 });
+    const first = await buildExportDocument(ctx.db, { appVersion: "2.0.0", now: 500 });
+    const second = await buildExportDocument(ctx.db, { appVersion: "2.0.0", now: 500 });
 
     expect(first).toEqual(second);
   });
 
-  it("only exportedAt differs when now differs between two calls", () => {
+  it("only exportedAt differs when now differs between two calls", async () => {
     ctx = openTestDb();
     const project = testProject();
     insertProject(ctx.db, project);
 
-    const first = buildExportDocument(ctx.db, { appVersion: "2.0.0", now: 100 });
-    const second = buildExportDocument(ctx.db, { appVersion: "2.0.0", now: 200 });
+    const first = await buildExportDocument(ctx.db, { appVersion: "2.0.0", now: 100 });
+    const second = await buildExportDocument(ctx.db, { appVersion: "2.0.0", now: 200 });
 
     expect({ ...first, exportedAt: "" }).toEqual({ ...second, exportedAt: "" });
     expect(first.exportedAt).not.toBe(second.exportedAt);
@@ -342,9 +554,9 @@ describe("buildExportDocument — determinism", () => {
 });
 
 describe("serializeExportDocument", () => {
-  it("2-space indents and ends with a single trailing newline", () => {
+  it("2-space indents and ends with a single trailing newline", async () => {
     ctx = openTestDb();
-    const document = buildExportDocument(ctx.db, { appVersion: "1.0.0", now: 0 });
+    const document = await buildExportDocument(ctx.db, { appVersion: "1.0.0", now: 0 });
 
     const serialized = serializeExportDocument(document);
 

@@ -255,6 +255,20 @@ describe("projectSession", () => {
     expect(attachment.native).toBeNull();
   });
 
+  it("projects the latest durable Session signal in ledger order", () => {
+    const projection = projectSession(session, [
+      event(3, { kind: "session.signaled", signal: "blocked", reason: null }),
+      event(1, { kind: "session.signaled", signal: "done", reason: "Initial result" }),
+      event(2, { kind: "session.signaled", signal: "blocked", reason: "Needs input" }),
+    ]);
+
+    expect(projection.signal).toEqual({
+      signal: "blocked",
+      reason: null,
+      occurredAt: 30,
+    });
+  });
+
   it("keeps the Session open when runs, turns, and an executor end", () => {
     const attachment = {
       id: "attachment-1",

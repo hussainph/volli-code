@@ -1,6 +1,5 @@
 /**
- * E2e smoke for issue #78 — backward-move interrupt + resume-on-re-entry
- * (CONCEPT decisions #20/#21).
+ * E2e smoke for backward-move interrupt + resume-on-re-entry.
  *
  * Two behaviors, both wired at the CLI/socket "agent-commands" choke point
  * (`apps/desktop/src/main/agent-commands.ts`'s `ticket.move` handler, shared
@@ -10,9 +9,9 @@
  *   • Interrupt: a move that LEAVES the active columns (doing/needs_review →
  *     backlog/todo/done) writes a single Esc byte (`"\x1b"`) to every live
  *     AGENT session of the ticket (`PtyManager.interruptTicketSessions`) and
- *     records one `sessions_interrupted` event. The PTY is never killed — the
- *     harness process must survive the Esc. A move that stays within the
- *     active columns (doing ⇄ needs_review) must do neither.
+ *     records no terminal evidence in planner history. The PTY is never killed
+ *     — the harness process must survive the Esc. A move that stays within the
+ *     active columns (doing ⇄ needs_review) must not send Esc.
  *   • Resume: re-entering a ticket after an agent session ENDED can relaunch
  *     the harness via `ticket.resume: { sessionId }` on a terminal-create
  *     request. Main resolves `buildHarnessResumeCommand` off the ended
@@ -27,8 +26,8 @@
  *       – the harness's own wrapper minted one for THAT LAUNCH (`volli session
  *         harness <slug> --mint`, `sessionId: { kind: "argv" }`) → check 5,
  *         which asserts the resume comes back with that exact id.
- *     A `session_resumed` event links the new session id back to the one it
- *     resumes, in every case.
+ *     Resume opens a new attachment on the same durable Volli Session; it does
+ *     not mint a second Session or write terminal lifecycle into ticket events.
  *
  * The terminal renders to a WebGPU canvas (no text in the DOM), so — exactly
  * like composer-kickoff-smoke.mjs — the "agent" is the FAKE harness
@@ -40,9 +39,9 @@
  * by the app's own `VOLLI_SESSION` env var — a live process to Esc, and a
  * byte-exact record of what it received. The smoke ends a session itself
  * (`window.api.terminal.kill`) once it's done asserting against the live
- * process, exactly as `pty.onExit` (which sets `endedAt` / fires
- * `session_ended` / pushes `volli:terminal-exit`) would for a real harness
- * exiting or a user closing the pane.
+ * process, exactly as `pty.onExit` (which closes the terminal attachment and
+ * pushes `volli:terminal-exit`) would for a real harness exiting or a user
+ * closing the pane.
  *
  * Sessions are booted through the REAL composer "Create & start" kickoff flow
  * (same helpers as composer-kickoff-smoke.mjs), not the bare
@@ -314,7 +313,7 @@ async function main() {
     // === 1. Interrupt: doing -> todo Escs the live agent, never kills it =====
     await attempt(
       1,
-      "Interrupt (doing→todo, leaves active columns): the fake harness receives Esc, stays alive, and one sessions_interrupted event is recorded",
+      "Interrupt (doing→todo, leaves active columns): the fake harness receives Esc, stays alive, and planner history remains Session-free",
       async () => {
         const { ticketId, displayId, session } = await kickoffTicket(
           page,
@@ -354,9 +353,8 @@ async function main() {
             e.payload.kind === "sessions_interrupted" && e.payload.sessionIds.includes(session.id),
         );
 
-        // The interrupt announces itself (CONCEPT #20: automation de-escalates,
-        // never silently): a toast naming the ticket lands in the window that
-        // did NOT initiate the move (it came over the socket).
+        // The interrupt announces itself: a toast naming the ticket lands in
+        // the window that did NOT initiate the move (it came over the socket).
         const toastVisible = await waitUntil(
           "interrupt toast announces the de-escalation",
           () => page.getByText(`${displayId}: interrupted an agent session`).first().isVisible(),
@@ -365,13 +363,13 @@ async function main() {
           .then(() => true)
           .catch(() => false);
 
-        const ok =
-          beforeBusy && receivedEsc && stillAlive && interruptedEvent !== undefined && toastVisible;
+        const plannerHistoryClean = interruptedEvent === undefined;
+        const ok = beforeBusy && receivedEsc && stillAlive && plannerHistoryClean && toastVisible;
         return {
           ok,
           detail:
             `beforeBusy=${beforeBusy} receivedEsc=${receivedEsc} stillAlive=${stillAlive} ` +
-            `process=${JSON.stringify(after.ok ? after.process : after.error)} interruptedEvent=${interruptedEvent !== undefined} ` +
+            `process=${JSON.stringify(after.ok ? after.process : after.error)} plannerHistoryClean=${plannerHistoryClean} ` +
             `toast=${toastVisible}`,
         };
       },
@@ -380,7 +378,7 @@ async function main() {
     // === 2. No interrupt: doing -> needs_review stays in the active columns ===
     await attempt(
       2,
-      "No interrupt (doing→needs_review, stays active): no Esc arrives and no sessions_interrupted event is recorded",
+      "No interrupt (doing→needs_review, stays active): no Esc arrives and planner history remains Session-free",
       async () => {
         await goToBoard(page);
         const { ticketId, displayId, session } = await kickoffTicket(
@@ -432,7 +430,7 @@ async function main() {
     // === 3. Resume with a linked harness session id: claude --resume '<id>' ==
     await attempt(
       3,
-      "Resume with a linked id: `volli session link` seeds harnessSessionId; after the session ends, a REAL resume UI surface relaunches `claude --resume '<uuid>'` and a session_resumed event lands",
+      "Resume with a linked id: `volli session link` seeds harnessSessionId; a REAL resume UI surface relaunches `claude --resume '<uuid>'` on the same durable Session",
       async () => {
         await goToBoard(page);
         const { ticketId, displayId, session } = await kickoffTicket(
@@ -461,22 +459,17 @@ async function main() {
           };
         }
 
-        const events = await waitUntil(
-          "session_resumed event recorded",
+        const resumedSameSession = await waitUntil(
+          "the same durable Session gains a live resumed attachment",
           async () => {
-            const rows = await eventsFor(page, ticketId);
-            const resumed = rows.find(
-              (e) =>
-                e.payload.kind === "session_resumed" && e.payload.previousSessionId === session.id,
-            );
-            return resumed ? rows : null;
+            const rows = await sessionsForTicket(page, ticketId);
+            return rows.find((row) => row.id === session.id && row.endedAt === null) ?? null;
           },
           { timeout: 15000 },
-        ).catch(() => []);
-        const resumedEvent = events.find(
-          (e) => e.payload.kind === "session_resumed" && e.payload.previousSessionId === session.id,
+        ).catch(() => null);
+        const plannerHistoryClean = !(await eventsFor(page, ticketId)).some(
+          (event) => event.payload.kind === "session_resumed",
         );
-        if (resumedEvent) liveSessionIds.push(resumedEvent.payload.sessionId);
 
         const probeText = await waitUntil(
           "resume probe records claude --resume <uuid>",
@@ -491,11 +484,12 @@ async function main() {
           .then(() => true)
           .catch(() => false);
 
-        const ok = linkOk && killOk && resumedEvent !== undefined && probeText;
+        const ok =
+          linkOk && killOk && resumedSameSession !== null && plannerHistoryClean && probeText;
         return {
           ok,
           detail:
-            `linkOk=${linkOk} killOk=${killOk} surface=${surface} resumedEvent=${resumedEvent !== undefined} ` +
+            `linkOk=${linkOk} killOk=${killOk} surface=${surface} sameSession=${resumedSameSession !== null} plannerHistoryClean=${plannerHistoryClean} ` +
             `resumeProbe=${probeText}`,
         };
       },
@@ -514,7 +508,7 @@ async function main() {
     // where the fallback actually lives.
     await attempt(
       4,
-      "Resume without any id (Opencode — a `reported` harness gets no minted id, and the fake reports none): after the session ends, resume falls back to `opencode --continue`, and a session_resumed event lands",
+      "Resume without any id (Opencode — a `reported` harness gets no minted id, and the fake reports none): resume falls back to `opencode --continue` on the same durable Session",
       async () => {
         await goToBoard(page);
         const { ticketId, displayId, session } = await kickoffTicket(
@@ -546,22 +540,17 @@ async function main() {
           };
         }
 
-        const events = await waitUntil(
-          "session_resumed event recorded",
+        const resumedSameSession = await waitUntil(
+          "the same durable Session gains a live resumed attachment",
           async () => {
-            const rows = await eventsFor(page, ticketId);
-            const resumed = rows.find(
-              (e) =>
-                e.payload.kind === "session_resumed" && e.payload.previousSessionId === session.id,
-            );
-            return resumed ? rows : null;
+            const rows = await sessionsForTicket(page, ticketId);
+            return rows.find((row) => row.id === session.id && row.endedAt === null) ?? null;
           },
           { timeout: 15000 },
-        ).catch(() => []);
-        const resumedEvent = events.find(
-          (e) => e.payload.kind === "session_resumed" && e.payload.previousSessionId === session.id,
+        ).catch(() => null);
+        const plannerHistoryClean = !(await eventsFor(page, ticketId)).some(
+          (event) => event.payload.kind === "session_resumed",
         );
-        if (resumedEvent) liveSessionIds.push(resumedEvent.payload.sessionId);
 
         const probeText = await waitUntil(
           "resume probe records opencode --continue (and never a by-id resume)",
@@ -578,12 +567,13 @@ async function main() {
           .then((text) => !text.includes("--session"))
           .catch(() => false);
 
-        const ok = noSeed && killOk && resumedEvent !== undefined && probeText;
+        const ok =
+          noSeed && killOk && resumedSameSession !== null && plannerHistoryClean && probeText;
         return {
           ok,
           detail:
             `noSeed=${noSeed}${noSeed ? "" : `(seed=${seed})`} killOk=${killOk} surface=${surface} ` +
-            `resumedEvent=${resumedEvent !== undefined} resumeProbe=${probeText}`,
+            `sameSession=${resumedSameSession !== null} plannerHistoryClean=${plannerHistoryClean} resumeProbe=${probeText}`,
         };
       },
     );
@@ -642,22 +632,17 @@ async function main() {
           };
         }
 
-        const events = await waitUntil(
-          "session_resumed event recorded",
+        const resumedSameSession = await waitUntil(
+          "the same durable Session gains a live resumed attachment",
           async () => {
-            const rows = await eventsFor(page, ticketId);
-            const resumed = rows.find(
-              (e) =>
-                e.payload.kind === "session_resumed" && e.payload.previousSessionId === session.id,
-            );
-            return resumed ? rows : null;
+            const rows = await sessionsForTicket(page, ticketId);
+            return rows.find((row) => row.id === session.id && row.endedAt === null) ?? null;
           },
           { timeout: 15000 },
-        ).catch(() => []);
-        const resumedEvent = events.find(
-          (e) => e.payload.kind === "session_resumed" && e.payload.previousSessionId === session.id,
+        ).catch(() => null);
+        const plannerHistoryClean = !(await eventsFor(page, ticketId)).some(
+          (event) => event.payload.kind === "session_resumed",
         );
-        if (resumedEvent) liveSessionIds.push(resumedEvent.payload.sessionId);
 
         const probeOk = await waitUntil(
           "resume probe records claude --resume <the minted uuid>",
@@ -672,12 +657,13 @@ async function main() {
           .then(() => true)
           .catch(() => false);
 
-        const ok = freshUuid && killOk && resumedEvent !== undefined && probeOk;
+        const ok =
+          freshUuid && killOk && resumedSameSession !== null && plannerHistoryClean && probeOk;
         return {
           ok,
           detail:
             `minted=${minted} freshUuid=${freshUuid} killOk=${killOk} surface=${surface} ` +
-            `resumedEvent=${resumedEvent !== undefined} resumeProbe=${probeOk}`,
+            `sameSession=${resumedSameSession !== null} plannerHistoryClean=${plannerHistoryClean} resumeProbe=${probeOk}`,
         };
       },
     );
