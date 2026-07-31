@@ -908,7 +908,7 @@ describe("migrate — 017 to 018 Session ledger reset", () => {
     db.close();
   });
 
-  it("backs up v17, keeps planner/comment content, and removes only legacy Session facts", () => {
+  it("migrates v17 with foreign keys enabled, retains planner/comment content, and removes only legacy Session facts", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
@@ -948,10 +948,13 @@ describe("migrate — 017 to 018 Session ledger reset", () => {
       event.run(kind, kind);
     }
 
+    expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
+
     migrate(db, dbPath);
 
     expect(existsSync(`${dbPath}.backup-v17`)).toBe(true);
     expect(db.pragma("user_version", { simple: true })).toBe(18);
+    expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
     expect(db.prepare("SELECT COUNT(*) AS n FROM sessions").get()).toEqual({ n: 0 });
     expect(
       db.prepare("SELECT session_id, body FROM ticket_comments WHERE id = 'c1'").get(),

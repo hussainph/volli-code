@@ -65,6 +65,25 @@ describe("Session ledger vocabularies", () => {
 });
 
 describe("observationPayload", () => {
+  it("canonicalizes an omitted adapter-observation attachment id to null", () => {
+    expect(
+      observationPayload({
+        id: "adapter-observation-omitted-attachment",
+        sessionId: session.id,
+        occurredAt: 1,
+        provenance: systemProvenance,
+        kind: "adapter.observed",
+        name: "native.session-signal",
+        native: null,
+      } as SessionObservation),
+    ).toEqual({
+      kind: "adapter.observed",
+      attachmentId: null,
+      name: "native.session-signal",
+      native: null,
+    });
+  });
+
   it("maps every externally observed fact without inventing a command", () => {
     const attachment = {
       id: "attachment-1",

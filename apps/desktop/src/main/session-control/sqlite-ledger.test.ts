@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { createControlPlane } from "@volli/control-plane";
-import type { SessionLedger } from "@volli/shared";
+import type { SessionLedger, SessionObservation } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
@@ -120,6 +120,42 @@ describe("SqliteSessionLedger", () => {
     expect(await control.listEvents({ sessionId: created.session.id })).toHaveLength(3);
   });
 
+  it("replays omitted and null event envelope ids through a durable SQLite read", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-null-envelope",
+      projectId,
+      ticketId: null,
+      title: "Null envelope",
+      provenance,
+    });
+    const observation = {
+      id: "null-envelope-observation",
+      sessionId: created.session.id,
+      occurredAt: 200,
+      provenance,
+      kind: "adapter.observed" as const,
+      name: "session-wide",
+      native: null,
+    };
+
+    const recorded = await control.observe(observation as SessionObservation);
+    const replayed = await control.observe({
+      ...observation,
+      attachmentId: null,
+      commandId: null,
+    });
+
+    expect(replayed).toMatchObject({
+      id: recorded.id,
+      sessionId: recorded.sessionId,
+      sequence: recorded.sequence,
+      payload: recorded.payload,
+    });
+    expect(replayed.attachmentId ?? null).toBeNull();
+    expect(replayed.commandId ?? null).toBeNull();
+  });
+
   it("does not make an unrelated append transaction fail on pre-existing receipt corruption", async () => {
     const { control, projectId } = setup();
     const first = await control.createSession({
@@ -183,6 +219,34 @@ describe("SqliteSessionLedger", () => {
         createdAt: 114,
       },
     ]);
+  });
+
+  it("ignores a malformed persisted signal instead of failing the ticket projection", async () => {
+    const { control, projectId } = setup();
+    insertTicket(
+      ctx.db,
+      testTicket(projectId, { id: "ticket-invalid-signal", usesWorktree: false }),
+    );
+    const created = await control.createSession({
+      commandId: "create-invalid-signal",
+      projectId,
+      ticketId: "ticket-invalid-signal",
+      title: "Invalid signal",
+      provenance,
+    });
+    ctx.db
+      .prepare(
+        `INSERT INTO session_events
+           (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+         VALUES ('invalid-signal', ?, 4, 104, 104, ?, NULL, NULL, ?)`,
+      )
+      .run(
+        created.session.id,
+        JSON.stringify(provenance),
+        JSON.stringify({ kind: "session.signaled", signal: "unexpected", reason: "Corrupt row" }),
+      );
+
+    await expect(control.listLatestTicketSignals({ projectId })).resolves.toEqual([]);
   });
 
   it("persists attachment evidence atomically and refuses a corrupt JSON row on read", async () => {

@@ -31,6 +31,21 @@ describe("deleteProject", () => {
       },
     });
 
+    for (const table of [
+      "projects",
+      "tickets",
+      "sessions",
+      "session_attachments",
+      "session_commands",
+      "session_events",
+      "session_command_receipts",
+    ]) {
+      const row = ctx.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as {
+        count: number;
+      };
+      expect(row.count).toBeGreaterThan(0);
+    }
+
     deleteProject(ctx.db, project.id);
 
     for (const table of [

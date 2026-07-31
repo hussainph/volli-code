@@ -180,6 +180,10 @@ export function createControlPlane(ports: ControlPlanePorts): ControlPlane {
         const session = transaction.getSession(observation.sessionId);
         if (!session) throw new ControlPlaneNotFoundError(observation.sessionId);
         const events = transaction.listEvents({ sessionId: session.id });
+        // SQLite persists omitted optional envelope ids as NULL. Canonicalize
+        // before either receipt or fact handling so every durable event uses
+        // the same replay identity.
+        const attachmentId = observationAttachmentId(observation) ?? null;
 
         if (observation.kind === "command.receipt") {
           const command = assertReceiptCommandOwnership(transaction, session, observation);
@@ -219,7 +223,7 @@ export function createControlPlane(ports: ControlPlanePorts): ControlPlane {
             observation.occurredAt,
             observation.provenance,
             stampReceipt(observation.receipt, sequence, ports.clock.now()),
-            observationAttachmentId(observation),
+            attachmentId,
           );
           transaction.appendReceipt(event.payload.receipt);
           transaction.appendEvent(event);
@@ -227,10 +231,6 @@ export function createControlPlane(ports: ControlPlanePorts): ControlPlane {
         }
 
         const payload = observationPayload(observation);
-        // SQLite stores both omitted optional envelope ids and explicit null as
-        // NULL. Normalize at this boundary so replay identity matches the
-        // durable representation across every ledger implementation.
-        const attachmentId = observationAttachmentId(observation) ?? null;
         const commandId = observation.commandId ?? null;
         assertObservationCausation(transaction, session, observation);
         assertAttachmentStartRoute(transaction, observation);
@@ -239,8 +239,8 @@ export function createControlPlane(ports: ControlPlanePorts): ControlPlane {
           if (
             existingEvent.sessionId !== observation.sessionId ||
             existingEvent.occurredAt !== observation.occurredAt ||
-            existingEvent.attachmentId !== attachmentId ||
-            existingEvent.commandId !== commandId ||
+            (existingEvent.attachmentId ?? null) !== attachmentId ||
+            (existingEvent.commandId ?? null) !== commandId ||
             !sameSessionEventProvenance(existingEvent.provenance, observation.provenance) ||
             !sameSessionEventPayload(existingEvent.payload, payload)
           ) {

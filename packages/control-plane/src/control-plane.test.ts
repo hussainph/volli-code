@@ -180,7 +180,7 @@ describe("ControlPlane creation and explicit commands", () => {
       kind: "executor.start.requested",
       sessionId: session.id,
     });
-    await plane.observe({
+    const acceptedEvent = await plane.observe({
       id: "observation-receipt-accepted",
       sessionId: session.id,
       occurredAt: 200,
@@ -188,6 +188,7 @@ describe("ControlPlane creation and explicit commands", () => {
       kind: "command.receipt",
       receipt: observedReceipt(receipt),
     });
+    expect(acceptedEvent.attachmentId).toBeNull();
     await plane.observe({
       id: "observation-receipt-completed",
       sessionId: session.id,
@@ -532,6 +533,40 @@ describe("ControlPlane creation and explicit commands", () => {
     expect(signals).toMatchObject([
       { sessionId: ticketA.session.id, signal: "done", reason: "Alphabetical first" },
       { sessionId: ticketBLatest.session.id, signal: "blocked", reason: "Newer" },
+    ]);
+  });
+
+  it("uses SQLite BINARY ordering to break equal-time ticket signal ties", async () => {
+    const { ledger, plane } = composition();
+    const bmpId = "session-\uE000";
+    const nonBmpId = "session-\u{10000}";
+    await ledger.transaction((transaction) => {
+      for (const sessionId of [bmpId, nonBmpId]) {
+        transaction.insertSession({ ...sessionRecord(sessionId), ticketId: "ticket-1" });
+        transaction.appendEvent({
+          id: `signal-${sessionId}`,
+          sessionId,
+          sequence: 1,
+          occurredAt: 100,
+          recordedAt: 100,
+          provenance: userProvenance,
+          payload: {
+            kind: "session.signaled",
+            signal: "done",
+            reason: sessionId,
+          },
+        });
+      }
+    });
+
+    await expect(plane.listLatestTicketSignals({ projectId: "project-1" })).resolves.toEqual([
+      {
+        ticketId: "ticket-1",
+        sessionId: nonBmpId,
+        signal: "done",
+        reason: nonBmpId,
+        createdAt: 100,
+      },
     ]);
   });
 

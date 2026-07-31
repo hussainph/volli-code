@@ -138,6 +138,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
             WHERE s.project_id = @projectId
               AND s.ticket_id IS NOT NULL
               AND json_extract(e.payload, '$.kind') = 'session.signaled'
+              AND json_extract(e.payload, '$.signal') IN ('done', 'blocked')
          ), latest_ticket_signals AS (
            SELECT ticket_id,
                   session_id,

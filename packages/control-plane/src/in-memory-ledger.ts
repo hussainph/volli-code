@@ -164,7 +164,8 @@ class InMemorySessionLedger implements SessionLedger {
       if (
         prior === undefined ||
         candidate.createdAt > prior.createdAt ||
-        (candidate.createdAt === prior.createdAt && candidate.sessionId > prior.sessionId)
+        (candidate.createdAt === prior.createdAt &&
+          compareSqliteBinaryText(candidate.sessionId, prior.sessionId) > 0)
       ) {
         byTicket.set(candidate.ticketId, candidate);
       }
