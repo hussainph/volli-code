@@ -99,6 +99,7 @@ describe("launchApp", () => {
           socketPath: "/socket",
           executable: "/app",
           appEntry: undefined,
+          platform: "linux",
           timeoutMs: 100,
           env: {},
         },
@@ -124,6 +125,7 @@ describe("launchApp", () => {
         socketPath: "/profiles/volli.sock",
         executable: "/Applications/Volli Code.app/Contents/MacOS/Volli Code",
         appEntry: undefined,
+        platform: "linux",
         timeoutMs: 1000,
         env: { ELECTRON_RUN_AS_NODE: "1", PATH: "/bin" },
       },
@@ -159,6 +161,7 @@ describe("launchApp", () => {
         socketPath: "/profiles/volli.sock",
         executable: "/Applications/Volli Code.app/Contents/MacOS/Volli Code",
         appEntry: undefined,
+        platform: "linux",
         rendererUrl: "http://127.0.0.1:5173",
         timeoutMs: 100,
         env: {
@@ -214,6 +217,7 @@ describe("launchApp", () => {
           executable: "/electron",
           appEntry: "/app/main.cjs",
           userDataPath: "/profiles/volli-dev",
+          platform: "linux",
           timeoutMs: 40,
           env: {},
         } as Parameters<typeof launchApp>[0],
@@ -228,5 +232,49 @@ describe("launchApp", () => {
       ),
     ).rejects.toMatchObject({ code: "TIMEOUT" });
     expect(spawns).toEqual([["/app/main.cjs", "--user-data-dir=/profiles/volli-dev"]]);
+  });
+
+  it("uses macOS LaunchServices for a bundled Electron executable", async () => {
+    const spawns: Array<{ executable: string; args: string[] }> = [];
+    let probes = 0;
+
+    await expect(
+      launchApp(
+        {
+          socketPath: "/profiles/volli.sock",
+          executable: "/Applications/Electron.app/Contents/MacOS/Electron",
+          appEntry: "/work/volli-code/apps/desktop",
+          userDataPath: "/profiles/volli-dev",
+          platform: "darwin",
+          timeoutMs: 100,
+          env: {},
+        },
+        {
+          probe: async () => {
+            probes += 1;
+            if (probes === 1) throw new Error("not ready");
+          },
+          spawnDetached: (executable, args) => spawns.push({ executable, args }),
+          delay: async () => undefined,
+          now: (() => {
+            let value = 0;
+            return () => (value += 10);
+          })(),
+        },
+      ),
+    ).resolves.toEqual({ alreadyRunning: false });
+
+    expect(spawns).toEqual([
+      {
+        executable: "/usr/bin/open",
+        args: [
+          "-n",
+          "/Applications/Electron.app",
+          "--args",
+          "/work/volli-code/apps/desktop",
+          "--user-data-dir=/profiles/volli-dev",
+        ],
+      },
+    ]);
   });
 });
