@@ -12,6 +12,7 @@ import type {
   CommandReceipt,
   CommandReceiptResult,
   GetSessionQuery,
+  ListSessionsQuery,
   ListSessionEventsQuery,
   Session,
   SessionAttachment,
@@ -69,6 +70,7 @@ export interface ControlPlane {
   observe(observation: SessionObservation): Promise<SessionEvent>;
   submit(request: SubmitSessionCommandRequest): Promise<SubmitSessionCommandResult>;
   getSession(query: GetSessionQuery): Promise<SessionProjection | null>;
+  listSessions(query: ListSessionsQuery): Promise<readonly SessionProjection[]>;
   listEvents(query: ListSessionEventsQuery): Promise<readonly SessionEvent[]>;
 }
 
@@ -305,11 +307,14 @@ export function createControlPlane(ports: ControlPlanePorts): ControlPlane {
           return { command, commandEvent, receipt: receiptEvent.payload.receipt, receiptEvent };
         }
 
-        if (command.intent.kind !== "session.archive") {
+        if (
+          command.intent.kind !== "session.archive" &&
+          command.intent.kind !== "session.retitle"
+        ) {
           return { command, commandEvent, receipt: null, receiptEvent: null };
         }
 
-        transaction.appendEvent({
+        const sessionEvent: SessionEvent = {
           id: ports.ids.next("event"),
           sessionId: session.id,
           sequence: commandEvent.sequence + 1,
@@ -317,8 +322,12 @@ export function createControlPlane(ports: ControlPlanePorts): ControlPlane {
           recordedAt: ports.clock.now(),
           provenance: request.provenance,
           commandId: command.id,
-          payload: { kind: "session.archived" },
-        });
+          payload:
+            command.intent.kind === "session.archive"
+              ? { kind: "session.archived" }
+              : { kind: "session.retitled", title: command.intent.title },
+        };
+        transaction.appendEvent(sessionEvent);
         const receiptEvent = receiptRecordedEvent(
           ports.ids.next("event"),
           session.id,
@@ -330,10 +339,9 @@ export function createControlPlane(ports: ControlPlanePorts): ControlPlane {
             command.id,
             commandEvent.sequence + 2,
             ports.clock.now(),
-            {
-              kind: "session.archived",
-              sessionId: session.id,
-            },
+            command.intent.kind === "session.archive"
+              ? { kind: "session.archived", sessionId: session.id }
+              : { kind: "session.retitled", sessionId: session.id },
           ),
         );
         transaction.appendReceipt(receiptEvent.payload.receipt);
@@ -349,6 +357,16 @@ export function createControlPlane(ports: ControlPlanePorts): ControlPlane {
           ? projectSession(session, transaction.listEvents({ sessionId: session.id }))
           : null;
       });
+    },
+
+    async listSessions(query) {
+      return ports.ledger.transaction((transaction) =>
+        transaction
+          .listSessions(query)
+          .map((session) =>
+            projectSession(session, transaction.listEvents({ sessionId: session.id })),
+          ),
+      );
     },
 
     async listEvents(query) {
@@ -616,6 +634,7 @@ function resolveCommandRoute(
           };
     }
     case "session.archive":
+    case "session.retitle":
       return { route: null, rejection: null };
   }
 }
@@ -651,6 +670,15 @@ function assertObservableFact(
   if (!attachment) throw new ControlPlaneConflictError(`Attachment ${attachmentId} is unknown`);
   if (attachment.status !== "open") {
     throw new ControlPlaneConflictError(`Attachment ${attachmentId} is already closed`);
+  }
+  if (
+    observation.kind === "attachment.native_referenced" &&
+    (observation.provenance.source.kind !== "adapter" ||
+      observation.provenance.source.id !== attachment.adapterId)
+  ) {
+    throw new ControlPlaneConflictError(
+      `Native reference for attachment ${attachmentId} must be produced by adapter ${attachment.adapterId}`,
+    );
   }
 }
 
@@ -713,7 +741,11 @@ function assertReceiptCommandOwnership(
       `Receipt ${observation.receipt.id} does not belong to Session ${session.id}`,
     );
   }
-  if (command.intent.kind === "session.create" || command.intent.kind === "session.archive") {
+  if (
+    command.intent.kind === "session.create" ||
+    command.intent.kind === "session.archive" ||
+    command.intent.kind === "session.retitle"
+  ) {
     throw new ControlPlaneConflictError(
       `Receipt ${observation.receipt.id} cannot be externally observed`,
     );
@@ -807,6 +839,7 @@ function expectedResultKind(intent: SessionCommandIntent["kind"]): CommandReceip
   const resultKinds: Record<SessionCommandIntent["kind"], CommandReceiptResult["kind"]> = {
     "session.create": "session.created",
     "session.archive": "session.archived",
+    "session.retitle": "session.retitled",
     "executor.start": "executor.start.requested",
     "executor.stop": "executor.stop.requested",
     "message.submit": "message.submitted",

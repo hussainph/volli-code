@@ -309,6 +309,267 @@ describe("ControlPlane creation and explicit commands", () => {
     ).toHaveLength(1);
   });
 
+  it("retitles through immutable internal facts, replays, and rejects after archive", async () => {
+    const { plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+    const retitled = await plane.submit({
+      commandId: "command-retitle",
+      sessionId: session.id,
+      intent: { kind: "session.retitle", title: "Renamed durable Session" },
+      provenance: userProvenance,
+    });
+
+    expect(retitled).toMatchObject({
+      commandEvent: { payload: { kind: "command.recorded" } },
+      receipt: {
+        status: "completed",
+        result: { kind: "session.retitled", sessionId: session.id },
+      },
+      receiptEvent: { payload: { kind: "command.receipt.recorded" } },
+    });
+    await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+      session: { title: "Renamed durable Session" },
+    });
+    expect(session.title).toBe("Durable Session");
+    await expect(
+      plane.submit({
+        commandId: "command-retitle",
+        sessionId: session.id,
+        intent: { kind: "session.retitle", title: "Renamed durable Session" },
+        provenance: userProvenance,
+      }),
+    ).resolves.toEqual(retitled);
+    await plane.submit({
+      commandId: "command-archive-after-retitle",
+      sessionId: session.id,
+      intent: { kind: "session.archive" },
+      provenance: userProvenance,
+    });
+    await expect(
+      plane.submit({
+        commandId: "command-retitle-after-archive",
+        sessionId: session.id,
+        intent: { kind: "session.retitle", title: null },
+        provenance: userProvenance,
+      }),
+    ).resolves.toMatchObject({ receipt: { status: "rejected", code: "session_archived" } });
+    const retitleFacts = (await plane.listEvents({ sessionId: session.id })).filter(
+      (event) => event.payload.kind === "session.retitled",
+    );
+    expect(retitleFacts).toHaveLength(1);
+    expect(retitleFacts[0]?.payload).toEqual({
+      kind: "session.retitled",
+      title: "Renamed durable Session",
+    });
+  });
+
+  it("lists deep Session projections through explicit project scopes in stable descending order", async () => {
+    const ledger = createInMemorySessionLedger();
+    const plane = createControlPlane({ ledger, clock: { now: () => 100 }, ids: ids() });
+    const ticketFirst = await plane.createSession(createRequest("command-list-ticket-first"));
+    const scratch = await plane.createSession({
+      ...createRequest("command-list-scratch"),
+      ticketId: null,
+      title: "Scratch Session",
+    });
+    const ticketLater = await plane.createSession({
+      ...createRequest("command-list-ticket-later"),
+      title: "Ticket Session",
+    });
+    await plane.createSession({
+      ...createRequest("command-list-other-project"),
+      projectId: "project-2",
+      ticketId: null,
+    });
+    await plane.submit({
+      commandId: "command-list-retitle",
+      sessionId: ticketLater.session.id,
+      intent: { kind: "session.retitle", title: "Projected title" },
+      provenance: userProvenance,
+    });
+
+    const all = await plane.listSessions({ projectId: "project-1", scope: "all" });
+    expect(all.map(({ session: listed }) => listed.id)).toEqual([
+      scratch.session.id,
+      ticketLater.session.id,
+      ticketFirst.session.id,
+    ]);
+    const listedLater = all.find(({ session: listed }) => listed.id === ticketLater.session.id);
+    expect(listedLater?.session.title).toBe("Projected title");
+    expect(
+      listedLater?.commands.some(
+        (sessionCommand) =>
+          sessionCommand.intent.kind === "session.retitle" &&
+          sessionCommand.intent.title === "Projected title",
+      ),
+    ).toBe(true);
+    expect(
+      listedLater?.receipts.some(
+        (receipt) => receipt.status === "completed" && receipt.result.kind === "session.retitled",
+      ),
+    ).toBe(true);
+    await expect(
+      plane.listSessions({ projectId: "project-1", scope: "ticket", ticketId: "ticket-1" }),
+    ).resolves.toMatchObject([
+      { session: { id: ticketLater.session.id } },
+      { session: { id: ticketFirst.session.id } },
+    ]);
+    await expect(
+      plane.listSessions({ projectId: "project-1", scope: "scratch" }),
+    ).resolves.toMatchObject([{ session: { id: scratch.session.id, ticketId: null } }]);
+  });
+
+  it("records native continuation evidence only for known open attachments and replays it exactly", async () => {
+    const { plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+    const opened = attachment(session.id);
+    await plane.observe({
+      id: "observation-native-opened",
+      sessionId: session.id,
+      occurredAt: 200,
+      provenance: adapterProvenance,
+      kind: "attachment.opened",
+      attachment: opened,
+    });
+    const native = {
+      id: "native-continuation",
+      detail: { adapter: { cursor: ["opaque", 3], resume: { token: true } } },
+    };
+    const observation = {
+      id: "observation-native-reference",
+      sessionId: session.id,
+      occurredAt: 201,
+      provenance: adapterProvenance,
+      kind: "attachment.native_referenced" as const,
+      attachmentId: opened.id,
+      native,
+    };
+
+    const recorded = await plane.observe(observation);
+    expect(recorded).toMatchObject({
+      attachmentId: opened.id,
+      payload: { kind: "attachment.native_referenced", attachmentId: opened.id, native },
+    });
+    await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+      liveExecutor: { id: opened.id, native },
+    });
+    await expect(plane.observe(observation)).resolves.toEqual(recorded);
+    await expect(plane.observe({ ...observation, provenance: userProvenance })).rejects.toThrow(
+      "already recorded with different evidence",
+    );
+    await expect(
+      plane.observe({ ...observation, native: { id: null, detail: ["different"] } }),
+    ).rejects.toThrow("already recorded with different evidence");
+    await expect(
+      plane.observe({
+        ...observation,
+        id: "observation-native-unknown",
+        attachmentId: "missing-attachment",
+      }),
+    ).rejects.toThrow("Attachment missing-attachment is unknown");
+    await plane.observe({
+      id: "observation-native-closed",
+      sessionId: session.id,
+      occurredAt: 202,
+      provenance: adapterProvenance,
+      kind: "attachment.closed",
+      attachmentId: opened.id,
+      outcome: "completed",
+    });
+    await expect(
+      plane.observe({ ...observation, id: "observation-native-after-close" }),
+    ).rejects.toThrow(`Attachment ${opened.id} is already closed`);
+  });
+
+  it("rejects user and system native evidence before either can be appended", async () => {
+    const { ledger, plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+    const opened = attachment(session.id);
+    await plane.observe({
+      id: "observation-native-user-opened",
+      sessionId: session.id,
+      occurredAt: 200,
+      provenance: adapterProvenance,
+      kind: "attachment.opened",
+      attachment: opened,
+    });
+
+    await expect(
+      plane.observe({
+        id: "observation-native-user",
+        sessionId: session.id,
+        occurredAt: 201,
+        provenance: userProvenance,
+        kind: "attachment.native_referenced",
+        attachmentId: opened.id,
+        native: { id: "native-user", detail: null },
+      }),
+    ).rejects.toThrow(
+      `Native reference for attachment ${opened.id} must be produced by adapter ${opened.adapterId}`,
+    );
+    await expect(
+      plane.observe({
+        id: "observation-native-system",
+        sessionId: session.id,
+        occurredAt: 202,
+        provenance: {
+          source: { kind: "system", id: "host-system", detail: null },
+          venue: localVenue,
+        },
+        kind: "attachment.native_referenced",
+        attachmentId: opened.id,
+        native: { id: "native-system", detail: null },
+      }),
+    ).rejects.toThrow(
+      `Native reference for attachment ${opened.id} must be produced by adapter ${opened.adapterId}`,
+    );
+    await expect(
+      ledger.transaction((transaction) =>
+        transaction
+          .listEvents({ sessionId: session.id })
+          .filter((event) => event.payload.kind === "attachment.native_referenced"),
+      ),
+    ).resolves.toEqual([]);
+  });
+
+  it("rejects native evidence from a different adapter before it can be appended", async () => {
+    const { ledger, plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+    const opened = attachment(session.id);
+    await plane.observe({
+      id: "observation-native-wrong-adapter-opened",
+      sessionId: session.id,
+      occurredAt: 200,
+      provenance: adapterProvenance,
+      kind: "attachment.opened",
+      attachment: opened,
+    });
+
+    await expect(
+      plane.observe({
+        id: "observation-native-wrong-adapter",
+        sessionId: session.id,
+        occurredAt: 201,
+        provenance: {
+          source: { kind: "adapter", id: "codex", detail: null },
+          venue: localVenue,
+        },
+        kind: "attachment.native_referenced",
+        attachmentId: opened.id,
+        native: { id: "native-wrong-adapter", detail: null },
+      }),
+    ).rejects.toThrow(
+      `Native reference for attachment ${opened.id} must be produced by adapter ${opened.adapterId}`,
+    );
+    await expect(
+      ledger.transaction((transaction) =>
+        transaction
+          .listEvents({ sessionId: session.id })
+          .filter((event) => event.payload.kind === "attachment.native_referenced"),
+      ),
+    ).resolves.toEqual([]);
+  });
+
   it("makes command replay idempotent without a receipt, while rejecting collisions and unknown Sessions", async () => {
     const { plane } = composition();
     const { session } = await plane.createSession(createRequest());
@@ -1618,6 +1879,83 @@ describe("InMemorySessionLedger", () => {
     expect(() => closedRejectedTransaction.listEvents({ sessionId: "missing" })).toThrow(
       "is closed",
     );
+  });
+
+  it("lists cloned base Sessions through explicit scopes in durable descending order", async () => {
+    const ledger = createInMemorySessionLedger();
+    const ticketOlder = {
+      ...sessionRecord("session-ticket-older"),
+      ticketId: "ticket-1",
+      title: "Older ticket",
+      createdAt: 1,
+    };
+    const scratch = {
+      ...sessionRecord("session-scratch"),
+      title: "Scratch",
+      createdAt: 2,
+    };
+    const ticketLaterId = {
+      ...sessionRecord("session-zulu"),
+      ticketId: "ticket-1",
+      title: "Later id",
+      createdAt: 3,
+    };
+    const ticketEarlierId = {
+      ...sessionRecord("session-alpha"),
+      ticketId: "ticket-1",
+      title: "Earlier id",
+      createdAt: 3,
+    };
+    const otherProject = {
+      ...sessionRecord("session-other"),
+      projectId: "project-2",
+      createdAt: 4,
+    };
+    await ledger.transaction((transaction) => {
+      for (const session of [ticketOlder, scratch, ticketLaterId, ticketEarlierId, otherProject]) {
+        transaction.insertSession(session);
+      }
+      const all = transaction.listSessions({ projectId: "project-1", scope: "all" });
+      expect(all.map((session) => session.id)).toEqual([
+        ticketLaterId.id,
+        ticketEarlierId.id,
+        scratch.id,
+        ticketOlder.id,
+      ]);
+      expect(
+        transaction
+          .listSessions({ projectId: "project-1", scope: "ticket", ticketId: "ticket-1" })
+          .map((session) => session.id),
+      ).toEqual([ticketLaterId.id, ticketEarlierId.id, ticketOlder.id]);
+      expect(transaction.listSessions({ projectId: "project-1", scope: "scratch" })).toEqual([
+        scratch,
+      ]);
+      all[0]!.title = "Mutated query result";
+      expect(transaction.listSessions({ projectId: "project-1", scope: "all" })[0]?.title).toBe(
+        "Later id",
+      );
+    });
+  });
+
+  it("uses SQLite BINARY descending ID order when creation times are equal", async () => {
+    const ledger = createInMemorySessionLedger();
+    const createdAt = 3;
+    const sessionIds = ["session-a", "session-z", "session-é", "session-中", "session-😀"];
+
+    await ledger.transaction((transaction) => {
+      for (const id of sessionIds) {
+        transaction.insertSession({ ...sessionRecord(id), createdAt });
+      }
+
+      // SQLite BINARY compares UTF-8 bytes: F0 (😀), E4 (中), C3 (é), 7A (z), 61 (a).
+      expect(transaction.listSessions({ projectId: "project-1", scope: "all" })).toMatchObject([
+        { id: "session-😀" },
+        { id: "session-中" },
+        { id: "session-é" },
+        { id: "session-z" },
+        { id: "session-a" },
+      ]);
+    });
   });
 
   it("is transactional, append-only, and globally id-safe", async () => {

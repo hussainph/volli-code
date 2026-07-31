@@ -1,5 +1,6 @@
 import type {
   CommandReceipt,
+  ListSessionsQuery,
   ListSessionEventsQuery,
   Session,
   SessionCommand,
@@ -52,6 +53,10 @@ class InMemorySessionLedger implements SessionLedger {
         assertOpen();
         return this.#getSession(sessionId);
       },
+      listSessions: (query) => {
+        assertOpen();
+        return this.#listSessions(query);
+      },
       insertSession: (session) => {
         assertOpen();
         this.#insertSession(session);
@@ -94,6 +99,26 @@ class InMemorySessionLedger implements SessionLedger {
   #getSession(sessionId: string): Session | null {
     const session = this.#sessions.get(sessionId);
     return session ? clone(session) : null;
+  }
+
+  #listSessions(query: ListSessionsQuery): readonly Session[] {
+    return [...this.#sessions.values()]
+      .filter((session) => {
+        if (session.projectId !== query.projectId) return false;
+        switch (query.scope) {
+          case "all":
+            return true;
+          case "ticket":
+            return session.ticketId === query.ticketId;
+          case "scratch":
+            return session.ticketId === null;
+        }
+      })
+      .toSorted(
+        (left, right) =>
+          right.createdAt - left.createdAt || compareSqliteBinaryText(right.id, left.id),
+      )
+      .map(clone);
   }
 
   #insertSession(session: Session): void {
@@ -205,6 +230,18 @@ export function createInMemorySessionLedger(): SessionLedger {
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/** SQLite's default BINARY collation compares the UTF-8 bytes of TEXT values. */
+function compareSqliteBinaryText(left: string, right: string): number {
+  const leftBytes = new TextEncoder().encode(left);
+  const rightBytes = new TextEncoder().encode(right);
+  const length = Math.min(leftBytes.length, rightBytes.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = leftBytes[index]! - rightBytes[index]!;
+    if (difference !== 0) return difference;
+  }
+  return leftBytes.length - rightBytes.length;
 }
 
 function cloneMap<T>(source: ReadonlyMap<string, T>): Map<string, T> {

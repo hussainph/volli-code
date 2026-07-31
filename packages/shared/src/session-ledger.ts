@@ -123,7 +123,13 @@ export type SessionEventPayload =
   | { kind: "command.recorded"; command: SessionCommand }
   | { kind: "session.created"; session: Session }
   | { kind: "session.archived" }
+  | { kind: "session.retitled"; title: string | null }
   | { kind: "attachment.opened"; attachment: SessionAttachment }
+  | {
+      kind: "attachment.native_referenced";
+      attachmentId: string;
+      native: SessionNativeReference;
+    }
   | { kind: "attachment.failed"; attachment: SessionAttachment; failure: SessionAttachmentFailure }
   | {
       kind: "attachment.closed";
@@ -190,6 +196,11 @@ export type SessionObservation =
       attachment: SessionAttachment;
     })
   | (SessionObservationBase & {
+      kind: "attachment.native_referenced";
+      attachmentId: string;
+      native: SessionNativeReference;
+    })
+  | (SessionObservationBase & {
       kind: "attachment.failed";
       attachment: SessionAttachment;
       failure: SessionAttachmentFailure;
@@ -235,6 +246,12 @@ export function observationPayload(observation: SessionObservation): SessionEven
   switch (observation.kind) {
     case "attachment.opened":
       return { kind: observation.kind, attachment: observation.attachment };
+    case "attachment.native_referenced":
+      return {
+        kind: observation.kind,
+        attachmentId: observation.attachmentId,
+        native: observation.native,
+      };
     case "attachment.failed":
       return {
         kind: observation.kind,
@@ -287,6 +304,7 @@ export function observationPayload(observation: SessionObservation): SessionEven
 export type SessionCommandIntent =
   | { kind: "session.create"; projectId: string; ticketId: string | null; title: string | null }
   | { kind: "session.archive" }
+  | { kind: "session.retitle"; title: string | null }
   | { kind: "executor.start"; adapterId: string; continuity: SessionAttachmentContinuity }
   | { kind: "executor.stop"; attachmentId: string }
   | { kind: "message.submit"; reference: TranscriptReference };
@@ -321,6 +339,7 @@ export interface SessionCommand {
 export type CommandReceiptResult =
   | { kind: "session.created"; sessionId: string }
   | { kind: "session.archived"; sessionId: string }
+  | { kind: "session.retitled"; sessionId: string }
   | { kind: "executor.start.requested"; sessionId: string }
   | { kind: "executor.stop.requested"; sessionId: string }
   | { kind: "message.submitted"; sessionId: string };
@@ -386,6 +405,12 @@ export interface GetSessionQuery {
   sessionId: string;
 }
 
+/** A project-scoped Session list with no optional/null filter ambiguity. */
+export type ListSessionsQuery =
+  | { projectId: string; scope: "all" }
+  | { projectId: string; scope: "ticket"; ticketId: string }
+  | { projectId: string; scope: "scratch" };
+
 export interface ListSessionEventsQuery {
   sessionId: string;
   afterSequence?: number;
@@ -431,6 +456,7 @@ export function projectSession(
   const receipts: CommandReceipt[] = [];
   const pendingExecutorStarts = new Map<string, SessionCommand>();
   let status: SessionProjection["status"] = "open";
+  let title = session.title;
 
   const ordered = [...events]
     .filter((event) => event.sessionId === session.id)
@@ -447,6 +473,16 @@ export function projectSession(
       case "session.archived":
         status = "archived";
         break;
+      case "session.retitled":
+        title = event.payload.title;
+        break;
+      case "attachment.native_referenced": {
+        const existing = attachments.get(event.payload.attachmentId);
+        if (existing) {
+          attachments.set(existing.id, { ...existing, native: event.payload.native });
+        }
+        break;
+      }
       case "attachment.opened": {
         const { attachment } = event.payload;
         attachments.set(attachment.id, {
@@ -509,7 +545,7 @@ export function projectSession(
   const pendingExecutorStart = [...pendingExecutorStarts.values()].at(-1) ?? null;
 
   return {
-    session,
+    session: { ...session, title },
     status,
     commands,
     receipts,
@@ -570,6 +606,8 @@ function sameSessionCommandIntent(
 /** A storage transaction for the event ledger, intentionally free of SQL-shaped operations. */
 export interface SessionLedgerTransaction {
   getSession(sessionId: string): Session | null;
+  /** Returns immutable base Sessions ordered by creation time descending, then id descending. */
+  listSessions(query: ListSessionsQuery): readonly Session[];
   insertSession(session: Session): void;
   getEvent(eventId: string): SessionEvent | null;
   appendEvent(event: SessionEvent): void;

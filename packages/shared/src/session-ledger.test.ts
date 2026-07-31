@@ -88,6 +88,15 @@ describe("observationPayload", () => {
         attachment,
       },
       {
+        id: "1-native",
+        sessionId: session.id,
+        occurredAt: 1,
+        provenance,
+        kind: "attachment.native_referenced",
+        attachmentId: attachment.id,
+        native: { id: "native-continuation", detail: { cursor: ["opaque", 3] } },
+      },
+      {
         id: "1-failed",
         sessionId: session.id,
         occurredAt: 1,
@@ -187,6 +196,7 @@ describe("observationPayload", () => {
 
     expect(observations.map(observationPayload).map(({ kind }) => kind)).toEqual([
       "attachment.opened",
+      "attachment.native_referenced",
       "attachment.failed",
       "attachment.closed",
       "run.started",
@@ -217,6 +227,34 @@ describe("observationPayload", () => {
 });
 
 describe("projectSession", () => {
+  it("projects retitle and native-continuation facts without mutating immutable inputs", () => {
+    const attachment = {
+      id: "attachment-1",
+      sessionId: session.id,
+      adapterId: "codex",
+      venue: localVenue,
+      continuity: "native_resume" as const,
+      native: null,
+    };
+    const native = { id: "native-continuation", detail: { cursor: ["opaque", 3] } };
+
+    const projection = projectSession(session, [
+      event(1, { kind: "attachment.opened", attachment }),
+      event(2, { kind: "session.retitled", title: "Retitled Session" }),
+      event(3, { kind: "attachment.native_referenced", attachmentId: attachment.id, native }),
+      event(4, {
+        kind: "attachment.native_referenced",
+        attachmentId: "missing",
+        native: { id: null, detail: null },
+      }),
+    ]);
+
+    expect(projection.session).toEqual({ ...session, title: "Retitled Session" });
+    expect(session.title).toBe("A durable Session");
+    expect(projection.attachments).toMatchObject([{ id: attachment.id, native }]);
+    expect(attachment.native).toBeNull();
+  });
+
   it("keeps the Session open when runs, turns, and an executor end", () => {
     const attachment = {
       id: "attachment-1",
