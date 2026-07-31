@@ -1,0 +1,606 @@
+/**
+ * The durable, harness-agnostic facts that make up a Session's local history.
+ * A Session belongs to Volli; adapters and UI surfaces only attach to it.
+ */
+
+export interface Session {
+  id: string;
+  projectId: string;
+  ticketId: string | null;
+  title: string | null;
+  /** Epoch milliseconds. Metadata only; ordering comes from `SessionEvent.sequence`. */
+  createdAt: number;
+}
+
+export const SESSION_ATTACHMENT_CONTINUITIES = [
+  "fresh",
+  "native_resume",
+  "context_replay",
+  "recreate",
+] as const;
+
+/** How this attachment continues the durable Session, without claiming provider parity. */
+export type SessionAttachmentContinuity = (typeof SESSION_ATTACHMENT_CONTINUITIES)[number];
+
+export function isSessionAttachmentContinuity(
+  value: unknown,
+): value is SessionAttachmentContinuity {
+  return (
+    typeof value === "string" &&
+    (SESSION_ATTACHMENT_CONTINUITIES as readonly string[]).includes(value)
+  );
+}
+
+export type SessionNativeDetail =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly SessionNativeDetail[]
+  | { readonly [key: string]: SessionNativeDetail };
+
+/**
+ * Adapter-provided correlation only. It is never a Volli command receipt and
+ * deliberately leaves native shape open for capability-specific adapters.
+ */
+export interface SessionNativeReference {
+  id: string | null;
+  detail: SessionNativeDetail | null;
+}
+
+/** An executor attached to a Session. Its end does not end the Session. */
+export interface SessionAttachment {
+  id: string;
+  sessionId: string;
+  adapterId: string;
+  /** Where this executor ran, independent of the adapter that spoke to it. */
+  venue: SessionExecutionVenue;
+  continuity: SessionAttachmentContinuity;
+  native: SessionNativeReference | null;
+}
+
+/** A local machine, cloud sandbox, or other execution venue. */
+export interface SessionExecutionVenue {
+  id: string;
+  kind: "local" | "cloud" | "remote" | "unknown";
+}
+
+/** Explicit provenance for audit and future cloud replay. */
+export interface SessionEventProvenance {
+  source: {
+    kind: "user" | "adapter" | "system";
+    id: string;
+    detail: SessionNativeDetail | null;
+  };
+  venue: SessionExecutionVenue | null;
+}
+
+/** Content is stored elsewhere; the ledger records only its durable reference. */
+export interface TranscriptReference {
+  id: string;
+  mediaType: string | null;
+  digest: string | null;
+}
+
+export const SESSION_ATTENTION_KINDS = [
+  "input_required",
+  "permission_required",
+  "auth_required",
+  "configuration_invalid",
+  "rate_limited",
+  "quota_exhausted",
+  "context_limit_reached",
+  "transport_retrying",
+  "partial_turn_interrupted",
+  "adapter_disconnected",
+  "adapter_unrecoverable",
+] as const;
+
+export type SessionAttentionKind = (typeof SESSION_ATTENTION_KINDS)[number];
+
+export function isSessionAttentionKind(value: unknown): value is SessionAttentionKind {
+  return (
+    typeof value === "string" && (SESSION_ATTENTION_KINDS as readonly string[]).includes(value)
+  );
+}
+
+interface SessionAttentionBase {
+  id: string;
+  attachmentId: string | null;
+  detail: string | null;
+  diagnostic: SessionNativeDetail | null;
+}
+
+/** A structured state the user may need to recover from. */
+export type SessionAttention =
+  | (SessionAttentionBase & { kind: "rate_limited"; retryAt: number | null })
+  | (SessionAttentionBase & { kind: "quota_exhausted"; resetAt: number | null })
+  | (SessionAttentionBase & {
+      kind: Exclude<SessionAttentionKind, "rate_limited" | "quota_exhausted">;
+    });
+
+export type SessionEventPayload =
+  | { kind: "command.recorded"; command: SessionCommand }
+  | { kind: "session.created"; session: Session }
+  | { kind: "session.archived" }
+  | { kind: "attachment.opened"; attachment: SessionAttachment }
+  | { kind: "attachment.failed"; attachment: SessionAttachment; failure: SessionAttachmentFailure }
+  | {
+      kind: "attachment.closed";
+      attachmentId: string;
+      outcome: "completed" | "failed" | "interrupted";
+    }
+  | { kind: "run.started"; attachmentId: string; runId: string }
+  | { kind: "run.completed"; attachmentId: string; runId: string }
+  | { kind: "turn.started"; attachmentId: string; turnId: string }
+  | { kind: "turn.completed"; attachmentId: string; turnId: string }
+  | {
+      kind: "transcript.referenced";
+      attachmentId: string | null;
+      turnId: string | null;
+      reference: TranscriptReference;
+    }
+  | { kind: "attention.raised"; attention: SessionAttention }
+  | { kind: "attention.cleared"; attentionId: string }
+  | { kind: "command.receipt.recorded"; receipt: CommandReceipt }
+  | {
+      kind: "adapter.observed";
+      attachmentId: string | null;
+      name: string;
+      native: SessionNativeDetail | null;
+    };
+
+/** A failed attachment preserves adapter and venue metadata without pretending it ever opened. */
+export interface SessionAttachmentFailure {
+  code: string;
+  detail: string | null;
+  diagnostic: SessionNativeDetail | null;
+}
+
+/** One immutable local fact. Sequence, not wall-clock time, defines its order. */
+export interface SessionEvent {
+  id: string;
+  sessionId: string;
+  sequence: number;
+  /** When the fact occurred according to the source, in epoch milliseconds. */
+  occurredAt: number;
+  /** When Volli durably recorded the fact, in epoch milliseconds. */
+  recordedAt: number;
+  provenance: SessionEventProvenance;
+  /** The executor concerned by this fact, when one exists. */
+  attachmentId?: string | null;
+  /** The explicit user intent that caused this fact, when one exists. */
+  commandId?: string | null;
+  payload: SessionEventPayload;
+}
+
+interface SessionObservationBase {
+  id: string;
+  sessionId: string;
+  occurredAt: number;
+  provenance: SessionEventProvenance;
+  attachmentId?: string | null;
+  commandId?: string | null;
+}
+
+export type SessionObservation =
+  | (SessionObservationBase & {
+      id: string;
+      kind: "attachment.opened";
+      attachment: SessionAttachment;
+    })
+  | (SessionObservationBase & {
+      kind: "attachment.failed";
+      attachment: SessionAttachment;
+      failure: SessionAttachmentFailure;
+    })
+  | (SessionObservationBase & {
+      kind: "attachment.closed";
+      attachmentId: string;
+      outcome: "completed" | "failed" | "interrupted";
+    })
+  | (SessionObservationBase & { kind: "run.started"; attachmentId: string; runId: string })
+  | (SessionObservationBase & {
+      kind: "run.completed";
+      attachmentId: string;
+      runId: string;
+    })
+  | (SessionObservationBase & { kind: "turn.started"; attachmentId: string; turnId: string })
+  | (SessionObservationBase & {
+      kind: "turn.completed";
+      attachmentId: string;
+      turnId: string;
+    })
+  | (SessionObservationBase & {
+      kind: "transcript.referenced";
+      attachmentId: string | null;
+      turnId: string | null;
+      reference: TranscriptReference;
+    })
+  | (SessionObservationBase & {
+      kind: "attention.raised";
+      attention: SessionAttention;
+    })
+  | (SessionObservationBase & { kind: "attention.cleared"; attentionId: string })
+  | (SessionObservationBase & {
+      kind: "adapter.observed";
+      attachmentId: string | null;
+      name: string;
+      native: SessionNativeDetail | null;
+    })
+  | (SessionObservationBase & { kind: "command.receipt"; receipt: UnstampedCommandReceipt });
+
+/** Maps externally observed evidence to the durable event payload it proves. */
+export function observationPayload(observation: SessionObservation): SessionEventPayload {
+  switch (observation.kind) {
+    case "attachment.opened":
+      return { kind: observation.kind, attachment: observation.attachment };
+    case "attachment.failed":
+      return {
+        kind: observation.kind,
+        attachment: observation.attachment,
+        failure: observation.failure,
+      };
+    case "attachment.closed":
+      return {
+        kind: observation.kind,
+        attachmentId: observation.attachmentId,
+        outcome: observation.outcome,
+      };
+    case "run.started":
+    case "run.completed":
+      return {
+        kind: observation.kind,
+        attachmentId: observation.attachmentId,
+        runId: observation.runId,
+      };
+    case "turn.started":
+    case "turn.completed":
+      return {
+        kind: observation.kind,
+        attachmentId: observation.attachmentId,
+        turnId: observation.turnId,
+      };
+    case "transcript.referenced":
+      return {
+        kind: observation.kind,
+        attachmentId: observation.attachmentId,
+        turnId: observation.turnId,
+        reference: observation.reference,
+      };
+    case "attention.raised":
+      return { kind: observation.kind, attention: observation.attention };
+    case "attention.cleared":
+      return { kind: observation.kind, attentionId: observation.attentionId };
+    case "command.receipt":
+      throw new Error("Command receipt observations require Control Plane stamping");
+    case "adapter.observed":
+      return {
+        kind: observation.kind,
+        attachmentId: observation.attachmentId,
+        name: observation.name,
+        native: observation.native,
+      };
+  }
+}
+
+export type SessionCommandIntent =
+  | { kind: "session.create"; projectId: string; ticketId: string | null; title: string | null }
+  | { kind: "session.archive" }
+  | { kind: "executor.start"; adapterId: string; continuity: SessionAttachmentContinuity }
+  | { kind: "executor.stop"; attachmentId: string }
+  | { kind: "message.submit"; reference: TranscriptReference };
+
+/**
+ * The adapter delivery target resolved by the control plane when it records a
+ * command. It prevents a later attachment from silently accepting work that
+ * was addressed to an earlier executor.
+ */
+export interface SessionCommandRoute {
+  adapterId: string;
+  attachmentId: string | null;
+}
+
+/** Caller-supplied intent for an existing Session before the control plane resolves a route. */
+export interface SessionCommandRequest {
+  id: string;
+  sessionId: string;
+  intent: Exclude<SessionCommandIntent, { kind: "session.create" }>;
+}
+
+/** Explicit user intent. A command is not evidence that an executor accepted it. */
+export interface SessionCommand {
+  id: string;
+  sessionId: string;
+  createdAt: number;
+  intent: SessionCommandIntent;
+  /** Null only for Session-level commands or deterministically rejected delivery. */
+  route: SessionCommandRoute | null;
+}
+
+export type CommandReceiptResult =
+  | { kind: "session.created"; sessionId: string }
+  | { kind: "session.archived"; sessionId: string }
+  | { kind: "executor.start.requested"; sessionId: string }
+  | { kind: "executor.stop.requested"; sessionId: string }
+  | { kind: "message.submitted"; sessionId: string };
+
+interface CommandReceiptDetailsAccepted {
+  status: "accepted";
+  acceptedAt: number;
+  result: CommandReceiptResult;
+}
+
+interface CommandReceiptDetailsRejected {
+  status: "rejected";
+  code: string;
+  detail: string | null;
+}
+
+interface CommandReceiptDetailsCompleted {
+  status: "completed";
+  result: CommandReceiptResult;
+}
+
+interface CommandReceiptDetailsUnreconciled {
+  status: "unreconciled";
+  detail: string | null;
+}
+
+type CommandReceiptDetails =
+  | CommandReceiptDetailsAccepted
+  | CommandReceiptDetailsRejected
+  | CommandReceiptDetailsCompleted
+  | CommandReceiptDetailsUnreconciled;
+
+/** Adapter evidence before Volli assigns durable ordering metadata. */
+export type UnstampedCommandReceipt = {
+  id: string;
+  commandId: string;
+} & CommandReceiptDetails;
+
+/** Durable command outcome; native/provider IDs never substitute for this receipt. */
+export type CommandReceipt = UnstampedCommandReceipt & {
+  /** Assigned by Volli's control plane, never supplied by an adapter. */
+  recordedAt: number;
+  /** Matches the immutable `command.receipt.recorded` event sequence. */
+  sequence: number;
+};
+
+export type AcceptedCommandReceipt = Extract<CommandReceipt, { status: "accepted" }>;
+
+export function sameCommandReceipt(left: CommandReceipt, right: CommandReceipt): boolean {
+  return left.id === right.id && stableSessionValue(left) === stableSessionValue(right);
+}
+
+/** Compares provider evidence with a stamped receipt, ignoring Volli-owned metadata. */
+export function sameCommandReceiptOutcome(
+  stored: CommandReceipt,
+  observed: UnstampedCommandReceipt,
+): boolean {
+  const { recordedAt: _recordedAt, sequence: _sequence, ...outcome } = stored;
+  return stableSessionValue(outcome) === stableSessionValue(observed);
+}
+
+export interface GetSessionQuery {
+  sessionId: string;
+}
+
+export interface ListSessionEventsQuery {
+  sessionId: string;
+  afterSequence?: number;
+  limit?: number;
+}
+
+export interface SessionAttachmentProjection extends SessionAttachment {
+  status: "open" | "failed" | "closed";
+  openedAt: number | null;
+  closedAt: number | null;
+  outcome: "completed" | "failed" | "interrupted" | null;
+  failure: SessionAttachmentFailure | null;
+}
+
+export interface SessionAttentionProjection {
+  active: readonly SessionAttention[];
+  primary: SessionAttention | null;
+}
+
+export interface SessionProjection {
+  session: Session;
+  status: "open" | "archived";
+  commands: readonly SessionCommand[];
+  receipts: readonly CommandReceipt[];
+  /** Latest unresolved executor.start intent; it exists before an attachment is observable. */
+  pendingExecutorStart: SessionCommand | null;
+  attachments: readonly SessionAttachmentProjection[];
+  liveExecutor: SessionAttachmentProjection | null;
+  attention: SessionAttentionProjection;
+}
+
+/**
+ * Derives UI-ready Session state from ordered facts. Turn and executor end
+ * events intentionally never close a Session; only `session.archived` does.
+ */
+export function projectSession(
+  session: Session,
+  events: readonly SessionEvent[],
+): SessionProjection {
+  const attachments = new Map<string, SessionAttachmentProjection>();
+  const attention = new Map<string, SessionAttention>();
+  const commands: SessionCommand[] = [];
+  const receipts: CommandReceipt[] = [];
+  const pendingExecutorStarts = new Map<string, SessionCommand>();
+  let status: SessionProjection["status"] = "open";
+
+  const ordered = [...events]
+    .filter((event) => event.sessionId === session.id)
+    .toSorted((left, right) => left.sequence - right.sequence);
+
+  for (const event of ordered) {
+    switch (event.payload.kind) {
+      case "command.recorded":
+        commands.push(event.payload.command);
+        if (event.payload.command.intent.kind === "executor.start") {
+          pendingExecutorStarts.set(event.payload.command.id, event.payload.command);
+        }
+        break;
+      case "session.archived":
+        status = "archived";
+        break;
+      case "attachment.opened": {
+        const { attachment } = event.payload;
+        attachments.set(attachment.id, {
+          ...attachment,
+          status: "open",
+          openedAt: event.occurredAt,
+          closedAt: null,
+          outcome: null,
+          failure: null,
+        });
+        if (event.commandId) pendingExecutorStarts.delete(event.commandId);
+        break;
+      }
+      case "attachment.failed": {
+        const { attachment } = event.payload;
+        attachments.set(attachment.id, {
+          ...attachment,
+          status: "failed",
+          openedAt: null,
+          closedAt: event.occurredAt,
+          outcome: "failed",
+          failure: event.payload.failure,
+        });
+        if (event.commandId) pendingExecutorStarts.delete(event.commandId);
+        break;
+      }
+      case "attachment.closed": {
+        const existing = attachments.get(event.payload.attachmentId);
+        if (existing) {
+          attachments.set(existing.id, {
+            ...existing,
+            status: "closed",
+            closedAt: event.occurredAt,
+            outcome: event.payload.outcome,
+          });
+        }
+        break;
+      }
+      case "attention.raised":
+        attention.delete(event.payload.attention.id);
+        attention.set(event.payload.attention.id, event.payload.attention);
+        break;
+      case "attention.cleared":
+        attention.delete(event.payload.attentionId);
+        break;
+      case "command.receipt.recorded":
+        receipts.push(event.payload.receipt);
+        if (event.payload.receipt.status === "rejected") {
+          pendingExecutorStarts.delete(event.payload.receipt.commandId);
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  const attachmentList = [...attachments.values()];
+  const liveExecutor = attachmentList.find((attachment) => attachment.status === "open") ?? null;
+  const activeAttention = [...attention.values()];
+  const pendingExecutorStart = [...pendingExecutorStarts.values()].at(-1) ?? null;
+
+  return {
+    session,
+    status,
+    commands,
+    receipts,
+    pendingExecutorStart,
+    attachments: attachmentList,
+    liveExecutor,
+    attention: {
+      active: activeAttention,
+      primary: activeAttention.at(-1) ?? null,
+    },
+  };
+}
+
+export function sameSessionCommand(left: SessionCommand, right: SessionCommand): boolean {
+  return (
+    left.id === right.id &&
+    left.sessionId === right.sessionId &&
+    sameSessionCommandIntent(left.intent, right.intent) &&
+    stableSessionValue(left.route) === stableSessionValue(right.route)
+  );
+}
+
+/** Compares caller intent without deriving or re-resolving a durable delivery route. */
+export function sameSessionCommandRequest(
+  command: SessionCommand,
+  request: SessionCommandRequest,
+): boolean {
+  return (
+    command.id === request.id &&
+    command.sessionId === request.sessionId &&
+    sameSessionCommandIntent(command.intent, request.intent)
+  );
+}
+
+/** Compares the durable content of two facts, independent of ledger-assigned metadata. */
+export function sameSessionEventPayload(
+  left: SessionEventPayload,
+  right: SessionEventPayload,
+): boolean {
+  return left.kind === right.kind && stableSessionValue(left) === stableSessionValue(right);
+}
+
+/** Compares envelope provenance without treating storage timestamps as identity. */
+export function sameSessionEventProvenance(
+  left: SessionEventProvenance,
+  right: SessionEventProvenance,
+): boolean {
+  return stableSessionValue(left) === stableSessionValue(right);
+}
+
+function sameSessionCommandIntent(
+  left: SessionCommandIntent,
+  right: SessionCommandIntent,
+): boolean {
+  return left.kind === right.kind && stableSessionValue(left) === stableSessionValue(right);
+}
+
+/** A storage transaction for the event ledger, intentionally free of SQL-shaped operations. */
+export interface SessionLedgerTransaction {
+  getSession(sessionId: string): Session | null;
+  insertSession(session: Session): void;
+  getEvent(eventId: string): SessionEvent | null;
+  appendEvent(event: SessionEvent): void;
+  /** Returns events in ascending per-Session sequence order. */
+  listEvents(query: ListSessionEventsQuery): readonly SessionEvent[];
+  getCommand(commandId: string): SessionCommand | null;
+  saveCommand(command: SessionCommand): void;
+  getReceipt(receiptId: string): CommandReceipt | null;
+  /** Returns receipt history in ascending receipt/event sequence order. */
+  listReceipts(commandId: string): readonly CommandReceipt[];
+  appendReceipt(receipt: CommandReceipt): void;
+}
+
+/** The composition root guarantees atomicity for every function passed here. */
+export interface SessionLedger {
+  transaction<T>(work: (transaction: SessionLedgerTransaction) => Promise<T> | T): Promise<T>;
+}
+
+/** Injected by the composition root so the domain never imports a runtime clock or UUID library. */
+export interface SessionLedgerClock {
+  now(): number;
+}
+
+export interface SessionLedgerIds {
+  next(kind: "session" | "event" | "receipt"): string;
+}
+
+function stableSessionValue(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) as string;
+  if (Array.isArray(value)) return `[${value.map(stableSessionValue).join(",")}]`;
+
+  const entries = Object.entries(value).toSorted(([left], [right]) => left.localeCompare(right));
+  return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableSessionValue(item)}`).join(",")}}`;
+}
