@@ -71,6 +71,8 @@ class FakeAdapter implements NativeHarnessAdapter {
   reconcileStarted: () => void = () => undefined;
   probeResult: NativeProbeResult | null = null;
   attachFailure: unknown = null;
+  attachGate: Promise<void> | null = null;
+  attachStarted: () => void = () => undefined;
   releaseFailure: unknown = null;
   dispatchReceipt: Awaited<ReturnType<BindingHandle["dispatch"]>> | null = null;
   dispatchGate: Promise<void> | null = null;
@@ -113,6 +115,8 @@ class FakeAdapter implements NativeHarnessAdapter {
     sink: ObservationSink,
   ): Promise<BindingHandle> {
     this.attaches += 1;
+    this.attachStarted();
+    await this.attachGate;
     this.sink = sink;
     if (this.attachObservation) await sink.emit(this.attachObservation);
     if (this.attachFailure) throw this.attachFailure;
@@ -773,6 +777,34 @@ describe("SessionRuntime native adapter contract", () => {
     expect(adapter.attaches).toBe(1);
     expect(adapter.reconciles).toBe(0);
     expect(adapter.releaseReasons).toEqual(["shutdown"]);
+  });
+
+  it("releases a rehydrated binding that finishes attaching after close", async () => {
+    const first = composition();
+    const sessionId = await createAndAttach(first.runtime);
+    const attachmentId = (await first.runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    await first.runtime.close();
+    const attachStarted = new Gate();
+    const releaseAttach = new Gate();
+    first.adapter.attachStarted = () => attachStarted.resolve();
+    first.adapter.attachGate = releaseAttach.promise;
+    const recovered = composition({ engine: first.engine, adapter: first.adapter });
+
+    const reconciling = recovered.runtime.reconcile({ sessionId, attachmentId });
+    await attachStarted.promise;
+    const closing = recovered.runtime.close();
+    const closeState = await Promise.race([
+      closing.then(() => "closed" as const),
+      new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), 0)),
+    ]);
+    releaseAttach.resolve();
+    await closing;
+
+    expect(closeState).toBe("closed");
+    await expect(reconciling).rejects.toThrow("Session runtime is closed");
+    expect(first.adapter.attaches).toBe(2);
+    expect(first.adapter.reconciles).toBe(0);
+    expect(first.adapter.releaseReasons).toEqual(["shutdown", "shutdown"]);
   });
 
   it("validates subscriptions, stops delivery after unsubscribe, and makes close idempotent", async () => {
