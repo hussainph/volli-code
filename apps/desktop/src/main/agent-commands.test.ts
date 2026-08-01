@@ -30,18 +30,18 @@ import {
   createAgentCommandService as createAgentCommandServiceBase,
   type AgentCommandServiceOptions,
 } from "./agent-commands";
-import { createDesktopControlPlane } from "./session-control";
+import { createDesktopSessionEngine } from "./session-control";
 import { updateTicketFieldsCommand } from "./ticket-commands";
 import { scriptedGit } from "./worktree/scripted-git";
-import type { ControlPlane } from "@volli/control-plane";
+import type { SessionEngine } from "@volli/session-engine";
 
-/** Main composes the service with its one Control Plane; tests do the same. */
+/** Main composes the service with its one Session Engine; tests do the same. */
 function createAgentCommandService(
-  options: Omit<AgentCommandServiceOptions, "controlPlane"> & { controlPlane?: ControlPlane },
+  options: Omit<AgentCommandServiceOptions, "sessionEngine"> & { sessionEngine?: SessionEngine },
 ) {
   return createAgentCommandServiceBase({
     ...options,
-    controlPlane: options.controlPlane ?? createDesktopControlPlane(options.db),
+    sessionEngine: options.sessionEngine ?? createDesktopSessionEngine(options.db),
   });
 }
 
@@ -1396,7 +1396,7 @@ describe("agent command service", () => {
     expect((events as { data: { events: unknown[] } }).data.events).toHaveLength(1);
     expect(JSON.stringify(events)).not.toContain(sessionId);
     expect(
-      (await createDesktopControlPlane(ctx.db).getSession({ sessionId }))?.signal,
+      (await createDesktopSessionEngine(ctx.db).getSession({ sessionId }))?.signal,
     ).toMatchObject({
       signal: "blocked",
       reason: "Waiting for credentials",
@@ -1415,15 +1415,15 @@ describe("agent command service", () => {
     insertTicket(ctx.db, testTicket("project-one", { id: "ticket-one", ticketNumber: 1 }));
     const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
     insertSession(ctx.db, testSession("project-one", "ticket-one", { id: sessionId }));
-    const controlPlane = createDesktopControlPlane(ctx.db);
+    const sessionEngine = createDesktopSessionEngine(ctx.db);
     const mutations: Array<{ ticketId?: string; projectId?: string; kind?: string }> = [];
-    const submit = controlPlane.submit.bind(controlPlane);
-    controlPlane.submit = async () => {
+    const submit = sessionEngine.submit.bind(sessionEngine);
+    sessionEngine.submit = async () => {
       throw new Error("disk full");
     };
     const service = createAgentCommandService({
       db: ctx.db,
-      controlPlane,
+      sessionEngine,
       appVersion: "1.2.3",
       onMutation: (change) => mutations.push(change),
     });
@@ -1437,7 +1437,7 @@ describe("agent command service", () => {
       }),
     ).rejects.toThrow("disk full");
     expect(mutations).toEqual([]);
-    controlPlane.submit = submit;
+    sessionEngine.submit = submit;
   });
 
   it("does not claim a signal was recorded when its durable receipt is rejected", async () => {
@@ -1448,8 +1448,8 @@ describe("agent command service", () => {
     );
     const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
     insertSession(ctx.db, testSession("project-one", null, { id: sessionId }));
-    const controlPlane = createDesktopControlPlane(ctx.db);
-    await controlPlane.submit({
+    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    await sessionEngine.submit({
       commandId: "archive-before-signal",
       sessionId,
       intent: { kind: "session.archive" },
@@ -1458,7 +1458,7 @@ describe("agent command service", () => {
     const mutations: unknown[] = [];
     const service = createAgentCommandService({
       db: ctx.db,
-      controlPlane,
+      sessionEngine,
       appVersion: "1.2.3",
       onMutation: (change) => mutations.push(change),
     });
@@ -1482,9 +1482,9 @@ describe("agent command service", () => {
     );
     const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
     insertSession(ctx.db, testSession("project-one", null, { id: sessionId }));
-    const controlPlane = createDesktopControlPlane(ctx.db);
-    const listed = vi.spyOn(controlPlane, "listSessions");
-    const service = createAgentCommandService({ db: ctx.db, controlPlane, appVersion: "1.2.3" });
+    const sessionEngine = createDesktopSessionEngine(ctx.db);
+    const listed = vi.spyOn(sessionEngine, "listSessions");
+    const service = createAgentCommandService({ db: ctx.db, sessionEngine, appVersion: "1.2.3" });
 
     const response = await service.execute({
       v: 1,
@@ -1566,10 +1566,10 @@ describe("agent command service", () => {
 
     it("preserves independent native fields when a wrapper announce races a session link", async () => {
       linkService();
-      const controlPlane = createDesktopControlPlane(ctx.db);
-      const observe = controlPlane.observe.bind(controlPlane);
+      const sessionEngine = createDesktopSessionEngine(ctx.db);
+      const observe = sessionEngine.observe.bind(sessionEngine);
       let delayFirstNativeWrite = true;
-      controlPlane.observe = async (observation) => {
+      sessionEngine.observe = async (observation) => {
         if (delayFirstNativeWrite && observation.kind === "attachment.native_referenced") {
           delayFirstNativeWrite = false;
           await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -1578,7 +1578,7 @@ describe("agent command service", () => {
       };
       const service = createAgentCommandService({
         db: ctx.db,
-        controlPlane,
+        sessionEngine,
         appVersion: "1.2.3",
       });
       const link = (id: string) =>
@@ -1824,10 +1824,10 @@ describe("agent command service", () => {
 
     it("does not report a minted id when its native write loses the live attachment", async () => {
       announceService("cursor");
-      const controlPlane = createDesktopControlPlane(ctx.db);
-      const observe = controlPlane.observe.bind(controlPlane);
+      const sessionEngine = createDesktopSessionEngine(ctx.db);
+      const observe = sessionEngine.observe.bind(sessionEngine);
       let closeAfterHarnessWrite = true;
-      controlPlane.observe = async (observation) => {
+      sessionEngine.observe = async (observation) => {
         const event = await observe(observation);
         if (closeAfterHarnessWrite && observation.kind === "attachment.native_referenced") {
           closeAfterHarnessWrite = false;
@@ -1848,7 +1848,7 @@ describe("agent command service", () => {
       };
       const service = createAgentCommandService({
         db: ctx.db,
-        controlPlane,
+        sessionEngine,
         appVersion: "1.2.3",
       });
 

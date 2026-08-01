@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import type { ControlPlane } from "@volli/control-plane";
+import type { SessionEngine } from "@volli/session-engine";
 import {
   buildHarnessCommand,
   buildHarnessResumeCommand,
@@ -95,7 +95,7 @@ export type ScopeResolution = { ok: true; scope: SessionScope } | { ok: false; e
  */
 export async function resolveScope(
   db: Database.Database,
-  controlPlane: ControlPlane,
+  sessionEngine: SessionEngine,
   request: CreateTerminalSessionRequest,
   attachmentsRootPath: string,
   wrapperFor: HarnessWrapperLookup,
@@ -111,7 +111,7 @@ export async function resolveScope(
     const kickoff = request.ticket.kickoff;
     const resume = request.ticket.resume;
     const usesWorktree = ctx.usesWorktree;
-    const sessionCount = await controlPlane.countSessions({
+    const sessionCount = await sessionEngine.countSessions({
       projectId: ctx.projectId,
       scope: "ticket",
       ticketId: request.ticket.ticketId,
@@ -124,7 +124,7 @@ export async function resolveScope(
       if (kickoff !== undefined) {
         return { ok: false, error: "A session cannot both start a kickoff and resume another" };
       }
-      const priorProjection = await controlPlane.getSession({ sessionId: resume.sessionId });
+      const priorProjection = await sessionEngine.getSession({ sessionId: resume.sessionId });
       if (priorProjection === null) return { ok: false, error: "Cannot resume an unknown session" };
       const prior = terminalSessionRecord(priorProjection);
       if (prior.ticketId !== request.ticket.ticketId) {
@@ -259,7 +259,7 @@ export async function resolveScope(
   // injected the same way a ticket session gets it (decision #9). A project
   // that can't be resolved still spawns (no artifacts env) rather than failing.
   const project = getProjectById(db, request.workspaceId);
-  const sessionCount = await controlPlane.countSessions({
+  const sessionCount = await sessionEngine.countSessions({
     projectId: request.workspaceId,
     scope: "scratch",
   });

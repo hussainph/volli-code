@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import type Database from "better-sqlite3";
-import type { ControlPlane } from "@volli/control-plane";
+import type { SessionEngine } from "@volli/session-engine";
 import {
   DATA_CHANNELS,
   DATA_IPC,
@@ -92,7 +92,7 @@ import {
   updateProjectBaseBranch,
   updateProjectSetupCommand,
 } from "./db/projects-repo";
-import { createDesktopControlPlane, terminalSessionRecord } from "./session-control";
+import { createDesktopSessionEngine, terminalSessionRecord } from "./session-control";
 import {
   getTicketRow,
   listAllTickets,
@@ -204,8 +204,8 @@ export function registerDataIpcHandlers(
      * lifecycle event. Absent (tests, degraded boot) means a no-op.
      */
     interruptTicketSessions?: (ticketId: string) => string[] | Promise<string[]>;
-    /** The app's single durable Session control plane. */
-    controlPlane?: ControlPlane;
+    /** The app's single durable Session session engine. */
+    sessionEngine?: SessionEngine;
   } = {},
 ): void {
   if (!handle.ok) {
@@ -214,7 +214,7 @@ export function registerDataIpcHandlers(
   }
 
   const db = handle.db;
-  const controlPlane = options.controlPlane ?? createDesktopControlPlane(db);
+  const sessionEngine = options.sessionEngine ?? createDesktopSessionEngine(db);
   const changeWatchManager = new WorktreeChangeWatchManager();
   const coalesceChangeSet = createCoalescer();
 
@@ -431,7 +431,7 @@ export function registerDataIpcHandlers(
     ): Promise<TicketLatestSignalsResult> => {
       return {
         ok: true,
-        signals: [...(await controlPlane.listLatestTicketSignals({ projectId: input.projectId }))],
+        signals: [...(await sessionEngine.listLatestTicketSignals({ projectId: input.projectId }))],
       };
     },
 
@@ -473,7 +473,7 @@ export function registerDataIpcHandlers(
     },
 
     "volli:session-list": async (input: ProjectIdInput): Promise<SessionsResult> => {
-      const sessions = await controlPlane.listSessions({
+      const sessions = await sessionEngine.listSessions({
         projectId: input.projectId,
         scope: "all",
       });
@@ -483,7 +483,7 @@ export function registerDataIpcHandlers(
     "volli:session-list-for-ticket": async (input: TicketIdInput): Promise<SessionsResult> => {
       const ticket = getTicketRow(db, input.ticketId);
       if (ticket === undefined) return { ok: true, sessions: [] };
-      const sessions = await controlPlane.listSessions({
+      const sessions = await sessionEngine.listSessions({
         projectId: ticket.project_id,
         scope: "ticket",
         ticketId: input.ticketId,
@@ -492,9 +492,9 @@ export function registerDataIpcHandlers(
     },
 
     "volli:session-rename": async (input: SessionRenameInput): Promise<SessionRenameResult> => {
-      const existing = await controlPlane.getSession({ sessionId: input.sessionId });
+      const existing = await sessionEngine.getSession({ sessionId: input.sessionId });
       if (existing === null) return { ok: false, error: "Unknown session" };
-      const submitted = await controlPlane.submit({
+      const submitted = await sessionEngine.submit({
         commandId: randomUUID(),
         sessionId: input.sessionId,
         intent: { kind: "session.retitle", title: input.title.trim() },

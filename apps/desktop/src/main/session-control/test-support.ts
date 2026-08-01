@@ -1,7 +1,7 @@
 /**
  * Test-only ledger fixture helpers.
  *
- * Runtime code reaches Sessions through ControlPlane projections.  A few
+ * Runtime code reaches Sessions through SessionEngine projections.  A few
  * long-lived main-process tests need synchronous fixture setup/assertion, so
  * these helpers write and read the *ledger tables* directly rather than
  * reviving a terminal-shaped `sessions` repository.  They intentionally live

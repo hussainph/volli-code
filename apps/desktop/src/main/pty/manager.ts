@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import type Database from "better-sqlite3";
-import type { ControlPlane } from "@volli/control-plane";
+import type { SessionEngine } from "@volli/session-engine";
 import {
   agentSessionEnv,
   errorMessage,
@@ -44,7 +44,7 @@ import { createOutputPipeline } from "./output";
 import type { OutputPipeline, OutputSink } from "./output";
 import { ParkController } from "./park-controller";
 import {
-  createDesktopControlPlane,
+  createDesktopSessionEngine,
   terminalNativeReference,
   terminalSessionRecord,
   type TerminalAttachmentDetail,
@@ -198,8 +198,8 @@ function terminalDetailFor(
  */
 export class PtyManager {
   private readonly sessions = new Map<string, Session>();
-  /** One app-owned durable Session control plane; tests may lazily compose one around their test db. */
-  private readonly controlPlane: ControlPlane | null;
+  /** One app-owned durable Session session engine; tests may lazily compose one around their test db. */
+  private readonly sessionEngine: SessionEngine | null;
   /**
    * The warm-park duty cycle (park/wake + breathe/sweep), extracted per issue
    * #99. It reads this manager's live `sessions` map (the SAME instance) and
@@ -232,9 +232,9 @@ export class PtyManager {
     private readonly parkConfig: ParkConfig = parkConfigFromEnv(process.env, process.platform),
     private readonly agentRuntime: AgentRuntimeEnvironment | null = null,
     private readonly attachmentsRootPath: string = "",
-    controlPlane: ControlPlane | null = null,
+    sessionEngine: SessionEngine | null = null,
   ) {
-    this.controlPlane = controlPlane ?? (db === null ? null : createDesktopControlPlane(db));
+    this.sessionEngine = sessionEngine ?? (db === null ? null : createDesktopSessionEngine(db));
     // The controller shares this manager's live session map and mutates each
     // session's park fields in place. `flush` and `pushParkState` stay here —
     // they touch the output pipeline and webContents — and every current
@@ -321,12 +321,12 @@ export class PtyManager {
   ): Promise<CreateTerminalSessionResult> {
     const db = this.db;
     if (db === null) return { ok: false, error: this.dbError };
-    const controlPlane = this.controlPlane;
-    if (controlPlane === null) return { ok: false, error: "Session control plane is unavailable" };
+    const sessionEngine = this.sessionEngine;
+    if (sessionEngine === null) return { ok: false, error: "Session session engine is unavailable" };
 
     const resolved = await resolveScope(
       db,
-      controlPlane,
+      sessionEngine,
       request,
       this.attachmentsRootPath,
       this.wrapperFor,
@@ -336,12 +336,12 @@ export class PtyManager {
     const scope = resolved.scope;
 
     // A Session is durable before any worktree or PTY attempt. A new terminal
-    // gets its identity from the control plane; native resume deliberately
+    // gets its identity from the session engine; native resume deliberately
     // retains the prior durable Session and starts another attachment on it.
     let sessionId: string;
     try {
       if (scope.resume === null) {
-        const created = await controlPlane.createSession({
+        const created = await sessionEngine.createSession({
           commandId: randomUUID(),
           projectId: scope.projectId,
           ticketId: scope.ticketId,
@@ -360,7 +360,7 @@ export class PtyManager {
     const recordAttachmentFailure = async (failure: unknown, cwd: string): Promise<void> => {
       const detail = terminalDetailFor(scope, cwd, scope.resume?.harnessSessionId ?? null, null);
       try {
-        await controlPlane.observe({
+        await sessionEngine.observe({
           id: randomUUID(),
           kind: "attachment.failed",
           sessionId,
@@ -387,9 +387,9 @@ export class PtyManager {
         );
       }
     };
-    let start: Awaited<ReturnType<ControlPlane["submit"]>>;
+    let start: Awaited<ReturnType<SessionEngine["submit"]>>;
     try {
-      start = await controlPlane.submit({
+      start = await sessionEngine.submit({
         commandId: randomUUID(),
         sessionId,
         intent: {
@@ -582,7 +582,7 @@ export class PtyManager {
         null,
       );
       try {
-        await controlPlane.observe({
+        await sessionEngine.observe({
           id: randomUUID(),
           kind: "attachment.opened",
           sessionId,
@@ -747,9 +747,9 @@ export class PtyManager {
           webContents.send("volli:terminal-exit" satisfies VolliIpcEvent, payload);
         }
         this.forget(sessionId);
-        void this.closeTerminalAttachment(controlPlane, sessionId, session, exitCode);
+        void this.closeTerminalAttachment(sessionEngine, sessionId, session, exitCode);
       });
-      const projection = await controlPlane.getSession({ sessionId });
+      const projection = await sessionEngine.getSession({ sessionId });
       if (projection === null) {
         pty.kill();
         return { ok: false, error: "Session was not found after terminal attachment opened" };
@@ -763,7 +763,7 @@ export class PtyManager {
 
   /** Closing a PTY closes only its terminal attachment; the durable Session remains navigable. */
   private async closeTerminalAttachment(
-    controlPlane: ControlPlane,
+    sessionEngine: SessionEngine,
     sessionId: string,
     session: Session,
     exitCode: number,
@@ -774,7 +774,7 @@ export class PtyManager {
       // may have since linked a newer harness id or active harness to this
       // attachment; re-emitting that snapshot on exit would overwrite that
       // newer evidence. Closing is the only fact the PTY itself observed.
-      await controlPlane.observe({
+      await sessionEngine.observe({
         id: randomUUID(),
         kind: "attachment.closed",
         sessionId,
@@ -972,20 +972,20 @@ export class PtyManager {
    */
   async interruptTicketSessions(ticketId: string): Promise<string[]> {
     const interrupted: string[] = [];
-    const controlPlane = this.controlPlane;
-    if (controlPlane === null) return interrupted;
+    const sessionEngine = this.sessionEngine;
+    if (sessionEngine === null) return interrupted;
     for (const [sessionId, session] of this.sessions) {
       if (session.ticketId !== ticketId || session.launchKind !== "agent") continue;
       // User-equivalent input: keep the session out of the idle window and wake
       // it before the write, exactly as write() does.
       session.lastActivityAt = Date.now();
       if (session.parkedPids !== null) this.parkController.wake(sessionId);
-      let command: Awaited<ReturnType<ControlPlane["submit"]>> | undefined;
+      let command: Awaited<ReturnType<SessionEngine["submit"]>> | undefined;
       try {
         // Record the exact Session-level interrupt intent before writing Esc.
         // It is deliberately not an attachment close: a TUI may keep its PTY
         // alive and continue emitting history after receiving the interrupt.
-        command = await controlPlane.submit({
+        command = await sessionEngine.submit({
           commandId: randomUUID(),
           sessionId,
           intent: { kind: "executor.interrupt", attachmentId: session.attachmentId },
@@ -993,7 +993,7 @@ export class PtyManager {
         });
         if (command.receipt !== null) continue;
         session.pty.write("\x1b");
-        await controlPlane.observe({
+        await sessionEngine.observe({
           id: randomUUID(),
           sessionId,
           occurredAt: Date.now(),
@@ -1014,7 +1014,7 @@ export class PtyManager {
         // accepted forever; a failed write cannot honestly claim interrupted.
         if (command?.receipt === null) {
           try {
-            await controlPlane.observe({
+            await sessionEngine.observe({
               id: randomUUID(),
               sessionId,
               occurredAt: Date.now(),

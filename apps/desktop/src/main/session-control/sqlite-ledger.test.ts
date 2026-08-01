@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import { createControlPlane } from "@volli/control-plane";
+import { createSessionEngine } from "@volli/session-engine";
 import type { SessionLedger, SessionObservation } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket } from "../db/test-helpers";
@@ -15,7 +15,7 @@ afterEach(() => {
 
 function setup(): {
   ledger: SessionLedger;
-  control: ReturnType<typeof createControlPlane>;
+  control: ReturnType<typeof createSessionEngine>;
   projectId: string;
 } {
   ctx = openTestDb();
@@ -25,7 +25,7 @@ function setup(): {
   const ledger = createSqliteSessionLedger(ctx.db);
   return {
     ledger,
-    control: createControlPlane({
+    control: createSessionEngine({
       ledger,
       clock: { now: () => 100 + id },
       ids: { next: (kind) => `${kind}-${++id}` },

@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 import {
-  ControlPlaneConflictError,
-  createControlPlane,
+  SessionEngineConflictError,
+  createSessionEngine,
   createInMemorySessionLedger,
 } from "./index";
 import type {
@@ -36,7 +36,7 @@ function ids(): SessionLedgerIds {
 function composition() {
   let now = 100;
   const ledger = createInMemorySessionLedger();
-  const plane = createControlPlane({ ledger, clock: { now: () => now++ }, ids: ids() });
+  const plane = createSessionEngine({ ledger, clock: { now: () => now++ }, ids: ids() });
   return { ledger, plane };
 }
 
@@ -95,7 +95,7 @@ function createdEvent(id: string, session: Session, commandId = "command-create"
   };
 }
 
-describe("ControlPlane creation and explicit commands", () => {
+describe("SessionEngine creation and explicit commands", () => {
   it("records submitted intent as a canonical event even before an adapter receipt exists", async () => {
     const { plane } = composition();
     const { session } = await plane.createSession(createRequest());
@@ -149,7 +149,7 @@ describe("ControlPlane creation and explicit commands", () => {
       { ...createRequest(), ticketId: null },
       { ...createRequest(), title: "different" },
     ]) {
-      await expect(plane.createSession(request)).rejects.toBeInstanceOf(ControlPlaneConflictError);
+      await expect(plane.createSession(request)).rejects.toBeInstanceOf(SessionEngineConflictError);
     }
     await plane.submit({
       commandId: "command-create-conflict",
@@ -159,7 +159,7 @@ describe("ControlPlane creation and explicit commands", () => {
     });
     await expect(
       plane.createSession(createRequest("command-create-conflict")),
-    ).rejects.toBeInstanceOf(ControlPlaneConflictError);
+    ).rejects.toBeInstanceOf(SessionEngineConflictError);
   });
 
   it("persists adapter-bound intent without manufacturing a receipt, then appends adapter receipts as facts", async () => {
@@ -391,7 +391,7 @@ describe("ControlPlane creation and explicit commands", () => {
 
   it("lists deep Session projections through explicit project scopes in stable descending order", async () => {
     const ledger = createInMemorySessionLedger();
-    const plane = createControlPlane({ ledger, clock: { now: () => 100 }, ids: ids() });
+    const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
     const ticketFirst = await plane.createSession(createRequest("command-list-ticket-first"));
     const scratch = await plane.createSession({
       ...createRequest("command-list-scratch"),
@@ -1139,7 +1139,7 @@ describe("ControlPlane creation and explicit commands", () => {
   });
 });
 
-describe("ControlPlane attachment facts", () => {
+describe("SessionEngine attachment facts", () => {
   it("reserves a pending executor start for its exact attachment opening", async () => {
     const { plane } = composition();
     const { session } = await plane.createSession(createRequest());
@@ -1417,7 +1417,7 @@ describe("ControlPlane attachment facts", () => {
   });
 });
 
-describe("ControlPlane idempotency and defensive ledger reads", () => {
+describe("SessionEngine idempotency and defensive ledger reads", () => {
   it("deduplicates an observation and rejects divergent evidence or invalid receipt provenance", async () => {
     const { plane } = composition();
     const { session } = await plane.createSession(createRequest());
@@ -1434,7 +1434,7 @@ describe("ControlPlane idempotency and defensive ledger reads", () => {
     const first = await plane.observe(observation);
     expect(await plane.observe(observation)).toEqual(first);
     await expect(plane.observe({ ...observation, name: "different" })).rejects.toBeInstanceOf(
-      ControlPlaneConflictError,
+      SessionEngineConflictError,
     );
     await expect(
       plane.observe({

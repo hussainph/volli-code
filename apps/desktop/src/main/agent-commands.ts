@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 
 import type Database from "better-sqlite3";
-import type { ControlPlane } from "@volli/control-plane";
+import type { SessionEngine } from "@volli/session-engine";
 import {
   applyTicketBodyMutation,
   attachmentsSectionInput,
@@ -84,8 +84,8 @@ import {
 
 export interface AgentCommandServiceOptions {
   db: Database.Database;
-  /** The app composition root's one durable Session control plane. */
-  controlPlane: ControlPlane;
+  /** The app composition root's one durable Session session engine. */
+  sessionEngine: SessionEngine;
   appVersion: string;
   now?: () => number;
   newId?: () => string;
@@ -789,7 +789,7 @@ function sessionForPublicId(
 
 async function updateTerminalNative(
   locks: Map<string, Promise<void>>,
-  controlPlane: ControlPlane,
+  sessionEngine: SessionEngine,
   session: SessionRecord,
   update: (
     detail: NonNullable<ReturnType<typeof readTerminalAttachmentDetail>>,
@@ -809,7 +809,7 @@ async function updateTerminalNative(
   locks.set(session.id, current);
   await previous;
   try {
-    const projection = await controlPlane.getSession({ sessionId: session.id });
+    const projection = await sessionEngine.getSession({ sessionId: session.id });
     if (projection === null) return null;
     const attachment = latestTerminalAttachment(projection.attachments);
     if (attachment === null || attachment.status !== "open") return null;
@@ -818,7 +818,7 @@ async function updateTerminalNative(
     const next = update(detail);
     if (next === null) return null;
     if (next === detail) return terminalSessionRecord(projection);
-    await controlPlane.observe({
+    await sessionEngine.observe({
       id: randomUUID(),
       kind: "attachment.native_referenced",
       sessionId: session.id,
@@ -830,7 +830,7 @@ async function updateTerminalNative(
       },
       native: terminalNativeReference(next),
     });
-    const updated = await controlPlane.getSession({ sessionId: session.id });
+    const updated = await sessionEngine.getSession({ sessionId: session.id });
     return updated === null ? null : terminalSessionRecord(updated);
   } finally {
     release?.();
@@ -892,7 +892,7 @@ export function createAgentCommandService(
   const newId = options.newId ?? randomUUID;
   const git = options.git ?? runGitCapturing;
   const worktreeExists = options.worktreeExists ?? existsSync;
-  const controlPlane = options.controlPlane;
+  const sessionEngine = options.sessionEngine;
   const terminalUpdateLocks = new Map<string, Promise<void>>();
 
   return {
@@ -912,7 +912,7 @@ export function createAgentCommandService(
           : (
               await Promise.all(
                 projects.map((project) =>
-                  controlPlane.listSessions({ projectId: project.id, scope: "all" }),
+                  sessionEngine.listSessions({ projectId: project.id, scope: "all" }),
                 ),
               )
             ).flatMap((projections) => projections.map(terminalSessionRecord));
@@ -1100,7 +1100,7 @@ export function createAgentCommandService(
             "session done and blocked require VOLLI_SESSION context.",
           );
         }
-        const projection = await controlPlane.getSession({ sessionId });
+        const projection = await sessionEngine.getSession({ sessionId });
         const session = projection === null ? null : terminalSessionRecord(projection);
         if (!session) return failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`);
         const reasonValue = request.args["reason"];
@@ -1109,7 +1109,7 @@ export function createAgentCommandService(
         }
         const reason = typeof reasonValue === "string" ? reasonValue : null;
         const signal = request.cmd === "session.done" ? "done" : "blocked";
-        const submitted = await controlPlane.submit({
+        const submitted = await sessionEngine.submit({
           commandId: newId(),
           sessionId: session.id,
           intent: { kind: "session.signal", signal, reason },
@@ -1146,7 +1146,7 @@ export function createAgentCommandService(
         if (!sessionId) {
           return failure("CONTEXT_REQUIRED", "session link requires VOLLI_SESSION context.");
         }
-        const projection = await controlPlane.getSession({ sessionId });
+        const projection = await sessionEngine.getSession({ sessionId });
         const session = projection === null ? null : terminalSessionRecord(projection);
         if (!session) return failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`);
         const idValue = request.args["id"];
@@ -1162,7 +1162,7 @@ export function createAgentCommandService(
         }
         const updated = await updateTerminalNative(
           terminalUpdateLocks,
-          controlPlane,
+          sessionEngine,
           session,
           (detail) => ({ ...detail, harnessSessionId }),
           now(),
@@ -1206,7 +1206,7 @@ export function createAgentCommandService(
         if (!sessionId) {
           return failure("CONTEXT_REQUIRED", "session harness requires VOLLI_SESSION context.");
         }
-        const projection = await controlPlane.getSession({ sessionId });
+        const projection = await sessionEngine.getSession({ sessionId });
         const session = projection === null ? null : terminalSessionRecord(projection);
         if (!session) return failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`);
         // Ended is ended, the same rule `hook` applies and for the same reason:
@@ -1255,7 +1255,7 @@ export function createAgentCommandService(
         let changed = false;
         const nativeUpdate = await updateTerminalNative(
           terminalUpdateLocks,
-          controlPlane,
+          sessionEngine,
           session,
           (detail) => {
             changed = harnessId !== (detail.activeHarnessId ?? detail.harnessId);
@@ -1292,7 +1292,7 @@ export function createAgentCommandService(
           // now; the previous one describes an agent this terminal has quit.
           const mintedUpdate = await updateTerminalNative(
             terminalUpdateLocks,
-            controlPlane,
+            sessionEngine,
             nativeUpdate,
             (detail) => ({ ...detail, harnessSessionId: minted }),
             now(),
@@ -1321,7 +1321,7 @@ export function createAgentCommandService(
         if (!sessionId) {
           return failure("CONTEXT_REQUIRED", "hook requires VOLLI_SESSION context.");
         }
-        const projection = await controlPlane.getSession({ sessionId });
+        const projection = await sessionEngine.getSession({ sessionId });
         const session = projection === null ? null : terminalSessionRecord(projection);
         if (!session) return failure("SESSION_NOT_FOUND", `No session matches ${sessionId}.`);
         // A session row outlives its PTY, and `VOLLI_SESSION` outlives both: it
@@ -1382,7 +1382,7 @@ export function createAgentCommandService(
         if (harnessSessionId !== null && !superseded) {
           await updateTerminalNative(
             terminalUpdateLocks,
-            controlPlane,
+            sessionEngine,
             session,
             (detail) => ({ ...detail, harnessSessionId }),
             now(),

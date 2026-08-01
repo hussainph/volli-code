@@ -35,7 +35,7 @@ import type { DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
 import { listProjects } from "./db/projects-repo";
-import { createDesktopControlPlane } from "./session-control";
+import { createDesktopSessionEngine } from "./session-control";
 import { listRegisteredHarnesses } from "./db/harness-registry-repo";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
@@ -386,13 +386,13 @@ app.whenReady().then(async () => {
     dbHandle = { ok: false, error: errorMessage(error) };
     console.error("[volli] failed to open database:", dbHandle.error);
   }
-  const controlPlane = dbHandle.ok ? createDesktopControlPlane(dbHandle.db) : null;
+  const sessionEngine = dbHandle.ok ? createDesktopSessionEngine(dbHandle.db) : null;
   // Boot recovery: no PTY survives a relaunch. Close only stale local terminal
   // attachments; the durable Session itself intentionally remains open.
-  if (dbHandle.ok && controlPlane !== null) {
+  if (dbHandle.ok && sessionEngine !== null) {
     try {
       for (const project of listProjects(dbHandle.db)) {
-        const sessions = await controlPlane.listSessions({ projectId: project.id, scope: "all" });
+        const sessions = await sessionEngine.listSessions({ projectId: project.id, scope: "all" });
         for (const projection of sessions) {
           for (const attachment of projection.attachments) {
             if (
@@ -401,7 +401,7 @@ app.whenReady().then(async () => {
               attachment.status === "open"
             ) {
               try {
-                await controlPlane.observe({
+                await sessionEngine.observe({
                   id: randomUUID(),
                   kind: "attachment.closed",
                   sessionId: projection.session.id,
@@ -482,7 +482,7 @@ app.whenReady().then(async () => {
   // (rather than up with the other pre-window setup) because File > Export
   // Database needs `dbHandle`, which doesn't exist yet at that point.
   registerDataIpcHandlers(dbHandle, {
-    controlPlane: controlPlane ?? undefined,
+    sessionEngine: sessionEngine ?? undefined,
     liveSessionCwds: () => ptyManagerRef?.liveSessionCwds() ?? [],
     // Backward-move interrupt (issue #78): a user move that leaves the active
     // columns Esc's the ticket's live agent sessions, announced via toast.
@@ -650,7 +650,7 @@ app.whenReady().then(async () => {
     });
   };
 
-  const ptyManager = registerTerminalIpcHandlers(dbHandle, agentRuntime, controlPlane);
+  const ptyManager = registerTerminalIpcHandlers(dbHandle, agentRuntime, sessionEngine);
   ptyManagerRef = ptyManager;
   const mainWindow = createWindow(ptyManager, currentFirstPaint());
 
@@ -861,7 +861,7 @@ app.whenReady().then(async () => {
     const execute = dbHandle.ok
       ? createAgentCommandService({
           db: dbHandle.db,
-          controlPlane: controlPlane!,
+          sessionEngine: sessionEngine!,
           appVersion: app.getVersion(),
           observeSession: (sessionId, lines) => ptyManager.peek(sessionId, lines),
           notify: (title, message) => new Notification({ title, body: message }).show(),

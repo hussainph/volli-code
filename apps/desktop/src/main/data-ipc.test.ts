@@ -84,7 +84,7 @@ vi.mock("./worktree", () => ({
 }));
 
 import { registerDataIpcHandlers } from "./data-ipc";
-import { createDesktopControlPlane } from "./session-control";
+import { createDesktopSessionEngine } from "./session-control";
 import { insertSession } from "./session-control/test-support";
 import { openTestDb, testSession } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
@@ -850,13 +850,13 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
 });
 
 describe("volli:ticket-latest-signals", () => {
-  it("uses the ControlPlane's bounded latest-signal query with a deterministic session-id tie-break", async () => {
+  it("uses the SessionEngine's bounded latest-signal query with a deterministic session-id tie-break", async () => {
     const projectId = createProject();
     const ticket = createTicket(projectId);
-    const controlPlane = createDesktopControlPlane(ctx.db, { now: () => 500 });
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
     insertSession(ctx.db, testSession(projectId, ticket.id, { id: "session-a" }));
     insertSession(ctx.db, testSession(projectId, ticket.id, { id: "session-z" }));
-    await controlPlane.submit({
+    await sessionEngine.submit({
       commandId: "signal-a",
       sessionId: "session-a",
       intent: { kind: "session.signal", signal: "done", reason: "Earlier id" },
@@ -865,7 +865,7 @@ describe("volli:ticket-latest-signals", () => {
         venue: { id: "local", kind: "local" },
       },
     });
-    await controlPlane.submit({
+    await sessionEngine.submit({
       commandId: "signal-z",
       sessionId: "session-z",
       intent: { kind: "session.signal", signal: "blocked", reason: "Later id" },
@@ -875,10 +875,10 @@ describe("volli:ticket-latest-signals", () => {
       },
     });
     const listSessions = vi
-      .spyOn(controlPlane, "listSessions")
+      .spyOn(sessionEngine, "listSessions")
       .mockRejectedValue(new Error("should not project every session"));
     handlers.clear();
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { controlPlane });
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
 
     const result = await invoke<Promise<TicketLatestSignalsResult>>("volli:ticket-latest-signals", {
       projectId,
@@ -934,7 +934,7 @@ describe("volli:session-rename", () => {
   it("reports a durable rejection instead of acknowledging an archived session rename", async () => {
     const projectId = createProject();
     insertSession(ctx.db, testSession(projectId, null, { id: "s1", title: "Session 1" }));
-    await createDesktopControlPlane(ctx.db).submit({
+    await createDesktopSessionEngine(ctx.db).submit({
       commandId: "archive-s1",
       sessionId: "s1",
       intent: { kind: "session.archive" },
