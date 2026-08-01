@@ -1269,6 +1269,40 @@ describe("OpenCodeNativeAdapter", () => {
     await handle.release("requested");
   });
 
+  it("does not raise duplicate attention for an unchanged reconciled retry state", async () => {
+    const { adapter, network } = composition();
+    const originalRequest = network.request.bind(network);
+    network.messageResponse = [];
+    network.request = async (input) =>
+      input.path.startsWith("/session/status")
+        ? {
+            status: 200,
+            body: { "native-session-1": { type: "retry", attempt: 2, next: 345 } },
+          }
+        : originalRequest(input);
+    const handle = await adapter.attach(spec(), { emit: async () => undefined });
+
+    const first = await handle.reconcile(null);
+    expect(
+      first.observations.filter(
+        (observation) =>
+          observation.kind === "attention.raised" &&
+          observation.attention.kind === "transport_retrying",
+      ),
+    ).toHaveLength(1);
+    await handle.acknowledgeReconciliation?.(first.cursor);
+
+    const second = await handle.reconcile(first.cursor);
+    expect(
+      second.observations.filter(
+        (observation) =>
+          observation.kind === "attention.raised" &&
+          observation.attention.kind === "transport_retrying",
+      ),
+    ).toEqual([]);
+    await handle.release("requested");
+  });
+
   it("does not consume a native turn transition when its durable sink rejects it", async () => {
     const network = new FakeNetwork();
     network.events = [
