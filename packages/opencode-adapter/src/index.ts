@@ -380,6 +380,14 @@ interface BufferedOpenCodeMessage {
   readonly parts: Map<string, unknown>;
 }
 
+interface PendingOpenCodeReconciliation {
+  readonly token: string;
+  readonly reconciliation: Reconciliation;
+  readonly seenIds: readonly string[];
+  readonly completesNativeHistoryImport: boolean;
+  readonly turnStatus: "busy" | "idle" | null;
+}
+
 class OpenCodeBinding implements BindingHandle {
   readonly native;
   readonly #server: ServerLease;
@@ -391,6 +399,7 @@ class OpenCodeBinding implements BindingHandle {
   readonly #seen = new Set<string>();
   readonly #streamEventsSeen = new Set<string>();
   readonly #messages = new Map<string, BufferedOpenCodeMessage>();
+  readonly #deferredEvents: OpenCodeSseEvent[] = [];
   readonly #questions = new Map<string, readonly OpenCodeQuestion[]>();
   readonly #streamAbort = new AbortController();
   #sink: ObservationSink | null = null;
@@ -399,6 +408,10 @@ class OpenCodeBinding implements BindingHandle {
   #cursor: SessionNativeDetail | null = null;
   #importNativeHistory: boolean;
   #turnStatus: "busy" | "idle" | null = null;
+  #pendingReconciliation: PendingOpenCodeReconciliation | null = null;
+  #reconciliationSequence = 0;
+  #reconciling = false;
+  #drainingDeferredEvents = false;
 
   constructor(options: BindingOptions) {
     this.#server = options.server;
@@ -493,29 +506,60 @@ class OpenCodeBinding implements BindingHandle {
   }
 
   async reconcile(cursor: SessionNativeDetail | null): Promise<Reconciliation> {
+    if (this.#pendingReconciliation) {
+      if (!isReconciliationAcknowledgement(cursor, this.#pendingReconciliation.token)) {
+        return this.#pendingReconciliation.reconciliation;
+      }
+      await this.acknowledgeReconciliation(cursor);
+    }
+    this.#reconciling = true;
+    try {
+      await this.#drainInFlightEmit();
+      return await this.#readReconciliation(cursor);
+    } finally {
+      this.#reconciling = false;
+      if (!this.#pendingReconciliation) await this.#drainDeferredEvents();
+    }
+  }
+
+  async acknowledgeReconciliation(cursor: SessionNativeDetail | null): Promise<void> {
+    const pending = this.#pendingReconciliation;
+    if (!pending || !isReconciliationAcknowledgement(cursor, pending.token)) return;
+    this.#commitReconciliation(pending);
+    this.#pendingReconciliation = null;
+    await this.#drainDeferredEvents();
+  }
+
+  async #readReconciliation(cursor: SessionNativeDetail | null): Promise<Reconciliation> {
     const [messages, status, permissionResponse, questionResponse] = await Promise.all([
       this.#request(`/session/${encodeURIComponent(this.#nativeSessionId)}/message`, "GET"),
       this.#request("/session/status", "GET"),
       this.#request("/permission", "GET").catch(() => ({ status: 404, body: [] })),
       this.#request("/question", "GET").catch(() => ({ status: 404, body: [] })),
     ]);
+    const token = `reconcile:${this.#nativeSessionId}:${++this.#reconciliationSequence}`;
     const observations: HarnessObservation[] = [];
+    const seenIds = new Set<string>();
+    const push = (observation: HarnessObservation): boolean => {
+      if (this.#seen.has(observation.id) || seenIds.has(observation.id)) return false;
+      seenIds.add(observation.id);
+      observations.push(observation);
+      return true;
+    };
+    let completesNativeHistoryImport = false;
     if (isSuccessfulMessageResponse(messages)) {
       const importNativeHistory = this.#importNativeHistory;
+      completesNativeHistoryImport = importNativeHistory;
       for (const message of messageResponses(messages.body)) {
         const info = nested(message, "info") ?? message;
         const id = objectString(info, "id");
-        if (id && !this.#seen.has(reconciledMessageKey(id))) {
-          const role = messageRole(info);
-          this.#messages.delete(id);
-          this.#seen.add(reconciledMessageKey(id));
-          if (role !== "user" || importNativeHistory) {
-            const observation = this.#messageObservation(`message:${id}`, id, role, message);
-            if (observation.message.parts.length > 0) this.#pushUnique(observations, observation);
-          }
+        if (!id) continue;
+        const role = messageRole(info);
+        if (role !== "user" || importNativeHistory) {
+          const observation = this.#messageObservation(`message:${id}`, id, role, message);
+          if (observation.message.parts.length > 0) push(observation);
         }
       }
-      this.#importNativeHistory = false;
     }
     for (const permission of arrayBody(permissionResponse.body).filter((candidate) =>
       hasSessionId(candidate, this.#nativeSessionId),
@@ -525,7 +569,7 @@ class OpenCodeBinding implements BindingHandle {
         permission,
         `permission:${objectString(permission, "id") ?? "unknown"}`,
       );
-      if (observation) this.#pushUnique(observations, observation);
+      if (observation) push(observation);
     }
     for (const question of arrayBody(questionResponse.body).filter((candidate) =>
       hasSessionId(candidate, this.#nativeSessionId),
@@ -535,15 +579,35 @@ class OpenCodeBinding implements BindingHandle {
         question,
         `question:${objectString(question, "id") ?? "unknown"}`,
       );
-      if (observation) this.#pushUnique(observations, observation);
+      if (observation) push(observation);
     }
-    const statusObservation = this.#statusObservation("reconcile:status", status.body);
-    if (statusObservation) this.#pushUnique(observations, statusObservation);
-    return {
-      cursor: this.#cursor ?? cursor ?? { eventId: null },
+    const statusObservation = this.#statusObservation(`reconcile:status:${token}`, status.body);
+    const turnStatus =
+      statusObservation && push(statusObservation)
+        ? turnStatusForObservation(statusObservation)
+        : null;
+    if (observations.length === 0 && !completesNativeHistoryImport && turnStatus === null) {
+      return { cursor: cursor ?? this.#cursor ?? { eventId: null }, observations, receipts: [] };
+    }
+    const reconciliation: Reconciliation = {
+      cursor: { kind: "volli.opencode.reconciliation.v1", token },
       observations,
       receipts: [],
     };
+    this.#pendingReconciliation = {
+      token,
+      reconciliation,
+      seenIds: [...seenIds],
+      completesNativeHistoryImport,
+      turnStatus,
+    };
+    return reconciliation;
+  }
+
+  #commitReconciliation(pending: PendingOpenCodeReconciliation): void {
+    for (const id of pending.seenIds) this.#seen.add(id);
+    if (pending.completesNativeHistoryImport) this.#importNativeHistory = false;
+    if (pending.turnStatus) this.#turnStatus = pending.turnStatus;
   }
 
   async release(_reason: ReleaseReason): Promise<void> {
@@ -556,6 +620,8 @@ class OpenCodeBinding implements BindingHandle {
     await this.#drainInFlightEmit();
     this.#sink = null;
     this.#messages.clear();
+    this.#deferredEvents.length = 0;
+    this.#pendingReconciliation = null;
     this.#onRelease();
   }
 
@@ -618,39 +684,59 @@ class OpenCodeBinding implements BindingHandle {
     }
   }
 
-  async #emit(observation: HarnessObservation): Promise<void> {
+  async #emit(observation: HarnessObservation): Promise<boolean> {
+    if (this.#seen.has(observation.id)) return true;
     const sink = this.#sink;
-    if (this.#released || !sink) return;
+    if (this.#released || !sink) return false;
     const emission = sink.emit(observation);
     this.#inFlightEmit = emission;
     try {
       await emission;
-      if (this.#released || this.#sink !== sink) return;
+      if (this.#released || this.#sink !== sink) return false;
       this.#remember(observation);
       this.#cursor = observation.cursor ?? { eventId: observation.id };
+      return true;
     } finally {
       this.#inFlightEmit = null;
     }
-  }
-
-  #pushUnique(target: HarnessObservation[], observation: HarnessObservation): void {
-    if (this.#isSeen(observation)) return;
-    this.#remember(observation);
-    this.#cursor = observation.cursor ?? { eventId: observation.id };
-    target.push(observation);
-  }
-
-  #isSeen(observation: HarnessObservation): boolean {
-    return this.#seen.has(observation.id);
   }
 
   #remember(observation: HarnessObservation): void {
     this.#seen.add(observation.id);
   }
 
-  async #handleEvent(event: OpenCodeSseEvent): Promise<void> {
+  async #drainDeferredEvents(): Promise<void> {
+    /* v8 ignore start -- public callers clear reconciliation state first; these guards only protect concurrent teardown or re-entry. */
+    if (
+      this.#released ||
+      this.#pendingReconciliation ||
+      this.#reconciling ||
+      this.#drainingDeferredEvents
+    )
+      return;
+    /* v8 ignore stop */
+    this.#drainingDeferredEvents = true;
+    try {
+      while (!this.#released && this.#deferredEvents.length > 0) {
+        const event = this.#deferredEvents[0];
+        await this.#handleEvent(event, true);
+        this.#deferredEvents.shift();
+      }
+    } finally {
+      this.#drainingDeferredEvents = false;
+    }
+  }
+
+  async #handleEvent(event: OpenCodeSseEvent, deferred = false): Promise<void> {
     const sessionId = objectString(event.properties, "sessionID");
     if (sessionId !== this.#nativeSessionId) return;
+    if (
+      !deferred &&
+      (this.#pendingReconciliation || this.#reconciling || this.#drainingDeferredEvents)
+    ) {
+      this.#deferredEvents.push(event);
+      return;
+    }
     switch (event.type) {
       case "message.updated":
         this.#bufferMessage(event.properties);
@@ -680,7 +766,10 @@ class OpenCodeBinding implements BindingHandle {
         ) {
           await this.#flushMessages(event.id);
         }
-        if (observation) await this.#emit(observation);
+        if (observation && (await this.#emit(observation))) {
+          const turnStatus = turnStatusForObservation(observation);
+          if (turnStatus) this.#turnStatus = turnStatus;
+        }
         return;
       }
       case "permission.asked":
@@ -771,7 +860,6 @@ class OpenCodeBinding implements BindingHandle {
         continue;
       }
       if (buffered.role === "user") {
-        this.#seen.add(reconciledMessageKey(messageId));
         this.#messages.delete(messageId);
         continue;
       }
@@ -779,7 +867,6 @@ class OpenCodeBinding implements BindingHandle {
         openCodePart(buffered.parts.get(partId)),
       );
       if (parts.length === 0) {
-        this.#seen.add(reconciledMessageKey(messageId));
         this.#messages.delete(messageId);
         continue;
       }
@@ -799,7 +886,6 @@ class OpenCodeBinding implements BindingHandle {
         this.#messages.clear();
         return;
       }
-      this.#seen.add(reconciledMessageKey(messageId));
       this.#messages.delete(messageId);
     }
   }
@@ -852,7 +938,6 @@ class OpenCodeBinding implements BindingHandle {
           objectString(sessionStatus, "type"));
     if (status === "busy") {
       if (this.#turnStatus === status) return null;
-      this.#turnStatus = status;
       return {
         id,
         kind: "turn.started",
@@ -862,7 +947,6 @@ class OpenCodeBinding implements BindingHandle {
     }
     if (status === "idle") {
       if (this.#turnStatus === status) return null;
-      this.#turnStatus = status;
       return {
         id,
         kind: "turn.completed",
@@ -1341,8 +1425,21 @@ function openCodePart(part: unknown): UIMessage["parts"] {
   }
 }
 
-function reconciledMessageKey(messageId: string): string {
-  return `reconcile:message:${messageId}`;
+function isReconciliationAcknowledgement(
+  cursor: SessionNativeDetail | null,
+  token: string,
+): boolean {
+  return (
+    isRecord(cursor) &&
+    objectString(cursor, "kind") === "volli.opencode.reconciliation.v1" &&
+    objectString(cursor, "token") === token
+  );
+}
+
+function turnStatusForObservation(observation: HarnessObservation): "busy" | "idle" | null {
+  if (observation.kind === "turn.started") return "busy";
+  if (observation.kind === "turn.completed") return "idle";
+  return null;
 }
 
 function catalogItems(
