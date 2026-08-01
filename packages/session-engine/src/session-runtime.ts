@@ -230,7 +230,6 @@ class DefaultSessionRuntime implements SessionRuntime {
   readonly #bindings = new Map<string, BindingRecord>();
   readonly #rehydratingBindings = new Map<string, Promise<BindingRecord>>();
   readonly #inFlight = new Map<string, InFlightCommand>();
-  readonly #bindingOperations = new Set<Promise<unknown>>();
   readonly #subscribers = new Map<string, Set<Subscriber>>();
   readonly #capabilityRevisions = new Map<string, number>();
   readonly #capabilityWrites = new Map<string, Promise<SessionCapabilitySnapshot>>();
@@ -253,7 +252,10 @@ class DefaultSessionRuntime implements SessionRuntime {
       return existing.promise;
     }
 
-    const promise = this.#command(request).finally(() => this.#inFlight.delete(request.commandId));
+    const promise = this.#command(request).finally(async () => {
+      this.#inFlight.delete(request.commandId);
+      await this.#releaseBindingsAfterClose();
+    });
     this.#inFlight.set(request.commandId, { signature, promise });
     return promise;
   }
@@ -963,26 +965,23 @@ class DefaultSessionRuntime implements SessionRuntime {
     };
   }
 
-  refreshCapabilities(input: {
+  async refreshCapabilities(input: {
     sessionId: string;
     attachmentId: string;
   }): Promise<SessionCapabilitySnapshot> {
     this.#assertOpen();
-    return this.#trackBindingOperation(this.#refreshCapabilities(input));
-  }
-
-  async #refreshCapabilities(input: {
-    sessionId: string;
-    attachmentId: string;
-  }): Promise<SessionCapabilitySnapshot> {
     const projection = await this.#requireSession(input.sessionId);
+    this.#assertOpen();
     const location = await this.ports.locations.resolve(projection.session);
+    this.#assertOpen();
     const binding = await this.#bindingForAttachment(input.attachmentId, projection, location);
+    await this.#assertBindingOperationOpen();
     const abort = new AbortController();
     const probe = await binding.adapter.probe(
       { profileId: binding.spec.profileId, directory: binding.spec.directory },
       abort.signal,
     );
+    await this.#assertBindingOperationOpen();
     if (probe.status !== "available") {
       throw new SessionRuntimeConflictError(probe.reason);
     }
@@ -996,16 +995,16 @@ class DefaultSessionRuntime implements SessionRuntime {
     );
   }
 
-  reconcile(input: { sessionId: string; attachmentId: string }): Promise<void> {
+  async reconcile(input: { sessionId: string; attachmentId: string }): Promise<void> {
     this.#assertOpen();
-    return this.#trackBindingOperation(this.#reconcile(input));
-  }
-
-  async #reconcile(input: { sessionId: string; attachmentId: string }): Promise<void> {
     const projection = await this.#requireSession(input.sessionId);
+    this.#assertOpen();
     const location = await this.ports.locations.resolve(projection.session);
+    this.#assertOpen();
     const binding = await this.#bindingForAttachment(input.attachmentId, projection, location);
-    await this.#reconcileBinding(binding);
+    await this.#assertBindingOperationOpen();
+    await this.#reconcileBinding(binding, true);
+    await this.#assertBindingOperationOpen();
   }
 
   async close(): Promise<void> {
@@ -1015,19 +1014,20 @@ class DefaultSessionRuntime implements SessionRuntime {
       for (const subscriber of subscribers) subscriber.active = false;
     }
     this.#subscribers.clear();
-    await Promise.allSettled(this.#bindingOperations);
+    await this.#releaseBindingsAfterClose();
+  }
+
+  async #releaseBindingsAfterClose(): Promise<void> {
+    if (!this.#closed) return;
     const bindings = [...this.#bindings.values()];
     this.#bindings.clear();
     await Promise.allSettled(bindings.map(({ handle }) => handle.release("shutdown")));
   }
 
-  async #trackBindingOperation<T>(operation: Promise<T>): Promise<T> {
-    this.#bindingOperations.add(operation);
-    try {
-      return await operation;
-    } finally {
-      this.#bindingOperations.delete(operation);
-    }
+  async #assertBindingOperationOpen(): Promise<void> {
+    if (!this.#closed) return;
+    await this.#releaseBindingsAfterClose();
+    this.#assertOpen();
   }
 
   async #recordCapabilities(
@@ -1305,9 +1305,9 @@ class DefaultSessionRuntime implements SessionRuntime {
     return record;
   }
 
-  async #reconcileBinding(binding: BindingRecord): Promise<void> {
+  async #reconcileBinding(binding: BindingRecord, requireOpen = false): Promise<void> {
     if (binding.reconcileInFlight) return binding.reconcileInFlight;
-    const reconciliation = this.#performReconciliation(binding);
+    const reconciliation = this.#performReconciliation(binding, requireOpen);
     binding.reconcileInFlight = reconciliation;
     try {
       await reconciliation;
@@ -1316,8 +1316,9 @@ class DefaultSessionRuntime implements SessionRuntime {
     }
   }
 
-  async #performReconciliation(binding: BindingRecord): Promise<void> {
+  async #performReconciliation(binding: BindingRecord, requireOpen: boolean): Promise<void> {
     const reconciliation = await binding.handle.reconcile(binding.cursor);
+    if (requireOpen) await this.#assertBindingOperationOpen();
     await this.#recordReconciliation(binding, reconciliation);
   }
 
