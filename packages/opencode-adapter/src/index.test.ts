@@ -1174,6 +1174,7 @@ describe("OpenCodeNativeAdapter", () => {
     const messageResponses = [
       { status: 503, body: nativeHistory },
       { status: 200, body: { items: "malformed" } },
+      { status: 200, body: [{}] },
       { status: 200, body: nativeHistory },
     ];
     network.request = async (input) => {
@@ -1185,6 +1186,11 @@ describe("OpenCodeNativeAdapter", () => {
       emit: async () => undefined,
     });
 
+    expect(
+      (await handle.reconcile(null)).observations.filter(
+        ({ kind }) => kind === "transcript.message",
+      ),
+    ).toEqual([]);
     expect(
       (await handle.reconcile(null)).observations.filter(
         ({ kind }) => kind === "transcript.message",
@@ -1635,12 +1641,33 @@ describe("OpenCodeNativeAdapter", () => {
       {
         id: "retry",
         type: "session.status",
-        properties: { sessionID: "native-session-1", status: { type: "retry", message: "again" } },
+        properties: {
+          sessionID: "native-session-1",
+          status: {
+            type: "retry",
+            attempt: 2,
+            next: 345,
+            message: "must-not-leak",
+            action: { title: "must-not-leak", message: "must-not-leak" },
+          },
+        },
       },
       {
         id: "error",
         type: "session.error",
-        properties: { sessionID: "native-session-1", error: { message: "bad" } },
+        properties: {
+          sessionID: "native-session-1",
+          error: {
+            name: "APIError",
+            data: {
+              message: "must-not-leak",
+              statusCode: 502,
+              isRetryable: false,
+              responseHeaders: { authorization: "must-not-leak" },
+              responseBody: "must-not-leak",
+            },
+          },
+        },
       },
       {
         id: "unknown-status",
@@ -1672,12 +1699,21 @@ describe("OpenCodeNativeAdapter", () => {
     ]);
     expect(observations[2]).toMatchObject({
       kind: "attention.raised",
-      attention: { kind: "transport_retrying", detail: "again" },
+      attention: {
+        kind: "transport_retrying",
+        detail: "OpenCode is retrying",
+        diagnostic: { attempt: 2, next: 345 },
+      },
     });
     expect(observations[3]).toMatchObject({
       kind: "attention.raised",
-      attention: { kind: "adapter_unrecoverable", detail: "bad" },
+      attention: {
+        kind: "adapter_unrecoverable",
+        detail: "OpenCode APIError (status 502)",
+        diagnostic: { name: "APIError", statusCode: 502, isRetryable: false },
+      },
     });
+    expect(JSON.stringify(observations)).not.toContain("must-not-leak");
   });
 
   it("does not repeat SSE observations and raises durable attention when the stream drops", async () => {
