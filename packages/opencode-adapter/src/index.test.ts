@@ -1216,6 +1216,74 @@ describe("OpenCodeNativeAdapter", () => {
     ]);
   });
 
+  it("replays the exact reconciliation batch until its returned cursor is acknowledged", async () => {
+    let now = 1234;
+    const network = new FakeNetwork();
+    const streamGate = new Deferred<void>();
+    network.subscribe = async () =>
+      (async function* () {
+        await streamGate.promise;
+        yield* [];
+      })();
+    network.messageResponse = {
+      info: { id: "provider-user-pending", role: "user" },
+      parts: [{ type: "text", text: "Durable native prompt" }],
+    };
+    const adapter = createOpenCodeNativeAdapter({
+      process: new FakeProcess(),
+      network,
+      now: () => now,
+    });
+    const handle = await adapter.attach(spec("/workspace/one", "native_resume"), {
+      emit: async () => undefined,
+    });
+
+    const first = await handle.reconcile(null);
+    now = 9999;
+    const retry = await handle.reconcile(null);
+    expect(retry).toEqual(first);
+    expect(retry.observations.find(({ kind }) => kind === "transcript.message")?.occurredAt).toBe(
+      1234,
+    );
+
+    const afterAcknowledgement = await handle.reconcile(first.cursor);
+    expect(
+      afterAcknowledgement.observations.filter(({ kind }) => kind === "transcript.message"),
+    ).toEqual([]);
+    await handle.release("requested");
+  });
+
+  it("does not consume a native turn transition when its durable sink rejects it", async () => {
+    const network = new FakeNetwork();
+    network.events = [
+      {
+        id: "busy-rejected",
+        type: "session.status",
+        properties: { sessionID: "native-session-1", status: { type: "busy" } },
+      },
+    ];
+    const originalRequest = network.request.bind(network);
+    network.request = async (input) =>
+      input.path.startsWith("/session/status")
+        ? { status: 200, body: { "native-session-1": { type: "busy" } } }
+        : originalRequest(input);
+    const adapter = createOpenCodeNativeAdapter({
+      process: new FakeProcess(),
+      network,
+      now: () => 1234,
+    });
+    const handle = await adapter.attach(spec(), {
+      emit: async () => {
+        throw new Error("durable turn write failed");
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(
+      (await handle.reconcile(null)).observations.filter(({ kind }) => kind === "turn.started"),
+    ).toEqual([expect.objectContaining({ kind: "turn.started" })]);
+  });
+
   it("uses the documented legacy resolution endpoints", async () => {
     const { adapter, network } = composition();
     const handle = await adapter.attach(spec(), { emit: async () => undefined });
