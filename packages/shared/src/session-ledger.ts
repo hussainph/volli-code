@@ -380,7 +380,7 @@ export function observationPayload(observation: SessionObservation): SessionEven
         resolution: observation.resolution,
       };
     case "command.receipt":
-      throw new Error("Command receipt observations require Control Plane stamping");
+      throw new Error("Command receipt observations require Session Engine stamping");
     case "adapter.observed":
       return {
         kind: observation.kind,
@@ -402,7 +402,14 @@ export type SessionCommandIntent =
   | { kind: "executor.stop"; attachmentId: string }
   /** A non-destructive adapter interrupt (for example terminal Esc); the attachment remains live. */
   | { kind: "executor.interrupt"; attachmentId: string }
-  | { kind: "message.submit"; reference: TranscriptReference };
+  | { kind: "message.submit"; reference: TranscriptReference }
+  | {
+      kind: "interaction.resolve";
+      attachmentId: string;
+      interactionId: string;
+      resolution: SessionInteractionResolution;
+      reference: TranscriptReference;
+    };
 
 /**
  * The adapter delivery target resolved by the control plane when it records a
@@ -439,7 +446,8 @@ export type CommandReceiptResult =
   | { kind: "executor.start.requested"; sessionId: string }
   | { kind: "executor.stop.requested"; sessionId: string }
   | { kind: "executor.interrupted"; sessionId: string }
-  | { kind: "message.submitted"; sessionId: string };
+  | { kind: "message.submitted"; sessionId: string }
+  | { kind: "interaction.resolved"; sessionId: string };
 
 interface CommandReceiptDetailsAccepted {
   status: "accepted";

@@ -709,6 +709,14 @@ function decodeIntent(value: unknown, context: string): SessionCommandIntent {
       return { kind, attachmentId: readString(row.attachmentId, `${context}.attachmentId`) };
     case "message.submit":
       return { kind, reference: decodeTranscript(row.reference, `${context}.reference`) };
+    case "interaction.resolve":
+      return {
+        kind,
+        attachmentId: readString(row.attachmentId, `${context}.attachmentId`),
+        interactionId: readString(row.interactionId, `${context}.interactionId`),
+        resolution: decodeInteractionResolution(row.resolution, `${context}.resolution`),
+        reference: decodeTranscript(row.reference, `${context}.reference`),
+      };
     default:
       throw new Error(`${context}.kind is not a known Session command`);
   }
@@ -769,6 +777,7 @@ function decodeReceiptResult(value: unknown, context: string): CommandReceiptRes
       "executor.stop.requested",
       "executor.interrupted",
       "message.submitted",
+      "interaction.resolved",
     ],
     `${context}.kind`,
   );

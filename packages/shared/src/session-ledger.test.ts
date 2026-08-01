@@ -317,7 +317,7 @@ describe("observationPayload", () => {
           detail: "Awaiting reconciliation",
         },
       }),
-    ).toThrow("require Control Plane stamping");
+    ).toThrow("require Session Engine stamping");
   });
 
   it("projects the latest binding capabilities and unresolved interactions", () => {

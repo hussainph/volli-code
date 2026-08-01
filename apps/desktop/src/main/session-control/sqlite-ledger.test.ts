@@ -380,6 +380,22 @@ describe("SqliteSessionLedger", () => {
         native: { id: "native-permission-1", detail: null },
       },
     });
+    const resolution = await control.submit({
+      commandId: "resolve-structured",
+      sessionId: created.session.id,
+      intent: {
+        kind: "interaction.resolve",
+        attachmentId: "attachment-structured",
+        interactionId: "permission-1",
+        resolution: { optionIds: ["once"], response: null },
+        reference: {
+          id: "sha256:resolution",
+          digest: "sha256:resolution",
+          mediaType: "application/vnd.volli.ui-message+json;version=1",
+        },
+      },
+      provenance,
+    });
     await control.observe({
       id: "interaction-resolved-structured",
       kind: "interaction.resolved",
@@ -387,13 +403,40 @@ describe("SqliteSessionLedger", () => {
       attachmentId: "attachment-structured",
       occurredAt: 203,
       provenance: adapterProvenance,
+      commandId: resolution.command.id,
       interactionId: "permission-1",
       resolution: { optionIds: ["once"], response: null },
     });
+    await control.observe({
+      id: "resolution-receipt-structured",
+      kind: "command.receipt",
+      sessionId: created.session.id,
+      attachmentId: "attachment-structured",
+      occurredAt: 204,
+      provenance: adapterProvenance,
+      receipt: {
+        id: "receipt-resolution-structured",
+        commandId: resolution.command.id,
+        status: "accepted",
+        acceptedAt: 204,
+        result: { kind: "interaction.resolved", sessionId: created.session.id },
+      },
+    });
 
-    await expect(control.getSession({ sessionId: created.session.id })).resolves.toMatchObject({
+    const projection = await control.getSession({ sessionId: created.session.id });
+    expect(projection).toMatchObject({
       capabilities: [{ id: "snapshot-1", catalog: [{ detail: { variants: ["high"] } }] }],
       interactions: { active: [], resolved: [{ interaction: { id: "permission-1" } }] },
     });
+    expect(projection?.commands.at(-1)).toMatchObject({
+      intent: { kind: "interaction.resolve", interactionId: "permission-1" },
+    });
+    expect(projection?.receipts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          result: expect.objectContaining({ kind: "interaction.resolved" }),
+        }),
+      ]),
+    );
   });
 });
