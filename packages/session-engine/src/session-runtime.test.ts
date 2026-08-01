@@ -47,6 +47,7 @@ class FakeAdapter implements NativeHarnessAdapter {
   attaches = 0;
   dispatches = 0;
   reconciles = 0;
+  reconcileAcknowledgements: Array<Awaited<ReturnType<BindingHandle["reconcile"]>>["cursor"]> = [];
   releases = 0;
   sink: ObservationSink | null = null;
   reconcileReceipts: Awaited<ReturnType<BindingHandle["reconcile"]>>["receipts"] = [];
@@ -120,6 +121,9 @@ class FakeAdapter implements NativeHarnessAdapter {
           observations: this.reconcileObservations,
           receipts: this.reconcileReceipts,
         };
+      },
+      acknowledgeReconciliation: async (cursor) => {
+        this.reconcileAcknowledgements.push(cursor);
       },
       release: async (reason) => {
         this.releases += 1;
@@ -668,6 +672,7 @@ describe("SessionRuntime native adapter contract", () => {
     await runtime.reconcile({ sessionId, attachmentId });
     const snapshot = await runtime.snapshot({ sessionId });
     expect(adapter.reconciles).toBe(1);
+    expect(adapter.reconcileAcknowledgements).toEqual([{ value: 1 }]);
     expect(snapshot.frames.map(({ event }) => event.payload.kind)).toContain("turn.started");
     expect(snapshot.projection.receipts).toContainEqual(
       expect.objectContaining({ commandId: "command-attach", status: "accepted" }),

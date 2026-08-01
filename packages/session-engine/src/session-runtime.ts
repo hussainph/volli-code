@@ -1316,6 +1316,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       );
     }
     binding.cursor = reconciliation.cursor;
+    await binding.handle.acknowledgeReconciliation?.(reconciliation.cursor);
   }
 
   async #recordDelivery(

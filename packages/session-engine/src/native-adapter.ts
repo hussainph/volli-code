@@ -185,6 +185,8 @@ export interface BindingHandle {
   readonly native: SessionNativeReference;
   dispatch(command: HarnessCommand): Promise<DeliveryReceipt>;
   reconcile(cursor: SessionNativeDetail | null): Promise<Reconciliation>;
+  /** Called only after every fact in the returned reconciliation batch commits durably. */
+  acknowledgeReconciliation?(cursor: SessionNativeDetail | null): Promise<void>;
   release(reason: ReleaseReason): Promise<void>;
 }
 
