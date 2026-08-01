@@ -467,6 +467,35 @@ describe("OpenCodeNativeAdapter", () => {
           },
         },
       },
+      {
+        id: "tool-before-malformed-update",
+        type: "message.part.updated",
+        properties: {
+          sessionID: "native-session-1",
+          part: {
+            id: "tool-without-final-state",
+            messageID: "provider-assistant",
+            type: "tool",
+            tool: "read",
+            callID: "call-without-final-state",
+            state: { status: "running" },
+          },
+        },
+      },
+      {
+        id: "tool-malformed-update",
+        type: "message.part.updated",
+        properties: {
+          sessionID: "native-session-1",
+          part: {
+            id: "tool-without-final-state",
+            messageID: "provider-assistant",
+            type: "tool",
+            tool: "read",
+            callID: "call-without-final-state",
+          },
+        },
+      },
       { id: "idle-final", type: "session.idle", properties: { sessionID: "native-session-1" } },
     ]);
     const observations: HarnessObservation[] = [];
@@ -700,6 +729,24 @@ describe("OpenCodeNativeAdapter", () => {
                 time: { start: 3, end: 4 },
               },
             },
+            {
+              type: "tool",
+              tool: "pending-empty",
+              callID: "call-pending-empty",
+              state: { status: "pending" },
+            },
+            {
+              type: "tool",
+              tool: "completed-empty",
+              callID: "call-completed-empty",
+              state: { status: "completed" },
+            },
+            {
+              type: "tool",
+              tool: "error-empty",
+              callID: "call-error-empty",
+              state: { status: "error" },
+            },
           ],
         },
       },
@@ -793,6 +840,28 @@ describe("OpenCodeNativeAdapter", () => {
               toolMetadata: {
                 opencode: { metadata: { code: "ENOENT" }, time: { start: 3, end: 4 } },
               },
+            },
+            {
+              type: "dynamic-tool",
+              toolName: "pending-empty",
+              toolCallId: "call-pending-empty",
+              state: "input-streaming",
+            },
+            {
+              type: "dynamic-tool",
+              toolName: "completed-empty",
+              toolCallId: "call-completed-empty",
+              state: "output-available",
+              input: null,
+              output: null,
+            },
+            {
+              type: "dynamic-tool",
+              toolName: "error-empty",
+              toolCallId: "call-error-empty",
+              state: "output-error",
+              input: null,
+              errorText: "Tool failed",
             },
           ],
         }),

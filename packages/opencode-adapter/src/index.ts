@@ -25,6 +25,8 @@ import type {
   SessionNativeReference,
 } from "@volli/shared";
 type UIMessage = Extract<HarnessCommand, { kind: "message.submit" }>["message"];
+type DynamicToolPart = Extract<UIMessage["parts"][number], { type: "dynamic-tool" }>;
+type ToolMetadata = NonNullable<DynamicToolPart["toolMetadata"]>;
 type OpenCodeStatusObservation = Extract<
   HarnessObservation,
   { kind: "turn.started" | "turn.completed" | "attention.raised" }
@@ -834,7 +836,7 @@ class OpenCodeBinding implements BindingHandle {
     if (!messageId || !partId) return;
     const message = this.#message(messageId);
     if (!message.parts.has(partId)) message.partOrder.push(partId);
-    message.parts.set(partId, part);
+    message.parts.set(partId, mergeOpenCodePart(message.parts.get(partId), part));
   }
 
   #applyPartDelta(raw: unknown): void {
@@ -1392,11 +1394,7 @@ const SAFE_OPEN_CODE_ERROR_NAMES = new Set([
   "APIError",
 ]);
 
-/**
- * Maps the legacy OpenCode Part union to transcript-safe AI SDK UI parts.
- * Tool inputs, outputs, raw pending text, metadata, and errors can contain
- * secrets, so a tool is represented only by its identity and lifecycle state.
- */
+/** Maps the legacy OpenCode Part union to durable AI SDK UI parts. */
 function messageParts(raw: unknown): UIMessage["parts"] {
   if (!isRecord(raw) || !Array.isArray(raw.parts)) return [];
   return raw.parts.flatMap((part) => openCodePart(part));
@@ -1426,22 +1424,77 @@ function openCodePart(part: unknown): UIMessage["parts"] {
   const toolCallId = objectString(part, "callID");
   const state = nested(part, "state");
   if (!toolName || !toolCallId || !state) return [];
+  const title = objectString(state, "title");
+  const toolMetadata = openCodeToolMetadata(state);
   const base = {
     type: "dynamic-tool" as const,
     toolName,
     toolCallId,
+    ...(title ? { title } : {}),
+    ...(toolMetadata ? { toolMetadata } : {}),
   };
   switch (objectString(state, "status")) {
     case "pending":
     case "running":
-      return [{ ...base, state: "input-streaming" }];
+      return [
+        {
+          ...base,
+          state: "input-streaming",
+          ...(Object.hasOwn(state, "input") ? { input: state.input } : {}),
+        },
+      ];
     case "completed":
-      return [{ ...base, state: "output-available", input: null, output: null }];
+      return [
+        {
+          ...base,
+          state: "output-available",
+          input: state.input ?? null,
+          output: state.output ?? null,
+        },
+      ];
     case "error":
-      return [{ ...base, state: "output-error", input: null, errorText: "Tool failed" }];
+      return [
+        {
+          ...base,
+          state: "output-error",
+          input: state.input ?? null,
+          errorText: objectString(state, "error") ?? "Tool failed",
+        },
+      ];
     default:
       return [];
   }
+}
+
+function mergeOpenCodePart(previous: unknown, next: Record<string, unknown>): unknown {
+  if (
+    !isRecord(previous) ||
+    objectString(previous, "type") !== "tool" ||
+    objectString(next, "type") !== "tool"
+  ) {
+    return next;
+  }
+  const previousState = nested(previous, "state");
+  const nextState = nested(next, "state");
+  if (!previousState || !nextState) return next;
+  return {
+    ...previous,
+    ...next,
+    state: { ...previousState, ...nextState },
+  };
+}
+
+/**
+ * OpenCode's HTTP/SSE boundary is JSON, so its provider-native metadata is
+ * already serializable. Keep it namespaced instead of flattening provider
+ * fields into AI SDK's portable tool vocabulary.
+ */
+function openCodeToolMetadata(state: Record<string, unknown>): ToolMetadata | undefined {
+  const metadata: Record<string, unknown> = {};
+  for (const key of ["raw", "metadata", "time"] as const) {
+    if (Object.hasOwn(state, key) && state[key] !== undefined) metadata[key] = state[key];
+  }
+  return Object.keys(metadata).length > 0 ? ({ opencode: metadata } as ToolMetadata) : undefined;
 }
 
 function isReconciliationAcknowledgement(
