@@ -203,11 +203,14 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
             }
             return event;
           }
-          if (
-            transaction
-              .listReceipts(observation.receipt.commandId)
-              .some((receipt) => receipt.status === "rejected" || receipt.status === "completed")
-          ) {
+          const priorReceipts = transaction.listReceipts(observation.receipt.commandId);
+          const hasTerminalReceipt = priorReceipts.some(
+            (receipt) => receipt.status === "rejected" || receipt.status === "completed",
+          );
+          const wouldRegressAcceptedDelivery =
+            observation.receipt.status !== "completed" &&
+            priorReceipts.some((receipt) => receipt.status === "accepted");
+          if (hasTerminalReceipt || wouldRegressAcceptedDelivery) {
             throw new SessionEngineConflictError(
               `Command ${observation.receipt.commandId} already has a terminal receipt`,
             );
@@ -593,6 +596,7 @@ function rejectionFor(
 interface CommandRouteRejection {
   code:
     | "no_live_executor"
+    | "interaction_unavailable"
     | "attachment_unavailable"
     | "live_executor_exists"
     | "executor_start_pending";
@@ -639,6 +643,35 @@ function resolveCommandRoute(
             rejection: {
               code: "no_live_executor",
               detail: "No live executor can receive this message",
+            },
+          };
+    }
+    case "interaction.resolve": {
+      const interaction = projection.interactions.active.find(
+        (candidate) => candidate.id === intent.interactionId,
+      );
+      if (!interaction || interaction.attachmentId !== intent.attachmentId) {
+        return {
+          route: null,
+          rejection: {
+            code: "interaction_unavailable",
+            detail: `Interaction ${intent.interactionId} is not open on attachment ${intent.attachmentId}`,
+          },
+        };
+      }
+      const attachment = projection.attachments.find(
+        (candidate) => candidate.id === intent.attachmentId,
+      );
+      return attachment?.status === "open"
+        ? {
+            route: { adapterId: attachment.adapterId, attachmentId: attachment.id },
+            rejection: null,
+          }
+        : {
+            route: null,
+            rejection: {
+              code: "attachment_unavailable",
+              detail: `Attachment ${intent.attachmentId} is not open`,
             },
           };
     }
@@ -886,6 +919,7 @@ function assertAdapterReceiptRoute(
   }
   if (
     (command.intent.kind === "message.submit" ||
+      command.intent.kind === "interaction.resolve" ||
       command.intent.kind === "executor.stop" ||
       command.intent.kind === "executor.interrupt") &&
     observationAttachmentId(observation) !== route.attachmentId
@@ -906,6 +940,7 @@ function expectedResultKind(intent: SessionCommandIntent["kind"]): CommandReceip
     "executor.stop": "executor.stop.requested",
     "executor.interrupt": "executor.interrupted",
     "message.submit": "message.submitted",
+    "interaction.resolve": "interaction.resolved",
   };
   return resultKinds[intent];
 }
