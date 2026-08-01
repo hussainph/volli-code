@@ -6,6 +6,11 @@ import { defineConfig } from "vite-plus";
 
 import { RENDERER_DEV_PORT } from "./scripts/dev-constants.mjs";
 
+const LAB_SESSION_RPC_PATH = "/__lab/session-rpc";
+const labSessionRpcModule = fileURLToPath(
+  new URL("./src/main/lab/session-rpc.ts", import.meta.url),
+);
+
 // Launch Electron after a pack only when BOTH hold:
 //  1. dev.mjs opted in by injecting VOLLI_DESKTOP_DEV=1 into the pack child's
 //     env (it is never exported globally), AND
@@ -25,13 +30,19 @@ const shouldLaunchElectronAfterPack = process.env.VOLLI_DESKTOP_DEV === "1" && i
 // main/preload artifacts instead of leaving a runtime require() behind.
 const bundleWorkspacePackages = (id: string): boolean => id.startsWith("@volli/");
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   // Renderer (React) app build. `root` points Vite at the renderer's index.html.
   root: "src/renderer",
   // CRITICAL: assets stay relative so the built index and worker chunks resolve
   // beneath volli-app://bundle/ in packaged builds. Plain Vite defaults to "/".
   base: "./",
-  plugins: [tailwindcss(), react()],
+  plugins: [
+    tailwindcss(),
+    react(),
+    ...(mode === "lab"
+      ? [labSessionRpcPlugin(fileURLToPath(new URL("../..", import.meta.url)))]
+      : []),
+  ],
   resolve: {
     alias: {
       "@renderer": fileURLToPath(new URL("./src/renderer/src", import.meta.url)),
@@ -194,4 +205,47 @@ export default defineConfig({
       },
     },
   },
-});
+}));
+
+function labSessionRpcPlugin(repoRoot: string) {
+  return {
+    name: "volli:lab-session-rpc",
+    configureServer(server: {
+      middlewares: {
+        use: (
+          path: string,
+          handler: (
+            req: import("node:http").IncomingMessage,
+            res: import("node:http").ServerResponse,
+          ) => void,
+        ) => void;
+      };
+      httpServer: { once: (event: "close", listener: () => void) => void } | null;
+      ssrLoadModule: (url: string) => Promise<typeof import("./src/main/lab/session-rpc")>;
+    }) {
+      let lab: Promise<
+        InstanceType<typeof import("./src/main/lab/session-rpc").LabSessionRpcServer>
+      > | null = null;
+      const getLab = () => {
+        lab ??= server
+          .ssrLoadModule(labSessionRpcModule)
+          .then(({ LabSessionRpcServer }) => new LabSessionRpcServer({ repoRoot }));
+        return lab;
+      };
+      server.middlewares.use(LAB_SESSION_RPC_PATH, (req, res) => {
+        void getLab().then(
+          (instance) => instance.handle(req, res),
+          (error: unknown) => {
+            res.statusCode = 500;
+            res.end(error instanceof Error ? error.message : "Lab Session RPC failed to load");
+          },
+        );
+      });
+      const close = () => {
+        if (lab) void lab.then((instance) => instance.close());
+      };
+      server.httpServer?.once("close", close);
+      return close;
+    },
+  };
+}
