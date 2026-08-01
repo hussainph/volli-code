@@ -722,6 +722,68 @@ describe("OpenCodeNativeAdapter", () => {
     expect(JSON.stringify(observations)).not.toContain("must-not-leak");
   });
 
+  it("does not finalize provider messages or parts removed before idle", async () => {
+    const { adapter } = composition([
+      {
+        id: "message-kept",
+        type: "message.updated",
+        properties: {
+          sessionID: "native-session-1",
+          info: { id: "assistant-kept", role: "assistant" },
+          parts: [
+            { id: "part-kept", type: "text", text: "Visible" },
+            { id: "part-removed", type: "text", text: "Removed part" },
+          ],
+        },
+      },
+      {
+        id: "part-removed",
+        type: "message.part.removed",
+        properties: {
+          sessionID: "native-session-1",
+          messageID: "assistant-kept",
+          partID: "part-removed",
+        },
+      },
+      {
+        id: "message-removed-update",
+        type: "message.updated",
+        properties: {
+          sessionID: "native-session-1",
+          info: { id: "assistant-removed", role: "assistant" },
+          parts: [{ id: "hidden-part", type: "text", text: "Removed message" }],
+        },
+      },
+      {
+        id: "message-removed",
+        type: "message.removed",
+        properties: { sessionID: "native-session-1", messageID: "assistant-removed" },
+      },
+      {
+        id: "idle-after-removal",
+        type: "session.idle",
+        properties: { sessionID: "native-session-1" },
+      },
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(observations.filter(({ kind }) => kind === "transcript.message")).toEqual([
+      expect.objectContaining({
+        message: {
+          id: "assistant-kept",
+          role: "assistant",
+          parts: [{ type: "text", text: "Visible" }],
+        },
+      }),
+    ]);
+  });
+
   it("parses OpenCode data-only SSE envelopes across CRLF and multiline chunks", async () => {
     const events: OpenCodeSseEvent[] = [];
     for await (const event of parseOpenCodeSse(
@@ -1615,6 +1677,51 @@ describe("OpenCodeNativeAdapter", () => {
         detail: "OpenCode event stream disconnected",
       }),
     ]);
+  });
+
+  it("waits for an in-flight durable emit before release completes", async () => {
+    const emitEntered = new Deferred<void>();
+    const allowEmit = new Deferred<void>();
+    const network = new FakeNetwork();
+    network.events = [
+      {
+        id: "release-message",
+        type: "message.updated",
+        properties: {
+          sessionID: "native-session-1",
+          info: { id: "release-assistant", role: "assistant" },
+          parts: [{ id: "release-part", type: "text", text: "Final" }],
+        },
+      },
+      { id: "release-idle", type: "session.idle", properties: { sessionID: "native-session-1" } },
+    ];
+    const adapter = createOpenCodeNativeAdapter({
+      process: new FakeProcess(),
+      network,
+      now: () => 1234,
+    });
+    const committed: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        emitEntered.resolve();
+        await allowEmit.promise;
+        committed.push(observation);
+      },
+    });
+    await emitEntered.promise;
+
+    let releaseCompleted = false;
+    const release = handle.release("requested").then(() => {
+      releaseCompleted = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(releaseCompleted).toBe(false);
+
+    allowEmit.resolve();
+    await release;
+    expect(committed.map(({ kind }) => kind)).toEqual(["transcript.message"]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(committed.map(({ kind }) => kind)).toEqual(["transcript.message"]);
   });
 
   it("keeps malformed catalog responses out while reporting successful safe metadata", async () => {
