@@ -18,6 +18,7 @@ import type { RpcDiagnosticEntry } from "@volli/session-rpc";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 
+import { SessionMessageList, type SessionMessageFrame } from "../session-message-list";
 import { createSessionRpcClient, type SessionRpcClient } from "../session-rpc-client";
 
 export const title = "Session tracer";
@@ -46,16 +47,9 @@ interface AgentCatalogEntry {
  * The RPC boundary serializes AI SDK message parts. Keep the inspection view
  * structural so it cannot inherit a second package's generic UIMessage type.
  */
-interface LabSessionStreamFrame {
+interface LabSessionStreamFrame extends SessionMessageFrame {
   sessionId: string;
-  sequence: number;
   event: unknown;
-  transcript: {
-    message: {
-      role: string;
-      parts: readonly { type: string; text?: unknown }[];
-    };
-  } | null;
 }
 
 function nextCommandId(): string {
@@ -137,19 +131,6 @@ function receiptStatus(result: unknown): string {
   const status = recordString(result.receipt, "status") ?? "unknown";
   const code = recordString(result.receipt, "code");
   return code ? `${status} (${code})` : status;
-}
-
-function messageText(frame: LabSessionStreamFrame): string | null {
-  const message = frame.transcript?.message;
-  if (!message) return null;
-  const text = message.parts
-    .filter(
-      (part): part is { type: "text"; text: string } =>
-        part.type === "text" && typeof part.text === "string",
-    )
-    .map((part) => part.text)
-    .join("");
-  return `${message.role}: ${text || `[${message.parts.map((part) => part.type).join(", ")}]`}`;
 }
 
 function ProjectionList({
@@ -662,22 +643,7 @@ export default function SessionTracerScratch() {
         </section>
         <section className="border border-border bg-card p-3">
           <h2 className="mb-2 font-mono text-label uppercase text-muted-foreground">Messages</h2>
-          <div className="space-y-2">
-            {frameList.map((frame) => {
-              const text = messageText(frame);
-              return text ? (
-                <pre
-                  key={frame.sequence}
-                  className="whitespace-pre-wrap text-label text-foreground"
-                >
-                  {String(frame.sequence).padStart(4, "0")} {text}
-                </pre>
-              ) : null;
-            })}
-            {!frameList.some((frame) => messageText(frame)) ? (
-              <p className="text-ui text-muted-foreground">No committed messages</p>
-            ) : null}
-          </div>
+          <SessionMessageList frames={frameList} />
         </section>
         <AttentionList attention={projection?.attention.active ?? []} />
         <CapabilityList capabilities={projection?.capabilities ?? []} />
@@ -765,12 +731,7 @@ function transcriptFrame(value: unknown): LabSessionStreamFrame["transcript"] | 
   ) {
     return undefined;
   }
-  const parts = value.message.parts.flatMap((part) =>
-    isRecord(part) && typeof part.type === "string"
-      ? [{ type: part.type, ...(typeof part.text === "string" ? { text: part.text } : {}) }]
-      : [],
-  );
-  return { message: { role: value.message.role, parts } };
+  return { message: { role: value.message.role, parts: value.message.parts } };
 }
 
 function diagnosticEntry(value: unknown): RpcDiagnosticEntry | null {
