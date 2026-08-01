@@ -226,10 +226,14 @@ function labSessionRpcPlugin(repoRoot: string) {
       let lab: Promise<
         InstanceType<typeof import("./src/main/lab/session-rpc").LabSessionRpcServer>
       > | null = null;
+      let labInstance: InstanceType<
+        typeof import("./src/main/lab/session-rpc").LabSessionRpcServer
+      > | null = null;
       const getLab = () => {
-        lab ??= server
-          .ssrLoadModule(labSessionRpcModule)
-          .then(({ LabSessionRpcServer }) => new LabSessionRpcServer({ repoRoot }));
+        lab ??= server.ssrLoadModule(labSessionRpcModule).then(({ LabSessionRpcServer }) => {
+          labInstance = new LabSessionRpcServer({ repoRoot });
+          return labInstance;
+        });
         return lab;
       };
       server.middlewares.use(LAB_SESSION_RPC_PATH, (req, res) => {
@@ -242,10 +246,18 @@ function labSessionRpcPlugin(repoRoot: string) {
         );
       });
       const close = () => {
-        if (lab) void lab.then((instance) => instance.close());
+        // Vite does not await an HTTP `close` listener. Reap the already-loaded
+        // backend synchronously before its process can finish handling SIGINT.
+        if (labInstance) {
+          labInstance.emergencyClose();
+        } else if (lab) {
+          void lab.then(
+            (instance) => instance.emergencyClose(),
+            () => undefined,
+          );
+        }
       };
       server.httpServer?.once("close", close);
-      return close;
     },
   };
 }
