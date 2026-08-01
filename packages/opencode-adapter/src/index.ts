@@ -22,6 +22,7 @@ import type {
   SessionCapabilityCatalogItem,
   SessionInteraction,
   SessionNativeDetail,
+  SessionNativeReference,
 } from "@volli/shared";
 type UIMessage = Extract<HarnessCommand, { kind: "message.submit" }>["message"];
 
@@ -412,29 +413,9 @@ class OpenCodeBinding implements BindingHandle {
   }
 
   async dispatch(command: HarnessCommand): Promise<DeliveryReceipt> {
+    if (command.kind === "message.submit") return this.#dispatchMessage(command);
+
     try {
-      if (command.kind === "message.submit") {
-        const response = await this.#request(
-          `/session/${encodeURIComponent(this.#nativeSessionId)}/prompt_async`,
-          "POST",
-          {
-            messageID: command.commandId,
-            ...(command.model
-              ? { model: { providerID: command.model.providerId, modelID: command.model.modelId } }
-              : {}),
-            ...(command.agent ? { agent: command.agent } : {}),
-            ...(command.variant ? { variant: command.variant } : {}),
-            parts: textParts(command.message),
-          },
-        );
-        return receipt(
-          command.commandId,
-          response.status === 204,
-          response.status,
-          this.native,
-          this.#now(),
-        );
-      }
       if (command.kind === "executor.interrupt") {
         const response = await this.#request(
           `/session/${encodeURIComponent(this.#nativeSessionId)}/abort`,
@@ -462,6 +443,45 @@ class OpenCodeBinding implements BindingHandle {
         status: "unknown",
         detail: error instanceof Error ? error.message : "OpenCode transport failed",
         native: this.native,
+      };
+    }
+  }
+
+  async #dispatchMessage(
+    command: Extract<HarnessCommand, { kind: "message.submit" }>,
+  ): Promise<DeliveryReceipt> {
+    const messageId = openCodeMessageId(this.#spec.sessionId, command.commandId);
+    const native: SessionNativeReference = {
+      id: this.#nativeSessionId,
+      detail: { messageId },
+    };
+    try {
+      const response = await this.#request(
+        `/session/${encodeURIComponent(this.#nativeSessionId)}/prompt_async`,
+        "POST",
+        {
+          messageID: messageId,
+          ...(command.model
+            ? { model: { providerID: command.model.providerId, modelID: command.model.modelId } }
+            : {}),
+          ...(command.agent ? { agent: command.agent } : {}),
+          ...(command.variant ? { variant: command.variant } : {}),
+          parts: textParts(command.message),
+        },
+      );
+      return receipt(
+        command.commandId,
+        response.status === 204,
+        response.status,
+        native,
+        this.#now(),
+      );
+    } catch (error) {
+      return {
+        commandId: command.commandId,
+        status: "unknown",
+        detail: error instanceof Error ? error.message : "OpenCode transport failed",
+        native,
       };
     }
   }
@@ -826,12 +846,21 @@ function receipt(
   commandId: string,
   accepted: boolean,
   status: number,
-  native: OpenCodeBinding["native"],
+  native: SessionNativeReference,
   now: number,
 ): DeliveryReceipt {
   return accepted
     ? { commandId, status: "accepted", acceptedAt: now, native }
     : { commandId, status: "rejected", code: `OPENCODE_HTTP_${status}`, detail: null, native };
+}
+
+function openCodeMessageId(sessionId: string, commandId: string): string {
+  const digest = createHash("sha256")
+    .update("volli:opencode:message:v1\0")
+    .update(JSON.stringify([sessionId, commandId]))
+    .digest("hex")
+    .slice(0, 26);
+  return `msg_${digest}`;
 }
 
 function textParts(message: UIMessage): readonly { type: "text"; text: string }[] {

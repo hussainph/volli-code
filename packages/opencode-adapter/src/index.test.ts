@@ -1148,6 +1148,36 @@ describe("OpenCodeNativeAdapter", () => {
         detail: { messageId: "msg_fc476b81ce66b0702f711903fd" },
       },
     });
+    network.request = async () => {
+      throw new Error("prompt connection closed");
+    };
+    expect(await handle.dispatch(messageCommand())).toMatchObject({
+      commandId: "volli-command-9",
+      status: "unknown",
+      detail: "prompt connection closed",
+    });
+    network.request = async () => {
+      throw "abort transport lost";
+    };
+    expect(
+      await handle.dispatch({
+        kind: "executor.interrupt",
+        commandId: "interrupt-unknown",
+        sessionId: "volli-session-1",
+        attachmentId: "attachment-1",
+      }),
+    ).toMatchObject({ status: "unknown", detail: "OpenCode transport failed" });
+    network.request = async () => {
+      throw new Error("abort connection closed");
+    };
+    expect(
+      await handle.dispatch({
+        kind: "executor.interrupt",
+        commandId: "interrupt-error",
+        sessionId: "volli-session-1",
+        attachmentId: "attachment-1",
+      }),
+    ).toMatchObject({ status: "unknown", detail: "abort connection closed" });
 
     network.request = originalRequest;
     expect(
