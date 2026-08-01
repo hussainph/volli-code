@@ -169,6 +169,7 @@ interface BindingRecord {
   attachment: SessionAttachment;
   venue: SessionExecutionVenue;
   cursor: SessionNativeDetail | null;
+  reconcileInFlight: Promise<void> | null;
 }
 
 type AdapterIdentity = Pick<NativeHarnessAdapter, "manifest">;
@@ -425,6 +426,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         attachment,
         venue: location.venue,
         cursor: null,
+        reconcileInFlight: null,
       });
       await this.#publish([opened]);
       await sink.activate();
@@ -1274,6 +1276,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       attachment,
       venue: attachment.venue,
       cursor: null,
+      reconcileInFlight: null,
     };
     this.#bindings.set(attachmentId, record);
     await sink.activate();
@@ -1281,6 +1284,17 @@ class DefaultSessionRuntime implements SessionRuntime {
   }
 
   async #reconcileBinding(binding: BindingRecord): Promise<void> {
+    if (binding.reconcileInFlight) return binding.reconcileInFlight;
+    const reconciliation = this.#performReconciliation(binding);
+    binding.reconcileInFlight = reconciliation;
+    try {
+      await reconciliation;
+    } finally {
+      binding.reconcileInFlight = null;
+    }
+  }
+
+  async #performReconciliation(binding: BindingRecord): Promise<void> {
     const reconciliation = await binding.handle.reconcile(binding.cursor);
     await this.#recordReconciliation(binding, reconciliation);
   }
