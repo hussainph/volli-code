@@ -1023,9 +1023,15 @@ describe("OpenCodeNativeAdapter", () => {
     const reconciliation = await handle.reconcile(null);
 
     expect(reconciliation.observations).toEqual([
-      expect.objectContaining({ id: "reconcile:status", kind: "turn.completed" }),
+      expect.objectContaining({
+        id: expect.stringMatching(/^reconcile:status:reconcile:native-session-1:/),
+        kind: "turn.completed",
+      }),
     ]);
-    expect(reconciliation.cursor).toEqual({ eventId: "reconcile:status" });
+    expect(reconciliation.cursor).toEqual({
+      kind: "volli.opencode.reconciliation.v1",
+      token: "reconcile:native-session-1:1",
+    });
   });
 
   it("uses the same immutable observation identity for streamed and reconciled messages", async () => {
@@ -1180,6 +1186,8 @@ describe("OpenCodeNativeAdapter", () => {
     network.request = async (input) => {
       if (input.path.includes("/message"))
         return messageResponses.shift() ?? { status: 200, body: nativeHistory };
+      if (input.path.startsWith("/session/status"))
+        return { status: 200, body: { type: "unknown" } };
       return originalRequest(input);
     };
     const handle = await adapter.attach(spec("/workspace/one", "native_resume"), {
@@ -1238,7 +1246,15 @@ describe("OpenCodeNativeAdapter", () => {
       emit: async () => undefined,
     });
 
+    await handle.acknowledgeReconciliation?.({
+      kind: "volli.opencode.reconciliation.v1",
+      token: "missing",
+    });
     const first = await handle.reconcile(null);
+    await handle.acknowledgeReconciliation?.({
+      kind: "volli.opencode.reconciliation.v1",
+      token: "wrong",
+    });
     now = 9999;
     const retry = await handle.reconcile(null);
     expect(retry).toEqual(first);
@@ -1282,6 +1298,60 @@ describe("OpenCodeNativeAdapter", () => {
     expect(
       (await handle.reconcile(null)).observations.filter(({ kind }) => kind === "turn.started"),
     ).toEqual([expect.objectContaining({ kind: "turn.started" })]);
+  });
+
+  it("does not redeliver a reconciled transcript when its final SSE event arrives later", async () => {
+    const streamGate = new Deferred<void>();
+    const streamEndGate = new Deferred<void>();
+    const network = new FakeNetwork();
+    network.messageResponse = {
+      info: { id: "reconciled-before-stream", role: "assistant" },
+      parts: [{ type: "text", text: "Stable recovery" }],
+    };
+    network.subscribe = async () =>
+      (async function* () {
+        await streamGate.promise;
+        yield {
+          id: "late-message",
+          type: "message.updated",
+          properties: {
+            sessionID: "native-session-1",
+            info: { id: "reconciled-before-stream", role: "assistant" },
+            parts: [{ id: "late-part", type: "text", text: "Stable recovery" }],
+          },
+        };
+        yield {
+          id: "late-busy",
+          type: "session.status",
+          properties: { sessionID: "native-session-1", status: { type: "busy" } },
+        };
+        yield {
+          id: "late-idle",
+          type: "session.idle",
+          properties: { sessionID: "native-session-1" },
+        };
+        await streamEndGate.promise;
+      })();
+    const adapter = createOpenCodeNativeAdapter({
+      process: new FakeProcess(),
+      network,
+      now: () => 1234,
+    });
+    const streamed: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        streamed.push(observation);
+      },
+    });
+    const reconciliation = await handle.reconcile(null);
+    streamGate.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(streamed.filter(({ kind }) => kind === "transcript.message")).toEqual([]);
+
+    await handle.acknowledgeReconciliation?.(reconciliation.cursor);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(streamed.filter(({ kind }) => kind === "transcript.message")).toEqual([]);
+    await handle.release("requested");
   });
 
   it("uses the documented legacy resolution endpoints", async () => {
@@ -2466,13 +2536,17 @@ describe("OpenCodeNativeAdapter", () => {
     };
     const handle = await adapter.attach(spec(), { emit: async () => undefined });
     const reconciliation = await handle.reconcile(null);
-    expect(reconciliation.cursor).toEqual({ eventId: "question:q" });
+    expect(reconciliation.cursor).toEqual({
+      kind: "volli.opencode.reconciliation.v1",
+      token: "reconcile:native-session-1:1",
+    });
     expect(reconciliation.observations).toEqual([
       expect.objectContaining({
         kind: "interaction.opened",
         interaction: expect.objectContaining({ id: "question:q", title: "Question", detail: "d" }),
       }),
     ]);
+    expect((await handle.reconcile(reconciliation.cursor)).observations).toEqual([]);
 
     const parsed: OpenCodeSseEvent[] = [];
     for await (const event of parseOpenCodeSse(
