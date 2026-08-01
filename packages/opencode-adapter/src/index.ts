@@ -375,7 +375,6 @@ interface BindingOptions {
 }
 
 interface BufferedOpenCodeMessage {
-  readonly id: string;
   role: ReturnType<typeof messageRole> | null;
   readonly partOrder: string[];
   readonly parts: Map<string, unknown>;
@@ -395,6 +394,7 @@ class OpenCodeBinding implements BindingHandle {
   readonly #questions = new Map<string, readonly OpenCodeQuestion[]>();
   readonly #streamAbort = new AbortController();
   #sink: ObservationSink | null = null;
+  #inFlightEmit: Promise<void> | null = null;
   #released = false;
   #cursor: SessionNativeDetail | null = null;
   #importNativeHistory: boolean;
@@ -544,11 +544,21 @@ class OpenCodeBinding implements BindingHandle {
   }
 
   async release(_reason: ReleaseReason): Promise<void> {
+    if (this.#released) {
+      await this.#drainInFlightEmit();
+      return;
+    }
     this.#released = true;
     this.#streamAbort.abort();
+    await this.#drainInFlightEmit();
     this.#sink = null;
     this.#messages.clear();
     this.#onRelease();
+  }
+
+  async #drainInFlightEmit(): Promise<void> {
+    const emission = this.#inFlightEmit;
+    if (emission) await Promise.allSettled([emission]);
   }
 
   async #pump(stream: AsyncIterable<OpenCodeSseEvent>): Promise<void> {
@@ -591,7 +601,6 @@ class OpenCodeBinding implements BindingHandle {
       // #emit remembers only after its sink commits, so this does not consume
       // the failure observation's independent native identity.
     }
-    if (this.#released) return;
     try {
       await this.#emit({
         id: `opencode:sse-binding-failed:${this.#nativeSessionId}`,
@@ -607,11 +616,18 @@ class OpenCodeBinding implements BindingHandle {
   }
 
   async #emit(observation: HarnessObservation): Promise<void> {
-    /* v8 ignore next -- a released binding exits its pump before another observation can enter. */
-    if (!this.#sink) return;
-    await this.#sink.emit(observation);
-    this.#remember(observation);
-    this.#cursor = observation.cursor ?? { eventId: observation.id };
+    const sink = this.#sink;
+    if (this.#released || !sink) return;
+    const emission = sink.emit(observation);
+    this.#inFlightEmit = emission;
+    try {
+      await emission;
+      if (this.#released || this.#sink !== sink) return;
+      this.#remember(observation);
+      this.#cursor = observation.cursor ?? { eventId: observation.id };
+    } finally {
+      this.#inFlightEmit = null;
+    }
   }
 
   #pushUnique(target: HarnessObservation[], observation: HarnessObservation): void {
@@ -642,6 +658,15 @@ class OpenCodeBinding implements BindingHandle {
       case "message.part.delta":
         this.#applyPartDelta(event.properties);
         return;
+      case "message.part.removed":
+        this.#removePart(event.properties);
+        return;
+      case "message.removed": {
+        const messageId =
+          objectString(event.properties, "messageID") ?? objectString(event.properties, "id");
+        if (messageId) this.#messages.delete(messageId);
+        return;
+      }
       case "session.status":
       case "session.idle":
       case "session.error": {
@@ -716,10 +741,21 @@ class OpenCodeBinding implements BindingHandle {
     });
   }
 
+  #removePart(raw: unknown): void {
+    const messageId = objectString(raw, "messageID");
+    const partId = objectString(raw, "partID");
+    if (!messageId || !partId) return;
+    const message = this.#messages.get(messageId);
+    if (!message) return;
+    message.parts.delete(partId);
+    const orderIndex = message.partOrder.indexOf(partId);
+    if (orderIndex >= 0) message.partOrder.splice(orderIndex, 1);
+  }
+
   #message(messageId: string): BufferedOpenCodeMessage {
     let message = this.#messages.get(messageId);
     if (!message) {
-      message = { id: messageId, role: null, partOrder: [], parts: new Map() };
+      message = { role: null, partOrder: [], parts: new Map() };
       this.#messages.set(messageId, message);
     }
     return message;
@@ -756,6 +792,10 @@ class OpenCodeBinding implements BindingHandle {
         turnId: null,
         message,
       });
+      if (this.#released) {
+        this.#messages.clear();
+        return;
+      }
       this.#seen.add(reconciledMessageKey(messageId));
       this.#messages.delete(messageId);
     }

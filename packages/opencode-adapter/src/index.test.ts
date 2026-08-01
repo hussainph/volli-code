@@ -746,6 +746,29 @@ describe("OpenCodeNativeAdapter", () => {
         },
       },
       {
+        id: "part-removal-malformed",
+        type: "message.part.removed",
+        properties: { sessionID: "native-session-1" },
+      },
+      {
+        id: "part-removal-orphaned",
+        type: "message.part.removed",
+        properties: {
+          sessionID: "native-session-1",
+          messageID: "missing-message",
+          partID: "missing-part",
+        },
+      },
+      {
+        id: "part-removal-unknown",
+        type: "message.part.removed",
+        properties: {
+          sessionID: "native-session-1",
+          messageID: "assistant-kept",
+          partID: "missing-part",
+        },
+      },
+      {
         id: "message-removed-update",
         type: "message.updated",
         properties: {
@@ -758,6 +781,25 @@ describe("OpenCodeNativeAdapter", () => {
         id: "message-removed",
         type: "message.removed",
         properties: { sessionID: "native-session-1", messageID: "assistant-removed" },
+      },
+      {
+        id: "fallback-removed-update",
+        type: "message.updated",
+        properties: {
+          sessionID: "native-session-1",
+          info: { id: "fallback-removed", role: "assistant" },
+          parts: [{ id: "fallback-hidden", type: "text", text: "Fallback removed" }],
+        },
+      },
+      {
+        id: "fallback-removed",
+        type: "message.removed",
+        properties: { sessionID: "native-session-1", id: "fallback-removed" },
+      },
+      {
+        id: "message-removal-malformed",
+        type: "message.removed",
+        properties: { sessionID: "native-session-1" },
       },
       {
         id: "idle-after-removal",
@@ -1693,7 +1735,6 @@ describe("OpenCodeNativeAdapter", () => {
           parts: [{ id: "release-part", type: "text", text: "Final" }],
         },
       },
-      { id: "release-idle", type: "session.idle", properties: { sessionID: "native-session-1" } },
     ];
     const adapter = createOpenCodeNativeAdapter({
       process: new FakeProcess(),
@@ -1720,6 +1761,7 @@ describe("OpenCodeNativeAdapter", () => {
     allowEmit.resolve();
     await release;
     expect(committed.map(({ kind }) => kind)).toEqual(["transcript.message"]);
+    await handle.release("requested");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(committed.map(({ kind }) => kind)).toEqual(["transcript.message"]);
   });
