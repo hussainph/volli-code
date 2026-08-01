@@ -15,6 +15,8 @@
  */
 import type {
   AppStateSetResult,
+  HarnessPendingResult,
+  HarnessRegisteredResult,
   Result,
   RetentionStateResult,
   SessionsResult,
@@ -96,6 +98,12 @@ export const appApi: ApiOverrides = {
     // project root unavailable") sits over the board on every load.
     watchDir: (): Promise<Result> => Promise.resolve({ ok: true }),
     unwatchDir: (): Promise<Result> => Promise.resolve({ ok: true }),
+  },
+  harness: {
+    pending: (): Promise<HarnessPendingResult> =>
+      Promise.resolve({ ok: true, pending: [], broken: [] }),
+    registered: (): Promise<HarnessRegisteredResult> =>
+      Promise.resolve({ ok: true, harnesses: [], channels: [] }),
   },
   sessions: {
     list: (): Promise<SessionsResult> => Promise.resolve({ ok: true, sessions }),

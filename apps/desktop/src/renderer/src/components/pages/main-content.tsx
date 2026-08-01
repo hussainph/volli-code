@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { FolderPlusIcon } from "@phosphor-icons/react/dist/csr/FolderPlus";
 
 import { BoardPage } from "@renderer/components/pages/board-page";
@@ -13,7 +14,7 @@ import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 
 /** No router: the selected project's nav page dispatches directly to a page component. */
-export function MainContent() {
+export function MainContent({ override }: { override?: ReactNode } = {}) {
   const selected = useSelectedProject();
   const projectCount = useProjectsStore((state) => state.projects.length);
   const [activeNav] = useActiveNav();
@@ -26,6 +27,10 @@ export function MainContent() {
   // stateless, so they keep plain conditional rendering. `SessionsLayer` owns
   // every terminal across all projects and toggles its own visibility.
   const sessionsVisible = !settingsOpen && selected !== null && activeNav === "sessions";
+
+  if (override !== undefined) {
+    return <div className="relative flex min-h-0 flex-1 flex-col">{override}</div>;
+  }
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
