@@ -328,7 +328,7 @@ describe("OpenCodeNativeAdapter", () => {
     ]);
   });
 
-  it("coalesces OpenCode part traffic into one safe finalized assistant message", async () => {
+  it("coalesces OpenCode tool lifecycle traffic without dropping earlier metadata", async () => {
     const { adapter } = composition([
       {
         id: "user-message",
@@ -439,7 +439,12 @@ describe("OpenCodeNativeAdapter", () => {
             type: "tool",
             tool: "read",
             callID: "call-1",
-            state: { status: "running", input: { token: "must-not-leak" } },
+            state: {
+              status: "running",
+              input: { path: "src/session-runtime.ts" },
+              title: "Read Session runtime",
+              metadata: { source: "workspace" },
+            },
           },
         },
       },
@@ -454,7 +459,11 @@ describe("OpenCodeNativeAdapter", () => {
             type: "tool",
             tool: "read",
             callID: "call-1",
-            state: { status: "completed", output: "must-not-leak" },
+            state: {
+              status: "completed",
+              output: { content: 'case "transcript.message"' },
+              time: { start: 1, end: 2 },
+            },
           },
         },
       },
@@ -481,8 +490,15 @@ describe("OpenCodeNativeAdapter", () => {
               toolName: "read",
               toolCallId: "call-1",
               state: "output-available",
-              input: null,
-              output: null,
+              input: { path: "src/session-runtime.ts" },
+              output: { content: 'case "transcript.message"' },
+              title: "Read Session runtime",
+              toolMetadata: {
+                opencode: {
+                  metadata: { source: "workspace" },
+                  time: { start: 1, end: 2 },
+                },
+              },
             },
           ],
         },
@@ -1942,7 +1958,6 @@ describe("OpenCodeNativeAdapter", () => {
     expect(observations[6]).toMatchObject({
       attention: { detail: null, diagnostic: null },
     });
-    expect(JSON.stringify(observations)).not.toContain("must-not-leak");
   });
 
   it("does not repeat SSE observations and raises durable attention when the stream drops", async () => {
