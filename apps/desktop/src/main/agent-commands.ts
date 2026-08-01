@@ -84,7 +84,7 @@ import {
 
 export interface AgentCommandServiceOptions {
   db: Database.Database;
-  /** The app composition root's one durable Session session engine. */
+  /** The app composition root's one durable Session Engine. */
   sessionEngine: SessionEngine;
   appVersion: string;
   now?: () => number;

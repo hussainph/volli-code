@@ -198,7 +198,7 @@ function terminalDetailFor(
  */
 export class PtyManager {
   private readonly sessions = new Map<string, Session>();
-  /** One app-owned durable Session session engine; tests may lazily compose one around their test db. */
+  /** One app-owned durable Session Engine; tests may lazily compose one around their test db. */
   private readonly sessionEngine: SessionEngine | null;
   /**
    * The warm-park duty cycle (park/wake + breathe/sweep), extracted per issue
@@ -322,7 +322,7 @@ export class PtyManager {
     const db = this.db;
     if (db === null) return { ok: false, error: this.dbError };
     const sessionEngine = this.sessionEngine;
-    if (sessionEngine === null) return { ok: false, error: "Session session engine is unavailable" };
+    if (sessionEngine === null) return { ok: false, error: "Session Engine is unavailable" };
 
     const resolved = await resolveScope(
       db,
@@ -336,7 +336,7 @@ export class PtyManager {
     const scope = resolved.scope;
 
     // A Session is durable before any worktree or PTY attempt. A new terminal
-    // gets its identity from the session engine; native resume deliberately
+    // gets its identity from the Session Engine; native resume deliberately
     // retains the prior durable Session and starts another attachment on it.
     let sessionId: string;
     try {
@@ -407,7 +407,7 @@ export class PtyManager {
       return { ok: false, error: errorMessage(error) };
     }
     if (start.receipt !== null) {
-      // A non-null submit receipt is a control-plane rejection: the adapter was
+      // A non-null submit receipt is a session-engine rejection: the adapter was
       // never asked to start and there is no attachment attempt to record.
       return { ok: false, error: "The Session cannot accept another terminal attachment" };
     }

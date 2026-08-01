@@ -96,7 +96,7 @@ async function seedTerminal(
 }
 
 describe("resolveScope", () => {
-  it("numbers from control-plane projections rather than terminal columns", async () => {
+  it("numbers from session-engine projections rather than terminal columns", async () => {
     const { project, ticket, control } = setup();
     await control.createSession({
       commandId: "create",

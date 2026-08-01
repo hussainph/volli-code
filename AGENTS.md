@@ -13,6 +13,9 @@ Use `CONTEXT.md` for canonical domain language and `docs/DESIGN.md` for the livi
 - `apps/desktop/src/renderer/` — React UI and Zustand stores. UI state is a projection of durable main-process state plus ephemeral view state. Do not import Node APIs.
 - `apps/desktop/scripts/` — Node build and development orchestration.
 - `packages/shared/` (`@volli/shared`) — pure, unit-tested domain code: models, ticket rules, event types, adapter capability definitions, and branch/slug rules. Do not import Electron, Node, or DOM APIs.
+- `packages/session-engine/` (`@volli/session-engine`) — plain TypeScript Session commands, durable projections, native-adapter contracts, committed stream coordination, and AI SDK transcript vocabulary. It owns no transport or Node APIs.
+- `packages/session-rpc/` (`@volli/session-rpc`) — the thin tRPC edge for Session clients and sanitized diagnostics.
+- `packages/opencode-adapter/` (`@volli/opencode-adapter`) — the Node-hosted OpenCode legacy HTTP/SSE mapper and supervised loopback server.
 - `apps/desktop/src/renderer/lab/` — the UI lab (`pnpm lab`): browser-only scratches for trying interactions against real components and tokens with fixture data, before they become app features. Dev-server only, never built; it imports the app, never the reverse.
 
 App data lives under Electron's `userData` directory. The agent-facing `volli` CLI communicates with main over a Unix socket.
@@ -26,6 +29,8 @@ App data lives under Electron's `userData` directory. The agent-facing `volli` C
 - Keep resume, terminal recreation, and history navigation as distinct semantics.
 - Retry transient transport failures without duplicating accepted work. Authentication, permissions, configuration, and quota failures require explicit user recovery.
 - Existing hooks and terminal markers are compatibility evidence for TUI adapters, not the canonical source of Session truth.
+- A Session starts with one root Agent Thread. Each Thread has at most one live Thread Binding; Conversation Branches and Generation Attempts preserve edits and regeneration without rewriting history.
+- Harness Profiles are explicit. Native is preferred when selected; terminal `liveBestEffort` is never a silent fallback.
 
 ## Conventions
 

@@ -38,10 +38,39 @@ _Avoid_: pane session, split session, harness process, terminal pane, UI tab
 **Session Event**:
 An immutable fact in a Session's locally ordered ledger: an attachment outcome,
 native observation, command outcome, message/turn boundary, or recovery signal.
-The control plane assigns the per-Session sequence; timestamps are metadata, not
+The Session Engine assigns the per-Session sequence; timestamps are metadata, not
 ledger order. Session Events are not Ticket Events, although a planner event may
 cite a Session as provenance.
 _Avoid_: session state, hook state, terminal state
+
+**Agent Thread**:
+A durable conversation lane inside a Session. The first native-adapter slice owns
+one root Agent Thread; a later slice may observe native depth-one child Threads
+without making a provider process or UI view own their lifetime.
+_Avoid_: provider session, subagent pane, terminal split
+
+**Conversation Branch**:
+An immutable lineage of messages within an Agent Thread. Editing an earlier
+message creates a new Branch instead of rewriting committed history.
+_Avoid_: edited transcript, current messages array
+
+**Generation Attempt**:
+One model response attempt on a Conversation Branch. Regeneration creates a
+sibling Attempt and retains the earlier result.
+_Avoid_: retry count, overwritten response
+
+**Harness Profile**:
+One execution surface exposed by a harness identity, such as a structured native
+profile or a terminal `liveBestEffort` profile. Profile selection is explicit;
+failure never silently switches profiles.
+_Avoid_: fallback mode, harness type
+
+**Thread Binding**:
+The live or historical binding from an Agent Thread to a Session Attachment and
+its native conversation locator. Each Agent Thread has at most one live Binding;
+the first native-adapter slice has one root Thread, so it retains the existing
+single-live-executor behavior until child Threads land.
+_Avoid_: Session, provider session, terminal pane
 
 **Session Attachment**:
 One historical association between an existing Session and an executor or
@@ -63,7 +92,7 @@ rejected, completed, or unreconciled. A Receipt makes delivery observable
 without claiming an unsupported native guarantee.
 _Avoid_: event, acknowledgement (when no durable outcome exists)
 
-**Control Plane**:
+**Session Engine**:
 The UI- and adapter-agnostic interface that owns Session commands, facts,
 projections, and their durable storage contract. Electron main is its only
 SQLite writer in the initial local deployment; the interface is deliberately

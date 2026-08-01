@@ -88,7 +88,7 @@ export interface ActiveSessionListing {
 export interface BuildActiveSessionListingInput {
   tickets: readonly Ticket[];
   containers: Readonly<Record<string, SessionContainer>>;
-  /** Latest durable Session signal by ticket, fetched from Control Plane projections. */
+  /** Latest durable Session signal by ticket, fetched from Session Engine projections. */
   signalsByTicket: Readonly<Record<string, LatestSessionSignal>>;
   records: readonly SessionRecord[];
   lastOutputAt: Readonly<Record<string, number>>;

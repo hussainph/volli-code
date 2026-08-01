@@ -552,7 +552,7 @@ describe("buildActiveSessionListing", () => {
     expect(result.active).toEqual([]);
   });
 
-  it("uses the Control Plane's projected latest signal", () => {
+  it("uses the Session Engine's projected latest signal", () => {
     const latest = signal("t1", "s1", "blocked", "Approve access", 50);
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "needs_review" })],
@@ -565,7 +565,7 @@ describe("buildActiveSessionListing", () => {
       now: 100,
     });
 
-    // The Control Plane has already reduced durable Session evidence to the latest signal.
+    // The Session Engine has already reduced durable Session evidence to the latest signal.
     expect(result.needsYou[0]).toMatchObject({
       attention: { signal: "blocked", reason: "Approve access" },
     });

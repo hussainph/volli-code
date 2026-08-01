@@ -204,7 +204,7 @@ export function registerDataIpcHandlers(
      * lifecycle event. Absent (tests, degraded boot) means a no-op.
      */
     interruptTicketSessions?: (ticketId: string) => string[] | Promise<string[]>;
-    /** The app's single durable Session session engine. */
+    /** The app's single durable Session Engine. */
     sessionEngine?: SessionEngine;
   } = {},
 ): void {
