@@ -111,7 +111,7 @@ import { openTestDb, testProject, testSession, testTicket, type TestDb } from ".
 import type { HarnessId } from "@volli/shared";
 import { deleteTicket, insertTicket } from "./db/tickets-repo";
 import { syncProjectRoots } from "./project-roots";
-import { createDesktopControlPlane } from "./session-control";
+import { createDesktopSessionEngine } from "./session-control";
 
 let ptyPidSeq = 1000;
 /** A distinct fake pid per session, so park-tree assertions can't collide. */
@@ -293,9 +293,9 @@ afterEach(() => {
 
 describe("volli:terminal-create", () => {
   it("preserves the new Session without inventing an attachment when executor.start is rejected", async () => {
-    const controlPlane = createDesktopControlPlane(testDb.db);
-    const submit = controlPlane.submit.bind(controlPlane);
-    controlPlane.submit = async (request) => {
+    const sessionEngine = createDesktopSessionEngine(testDb.db);
+    const submit = sessionEngine.submit.bind(sessionEngine);
+    sessionEngine.submit = async (request) => {
       const result = await submit(request);
       if (request.intent.kind !== "executor.start") return result;
       return {
@@ -314,7 +314,7 @@ describe("volli:terminal-create", () => {
     manager = registerTerminalIpcHandlers(
       { ok: true, db: testDb.db },
       { socketPath: "/profile/volli.sock", binDir: "/profile/bin" },
-      controlPlane,
+      sessionEngine,
     );
 
     const result = await invokeCreate(makeWebContents(), {
@@ -323,7 +323,7 @@ describe("volli:terminal-create", () => {
       cols: 80,
       rows: 24,
     });
-    const projection = (await controlPlane.listSessions({ projectId: "w", scope: "all" }))[0];
+    const projection = (await sessionEngine.listSessions({ projectId: "w", scope: "all" }))[0];
 
     expect(result).toEqual({
       ok: false,
@@ -1471,11 +1471,11 @@ describe("PtyManager.interruptTicketSessions", () => {
   });
 
   it("keeps interrupting the rest when one session's pty write throws", async () => {
-    const controlPlane = createDesktopControlPlane(testDb.db);
+    const sessionEngine = createDesktopSessionEngine(testDb.db);
     manager = registerTerminalIpcHandlers(
       { ok: true, db: testDb.db },
       { socketPath: "/profile/volli.sock", binDir: "/profile/bin" },
-      controlPlane,
+      sessionEngine,
     );
     const broken = await createKickoffSession("itk1", { harnessId: "codex", prompt: "go" });
     const healthy = await createKickoffSession("itk1", { harnessId: "codex", prompt: "go" });
@@ -1492,7 +1492,7 @@ describe("PtyManager.interruptTicketSessions", () => {
 
       expect(interrupted).toEqual([healthy.result.sessionId]);
       expect(healthy.pty.write).toHaveBeenCalledWith("\x1b");
-      const events = await controlPlane.listEvents({ sessionId: broken.result.sessionId });
+      const events = await sessionEngine.listEvents({ sessionId: broken.result.sessionId });
       expect(events).toContainEqual(
         expect.objectContaining({
           payload: expect.objectContaining({
@@ -1584,12 +1584,12 @@ describe("resume launch (issue #78)", () => {
   });
 
   it("keeps the latest linked native id and active harness when a terminal exits before resume", async () => {
-    const controlPlane = createDesktopControlPlane(testDb.db);
+    const sessionEngine = createDesktopSessionEngine(testDb.db);
     // Re-register the PTY door with the SAME writer the socket service uses.
     manager = registerTerminalIpcHandlers(
       { ok: true, db: testDb.db },
       { socketPath: "/profile/volli.sock", binDir: "/profile/bin" },
-      controlPlane,
+      sessionEngine,
     );
     const { result: launched, pty: launchedPty } = await createKickoffSession("rtk1", {
       harnessId: "claude-code",
@@ -1598,7 +1598,7 @@ describe("resume launch (issue #78)", () => {
     if (!launched.ok) throw new Error(`expected session, got ${launched.error}`);
     const service = createAgentCommandService({
       db: testDb.db,
-      controlPlane,
+      sessionEngine,
       appVersion: "1.2.3",
     });
     const request = (cmd: "session.harness" | "session.link", args: Record<string, unknown>) =>
@@ -1632,12 +1632,12 @@ describe("resume launch (issue #78)", () => {
     });
   });
 
-  it("serializes concurrent PTY exit and agent signal through the injected Control Plane", async () => {
-    const controlPlane = createDesktopControlPlane(testDb.db);
+  it("serializes concurrent PTY exit and agent signal through the injected Session Engine", async () => {
+    const sessionEngine = createDesktopSessionEngine(testDb.db);
     manager = registerTerminalIpcHandlers(
       { ok: true, db: testDb.db },
       { socketPath: "/profile/volli.sock", binDir: "/profile/bin" },
-      controlPlane,
+      sessionEngine,
     );
     const { result: launched, pty } = await createKickoffSession("rtk1", {
       harnessId: "claude-code",
@@ -1646,7 +1646,7 @@ describe("resume launch (issue #78)", () => {
     if (!launched.ok) throw new Error(`expected session, got ${launched.error}`);
     const service = createAgentCommandService({
       db: testDb.db,
-      controlPlane,
+      sessionEngine,
       appVersion: "1.2.3",
     });
 
@@ -1662,8 +1662,8 @@ describe("resume launch (issue #78)", () => {
       expect(getSession(testDb.db, launched.sessionId)?.endedAt).not.toBeNull(),
     );
 
-    const projection = await controlPlane.getSession({ sessionId: launched.sessionId });
-    const events = await controlPlane.listEvents({ sessionId: launched.sessionId });
+    const projection = await sessionEngine.getSession({ sessionId: launched.sessionId });
+    const events = await sessionEngine.listEvents({ sessionId: launched.sessionId });
     expect(events.map((event) => event.sequence)).toEqual(
       Array.from({ length: events.length }, (_value, index) => index + 1),
     );

@@ -12,7 +12,7 @@ import { createAgentCommandService } from "./agent-commands";
 import { startAgentSocket, type AgentSocketServer } from "./agent-socket";
 import { insertProject } from "./db/projects-repo";
 import { openTestDb, testProject, type TestDb } from "./db/test-helpers";
-import { createDesktopControlPlane } from "./session-control";
+import { createDesktopSessionEngine } from "./session-control";
 
 let ctx: TestDb;
 let server: AgentSocketServer | undefined;
@@ -71,7 +71,7 @@ describe("agent socket", () => {
     let timestamp = 100;
     const service = createAgentCommandService({
       db: ctx.db,
-      controlPlane: createDesktopControlPlane(ctx.db),
+      sessionEngine: createDesktopSessionEngine(ctx.db),
       appVersion: "1.2.3",
       now: () => timestamp++,
       newId: () => "ticket-internal",

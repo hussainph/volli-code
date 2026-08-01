@@ -67,7 +67,7 @@ export interface SubmitSessionCommandResult {
   receiptEvent: SessionEvent | null;
 }
 
-export interface ControlPlane {
+export interface SessionEngine {
   createSession(request: CreateSessionRequest): Promise<CreateSessionResult>;
   observe(observation: SessionObservation): Promise<SessionEvent>;
   submit(request: SubmitSessionCommandRequest): Promise<SubmitSessionCommandResult>;
@@ -80,28 +80,28 @@ export interface ControlPlane {
   listEvents(query: ListSessionEventsQuery): Promise<readonly SessionEvent[]>;
 }
 
-export interface ControlPlanePorts {
+export interface SessionEnginePorts {
   ledger: SessionLedger;
   clock: SessionLedgerClock;
   ids: SessionLedgerIds;
 }
 
-export class ControlPlaneConflictError extends Error {
+export class SessionEngineConflictError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "ControlPlaneConflictError";
+    this.name = "SessionEngineConflictError";
   }
 }
 
-export class ControlPlaneNotFoundError extends Error {
+export class SessionEngineNotFoundError extends Error {
   constructor(sessionId: string) {
     super(`Session ${sessionId} was not found`);
-    this.name = "ControlPlaneNotFoundError";
+    this.name = "SessionEngineNotFoundError";
   }
 }
 
-/** The storage-agnostic control plane; its host supplies one transactional ledger writer. */
-export function createControlPlane(ports: ControlPlanePorts): ControlPlane {
+/** The storage-agnostic Session Engine; its host supplies one transactional ledger writer. */
+export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
   return {
     async createSession(request) {
       return ports.ledger.transaction((transaction) => {
@@ -178,7 +178,7 @@ export function createControlPlane(ports: ControlPlanePorts): ControlPlane {
     async observe(observation) {
       return ports.ledger.transaction((transaction) => {
         const session = transaction.getSession(observation.sessionId);
-        if (!session) throw new ControlPlaneNotFoundError(observation.sessionId);
+        if (!session) throw new SessionEngineNotFoundError(observation.sessionId);
         const events = transaction.listEvents({ sessionId: session.id });
         // SQLite persists omitted optional envelope ids as NULL. Canonicalize
         // before either receipt or fact handling so every durable event uses
@@ -191,29 +191,32 @@ export function createControlPlane(ports: ControlPlanePorts): ControlPlane {
           if (existingReceipt) {
             assertAdapterReceiptRoute(command, observation);
             if (!sameCommandReceiptOutcome(existingReceipt, observation.receipt)) {
-              throw new ControlPlaneConflictError(
+              throw new SessionEngineConflictError(
                 `Receipt ${observation.receipt.id} was already recorded differently`,
               );
             }
             const event = receiptEventFor(events, existingReceipt.id);
             if (!event || event.sessionId !== session.id) {
-              throw new ControlPlaneConflictError(
+              throw new SessionEngineConflictError(
                 `Receipt ${existingReceipt.id} has no Session event`,
               );
             }
             return event;
           }
-          if (
-            transaction
-              .listReceipts(observation.receipt.commandId)
-              .some((receipt) => receipt.status === "rejected" || receipt.status === "completed")
-          ) {
-            throw new ControlPlaneConflictError(
+          const priorReceipts = transaction.listReceipts(observation.receipt.commandId);
+          const hasTerminalReceipt = priorReceipts.some(
+            (receipt) => receipt.status === "rejected" || receipt.status === "completed",
+          );
+          const wouldRegressAcceptedDelivery =
+            observation.receipt.status !== "completed" &&
+            priorReceipts.some((receipt) => receipt.status === "accepted");
+          if (hasTerminalReceipt || wouldRegressAcceptedDelivery) {
+            throw new SessionEngineConflictError(
               `Command ${observation.receipt.commandId} already has a terminal receipt`,
             );
           }
 
-          const projection = projectSession(session, events);
+          const projection = projectSession(session, events, ports.clock.now());
           assertReceiptObservation(transaction, session, projection, observation);
           const sequence = nextSequence(events);
           const event = receiptRecordedEvent(
@@ -244,14 +247,14 @@ export function createControlPlane(ports: ControlPlanePorts): ControlPlane {
             !sameSessionEventProvenance(existingEvent.provenance, observation.provenance) ||
             !sameSessionEventPayload(existingEvent.payload, payload)
           ) {
-            throw new ControlPlaneConflictError(
+            throw new SessionEngineConflictError(
               `Observation ${observation.id} was already recorded with different evidence`,
             );
           }
           return existingEvent;
         }
 
-        const projection = projectSession(session, events);
+        const projection = projectSession(session, events, ports.clock.now());
         assertObservableFact(projection, observation);
         assertPendingStartReservation(projection, observation);
         const event: SessionEvent = {
@@ -273,7 +276,7 @@ export function createControlPlane(ports: ControlPlanePorts): ControlPlane {
     async submit(request) {
       return ports.ledger.transaction((transaction) => {
         const session = transaction.getSession(request.sessionId);
-        if (!session) throw new ControlPlaneNotFoundError(request.sessionId);
+        if (!session) throw new SessionEngineNotFoundError(request.sessionId);
         const commandRequest: SessionCommandRequest = {
           id: request.commandId,
           sessionId: session.id,
@@ -283,7 +286,7 @@ export function createControlPlane(ports: ControlPlanePorts): ControlPlane {
         if (existing) return replaySubmit(transaction, session, commandRequest);
 
         const events = transaction.listEvents({ sessionId: session.id });
-        const projection = projectSession(session, events);
+        const projection = projectSession(session, events, ports.clock.now());
         const routeResolution = resolveCommandRoute(projection, request.intent);
         const command: SessionCommand = {
           ...commandRequest,
@@ -372,7 +375,11 @@ export function createControlPlane(ports: ControlPlanePorts): ControlPlane {
       return ports.ledger.transaction((transaction) => {
         const session = transaction.getSession(query.sessionId);
         return session
-          ? projectSession(session, transaction.listEvents({ sessionId: session.id }))
+          ? projectSession(
+              session,
+              transaction.listEvents({ sessionId: session.id }),
+              ports.clock.now(),
+            )
           : null;
       });
     },
@@ -382,7 +389,11 @@ export function createControlPlane(ports: ControlPlanePorts): ControlPlane {
         transaction
           .listSessions(query)
           .map((session) =>
-            projectSession(session, transaction.listEvents({ sessionId: session.id })),
+            projectSession(
+              session,
+              transaction.listEvents({ sessionId: session.id }),
+              ports.clock.now(),
+            ),
           ),
       );
     },
@@ -407,16 +418,16 @@ function replayCreate(
 ): CreateSessionResult {
   const stored = transaction.getCommand(request.commandId);
   if (!stored || !sameCreateSessionRequest(stored, request)) {
-    throw new ControlPlaneConflictError(
+    throw new SessionEngineConflictError(
       `Command ${request.commandId} was already accepted with different intent`,
     );
   }
   const receipt = transaction.listReceipts(stored.id).find(isCreateReceipt);
-  if (!receipt) throw new ControlPlaneConflictError(`Command ${stored.id} has no create receipt`);
+  if (!receipt) throw new SessionEngineConflictError(`Command ${stored.id} has no create receipt`);
   const session = transaction.getSession(stored.sessionId);
-  if (!session) throw new ControlPlaneConflictError(`Command ${stored.id} has no Session`);
+  if (!session) throw new SessionEngineConflictError(`Command ${stored.id} has no Session`);
   if (receipt.result.sessionId !== session.id) {
-    throw new ControlPlaneConflictError(
+    throw new SessionEngineConflictError(
       `Command ${stored.id} has a create receipt for another Session`,
     );
   }
@@ -435,7 +446,7 @@ function replayCreate(
     !receiptEvent ||
     receiptEvent.sessionId !== session.id
   ) {
-    throw new ControlPlaneConflictError(`Command ${stored.id} has incomplete durable history`);
+    throw new SessionEngineConflictError(`Command ${stored.id} has incomplete durable history`);
   }
   if (
     commandEvent.payload.kind !== "command.recorded" ||
@@ -445,7 +456,7 @@ function replayCreate(
     receiptEvent.payload.kind !== "command.receipt.recorded" ||
     !sameCommandReceipt(receiptEvent.payload.receipt, receipt)
   ) {
-    throw new ControlPlaneConflictError(
+    throw new SessionEngineConflictError(
       `Command ${stored.id} has history that does not match Session`,
     );
   }
@@ -479,19 +490,19 @@ function replaySubmit(
 ): SubmitSessionCommandResult {
   const stored = transaction.getCommand(command.id);
   if (!stored || !sameSessionCommandRequest(stored, command)) {
-    throw new ControlPlaneConflictError(
+    throw new SessionEngineConflictError(
       `Command ${command.id} was already accepted with different intent`,
     );
   }
   const events = transaction.listEvents({ sessionId: session.id });
   const commandEvent = commandEventFor(events, command.id);
   if (!commandEvent || commandEvent.sessionId !== session.id) {
-    throw new ControlPlaneConflictError(`Command ${command.id} has no recorded event`);
+    throw new SessionEngineConflictError(`Command ${command.id} has no recorded event`);
   }
   const receipt = transaction.listReceipts(command.id).at(-1) ?? null;
   const receiptEvent = receipt ? receiptEventFor(events, receipt.id) : null;
   if (receipt && (!receiptEvent || receiptEvent.sessionId !== session.id)) {
-    throw new ControlPlaneConflictError(`Receipt ${receipt.id} has no Session event`);
+    throw new SessionEngineConflictError(`Receipt ${receipt.id} has no Session event`);
   }
   return {
     command: stored,
@@ -593,6 +604,7 @@ function rejectionFor(
 interface CommandRouteRejection {
   code:
     | "no_live_executor"
+    | "interaction_unavailable"
     | "attachment_unavailable"
     | "live_executor_exists"
     | "executor_start_pending";
@@ -642,6 +654,35 @@ function resolveCommandRoute(
             },
           };
     }
+    case "interaction.resolve": {
+      const interaction = projection.interactions.active.find(
+        (candidate) => candidate.id === intent.interactionId,
+      );
+      if (!interaction || interaction.attachmentId !== intent.attachmentId) {
+        return {
+          route: null,
+          rejection: {
+            code: "interaction_unavailable",
+            detail: `Interaction ${intent.interactionId} is not open on attachment ${intent.attachmentId}`,
+          },
+        };
+      }
+      const attachment = projection.attachments.find(
+        (candidate) => candidate.id === intent.attachmentId,
+      );
+      return attachment?.status === "open"
+        ? {
+            route: { adapterId: attachment.adapterId, attachmentId: attachment.id },
+            rejection: null,
+          }
+        : {
+            route: null,
+            rejection: {
+              code: "attachment_unavailable",
+              detail: `Attachment ${intent.attachmentId} is not open`,
+            },
+          };
+    }
     case "executor.stop":
     case "executor.interrupt": {
       const attachment = projection.attachments.find(
@@ -677,11 +718,11 @@ function assertObservableFact(
 ): void {
   if (observation.kind === "attachment.opened") {
     if (projection.status === "archived") {
-      throw new ControlPlaneConflictError(`Session ${projection.session.id} is archived`);
+      throw new SessionEngineConflictError(`Session ${projection.session.id} is archived`);
     }
     assertNewAttachment(projection, observation.attachment);
     if (projection.liveExecutor) {
-      throw new ControlPlaneConflictError(
+      throw new SessionEngineConflictError(
         `Session ${projection.session.id} already has live executor ${projection.liveExecutor.id}`,
       );
     }
@@ -693,20 +734,61 @@ function assertObservableFact(
   }
 
   const attachmentId = observationAttachmentId(observation);
-  if (!attachmentId) return;
+  if (!attachmentId) {
+    if (
+      observation.kind === "capabilities.updated" &&
+      (observation.provenance.source.kind !== "adapter" ||
+        observation.provenance.source.id !== observation.snapshot.adapterId)
+    ) {
+      throw new SessionEngineConflictError(
+        `Capability snapshot ${observation.snapshot.id} must be produced by adapter ${observation.snapshot.adapterId}`,
+      );
+    }
+    return;
+  }
   const attachment = projection.attachments.find((candidate) => candidate.id === attachmentId);
-  if (!attachment) throw new ControlPlaneConflictError(`Attachment ${attachmentId} is unknown`);
+  if (!attachment) throw new SessionEngineConflictError(`Attachment ${attachmentId} is unknown`);
   if (attachment.status !== "open") {
-    throw new ControlPlaneConflictError(`Attachment ${attachmentId} is already closed`);
+    throw new SessionEngineConflictError(`Attachment ${attachmentId} is already closed`);
   }
   if (
     observation.kind === "attachment.native_referenced" &&
     (observation.provenance.source.kind !== "adapter" ||
       observation.provenance.source.id !== attachment.adapterId)
   ) {
-    throw new ControlPlaneConflictError(
+    throw new SessionEngineConflictError(
       `Native reference for attachment ${attachmentId} must be produced by adapter ${attachment.adapterId}`,
     );
+  }
+  if (
+    (observation.kind === "capabilities.updated" ||
+      observation.kind === "interaction.opened" ||
+      observation.kind === "interaction.resolved") &&
+    (observation.provenance.source.kind !== "adapter" ||
+      observation.provenance.source.id !== attachment.adapterId)
+  ) {
+    throw new SessionEngineConflictError(
+      `${observation.kind} for attachment ${attachmentId} must be produced by adapter ${attachment.adapterId}`,
+    );
+  }
+  if (
+    observation.kind === "capabilities.updated" &&
+    (observation.snapshot.attachmentId !== attachment.id ||
+      observation.snapshot.adapterId !== attachment.adapterId)
+  ) {
+    throw new SessionEngineConflictError(
+      `Capability snapshot ${observation.snapshot.id} does not match attachment ${attachment.id}`,
+    );
+  }
+  if (observation.kind === "interaction.resolved") {
+    const interaction = projection.interactions.active.find(
+      (candidate) => candidate.id === observation.interactionId,
+    );
+    if (!interaction || interaction.attachmentId !== attachment.id) {
+      throw new SessionEngineConflictError(
+        `Interaction ${observation.interactionId} is not open on attachment ${attachment.id}`,
+      );
+    }
   }
 }
 
@@ -719,7 +801,7 @@ function assertPendingStartReservation(
     projection.pendingExecutorStart &&
     observation.commandId !== projection.pendingExecutorStart.id
   ) {
-    throw new ControlPlaneConflictError(
+    throw new SessionEngineConflictError(
       `Session ${projection.session.id} has pending executor start ${projection.pendingExecutorStart.id}`,
     );
   }
@@ -727,10 +809,10 @@ function assertPendingStartReservation(
 
 function assertNewAttachment(projection: SessionProjection, attachment: SessionAttachment): void {
   if (attachment.sessionId !== projection.session.id) {
-    throw new ControlPlaneConflictError(`Attachment ${attachment.id} belongs to another Session`);
+    throw new SessionEngineConflictError(`Attachment ${attachment.id} belongs to another Session`);
   }
   if (projection.attachments.some((candidate) => candidate.id === attachment.id)) {
-    throw new ControlPlaneConflictError(`Attachment ${attachment.id} already exists`);
+    throw new SessionEngineConflictError(`Attachment ${attachment.id} already exists`);
   }
 }
 
@@ -752,7 +834,7 @@ function assertReceiptObservation(
     observation.provenance.source.kind !== "adapter" ||
     observation.provenance.source.id !== attachment.adapterId
   ) {
-    throw new ControlPlaneConflictError(
+    throw new SessionEngineConflictError(
       `Receipt ${observation.receipt.id} has invalid attachment evidence`,
     );
   }
@@ -765,7 +847,7 @@ function assertReceiptCommandOwnership(
 ): SessionCommand {
   const command = transaction.getCommand(observation.receipt.commandId);
   if (!command || !commandBelongsToSession(command, session)) {
-    throw new ControlPlaneConflictError(
+    throw new SessionEngineConflictError(
       `Receipt ${observation.receipt.id} does not belong to Session ${session.id}`,
     );
   }
@@ -775,7 +857,7 @@ function assertReceiptCommandOwnership(
     command.intent.kind === "session.retitle" ||
     command.intent.kind === "session.signal"
   ) {
-    throw new ControlPlaneConflictError(
+    throw new SessionEngineConflictError(
       `Receipt ${observation.receipt.id} cannot be externally observed`,
     );
   }
@@ -797,7 +879,7 @@ function assertAttachmentStartRoute(
     command?.intent.kind === "executor.start" &&
     command.route?.adapterId !== observation.attachment.adapterId
   ) {
-    throw new ControlPlaneConflictError(
+    throw new SessionEngineConflictError(
       `Attachment ${observation.attachment.id} does not match command ${command.id} route`,
     );
   }
@@ -811,7 +893,7 @@ function assertObservationCausation(
   if (!observation.commandId) return;
   const command = transaction.getCommand(observation.commandId);
   if (!command || !commandBelongsToSession(command, session)) {
-    throw new ControlPlaneConflictError(
+    throw new SessionEngineConflictError(
       `Command ${observation.commandId} does not belong to Session ${session.id}`,
     );
   }
@@ -831,7 +913,7 @@ function assertReceiptMatchesCommand(
       receipt.result.kind !== expectedResultKind(command.intent.kind) ||
       receipt.result.sessionId !== session.id
     ) {
-      throw new ControlPlaneConflictError(
+      throw new SessionEngineConflictError(
         `Receipt ${receipt.id} does not match command ${command.id}`,
       );
     }
@@ -844,23 +926,24 @@ function assertAdapterReceiptRoute(
 ): void {
   const route = command.route;
   if (!route) {
-    throw new ControlPlaneConflictError(`Command ${command.id} has no adapter delivery route`);
+    throw new SessionEngineConflictError(`Command ${command.id} has no adapter delivery route`);
   }
   if (
     observation.provenance.source.kind !== "adapter" ||
     observation.provenance.source.id !== route.adapterId
   ) {
-    throw new ControlPlaneConflictError(
+    throw new SessionEngineConflictError(
       `Receipt ${observation.receipt.id} was not produced by adapter ${route.adapterId}`,
     );
   }
   if (
     (command.intent.kind === "message.submit" ||
+      command.intent.kind === "interaction.resolve" ||
       command.intent.kind === "executor.stop" ||
       command.intent.kind === "executor.interrupt") &&
     observationAttachmentId(observation) !== route.attachmentId
   ) {
-    throw new ControlPlaneConflictError(
+    throw new SessionEngineConflictError(
       `Receipt ${observation.receipt.id} does not match routed attachment`,
     );
   }
@@ -876,6 +959,7 @@ function expectedResultKind(intent: SessionCommandIntent["kind"]): CommandReceip
     "executor.stop": "executor.stop.requested",
     "executor.interrupt": "executor.interrupted",
     "message.submit": "message.submitted",
+    "interaction.resolve": "interaction.resolved",
   };
   return resultKinds[intent];
 }
@@ -887,6 +971,10 @@ function observationAttachmentId(observation: SessionObservation): string | null
       return observation.attachment.id;
     case "attention.raised":
       return observation.attention.attachmentId;
+    case "capabilities.updated":
+      return observation.snapshot.attachmentId;
+    case "interaction.opened":
+      return observation.interaction.attachmentId;
     default:
       return observation.attachmentId;
   }

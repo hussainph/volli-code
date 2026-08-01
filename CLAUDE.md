@@ -10,6 +10,9 @@ A local-first macOS workspace for planning and running coding sessions, built wi
 - `apps/desktop/src/preload/` — the typed `contextBridge` API; the only door between renderer and main. Thin and explicit.
 - `apps/desktop/src/renderer/` — React UI + Zustand stores. UI state projects durable main-process state plus ephemeral view state. **No Node imports.**
 - `packages/shared/` (`@volli/shared`) — pure, unit-tested domain code (models, ticket rules, event types, adapter capabilities, branch/slug rules). **No Electron/Node/DOM imports.**
+- `packages/session-engine/` (`@volli/session-engine`) — plain TypeScript Session commands, durable projections, native-adapter contracts, committed streams, and AI SDK transcript vocabulary. **No transport/Node APIs.**
+- `packages/session-rpc/` (`@volli/session-rpc`) — thin tRPC Session edge plus sanitized diagnostics.
+- `packages/opencode-adapter/` (`@volli/opencode-adapter`) — Node-hosted OpenCode HTTP/SSE mapping and loopback process supervision.
 - `packages/cli/` — the agent-facing `volli` CLI (built; Unix socket to main). App data lives under Electron's `userData` dir.
 - `apps/desktop/src/renderer/lab/` — the UI lab (`pnpm lab`): browser-only scratches for trying interactions against real components/tokens with fixture data, before they become app features. Dev-server only, never built; imports the app, never the reverse.
 
@@ -22,6 +25,8 @@ A local-first macOS workspace for planning and running coding sessions, built wi
 - Resume, terminal recreation, and history navigation are distinct semantics.
 - Retry transient transport failures without duplicating accepted work. Authentication, permissions, configuration, and quota failures require explicit user recovery.
 - Existing hooks and terminal markers are compatibility evidence for TUI adapters, not the canonical source of Session truth.
+- A Session starts with one root Agent Thread. Each Thread has at most one live Thread Binding; Conversation Branches and Generation Attempts preserve edits and regeneration without rewriting history.
+- Harness Profiles are explicit. Native is preferred when selected; terminal `liveBestEffort` is never a silent fallback.
 
 - Ticket rules + all auto-move logic: pure, tested TS in `@volli/shared`; the UI only observes it.
 - Terminal access goes through the `TerminalEngine` seam: node-pty never leaves `src/main`, restty (ghostty-derived WebGPU renderer, decision #26) never leaves the renderer's terminal components. Native modules (node-pty, better-sqlite3) need `pnpm -C apps/desktop run rebuild:native` after every install (Electron ABI).

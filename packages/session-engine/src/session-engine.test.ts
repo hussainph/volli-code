@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 import {
-  ControlPlaneConflictError,
-  createControlPlane,
+  SessionEngineConflictError,
+  createSessionEngine,
   createInMemorySessionLedger,
 } from "./index";
 import type {
@@ -36,7 +36,7 @@ function ids(): SessionLedgerIds {
 function composition() {
   let now = 100;
   const ledger = createInMemorySessionLedger();
-  const plane = createControlPlane({ ledger, clock: { now: () => now++ }, ids: ids() });
+  const plane = createSessionEngine({ ledger, clock: { now: () => now++ }, ids: ids() });
   return { ledger, plane };
 }
 
@@ -95,7 +95,7 @@ function createdEvent(id: string, session: Session, commandId = "command-create"
   };
 }
 
-describe("ControlPlane creation and explicit commands", () => {
+describe("SessionEngine creation and explicit commands", () => {
   it("records submitted intent as a canonical event even before an adapter receipt exists", async () => {
     const { plane } = composition();
     const { session } = await plane.createSession(createRequest());
@@ -149,7 +149,7 @@ describe("ControlPlane creation and explicit commands", () => {
       { ...createRequest(), ticketId: null },
       { ...createRequest(), title: "different" },
     ]) {
-      await expect(plane.createSession(request)).rejects.toBeInstanceOf(ControlPlaneConflictError);
+      await expect(plane.createSession(request)).rejects.toBeInstanceOf(SessionEngineConflictError);
     }
     await plane.submit({
       commandId: "command-create-conflict",
@@ -159,7 +159,7 @@ describe("ControlPlane creation and explicit commands", () => {
     });
     await expect(
       plane.createSession(createRequest("command-create-conflict")),
-    ).rejects.toBeInstanceOf(ControlPlaneConflictError);
+    ).rejects.toBeInstanceOf(SessionEngineConflictError);
   });
 
   it("persists adapter-bound intent without manufacturing a receipt, then appends adapter receipts as facts", async () => {
@@ -391,7 +391,7 @@ describe("ControlPlane creation and explicit commands", () => {
 
   it("lists deep Session projections through explicit project scopes in stable descending order", async () => {
     const ledger = createInMemorySessionLedger();
-    const plane = createControlPlane({ ledger, clock: { now: () => 100 }, ids: ids() });
+    const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
     const ticketFirst = await plane.createSession(createRequest("command-list-ticket-first"));
     const scratch = await plane.createSession({
       ...createRequest("command-list-scratch"),
@@ -721,6 +721,125 @@ describe("ControlPlane creation and explicit commands", () => {
     ).resolves.toEqual([]);
   });
 
+  it("records adapter-owned capability and interaction facts and rejects mismatched evidence", async () => {
+    const { plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+    const opened = attachment(session.id);
+    await plane.observe({
+      id: "observation-structured-opened",
+      sessionId: session.id,
+      occurredAt: 200,
+      provenance: adapterProvenance,
+      kind: "attachment.opened",
+      attachment: opened,
+    });
+    const snapshot = {
+      id: "capabilities-1",
+      adapterId: opened.adapterId,
+      attachmentId: opened.id,
+      profileId: "native",
+      revision: 1,
+      observedAt: 201,
+      expiresAt: null,
+      features: [],
+      catalog: [],
+    };
+    await plane.observe({
+      id: "observation-capabilities",
+      sessionId: session.id,
+      occurredAt: 201,
+      provenance: adapterProvenance,
+      kind: "capabilities.updated",
+      snapshot,
+    });
+    const interaction = {
+      id: "permission-1",
+      attachmentId: opened.id,
+      kind: "permission" as const,
+      title: "Allow write?",
+      detail: null,
+      options: [{ id: "once", label: "Allow once", description: null }],
+      multiple: false,
+      native: { id: "native-permission-1", detail: null },
+    };
+    await plane.observe({
+      id: "observation-interaction-opened",
+      sessionId: session.id,
+      occurredAt: 202,
+      provenance: adapterProvenance,
+      kind: "interaction.opened",
+      interaction,
+    });
+    await plane.observe({
+      id: "observation-interaction-resolved",
+      sessionId: session.id,
+      occurredAt: 203,
+      provenance: adapterProvenance,
+      kind: "interaction.resolved",
+      attachmentId: opened.id,
+      interactionId: interaction.id,
+      resolution: { optionIds: ["once"], response: null },
+    });
+
+    await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+      capabilities: [snapshot],
+      interactions: {
+        active: [],
+        resolved: [{ interaction, resolution: { optionIds: ["once"], response: null } }],
+      },
+    });
+    await expect(
+      plane.observe({
+        id: "observation-capabilities-wrong-adapter",
+        sessionId: session.id,
+        occurredAt: 204,
+        provenance: {
+          ...adapterProvenance,
+          source: { ...adapterProvenance.source, id: "codex" },
+        },
+        kind: "capabilities.updated",
+        snapshot: { ...snapshot, id: "capabilities-2" },
+      }),
+    ).rejects.toThrow("must be produced by adapter opencode");
+    await expect(
+      plane.observe({
+        id: "observation-capabilities-wrong-binding",
+        sessionId: session.id,
+        occurredAt: 205,
+        provenance: adapterProvenance,
+        kind: "capabilities.updated",
+        snapshot: { ...snapshot, id: "capabilities-3", adapterId: "codex" },
+      }),
+    ).rejects.toThrow("does not match attachment");
+    await expect(
+      plane.observe({
+        id: "observation-session-capabilities-wrong-adapter",
+        sessionId: session.id,
+        occurredAt: 206,
+        provenance: {
+          ...adapterProvenance,
+          source: { ...adapterProvenance.source, id: "codex" },
+        },
+        kind: "capabilities.updated",
+        snapshot: { ...snapshot, id: "capabilities-session", attachmentId: null },
+      }),
+    ).rejects.toThrow(
+      "Capability snapshot capabilities-session must be produced by adapter opencode",
+    );
+    await expect(
+      plane.observe({
+        id: "observation-interaction-resolved-twice",
+        sessionId: session.id,
+        occurredAt: 206,
+        provenance: adapterProvenance,
+        kind: "interaction.resolved",
+        attachmentId: opened.id,
+        interactionId: interaction.id,
+        resolution: { optionIds: ["once"], response: null },
+      }),
+    ).rejects.toThrow("is not open");
+  });
+
   it("makes command replay idempotent without a receipt, while rejecting collisions and unknown Sessions", async () => {
     const { plane } = composition();
     const { session } = await plane.createSession(createRequest());
@@ -921,6 +1040,56 @@ describe("ControlPlane creation and explicit commands", () => {
       kind: "attachment.opened",
       attachment: firstAttachment,
     });
+    await plane.observe({
+      id: "interaction-a",
+      sessionId: session.id,
+      attachmentId: firstAttachment.id,
+      occurredAt: 1,
+      provenance: adapterProvenance,
+      kind: "interaction.opened",
+      interaction: {
+        id: "permission-a",
+        attachmentId: firstAttachment.id,
+        kind: "permission",
+        title: "Allow write?",
+        detail: null,
+        options: [{ id: "once", label: "Allow once", description: null }],
+        multiple: false,
+        native: { id: "native-permission-a", detail: null },
+      },
+    });
+    const interactionResolution = await plane.submit({
+      commandId: "command-resolve-a",
+      sessionId: session.id,
+      intent: {
+        kind: "interaction.resolve",
+        attachmentId: firstAttachment.id,
+        interactionId: "permission-a",
+        resolution: { optionIds: ["once"], response: null },
+        reference: { id: "resolution-a", mediaType: null, digest: null },
+      },
+      provenance: userProvenance,
+    });
+    expect(interactionResolution.command.route).toEqual({
+      adapterId: firstAttachment.adapterId,
+      attachmentId: firstAttachment.id,
+    });
+    await expect(
+      plane.submit({
+        commandId: "command-resolve-missing",
+        sessionId: session.id,
+        intent: {
+          kind: "interaction.resolve",
+          attachmentId: firstAttachment.id,
+          interactionId: "missing-interaction",
+          resolution: { optionIds: [], response: null },
+          reference: { id: "resolution-missing", mediaType: null, digest: null },
+        },
+        provenance: userProvenance,
+      }),
+    ).resolves.toMatchObject({
+      receipt: { status: "rejected", code: "interaction_unavailable" },
+    });
     await expect(
       plane.submit({
         commandId: "command-start-while-live",
@@ -953,6 +1122,22 @@ describe("ControlPlane creation and explicit commands", () => {
       kind: "attachment.closed",
       attachmentId: firstAttachment.id,
       outcome: "interrupted",
+    });
+    await expect(
+      plane.submit({
+        commandId: "command-resolve-closed",
+        sessionId: session.id,
+        intent: {
+          kind: "interaction.resolve",
+          attachmentId: firstAttachment.id,
+          interactionId: "permission-a",
+          resolution: { optionIds: ["once"], response: null },
+          reference: { id: "resolution-closed", mediaType: null, digest: null },
+        },
+        provenance: userProvenance,
+      }),
+    ).resolves.toMatchObject({
+      receipt: { status: "rejected", code: "attachment_unavailable" },
     });
     await expect(
       plane.submit({
@@ -1041,17 +1226,16 @@ describe("ControlPlane creation and explicit commands", () => {
       receipt: { status: "rejected", code: "executor_start_pending" },
     });
     await firstAttempt.plane.observe({
-      id: "observation-start-pending-a-accepted",
+      id: "observation-start-pending-a-unreconciled",
       sessionId: session.id,
       occurredAt: 1,
       provenance: adapterProvenance,
       kind: "command.receipt",
       receipt: {
-        id: "receipt-start-pending-a-accepted",
+        id: "receipt-start-pending-a-unreconciled",
         commandId: first.command.id,
-        status: "accepted",
-        acceptedAt: 1,
-        result: { kind: "executor.start.requested", sessionId: session.id },
+        status: "unreconciled",
+        detail: "Provider outcome is not known yet",
       },
     });
     await expect(
@@ -1139,7 +1323,7 @@ describe("ControlPlane creation and explicit commands", () => {
   });
 });
 
-describe("ControlPlane attachment facts", () => {
+describe("SessionEngine attachment facts", () => {
   it("reserves a pending executor start for its exact attachment opening", async () => {
     const { plane } = composition();
     const { session } = await plane.createSession(createRequest());
@@ -1417,7 +1601,7 @@ describe("ControlPlane attachment facts", () => {
   });
 });
 
-describe("ControlPlane idempotency and defensive ledger reads", () => {
+describe("SessionEngine idempotency and defensive ledger reads", () => {
   it("deduplicates an observation and rejects divergent evidence or invalid receipt provenance", async () => {
     const { plane } = composition();
     const { session } = await plane.createSession(createRequest());
@@ -1434,7 +1618,7 @@ describe("ControlPlane idempotency and defensive ledger reads", () => {
     const first = await plane.observe(observation);
     expect(await plane.observe(observation)).toEqual(first);
     await expect(plane.observe({ ...observation, name: "different" })).rejects.toBeInstanceOf(
-      ControlPlaneConflictError,
+      SessionEngineConflictError,
     );
     await expect(
       plane.observe({
@@ -1671,20 +1855,22 @@ describe("ControlPlane idempotency and defensive ledger reads", () => {
         },
       }),
     ).rejects.toThrow("was not produced by adapter opencode");
-    await plane.observe({
-      id: "unreconciled-receipt",
-      sessionId: session.id,
-      occurredAt: 9,
-      provenance: adapterProvenance,
-      kind: "command.receipt",
-      attachmentId: opened.id,
-      receipt: {
-        id: "receipt-unreconciled",
-        commandId: message.command.id,
-        status: "unreconciled",
-        detail: "Awaiting provider reconciliation",
-      },
-    });
+    await expect(
+      plane.observe({
+        id: "unreconciled-receipt",
+        sessionId: session.id,
+        occurredAt: 9,
+        provenance: adapterProvenance,
+        kind: "command.receipt",
+        attachmentId: opened.id,
+        receipt: {
+          id: "receipt-unreconciled",
+          commandId: message.command.id,
+          status: "unreconciled",
+          detail: "Awaiting provider reconciliation",
+        },
+      }),
+    ).rejects.toThrow("has a terminal receipt");
 
     await expect(
       plane.observe({

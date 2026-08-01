@@ -6,7 +6,7 @@
 
 import { app, dialog, ipcMain } from "electron";
 import type { BrowserWindow } from "electron";
-import type { ControlPlane } from "@volli/control-plane";
+import type { SessionEngine } from "@volli/session-engine";
 import { isFirstClassHarnessId, parseHarnessId } from "@volli/shared";
 import type {
   CreateTerminalSessionRequest,
@@ -18,7 +18,7 @@ import type {
 } from "@volli/shared";
 import { attachmentsRoot } from "../attachment-store";
 import type { DbHandle } from "../data-ipc";
-import { createDesktopControlPlane } from "../session-control";
+import { createDesktopSessionEngine } from "../session-control";
 import type { AgentRuntimeEnvironment } from "./manager";
 import { PtyManager } from "./manager";
 
@@ -163,7 +163,7 @@ function isCreateRequest(
 export function registerTerminalIpcHandlers(
   handle: DbHandle,
   agentRuntime: AgentRuntimeEnvironment | null = null,
-  controlPlane: ControlPlane | null = handle.ok ? createDesktopControlPlane(handle.db) : null,
+  sessionEngine: SessionEngine | null = handle.ok ? createDesktopSessionEngine(handle.db) : null,
 ): PtyManager {
   // Same resolution as worktree-runtime.ts's `worktreeDeps`: one production
   // seam, `app.getPath("userData")`-derived.
@@ -179,7 +179,7 @@ export function registerTerminalIpcHandlers(
         undefined,
         agentRuntime,
         attachmentsRootPath,
-        controlPlane,
+        sessionEngine,
       )
     : new PtyManager(null, handle.error, undefined, undefined, agentRuntime, attachmentsRootPath);
 

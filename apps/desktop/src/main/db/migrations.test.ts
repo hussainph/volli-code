@@ -197,7 +197,7 @@ describe("migrate — fresh install", () => {
     db.close();
   });
 
-  it("creates identity-only Sessions and the durable control-plane tables", () => {
+  it("creates identity-only Sessions and the durable session-engine tables", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     migrate(db, dbPath);

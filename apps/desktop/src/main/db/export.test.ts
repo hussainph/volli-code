@@ -16,7 +16,7 @@ import {
   updateProjectCanvas,
   updateProjectThemeOverride,
 } from "./projects-repo";
-import { createDesktopControlPlane } from "../session-control";
+import { createDesktopSessionEngine } from "../session-control";
 import { insertSession } from "../session-control/test-support";
 import { openTestDb, testProject, testSession, testTicket } from "./test-helpers";
 import type { TestDb } from "./test-helpers";
@@ -168,7 +168,7 @@ describe("buildExportDocument — populated db", () => {
       "signal-receipt-event",
       "signal-receipt",
     ];
-    const controlPlane = createDesktopControlPlane(ctx.db, {
+    const sessionEngine = createDesktopSessionEngine(ctx.db, {
       now: () => 35,
       nextId: () => {
         const id = generatedIds.shift();
@@ -176,7 +176,7 @@ describe("buildExportDocument — populated db", () => {
         return id;
       },
     });
-    await controlPlane.submit({
+    await sessionEngine.submit({
       commandId: "signal-command",
       sessionId: session.id,
       intent: { kind: "session.signal", signal: "blocked", reason: "Needs approval" },
@@ -432,7 +432,7 @@ describe("buildExportDocument — populated db", () => {
       "receipt",
       "message-event",
     ];
-    const controlPlane = createDesktopControlPlane(ctx.db, {
+    const sessionEngine = createDesktopSessionEngine(ctx.db, {
       now: () => 1,
       nextId: () => {
         const id = ids.shift();
@@ -440,7 +440,7 @@ describe("buildExportDocument — populated db", () => {
         return id;
       },
     });
-    const failedSession = await controlPlane.createSession({
+    const failedSession = await sessionEngine.createSession({
       commandId: "failure-create-command",
       projectId: project.id,
       ticketId: null,
@@ -450,7 +450,7 @@ describe("buildExportDocument — populated db", () => {
         venue: { id: "local", kind: "local" },
       },
     });
-    await controlPlane.observe({
+    await sessionEngine.observe({
       id: "attachment-failed-event",
       kind: "attachment.failed",
       sessionId: failedSession.session.id,
@@ -469,7 +469,7 @@ describe("buildExportDocument — populated db", () => {
       },
       failure: { code: "spawn_failed", detail: "shell missing", diagnostic: null },
     });
-    await controlPlane.submit({
+    await sessionEngine.submit({
       commandId: "command",
       sessionId: session.id,
       intent: { kind: "session.signal", signal: "done", reason: null },
@@ -478,7 +478,7 @@ describe("buildExportDocument — populated db", () => {
         venue: { id: "local", kind: "local" },
       },
     });
-    await controlPlane.submit({
+    await sessionEngine.submit({
       commandId: "message-command",
       sessionId: session.id,
       intent: {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import { createControlPlane } from "@volli/control-plane";
+import { createSessionEngine } from "@volli/session-engine";
 import type { SessionLedger, SessionObservation } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket } from "../db/test-helpers";
@@ -15,7 +15,7 @@ afterEach(() => {
 
 function setup(): {
   ledger: SessionLedger;
-  control: ReturnType<typeof createControlPlane>;
+  control: ReturnType<typeof createSessionEngine>;
   projectId: string;
 } {
   ctx = openTestDb();
@@ -25,7 +25,7 @@ function setup(): {
   const ledger = createSqliteSessionLedger(ctx.db);
   return {
     ledger,
-    control: createControlPlane({
+    control: createSessionEngine({
       ledger,
       clock: { now: () => 100 + id },
       ids: { next: (kind) => `${kind}-${++id}` },
@@ -289,6 +289,154 @@ describe("SqliteSessionLedger", () => {
     ctx.db.pragma("ignore_check_constraints = OFF");
     await expect(control.listEvents({ sessionId: created.session.id })).rejects.toThrow(
       "contains invalid JSON",
+    );
+  });
+
+  it("round-trips capability and interaction facts through strict SQLite decoding", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-structured",
+      projectId,
+      ticketId: null,
+      title: "Structured",
+      provenance,
+    });
+    const start = await control.submit({
+      commandId: "start-structured",
+      sessionId: created.session.id,
+      intent: { kind: "executor.start", adapterId: "opencode", continuity: "fresh" },
+      provenance,
+    });
+    const adapterProvenance = {
+      source: { kind: "adapter" as const, id: "opencode", detail: null },
+      venue: { id: "local", kind: "local" as const },
+    };
+    await control.observe({
+      id: "opened-structured",
+      kind: "attachment.opened",
+      sessionId: created.session.id,
+      commandId: start.command.id,
+      occurredAt: 200,
+      provenance: adapterProvenance,
+      attachment: {
+        id: "attachment-structured",
+        sessionId: created.session.id,
+        adapterId: "opencode",
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+        native: { id: "native-1", detail: null },
+      },
+    });
+    await control.observe({
+      id: "capabilities-structured",
+      kind: "capabilities.updated",
+      sessionId: created.session.id,
+      attachmentId: "attachment-structured",
+      occurredAt: 201,
+      provenance: adapterProvenance,
+      snapshot: {
+        id: "snapshot-1",
+        adapterId: "opencode",
+        attachmentId: "attachment-structured",
+        profileId: "native",
+        revision: 1,
+        observedAt: 201,
+        expiresAt: null,
+        features: [
+          {
+            id: "message.submit",
+            state: "available",
+            evidence: "verified",
+            detail: null,
+          },
+        ],
+        catalog: [
+          {
+            kind: "model",
+            id: "provider/model",
+            label: "Model",
+            state: "available",
+            evidence: "reported",
+            detail: { variants: ["high"] },
+          },
+        ],
+      },
+    });
+    await control.observe({
+      id: "interaction-opened-structured",
+      kind: "interaction.opened",
+      sessionId: created.session.id,
+      attachmentId: "attachment-structured",
+      occurredAt: 202,
+      provenance: adapterProvenance,
+      interaction: {
+        id: "permission-1",
+        attachmentId: "attachment-structured",
+        kind: "permission",
+        title: "Allow write?",
+        detail: null,
+        options: [{ id: "once", label: "Allow once", description: "This request only" }],
+        multiple: false,
+        native: { id: "native-permission-1", detail: null },
+      },
+    });
+    const resolution = await control.submit({
+      commandId: "resolve-structured",
+      sessionId: created.session.id,
+      intent: {
+        kind: "interaction.resolve",
+        attachmentId: "attachment-structured",
+        interactionId: "permission-1",
+        resolution: { optionIds: ["once"], response: null },
+        reference: {
+          id: "sha256:resolution",
+          digest: "sha256:resolution",
+          mediaType: "application/vnd.volli.ui-message+json;version=1",
+        },
+      },
+      provenance,
+    });
+    await control.observe({
+      id: "interaction-resolved-structured",
+      kind: "interaction.resolved",
+      sessionId: created.session.id,
+      attachmentId: "attachment-structured",
+      occurredAt: 203,
+      provenance: adapterProvenance,
+      commandId: resolution.command.id,
+      interactionId: "permission-1",
+      resolution: { optionIds: ["once"], response: null },
+    });
+    await control.observe({
+      id: "resolution-receipt-structured",
+      kind: "command.receipt",
+      sessionId: created.session.id,
+      attachmentId: "attachment-structured",
+      occurredAt: 204,
+      provenance: adapterProvenance,
+      receipt: {
+        id: "receipt-resolution-structured",
+        commandId: resolution.command.id,
+        status: "accepted",
+        acceptedAt: 204,
+        result: { kind: "interaction.resolved", sessionId: created.session.id },
+      },
+    });
+
+    const projection = await control.getSession({ sessionId: created.session.id });
+    expect(projection).toMatchObject({
+      capabilities: [{ id: "snapshot-1", catalog: [{ detail: { variants: ["high"] } }] }],
+      interactions: { active: [], resolved: [{ interaction: { id: "permission-1" } }] },
+    });
+    expect(projection?.commands.at(-1)).toMatchObject({
+      intent: { kind: "interaction.resolve", interactionId: "permission-1" },
+    });
+    expect(projection?.receipts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          result: expect.objectContaining({ kind: "interaction.resolved" }),
+        }),
+      ]),
     );
   });
 });

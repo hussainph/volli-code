@@ -25,7 +25,7 @@ type SqlRow = Record<string, unknown>;
 
 /**
  * The desktop's sole durable Session writer.  Although better-sqlite3 is
- * synchronous, a Control Plane transaction may await host work, so this queue
+ * synchronous, a Session Engine transaction may await host work, so this queue
  * holds BEGIN IMMEDIATE ownership across that await and never lets a second
  * ledger operation observe a partial fact set.
  */
@@ -616,6 +616,23 @@ function decodePayload(value: unknown, context: string): SessionEventPayload {
       return { kind, attention: decodeAttention(record.attention, `${context}.attention`) };
     case "attention.cleared":
       return { kind, attentionId: readString(record.attentionId, `${context}.attentionId`) };
+    case "capabilities.updated":
+      return {
+        kind,
+        snapshot: decodeCapabilitySnapshot(record.snapshot, `${context}.snapshot`),
+      };
+    case "interaction.opened":
+      return {
+        kind,
+        interaction: decodeInteraction(record.interaction, `${context}.interaction`),
+      };
+    case "interaction.resolved":
+      return {
+        kind,
+        attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
+        interactionId: readString(record.interactionId, `${context}.interactionId`),
+        resolution: decodeInteractionResolution(record.resolution, `${context}.resolution`),
+      };
     case "command.receipt.recorded":
       return { kind, receipt: decodeReceipt(record.receipt, `${context}.receipt`) };
     case "adapter.observed":
@@ -692,6 +709,14 @@ function decodeIntent(value: unknown, context: string): SessionCommandIntent {
       return { kind, attachmentId: readString(row.attachmentId, `${context}.attachmentId`) };
     case "message.submit":
       return { kind, reference: decodeTranscript(row.reference, `${context}.reference`) };
+    case "interaction.resolve":
+      return {
+        kind,
+        attachmentId: readString(row.attachmentId, `${context}.attachmentId`),
+        interactionId: readString(row.interactionId, `${context}.interactionId`),
+        resolution: decodeInteractionResolution(row.resolution, `${context}.resolution`),
+        reference: decodeTranscript(row.reference, `${context}.reference`),
+      };
     default:
       throw new Error(`${context}.kind is not a known Session command`);
   }
@@ -752,6 +777,7 @@ function decodeReceiptResult(value: unknown, context: string): CommandReceiptRes
       "executor.stop.requested",
       "executor.interrupted",
       "message.submitted",
+      "interaction.resolved",
     ],
     `${context}.kind`,
   );
@@ -847,6 +873,108 @@ function decodeAttention(
     return { ...base, kind, resetAt: readNullableInteger(row.resetAt, `${context}.resetAt`) };
   }
   return { ...base, kind };
+}
+
+function decodeCapabilitySnapshot(
+  value: unknown,
+  context: string,
+): Extract<SessionEventPayload, { kind: "capabilities.updated" }>["snapshot"] {
+  const row = asRecord(value, context);
+  if (!Array.isArray(row.features)) throw new Error(`${context}.features must be an array`);
+  if (!Array.isArray(row.catalog)) throw new Error(`${context}.catalog must be an array`);
+  return {
+    id: readString(row.id, `${context}.id`),
+    adapterId: readString(row.adapterId, `${context}.adapterId`),
+    attachmentId: readNullableString(row.attachmentId, `${context}.attachmentId`),
+    profileId: readString(row.profileId, `${context}.profileId`),
+    revision: readInteger(row.revision, `${context}.revision`),
+    observedAt: readInteger(row.observedAt, `${context}.observedAt`),
+    expiresAt: readNullableInteger(row.expiresAt, `${context}.expiresAt`),
+    features: row.features.map((item, index) => {
+      const feature = asRecord(item, `${context}.features[${index}]`);
+      return {
+        id: readString(feature.id, `${context}.features[${index}].id`),
+        state: enumValue(
+          feature.state,
+          ["available", "unavailable", "unknown"],
+          `${context}.features[${index}].state`,
+        ),
+        evidence: enumValue(
+          feature.evidence,
+          ["declared", "reported", "observed", "verified"],
+          `${context}.features[${index}].evidence`,
+        ),
+        detail: readNullableString(feature.detail, `${context}.features[${index}].detail`),
+      };
+    }),
+    catalog: row.catalog.map((item, index) => {
+      const entry = asRecord(item, `${context}.catalog[${index}]`);
+      return {
+        kind: enumValue(
+          entry.kind,
+          ["model", "agent", "command", "mcp", "skill", "tool"],
+          `${context}.catalog[${index}].kind`,
+        ),
+        id: readString(entry.id, `${context}.catalog[${index}].id`),
+        label: readString(entry.label, `${context}.catalog[${index}].label`),
+        state: enumValue(
+          entry.state,
+          ["available", "unavailable", "unknown"],
+          `${context}.catalog[${index}].state`,
+        ),
+        evidence: enumValue(
+          entry.evidence,
+          ["declared", "reported", "observed", "verified"],
+          `${context}.catalog[${index}].evidence`,
+        ),
+        detail: decodeNativeDetail(entry.detail, `${context}.catalog[${index}].detail`),
+      };
+    }),
+  };
+}
+
+function decodeInteraction(
+  value: unknown,
+  context: string,
+): Extract<SessionEventPayload, { kind: "interaction.opened" }>["interaction"] {
+  const row = asRecord(value, context);
+  if (!Array.isArray(row.options)) throw new Error(`${context}.options must be an array`);
+  return {
+    id: readString(row.id, `${context}.id`),
+    attachmentId: readString(row.attachmentId, `${context}.attachmentId`),
+    kind: enumValue(row.kind, ["permission", "question"], `${context}.kind`),
+    title: readString(row.title, `${context}.title`),
+    detail: readNullableString(row.detail, `${context}.detail`),
+    options: row.options.map((item, index) => {
+      const option = asRecord(item, `${context}.options[${index}]`);
+      const description = readOptionalString(
+        option.description,
+        `${context}.options[${index}].description`,
+      );
+      return {
+        id: readString(option.id, `${context}.options[${index}].id`),
+        label: readString(option.label, `${context}.options[${index}].label`),
+        // Older persisted events predate the explicit nullability contract.
+        description: description ?? null,
+      };
+    }),
+    multiple: readBoolean(row.multiple, `${context}.multiple`),
+    native: decodeNative(row.native, `${context}.native`),
+  };
+}
+
+function decodeInteractionResolution(
+  value: unknown,
+  context: string,
+): Extract<SessionEventPayload, { kind: "interaction.resolved" }>["resolution"] {
+  const row = asRecord(value, context);
+  if (!Array.isArray(row.optionIds)) throw new Error(`${context}.optionIds must be an array`);
+  return {
+    optionIds: row.optionIds.map((item, index) =>
+      readString(item, `${context}.optionIds[${index}]`),
+    ),
+    response: readNullableString(row.response, `${context}.response`),
+  };
 }
 
 function decodeProvenance(value: unknown, context: string): SessionEventProvenance {
@@ -984,6 +1112,15 @@ function readString(value: unknown, context: string): string {
 
 function readNullableString(value: unknown, context: string): string | null {
   return value === null ? null : readString(value, context);
+}
+
+function readOptionalString(value: unknown, context: string): string | undefined {
+  return value === undefined ? undefined : readString(value, context);
+}
+
+function readBoolean(value: unknown, context: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`${context} must be a boolean`);
+  return value;
 }
 
 function readInteger(value: unknown, context: string): number {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import { createControlPlane } from "@volli/control-plane";
+import { createSessionEngine } from "@volli/session-engine";
 import { getHarnessAdapter } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket } from "../db/test-helpers";
@@ -25,7 +25,7 @@ function setup() {
   insertProject(ctx.db, project);
   insertTicket(ctx.db, ticket);
   let id = 0;
-  const control = createControlPlane({
+  const control = createSessionEngine({
     ledger: createSqliteSessionLedger(ctx.db),
     clock: { now: () => 1 },
     ids: { next: (kind) => `${kind}-${++id}` },
@@ -34,7 +34,7 @@ function setup() {
 }
 
 async function seedTerminal(
-  control: ReturnType<typeof createControlPlane>,
+  control: ReturnType<typeof createSessionEngine>,
   input: {
     projectId: string;
     ticketId: string | null;
@@ -96,7 +96,7 @@ async function seedTerminal(
 }
 
 describe("resolveScope", () => {
-  it("numbers from control-plane projections rather than terminal columns", async () => {
+  it("numbers from session-engine projections rather than terminal columns", async () => {
     const { project, ticket, control } = setup();
     await control.createSession({
       commandId: "create",

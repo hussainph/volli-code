@@ -35,7 +35,10 @@ import type { DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
 import { listProjects } from "./db/projects-repo";
-import { createDesktopControlPlane } from "./session-control";
+import { createDesktopSessionEngine } from "./session-control";
+import { createDesktopSessionRuntime } from "./session-runtime";
+import { registerSessionRpcIpcHandlers } from "./session-rpc-ipc";
+import { createOpenCodeNativeAdapter } from "@volli/opencode-adapter";
 import { listRegisteredHarnesses } from "./db/harness-registry-repo";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
@@ -386,13 +389,28 @@ app.whenReady().then(async () => {
     dbHandle = { ok: false, error: errorMessage(error) };
     console.error("[volli] failed to open database:", dbHandle.error);
   }
-  const controlPlane = dbHandle.ok ? createDesktopControlPlane(dbHandle.db) : null;
+  const sessionEngine = dbHandle.ok ? createDesktopSessionEngine(dbHandle.db) : null;
+  // Native Session RPC shares the same durable Session Engine as terminal and
+  // planner paths. The OpenCode process stays dormant until a caller explicitly
+  // attaches its native profile; registering the transport never launches it.
+  const nativeAdapter = dbHandle.ok ? createOpenCodeNativeAdapter() : null;
+  const sessionRuntime =
+    dbHandle.ok && sessionEngine !== null && nativeAdapter !== null
+      ? createDesktopSessionRuntime({
+          db: dbHandle.db,
+          transcriptDirectory: join(app.getPath("userData"), "session-transcripts"),
+          adapters: [nativeAdapter],
+          sessionEngine,
+        })
+      : null;
+  const sessionRpc =
+    sessionRuntime === null ? null : registerSessionRpcIpcHandlers({ runtime: sessionRuntime });
   // Boot recovery: no PTY survives a relaunch. Close only stale local terminal
   // attachments; the durable Session itself intentionally remains open.
-  if (dbHandle.ok && controlPlane !== null) {
+  if (dbHandle.ok && sessionEngine !== null) {
     try {
       for (const project of listProjects(dbHandle.db)) {
-        const sessions = await controlPlane.listSessions({ projectId: project.id, scope: "all" });
+        const sessions = await sessionEngine.listSessions({ projectId: project.id, scope: "all" });
         for (const projection of sessions) {
           for (const attachment of projection.attachments) {
             if (
@@ -401,7 +419,7 @@ app.whenReady().then(async () => {
               attachment.status === "open"
             ) {
               try {
-                await controlPlane.observe({
+                await sessionEngine.observe({
                   id: randomUUID(),
                   kind: "attachment.closed",
                   sessionId: projection.session.id,
@@ -482,7 +500,7 @@ app.whenReady().then(async () => {
   // (rather than up with the other pre-window setup) because File > Export
   // Database needs `dbHandle`, which doesn't exist yet at that point.
   registerDataIpcHandlers(dbHandle, {
-    controlPlane: controlPlane ?? undefined,
+    sessionEngine: sessionEngine ?? undefined,
     liveSessionCwds: () => ptyManagerRef?.liveSessionCwds() ?? [],
     // Backward-move interrupt (issue #78): a user move that leaves the active
     // columns Esc's the ticket's live agent sessions, announced via toast.
@@ -650,7 +668,7 @@ app.whenReady().then(async () => {
     });
   };
 
-  const ptyManager = registerTerminalIpcHandlers(dbHandle, agentRuntime, controlPlane);
+  const ptyManager = registerTerminalIpcHandlers(dbHandle, agentRuntime, sessionEngine);
   ptyManagerRef = ptyManager;
   const mainWindow = createWindow(ptyManager, currentFirstPaint());
 
@@ -861,7 +879,7 @@ app.whenReady().then(async () => {
     const execute = dbHandle.ok
       ? createAgentCommandService({
           db: dbHandle.db,
-          controlPlane: controlPlane!,
+          sessionEngine: sessionEngine!,
           appVersion: app.getVersion(),
           observeSession: (sessionId, lines) => ptyManager.peek(sessionId, lines),
           notify: (title, message) => new Notification({ title, body: message }).show(),
@@ -1029,6 +1047,31 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow(ptyManager, currentFirstPaint());
     }
+  });
+
+  let nativeSessionShutdownInFlight = false;
+  app.on("before-quit", (event) => {
+    if (nativeSessionShutdownInFlight) return;
+    // Electron does not await async before-quit handlers. Hold this quit until
+    // the local Session control plane has released its streams and child.
+    event.preventDefault();
+    nativeSessionShutdownInFlight = true;
+    void Promise.allSettled([sessionRpc?.close(), sessionRuntime?.close(), nativeAdapter?.close()])
+      .then((results) => {
+        for (const result of results) {
+          if (result.status === "rejected") {
+            console.error(
+              "[volli] failed to close native Session RPC:",
+              errorMessage(result.reason),
+            );
+          }
+        }
+      })
+      .finally(() => {
+        // Re-issuing app.quit() during before-quit is swallowed by Electron.
+        // PTY teardown has already run synchronously in its own quit handler.
+        app.exit(0);
+      });
   });
 });
 

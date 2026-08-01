@@ -1,17 +1,17 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import { createControlPlane } from "@volli/control-plane";
-import type { ControlPlane } from "@volli/control-plane";
+import { createSessionEngine } from "@volli/session-engine";
+import type { SessionEngine } from "@volli/session-engine";
 import { createSqliteSessionLedger } from "./sqlite-ledger";
 
 /** Main-process composition root: SQLite is the only Session writer today. */
-export function createDesktopControlPlane(
+export function createDesktopSessionEngine(
   db: Database.Database,
   ports: { now?: () => number; nextId?: () => string } = {},
-): ControlPlane {
+): SessionEngine {
   const now = ports.now ?? Date.now;
   const nextId = ports.nextId ?? randomUUID;
-  return createControlPlane({
+  return createSessionEngine({
     ledger: createSqliteSessionLedger(db),
     clock: { now },
     ids: { next: () => nextId() },
