@@ -163,6 +163,7 @@ function composition(
     adapter?: FakeAdapter;
     engine?: SessionEngine;
     artifacts?: TranscriptArtifactStore;
+    locations?: Parameters<typeof createSessionRuntime>[0]["locations"];
     runtimeIdPrefix?: string;
   } = {},
 ): { runtime: SessionRuntime; engine: SessionEngine; adapter: FakeAdapter } {
@@ -182,9 +183,11 @@ function composition(
       engine,
       adapters: createNativeAdapterRegistry([adapter]),
       artifacts: options.artifacts ?? createInMemoryTranscriptArtifactStore(),
-      locations: {
-        resolve: async () => ({ directory: "/projects/fake", venue }),
-      },
+      locations:
+        options.locations ??
+        ({
+          resolve: async () => ({ directory: "/projects/fake", venue }),
+        } satisfies Parameters<typeof createSessionRuntime>[0]["locations"]),
       clock: { now: () => now++ },
       ids: runtimeIds(options.runtimeIdPrefix),
     }),
@@ -734,6 +737,36 @@ describe("SessionRuntime native adapter contract", () => {
           event.payload.kind === "turn.started" && event.payload.turnId === "turn-concurrent",
       ),
     ).toHaveLength(1);
+  });
+
+  it("drains reconciliation started before close without reattaching after shutdown", async () => {
+    const locationStarted = new Gate();
+    const releaseLocation = new Gate();
+    let delayLocation = false;
+    const { runtime, adapter } = composition({
+      locations: {
+        resolve: async () => {
+          if (delayLocation) {
+            locationStarted.resolve();
+            await releaseLocation.promise;
+          }
+          return { directory: "/projects/fake", venue };
+        },
+      },
+    });
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    delayLocation = true;
+
+    const reconciling = runtime.reconcile({ sessionId, attachmentId });
+    await locationStarted.promise;
+    const closing = runtime.close();
+    releaseLocation.resolve();
+    await Promise.all([reconciling, closing]);
+
+    expect(adapter.attaches).toBe(1);
+    expect(adapter.reconciles).toBe(1);
+    expect(adapter.releaseReasons).toEqual(["shutdown"]);
   });
 
   it("validates subscriptions, stops delivery after unsubscribe, and makes close idempotent", async () => {
