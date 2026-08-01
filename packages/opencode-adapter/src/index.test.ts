@@ -601,7 +601,11 @@ describe("OpenCodeNativeAdapter", () => {
               type: "tool",
               tool: "bash",
               callID: "call-running",
-              state: { status: "running", input: { token: "must-not-leak" }, title: "Run checks" },
+              state: {
+                status: "running",
+                input: { token: "must-not-leak" },
+                title: "private /Users/example/repository",
+              },
             },
             {
               type: "tool",
@@ -617,7 +621,7 @@ describe("OpenCodeNativeAdapter", () => {
                 status: "completed",
                 input: { path: "/private/must-not-leak" },
                 output: "must-not-leak",
-                title: "Read file",
+                title: "private /Users/example/source.ts",
                 metadata: {},
                 time: { start: 1, end: 2 },
               },
@@ -689,7 +693,6 @@ describe("OpenCodeNativeAdapter", () => {
               type: "dynamic-tool",
               toolName: "bash",
               toolCallId: "call-running",
-              title: "Run checks",
               state: "input-streaming",
             },
             {
@@ -702,7 +705,6 @@ describe("OpenCodeNativeAdapter", () => {
               type: "dynamic-tool",
               toolName: "read",
               toolCallId: "call-complete",
-              title: "Read file",
               state: "output-available",
               input: null,
               output: null,
@@ -720,6 +722,7 @@ describe("OpenCodeNativeAdapter", () => {
       }),
     ]);
     expect(JSON.stringify(observations)).not.toContain("must-not-leak");
+    expect(JSON.stringify(observations)).not.toContain("/Users/example");
   });
 
   it("does not finalize provider messages or parts removed before idle", async () => {
@@ -1115,6 +1118,52 @@ describe("OpenCodeNativeAdapter", () => {
           id: "provider-user-history",
           role: "user",
           parts: [{ type: "text", text: "Native prompt" }],
+        },
+      }),
+    ]);
+  });
+
+  it("retries native history import until the message response is successful and valid", async () => {
+    const { adapter, network } = composition();
+    const originalRequest = network.request.bind(network);
+    const nativeHistory = {
+      info: { id: "provider-user-retry", role: "user" },
+      parts: [{ type: "text", text: "Recovered native prompt" }],
+    };
+    const messageResponses = [
+      { status: 503, body: nativeHistory },
+      { status: 200, body: { items: "malformed" } },
+      { status: 200, body: nativeHistory },
+    ];
+    network.request = async (input) => {
+      if (input.path.includes("/message"))
+        return messageResponses.shift() ?? { status: 200, body: nativeHistory };
+      return originalRequest(input);
+    };
+    const handle = await adapter.attach(spec("/workspace/one", "native_resume"), {
+      emit: async () => undefined,
+    });
+
+    expect(
+      (await handle.reconcile(null)).observations.filter(
+        ({ kind }) => kind === "transcript.message",
+      ),
+    ).toEqual([]);
+    expect(
+      (await handle.reconcile(null)).observations.filter(
+        ({ kind }) => kind === "transcript.message",
+      ),
+    ).toEqual([]);
+    expect(
+      (await handle.reconcile(null)).observations.filter(
+        ({ kind }) => kind === "transcript.message",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        message: {
+          id: "provider-user-retry",
+          role: "user",
+          parts: [{ type: "text", text: "Recovered native prompt" }],
         },
       }),
     ]);
