@@ -739,7 +739,7 @@ describe("SessionRuntime native adapter contract", () => {
     ).toHaveLength(1);
   });
 
-  it("drains reconciliation started before close without reattaching after shutdown", async () => {
+  it("cancels reconciliation paused during a non-blocking close without reattaching", async () => {
     const locationStarted = new Gate();
     const releaseLocation = new Gate();
     let delayLocation = false;
@@ -761,11 +761,17 @@ describe("SessionRuntime native adapter contract", () => {
     const reconciling = runtime.reconcile({ sessionId, attachmentId });
     await locationStarted.promise;
     const closing = runtime.close();
+    const closeState = await Promise.race([
+      closing.then(() => "closed" as const),
+      new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), 0)),
+    ]);
     releaseLocation.resolve();
-    await Promise.all([reconciling, closing]);
+    await closing;
 
+    expect(closeState).toBe("closed");
+    await expect(reconciling).rejects.toThrow("Session runtime is closed");
     expect(adapter.attaches).toBe(1);
-    expect(adapter.reconciles).toBe(1);
+    expect(adapter.reconciles).toBe(0);
     expect(adapter.releaseReasons).toEqual(["shutdown"]);
   });
 
