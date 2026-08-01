@@ -721,6 +721,110 @@ describe("SessionEngine creation and explicit commands", () => {
     ).resolves.toEqual([]);
   });
 
+  it("records adapter-owned capability and interaction facts and rejects mismatched evidence", async () => {
+    const { plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+    const opened = attachment(session.id);
+    await plane.observe({
+      id: "observation-structured-opened",
+      sessionId: session.id,
+      occurredAt: 200,
+      provenance: adapterProvenance,
+      kind: "attachment.opened",
+      attachment: opened,
+    });
+    const snapshot = {
+      id: "capabilities-1",
+      adapterId: opened.adapterId,
+      attachmentId: opened.id,
+      profileId: "native",
+      revision: 1,
+      observedAt: 201,
+      expiresAt: null,
+      features: [],
+      catalog: [],
+    };
+    await plane.observe({
+      id: "observation-capabilities",
+      sessionId: session.id,
+      occurredAt: 201,
+      provenance: adapterProvenance,
+      kind: "capabilities.updated",
+      snapshot,
+    });
+    const interaction = {
+      id: "permission-1",
+      attachmentId: opened.id,
+      kind: "permission" as const,
+      title: "Allow write?",
+      detail: null,
+      options: [{ id: "once", label: "Allow once" }],
+      multiple: false,
+      native: { id: "native-permission-1", detail: null },
+    };
+    await plane.observe({
+      id: "observation-interaction-opened",
+      sessionId: session.id,
+      occurredAt: 202,
+      provenance: adapterProvenance,
+      kind: "interaction.opened",
+      interaction,
+    });
+    await plane.observe({
+      id: "observation-interaction-resolved",
+      sessionId: session.id,
+      occurredAt: 203,
+      provenance: adapterProvenance,
+      kind: "interaction.resolved",
+      attachmentId: opened.id,
+      interactionId: interaction.id,
+      resolution: { optionIds: ["once"], response: null },
+    });
+
+    await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+      capabilities: [snapshot],
+      interactions: {
+        active: [],
+        resolved: [{ interaction, resolution: { optionIds: ["once"], response: null } }],
+      },
+    });
+    await expect(
+      plane.observe({
+        id: "observation-capabilities-wrong-adapter",
+        sessionId: session.id,
+        occurredAt: 204,
+        provenance: {
+          ...adapterProvenance,
+          source: { ...adapterProvenance.source, id: "codex" },
+        },
+        kind: "capabilities.updated",
+        snapshot: { ...snapshot, id: "capabilities-2" },
+      }),
+    ).rejects.toThrow("must be produced by adapter opencode");
+    await expect(
+      plane.observe({
+        id: "observation-capabilities-wrong-binding",
+        sessionId: session.id,
+        occurredAt: 205,
+        provenance: adapterProvenance,
+        kind: "capabilities.updated",
+        snapshot: { ...snapshot, id: "capabilities-3", adapterId: "codex" },
+      }),
+    ).rejects.toThrow("does not match attachment");
+    await expect(
+      plane.observe({
+        id: "observation-interaction-resolved-twice",
+        sessionId: session.id,
+        occurredAt: 206,
+        provenance: adapterProvenance,
+        kind: "interaction.resolved",
+        attachmentId: opened.id,
+        interactionId: interaction.id,
+        resolution: { optionIds: ["once"], response: null },
+      }),
+    ).rejects.toThrow("is not open");
+  });
+
   it("makes command replay idempotent without a receipt, while rejecting collisions and unknown Sessions", async () => {
     const { plane } = composition();
     const { session } = await plane.createSession(createRequest());

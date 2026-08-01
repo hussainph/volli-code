@@ -48,6 +48,61 @@ export interface SessionNativeReference {
   detail: SessionNativeDetail | null;
 }
 
+export type SessionCapabilityState = "available" | "unavailable" | "unknown";
+export type SessionCapabilityEvidence = "declared" | "reported" | "observed" | "verified";
+
+export interface SessionCapabilityFeature {
+  id: string;
+  state: SessionCapabilityState;
+  evidence: SessionCapabilityEvidence;
+  detail: string | null;
+}
+
+export interface SessionCapabilityCatalogItem {
+  kind: "model" | "agent" | "command" | "mcp" | "skill" | "tool";
+  id: string;
+  label: string;
+  state: SessionCapabilityState;
+  evidence: SessionCapabilityEvidence;
+  detail: SessionNativeDetail | null;
+}
+
+/** A versioned, binding-scoped view of what a native harness can do right now. */
+export interface SessionCapabilitySnapshot {
+  id: string;
+  adapterId: string;
+  attachmentId: string | null;
+  profileId: string;
+  revision: number;
+  observedAt: number;
+  expiresAt: number | null;
+  features: readonly SessionCapabilityFeature[];
+  catalog: readonly SessionCapabilityCatalogItem[];
+}
+
+export interface SessionInteractionOption {
+  id: string;
+  label: string;
+  description?: string;
+}
+
+/** A provider-neutral user decision with an opaque native correlation reference. */
+export interface SessionInteraction {
+  id: string;
+  attachmentId: string;
+  kind: "permission" | "question";
+  title: string;
+  detail: string | null;
+  options: readonly SessionInteractionOption[];
+  multiple: boolean;
+  native: SessionNativeReference;
+}
+
+export interface SessionInteractionResolution {
+  optionIds: readonly string[];
+  response: string | null;
+}
+
 /** An executor attached to a Session. Its end does not end the Session. */
 export interface SessionAttachment {
   id: string;
@@ -150,6 +205,14 @@ export type SessionEventPayload =
     }
   | { kind: "attention.raised"; attention: SessionAttention }
   | { kind: "attention.cleared"; attentionId: string }
+  | { kind: "capabilities.updated"; snapshot: SessionCapabilitySnapshot }
+  | { kind: "interaction.opened"; interaction: SessionInteraction }
+  | {
+      kind: "interaction.resolved";
+      attachmentId: string;
+      interactionId: string;
+      resolution: SessionInteractionResolution;
+    }
   | { kind: "command.receipt.recorded"; receipt: CommandReceipt }
   | {
       kind: "adapter.observed";
@@ -236,6 +299,20 @@ export type SessionObservation =
     })
   | (SessionObservationBase & { kind: "attention.cleared"; attentionId: string })
   | (SessionObservationBase & {
+      kind: "capabilities.updated";
+      snapshot: SessionCapabilitySnapshot;
+    })
+  | (SessionObservationBase & {
+      kind: "interaction.opened";
+      interaction: SessionInteraction;
+    })
+  | (SessionObservationBase & {
+      kind: "interaction.resolved";
+      attachmentId: string;
+      interactionId: string;
+      resolution: SessionInteractionResolution;
+    })
+  | (SessionObservationBase & {
       kind: "adapter.observed";
       attachmentId: string | null;
       name: string;
@@ -291,6 +368,17 @@ export function observationPayload(observation: SessionObservation): SessionEven
       return { kind: observation.kind, attention: observation.attention };
     case "attention.cleared":
       return { kind: observation.kind, attentionId: observation.attentionId };
+    case "capabilities.updated":
+      return { kind: observation.kind, snapshot: observation.snapshot };
+    case "interaction.opened":
+      return { kind: observation.kind, interaction: observation.interaction };
+    case "interaction.resolved":
+      return {
+        kind: observation.kind,
+        attachmentId: observation.attachmentId,
+        interactionId: observation.interactionId,
+        resolution: observation.resolution,
+      };
     case "command.receipt":
       throw new Error("Command receipt observations require Control Plane stamping");
     case "adapter.observed":
@@ -444,6 +532,15 @@ export interface SessionAttentionProjection {
   primary: SessionAttention | null;
 }
 
+export interface SessionInteractionProjection {
+  active: readonly SessionInteraction[];
+  resolved: readonly {
+    interaction: SessionInteraction;
+    resolution: SessionInteractionResolution;
+    resolvedAt: number;
+  }[];
+}
+
 export interface SessionProjection {
   session: Session;
   status: "open" | "archived";
@@ -454,6 +551,9 @@ export interface SessionProjection {
   attachments: readonly SessionAttachmentProjection[];
   liveExecutor: SessionAttachmentProjection | null;
   attention: SessionAttentionProjection;
+  /** Latest capability snapshot for each adapter/profile/binding scope. */
+  capabilities: readonly SessionCapabilitySnapshot[];
+  interactions: SessionInteractionProjection;
   /** Latest explicit generic outcome signal, independent of planner history. */
   signal: { signal: "done" | "blocked"; reason: string | null; occurredAt: number } | null;
 }
@@ -468,6 +568,9 @@ export function projectSession(
 ): SessionProjection {
   const attachments = new Map<string, SessionAttachmentProjection>();
   const attention = new Map<string, SessionAttention>();
+  const capabilities = new Map<string, SessionCapabilitySnapshot>();
+  const interactions = new Map<string, SessionInteraction>();
+  const resolvedInteractions: SessionInteractionProjection["resolved"][number][] = [];
   const commands: SessionCommand[] = [];
   const receipts: CommandReceipt[] = [];
   const pendingExecutorStarts = new Map<string, SessionCommand>();
@@ -552,6 +655,29 @@ export function projectSession(
       case "attention.cleared":
         attention.delete(event.payload.attentionId);
         break;
+      case "capabilities.updated": {
+        const { snapshot } = event.payload;
+        const scope = `${snapshot.adapterId}\u0000${snapshot.profileId}\u0000${snapshot.attachmentId ?? ""}`;
+        capabilities.delete(scope);
+        capabilities.set(scope, snapshot);
+        break;
+      }
+      case "interaction.opened":
+        interactions.delete(event.payload.interaction.id);
+        interactions.set(event.payload.interaction.id, event.payload.interaction);
+        break;
+      case "interaction.resolved": {
+        const interaction = interactions.get(event.payload.interactionId);
+        if (interaction) {
+          interactions.delete(interaction.id);
+          resolvedInteractions.push({
+            interaction,
+            resolution: event.payload.resolution,
+            resolvedAt: event.occurredAt,
+          });
+        }
+        break;
+      }
       case "command.receipt.recorded":
         receipts.push(event.payload.receipt);
         if (event.payload.receipt.status === "rejected") {
@@ -580,6 +706,8 @@ export function projectSession(
       active: activeAttention,
       primary: activeAttention.at(-1) ?? null,
     },
+    capabilities: [...capabilities.values()],
+    interactions: { active: [...interactions.values()], resolved: resolvedInteractions },
     signal,
   };
 }

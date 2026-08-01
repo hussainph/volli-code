@@ -100,7 +100,7 @@ export class SessionEngineNotFoundError extends Error {
   }
 }
 
-/** The storage-agnostic session engine; its host supplies one transactional ledger writer. */
+/** The storage-agnostic Session Engine; its host supplies one transactional ledger writer. */
 export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
   return {
     async createSession(request) {
@@ -708,6 +708,36 @@ function assertObservableFact(
       `Native reference for attachment ${attachmentId} must be produced by adapter ${attachment.adapterId}`,
     );
   }
+  if (
+    (observation.kind === "capabilities.updated" ||
+      observation.kind === "interaction.opened" ||
+      observation.kind === "interaction.resolved") &&
+    (observation.provenance.source.kind !== "adapter" ||
+      observation.provenance.source.id !== attachment.adapterId)
+  ) {
+    throw new SessionEngineConflictError(
+      `${observation.kind} for attachment ${attachmentId} must be produced by adapter ${attachment.adapterId}`,
+    );
+  }
+  if (
+    observation.kind === "capabilities.updated" &&
+    (observation.snapshot.attachmentId !== attachment.id ||
+      observation.snapshot.adapterId !== attachment.adapterId)
+  ) {
+    throw new SessionEngineConflictError(
+      `Capability snapshot ${observation.snapshot.id} does not match attachment ${attachment.id}`,
+    );
+  }
+  if (observation.kind === "interaction.resolved") {
+    const interaction = projection.interactions.active.find(
+      (candidate) => candidate.id === observation.interactionId,
+    );
+    if (!interaction || interaction.attachmentId !== attachment.id) {
+      throw new SessionEngineConflictError(
+        `Interaction ${observation.interactionId} is not open on attachment ${attachment.id}`,
+      );
+    }
+  }
 }
 
 function assertPendingStartReservation(
@@ -887,6 +917,10 @@ function observationAttachmentId(observation: SessionObservation): string | null
       return observation.attachment.id;
     case "attention.raised":
       return observation.attention.attachmentId;
+    case "capabilities.updated":
+      return observation.snapshot.attachmentId;
+    case "interaction.opened":
+      return observation.interaction.attachmentId;
     default:
       return observation.attachmentId;
   }

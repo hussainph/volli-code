@@ -25,7 +25,7 @@ const session: Session = {
 
 const localVenue = { id: "machine-1", kind: "local" as const };
 const systemProvenance = {
-  source: { kind: "system" as const, id: "control-plane", detail: null },
+  source: { kind: "system" as const, id: "session-engine", detail: null },
   venue: localVenue,
 };
 
@@ -211,6 +211,67 @@ describe("observationPayload", () => {
         name: "native.signal",
         native: ["opaque", true],
       },
+      {
+        id: "11-capabilities",
+        sessionId: session.id,
+        occurredAt: 11,
+        provenance,
+        kind: "capabilities.updated",
+        snapshot: {
+          id: "capabilities-1",
+          adapterId: "opencode",
+          attachmentId: attachment.id,
+          profileId: "native",
+          revision: 1,
+          observedAt: 11,
+          expiresAt: 71,
+          features: [
+            {
+              id: "message.submit",
+              state: "available",
+              evidence: "verified",
+              detail: null,
+            },
+          ],
+          catalog: [
+            {
+              kind: "model",
+              id: "openai/gpt-5",
+              label: "GPT-5",
+              state: "available",
+              evidence: "reported",
+              detail: null,
+            },
+          ],
+        },
+      },
+      {
+        id: "12-interaction-opened",
+        sessionId: session.id,
+        occurredAt: 12,
+        provenance,
+        kind: "interaction.opened",
+        interaction: {
+          id: "permission-1",
+          attachmentId: attachment.id,
+          kind: "permission",
+          title: "Allow file write?",
+          detail: null,
+          options: [{ id: "once", label: "Allow once" }],
+          multiple: false,
+          native: { id: "native-permission-1", detail: null },
+        },
+      },
+      {
+        id: "13-interaction-resolved",
+        sessionId: session.id,
+        occurredAt: 13,
+        provenance,
+        kind: "interaction.resolved",
+        attachmentId: attachment.id,
+        interactionId: "permission-1",
+        resolution: { optionIds: ["once"], response: null },
+      },
     ];
 
     expect(observations.map(observationPayload).map(({ kind }) => kind)).toEqual([
@@ -226,6 +287,9 @@ describe("observationPayload", () => {
       "attention.raised",
       "attention.cleared",
       "adapter.observed",
+      "capabilities.updated",
+      "interaction.opened",
+      "interaction.resolved",
     ]);
     expect(
       observationPayload({
@@ -254,6 +318,75 @@ describe("observationPayload", () => {
         },
       }),
     ).toThrow("require Control Plane stamping");
+  });
+
+  it("projects the latest binding capabilities and unresolved interactions", () => {
+    const firstSnapshot = {
+      id: "capabilities-1",
+      adapterId: "opencode",
+      attachmentId: "attachment-1",
+      profileId: "native",
+      revision: 1,
+      observedAt: 10,
+      expiresAt: 70,
+      features: [
+        {
+          id: "message.submit",
+          state: "available" as const,
+          evidence: "verified" as const,
+          detail: null,
+        },
+      ],
+      catalog: [],
+    };
+    const latestSnapshot = { ...firstSnapshot, id: "capabilities-2", revision: 2, observedAt: 20 };
+    const sessionSnapshot = {
+      ...latestSnapshot,
+      id: "capabilities-session",
+      attachmentId: null,
+      revision: 1,
+    };
+    const interaction = {
+      id: "permission-1",
+      attachmentId: "attachment-1",
+      kind: "permission" as const,
+      title: "Allow file write?",
+      detail: null,
+      options: [{ id: "once", label: "Allow once" }],
+      multiple: false,
+      native: { id: "native-permission-1", detail: null },
+    };
+    const remaining = { ...interaction, id: "question-1", kind: "question" as const };
+
+    const projection = projectSession(session, [
+      event(1, { kind: "capabilities.updated", snapshot: firstSnapshot }),
+      event(2, { kind: "interaction.opened", interaction }),
+      event(3, { kind: "interaction.opened", interaction: remaining }),
+      event(4, {
+        kind: "interaction.resolved",
+        attachmentId: interaction.attachmentId,
+        interactionId: interaction.id,
+        resolution: { optionIds: ["once"], response: null },
+      }),
+      event(5, { kind: "capabilities.updated", snapshot: latestSnapshot }),
+      event(6, { kind: "capabilities.updated", snapshot: sessionSnapshot }),
+      event(7, {
+        kind: "interaction.resolved",
+        attachmentId: "attachment-1",
+        interactionId: "missing",
+        resolution: { optionIds: [], response: null },
+      }),
+    ]);
+
+    expect(projection.capabilities).toEqual([latestSnapshot, sessionSnapshot]);
+    expect(projection.interactions.active).toEqual([remaining]);
+    expect(projection.interactions.resolved).toEqual([
+      {
+        interaction,
+        resolution: { optionIds: ["once"], response: null },
+        resolvedAt: 40,
+      },
+    ]);
   });
 });
 

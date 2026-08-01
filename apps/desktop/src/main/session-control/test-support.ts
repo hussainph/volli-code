@@ -190,6 +190,8 @@ export function getSession(db: Database.Database, sessionId: string): SessionRec
       attachments: [],
       liveExecutor: null,
       attention: { active: [], primary: null },
+      capabilities: [],
+      interactions: { active: [], resolved: [] },
       signal: null,
     });
   }
@@ -235,6 +237,8 @@ export function getSession(db: Database.Database, sessionId: string): SessionRec
     ],
     liveExecutor: null,
     attention: { active: [], primary: null },
+    capabilities: [],
+    interactions: { active: [], resolved: [] },
     signal: null,
   });
 }
