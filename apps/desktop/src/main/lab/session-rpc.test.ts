@@ -1,12 +1,15 @@
-import { readdir } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { createOpenCodeNativeAdapter } from "@volli/opencode-adapter";
 
+import { LAB_SESSION_PROJECT_ID, LAB_SESSION_TICKET_ID } from "../../lab-session-rpc-path";
 import {
   LAB_SESSION_RPC_PATH,
+  createLabTaskWorkspace,
   type LabProcessExitLifecycle,
   LabSessionRpcServer,
   labRequestSecurityError,
@@ -48,7 +51,7 @@ describe("Lab Session RPC server", () => {
   it("initializes an isolated database only on its first valid request and removes it on close", async () => {
     const before = new Set(await labDirectories());
     const lifecycle = new TestExitLifecycle();
-    const lab = new LabSessionRpcServer({ repoRoot: process.cwd(), exitLifecycle: lifecycle });
+    const lab = new LabSessionRpcServer({ exitLifecycle: lifecycle });
     servers.push(lab);
     const server = createServer((req, res) => {
       void lab.handle(req, res);
@@ -66,8 +69,8 @@ describe("Lab Session RPC server", () => {
             commandId: "lab-create",
             command: {
               kind: "session.create",
-              projectId: "lab-project",
-              ticketId: null,
+              projectId: LAB_SESSION_PROJECT_ID,
+              ticketId: LAB_SESSION_TICKET_ID,
               title: "Lab scratch",
             },
           }),
@@ -95,14 +98,8 @@ describe("Lab Session RPC server", () => {
     const before = new Set(await labDirectories());
     const firstLifecycle = new TestExitLifecycle();
     const secondLifecycle = new TestExitLifecycle();
-    const first = new LabSessionRpcServer({
-      repoRoot: process.cwd(),
-      exitLifecycle: firstLifecycle,
-    });
-    const second = new LabSessionRpcServer({
-      repoRoot: process.cwd(),
-      exitLifecycle: secondLifecycle,
-    });
+    const first = new LabSessionRpcServer({ exitLifecycle: firstLifecycle });
+    const second = new LabSessionRpcServer({ exitLifecycle: secondLifecycle });
     servers.push(first, second);
     const firstServer = createServer((req, res) => {
       void first.handle(req, res);
@@ -132,7 +129,7 @@ describe("Lab Session RPC server", () => {
 
   it("does not initialize a database for rejected requests", async () => {
     const before = new Set(await labDirectories());
-    const lab = new LabSessionRpcServer({ repoRoot: process.cwd() });
+    const lab = new LabSessionRpcServer();
     servers.push(lab);
     const response = await invoke(lab, request({ host: "evil.example" }));
     expect(response.status).toBe(403);
@@ -142,7 +139,6 @@ describe("Lab Session RPC server", () => {
   it("retries initialization after a temporary adapter construction failure", async () => {
     let attempts = 0;
     const lab = new LabSessionRpcServer({
-      repoRoot: process.cwd(),
       createAdapter: () => {
         attempts += 1;
         if (attempts === 1) throw new Error("adapter unavailable");
@@ -165,6 +161,34 @@ describe("Lab Session RPC server", () => {
       body: "adapter unavailable",
     });
     expect(attempts).toBe(2);
+  });
+});
+
+describe("Lab task workspace", () => {
+  it("creates a clean disposable git repository with a concrete starter task", async () => {
+    const parent = await mkdtemp(`${tmpdir()}/volli-lab-workspace-test-`);
+
+    try {
+      const workspace = await createLabTaskWorkspace(parent);
+
+      await expect(stat(`${workspace}/.git`)).resolves.toMatchObject({});
+      await expect(readFile(`${workspace}/TASK.md`, "utf8")).resolves.toContain(
+        "Implement the greeting",
+      );
+      await expect(readFile(`${workspace}/src/greeting.ts`, "utf8")).resolves.toContain(
+        "export function greeting",
+      );
+
+      const status = await new Promise<string>((resolve, reject) => {
+        execFile("git", ["status", "--short"], { cwd: workspace }, (error, stdout) => {
+          if (error) reject(error);
+          else resolve(stdout);
+        });
+      });
+      expect(status).toBe("");
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
   });
 });
 
@@ -237,8 +261,8 @@ async function createSession(server: ReturnType<typeof createServer>): Promise<v
         commandId: `lab-create-${address.port}`,
         command: {
           kind: "session.create",
-          projectId: "lab-project",
-          ticketId: null,
+          projectId: LAB_SESSION_PROJECT_ID,
+          ticketId: LAB_SESSION_TICKET_ID,
           title: "Lab scratch",
         },
       }),

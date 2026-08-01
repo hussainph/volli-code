@@ -37,15 +37,10 @@ export default defineConfig(({ mode }) => ({
   // CRITICAL: assets stay relative so the built index and worker chunks resolve
   // beneath volli-app://bundle/ in packaged builds. Plain Vite defaults to "/".
   base: "./",
-  plugins: [
-    tailwindcss(),
-    react(),
-    ...(mode === "lab"
-      ? [labSessionRpcPlugin(fileURLToPath(new URL("../..", import.meta.url)))]
-      : []),
-  ],
+  plugins: [tailwindcss(), react(), ...(mode === "lab" ? [labSessionRpcPlugin()] : [])],
   resolve: {
     alias: {
+      "@ai-elements": fileURLToPath(new URL("./src/components/ai-elements", import.meta.url)),
       "@renderer": fileURLToPath(new URL("./src/renderer/src", import.meta.url)),
     },
   },
@@ -208,7 +203,7 @@ export default defineConfig(({ mode }) => ({
   },
 }));
 
-function labSessionRpcPlugin(repoRoot: string): Plugin {
+function labSessionRpcPlugin(): Plugin {
   return {
     name: "volli:lab-session-rpc",
     configureServer(server: ViteDevServer) {
@@ -224,7 +219,7 @@ function labSessionRpcPlugin(repoRoot: string): Plugin {
         let pending = lab;
         if (pending === null) {
           pending = server.ssrLoadModule(labSessionRpcModule).then(({ LabSessionRpcServer }) => {
-            const instance = new LabSessionRpcServer({ repoRoot });
+            const instance = new LabSessionRpcServer();
             labInstance = instance;
             return instance;
           });
