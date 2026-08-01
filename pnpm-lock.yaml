@@ -300,10 +300,10 @@ importers:
       '@volli/shared':
         specifier: workspace:*
         version: link:../shared
+    devDependencies:
       ai:
         specifier: ^7.0.47
         version: 7.0.47(zod@4.4.3)
-    devDependencies:
       typescript:
         specifier: 'catalog:'
         version: 7.0.2

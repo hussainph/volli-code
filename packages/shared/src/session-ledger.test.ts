@@ -257,7 +257,7 @@ describe("observationPayload", () => {
           kind: "permission",
           title: "Allow file write?",
           detail: null,
-          options: [{ id: "once", label: "Allow once" }],
+          options: [{ id: "once", label: "Allow once", description: null }],
           multiple: false,
           native: { id: "native-permission-1", detail: null },
         },
@@ -328,7 +328,7 @@ describe("observationPayload", () => {
       profileId: "native",
       revision: 1,
       observedAt: 10,
-      expiresAt: 70,
+      expiresAt: null,
       features: [
         {
           id: "message.submit",
@@ -352,12 +352,18 @@ describe("observationPayload", () => {
       kind: "permission" as const,
       title: "Allow file write?",
       detail: null,
-      options: [{ id: "once", label: "Allow once" }],
+      options: [{ id: "once", label: "Allow once", description: null }],
       multiple: false,
       native: { id: "native-permission-1", detail: null },
     };
     const remaining = { ...interaction, id: "question-1", kind: "question" as const };
 
+    const reorderedSnapshot = {
+      ...latestSnapshot,
+      id: "capabilities-3",
+      revision: 3,
+      observedAt: 30,
+    };
     const projection = projectSession(session, [
       event(1, { kind: "capabilities.updated", snapshot: firstSnapshot }),
       event(2, { kind: "interaction.opened", interaction }),
@@ -376,9 +382,10 @@ describe("observationPayload", () => {
         interactionId: "missing",
         resolution: { optionIds: [], response: null },
       }),
+      event(8, { kind: "capabilities.updated", snapshot: reorderedSnapshot }),
     ]);
 
-    expect(projection.capabilities).toEqual([latestSnapshot, sessionSnapshot]);
+    expect(projection.capabilities).toEqual([sessionSnapshot, reorderedSnapshot]);
     expect(projection.interactions.active).toEqual([remaining]);
     expect(projection.interactions.resolved).toEqual([
       {
@@ -387,6 +394,24 @@ describe("observationPayload", () => {
         resolvedAt: 40,
       },
     ]);
+  });
+
+  it("does not project an expired capability snapshot", () => {
+    const expired = {
+      id: "capabilities-expired",
+      adapterId: "opencode",
+      attachmentId: "attachment-1",
+      profileId: "native",
+      revision: 1,
+      observedAt: 10,
+      expiresAt: 20,
+      features: [],
+      catalog: [],
+    };
+
+    expect(
+      projectSession(session, [event(1, { kind: "capabilities.updated", snapshot: expired })], 20),
+    ).toMatchObject({ capabilities: [] });
   });
 });
 

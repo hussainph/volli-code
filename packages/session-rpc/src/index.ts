@@ -157,6 +157,11 @@ const nonNegativeSafeInteger = z
   .int()
   .nonnegative()
   .refine(Number.isSafeInteger, "Expected a safe non-negative integer");
+const positiveSafeInteger = z
+  .number()
+  .int()
+  .positive()
+  .refine(Number.isSafeInteger, "Expected a safe positive integer");
 const sseCursor = z
   .string()
   .regex(/^(?:0|[1-9]\d*)$/)
@@ -274,6 +279,15 @@ export function createSessionRouter() {
           } finally {
             signal?.removeEventListener("abort", abort);
             unsubscribe();
+            if (queue.overflowed) {
+              ctx.diagnostics.record({
+                procedure: "session.subscribe",
+                phase: "error",
+                transport: ctx.transport ?? "unknown",
+                code: "SUBSCRIPTION_OVERFLOW",
+                message: "Session subscription fell behind; resume from the last event id",
+              });
+            }
           }
         }),
       command: instrumentedProcedure
@@ -291,8 +305,8 @@ export function createSessionRouter() {
         .input(
           z
             .object({
-              afterId: z.number().int().nonnegative().optional(),
-              limit: z.number().int().positive().optional(),
+              afterId: nonNegativeSafeInteger.optional(),
+              limit: positiveSafeInteger.optional(),
             })
             .optional(),
         )
@@ -317,6 +331,15 @@ export function createSessionRouter() {
           } finally {
             signal?.removeEventListener("abort", abort);
             unsubscribe();
+            if (queue.overflowed) {
+              ctx.diagnostics.record({
+                procedure: "labDiagnostics.subscribe",
+                phase: "error",
+                transport: ctx.transport ?? "unknown",
+                code: "SUBSCRIPTION_OVERFLOW",
+                message: "Diagnostics subscription fell behind; resume from the last event id",
+              });
+            }
           }
         }),
     }),
@@ -328,25 +351,42 @@ export type AppRouter = ReturnType<typeof createSessionRouter>;
 export class AsyncQueue<T> implements AsyncIterable<T> {
   readonly #values: T[] = [];
   readonly #waiters: ((result: IteratorResult<T>) => void)[] = [];
+  readonly #capacity: number;
   #closed = false;
+  #overflowed = false;
+
+  constructor(capacity = 4_096) {
+    if (!Number.isInteger(capacity) || capacity < 1) {
+      throw new Error("AsyncQueue capacity must be a positive integer");
+    }
+    this.#capacity = capacity;
+  }
+
+  get overflowed(): boolean {
+    return this.#overflowed;
+  }
 
   push(value: T): void {
     if (this.#closed) return;
     const waiter = this.#waiters.shift();
     if (waiter) waiter({ done: false, value });
-    else this.#values.push(value);
+    else if (this.#values.length < this.#capacity) this.#values.push(value);
+    else {
+      this.#overflowed = true;
+      this.close(false);
+    }
   }
 
-  close(): void {
+  close(discard = true): void {
     if (this.#closed) return;
     this.#closed = true;
-    this.#values.length = 0;
+    if (discard) this.#values.length = 0;
     for (const waiter of this.#waiters.splice(0)) waiter({ done: true, value: undefined });
   }
 
   async next(): Promise<IteratorResult<T>> {
-    if (this.#closed) return { done: true, value: undefined };
     if (this.#values.length > 0) return { done: false, value: this.#values.shift()! };
+    if (this.#closed) return { done: true, value: undefined };
     return new Promise((resolve) => this.#waiters.push(resolve));
   }
 
@@ -394,7 +434,7 @@ function isUiRole(value: unknown): value is RpcUiMessage["role"] {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function cloneDiagnostic(entry: RpcDiagnosticEntry): RpcDiagnosticEntry {

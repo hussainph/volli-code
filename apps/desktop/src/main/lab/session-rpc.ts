@@ -8,11 +8,12 @@ import { nodeHTTPRequestHandler } from "@trpc/server/adapters/node-http";
 import { createOpenCodeNativeAdapter, type OpenCodeNativeAdapter } from "@volli/opencode-adapter";
 import { createSessionRouter, RpcDiagnosticLog } from "@volli/session-rpc";
 
+import { LAB_SESSION_RPC_PATH } from "../../lab-session-rpc-path";
 import { openVolliDb } from "../db";
 import { insertProject } from "../db/projects-repo";
 import { createDesktopSessionRuntime } from "../session-runtime";
 
-export const LAB_SESSION_RPC_PATH = "/__lab/session-rpc";
+export { LAB_SESSION_RPC_PATH } from "../../lab-session-rpc-path";
 export const LAB_PROJECT_ID = "lab-project";
 
 const requireFromHere = createRequire(import.meta.url);
@@ -182,7 +183,13 @@ export class LabSessionRpcServer {
   }
 
   async #ensureResources(): Promise<LabResources> {
-    if (!this.#resources) this.#resources = this.#createResources();
+    if (!this.#resources) {
+      const pending = this.#createResources();
+      this.#resources = pending;
+      void pending.catch(() => {
+        if (this.#resources === pending) this.#resources = null;
+      });
+    }
     return this.#resources;
   }
 
@@ -230,6 +237,10 @@ export class LabSessionRpcServer {
     } catch (error) {
       db?.close();
       await rm(directory, { recursive: true, force: true });
+      this.#directory = null;
+      this.#db = null;
+      this.#adapter = null;
+      this.#runtime = null;
       throw error;
     }
   }

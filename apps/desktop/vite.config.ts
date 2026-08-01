@@ -2,11 +2,12 @@ import "vite-plus/test/config";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
+import type { Plugin, ViteDevServer } from "vite";
 import { defineConfig } from "vite-plus";
 
+import { LAB_SESSION_RPC_PATH } from "./src/lab-session-rpc-path";
 import { RENDERER_DEV_PORT } from "./scripts/dev-constants.mjs";
 
-const LAB_SESSION_RPC_PATH = "/__lab/session-rpc";
 const labSessionRpcModule = fileURLToPath(
   new URL("./src/main/lab/session-rpc.ts", import.meta.url),
 );
@@ -207,34 +208,29 @@ export default defineConfig(({ mode }) => ({
   },
 }));
 
-function labSessionRpcPlugin(repoRoot: string) {
+function labSessionRpcPlugin(repoRoot: string): Plugin {
   return {
     name: "volli:lab-session-rpc",
-    configureServer(server: {
-      middlewares: {
-        use: (
-          path: string,
-          handler: (
-            req: import("node:http").IncomingMessage,
-            res: import("node:http").ServerResponse,
-          ) => void,
-        ) => void;
-      };
-      httpServer: { once: (event: "close", listener: () => void) => void } | null;
-      ssrLoadModule: (url: string) => Promise<typeof import("./src/main/lab/session-rpc")>;
-    }) {
+    configureServer(server: ViteDevServer) {
       let lab: Promise<
         InstanceType<typeof import("./src/main/lab/session-rpc").LabSessionRpcServer>
       > | null = null;
       let labInstance: InstanceType<
         typeof import("./src/main/lab/session-rpc").LabSessionRpcServer
       > | null = null;
-      const getLab = () => {
-        lab ??= server.ssrLoadModule(labSessionRpcModule).then(({ LabSessionRpcServer }) => {
-          labInstance = new LabSessionRpcServer({ repoRoot });
-          return labInstance;
-        });
-        return lab;
+      const getLab = (): Promise<
+        InstanceType<typeof import("./src/main/lab/session-rpc").LabSessionRpcServer>
+      > => {
+        let pending = lab;
+        if (pending === null) {
+          pending = server.ssrLoadModule(labSessionRpcModule).then(({ LabSessionRpcServer }) => {
+            const instance = new LabSessionRpcServer({ repoRoot });
+            labInstance = instance;
+            return instance;
+          });
+          lab = pending;
+        }
+        return pending;
       };
       server.middlewares.use(LAB_SESSION_RPC_PATH, (req, res) => {
         void getLab().then(
@@ -245,8 +241,10 @@ function labSessionRpcPlugin(repoRoot: string) {
           },
         );
       });
+      const terminationSignals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+      const terminationHandlers = new Map<NodeJS.Signals, () => void>();
       const close = () => {
-        for (const signal of terminationSignals) process.off(signal, close);
+        for (const [signal, handler] of terminationHandlers) process.off(signal, handler);
         // Vite does not await an HTTP `close` listener. Reap the already-loaded
         // backend synchronously before its process can finish handling SIGINT.
         if (labInstance) {
@@ -258,8 +256,15 @@ function labSessionRpcPlugin(repoRoot: string) {
           );
         }
       };
-      const terminationSignals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
-      for (const signal of terminationSignals) process.once(signal, close);
+      const terminate = (signal: NodeJS.Signals) => {
+        close();
+        process.kill(process.pid, signal);
+      };
+      for (const signal of terminationSignals) {
+        const handler = () => terminate(signal);
+        terminationHandlers.set(signal, handler);
+        process.once(signal, handler);
+      }
       server.httpServer?.once("close", close);
     },
   };

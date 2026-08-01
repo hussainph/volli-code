@@ -34,6 +34,10 @@ type OpenCodeStatusObservation = Extract<
 
 const DIRECTORY_QUERY = "directory";
 const ADAPTER_ID = "opencode";
+const REQUEST_TIMEOUT_MS = 30_000;
+const MAX_DEFERRED_EVENTS = 1_000;
+const MAX_REMEMBERED_EVENT_IDS = 10_000;
+const MAX_SSE_BUFFER_LENGTH = 1_048_576;
 
 export interface OpenCodeChild {
   readonly exited: Promise<number | null>;
@@ -72,6 +76,7 @@ export interface OpenCodeNetworkPort {
     method: "GET" | "POST";
     headers: Readonly<Record<string, string>>;
     body?: unknown;
+    signal?: AbortSignal;
   }): Promise<OpenCodeHttpResponse>;
   subscribe(input: {
     baseUrl: string;
@@ -90,12 +95,18 @@ export interface OpenCodeAdapterOptions {
   healthRetryAttempts?: number;
   healthRetryDelayMs?: number;
   stopTimeoutMs?: number;
+  maxDeferredEvents?: number;
 }
 
 interface ServerLease {
   readonly baseUrl: string;
   readonly password: string;
   readonly child: OpenCodeChild;
+}
+
+interface VerifiedOpenCodeBinary {
+  readonly path: string;
+  readonly fingerprint: string;
 }
 
 /**
@@ -121,6 +132,8 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
   readonly #healthRetryAttempts: number;
   readonly #healthRetryDelayMs: number;
   readonly #stopTimeoutMs: number;
+  readonly #maxDeferredEvents: number;
+  #verifiedBinary: VerifiedOpenCodeBinary | null = null;
   #server: ServerLease | null = null;
   #starting: Promise<ServerLease> | null = null;
   #closing: Promise<void> | null = null;
@@ -138,6 +151,10 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
     this.#healthRetryAttempts = options.healthRetryAttempts ?? 100;
     this.#healthRetryDelayMs = options.healthRetryDelayMs ?? 100;
     this.#stopTimeoutMs = options.stopTimeoutMs ?? 2_000;
+    this.#maxDeferredEvents = options.maxDeferredEvents ?? MAX_DEFERRED_EVENTS;
+    if (!Number.isInteger(this.#maxDeferredEvents) || this.#maxDeferredEvents < 1) {
+      throw new Error("OpenCode maxDeferredEvents must be a positive integer");
+    }
   }
 
   async probe(context: NativeProbeContext, signal: AbortSignal): Promise<NativeProbeResult> {
@@ -150,17 +167,15 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
     }
     try {
       this.#throwIfClosed();
-      const path = await this.#process.resolveBinary(this.#binaryPath);
-      const [version, fingerprint] = await Promise.all([
-        this.#process.version(path, signal),
-        this.#process.sha256(path),
-      ]);
+      const binary = await this.#resolveAndFingerprint();
+      const version = await this.#process.version(binary.path, signal);
+      this.#verifiedBinary = binary;
       const server = await this.#ensureServer();
-      await this.#waitForHealth(server);
+      await this.#waitForHealth(server, signal);
       this.#throwIfClosed();
       return {
         status: "available",
-        runtime: { path, version, fingerprint },
+        runtime: { path: binary.path, version, fingerprint: binary.fingerprint },
         capabilities: await this.#capabilities(server, context.directory),
       };
     } catch (error) {
@@ -186,6 +201,9 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
       nativeSessionId,
       network: this.#network,
       now: this.#now,
+      sleep: this.#sleep,
+      reconnectDelayMs: this.#healthRetryDelayMs,
+      maxDeferredEvents: this.#maxDeferredEvents,
       onRelease: () => undefined,
     });
     await binding.start(sink);
@@ -270,27 +288,34 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
   }
 
   async #startServer(): Promise<ServerLease> {
-    const path = await this.#process.resolveBinary(this.#binaryPath);
+    const binary = await this.#verifiedBinaryForLaunch();
     const port = await this.#process.allocatePort();
     const password = this.#process.randomSecret();
     const child = await this.#process.spawn({
-      path,
+      path: binary.path,
       // `--no-mdns` and omitted `--cors` keep discovery and browser origins disabled.
       args: ["serve", "--hostname", "127.0.0.1", "--port", String(port), "--no-mdns"],
-      env: { OPENCODE_SERVER_PASSWORD: password },
+      env: {
+        OPENCODE_SERVER_PASSWORD: password,
+        // The client authenticates with this explicit principal; do not inherit
+        // an ambient OPENCODE_SERVER_USERNAME from the parent process.
+        OPENCODE_SERVER_USERNAME: "opencode",
+      },
     });
     return { baseUrl: `http://127.0.0.1:${port}`, password, child };
   }
 
-  async #waitForHealth(server: ServerLease): Promise<OpenCodeHttpResponse> {
+  async #waitForHealth(server: ServerLease, signal?: AbortSignal): Promise<OpenCodeHttpResponse> {
     let last: OpenCodeHttpResponse | null = null;
     let lastError: unknown = null;
     for (let attempt = 0; attempt < this.#healthRetryAttempts; attempt += 1) {
       try {
-        const health = await this.#request(server, "/global/health", "GET");
+        if (signal?.aborted) throw signal.reason;
+        const health = await this.#request(server, "/global/health", "GET", undefined, signal);
         last = health;
         if (health.status >= 200 && health.status < 300) return health;
       } catch (error) {
+        if (signal?.aborted) throw error;
         lastError = error;
       }
       if (attempt + 1 < this.#healthRetryAttempts) await this.#sleep(this.#healthRetryDelayMs);
@@ -299,17 +324,42 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
     throw lastError instanceof Error ? lastError : new Error("OpenCode health check failed");
   }
 
+  async #resolveAndFingerprint(): Promise<VerifiedOpenCodeBinary> {
+    const path = await this.#process.resolveBinary(this.#binaryPath);
+    return { path, fingerprint: await this.#process.sha256(path) };
+  }
+
+  async #verifiedBinaryForLaunch(): Promise<VerifiedOpenCodeBinary> {
+    const binary = this.#verifiedBinary ?? (await this.#resolveAndFingerprint());
+    const currentFingerprint = await this.#process.sha256(binary.path);
+    if (currentFingerprint !== binary.fingerprint) {
+      this.#verifiedBinary = null;
+      throw new Error(
+        "OpenCode executable changed after verification; probe it again before launch",
+      );
+    }
+    this.#verifiedBinary = binary;
+    return binary;
+  }
+
   async #stopChild(child: OpenCodeChild): Promise<void> {
     await Promise.race([child.stop().then(() => child.exited), this.#sleep(this.#stopTimeoutMs)]);
   }
 
-  async #request(server: ServerLease, path: string, method: "GET" | "POST", body?: unknown) {
+  async #request(
+    server: ServerLease,
+    path: string,
+    method: "GET" | "POST",
+    body?: unknown,
+    signal?: AbortSignal,
+  ) {
     return this.#network.request({
       baseUrl: server.baseUrl,
       path,
       method,
       headers: authHeaders(server.password),
       ...(body === undefined ? {} : { body }),
+      ...(signal === undefined ? {} : { signal }),
     });
   }
 
@@ -377,6 +427,9 @@ interface BindingOptions {
   nativeSessionId: string;
   network: OpenCodeNetworkPort;
   now: () => number;
+  sleep: (milliseconds: number) => Promise<void>;
+  reconnectDelayMs: number;
+  maxDeferredEvents: number;
   onRelease: () => void;
 }
 
@@ -402,6 +455,9 @@ class OpenCodeBinding implements BindingHandle {
   readonly #nativeSessionId: string;
   readonly #network: OpenCodeNetworkPort;
   readonly #now: () => number;
+  readonly #sleep: (milliseconds: number) => Promise<void>;
+  readonly #reconnectDelayMs: number;
+  readonly #maxDeferredEvents: number;
   readonly #onRelease: () => void;
   readonly #seen = new Set<string>();
   readonly #streamEventsSeen = new Set<string>();
@@ -420,6 +476,8 @@ class OpenCodeBinding implements BindingHandle {
   #reconciliationSequence = 0;
   #reconciling = false;
   #drainingDeferredEvents = false;
+  #requiresFullReconciliation = false;
+  #streamReconnectSequence = 0;
 
   constructor(options: BindingOptions) {
     this.#server = options.server;
@@ -427,6 +485,9 @@ class OpenCodeBinding implements BindingHandle {
     this.#nativeSessionId = options.nativeSessionId;
     this.#network = options.network;
     this.#now = options.now;
+    this.#sleep = options.sleep;
+    this.#reconnectDelayMs = options.reconnectDelayMs;
+    this.#maxDeferredEvents = options.maxDeferredEvents;
     this.#onRelease = options.onRelease;
     this.native = { id: options.nativeSessionId, detail: null };
     this.#importNativeHistory = options.spec.continuity === "native_resume";
@@ -434,14 +495,9 @@ class OpenCodeBinding implements BindingHandle {
 
   async start(sink: ObservationSink): Promise<void> {
     this.#sink = sink;
-    const stream = await this.#network.subscribe({
-      baseUrl: this.#server.baseUrl,
-      path: withDirectory("/event", this.#spec.directory),
-      headers: authHeaders(this.#server.password),
-      signal: this.#streamAbort.signal,
-    });
-    // #pump contains both source and sink failures before this detached task
-    // settles, so a transient durable-store failure cannot escape the main process.
+    const stream = await this.#subscribe();
+    // #pump contains source, reconnect, and sink failures before this detached
+    // task settles, so a transient durable-store failure cannot escape main.
     void this.#pump(stream);
   }
 
@@ -523,7 +579,14 @@ class OpenCodeBinding implements BindingHandle {
     this.#reconciling = true;
     try {
       await this.#drainInFlightEmit();
-      return await this.#readReconciliation(cursor);
+      const reconciliation = await this.#readReconciliation(cursor);
+      if (this.#requiresFullReconciliation) {
+        // A fresh provider snapshot is authoritative; stale partial stream
+        // deltas cannot be replayed safely after the bounded queue overflowed.
+        this.#requiresFullReconciliation = false;
+        this.#deferredEvents.length = 0;
+      }
+      return reconciliation;
     } finally {
       this.#reconciling = false;
       if (!this.#pendingReconciliation) await this.#drainDeferredEvents();
@@ -619,7 +682,7 @@ class OpenCodeBinding implements BindingHandle {
   }
 
   #commitReconciliation(pending: PendingOpenCodeReconciliation): void {
-    for (const id of pending.seenIds) this.#seen.add(id);
+    for (const id of pending.seenIds) this.#rememberId(this.#seen, id);
     if (pending.completesNativeHistoryImport) this.#importNativeHistory = false;
     if (pending.turnStatus) this.#turnStatus = pending.turnStatus;
     if (pending.statusSignature) this.#statusSignature = pending.statusSignature;
@@ -645,28 +708,57 @@ class OpenCodeBinding implements BindingHandle {
     if (emission) await Promise.allSettled([emission]);
   }
 
-  async #pump(stream: AsyncIterable<OpenCodeSseEvent>): Promise<void> {
+  async #pump(initialStream: AsyncIterable<OpenCodeSseEvent>): Promise<void> {
+    let disconnected = await this.#consumeStream(initialStream);
+    while (!this.#released) {
+      await this.#emitDisconnected(disconnected);
+      try {
+        await this.#sleep(this.#reconnectDelayMs);
+      } catch {
+        return;
+      }
+      if (this.#released) return;
+      try {
+        const stream = await this.#subscribe();
+        await this.#emitReconnected();
+        disconnected = await this.#consumeStream(stream);
+      } catch (error) {
+        disconnected =
+          error instanceof Error ? error.message : "OpenCode event stream disconnected";
+      }
+    }
+  }
+
+  async #consumeStream(stream: AsyncIterable<OpenCodeSseEvent>): Promise<string | null> {
     let disconnected: string | null = "OpenCode event stream ended";
     try {
       for await (const event of stream) {
-        if (this.#released) return;
-        if (this.#streamEventsSeen.has(event.id)) continue;
+        if (this.#released) return disconnected;
+        const sessionId = eventSessionId(event.properties);
+        if (sessionId !== this.#nativeSessionId || this.#streamEventsSeen.has(event.id)) continue;
         await this.#handleEvent(event);
-        this.#streamEventsSeen.add(event.id);
+        this.#rememberStreamEvent(event.id);
       }
     } catch (error) {
       disconnected = error instanceof Error ? error.message : "OpenCode event stream disconnected";
     }
-    if (!this.#released) {
-      await this.#emitDisconnected(disconnected);
-    }
+    return disconnected;
+  }
+
+  #subscribe(): Promise<AsyncIterable<OpenCodeSseEvent>> {
+    return this.#network.subscribe({
+      baseUrl: this.#server.baseUrl,
+      path: withDirectory("/event", this.#spec.directory),
+      headers: authHeaders(this.#server.password),
+      signal: this.#streamAbort.signal,
+    });
   }
 
   async #emitDisconnected(disconnectDetail: string | null): Promise<void> {
     try {
       await this.#flushMessages(`opencode:sse-final:${this.#nativeSessionId}`);
     } catch {
-      // Continue to the independently identified attention and terminal facts.
+      // Continue to the independently identified attention fact.
     }
     try {
       await this.#emit({
@@ -685,17 +777,18 @@ class OpenCodeBinding implements BindingHandle {
       // #emit remembers only after its sink commits, so this does not consume
       // the failure observation's independent native identity.
     }
+  }
+
+  async #emitReconnected(): Promise<void> {
     try {
       await this.#emit({
-        id: `opencode:sse-binding-failed:${this.#nativeSessionId}`,
-        kind: "attachment.failed",
+        id: `opencode:sse-reconnected:${this.#nativeSessionId}:${++this.#streamReconnectSequence}`,
+        kind: "attention.cleared",
         occurredAt: this.#now(),
-        detail: disconnectDetail,
+        attentionId: `opencode:sse-disconnected:${this.#nativeSessionId}`,
       });
     } catch {
-      // The detached pump must not surface a durable-store failure as an
-      // unhandled rejection. There is no safe further delivery path.
-      this.#sink = null;
+      // The stream remains usable even if the durable attention clear fails.
     }
   }
 
@@ -717,7 +810,19 @@ class OpenCodeBinding implements BindingHandle {
   }
 
   #remember(observation: HarnessObservation): void {
-    this.#seen.add(observation.id);
+    this.#rememberId(this.#seen, observation.id);
+  }
+
+  #rememberStreamEvent(eventId: string): void {
+    this.#rememberId(this.#streamEventsSeen, eventId);
+  }
+
+  #rememberId(ids: Set<string>, id: string): void {
+    ids.add(id);
+    if (ids.size > MAX_REMEMBERED_EVENT_IDS) {
+      const first = ids.values().next().value as string;
+      ids.delete(first);
+    }
   }
 
   async #drainDeferredEvents(): Promise<void> {
@@ -726,6 +831,7 @@ class OpenCodeBinding implements BindingHandle {
       this.#released ||
       this.#pendingReconciliation ||
       this.#reconciling ||
+      this.#requiresFullReconciliation ||
       this.#drainingDeferredEvents
     )
       return;
@@ -743,13 +849,15 @@ class OpenCodeBinding implements BindingHandle {
   }
 
   async #handleEvent(event: OpenCodeSseEvent, deferred = false): Promise<void> {
-    const sessionId = eventSessionId(event.properties);
-    if (sessionId !== this.#nativeSessionId) return;
     if (
       !deferred &&
-      (this.#pendingReconciliation || this.#reconciling || this.#drainingDeferredEvents)
+      (this.#pendingReconciliation ||
+        this.#reconciling ||
+        this.#drainingDeferredEvents ||
+        this.#requiresFullReconciliation)
     ) {
-      this.#deferredEvents.push(event);
+      if (this.#deferredEvents.length < this.#maxDeferredEvents) this.#deferredEvents.push(event);
+      else this.#requiresFullReconciliation = true;
       return;
     }
     switch (event.type) {
@@ -1006,9 +1114,9 @@ class OpenCodeBinding implements BindingHandle {
       options:
         kind === "permission"
           ? [
-              { id: "once", label: "Allow once" },
-              { id: "always", label: "Allow always" },
-              { id: "reject", label: "Reject" },
+              { id: "once", label: "Allow once", description: null },
+              { id: "always", label: "Allow always", description: null },
+              { id: "reject", label: "Reject", description: null },
             ]
           : questionOptions(raw),
       multiple: kind === "question",
@@ -1222,7 +1330,7 @@ function questionOption(raw: unknown): readonly OpenCodeQuestionOption[] {
 
 function questionOptions(
   raw: unknown,
-): readonly { id: string; label: string; description?: string }[] {
+): readonly { id: string; label: string; description: string | null }[] {
   return questions(raw).flatMap((question, questionIndex) =>
     question.options.map((option) => ({
       id: questionOptionId(questionIndex, option.value),
@@ -1230,7 +1338,7 @@ function questionOptions(
         question.label === `Question ${questionIndex + 1}`
           ? option.label
           : `${question.label}: ${option.label}`,
-      ...(option.description ? { description: option.description } : {}),
+      description: option.description,
     })),
   );
 }
@@ -1588,6 +1696,7 @@ function mcpCatalogItems(body: unknown): readonly SessionCapabilityCatalogItem[]
   if (!isRecord(body)) return [];
   return Object.entries(body).map(([id, raw]) => {
     const status = objectString(raw, "status");
+    const detail: SessionNativeDetail = status ? { status } : {};
     return {
       kind: "mcp" as const,
       id,
@@ -1599,10 +1708,7 @@ function mcpCatalogItems(body: unknown): readonly SessionCapabilityCatalogItem[]
             ? ("unavailable" as const)
             : ("unknown" as const),
       evidence: "reported" as const,
-      detail: {
-        ...(status ? { status } : {}),
-        ...(objectString(raw, "error") ? { error: objectString(raw, "error") } : {}),
-      },
+      detail,
     };
   });
 }
@@ -1734,10 +1840,13 @@ async function resolveExecutable(path: string): Promise<string> {
 
 function createFetchNetworkPort(): OpenCodeNetworkPort {
   return {
-    request: async ({ baseUrl, path, method, headers, body }) => {
+    request: async ({ baseUrl, path, method, headers, body, signal }) => {
+      const deadline = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+      const requestSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
       const response = await fetch(`${baseUrl}${path}`, {
         method,
         headers,
+        signal: requestSignal,
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
       const text = await response.text();
@@ -1773,6 +1882,8 @@ export async function* parseOpenCodeSse(
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
+      if (buffer.length > MAX_SSE_BUFFER_LENGTH)
+        throw new Error("OpenCode SSE frame exceeded the 1 MiB safety limit");
       const parsed = consumeSseBlocks(buffer);
       buffer = parsed.rest;
       yield* parsed.events;
@@ -1792,7 +1903,7 @@ function consumeSseBlocks(buffer: string): { rest: string; events: readonly Open
     const block = rest.slice(0, boundary);
     const separator = rest[boundary] === "\r" ? 4 : 2;
     events.push(...decodeSseBlock(block));
-    rest = rest.slice(separator);
+    rest = rest.slice(boundary + separator);
     boundary = rest.search(/\r?\n\r?\n/);
   }
   return { rest, events };

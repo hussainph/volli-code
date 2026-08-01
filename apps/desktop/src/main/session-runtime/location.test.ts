@@ -50,8 +50,15 @@ describe("desktop Session location resolver", () => {
     testDb = openTestDb();
     const project = testProject({ id: "project-1", path: "/repo/main" });
     const ticket = testTicket(project.id, { id: "ticket-1", worktreePath: null });
+    const otherProject = testProject({ id: "project-2", path: "/repo/other" });
+    const foreignTicket = testTicket(otherProject.id, {
+      id: "ticket-2",
+      worktreePath: "/repo/other-worktree",
+    });
     insertProject(testDb.db, project);
     insertTicket(testDb.db, ticket);
+    insertProject(testDb.db, otherProject);
+    insertTicket(testDb.db, foreignTicket);
     const resolver = createDesktopSessionLocationResolver(testDb.db);
 
     await expect(
@@ -81,5 +88,14 @@ describe("desktop Session location resolver", () => {
         createdAt: 0,
       }),
     ).rejects.toThrow("Ticket missing was not found");
+    await expect(
+      resolver.resolve({
+        id: "cross-project-ticket-session",
+        projectId: project.id,
+        ticketId: foreignTicket.id,
+        title: null,
+        createdAt: 0,
+      }),
+    ).rejects.toThrow(`Ticket ${foreignTicket.id} was not found in project ${project.id}`);
   });
 });

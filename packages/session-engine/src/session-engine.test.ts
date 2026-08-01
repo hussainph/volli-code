@@ -758,7 +758,7 @@ describe("SessionEngine creation and explicit commands", () => {
       kind: "permission" as const,
       title: "Allow write?",
       detail: null,
-      options: [{ id: "once", label: "Allow once" }],
+      options: [{ id: "once", label: "Allow once", description: null }],
       multiple: false,
       native: { id: "native-permission-1", detail: null },
     };
@@ -811,6 +811,21 @@ describe("SessionEngine creation and explicit commands", () => {
         snapshot: { ...snapshot, id: "capabilities-3", adapterId: "codex" },
       }),
     ).rejects.toThrow("does not match attachment");
+    await expect(
+      plane.observe({
+        id: "observation-session-capabilities-wrong-adapter",
+        sessionId: session.id,
+        occurredAt: 206,
+        provenance: {
+          ...adapterProvenance,
+          source: { ...adapterProvenance.source, id: "codex" },
+        },
+        kind: "capabilities.updated",
+        snapshot: { ...snapshot, id: "capabilities-session", attachmentId: null },
+      }),
+    ).rejects.toThrow(
+      "Capability snapshot capabilities-session must be produced by adapter opencode",
+    );
     await expect(
       plane.observe({
         id: "observation-interaction-resolved-twice",
@@ -1038,7 +1053,7 @@ describe("SessionEngine creation and explicit commands", () => {
         kind: "permission",
         title: "Allow write?",
         detail: null,
-        options: [{ id: "once", label: "Allow once" }],
+        options: [{ id: "once", label: "Allow once", description: null }],
         multiple: false,
         native: { id: "native-permission-a", detail: null },
       },

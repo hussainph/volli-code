@@ -954,7 +954,8 @@ function decodeInteraction(
       return {
         id: readString(option.id, `${context}.options[${index}].id`),
         label: readString(option.label, `${context}.options[${index}].label`),
-        ...(description === undefined ? {} : { description }),
+        // Older persisted events predate the explicit nullability contract.
+        description: description ?? null,
       };
     }),
     multiple: readBoolean(row.multiple, `${context}.multiple`),

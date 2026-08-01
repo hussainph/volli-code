@@ -16,17 +16,22 @@ export const SESSION_RPC_CANCEL_CHANNEL = "volli:session-rpc-cancel";
  * the development-only HTTP surface; production clients only receive Session
  * data and stream frames.
  */
-export type SessionRpcIpcProcedure =
-  | "session.snapshot"
-  | "session.subscribe"
-  | "session.command"
-  | "session.refreshCapabilities"
-  | "session.reconcile";
+export const SESSION_RPC_IPC_PROCEDURES = [
+  "session.snapshot",
+  "session.subscribe",
+  "session.command",
+  "session.refreshCapabilities",
+  "session.reconcile",
+] as const;
 
-export interface SessionRpcIpcRequest {
-  procedure: SessionRpcIpcProcedure;
-  input: unknown;
-}
+export type SessionRpcIpcProcedure = (typeof SESSION_RPC_IPC_PROCEDURES)[number];
+
+export type SessionRpcIpcRequest = {
+  [Procedure in SessionRpcIpcProcedure]: {
+    procedure: Procedure;
+    input: unknown;
+  };
+}[SessionRpcIpcProcedure];
 
 export interface SessionRpcIpcEvent {
   subscriptionId: string;
@@ -115,6 +120,11 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
     const stream = await caller.session.subscribe(input as never);
     const iterator = stream[Symbol.asyncIterator]() as AsyncIterator<readonly [string, unknown]>;
     const subscriptionId = randomUUID();
+    if (owner.isDestroyed()) {
+      abort.abort();
+      await iterator.return?.();
+      return { ok: false, error: { code: "CLIENT_CLOSED_REQUEST", message: "Renderer closed" } };
+    }
     const onDestroyed = () => void stop(subscriptionId);
     active.set(subscriptionId, { owner, abort, iterator, onDestroyed });
     owner.once("destroyed", onDestroyed);
@@ -126,17 +136,16 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
     const subscription = active.get(subscriptionId);
     if (!subscription) return;
     try {
-      while (!subscription.abort.signal.aborted) {
+      while (!subscription.abort.signal.aborted && !subscription.owner.isDestroyed()) {
         const next = await subscription.iterator.next();
         if (next.done) break;
         const [eventId, data] = next.value;
-        if (!subscription.owner.isDestroyed()) {
-          subscription.owner.send(SESSION_RPC_EVENT_CHANNEL, {
-            subscriptionId,
-            eventId,
-            data,
-          } satisfies SessionRpcIpcEvent);
-        }
+        if (subscription.owner.isDestroyed()) break;
+        subscription.owner.send(SESSION_RPC_EVENT_CHANNEL, {
+          subscriptionId,
+          eventId,
+          data,
+        } satisfies SessionRpcIpcEvent);
       }
     } catch (error) {
       diagnostics.record({
@@ -172,19 +181,18 @@ async function callProcedure(
       return caller.session.refreshCapabilities(request.input as never);
     case "session.reconcile":
       return caller.session.reconcile(request.input as never);
-    default:
-      throw new Error("Unsupported Session RPC procedure");
+    default: {
+      const exhaustive: never = request;
+      return exhaustive;
+    }
   }
 }
 
 function isRequest(value: unknown): value is SessionRpcIpcRequest {
   if (!isRecord(value) || !("procedure" in value) || !("input" in value)) return false;
   return (
-    value.procedure === "session.snapshot" ||
-    value.procedure === "session.subscribe" ||
-    value.procedure === "session.command" ||
-    value.procedure === "session.refreshCapabilities" ||
-    value.procedure === "session.reconcile"
+    typeof value.procedure === "string" &&
+    (SESSION_RPC_IPC_PROCEDURES as readonly string[]).includes(value.procedure)
   );
 }
 

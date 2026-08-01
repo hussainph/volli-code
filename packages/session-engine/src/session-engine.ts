@@ -216,7 +216,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
             );
           }
 
-          const projection = projectSession(session, events);
+          const projection = projectSession(session, events, ports.clock.now());
           assertReceiptObservation(transaction, session, projection, observation);
           const sequence = nextSequence(events);
           const event = receiptRecordedEvent(
@@ -254,7 +254,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           return existingEvent;
         }
 
-        const projection = projectSession(session, events);
+        const projection = projectSession(session, events, ports.clock.now());
         assertObservableFact(projection, observation);
         assertPendingStartReservation(projection, observation);
         const event: SessionEvent = {
@@ -286,7 +286,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         if (existing) return replaySubmit(transaction, session, commandRequest);
 
         const events = transaction.listEvents({ sessionId: session.id });
-        const projection = projectSession(session, events);
+        const projection = projectSession(session, events, ports.clock.now());
         const routeResolution = resolveCommandRoute(projection, request.intent);
         const command: SessionCommand = {
           ...commandRequest,
@@ -375,7 +375,11 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       return ports.ledger.transaction((transaction) => {
         const session = transaction.getSession(query.sessionId);
         return session
-          ? projectSession(session, transaction.listEvents({ sessionId: session.id }))
+          ? projectSession(
+              session,
+              transaction.listEvents({ sessionId: session.id }),
+              ports.clock.now(),
+            )
           : null;
       });
     },
@@ -385,7 +389,11 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         transaction
           .listSessions(query)
           .map((session) =>
-            projectSession(session, transaction.listEvents({ sessionId: session.id })),
+            projectSession(
+              session,
+              transaction.listEvents({ sessionId: session.id }),
+              ports.clock.now(),
+            ),
           ),
       );
     },
@@ -726,7 +734,18 @@ function assertObservableFact(
   }
 
   const attachmentId = observationAttachmentId(observation);
-  if (!attachmentId) return;
+  if (!attachmentId) {
+    if (
+      observation.kind === "capabilities.updated" &&
+      (observation.provenance.source.kind !== "adapter" ||
+        observation.provenance.source.id !== observation.snapshot.adapterId)
+    ) {
+      throw new SessionEngineConflictError(
+        `Capability snapshot ${observation.snapshot.id} must be produced by adapter ${observation.snapshot.adapterId}`,
+      );
+    }
+    return;
+  }
   const attachment = projection.attachments.find((candidate) => candidate.id === attachmentId);
   if (!attachment) throw new SessionEngineConflictError(`Attachment ${attachmentId} is unknown`);
   if (attachment.status !== "open") {

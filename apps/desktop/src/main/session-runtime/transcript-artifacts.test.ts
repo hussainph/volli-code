@@ -59,6 +59,19 @@ describe("FileTranscriptArtifactStore", () => {
     await expect(artifacts.read(references[0]!)).resolves.toEqual(value);
   });
 
+  it("retries directory initialization after a transient creation failure", async () => {
+    directory = await mkdtemp(join(tmpdir(), "volli-transcript-artifacts-"));
+    const blockedDirectory = join(directory, "artifacts");
+    await writeFile(blockedDirectory, "not a directory");
+    const artifacts = createFileTranscriptArtifactStore(blockedDirectory);
+
+    await expect(artifacts.write(artifact())).rejects.toThrow();
+    await rm(blockedDirectory);
+    await expect(artifacts.write(artifact())).resolves.toMatchObject({
+      id: expect.stringMatching(/^sha256:/),
+    });
+  });
+
   it("uses canonical JSON semantics for optional UI message values and arrays", async () => {
     const artifacts = await store();
     const withOptionalValues = {
@@ -128,5 +141,21 @@ describe("FileTranscriptArtifactStore", () => {
     await symlink(externalPath, artifactPath);
 
     await expect(artifacts.read(reference)).rejects.toThrow("not a regular file");
+  });
+
+  it("rejects tampered and symlinked digest paths before publishing a write", async () => {
+    const artifacts = await store();
+    const value = artifact();
+    const reference = await artifacts.write(value);
+    const artifactPath = join(directory!, `${reference.id.slice("sha256:".length)}.json`);
+
+    await writeFile(artifactPath, "bytes for another digest");
+    await expect(artifacts.write(value)).rejects.toThrow("contains bytes for another digest");
+
+    const externalPath = join(directory!, "outside.json");
+    await writeFile(externalPath, await readFile(artifactPath));
+    await rm(artifactPath);
+    await symlink(externalPath, artifactPath);
+    await expect(artifacts.write(value)).rejects.toThrow("not a regular file");
   });
 });

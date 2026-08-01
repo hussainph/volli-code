@@ -552,7 +552,7 @@ describe("SessionRuntime native adapter contract", () => {
         kind: "permission",
         title: "Write file",
         detail: null,
-        options: [{ id: "allow", label: "Allow" }],
+        options: [{ id: "allow", label: "Allow", description: null }],
         multiple: false,
         native: { id: "native-permission-1", detail: { request: 1 } },
       },

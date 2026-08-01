@@ -92,7 +92,11 @@ function latestCapabilities(
 ): SessionCapabilitySnapshot | null {
   return (
     capabilities
-      .filter((capability) => !attachmentId || capability.attachmentId === attachmentId)
+      .filter(
+        (capability) =>
+          (capability.expiresAt === null || capability.expiresAt > Date.now()) &&
+          (!attachmentId || capability.attachmentId === attachmentId),
+      )
       .toSorted(
         (left, right) => left.observedAt - right.observedAt || left.revision - right.revision,
       )
@@ -199,7 +203,7 @@ function InteractionResolution({
   onResolve,
 }: {
   interaction: SessionInteraction;
-  onResolve: (interaction: SessionInteraction, response: string) => void;
+  onResolve: (interactionId: string, optionIds: readonly string[], response: string) => void;
 }) {
   const [response, setResponse] = React.useState("");
   const [selected, setSelected] = React.useState<readonly string[]>(
@@ -211,13 +215,7 @@ function InteractionResolution({
       className="space-y-2 border border-border p-2"
       onSubmit={(event) => {
         event.preventDefault();
-        onResolve(
-          {
-            ...interaction,
-            options: interaction.options.filter((option) => selected.includes(option.id)),
-          },
-          response,
-        );
+        onResolve(interaction.id, selected, response);
       }}
     >
       <p className="text-ui text-foreground">
@@ -282,7 +280,10 @@ export default function SessionTracerScratch() {
     void rpc.labDiagnostics.list
       .query({ limit: DIAGNOSTIC_LIMIT })
       .then(setDiagnosticEntries)
-      .catch(reportError);
+      .catch((error) => {
+        if (active) setStatus(`Diagnostics stream: ${errorMessage(error)}`);
+        reportError(error);
+      });
     const subscription = rpc.labDiagnostics.subscribe.subscribe(
       {},
       {
@@ -290,7 +291,10 @@ export default function SessionTracerScratch() {
           const normalized = diagnosticEntry(entry.data);
           if (normalized) setDiagnosticEntries([normalized]);
         },
-        onError: reportError,
+        onError: (error) => {
+          if (active) setStatus(`Diagnostics stream: ${errorMessage(error)}`);
+          reportError(error);
+        },
       },
     );
     return () => {
@@ -309,6 +313,31 @@ export default function SessionTracerScratch() {
     const rpc = client.current;
     let active = true;
     let subscription: { unsubscribe(): void } | null = null;
+    let refreshInFlight: Promise<void> | null = null;
+    let refreshQueued = false;
+    const refreshProjection = () => {
+      if (refreshInFlight) {
+        refreshQueued = true;
+        return;
+      }
+      refreshInFlight = rpc.session.snapshot
+        .query({ sessionId })
+        .then((snapshot) => {
+          if (!active) return;
+          setProjection(snapshot.projection);
+        })
+        .catch((error) => {
+          if (active) setStatus(`Session stream: ${errorMessage(error)}`);
+          reportError(error);
+        })
+        .finally(() => {
+          refreshInFlight = null;
+          if (active && refreshQueued) {
+            refreshQueued = false;
+            refreshProjection();
+          }
+        });
+    };
     const refresh = async () => {
       const snapshot = await rpc.session.snapshot.query({ sessionId });
       if (!active) return;
@@ -322,18 +351,19 @@ export default function SessionTracerScratch() {
             const normalized = sessionFrame(frame.data);
             if (!normalized) return;
             setFrames((current) => new Map(current).set(normalized.sequence, normalized));
-            void rpc.session.snapshot
-              .query({ sessionId })
-              .then((next) => {
-                if (active) setProjection(next.projection);
-              })
-              .catch(reportError);
+            refreshProjection();
           },
-          onError: reportError,
+          onError: (error) => {
+            if (active) setStatus(`Session stream: ${errorMessage(error)}`);
+            reportError(error);
+          },
         },
       );
     };
-    void refresh().catch(reportError);
+    void refresh().catch((error) => {
+      if (active) setStatus(`Session stream: ${errorMessage(error)}`);
+      reportError(error);
+    });
     return () => {
       active = false;
       subscription?.unsubscribe();
@@ -371,16 +401,20 @@ export default function SessionTracerScratch() {
     }
   };
 
-  const resolveInteraction = (interaction: SessionInteraction, response: string) => {
+  const resolveInteraction = (
+    interactionId: string,
+    optionIds: readonly string[],
+    response: string,
+  ) => {
     void run("Resolve", async (rpc, activeSessionId) => {
       return rpc.session.command.mutate({
         commandId: nextCommandId(),
         sessionId: activeSessionId,
         command: {
           kind: "interaction.resolve",
-          interactionId: interaction.id,
+          interactionId,
           resolution: {
-            optionIds: interaction.options.map((option) => option.id),
+            optionIds: [...optionIds],
             response: response || null,
           },
         },

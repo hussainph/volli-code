@@ -60,10 +60,12 @@ function snapshot(): SessionRuntimeSnapshot {
   };
 }
 
-function trackedValue(value: unknown): readonly unknown[] {
+function trackedValue(value: unknown): { id: string; data: unknown } {
   expect(Array.isArray(value)).toBe(true);
   if (!Array.isArray(value)) throw new Error("Expected a tracked SSE envelope");
-  return value;
+  const [id, data] = value;
+  if (typeof id !== "string") throw new Error("Expected a tracked SSE identifier");
+  return { id, data };
 }
 
 function runtimeFixture(): {
@@ -242,6 +244,17 @@ describe("AsyncQueue", () => {
 
     expect(await queue.next()).toEqual({ done: false, value: undefined });
   });
+
+  it("ends an overflowing queue after delivering its already-buffered frames", async () => {
+    const queue = new AsyncQueue<number>(1);
+    queue.push(1);
+    queue.push(2);
+
+    expect(queue.overflowed).toBe(true);
+    expect(await queue.next()).toEqual({ done: false, value: 1 });
+    expect(await queue.next()).toEqual({ done: true, value: undefined });
+    expect(() => new AsyncQueue(0)).toThrow("capacity must be a positive integer");
+  });
 });
 
 describe("Session tRPC router", () => {
@@ -347,10 +360,46 @@ describe("Session tRPC router", () => {
     expect(fixture.calls.subscribeAfter).toEqual([4]);
     const sessionTracked = trackedValue(sessionValue.value);
     const diagnosticTracked = trackedValue(diagnosticValue.value);
-    expect(sessionTracked[0]).toBe("5");
-    expect(sessionTracked[1]).toEqual(expect.objectContaining({ sequence: 5 }));
-    expect(diagnosticTracked[0]).toBe("2");
-    expect(diagnosticTracked[1]).toEqual(expect.objectContaining({ id: 2 }));
+    expect(sessionTracked.id).toBe("5");
+    expect(sessionTracked.data).toEqual(expect.objectContaining({ sequence: 5 }));
+    expect(diagnosticTracked.id).toBe("2");
+    expect(diagnosticTracked.data).toEqual(expect.objectContaining({ id: 2 }));
+  });
+
+  it("records a sanitized diagnostic when either bounded subscription queue overflows", async () => {
+    const fixture = runtimeFixture();
+    const diagnostics = new RpcDiagnosticLog({ capacity: 10_000 });
+    const caller = createSessionRouter().createCaller({ runtime: fixture.runtime, diagnostics });
+
+    const sessionStream = await caller.session.subscribe({
+      sessionId: "session-1",
+      afterSequence: 0,
+    });
+    const sessionIterator = sessionStream[Symbol.asyncIterator]();
+    const firstSessionFrame = sessionIterator.next();
+    await Promise.resolve();
+    for (let sequence = 1; sequence <= 4_098; sequence += 1) fixture.emit(frame(sequence));
+    await firstSessionFrame;
+    await sessionIterator.return?.();
+
+    const diagnosticStream = await caller.labDiagnostics.subscribe({ afterId: 0 });
+    const diagnosticIterator = diagnosticStream[Symbol.asyncIterator]();
+    const firstDiagnostic = diagnosticIterator.next();
+    for (let index = 0; index <= 4_097; index += 1) {
+      diagnostics.record({
+        procedure: `live-${index}`,
+        phase: "success",
+        transport: "unknown",
+        code: null,
+        message: null,
+      });
+    }
+    await firstDiagnostic;
+    await diagnosticIterator.return?.();
+
+    expect(diagnostics.list().filter(({ code }) => code === "SUBSCRIPTION_OVERFLOW")).toHaveLength(
+      2,
+    );
   });
 
   it("records sanitized failures and rejects structurally invalid commands", async () => {

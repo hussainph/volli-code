@@ -45,6 +45,8 @@ class Adapter implements NativeHarnessAdapter {
   releases = 0;
   probeFailure: unknown = null;
   probeResult: NativeProbeResult | null = null;
+  probeGate: Promise<void> | null = null;
+  probeStarted: () => void = () => undefined;
   attachGate: Promise<void> | null = null;
   attachObservation: HarnessObservation | null = null;
   reconcileReceipts: Awaited<ReturnType<BindingHandle["reconcile"]>>["receipts"] = [];
@@ -53,6 +55,8 @@ class Adapter implements NativeHarnessAdapter {
   specs: Parameters<NativeHarnessAdapter["attach"]>[0][] = [];
 
   async probe(): Promise<NativeProbeResult> {
+    this.probeStarted();
+    await this.probeGate;
     if (this.probeFailure) throw this.probeFailure;
     return (
       this.probeResult ?? {
@@ -104,6 +108,8 @@ function composition(
     engine?: SessionEngine;
     directory?: () => string;
     runtimeIdPrefix?: string;
+    onSubscriberFailure?: (error: unknown) => void | Promise<void>;
+    probeTimeoutMs?: number;
   } = {},
 ) {
   let now = 1;
@@ -127,6 +133,8 @@ function composition(
       },
       clock: { now: () => now++ },
       ids: runtimeIds(input.runtimeIdPrefix),
+      ...(input.onSubscriberFailure ? { onSubscriberFailure: input.onSubscriberFailure } : {}),
+      ...(input.probeTimeoutMs !== undefined ? { probeTimeoutMs: input.probeTimeoutMs } : {}),
     }),
   };
 }
@@ -182,6 +190,58 @@ describe("SessionRuntime durable boundary invariants", () => {
     ).toMatchObject({
       pendingExecutorStart: null,
       attachments: [{ status: "failed", failure: { code: "probe_failed" } }],
+    });
+  });
+
+  it("publishes an engine-level rejection receipt without an adapter binding", async () => {
+    const { runtime } = composition();
+    const created = await create(runtime);
+
+    await expect(
+      runtime.command({
+        commandId: "release-missing",
+        sessionId: created.sessionId,
+        command: { kind: "adapter.release", attachmentId: "missing-attachment" },
+      }),
+    ).resolves.toMatchObject({ receipt: { status: "rejected" } });
+  });
+
+  it("bounds probes that ignore cancellation and aborts pending probes on close", async () => {
+    const deadlineAdapter = new Adapter();
+    deadlineAdapter.probeGate = new Promise<void>(() => undefined);
+    const deadline = composition({ adapter: deadlineAdapter, probeTimeoutMs: 1 });
+    const deadlineSession = await create(deadline.runtime);
+    await expect(attach(deadline.runtime, deadlineSession.sessionId)).resolves.toMatchObject({
+      receipt: { status: "rejected", code: "probe_failed" },
+    });
+    expect(deadlineAdapter.attaches).toBe(0);
+
+    const closeAdapter = new Adapter();
+    const probeStarted = new Promise<void>((resolve) => {
+      closeAdapter.probeStarted = resolve;
+    });
+    closeAdapter.probeGate = new Promise<void>(() => undefined);
+    const closing = composition({ adapter: closeAdapter });
+    const closingSession = await create(closing.runtime);
+    const attaching = attach(closing.runtime, closingSession.sessionId);
+    await probeStarted;
+    await closing.runtime.close();
+    await expect(attaching).resolves.toMatchObject({
+      receipt: { status: "rejected", code: "probe_failed" },
+    });
+    expect(closeAdapter.attaches).toBe(0);
+  });
+
+  it("records invalid host probe timeouts as a durable rejected attach", async () => {
+    const { runtime } = composition({ probeTimeoutMs: 0 });
+    const created = await create(runtime);
+
+    await expect(attach(runtime, created.sessionId)).resolves.toMatchObject({
+      receipt: {
+        status: "rejected",
+        code: "probe_failed",
+        detail: "Native adapter probe timeout must be a positive integer",
+      },
     });
   });
 
@@ -248,6 +308,7 @@ describe("SessionRuntime durable boundary invariants", () => {
     await Promise.all([left, right]);
 
     expect(first.adapter.specs.at(-1)?.directory).toBe("/ticket/original");
+    expect(first.adapter.specs.at(-1)?.continuity).toBe("native_resume");
     expect((await recovered.runtime.snapshot({ sessionId: created.sessionId })).frames).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -325,6 +386,80 @@ describe("SessionRuntime durable boundary invariants", () => {
     ).toEqual([expect.objectContaining({ status: "accepted" })]);
   });
 
+  it("keeps distinct unreconciled reconciliation details as distinct durable receipts", async () => {
+    const { runtime, adapter } = composition();
+    const created = await create(runtime);
+    await attach(runtime, created.sessionId);
+    const attachmentId = (await runtime.snapshot({ sessionId: created.sessionId })).projection
+      .liveExecutor!.id;
+    adapter.dispatchReceipt = {
+      commandId: "message-ambiguous",
+      status: "unknown",
+      detail: "first transport outcome",
+      native: null,
+    };
+    await runtime.command({
+      commandId: "message-ambiguous",
+      sessionId: created.sessionId,
+      command: { kind: "message.submit", message: message("ambiguous") },
+    });
+    adapter.reconcileReceipts = [
+      {
+        commandId: "message-ambiguous",
+        status: "unknown",
+        detail: "second transport outcome",
+        native: null,
+      },
+    ];
+
+    await runtime.reconcile({ sessionId: created.sessionId, attachmentId });
+
+    const receipts = (
+      await runtime.snapshot({ sessionId: created.sessionId })
+    ).projection.receipts.filter(({ commandId }) => commandId === "message-ambiguous");
+    expect(receipts).toHaveLength(2);
+    expect(receipts.map(({ id }) => id)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("first%20transport%20outcome"),
+        expect.stringContaining("second%20transport%20outcome"),
+      ]),
+    );
+  });
+
+  it("keeps nullable native receipt details deterministic", async () => {
+    const { runtime, adapter } = composition();
+    const created = await create(runtime);
+    await attach(runtime, created.sessionId);
+    adapter.dispatchReceipt = {
+      commandId: "message-rejected-null",
+      status: "rejected",
+      code: "PROVIDER_REJECTED",
+      detail: null,
+      native: null,
+    };
+    await expect(
+      runtime.command({
+        commandId: "message-rejected-null",
+        sessionId: created.sessionId,
+        command: { kind: "message.submit", message: message("rejected-null") },
+      }),
+    ).resolves.toMatchObject({ receipt: { id: expect.stringContaining("PROVIDER_REJECTED:") } });
+
+    adapter.dispatchReceipt = {
+      commandId: "message-unknown-null",
+      status: "unknown",
+      detail: null,
+      native: null,
+    };
+    await expect(
+      runtime.command({
+        commandId: "message-unknown-null",
+        sessionId: created.sessionId,
+        command: { kind: "message.submit", message: message("unknown-null") },
+      }),
+    ).resolves.toMatchObject({ receipt: { id: expect.stringContaining("unreconciled:") } });
+  });
+
   it("recovers an opened replayed attach and marks an outcome-less replay for explicit recovery", async () => {
     const opened = composition();
     const openedSession = await create(opened.runtime);
@@ -388,7 +523,12 @@ describe("SessionRuntime durable boundary invariants", () => {
   });
 
   it("contains poisoned stream subscribers and serializes capability revisions", async () => {
-    const { runtime, adapter } = composition();
+    const failures: unknown[] = [];
+    const { runtime, adapter } = composition({
+      onSubscriberFailure: (error) => {
+        failures.push(error);
+      },
+    });
     const created = await create(runtime);
     await attach(runtime, created.sessionId);
     const attachmentId = (await runtime.snapshot({ sessionId: created.sessionId })).projection
@@ -407,6 +547,31 @@ describe("SessionRuntime durable boundary invariants", () => {
     expect([first.revision, second.revision].toSorted((left, right) => left - right)).toEqual([
       2, 3,
     ]);
+    expect(failures).toEqual([expect.objectContaining({ message: "client frame failed" })]);
+  });
+
+  it("reads long event histories through bounded engine pages", async () => {
+    const { runtime, adapter } = composition();
+    const created = await create(runtime);
+    await attach(runtime, created.sessionId);
+    for (let index = 0; index <= 500; index += 1) {
+      await adapter.emit({
+        id: `paged-turn-${index}`,
+        kind: "turn.started",
+        occurredAt: 1_000 + index,
+        turnId: `turn-${index}`,
+      });
+    }
+
+    const snapshot = await runtime.snapshot({ sessionId: created.sessionId });
+    expect(snapshot.frames.length).toBeGreaterThan(500);
+    await expect(
+      runtime.command({
+        commandId: "paged-interrupt",
+        sessionId: created.sessionId,
+        command: { kind: "executor.interrupt" },
+      }),
+    ).resolves.toMatchObject({ throughSequence: expect.any(Number) });
   });
 
   it("keeps ambiguous replayed deliveries unreconciled across every native command route", async () => {

@@ -4,6 +4,7 @@ import {
   createOpenCodeNativeAdapter,
   parseOpenCodeSse,
   type OpenCodeChild,
+  type OpenCodeHttpResponse,
   type OpenCodeNetworkPort,
   type OpenCodeProcessPort,
   type OpenCodeSseEvent,
@@ -22,6 +23,10 @@ class Deferred<T> {
   }
 }
 
+function waitForever(): Promise<void> {
+  return new Promise<void>(() => undefined);
+}
+
 class FakeProcess implements OpenCodeProcessPort {
   spawns: Array<{
     path: string;
@@ -30,6 +35,7 @@ class FakeProcess implements OpenCodeProcessPort {
   }> = [];
   readonly exited = new Deferred<number | null>();
   spawnFailure: Error | null = null;
+  fingerprint = "sha256:trusted";
   async resolveBinary(path: string): Promise<string> {
     return path === "opencode" ? "/trusted/opencode" : path;
   }
@@ -37,7 +43,7 @@ class FakeProcess implements OpenCodeProcessPort {
     return "1.17.18";
   }
   async sha256(): Promise<string> {
-    return "sha256:trusted";
+    return this.fingerprint;
   }
   async spawn(input: {
     path: string;
@@ -71,6 +77,7 @@ class FakeNetwork implements OpenCodeNetworkPort {
   healthStatuses: number[] = [];
   messageResponse: unknown = [{ id: "history-1", role: "assistant" }];
   events: readonly OpenCodeSseEvent[] = [];
+  holdEventStream = false;
   async request(input: Parameters<OpenCodeNetworkPort["request"]>[0]) {
     this.requests.push({
       path: input.path,
@@ -103,7 +110,14 @@ class FakeNetwork implements OpenCodeNetworkPort {
   ): Promise<AsyncIterable<OpenCodeSseEvent>> {
     this.subscriptions.push(input);
     const values = this.events;
+    const holdEventStream = this.holdEventStream;
     return (async function* () {
+      if (holdEventStream) {
+        await new Promise<void>((resolve) =>
+          input.signal.addEventListener("abort", () => resolve()),
+        );
+        return;
+      }
       for (const event of values) yield event;
     })();
   }
@@ -148,11 +162,24 @@ function composition(events: readonly OpenCodeSseEvent[] = []) {
   const process = new FakeProcess();
   const network = new FakeNetwork();
   network.events = events;
-  const adapter = createOpenCodeNativeAdapter({ process, network, now: () => 1234 });
+  const adapter = createOpenCodeNativeAdapter({
+    process,
+    network,
+    now: () => 1234,
+  });
   return { adapter, process, network };
 }
 
 describe("OpenCodeNativeAdapter", () => {
+  it("rejects an invalid deferred-event safety bound", () => {
+    expect(() => createOpenCodeNativeAdapter({ maxDeferredEvents: 0 })).toThrow(
+      "maxDeferredEvents must be a positive integer",
+    );
+    expect(() => createOpenCodeNativeAdapter({ maxDeferredEvents: 1.5 })).toThrow(
+      "maxDeferredEvents must be a positive integer",
+    );
+  });
+
   it("routes every binding call through its immutable directory and keeps Basic credentials private", async () => {
     const { adapter, network, process } = composition();
     const probe = await adapter.probe(
@@ -171,7 +198,10 @@ describe("OpenCodeNativeAdapter", () => {
     expect(process.spawns[0]).toMatchObject({
       path: "/trusted/opencode",
       args: ["serve", "--hostname", "127.0.0.1", "--port", "43123", "--no-mdns"],
-      env: { OPENCODE_SERVER_PASSWORD: "never-persist-this" },
+      env: {
+        OPENCODE_SERVER_PASSWORD: "never-persist-this",
+        OPENCODE_SERVER_USERNAME: "opencode",
+      },
     });
     const scoped = network.requests.filter(({ path }) => !path.startsWith("/global/health"));
     expect(scoped.every(({ path }) => path.includes("directory=%2Fworkspace%2Fone"))).toBe(true);
@@ -198,6 +228,31 @@ describe("OpenCodeNativeAdapter", () => {
     expect(
       network.requests.find(({ path }) => path.includes("prompt_async"))?.body,
     ).not.toHaveProperty("messageID");
+  });
+
+  it("refuses a later server launch when the verified binary has changed", async () => {
+    const { adapter, process } = composition();
+    await adapter.probe(
+      { profileId: "native", directory: "/workspace/one" },
+      new AbortController().signal,
+    );
+    process.exited.resolve(0);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    process.fingerprint = "sha256:replaced";
+
+    await expect(adapter.attach(spec(), { emit: async () => undefined })).rejects.toThrow(
+      "changed after verification",
+    );
+  });
+
+  it("reports an already-aborted health probe without launching a usable binding", async () => {
+    const { adapter } = composition();
+    const abort = new AbortController();
+    abort.abort(new Error("probe cancelled"));
+
+    await expect(
+      adapter.probe({ profileId: "native", directory: "/workspace/one" }, abort.signal),
+    ).resolves.toEqual({ status: "unavailable", runtime: null, reason: "probe cancelled" });
   });
 
   it("maps legacy SSE messages, turns, and interactions into durable-neutral observations", async () => {
@@ -278,11 +333,6 @@ describe("OpenCodeNativeAdapter", () => {
           kind: "adapter_disconnected",
           detail: "OpenCode event stream ended",
         }),
-      }),
-      expect.objectContaining({
-        id: "opencode:sse-binding-failed:native-session-1",
-        kind: "attachment.failed",
-        detail: "OpenCode event stream ended",
       }),
     ]);
   });
@@ -622,7 +672,7 @@ describe("OpenCodeNativeAdapter", () => {
           status: 200,
           body: {
             github: { status: "connected" },
-            linear: { status: "failed", error: "authentication required" },
+            linear: { status: "failed", error: "Authorization: Bearer must-not-leak" },
           },
         };
       }
@@ -994,9 +1044,22 @@ describe("OpenCodeNativeAdapter", () => {
     ]);
   });
 
+  it("rejects an unterminated SSE frame that exceeds the bounded parser buffer", async () => {
+    const oversized = `data: ${"x".repeat(1_048_577)}`;
+    const consume = async () => {
+      for await (const event of parseOpenCodeSse(sseBody([oversized]))) {
+        // The oversized input cannot produce a valid event.
+        void event;
+      }
+    };
+
+    await expect(consume()).rejects.toThrow("exceeded the 1 MiB safety limit");
+  });
+
   it("waits for the shared server health endpoint before its first attach", async () => {
     const { network } = composition();
     network.healthStatuses = [503, 503, 200];
+    network.holdEventStream = true;
     const delays: number[] = [];
     const retrying = createOpenCodeNativeAdapter({
       process: new FakeProcess(),
@@ -1019,6 +1082,7 @@ describe("OpenCodeNativeAdapter", () => {
   it("gives a cold server a multi-second default startup budget", async () => {
     const process = new FakeProcess();
     const network = new FakeNetwork();
+    network.holdEventStream = true;
     const request = network.request.bind(network);
     let transientFailures = 9;
     network.request = async (input) => {
@@ -1088,6 +1152,7 @@ describe("OpenCodeNativeAdapter", () => {
   it("bounds child shutdown if its exit promise never settles", async () => {
     const process = new FakeProcess();
     const network = new FakeNetwork();
+    network.holdEventStream = true;
     const delays: number[] = [];
     const adapter = createOpenCodeNativeAdapter({
       process,
@@ -1411,6 +1476,23 @@ describe("OpenCodeNativeAdapter", () => {
     await handle.release("requested");
   });
 
+  it("commits reconciliation turn state before accepting later stream transitions", async () => {
+    const { adapter, network } = composition();
+    const originalRequest = network.request.bind(network);
+    network.messageResponse = [];
+    network.request = async (input) =>
+      input.path.startsWith("/session/status")
+        ? { status: 200, body: { "native-session-1": { type: "busy" } } }
+        : originalRequest(input);
+    const handle = await adapter.attach(spec(), { emit: async () => undefined });
+    const reconciliation = await handle.reconcile(null);
+    expect(reconciliation.observations).toEqual([
+      expect.objectContaining({ kind: "turn.started" }),
+    ]);
+    await handle.acknowledgeReconciliation?.(reconciliation.cursor);
+    await handle.release("requested");
+  });
+
   it("does not consume a native turn transition when its durable sink rejects it", async () => {
     const network = new FakeNetwork();
     network.events = [
@@ -1429,6 +1511,7 @@ describe("OpenCodeNativeAdapter", () => {
       process: new FakeProcess(),
       network,
       now: () => 1234,
+      sleep: waitForever,
     });
     const handle = await adapter.attach(spec(), {
       emit: async () => {
@@ -1999,7 +2082,6 @@ describe("OpenCodeNativeAdapter", () => {
       "error-status-only",
       "error-empty",
       "opencode:sse-disconnected:native-session-1",
-      "opencode:sse-binding-failed:native-session-1",
     ]);
     expect(observations[2]).toMatchObject({
       kind: "attention.raised",
@@ -2043,7 +2125,12 @@ describe("OpenCodeNativeAdapter", () => {
         yield { id: "repeat", type: "session.idle", properties: { sessionID: "native-session-1" } };
         throw new Error("stream closed");
       })();
-    const adapter = createOpenCodeNativeAdapter({ process, network, now: () => 1234 });
+    const adapter = createOpenCodeNativeAdapter({
+      process,
+      network,
+      now: () => 1234,
+      sleep: waitForever,
+    });
     const observations: HarnessObservation[] = [];
     await adapter.attach(spec(), {
       emit: async (observation) => {
@@ -2058,12 +2145,210 @@ describe("OpenCodeNativeAdapter", () => {
         kind: "attention.raised",
         attention: expect.objectContaining({ detail: "stream closed" }),
       }),
+    ]);
+  });
+
+  it("reconnects a dropped SSE stream without failing the durable attachment", async () => {
+    const process = new FakeProcess();
+    const network = new FakeNetwork();
+    const reconnectDelay = new Deferred<void>();
+    const releaseSecondStream = new Deferred<void>();
+    let subscriptions = 0;
+    network.subscribe = async (input) => {
+      network.subscriptions.push(input);
+      subscriptions += 1;
+      if (subscriptions === 1) {
+        return (async function* () {
+          if (input.signal.aborted) {
+            yield { id: "unreachable", type: "session.idle", properties: {} };
+          }
+          throw new Error("temporary stream failure");
+        })();
+      }
+      return (async function* () {
+        await releaseSecondStream.promise;
+        if (input.signal.aborted) {
+          yield { id: "unreachable", type: "session.idle", properties: {} };
+        }
+      })();
+    };
+    const adapter = createOpenCodeNativeAdapter({
+      process,
+      network,
+      now: () => 1234,
+      sleep: () => reconnectDelay.promise,
+    });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(observations).toEqual([
       expect.objectContaining({
-        id: "opencode:sse-binding-failed:native-session-1",
-        kind: "attachment.failed",
-        detail: "stream closed",
+        kind: "attention.raised",
+        attention: expect.objectContaining({ detail: "temporary stream failure" }),
       }),
     ]);
+
+    reconnectDelay.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(network.subscriptions).toHaveLength(2);
+    expect(observations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "attention.cleared",
+          attentionId: "opencode:sse-disconnected:native-session-1",
+        }),
+      ]),
+    );
+    expect(observations.some(({ kind }) => kind === "attachment.failed")).toBe(false);
+    // Let the detached reconnect pump finish its post-clear continuation so
+    // coverage records both branches of its connection-state guard.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await handle.release("requested");
+    releaseSecondStream.resolve();
+  });
+
+  it("contains a rejected reconnect delay after recording disconnected attention", async () => {
+    const network = new FakeNetwork();
+    const adapter = createOpenCodeNativeAdapter({
+      process: new FakeProcess(),
+      network,
+      now: () => 1234,
+      sleep: async () => {
+        throw new Error("shutdown retry loop");
+      },
+    });
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(observations).toEqual([
+      expect.objectContaining({
+        kind: "attention.raised",
+        attention: expect.objectContaining({ kind: "adapter_disconnected" }),
+      }),
+    ]);
+  });
+
+  it("contains both Error and non-Error failures while reconnecting", async () => {
+    const network = new FakeNetwork();
+    let subscriptions = 0;
+    network.subscribe = async () => {
+      subscriptions += 1;
+      if (subscriptions === 1) return (async function* () {})();
+      if (subscriptions === 2) throw new Error("second connection failed");
+      throw "third connection failed";
+    };
+    let delays = 0;
+    const adapter = createOpenCodeNativeAdapter({
+      process: new FakeProcess(),
+      network,
+      now: () => 1234,
+      sleep: async () => {
+        delays += 1;
+        if (delays === 3) throw new Error("stop retrying");
+      },
+    });
+    await adapter.attach(spec(), { emit: async () => undefined });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(subscriptions).toBe(3);
+  });
+
+  it("does not reconnect when release wins during the retry delay", async () => {
+    const network = new FakeNetwork();
+    const retryDelay = new Deferred<void>();
+    const adapter = createOpenCodeNativeAdapter({
+      process: new FakeProcess(),
+      network,
+      now: () => 1234,
+      sleep: () => retryDelay.promise,
+    });
+    const handle = await adapter.attach(spec(), { emit: async () => undefined });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await handle.release("requested");
+    retryDelay.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(network.subscriptions).toHaveLength(1);
+  });
+
+  it("bounds deferred stream events and requires a fresh reconciliation after overflow", async () => {
+    const network = new FakeNetwork();
+    const eventGate = new Deferred<void>();
+    const messageResponse = new Deferred<OpenCodeHttpResponse>();
+    network.subscribe = async () =>
+      (async function* () {
+        await eventGate.promise;
+        yield {
+          id: "deferred-busy",
+          type: "session.status",
+          properties: { sessionID: "native-session-1", status: { type: "busy" } },
+        };
+        yield {
+          id: "deferred-idle",
+          type: "session.idle",
+          properties: { sessionID: "native-session-1" },
+        };
+        await waitForever();
+      })();
+    const request = network.request.bind(network);
+    network.request = async (input) =>
+      input.path.includes("/message") ? messageResponse.promise : request(input);
+    const adapter = createOpenCodeNativeAdapter({
+      process: new FakeProcess(),
+      network,
+      now: () => 1234,
+      maxDeferredEvents: 1,
+      sleep: waitForever,
+    });
+    const handle = await adapter.attach(spec(), { emit: async () => undefined });
+    const reconciling = handle.reconcile(null);
+    eventGate.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    messageResponse.resolve({ status: 200, body: [] });
+    const reconciliation = await reconciling;
+
+    expect(reconciliation.observations).toEqual([
+      expect.objectContaining({ kind: "turn.completed" }),
+    ]);
+    await handle.acknowledgeReconciliation?.(reconciliation.cursor);
+    await handle.release("requested");
+  });
+
+  it("bounds remembered native identities while draining a long stream", async () => {
+    const network = new FakeNetwork();
+    const drained = new Deferred<void>();
+    network.subscribe = async () =>
+      (async function* () {
+        for (let index = 0; index <= 10_000; index += 1) {
+          yield {
+            id: `error-${index}`,
+            type: "session.error",
+            properties: {
+              sessionID: "native-session-1",
+              error: { name: `ProviderError${index}` },
+            },
+          };
+        }
+        drained.resolve();
+        await waitForever();
+      })();
+    const adapter = createOpenCodeNativeAdapter({
+      process: new FakeProcess(),
+      network,
+      now: () => 1234,
+      sleep: waitForever,
+    });
+    const handle = await adapter.attach(spec(), { emit: async () => undefined });
+    await drained.promise;
+    await handle.release("requested");
   });
 
   it("contains a detached pump sink failure without emitting an unhandled rejection", async () => {
@@ -2080,6 +2365,7 @@ describe("OpenCodeNativeAdapter", () => {
       process: new FakeProcess(),
       network,
       now: () => 1234,
+      sleep: waitForever,
     });
     let emits = 0;
     const attempted: HarnessObservation[] = [];
@@ -2092,21 +2378,13 @@ describe("OpenCodeNativeAdapter", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // The binding terminal fact is independently attempted even if both the
-    // source event and durable attention were rejected by the sink.
-    expect(emits).toBe(3);
-    expect(attempted.map(({ kind }) => kind)).toEqual([
-      "turn.completed",
-      "attention.raised",
-      "attachment.failed",
-    ]);
+    // A transient stream failure remains retryable even when both the source
+    // event and its durable attention fail to persist.
+    expect(emits).toBe(2);
+    expect(attempted.map(({ kind }) => kind)).toEqual(["turn.completed", "attention.raised"]);
     expect(attempted[1]).toMatchObject({
       id: "opencode:sse-disconnected:native-session-1",
       attention: { kind: "adapter_disconnected", detail: "durable store unavailable" },
-    });
-    expect(attempted[2]).toMatchObject({
-      id: "opencode:sse-binding-failed:native-session-1",
-      detail: "durable store unavailable",
     });
   });
 
@@ -2145,6 +2423,7 @@ describe("OpenCodeNativeAdapter", () => {
       process: new FakeProcess(),
       network: stringFailure,
       now: () => 1234,
+      sleep: waitForever,
     });
     const stringObservations: HarnessObservation[] = [];
     await stringAdapter.attach(spec(), {
@@ -2157,10 +2436,6 @@ describe("OpenCodeNativeAdapter", () => {
       expect.objectContaining({
         kind: "attention.raised",
         attention: expect.objectContaining({ detail: "OpenCode event stream disconnected" }),
-      }),
-      expect.objectContaining({
-        kind: "attachment.failed",
-        detail: "OpenCode event stream disconnected",
       }),
     ]);
   });

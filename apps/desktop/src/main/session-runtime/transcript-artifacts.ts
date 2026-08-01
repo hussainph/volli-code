@@ -93,10 +93,17 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
   }
 
   private async ensureDirectory(): Promise<void> {
-    this.#ready ??= mkdir(this.baseDirectory, { recursive: true, mode: 0o700 }).then(
-      () => undefined,
-    );
-    await this.#ready;
+    const ready =
+      this.#ready ??
+      (this.#ready = mkdir(this.baseDirectory, { recursive: true, mode: 0o700 }).then(
+        () => undefined,
+      ));
+    try {
+      await ready;
+    } catch (error) {
+      if (this.#ready === ready) this.#ready = undefined;
+      throw error;
+    }
   }
 
   private pathFor(id: string): string {

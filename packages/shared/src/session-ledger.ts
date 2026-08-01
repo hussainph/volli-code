@@ -83,7 +83,7 @@ export interface SessionCapabilitySnapshot {
 export interface SessionInteractionOption {
   id: string;
   label: string;
-  description?: string;
+  description: string | null;
 }
 
 /** A provider-neutral user decision with an opaque native correlation reference. */
@@ -573,6 +573,7 @@ export interface SessionProjection {
 export function projectSession(
   session: Session,
   events: readonly SessionEvent[],
+  now = Date.now(),
 ): SessionProjection {
   const attachments = new Map<string, SessionAttachmentProjection>();
   const attention = new Map<string, SessionAttention>();
@@ -667,7 +668,9 @@ export function projectSession(
         const { snapshot } = event.payload;
         const scope = `${snapshot.adapterId}\u0000${snapshot.profileId}\u0000${snapshot.attachmentId ?? ""}`;
         capabilities.delete(scope);
-        capabilities.set(scope, snapshot);
+        if (snapshot.expiresAt === null || snapshot.expiresAt > now) {
+          capabilities.set(scope, snapshot);
+        }
         break;
       }
       case "interaction.opened":

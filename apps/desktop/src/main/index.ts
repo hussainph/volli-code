@@ -1049,12 +1049,29 @@ app.whenReady().then(async () => {
     }
   });
 
-  app.on("before-quit", () => {
-    void Promise.all([sessionRpc?.close(), sessionRuntime?.close(), nativeAdapter?.close()]).catch(
-      (error: unknown) => {
-        console.error("[volli] failed to close native Session RPC:", errorMessage(error));
-      },
-    );
+  let nativeSessionShutdownInFlight = false;
+  app.on("before-quit", (event) => {
+    if (nativeSessionShutdownInFlight) return;
+    // Electron does not await async before-quit handlers. Hold this quit until
+    // the local Session control plane has released its streams and child.
+    event.preventDefault();
+    nativeSessionShutdownInFlight = true;
+    void Promise.allSettled([sessionRpc?.close(), sessionRuntime?.close(), nativeAdapter?.close()])
+      .then((results) => {
+        for (const result of results) {
+          if (result.status === "rejected") {
+            console.error(
+              "[volli] failed to close native Session RPC:",
+              errorMessage(result.reason),
+            );
+          }
+        }
+      })
+      .finally(() => {
+        // Re-issuing app.quit() during before-quit is swallowed by Electron.
+        // PTY teardown has already run synchronously in its own quit handler.
+        app.exit(0);
+      });
   });
 });
 

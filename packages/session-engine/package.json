@@ -15,10 +15,10 @@
     "test:coverage": "vp test run --coverage"
   },
   "dependencies": {
-    "@volli/shared": "workspace:*",
-    "ai": "^7.0.47"
+    "@volli/shared": "workspace:*"
   },
   "devDependencies": {
+    "ai": "^7.0.47",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   }

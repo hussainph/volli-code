@@ -56,6 +56,10 @@ export interface SessionRuntimePorts {
   locations: SessionLocationResolver;
   clock: SessionRuntimeClock;
   ids: SessionRuntimeIds;
+  /** Host diagnostics seam for a failing client stream; failures are isolated. */
+  onSubscriberFailure?: (error: unknown) => void | Promise<void>;
+  /** Bounded host probe deadline; tests may inject a shorter value. */
+  probeTimeoutMs?: number;
 }
 
 export type SessionClientCommand =
@@ -211,8 +215,8 @@ class BufferedObservationSink implements ObservationSink {
 
   activate(): Promise<void> {
     this.#state = "active";
-    for (const observation of this.#pending.splice(0)) void this.#enqueue(observation);
-    return this.#tail;
+    const emissions = this.#pending.splice(0).map((observation) => this.#enqueue(observation));
+    return Promise.all(emissions).then(() => undefined);
   }
 
   discard(): void {
@@ -221,10 +225,16 @@ class BufferedObservationSink implements ObservationSink {
   }
 
   #enqueue(observation: HarnessObservation): Promise<void> {
-    this.#tail = this.#tail.then(() => this.target.emit(observation));
-    return this.#tail;
+    const emission = this.#tail.then(() => this.target.emit(observation));
+    // Preserve the caller-visible rejection while allowing later observations
+    // to continue behind a failed durable write.
+    this.#tail = emission.catch(() => undefined);
+    return emission;
   }
 }
+
+const ADAPTER_PROBE_TIMEOUT_MS = 15_000;
+const EVENT_PAGE_SIZE = 500;
 
 class DefaultSessionRuntime implements SessionRuntime {
   readonly #bindings = new Map<string, BindingRecord>();
@@ -233,6 +243,7 @@ class DefaultSessionRuntime implements SessionRuntime {
   readonly #subscribers = new Map<string, Set<Subscriber>>();
   readonly #capabilityRevisions = new Map<string, number>();
   readonly #capabilityWrites = new Map<string, Promise<SessionCapabilitySnapshot>>();
+  readonly #probeControllers = new Set<AbortController>();
   #closed = false;
 
   constructor(private readonly ports: SessionRuntimePorts) {}
@@ -280,7 +291,7 @@ class DefaultSessionRuntime implements SessionRuntime {
 
     const projection = await this.#requireSession(request.sessionId);
     const location = await this.ports.locations.resolve(projection.session);
-    const existed = await this.#commandExists(request.sessionId, request.commandId);
+    const existed = this.#commandExists(projection, request.commandId);
 
     switch (request.command.kind) {
       case "adapter.attach":
@@ -345,13 +356,12 @@ class DefaultSessionRuntime implements SessionRuntime {
       });
     }
 
-    const abort = new AbortController();
     let probe: NativeProbeResult;
     try {
-      probe = await adapter.probe(
-        { profileId: request.command.profileId, directory: location.directory },
-        abort.signal,
-      );
+      probe = await this.#probe(adapter, {
+        profileId: request.command.profileId,
+        directory: location.directory,
+      });
     } catch (error) {
       return this.#failAttach({
         request,
@@ -471,7 +481,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     location: SessionLocation,
   ): Promise<SessionRuntimeCommandResult> {
     const projection = await this.#requireSession(request.sessionId);
-    const events = await this.ports.engine.listEvents({ sessionId: request.sessionId });
+    const events = await this.#listEventsPaged({ sessionId: request.sessionId });
     const outcome = events.find(
       (event) =>
         event.commandId === request.commandId &&
@@ -608,37 +618,8 @@ class DefaultSessionRuntime implements SessionRuntime {
       return this.#result(request.sessionId, submitted.command, submitted.receipt);
 
     const binding = await this.#bindingForCommand(submitted.command, projection, location);
-    if (submitted.receipt) {
-      await this.#reconcileBinding(binding);
-      const replayed = await this.ports.engine.submit({
-        commandId: request.commandId,
-        sessionId: request.sessionId,
-        intent: submitted.command.intent as Extract<
-          SessionCommand["intent"],
-          { kind: "message.submit" }
-        >,
-        provenance: userProvenance(location.venue),
-      });
-      return this.#result(
-        request.sessionId,
-        replayed.command,
-        replayed.receipt ?? submitted.receipt,
-      );
-    }
-    if (existed) {
-      await this.#reconcileBinding(binding);
-      const replayed = await this.ports.engine.submit({
-        commandId: request.commandId,
-        sessionId: request.sessionId,
-        intent: submitted.command.intent as Extract<
-          SessionCommand["intent"],
-          { kind: "message.submit" }
-        >,
-        provenance: userProvenance(location.venue),
-      });
-      if (replayed.receipt)
-        return this.#result(request.sessionId, replayed.command, replayed.receipt);
-    }
+    const recovered = await this.#recoverAdapterDelivery({ request, submitted, binding, existed });
+    if (recovered) return recovered;
 
     const receipt = await binding.handle.dispatch({
       kind: "message.submit",
@@ -680,35 +661,8 @@ class DefaultSessionRuntime implements SessionRuntime {
     if (submitted.receipt && submitted.receipt.status !== "unreconciled")
       return this.#result(request.sessionId, submitted.command, submitted.receipt);
     const binding = await this.#bindingForCommand(submitted.command, projection, location);
-    if (submitted.receipt) {
-      await this.#reconcileBinding(binding);
-      const replayed = await this.ports.engine.submit({
-        commandId: request.commandId,
-        sessionId: request.sessionId,
-        intent: submitted.command.intent as Extract<
-          SessionCommand["intent"],
-          {
-            kind: "executor.interrupt";
-          }
-        >,
-        provenance: userProvenance(location.venue),
-      });
-      return this.#result(
-        request.sessionId,
-        replayed.command,
-        replayed.receipt ?? submitted.receipt,
-      );
-    }
-    if (existed) {
-      await this.#reconcileBinding(binding);
-      const after = await this.ports.engine.submit({
-        commandId: request.commandId,
-        sessionId: request.sessionId,
-        intent: { kind: "executor.interrupt", attachmentId },
-        provenance: userProvenance(location.venue),
-      });
-      if (after.receipt) return this.#result(request.sessionId, after.command, after.receipt);
-    }
+    const recovered = await this.#recoverAdapterDelivery({ request, submitted, binding, existed });
+    if (recovered) return recovered;
     const receipt = await binding.handle.dispatch({
       kind: "executor.interrupt",
       commandId: request.commandId,
@@ -778,38 +732,8 @@ class DefaultSessionRuntime implements SessionRuntime {
       projection,
       location,
     );
-    if (submitted.receipt) {
-      await this.#reconcileBinding(binding);
-      const replayed = await this.ports.engine.submit({
-        commandId: request.commandId,
-        sessionId: request.sessionId,
-        intent: submitted.command.intent as Extract<
-          SessionCommand["intent"],
-          {
-            kind: "interaction.resolve";
-          }
-        >,
-        provenance: userProvenance(location.venue),
-      });
-      return this.#result(
-        request.sessionId,
-        replayed.command,
-        replayed.receipt ?? submitted.receipt,
-      );
-    }
-    if (existed) {
-      await this.#reconcileBinding(binding);
-      const after = await this.ports.engine.submit({
-        commandId: request.commandId,
-        sessionId: request.sessionId,
-        intent: submitted.command.intent as Extract<
-          SessionCommand["intent"],
-          { kind: "interaction.resolve" }
-        >,
-        provenance: userProvenance(location.venue),
-      });
-      if (after.receipt) return this.#result(request.sessionId, after.command, after.receipt);
-    }
+    const recovered = await this.#recoverAdapterDelivery({ request, submitted, binding, existed });
+    if (recovered) return recovered;
     const receipt = await binding.handle.dispatch({
       kind: "interaction.resolve",
       commandId: request.commandId,
@@ -849,35 +773,8 @@ class DefaultSessionRuntime implements SessionRuntime {
       projection,
       location,
     );
-    if (submitted.receipt) {
-      await this.#reconcileBinding(binding);
-      const replayed = await this.ports.engine.submit({
-        commandId: request.commandId,
-        sessionId: request.sessionId,
-        intent: submitted.command.intent as Extract<
-          SessionCommand["intent"],
-          {
-            kind: "executor.stop";
-          }
-        >,
-        provenance: userProvenance(location.venue),
-      });
-      return this.#result(
-        request.sessionId,
-        replayed.command,
-        replayed.receipt ?? submitted.receipt,
-      );
-    }
-    if (existed) {
-      await this.#reconcileBinding(binding);
-      const after = await this.ports.engine.submit({
-        commandId: request.commandId,
-        sessionId: request.sessionId,
-        intent: { kind: "executor.stop", attachmentId: request.command.attachmentId },
-        provenance: userProvenance(location.venue),
-      });
-      if (after.receipt) return this.#result(request.sessionId, after.command, after.receipt);
-    }
+    const recovered = await this.#recoverAdapterDelivery({ request, submitted, binding, existed });
+    if (recovered) return recovered;
     await binding.handle.release("requested");
     const closed = await this.ports.engine.observe({
       id: this.#id("event"),
@@ -907,10 +804,32 @@ class DefaultSessionRuntime implements SessionRuntime {
     return this.#result(request.sessionId, submitted.command, receipt);
   }
 
+  async #recoverAdapterDelivery(input: {
+    request: ExistingSessionCommandRequest;
+    submitted: SubmitSessionCommandResult;
+    binding: BindingRecord;
+    existed: boolean;
+  }): Promise<SessionRuntimeCommandResult | null> {
+    const priorReceipt = input.submitted.receipt;
+    if (!priorReceipt && !input.existed) return null;
+    await this.#reconcileBinding(input.binding);
+    const replayed = await this.ports.engine.submit({
+      commandId: input.request.commandId,
+      sessionId: input.request.sessionId,
+      intent: input.submitted.command.intent as Exclude<
+        SessionCommand["intent"],
+        { kind: "session.create" }
+      >,
+      provenance: userProvenance(input.binding.venue),
+    });
+    const receipt = replayed.receipt ?? priorReceipt;
+    return receipt ? this.#result(input.request.sessionId, replayed.command, receipt) : null;
+  }
+
   async snapshot(input: { sessionId: string }): Promise<SessionRuntimeSnapshot> {
     this.#assertOpen();
     const projection = await this.#requireSession(input.sessionId);
-    const events = await this.ports.engine.listEvents({ sessionId: input.sessionId });
+    const events = await this.#listEventsPaged({ sessionId: input.sessionId });
     const frames: SessionStreamFrame[] = [];
     const transcript: SessionTranscriptArtifact[] = [];
     for (const event of events) {
@@ -949,7 +868,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     }
     subscribers.add(subscriber);
     try {
-      const replay = await this.ports.engine.listEvents({
+      const replay = await this.#listEventsPaged({
         sessionId: input.sessionId,
         afterSequence: input.afterSequence,
       });
@@ -976,11 +895,10 @@ class DefaultSessionRuntime implements SessionRuntime {
     this.#assertOpen();
     const binding = await this.#bindingForAttachment(input.attachmentId, projection, location);
     await this.#assertBindingOperationOpen();
-    const abort = new AbortController();
-    const probe = await binding.adapter.probe(
-      { profileId: binding.spec.profileId, directory: binding.spec.directory },
-      abort.signal,
-    );
+    const probe = await this.#probe(binding.adapter, {
+      profileId: binding.spec.profileId,
+      directory: binding.spec.directory,
+    });
     await this.#assertBindingOperationOpen();
     if (probe.status !== "available") {
       throw new SessionRuntimeConflictError(probe.reason);
@@ -1010,6 +928,9 @@ class DefaultSessionRuntime implements SessionRuntime {
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
+    for (const controller of this.#probeControllers)
+      controller.abort(new Error("Session runtime closed"));
+    this.#probeControllers.clear();
     for (const subscribers of this.#subscribers.values()) {
       for (const subscriber of subscribers) subscriber.active = false;
     }
@@ -1028,6 +949,30 @@ class DefaultSessionRuntime implements SessionRuntime {
     if (!this.#closed) return;
     await this.#releaseBindingsAfterClose();
     this.#assertOpen();
+  }
+
+  async #probe(
+    adapter: NativeHarnessAdapter,
+    context: { profileId: string; directory: string },
+  ): Promise<NativeProbeResult> {
+    const controller = new AbortController();
+    const timeoutMs = this.ports.probeTimeoutMs ?? ADAPTER_PROBE_TIMEOUT_MS;
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1)
+      throw new Error("Native adapter probe timeout must be a positive integer");
+    const deadline = AbortSignal.timeout(timeoutMs);
+    const signal = AbortSignal.any([controller.signal, deadline]);
+    this.#probeControllers.add(controller);
+    let onAbort!: () => void;
+    try {
+      const aborted = new Promise<never>((_resolve, reject) => {
+        onAbort = () => reject(signal.reason);
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
+      return await Promise.race([adapter.probe(context, signal), aborted]);
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+      this.#probeControllers.delete(controller);
+    }
   }
 
   async #recordCapabilities(
@@ -1280,7 +1225,9 @@ class DefaultSessionRuntime implements SessionRuntime {
       attachmentId,
       profileId: binding.profileId,
       directory: binding.directory ?? location.directory,
-      continuity: attachment.continuity,
+      // A persisted binding is always a resume operation. A malformed empty
+      // provider id fails honestly in the adapter; it must never create fresh.
+      continuity: "native_resume",
       native: binding.native,
     };
     const sink = new BufferedObservationSink(this.#sink(adapter, spec, attachment.venue));
@@ -1329,21 +1276,19 @@ class DefaultSessionRuntime implements SessionRuntime {
     for (const observation of reconciliation.observations) {
       await this.#recordObservation(binding.adapter, binding.spec, binding.venue, observation);
     }
+    const projection = await this.#requireSession(binding.spec.sessionId);
+    const commands = new Map(projection.commands.map((command) => [command.id, command]));
+    const terminalReceiptCommands = new Set(
+      projection.receipts
+        .filter((receipt) => receipt.status !== "unreconciled")
+        .map((receipt) => receipt.commandId),
+    );
     for (const receipt of reconciliation.receipts) {
-      const projection = await this.#requireSession(binding.spec.sessionId);
-      const command = projection.commands.find(({ id }) => id === receipt.commandId);
+      const command = commands.get(receipt.commandId);
       if (!command) continue;
-      if (
-        receipt.status === "unknown" &&
-        projection.receipts.some(
-          (existing) =>
-            existing.commandId === receipt.commandId && existing.status !== "unreconciled",
-        )
-      ) {
-        continue;
-      }
+      if (receipt.status === "unknown" && terminalReceiptCommands.has(receipt.commandId)) continue;
       const resultKind = resultKindFor(command);
-      await this.#recordDelivery(
+      const durable = await this.#recordDelivery(
         binding.spec.sessionId,
         binding.spec.attachmentId,
         binding.adapter,
@@ -1351,6 +1296,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         receipt,
         resultKind,
       );
+      if (durable.status !== "unreconciled") terminalReceiptCommands.add(receipt.commandId);
     }
     binding.cursor = reconciliation.cursor;
     await binding.handle.acknowledgeReconciliation?.(reconciliation.cursor);
@@ -1372,7 +1318,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     const unstamped: UnstampedCommandReceipt =
       receipt.status === "accepted"
         ? {
-            id: nativeReceiptId(receipt.commandId, receipt.status),
+            id: nativeReceiptId(receipt.commandId, receipt),
             commandId: receipt.commandId,
             status: "accepted",
             acceptedAt: receipt.acceptedAt,
@@ -1380,20 +1326,20 @@ class DefaultSessionRuntime implements SessionRuntime {
           }
         : receipt.status === "rejected"
           ? {
-              id: nativeReceiptId(receipt.commandId, receipt.status),
+              id: nativeReceiptId(receipt.commandId, receipt),
               commandId: receipt.commandId,
               status: "rejected",
               code: receipt.code,
               detail: receipt.detail,
             }
           : {
-              id: nativeReceiptId(receipt.commandId, receipt.status),
+              id: nativeReceiptId(receipt.commandId, receipt),
               commandId: receipt.commandId,
               status: "unreconciled",
               detail: receipt.detail,
             };
     const event = await this.ports.engine.observe({
-      id: nativeReceiptEventId(receipt.commandId, receipt.status),
+      id: nativeReceiptEventId(receipt.commandId, receipt),
       sessionId,
       attachmentId,
       occurredAt: receipt.status === "accepted" ? receipt.acceptedAt : this.ports.clock.now(),
@@ -1457,7 +1403,13 @@ class DefaultSessionRuntime implements SessionRuntime {
           subscriber.cursor = event.sequence;
         }
       })
-      .catch(() => this.#removeSubscriber(subscriber));
+      .catch(async (error) => {
+        try {
+          await this.ports.onSubscriberFailure?.(error);
+        } finally {
+          this.#removeSubscriber(subscriber);
+        }
+      });
     await subscriber.draining;
   }
 
@@ -1480,9 +1432,42 @@ class DefaultSessionRuntime implements SessionRuntime {
     command: SessionCommand,
     receipt: CommandReceipt | null,
   ): Promise<SessionRuntimeCommandResult> {
-    const events = await this.ports.engine.listEvents({ sessionId });
-    /* v8 ignore next -- every returned command has at least its command.recorded event. */
-    return { sessionId, command, receipt, throughSequence: events.at(-1)?.sequence ?? 0 };
+    return { sessionId, command, receipt, throughSequence: await this.#latestSequence(sessionId) };
+  }
+
+  async #latestSequence(sessionId: string): Promise<number> {
+    let afterSequence = 0;
+    for (;;) {
+      const page = await this.ports.engine.listEvents({
+        sessionId,
+        afterSequence,
+        limit: EVENT_PAGE_SIZE,
+      });
+      const latest = page.at(-1);
+      /* v8 ignore next -- #result is only called after its command event commits. */
+      if (!latest) throw new Error(`Session ${sessionId} has no committed command event`);
+      afterSequence = latest.sequence;
+      if (page.length < EVENT_PAGE_SIZE) return afterSequence;
+    }
+  }
+
+  async #listEventsPaged(input: {
+    sessionId: string;
+    afterSequence?: number;
+  }): Promise<readonly SessionEvent[]> {
+    let afterSequence = input.afterSequence ?? 0;
+    const events: SessionEvent[] = [];
+    for (;;) {
+      const page = await this.ports.engine.listEvents({
+        sessionId: input.sessionId,
+        afterSequence,
+        limit: EVENT_PAGE_SIZE,
+      });
+      events.push(...page);
+      const latest = page.at(-1);
+      if (!latest || page.length < EVENT_PAGE_SIZE) return events;
+      afterSequence = latest.sequence;
+    }
   }
 
   async #requireSession(sessionId: string): Promise<SessionProjection> {
@@ -1498,11 +1483,8 @@ class DefaultSessionRuntime implements SessionRuntime {
     return adapter;
   }
 
-  async #commandExists(sessionId: string, commandId: string): Promise<boolean> {
-    return (await this.ports.engine.listEvents({ sessionId })).some(
-      (event) =>
-        event.payload.kind === "command.recorded" && event.payload.command.id === commandId,
-    );
+  #commandExists(projection: SessionProjection, commandId: string): boolean {
+    return projection.commands.some((command) => command.id === commandId);
   }
 
   #assertOpen(): void {
@@ -1626,12 +1608,20 @@ function nativeObservationId(
   return `native-event:${adapterId}:${sessionId}:${attachmentId}:${observationId}`;
 }
 
-function nativeReceiptId(commandId: string, status: DeliveryReceipt["status"]): string {
-  return `native-receipt:${commandId}:${status}`;
+function nativeReceiptId(commandId: string, receipt: DeliveryReceipt): string {
+  return `native-receipt:${commandId}:${receiptIdentity(receipt)}`;
 }
 
-function nativeReceiptEventId(commandId: string, status: DeliveryReceipt["status"]): string {
-  return `native-receipt-event:${commandId}:${status}`;
+function nativeReceiptEventId(commandId: string, receipt: DeliveryReceipt): string {
+  return `native-receipt-event:${commandId}:${receiptIdentity(receipt)}`;
+}
+
+function receiptIdentity(receipt: DeliveryReceipt): string {
+  if (receipt.status === "accepted") return `accepted:${receipt.acceptedAt}`;
+  if (receipt.status === "rejected") {
+    return `rejected:${receipt.code}:${encodeURIComponent(receipt.detail ?? "")}`;
+  }
+  return `unreconciled:${encodeURIComponent(receipt.detail ?? "")}`;
 }
 
 function errorMessage(error: unknown): string {

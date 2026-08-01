@@ -184,4 +184,23 @@ describe("registerSessionRpcIpcHandlers", () => {
     );
     await registration.close();
   });
+
+  it("does not retain a subscription whose renderer is already destroyed", async () => {
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+    const owner = sender();
+    owner.isDestroyed = () => true;
+
+    await expect(
+      invoke(owner, {
+        procedure: "session.subscribe",
+        input: { sessionId: "session-1", afterSequence: 0 },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "CLIENT_CLOSED_REQUEST", message: "Renderer closed" },
+    });
+    expect(owner.once).not.toHaveBeenCalled();
+    await registration.close();
+  });
 });

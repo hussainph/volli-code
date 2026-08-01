@@ -14,7 +14,9 @@ import {
 } from "@trpc/client";
 import type { AppRouter } from "@volli/session-rpc";
 
-export const LAB_SESSION_RPC_PATH = "/__lab/session-rpc";
+import { LAB_SESSION_RPC_PATH } from "../../lab-session-rpc-path";
+
+export { LAB_SESSION_RPC_PATH } from "../../lab-session-rpc-path";
 
 export type SessionRpcClient = TRPCClient<AppRouter>;
 

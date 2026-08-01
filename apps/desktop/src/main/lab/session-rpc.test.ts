@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { tmpdir } from "node:os";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
+import { createOpenCodeNativeAdapter } from "@volli/opencode-adapter";
 
 import {
   LAB_SESSION_RPC_PATH,
@@ -137,12 +138,45 @@ describe("Lab Session RPC server", () => {
     expect(response.status).toBe(403);
     expect((await labDirectories()).filter((entry) => !before.has(entry))).toEqual([]);
   });
+
+  it("retries initialization after a temporary adapter construction failure", async () => {
+    let attempts = 0;
+    const lab = new LabSessionRpcServer({
+      repoRoot: process.cwd(),
+      createAdapter: () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("adapter unavailable");
+        return createOpenCodeNativeAdapter();
+      },
+    });
+    servers.push(lab);
+    const path = `${LAB_SESSION_RPC_PATH}/session.snapshot`;
+
+    await expect(
+      invoke(lab, request({ host: "localhost:5174" }, "127.0.0.1", path)),
+    ).resolves.toMatchObject({
+      status: 500,
+      body: "adapter unavailable",
+    });
+    await expect(
+      invoke(lab, request({ host: "localhost:5174" }, "127.0.0.1", path)),
+    ).resolves.not.toMatchObject({
+      status: 500,
+      body: "adapter unavailable",
+    });
+    expect(attempts).toBe(2);
+  });
 });
 
-function request(headers: Record<string, string>, remoteAddress = "127.0.0.1"): IncomingMessage {
+function request(
+  headers: Record<string, string>,
+  remoteAddress = "127.0.0.1",
+  url?: string,
+): IncomingMessage {
   return {
     headers,
     socket: { remoteAddress },
+    url,
   } as unknown as IncomingMessage;
 }
 
