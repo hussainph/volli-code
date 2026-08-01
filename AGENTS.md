@@ -67,7 +67,7 @@ The global `vp` toolchain CLI is used by this repository. Node and pnpm versions
 
 - **Data:** local SQLite via better-sqlite3, WAL mode, owned by the main process. Store transcripts as indexed files on disk. The product is local-first and single-player.
 - **Adapters:** preserve the manifest registry, exact-hash trust, capability evidence, launch configuration, and honest resume support already used by Claude Code, Codex, OpenCode, and custom TUI harnesses. Structured SDK/ACP adapters will attach at the same Session seam later.
-- **Execution:** one worktree per ticket by default. Agents may communicate with the planner through the bundled `volli` CLI. Terminal wrappers and hooks remain compatibility mechanisms for TUI harnesses.
+- **Execution:** one worktree per ticket by default. Terminal wrappers and hooks remain compatibility mechanisms for TUI harnesses.
 - **Board:** fixed columns Backlog, Todo, Doing, Needs Review, and Done. Explicit moves win over stale lifecycle evidence. Automation never destroys data; archive worktrees instead of deleting them.
 
 ## Reference implementations

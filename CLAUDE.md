@@ -52,7 +52,7 @@ A local-first macOS workspace for planning and running coding sessions, built wi
 
 - **Data**: local SQLite (better-sqlite3, WAL, main-process-owned); transcripts as indexed files on disk. Local-first, single-player.
 - **Adapters**: preserve the manifest registry, exact-hash trust, capability evidence, launch configuration, and honest resume support already used by Claude Code, Codex, OpenCode, and custom TUI harnesses. Structured SDK/ACP adapters will attach at the same Session seam later.
-- **Execution**: worktree-per-ticket. Agents may reach the planner through the bundled `volli` CLI. Terminal wrappers and hooks remain compatibility mechanisms for TUI harnesses.
+- **Execution**: worktree-per-ticket. Terminal wrappers and hooks remain compatibility mechanisms for TUI harnesses.
 - **Board**: fixed columns Backlog · Todo · Doing · Needs Review · Done. Explicit moves win over stale lifecycle evidence; automation only de-escalates and never destroys data.
 
 ## Reference implementations
