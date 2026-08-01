@@ -1,5 +1,3 @@
-import * as React from "react";
-
 const TOOL_PREVIEW_LIMIT = 1_200;
 
 export interface SessionMessageFrame {
