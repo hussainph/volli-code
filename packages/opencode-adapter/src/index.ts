@@ -116,6 +116,8 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
   readonly #stopTimeoutMs: number;
   #server: ServerLease | null = null;
   #starting: Promise<ServerLease> | null = null;
+  #closing: Promise<void> | null = null;
+  #closed = false;
 
   constructor(options: OpenCodeAdapterOptions = {}) {
     this.#process = options.process ?? createNodeProcessPort();
@@ -137,6 +139,7 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
       };
     }
     try {
+      this.#throwIfClosed();
       const path = await this.#process.resolveBinary(this.#binaryPath);
       const [version, fingerprint] = await Promise.all([
         this.#process.version(path, signal),
@@ -144,6 +147,7 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
       ]);
       const server = await this.#ensureServer();
       await this.#waitForHealth(server);
+      this.#throwIfClosed();
       return {
         status: "available",
         runtime: { path, version, fingerprint },
@@ -160,9 +164,12 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
 
   async attach(spec: NativeAttachmentSpec, sink: ObservationSink): Promise<BindingHandle> {
     if (spec.profileId !== "native") throw new Error(`Unknown OpenCode profile ${spec.profileId}`);
+    this.#throwIfClosed();
     const server = await this.#ensureServer();
     await this.#waitForHealth(server);
+    this.#throwIfClosed();
     const nativeSessionId = await this.#attachSession(server, spec);
+    this.#throwIfClosed();
     const binding = new OpenCodeBinding({
       server,
       spec,
@@ -175,13 +182,29 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
     return binding;
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    if (this.#closing) return this.#closing;
+    this.#closed = true;
+    const server = this.#server;
     const starting = this.#starting;
-    const server = this.#server ?? (starting ? await starting : null);
-    if (!server) return;
     this.#server = null;
     this.#starting = null;
-    await this.#stopChild(server.child);
+    this.#closing = this.#closeServerLeases(server, starting);
+    return this.#closing;
+  }
+
+  async #closeServerLeases(
+    server: ServerLease | null,
+    starting: Promise<ServerLease> | null,
+  ): Promise<void> {
+    if (server) await this.#stopChild(server.child);
+    if (!starting) return;
+    try {
+      const lateServer = await starting;
+      await this.#stopChild(lateServer.child);
+    } catch {
+      // Startup failed before a child lease existed. There is nothing to reap.
+    }
   }
 
   async #attachSession(server: ServerLease, spec: NativeAttachmentSpec): Promise<string> {
@@ -210,23 +233,30 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
   }
 
   async #ensureServer(): Promise<ServerLease> {
+    this.#throwIfClosed();
     if (this.#server) return this.#server;
     if (this.#starting) return this.#starting;
     const starting = this.#startServer();
     this.#starting = starting;
     void starting.then(
       (server) => {
-        this.#server = server;
-        this.#starting = null;
-        void server.child.exited.then(() => {
-          if (this.#server === server) this.#server = null;
-        });
+        if (this.#starting === starting) this.#starting = null;
+        if (!this.#closed) {
+          this.#server = server;
+          void server.child.exited.then(() => {
+            if (this.#server === server) this.#server = null;
+          });
+        }
       },
       () => {
-        this.#starting = null;
+        if (this.#starting === starting) this.#starting = null;
       },
     );
     return starting;
+  }
+
+  #throwIfClosed(): void {
+    if (this.#closed) throw new Error("OpenCode native adapter is closed");
   }
 
   async #startServer(): Promise<ServerLease> {

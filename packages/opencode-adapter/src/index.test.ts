@@ -610,6 +610,24 @@ describe("OpenCodeNativeAdapter", () => {
     expect(process.spawns).toHaveLength(1);
   });
 
+  it("does not retain a failed startup when close wins its race", async () => {
+    const process = new FakeProcess();
+    const resolvedPath = new Deferred<string>();
+    process.resolveBinary = async () => resolvedPath.promise;
+    process.spawnFailure = new Error("port already in use");
+    const adapter = createOpenCodeNativeAdapter({ process, network: new FakeNetwork() });
+
+    const attaching = adapter.attach(spec(), { emit: async () => undefined });
+    const closing = adapter.close();
+    resolvedPath.resolve("/trusted/opencode");
+
+    await expect(attaching).rejects.toThrow("port already in use");
+    await closing;
+    await expect(adapter.attach(spec(), { emit: async () => undefined })).rejects.toThrow(
+      "OpenCode native adapter is closed",
+    );
+  });
+
   it("bounds child shutdown if its exit promise never settles", async () => {
     const process = new FakeProcess();
     const network = new FakeNetwork();
@@ -1305,15 +1323,29 @@ describe("OpenCodeNativeAdapter", () => {
     ]);
   });
 
-  it("uses defaults without starting a process and releases a stopped server lifecycle cleanly", async () => {
+  it("uses defaults without starting a process and treats close as terminal", async () => {
     expect(createOpenCodeNativeAdapter().manifest.id).toBe("opencode");
 
     const { adapter, process } = composition();
     await adapter.close();
+    await expect(adapter.attach(spec(), { emit: async () => undefined })).rejects.toThrow(
+      "OpenCode native adapter is closed",
+    );
+    expect(
+      await adapter.probe(
+        { profileId: "native", directory: "/workspace/one" },
+        new AbortController().signal,
+      ),
+    ).toMatchObject({ status: "unavailable", reason: "OpenCode native adapter is closed" });
+    expect(process.spawns).toHaveLength(0);
+  });
+
+  it("forgets an exited shared child before a later attach", async () => {
+    const { adapter, process } = composition();
     await adapter.attach(spec(), { emit: async () => undefined });
     process.exited.resolve(0);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    await adapter.close();
+
     await adapter.attach(spec(), { emit: async () => undefined });
     expect(process.spawns).toHaveLength(2);
   });
@@ -1606,7 +1638,7 @@ describe("OpenCodeNativeAdapter", () => {
     expect(network.requests.at(-1)?.body).toEqual({ reply: "reject" });
   });
 
-  it("shares a pending startup, permits close during startup, and does not emit after release", async () => {
+  it("shares a pending startup and reaps its only child when close wins", async () => {
     const process = new FakeProcess();
     const spawned = new Deferred<OpenCodeChild>();
     let stops = 0;
@@ -1615,16 +1647,6 @@ describe("OpenCodeNativeAdapter", () => {
       return spawned.promise;
     };
     const network = new FakeNetwork();
-    const eventGate = new Deferred<void>();
-    network.subscribe = async () =>
-      (async function* () {
-        await eventGate.promise;
-        yield {
-          id: "after-release",
-          type: "session.idle",
-          properties: { sessionID: "native-session-1" },
-        };
-      })();
     const adapter = createOpenCodeNativeAdapter({
       process,
       network,
@@ -1639,14 +1661,55 @@ describe("OpenCodeNativeAdapter", () => {
         stops += 1;
       },
     });
-    const [one, two] = await Promise.all([first, second]);
+    await expect(first).rejects.toThrow("OpenCode native adapter is closed");
+    await expect(second).rejects.toThrow("OpenCode native adapter is closed");
     await closing;
     expect(process.spawns).toHaveLength(1);
     expect(stops).toBe(1);
-    await one.release("requested");
-    eventGate.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await two.release("requested");
+  });
+
+  it("reaps a child spawned after close during port allocation", async () => {
+    const process = new FakeProcess();
+    const resolvedPath = new Deferred<string>();
+    const allocatedPort = new Deferred<number>();
+    const allocationStarted = new Deferred<void>();
+    const exited = new Deferred<number | null>();
+    let stops = 0;
+    process.resolveBinary = async () => resolvedPath.promise;
+    process.allocatePort = async () => {
+      allocationStarted.resolve();
+      return allocatedPort.promise;
+    };
+    process.spawn = async (input) => {
+      process.spawns.push(input);
+      return {
+        exited: exited.promise,
+        stop: async () => {
+          stops += 1;
+        },
+      };
+    };
+    const adapter = createOpenCodeNativeAdapter({
+      process,
+      network: new FakeNetwork(),
+      sleep: async () => undefined,
+    });
+
+    const attaching = adapter.attach(spec(), { emit: async () => undefined });
+    resolvedPath.resolve("/trusted/opencode");
+    await allocationStarted.promise;
+    const firstClose = adapter.close();
+    expect(adapter.close()).toBe(firstClose);
+    allocatedPort.resolve(43123);
+
+    await expect(attaching).rejects.toThrow("OpenCode native adapter is closed");
+    await firstClose;
+    expect(process.spawns).toHaveLength(1);
+    expect(stops).toBe(1);
+    await expect(adapter.attach(spec(), { emit: async () => undefined })).rejects.toThrow(
+      "OpenCode native adapter is closed",
+    );
+    exited.resolve(0);
   });
 
   it("reconciles questions and empty cursors, and parses malformed terminal SSE blocks safely", async () => {
