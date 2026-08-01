@@ -177,17 +177,46 @@ describe("OpenCodeNativeAdapter", () => {
     expect(scoped.every(({ path }) => path.includes("directory=%2Fworkspace%2Fone"))).toBe(true);
     const prompt = network.requests.find(({ path }) => path.includes("prompt_async"));
     expect(prompt?.body).toEqual({
-      messageID: "volli-command-9",
+      messageID: "msg_fc476b81ce66b0702f711903fd",
       model: { providerID: "openai", modelID: "gpt-5" },
       agent: "build",
       variant: "high",
       parts: [{ type: "text", text: "Fix the tracer" }],
+    });
+    expect(delivered.native).toEqual({
+      id: "native-session-1",
+      detail: { messageId: "msg_fc476b81ce66b0702f711903fd" },
     });
     expect(prompt?.headers.authorization).toBe(
       `Basic ${Buffer.from("opencode:never-persist-this").toString("base64")}`,
     );
     expect(JSON.stringify(handle.native)).not.toContain("never-persist-this");
     expect(JSON.stringify(handle.native)).not.toContain("43123");
+  });
+
+  it("keeps provider-native message IDs stable per Session and distinct across Sessions", async () => {
+    const first = composition();
+    const firstHandle = await first.adapter.attach(spec(), { emit: async () => undefined });
+    await firstHandle.dispatch(messageCommand());
+    await firstHandle.dispatch(messageCommand());
+    expect(
+      first.network.requests
+        .filter(({ path }) => path.includes("prompt_async"))
+        .map(({ body }) => body),
+    ).toEqual([
+      expect.objectContaining({ messageID: "msg_fc476b81ce66b0702f711903fd" }),
+      expect.objectContaining({ messageID: "msg_fc476b81ce66b0702f711903fd" }),
+    ]);
+
+    const second = composition();
+    const secondHandle = await second.adapter.attach(
+      { ...spec(), sessionId: "volli-session-2" },
+      { emit: async () => undefined },
+    );
+    await secondHandle.dispatch({ ...messageCommand(), sessionId: "volli-session-2" });
+    expect(second.network.requests.find(({ path }) => path.includes("prompt_async"))?.body).toEqual(
+      expect.objectContaining({ messageID: "msg_bd71831d40bf8245a7862cca8f" }),
+    );
   });
 
   it("maps legacy SSE messages, turns, and interactions into durable-neutral observations", async () => {
@@ -1085,7 +1114,10 @@ describe("OpenCodeNativeAdapter", () => {
       }),
     ).toMatchObject({ status: "accepted", acceptedAt: 1234 });
     const prompt = network.requests.at(-1);
-    expect(prompt?.body).toEqual({ messageID: "volli-command-9", parts: [] });
+    expect(prompt?.body).toEqual({
+      messageID: "msg_fc476b81ce66b0702f711903fd",
+      parts: [],
+    });
 
     const originalRequest = network.request.bind(network);
     network.request = async (input) =>
@@ -1111,7 +1143,10 @@ describe("OpenCodeNativeAdapter", () => {
       commandId: "volli-command-9",
       status: "unknown",
       detail: "OpenCode transport failed",
-      native: { id: "native-session-1", detail: null },
+      native: {
+        id: "native-session-1",
+        detail: { messageId: "msg_fc476b81ce66b0702f711903fd" },
+      },
     });
 
     network.request = originalRequest;
@@ -1126,7 +1161,7 @@ describe("OpenCodeNativeAdapter", () => {
       }),
     ).toMatchObject({ status: "accepted" });
     expect(network.requests.at(-1)?.body).toEqual({
-      messageID: "volli-command-9",
+      messageID: "msg_fc476b81ce66b0702f711903fd",
       model: { providerID: "openai", modelID: "gpt-5" },
       agent: "build",
       variant: "high",
