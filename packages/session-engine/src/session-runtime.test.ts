@@ -36,6 +36,21 @@ function userMessage(id = "message-1", text = "Hello"): UIMessage {
   return { id, role: "user", parts: [{ type: "text", text }] };
 }
 
+class Gate {
+  readonly promise: Promise<void>;
+  #resolve!: () => void;
+
+  constructor() {
+    this.promise = new Promise((resolve) => {
+      this.#resolve = resolve;
+    });
+  }
+
+  resolve(): void {
+    this.#resolve();
+  }
+}
+
 class FakeAdapter implements NativeHarnessAdapter {
   readonly manifest = {
     id: "fake",
@@ -52,6 +67,8 @@ class FakeAdapter implements NativeHarnessAdapter {
   sink: ObservationSink | null = null;
   reconcileReceipts: Awaited<ReturnType<BindingHandle["reconcile"]>>["receipts"] = [];
   reconcileObservations: HarnessObservation[] = [];
+  reconcileGate: Promise<void> | null = null;
+  reconcileStarted: () => void = () => undefined;
   probeResult: NativeProbeResult | null = null;
   attachFailure: unknown = null;
   releaseFailure: unknown = null;
@@ -116,6 +133,8 @@ class FakeAdapter implements NativeHarnessAdapter {
       },
       reconcile: async () => {
         this.reconciles += 1;
+        this.reconcileStarted();
+        await this.reconcileGate;
         return {
           cursor: { value: this.reconciles },
           observations: this.reconcileObservations,
@@ -680,6 +699,41 @@ describe("SessionRuntime native adapter contract", () => {
     expect(snapshot.projection.receipts).not.toContainEqual(
       expect.objectContaining({ commandId: "command-attach", status: "unreconciled" }),
     );
+  });
+
+  it("coalesces concurrent reconciliation through one durable acknowledgement", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    const started = new Gate();
+    const release = new Gate();
+    adapter.reconcileStarted = () => started.resolve();
+    adapter.reconcileGate = release.promise;
+    adapter.reconcileObservations = [
+      {
+        id: "concurrent-turn",
+        kind: "turn.started",
+        occurredAt: 450,
+        turnId: "turn-concurrent",
+      },
+    ];
+
+    const first = runtime.reconcile({ sessionId, attachmentId });
+    await started.promise;
+    const second = runtime.reconcile({ sessionId, attachmentId });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(adapter.reconciles).toBe(1);
+    release.resolve();
+    await Promise.all([first, second]);
+    expect(adapter.reconcileAcknowledgements).toEqual([{ value: 1 }]);
+    const snapshot = await runtime.snapshot({ sessionId });
+    expect(
+      snapshot.frames.filter(
+        ({ event }) =>
+          event.payload.kind === "turn.started" && event.payload.turnId === "turn-concurrent",
+      ),
+    ).toHaveLength(1);
   });
 
   it("validates subscriptions, stops delivery after unsubscribe, and makes close idempotent", async () => {
