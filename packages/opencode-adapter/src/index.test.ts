@@ -627,7 +627,7 @@ describe("OpenCodeNativeAdapter", () => {
     expect(JSON.stringify(probe.capabilities.catalog)).not.toContain("/private/user/path");
   });
 
-  it("maps finalized OpenCode text, reasoning, and tool lifecycle without leaking payloads", async () => {
+  it("preserves finalized OpenCode reasoning and inspectable tool payloads", async () => {
     const { adapter } = composition([
       {
         id: "parts",
@@ -644,15 +644,19 @@ describe("OpenCodeNativeAdapter", () => {
               callID: "call-running",
               state: {
                 status: "running",
-                input: { token: "must-not-leak" },
-                title: "private /Users/example/repository",
+                input: { path: "src/session-runtime.ts" },
+                title: "Read Session runtime",
               },
             },
             {
               type: "tool",
               tool: "search",
               callID: "call-pending",
-              state: { status: "pending", input: {}, raw: "must-not-leak" },
+              state: {
+                status: "pending",
+                input: { pattern: "transcript.message" },
+                raw: "Preparing repository search",
+              },
             },
             {
               type: "tool",
@@ -660,10 +664,10 @@ describe("OpenCodeNativeAdapter", () => {
               callID: "call-complete",
               state: {
                 status: "completed",
-                input: { path: "/private/must-not-leak" },
-                output: "must-not-leak",
-                title: "private /Users/example/source.ts",
-                metadata: {},
+                input: { path: "src/session-runtime.ts", offset: 1149 },
+                output: { content: 'case "transcript.message"', truncated: false },
+                title: "Read transcript mapping",
+                metadata: { bytes: 42 },
                 time: { start: 1, end: 2 },
               },
             },
@@ -673,9 +677,11 @@ describe("OpenCodeNativeAdapter", () => {
               callID: "call-error",
               state: {
                 status: "error",
-                input: {},
-                error: "must-not-leak",
-                time: { start: 1, end: 2 },
+                input: { path: "src/missing.ts" },
+                error: "File not found",
+                title: "Read missing file",
+                metadata: { code: "ENOENT" },
+                time: { start: 3, end: 4 },
               },
             },
           ],
@@ -735,35 +741,47 @@ describe("OpenCodeNativeAdapter", () => {
               toolName: "bash",
               toolCallId: "call-running",
               state: "input-streaming",
+              input: { path: "src/session-runtime.ts" },
+              title: "Read Session runtime",
             },
             {
               type: "dynamic-tool",
               toolName: "search",
               toolCallId: "call-pending",
               state: "input-streaming",
+              input: { pattern: "transcript.message" },
+              toolMetadata: {
+                opencode: { raw: "Preparing repository search" },
+              },
             },
             {
               type: "dynamic-tool",
               toolName: "read",
               toolCallId: "call-complete",
               state: "output-available",
-              input: null,
-              output: null,
+              input: { path: "src/session-runtime.ts", offset: 1149 },
+              output: { content: 'case "transcript.message"', truncated: false },
+              title: "Read transcript mapping",
+              toolMetadata: {
+                opencode: { metadata: { bytes: 42 }, time: { start: 1, end: 2 } },
+              },
             },
             {
               type: "dynamic-tool",
               toolName: "write",
               toolCallId: "call-error",
               state: "output-error",
-              input: null,
-              errorText: "Tool failed",
+              input: { path: "src/missing.ts" },
+              errorText: "File not found",
+              title: "Read missing file",
+              toolMetadata: {
+                opencode: { metadata: { code: "ENOENT" }, time: { start: 3, end: 4 } },
+              },
             },
           ],
         }),
       }),
     ]);
-    expect(JSON.stringify(observations)).not.toContain("must-not-leak");
-    expect(JSON.stringify(observations)).not.toContain("/Users/example");
   });
 
   it("does not finalize provider messages or parts removed before idle", async () => {
