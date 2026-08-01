@@ -230,6 +230,7 @@ class DefaultSessionRuntime implements SessionRuntime {
   readonly #bindings = new Map<string, BindingRecord>();
   readonly #rehydratingBindings = new Map<string, Promise<BindingRecord>>();
   readonly #inFlight = new Map<string, InFlightCommand>();
+  readonly #bindingOperations = new Set<Promise<unknown>>();
   readonly #subscribers = new Map<string, Set<Subscriber>>();
   readonly #capabilityRevisions = new Map<string, number>();
   readonly #capabilityWrites = new Map<string, Promise<SessionCapabilitySnapshot>>();
@@ -962,11 +963,18 @@ class DefaultSessionRuntime implements SessionRuntime {
     };
   }
 
-  async refreshCapabilities(input: {
+  refreshCapabilities(input: {
     sessionId: string;
     attachmentId: string;
   }): Promise<SessionCapabilitySnapshot> {
     this.#assertOpen();
+    return this.#trackBindingOperation(this.#refreshCapabilities(input));
+  }
+
+  async #refreshCapabilities(input: {
+    sessionId: string;
+    attachmentId: string;
+  }): Promise<SessionCapabilitySnapshot> {
     const projection = await this.#requireSession(input.sessionId);
     const location = await this.ports.locations.resolve(projection.session);
     const binding = await this.#bindingForAttachment(input.attachmentId, projection, location);
@@ -988,8 +996,12 @@ class DefaultSessionRuntime implements SessionRuntime {
     );
   }
 
-  async reconcile(input: { sessionId: string; attachmentId: string }): Promise<void> {
+  reconcile(input: { sessionId: string; attachmentId: string }): Promise<void> {
     this.#assertOpen();
+    return this.#trackBindingOperation(this.#reconcile(input));
+  }
+
+  async #reconcile(input: { sessionId: string; attachmentId: string }): Promise<void> {
     const projection = await this.#requireSession(input.sessionId);
     const location = await this.ports.locations.resolve(projection.session);
     const binding = await this.#bindingForAttachment(input.attachmentId, projection, location);
@@ -1003,9 +1015,19 @@ class DefaultSessionRuntime implements SessionRuntime {
       for (const subscriber of subscribers) subscriber.active = false;
     }
     this.#subscribers.clear();
+    await Promise.allSettled(this.#bindingOperations);
     const bindings = [...this.#bindings.values()];
     this.#bindings.clear();
     await Promise.allSettled(bindings.map(({ handle }) => handle.release("shutdown")));
+  }
+
+  async #trackBindingOperation<T>(operation: Promise<T>): Promise<T> {
+    this.#bindingOperations.add(operation);
+    try {
+      return await operation;
+    } finally {
+      this.#bindingOperations.delete(operation);
+    }
   }
 
   async #recordCapabilities(
