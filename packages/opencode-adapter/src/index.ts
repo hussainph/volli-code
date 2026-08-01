@@ -499,21 +499,23 @@ class OpenCodeBinding implements BindingHandle {
       this.#request("/question", "GET").catch(() => ({ status: 404, body: [] })),
     ]);
     const observations: HarnessObservation[] = [];
-    const importNativeHistory = this.#importNativeHistory;
-    for (const message of messageResponses(messages.body)) {
-      const info = nested(message, "info") ?? message;
-      const id = objectString(info, "id");
-      if (id && !this.#seen.has(reconciledMessageKey(id))) {
-        const role = messageRole(info);
-        this.#messages.delete(id);
-        this.#seen.add(reconciledMessageKey(id));
-        if (role !== "user" || importNativeHistory) {
-          const observation = this.#messageObservation(`message:${id}`, id, role, message);
-          if (observation.message.parts.length > 0) this.#pushUnique(observations, observation);
+    if (isSuccessfulMessageResponse(messages)) {
+      const importNativeHistory = this.#importNativeHistory;
+      for (const message of messageResponses(messages.body)) {
+        const info = nested(message, "info") ?? message;
+        const id = objectString(info, "id");
+        if (id && !this.#seen.has(reconciledMessageKey(id))) {
+          const role = messageRole(info);
+          this.#messages.delete(id);
+          this.#seen.add(reconciledMessageKey(id));
+          if (role !== "user" || importNativeHistory) {
+            const observation = this.#messageObservation(`message:${id}`, id, role, message);
+            if (observation.message.parts.length > 0) this.#pushUnique(observations, observation);
+          }
         }
       }
+      this.#importNativeHistory = false;
     }
-    this.#importNativeHistory = false;
     for (const permission of arrayBody(permissionResponse.body).filter((candidate) =>
       hasSessionId(candidate, this.#nativeSessionId),
     )) {
@@ -1210,6 +1212,16 @@ function messageResponses(body: unknown): readonly unknown[] {
   return arrayBody(body);
 }
 
+function isSuccessfulMessageResponse(response: OpenCodeHttpResponse): boolean {
+  if (response.status < 200 || response.status >= 300) return false;
+  const body = response.body;
+  return (
+    Array.isArray(body) ||
+    (isRecord(body) && Array.isArray(body.items)) ||
+    (isRecord(body) && isRecord(body.info) && Array.isArray(body.parts))
+  );
+}
+
 /**
  * Maps the legacy OpenCode Part union to transcript-safe AI SDK UI parts.
  * Tool inputs, outputs, raw pending text, metadata, and errors can contain
@@ -1244,12 +1256,10 @@ function openCodePart(part: unknown): UIMessage["parts"] {
   const toolCallId = objectString(part, "callID");
   const state = nested(part, "state");
   if (!toolName || !toolCallId || !state) return [];
-  const title = objectString(state, "title");
   const base = {
     type: "dynamic-tool" as const,
     toolName,
     toolCallId,
-    ...(title ? { title } : {}),
   };
   switch (objectString(state, "status")) {
     case "pending":
