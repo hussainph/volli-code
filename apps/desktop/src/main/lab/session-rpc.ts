@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -31,7 +31,20 @@ export interface LabSessionRpcServerOptions {
   repoRoot: string;
   createAdapter?: () => OpenCodeNativeAdapter;
   now?: () => number;
+  /** Injectable only so shutdown semantics can be verified without ending Node. */
+  exitLifecycle?: LabProcessExitLifecycle;
 }
+
+/** The tiny process-exit surface the Lab owns. */
+export interface LabProcessExitLifecycle {
+  add(listener: () => void): void;
+  remove(listener: () => void): void;
+}
+
+const processExitLifecycle: LabProcessExitLifecycle = {
+  add: (listener) => process.once("exit", listener),
+  remove: (listener) => process.off("exit", listener),
+};
 
 /**
  * A dev-only same-origin transport for the UI Lab. It has no Electron IPC and
@@ -41,14 +54,23 @@ export class LabSessionRpcServer {
   readonly #repoRoot: string;
   readonly #createAdapter: () => OpenCodeNativeAdapter;
   readonly #now: () => number;
+  readonly #exitLifecycle: LabProcessExitLifecycle;
+  readonly #onProcessExit = () => this.emergencyClose();
   #resources: Promise<LabResources> | null = null;
   #close: Promise<void> | null = null;
+  #directory: string | null = null;
+  #db: ReturnType<typeof openVolliDb> | null = null;
+  #adapter: OpenCodeNativeAdapter | null = null;
+  #runtime: ReturnType<typeof createDesktopSessionRuntime> | null = null;
+  #emergencyClosed = false;
   #closed = false;
 
   constructor(options: LabSessionRpcServerOptions) {
     this.#repoRoot = resolve(options.repoRoot);
     this.#createAdapter = options.createAdapter ?? (() => createOpenCodeNativeAdapter());
     this.#now = options.now ?? Date.now;
+    this.#exitLifecycle = options.exitLifecycle ?? processExitLifecycle;
+    this.#exitLifecycle.add(this.#onProcessExit);
   }
 
   async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -94,11 +116,47 @@ export class LabSessionRpcServer {
 
   async close(): Promise<void> {
     this.#closed = true;
-    this.#close ??= this.#closeResources();
+    this.#close ??= this.#closeResources().finally(() => this.#removeExitListener());
     return this.#close;
   }
 
+  /**
+   * Process-exit handlers cannot await. Start teardown of the provider child,
+   * close the SQLite handle, and synchronously remove only this Lab's owned
+   * temporary directory. Normal shutdown remains the complete async path.
+   */
+  emergencyClose(): void {
+    if (this.#emergencyClosed) return;
+    this.#emergencyClosed = true;
+    this.#closed = true;
+    this.#removeExitListener();
+
+    if (this.#runtime) {
+      void this.#runtime.close().catch(() => undefined);
+    }
+    if (this.#adapter) {
+      try {
+        void this.#adapter.close().catch(() => undefined);
+      } catch {
+        // A process is already exiting; retain the directory cleanup guarantee.
+      }
+    }
+    try {
+      this.#db?.close();
+    } catch {
+      // SQLite may already be closed by the normal path.
+    }
+    if (this.#directory && isOwnedLabDirectory(this.#directory)) {
+      try {
+        rmSync(this.#directory, { recursive: true, force: true });
+      } catch {
+        // Best effort only: process exit will release any remaining OS handles.
+      }
+    }
+  }
+
   async #closeResources(): Promise<void> {
+    if (this.#emergencyClosed) return;
     const pending = this.#resources;
     if (!pending) return;
     let resources: LabResources | null = null;
@@ -119,6 +177,10 @@ export class LabSessionRpcServer {
     }
   }
 
+  #removeExitListener(): void {
+    this.#exitLifecycle.remove(this.#onProcessExit);
+  }
+
   async #ensureResources(): Promise<LabResources> {
     if (!this.#resources) this.#resources = this.#createResources();
     return this.#resources;
@@ -126,11 +188,13 @@ export class LabSessionRpcServer {
 
   async #createResources(): Promise<LabResources> {
     const directory = await mkdtemp(join(tmpdir(), "volli-lab-session-rpc-"));
+    this.#directory = directory;
     let db: ReturnType<typeof openVolliDb> | null = null;
     try {
       db = openVolliDb(join(directory, "volli.db"), {
         nativeBinding: nodeAbiBindingPath() ?? undefined,
       });
+      this.#db = db;
       const now = this.#now();
       insertProject(db, {
         id: LAB_PROJECT_ID,
@@ -145,18 +209,21 @@ export class LabSessionRpcServer {
         updatedAt: now,
       });
       const adapter = this.#createAdapter();
+      this.#adapter = adapter;
       const transcriptDirectory = join(directory, "artifacts");
       await mkdir(transcriptDirectory, { recursive: true, mode: 0o700 });
+      const runtime = createDesktopSessionRuntime({
+        db,
+        transcriptDirectory,
+        adapters: [adapter],
+        now: this.#now,
+      });
+      this.#runtime = runtime;
       return {
         directory,
         db,
         adapter,
-        runtime: createDesktopSessionRuntime({
-          db,
-          transcriptDirectory,
-          adapters: [adapter],
-          now: this.#now,
-        }),
+        runtime,
         router: createSessionRouter(),
         diagnostics: new RpcDiagnosticLog(),
       };
@@ -166,6 +233,14 @@ export class LabSessionRpcServer {
       throw error;
     }
   }
+}
+
+function isOwnedLabDirectory(directory: string): boolean {
+  const temporaryDirectory = resolve(tmpdir());
+  return (
+    dirname(directory) === temporaryDirectory &&
+    directory.startsWith(join(temporaryDirectory, "volli-lab-session-rpc-"))
+  );
 }
 
 /** Returns a safe rejection reason, or null for same-origin loopback traffic. */

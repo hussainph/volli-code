@@ -200,7 +200,7 @@ export default defineConfig(({ mode }) => ({
       // ALONGSIDE `pnpm dev`; `strictPort` above still applies, so a clash
       // fails loudly instead of silently landing somewhere else.
       lab: {
-        command: "vp dev --port 5174 --open /lab/",
+        command: "vp dev --mode lab --port 5174 --open /lab/",
         cache: false,
       },
     },

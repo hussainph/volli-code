@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { LAB_SESSION_RPC_PATH, LabSessionRpcServer, labRequestSecurityError } from "./session-rpc";
+import {
+  LAB_SESSION_RPC_PATH,
+  type LabProcessExitLifecycle,
+  LabSessionRpcServer,
+  labRequestSecurityError,
+} from "./session-rpc";
 
 const labDirectories = async () =>
   (await readdir(tmpdir())).filter((entry) => entry.startsWith("volli-lab-session-rpc-"));
@@ -41,7 +46,8 @@ describe("Lab Session RPC server", () => {
 
   it("initializes an isolated database only on its first valid request and removes it on close", async () => {
     const before = new Set(await labDirectories());
-    const lab = new LabSessionRpcServer({ repoRoot: process.cwd() });
+    const lifecycle = new TestExitLifecycle();
+    const lab = new LabSessionRpcServer({ repoRoot: process.cwd(), exitLifecycle: lifecycle });
     servers.push(lab);
     const server = createServer((req, res) => {
       void lab.handle(req, res);
@@ -78,8 +84,48 @@ describe("Lab Session RPC server", () => {
       expect(created).toMatch(/^volli-lab-session-rpc-/);
       await lab.close();
       expect(await labDirectories()).not.toContain(created);
+      expect(lifecycle.size).toBe(0);
     } finally {
       await closeServer(server);
+    }
+  });
+
+  it("synchronously reaps only its owned directory when the dev process exits", async () => {
+    const before = new Set(await labDirectories());
+    const firstLifecycle = new TestExitLifecycle();
+    const secondLifecycle = new TestExitLifecycle();
+    const first = new LabSessionRpcServer({
+      repoRoot: process.cwd(),
+      exitLifecycle: firstLifecycle,
+    });
+    const second = new LabSessionRpcServer({
+      repoRoot: process.cwd(),
+      exitLifecycle: secondLifecycle,
+    });
+    servers.push(first, second);
+    const firstServer = createServer((req, res) => {
+      void first.handle(req, res);
+    });
+    const secondServer = createServer((req, res) => {
+      void second.handle(req, res);
+    });
+    await Promise.all([listen(firstServer), listen(secondServer)]);
+    try {
+      await Promise.all([createSession(firstServer), createSession(secondServer)]);
+      const created = (await labDirectories()).filter((entry) => !before.has(entry));
+      expect(created).toHaveLength(2);
+
+      firstLifecycle.exit();
+
+      const remaining = (await labDirectories()).filter((entry) => !before.has(entry));
+      expect(remaining).toHaveLength(1);
+      expect(firstLifecycle.size).toBe(0);
+      expect(secondLifecycle.size).toBe(1);
+
+      await second.close();
+      expect(secondLifecycle.size).toBe(0);
+    } finally {
+      await Promise.all([closeServer(firstServer), closeServer(secondServer)]);
     }
   });
 
@@ -143,6 +189,48 @@ function sessionIdFromResponse(value: unknown): string {
   const sessionId = payload.sessionId;
   if (typeof sessionId !== "string") throw new Error("Expected a Session id from tRPC");
   return sessionId;
+}
+
+async function createSession(server: ReturnType<typeof createServer>): Promise<void> {
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Expected a TCP test server");
+  const response = await fetch(
+    `http://127.0.0.1:${address.port}${LAB_SESSION_RPC_PATH}/session.command`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        commandId: `lab-create-${address.port}`,
+        command: {
+          kind: "session.create",
+          projectId: "lab-project",
+          ticketId: null,
+          title: "Lab scratch",
+        },
+      }),
+    },
+  );
+  expect(response.status).toBe(200);
+}
+
+class TestExitLifecycle implements LabProcessExitLifecycle {
+  readonly #listeners = new Set<() => void>();
+
+  get size(): number {
+    return this.#listeners.size;
+  }
+
+  add(listener: () => void): void {
+    this.#listeners.add(listener);
+  }
+
+  remove(listener: () => void): void {
+    this.#listeners.delete(listener);
+  }
+
+  exit(): void {
+    for (const listener of this.#listeners) listener();
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
