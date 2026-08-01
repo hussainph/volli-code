@@ -246,6 +246,7 @@ function labSessionRpcPlugin(repoRoot: string) {
         );
       });
       const close = () => {
+        for (const signal of terminationSignals) process.off(signal, close);
         // Vite does not await an HTTP `close` listener. Reap the already-loaded
         // backend synchronously before its process can finish handling SIGINT.
         if (labInstance) {
@@ -257,6 +258,8 @@ function labSessionRpcPlugin(repoRoot: string) {
           );
         }
       };
+      const terminationSignals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+      for (const signal of terminationSignals) process.once(signal, close);
       server.httpServer?.once("close", close);
     },
   };
