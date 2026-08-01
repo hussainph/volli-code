@@ -282,6 +282,165 @@ describe("OpenCodeNativeAdapter", () => {
     ]);
   });
 
+  it("coalesces OpenCode part traffic into one safe finalized assistant message", async () => {
+    const { adapter } = composition([
+      {
+        id: "user-message",
+        type: "message.updated",
+        properties: {
+          sessionID: "native-session-1",
+          info: { id: "provider-user", role: "user" },
+        },
+      },
+      {
+        id: "user-part",
+        type: "message.part.updated",
+        properties: {
+          sessionID: "native-session-1",
+          part: {
+            id: "user-text",
+            messageID: "provider-user",
+            type: "text",
+            text: "Reply with exactly READY.",
+          },
+        },
+      },
+      {
+        id: "assistant-message",
+        type: "message.updated",
+        properties: {
+          sessionID: "native-session-1",
+          info: { id: "provider-assistant", role: "assistant" },
+        },
+      },
+      {
+        id: "reasoning-part",
+        type: "message.part.updated",
+        properties: {
+          sessionID: "native-session-1",
+          part: {
+            id: "reasoning",
+            messageID: "provider-assistant",
+            type: "reasoning",
+            text: "think",
+          },
+        },
+      },
+      {
+        id: "reasoning-delta",
+        type: "message.part.delta",
+        properties: {
+          sessionID: "native-session-1",
+          messageID: "provider-assistant",
+          partID: "reasoning",
+          field: "text",
+          delta: "ing",
+        },
+      },
+      {
+        id: "reasoning-delta",
+        type: "message.part.delta",
+        properties: {
+          sessionID: "native-session-1",
+          messageID: "provider-assistant",
+          partID: "reasoning",
+          field: "text",
+          delta: "ing",
+        },
+      },
+      {
+        id: "text-part",
+        type: "message.part.updated",
+        properties: {
+          sessionID: "native-session-1",
+          part: {
+            id: "answer",
+            messageID: "provider-assistant",
+            type: "text",
+            text: "REA",
+          },
+        },
+      },
+      {
+        id: "text-delta",
+        type: "message.part.delta",
+        properties: {
+          sessionID: "native-session-1",
+          messageID: "provider-assistant",
+          partID: "answer",
+          field: "text",
+          delta: "DY",
+        },
+      },
+      {
+        id: "tool-running",
+        type: "message.part.updated",
+        properties: {
+          sessionID: "native-session-1",
+          part: {
+            id: "tool-part",
+            messageID: "provider-assistant",
+            type: "tool",
+            tool: "read",
+            callID: "call-1",
+            state: { status: "running", input: { token: "must-not-leak" } },
+          },
+        },
+      },
+      {
+        id: "tool-completed",
+        type: "message.part.updated",
+        properties: {
+          sessionID: "native-session-1",
+          part: {
+            id: "tool-part",
+            messageID: "provider-assistant",
+            type: "tool",
+            tool: "read",
+            callID: "call-1",
+            state: { status: "completed", output: "must-not-leak" },
+          },
+        },
+      },
+      { id: "idle-final", type: "session.idle", properties: { sessionID: "native-session-1" } },
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(observations.filter(({ kind }) => kind === "transcript.message")).toEqual([
+      expect.objectContaining({
+        message: {
+          id: "provider-assistant",
+          role: "assistant",
+          parts: [
+            { type: "reasoning", text: "thinking" },
+            { type: "text", text: "READY" },
+            {
+              type: "dynamic-tool",
+              toolName: "read",
+              toolCallId: "call-1",
+              state: "output-available",
+              input: null,
+              output: null,
+            },
+          ],
+        },
+      }),
+    ]);
+    expect(observations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "idle-final", kind: "turn.completed" }),
+      ]),
+    );
+    expect(JSON.stringify(observations)).not.toContain("must-not-leak");
+    expect(JSON.stringify(observations)).not.toContain("provider-user");
+  });
+
   it("normalizes provider models, variants, MCP state, tools, and safe catalog metadata", async () => {
     const { adapter, network } = composition();
     const originalRequest = network.request.bind(network);
