@@ -398,6 +398,7 @@ class OpenCodeBinding implements BindingHandle {
   #released = false;
   #cursor: SessionNativeDetail | null = null;
   #importNativeHistory: boolean;
+  #turnStatus: "busy" | "idle" | null = null;
 
   constructor(options: BindingOptions) {
     this.#server = options.server;
@@ -848,20 +849,26 @@ class OpenCodeBinding implements BindingHandle {
         ? "idle"
         : (objectString(nested(sessionStatus, "status") ?? sessionStatus, "type") ??
           objectString(sessionStatus, "type"));
-    if (status === "busy")
+    if (status === "busy") {
+      if (this.#turnStatus === status) return null;
+      this.#turnStatus = status;
       return {
         id,
         kind: "turn.started",
         occurredAt: this.#now(),
         turnId: `turn:${this.#nativeSessionId}`,
       };
-    if (status === "idle")
+    }
+    if (status === "idle") {
+      if (this.#turnStatus === status) return null;
+      this.#turnStatus = status;
       return {
         id,
         kind: "turn.completed",
         occurredAt: this.#now(),
         turnId: `turn:${this.#nativeSessionId}`,
       };
+    }
     if (status === "retry") {
       return {
         id,
