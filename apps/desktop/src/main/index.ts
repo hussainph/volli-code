@@ -36,6 +36,9 @@ import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
 import { listProjects } from "./db/projects-repo";
 import { createDesktopSessionEngine } from "./session-control";
+import { createDesktopSessionRuntime } from "./session-runtime";
+import { registerSessionRpcIpcHandlers } from "./session-rpc-ipc";
+import { createOpenCodeNativeAdapter } from "@volli/opencode-adapter";
 import { listRegisteredHarnesses } from "./db/harness-registry-repo";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
@@ -387,6 +390,21 @@ app.whenReady().then(async () => {
     console.error("[volli] failed to open database:", dbHandle.error);
   }
   const sessionEngine = dbHandle.ok ? createDesktopSessionEngine(dbHandle.db) : null;
+  // Native Session RPC shares the same durable Session Engine as terminal and
+  // planner paths. The OpenCode process stays dormant until a caller explicitly
+  // attaches its native profile; registering the transport never launches it.
+  const nativeAdapter = dbHandle.ok ? createOpenCodeNativeAdapter() : null;
+  const sessionRuntime =
+    dbHandle.ok && sessionEngine !== null && nativeAdapter !== null
+      ? createDesktopSessionRuntime({
+          db: dbHandle.db,
+          transcriptDirectory: join(app.getPath("userData"), "session-transcripts"),
+          adapters: [nativeAdapter],
+          sessionEngine,
+        })
+      : null;
+  const sessionRpc =
+    sessionRuntime === null ? null : registerSessionRpcIpcHandlers({ runtime: sessionRuntime });
   // Boot recovery: no PTY survives a relaunch. Close only stale local terminal
   // attachments; the durable Session itself intentionally remains open.
   if (dbHandle.ok && sessionEngine !== null) {
@@ -1029,6 +1047,14 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow(ptyManager, currentFirstPaint());
     }
+  });
+
+  app.on("before-quit", () => {
+    void Promise.all([sessionRpc?.close(), sessionRuntime?.close(), nativeAdapter?.close()]).catch(
+      (error: unknown) => {
+        console.error("[volli] failed to close native Session RPC:", errorMessage(error));
+      },
+    );
   });
 });
 
