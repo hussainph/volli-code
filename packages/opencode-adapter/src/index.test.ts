@@ -287,6 +287,47 @@ describe("OpenCodeNativeAdapter", () => {
     ]);
   });
 
+  it("emits one turn fact per native status transition", async () => {
+    const { adapter } = composition([
+      {
+        id: "busy-first",
+        type: "session.status",
+        properties: { sessionID: "native-session-1", status: { type: "busy" } },
+      },
+      {
+        id: "busy-repeat",
+        type: "session.status",
+        properties: { sessionID: "native-session-1", status: { type: "busy" } },
+      },
+      {
+        id: "idle-first",
+        type: "session.status",
+        properties: { sessionID: "native-session-1", status: { type: "idle" } },
+      },
+      {
+        id: "idle-repeat",
+        type: "session.idle",
+        properties: { sessionID: "native-session-1" },
+      },
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(
+      observations
+        .filter(({ kind }) => kind === "turn.started" || kind === "turn.completed")
+        .map(({ id, kind }) => ({ id, kind })),
+    ).toEqual([
+      { id: "busy-first", kind: "turn.started" },
+      { id: "idle-first", kind: "turn.completed" },
+    ]);
+  });
+
   it("coalesces OpenCode part traffic into one safe finalized assistant message", async () => {
     const { adapter } = composition([
       {
