@@ -25,6 +25,10 @@ import type {
   SessionNativeReference,
 } from "@volli/shared";
 type UIMessage = Extract<HarnessCommand, { kind: "message.submit" }>["message"];
+type OpenCodeStatusObservation = Extract<
+  HarnessObservation,
+  { kind: "turn.started" | "turn.completed" | "attention.raised" }
+>;
 
 const DIRECTORY_QUERY = "directory";
 const ADAPTER_ID = "opencode";
@@ -386,6 +390,7 @@ interface PendingOpenCodeReconciliation {
   readonly seenIds: readonly string[];
   readonly completesNativeHistoryImport: boolean;
   readonly turnStatus: "busy" | "idle" | null;
+  readonly statusSignature: string | null;
 }
 
 class OpenCodeBinding implements BindingHandle {
@@ -408,6 +413,7 @@ class OpenCodeBinding implements BindingHandle {
   #cursor: SessionNativeDetail | null = null;
   #importNativeHistory: boolean;
   #turnStatus: "busy" | "idle" | null = null;
+  #statusSignature: string | null = null;
   #pendingReconciliation: PendingOpenCodeReconciliation | null = null;
   #reconciliationSequence = 0;
   #reconciling = false;
@@ -582,10 +588,15 @@ class OpenCodeBinding implements BindingHandle {
       if (observation) push(observation);
     }
     const statusObservation = this.#statusObservation(`reconcile:status:${token}`, status.body);
-    const turnStatus =
-      statusObservation && push(statusObservation)
-        ? turnStatusForObservation(statusObservation)
-        : null;
+    let statusSignature: string | null = null;
+    let turnStatus: "busy" | "idle" | null = null;
+    if (statusObservation) {
+      const candidate = statusSignatureForObservation(statusObservation);
+      if ((candidate === null || candidate !== this.#statusSignature) && push(statusObservation)) {
+        statusSignature = candidate;
+        turnStatus = turnStatusForObservation(statusObservation);
+      }
+    }
     if (observations.length === 0 && !completesNativeHistoryImport && turnStatus === null) {
       return { cursor: cursor ?? this.#cursor ?? { eventId: null }, observations, receipts: [] };
     }
@@ -600,6 +611,7 @@ class OpenCodeBinding implements BindingHandle {
       seenIds: [...seenIds],
       completesNativeHistoryImport,
       turnStatus,
+      statusSignature,
     };
     return reconciliation;
   }
@@ -608,6 +620,7 @@ class OpenCodeBinding implements BindingHandle {
     for (const id of pending.seenIds) this.#seen.add(id);
     if (pending.completesNativeHistoryImport) this.#importNativeHistory = false;
     if (pending.turnStatus) this.#turnStatus = pending.turnStatus;
+    if (pending.statusSignature) this.#statusSignature = pending.statusSignature;
   }
 
   async release(_reason: ReleaseReason): Promise<void> {
@@ -766,9 +779,15 @@ class OpenCodeBinding implements BindingHandle {
         ) {
           await this.#flushMessages(event.id);
         }
-        if (observation && (await this.#emit(observation))) {
+        const statusSignature = observation ? statusSignatureForObservation(observation) : null;
+        if (
+          observation &&
+          (statusSignature === null || statusSignature !== this.#statusSignature) &&
+          (await this.#emit(observation))
+        ) {
           const turnStatus = turnStatusForObservation(observation);
           if (turnStatus) this.#turnStatus = turnStatus;
+          if (statusSignature) this.#statusSignature = statusSignature;
         }
         return;
       }
@@ -914,7 +933,7 @@ class OpenCodeBinding implements BindingHandle {
     id: string,
     raw: unknown,
     eventType = "session.status",
-  ): HarnessObservation | null {
+  ): OpenCodeStatusObservation | null {
     if (eventType === "session.error") {
       const failure = safeOpenCodeError(raw);
       return {
@@ -1436,10 +1455,19 @@ function isReconciliationAcknowledgement(
   );
 }
 
-function turnStatusForObservation(observation: HarnessObservation): "busy" | "idle" | null {
+function turnStatusForObservation(observation: OpenCodeStatusObservation): "busy" | "idle" | null {
   if (observation.kind === "turn.started") return "busy";
   if (observation.kind === "turn.completed") return "idle";
   return null;
+}
+
+function statusSignatureForObservation(observation: OpenCodeStatusObservation): string | null {
+  if (observation.kind === "turn.started") return "busy";
+  if (observation.kind === "turn.completed") return "idle";
+  if (observation.attention.kind !== "transport_retrying") return null;
+  return `retry:${observation.attention.detail ?? ""}:${JSON.stringify(
+    observation.attention.diagnostic ?? null,
+  )}`;
 }
 
 function catalogItems(
