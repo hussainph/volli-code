@@ -125,8 +125,11 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
     this.#binaryPath = options.binaryPath ?? "opencode";
     this.#now = options.now ?? Date.now;
     this.#sleep = options.sleep ?? defaultSleep;
-    this.#healthRetryAttempts = options.healthRetryAttempts ?? 8;
-    this.#healthRetryDelayMs = options.healthRetryDelayMs ?? 50;
+    // A cold OpenCode process routinely needs longer than a few hundred
+    // milliseconds to bind and initialize its provider catalog. Keep the
+    // default startup budget at ten seconds; tests can inject shorter bounds.
+    this.#healthRetryAttempts = options.healthRetryAttempts ?? 100;
+    this.#healthRetryDelayMs = options.healthRetryDelayMs ?? 100;
     this.#stopTimeoutMs = options.stopTimeoutMs ?? 2_000;
   }
 

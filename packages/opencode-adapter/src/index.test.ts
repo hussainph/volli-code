@@ -598,6 +598,45 @@ describe("OpenCodeNativeAdapter", () => {
     expect(delays).toEqual([7, 7]);
   });
 
+  it("gives a cold server a multi-second default startup budget", async () => {
+    const process = new FakeProcess();
+    const network = new FakeNetwork();
+    const request = network.request.bind(network);
+    let transientFailures = 9;
+    network.request = async (input) => {
+      if (input.path.startsWith("/global/health") && transientFailures-- > 0) {
+        throw new Error("server is still starting");
+      }
+      return request(input);
+    };
+    const delays: number[] = [];
+    const adapter = createOpenCodeNativeAdapter({
+      process,
+      network,
+      sleep: async (milliseconds) => {
+        delays.push(milliseconds);
+      },
+    });
+
+    await adapter.attach(spec(), { emit: async () => undefined });
+
+    expect(delays).toEqual(Array.from({ length: 9 }, () => 100));
+    expect(network.requests.filter(({ path }) => path.startsWith("/global/health"))).toHaveLength(
+      1,
+    );
+  });
+
+  it("uses the default health delay between cold-start probes", async () => {
+    const { adapter, network } = composition();
+    network.healthStatuses = [503, 200];
+
+    await adapter.attach(spec(), { emit: async () => undefined });
+
+    expect(network.requests.filter(({ path }) => path.startsWith("/global/health"))).toHaveLength(
+      2,
+    );
+  });
+
   it("surfaces a startup failure and permits a later singleton retry", async () => {
     const { adapter, process } = composition();
     process.spawnFailure = new Error("port already in use");
@@ -981,7 +1020,12 @@ describe("OpenCodeNativeAdapter", () => {
     transportFailure.network.request = async () => {
       throw new Error("offline");
     };
-    const unavailable = await transportFailure.adapter.probe(
+    const unavailableAdapter = createOpenCodeNativeAdapter({
+      process: transportFailure.process,
+      network: transportFailure.network,
+      healthRetryAttempts: 1,
+    });
+    const unavailable = await unavailableAdapter.probe(
       { profileId: "native", directory: "/workspace/one" },
       new AbortController().signal,
     );
