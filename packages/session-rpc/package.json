@@ -15,7 +15,6 @@
     "test:coverage": "vp test run --coverage"
   },
   "dependencies": {
-    "@trpc/client": "^11.18.0",
     "@trpc/server": "^11.18.0",
     "@volli/session-engine": "workspace:*",
     "zod": "^4.4.3"
