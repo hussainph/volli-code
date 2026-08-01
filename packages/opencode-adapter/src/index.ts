@@ -743,7 +743,7 @@ class OpenCodeBinding implements BindingHandle {
   }
 
   async #handleEvent(event: OpenCodeSseEvent, deferred = false): Promise<void> {
-    const sessionId = objectString(event.properties, "sessionID");
+    const sessionId = eventSessionId(event.properties);
     if (sessionId !== this.#nativeSessionId) return;
     if (
       !deferred &&
@@ -1491,7 +1491,7 @@ function mergeOpenCodePart(previous: unknown, next: Record<string, unknown>): un
  */
 function openCodeToolMetadata(state: Record<string, unknown>): ToolMetadata | undefined {
   const metadata: Record<string, unknown> = {};
-  for (const key of ["raw", "metadata", "time"] as const) {
+  for (const key of ["raw", "metadata", "time", "attachments"] as const) {
     if (Object.hasOwn(state, key) && state[key] !== undefined) metadata[key] = state[key];
   }
   return Object.keys(metadata).length > 0 ? ({ opencode: metadata } as ToolMetadata) : undefined;
@@ -1813,6 +1813,14 @@ function decodeSseBlock(block: string): readonly OpenCodeSseEvent[] {
   } catch {
     return [];
   }
+}
+
+function eventSessionId(properties: unknown): string | null {
+  return (
+    objectString(properties, "sessionID") ??
+    objectString(nested(properties, "info"), "sessionID") ??
+    objectString(nested(properties, "part"), "sessionID")
+  );
 }
 
 function defaultSleep(milliseconds: number): Promise<void> {
