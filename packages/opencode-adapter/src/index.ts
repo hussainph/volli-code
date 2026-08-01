@@ -374,6 +374,13 @@ interface BindingOptions {
   onRelease: () => void;
 }
 
+interface BufferedOpenCodeMessage {
+  readonly id: string;
+  role: ReturnType<typeof messageRole> | null;
+  readonly partOrder: string[];
+  readonly parts: Map<string, unknown>;
+}
+
 class OpenCodeBinding implements BindingHandle {
   readonly native;
   readonly #server: ServerLease;
@@ -383,11 +390,14 @@ class OpenCodeBinding implements BindingHandle {
   readonly #now: () => number;
   readonly #onRelease: () => void;
   readonly #seen = new Set<string>();
+  readonly #streamEventsSeen = new Set<string>();
+  readonly #messages = new Map<string, BufferedOpenCodeMessage>();
   readonly #questions = new Map<string, readonly OpenCodeQuestion[]>();
   readonly #streamAbort = new AbortController();
   #sink: ObservationSink | null = null;
   #released = false;
   #cursor: SessionNativeDetail | null = null;
+  #importNativeHistory: boolean;
 
   constructor(options: BindingOptions) {
     this.#server = options.server;
@@ -397,6 +407,7 @@ class OpenCodeBinding implements BindingHandle {
     this.#now = options.now;
     this.#onRelease = options.onRelease;
     this.native = { id: options.nativeSessionId, detail: null };
+    this.#importNativeHistory = options.spec.continuity === "native_resume";
   }
 
   async start(sink: ObservationSink): Promise<void> {
@@ -488,12 +499,21 @@ class OpenCodeBinding implements BindingHandle {
       this.#request("/question", "GET").catch(() => ({ status: 404, body: [] })),
     ]);
     const observations: HarnessObservation[] = [];
+    const importNativeHistory = this.#importNativeHistory;
     for (const message of messageResponses(messages.body)) {
-      const id = objectString(nested(message, "info") ?? message, "id");
+      const info = nested(message, "info") ?? message;
+      const id = objectString(info, "id");
       if (id && !this.#seen.has(reconciledMessageKey(id))) {
-        this.#pushUnique(observations, this.#messageObservation(`message:${id}`, message));
+        const role = messageRole(info);
+        this.#messages.delete(id);
+        this.#seen.add(reconciledMessageKey(id));
+        if (role !== "user" || importNativeHistory) {
+          const observation = this.#messageObservation(`message:${id}`, id, role, message);
+          if (observation.message.parts.length > 0) this.#pushUnique(observations, observation);
+        }
       }
     }
+    this.#importNativeHistory = false;
     for (const permission of arrayBody(permissionResponse.body).filter((candidate) =>
       hasSessionId(candidate, this.#nativeSessionId),
     )) {
@@ -527,6 +547,7 @@ class OpenCodeBinding implements BindingHandle {
     this.#released = true;
     this.#streamAbort.abort();
     this.#sink = null;
+    this.#messages.clear();
     this.#onRelease();
   }
 
@@ -535,8 +556,9 @@ class OpenCodeBinding implements BindingHandle {
     try {
       for await (const event of stream) {
         if (this.#released) return;
-        const observation = this.#eventObservation(event);
-        if (observation) await this.#emit(observation);
+        if (this.#streamEventsSeen.has(event.id)) continue;
+        await this.#handleEvent(event);
+        this.#streamEventsSeen.add(event.id);
       }
     } catch (error) {
       disconnected = error instanceof Error ? error.message : "OpenCode event stream disconnected";
@@ -547,6 +569,11 @@ class OpenCodeBinding implements BindingHandle {
   }
 
   async #emitDisconnected(disconnectDetail: string | null): Promise<void> {
+    try {
+      await this.#flushMessages(`opencode:sse-final:${this.#nativeSessionId}`);
+    } catch {
+      // Continue to the independently identified attention and terminal facts.
+    }
     try {
       await this.#emit({
         id: `opencode:sse-disconnected:${this.#nativeSessionId}`,
@@ -580,7 +607,8 @@ class OpenCodeBinding implements BindingHandle {
   }
 
   async #emit(observation: HarnessObservation): Promise<void> {
-    if (this.#isSeen(observation) || !this.#sink) return;
+    /* v8 ignore next -- a released binding exits its pump before another observation can enter. */
+    if (!this.#sink) return;
     await this.#sink.emit(observation);
     this.#remember(observation);
     this.#cursor = observation.cursor ?? { eventId: observation.id };
@@ -601,41 +629,147 @@ class OpenCodeBinding implements BindingHandle {
     this.#seen.add(observation.id);
   }
 
-  #eventObservation(event: OpenCodeSseEvent): HarnessObservation | null {
+  async #handleEvent(event: OpenCodeSseEvent): Promise<void> {
     const sessionId = objectString(event.properties, "sessionID");
-    if (sessionId !== this.#nativeSessionId) return null;
+    if (sessionId !== this.#nativeSessionId) return;
     switch (event.type) {
-      case "message.updated": {
-        const message = event.properties;
-        const messageId = objectString(nested(message, "info") ?? message, "id");
-        if (messageId) this.#seen.add(reconciledMessageKey(messageId));
-        return this.#messageObservation(event.id, message);
-      }
+      case "message.updated":
+        this.#bufferMessage(event.properties);
+        return;
       case "message.part.updated":
+        this.#bufferPart(event.properties);
+        return;
       case "message.part.delta":
-        return this.#partObservation(event);
+        this.#applyPartDelta(event.properties);
+        return;
       case "session.status":
       case "session.idle":
-      case "session.error":
-        return this.#statusObservation(event.id, event.properties, event.type);
+      case "session.error": {
+        const observation = this.#statusObservation(event.id, event.properties, event.type);
+        if (
+          event.type === "session.error" ||
+          (observation && observation.kind === "turn.completed")
+        ) {
+          await this.#flushMessages(event.id);
+        }
+        if (observation) await this.#emit(observation);
+        return;
+      }
       case "permission.asked":
-      case "question.asked":
-        return this.#interactionObservation(event.type, event.properties, event.id);
+      case "question.asked": {
+        const observation = this.#interactionObservation(event.type, event.properties, event.id);
+        if (observation) await this.#emit(observation);
+        return;
+      }
       case "permission.replied":
       case "question.replied":
-      case "question.rejected":
-        return this.#resolvedInteractionObservation(event);
+      case "question.rejected": {
+        const observation = this.#resolvedInteractionObservation(event);
+        if (observation) await this.#emit(observation);
+        return;
+      }
       default:
-        return null;
+        return;
     }
   }
 
-  #messageObservation(id: string, raw: unknown): HarnessObservation {
+  #bufferMessage(raw: unknown): void {
     const info = nested(raw, "info") ?? raw;
-    const messageId = objectString(info, "id") ?? id;
-    const role = messageRole(info);
+    const messageId = objectString(info, "id");
+    if (!messageId) return;
+    const message = this.#message(messageId);
+    const role = explicitMessageRole(info);
+    if (role) message.role = role;
+    if (!isRecord(raw) || !Array.isArray(raw.parts)) return;
+    message.parts.clear();
+    message.partOrder.length = 0;
+    raw.parts.forEach((part, index) => {
+      const partId = objectString(part, "id") ?? `snapshot:${index}`;
+      message.partOrder.push(partId);
+      message.parts.set(partId, part);
+    });
+  }
+
+  #bufferPart(raw: unknown): void {
+    const part = nested(raw, "part");
+    if (!part) return;
+    const messageId = objectString(raw, "messageID") ?? objectString(part, "messageID");
+    const partId = objectString(part, "id");
+    if (!messageId || !partId) return;
+    const message = this.#message(messageId);
+    if (!message.parts.has(partId)) message.partOrder.push(partId);
+    message.parts.set(partId, part);
+  }
+
+  #applyPartDelta(raw: unknown): void {
+    const messageId = objectString(raw, "messageID");
+    const partId = objectString(raw, "partID");
+    const field = objectString(raw, "field");
+    const delta = objectString(raw, "delta");
+    if (!messageId || !partId || field !== "text" || delta === null) return;
+    const message = this.#messages.get(messageId);
+    const part = message?.parts.get(partId);
+    if (!message || !isRecord(part)) return;
+    message.parts.set(partId, {
+      ...part,
+      [field]: `${objectString(part, field) ?? ""}${delta}`,
+    });
+  }
+
+  #message(messageId: string): BufferedOpenCodeMessage {
+    let message = this.#messages.get(messageId);
+    if (!message) {
+      message = { id: messageId, role: null, partOrder: [], parts: new Map() };
+      this.#messages.set(messageId, message);
+    }
+    return message;
+  }
+
+  async #flushMessages(triggerId: string): Promise<void> {
+    for (const [messageId, buffered] of this.#messages) {
+      if (!buffered.role) {
+        this.#messages.delete(messageId);
+        continue;
+      }
+      if (buffered.role === "user") {
+        this.#seen.add(reconciledMessageKey(messageId));
+        this.#messages.delete(messageId);
+        continue;
+      }
+      const parts = buffered.partOrder.flatMap((partId) =>
+        openCodePart(buffered.parts.get(partId)),
+      );
+      if (parts.length === 0) {
+        this.#seen.add(reconciledMessageKey(messageId));
+        this.#messages.delete(messageId);
+        continue;
+      }
+      const message: UIMessage = { id: messageId, role: buffered.role, parts };
+      await this.#emit({
+        id: transcriptObservationId(message),
+        kind: "transcript.message",
+        occurredAt: this.#now(),
+        cursor: { eventId: triggerId },
+        threadId: `thread:${this.#spec.sessionId}:root`,
+        branchId: `branch:${this.#spec.sessionId}:main`,
+        attemptId: `attempt:${messageId}`,
+        turnId: null,
+        message,
+      });
+      this.#seen.add(reconciledMessageKey(messageId));
+      this.#messages.delete(messageId);
+    }
+  }
+
+  #messageObservation(
+    id: string,
+    messageId: string,
+    role: ReturnType<typeof messageRole>,
+    raw: unknown,
+  ): Extract<HarnessObservation, { kind: "transcript.message" }> {
+    const message: UIMessage = { id: messageId, role, parts: messageParts(raw) };
     return {
-      id,
+      id: transcriptObservationId(message),
       kind: "transcript.message",
       occurredAt: this.#now(),
       cursor: { eventId: id },
@@ -643,25 +777,7 @@ class OpenCodeBinding implements BindingHandle {
       branchId: `branch:${this.#spec.sessionId}:main`,
       attemptId: `attempt:${messageId}`,
       turnId: null,
-      message: { id: messageId, role, parts: messageParts(raw) },
-    };
-  }
-
-  #partObservation(event: OpenCodeSseEvent): HarnessObservation {
-    const part = nested(event.properties, "part") ?? event.properties;
-    const messageId =
-      objectString(event.properties, "messageID") ?? objectString(part, "messageID") ?? event.id;
-    const parts = messageParts(part, objectString(event.properties, "delta"));
-    return {
-      id: event.id,
-      kind: "transcript.message",
-      occurredAt: this.#now(),
-      cursor: { eventId: event.id },
-      threadId: `thread:${this.#spec.sessionId}:root`,
-      branchId: `branch:${this.#spec.sessionId}:main`,
-      attemptId: `attempt:${messageId}`,
-      turnId: null,
-      message: { id: messageId, role: "assistant", parts },
+      message,
     };
   }
 
@@ -902,8 +1018,12 @@ function isSessionNativeDetail(value: unknown): value is SessionNativeDetail {
 }
 
 function messageRole(raw: unknown): "system" | "user" | "assistant" {
+  return explicitMessageRole(raw) ?? "assistant";
+}
+
+function explicitMessageRole(raw: unknown): "system" | "user" | "assistant" | null {
   const role = objectString(raw, "role");
-  return role === "system" || role === "user" || role === "assistant" ? role : "assistant";
+  return role === "system" || role === "user" || role === "assistant" ? role : null;
 }
 
 interface OpenCodeQuestion {
@@ -1055,20 +1175,28 @@ function messageResponses(body: unknown): readonly unknown[] {
  * Tool inputs, outputs, raw pending text, metadata, and errors can contain
  * secrets, so a tool is represented only by its identity and lifecycle state.
  */
-function messageParts(raw: unknown, delta: string | null = null): UIMessage["parts"] {
-  const parts = isRecord(raw) && Array.isArray(raw.parts) ? raw.parts : [];
-  if (parts.length > 0) return parts.flatMap((part) => openCodePart(part));
-  return openCodePart(raw, delta);
+function messageParts(raw: unknown): UIMessage["parts"] {
+  if (!isRecord(raw) || !Array.isArray(raw.parts)) return [];
+  return raw.parts.flatMap((part) => openCodePart(part));
 }
 
-function openCodePart(part: unknown, delta: string | null = null): UIMessage["parts"] {
+function transcriptObservationId(message: UIMessage): string {
+  const digest = createHash("sha256")
+    .update("volli:opencode:transcript:v1\0")
+    .update(JSON.stringify(message))
+    .digest("hex")
+    .slice(0, 24);
+  return `message:${message.id}:${digest}`;
+}
+
+function openCodePart(part: unknown): UIMessage["parts"] {
   const type = objectString(part, "type");
   if (type === "text") {
-    const text = objectString(part, "text") ?? delta;
+    const text = objectString(part, "text");
     return text === null ? [] : [{ type: "text", text }];
   }
   if (type === "reasoning") {
-    const text = objectString(part, "text") ?? delta;
+    const text = objectString(part, "text");
     return text === null ? [] : [{ type: "reasoning", text }];
   }
   if (type !== "tool") return [];

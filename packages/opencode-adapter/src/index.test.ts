@@ -215,7 +215,12 @@ describe("OpenCodeNativeAdapter", () => {
         type: "message.part.updated",
         properties: {
           sessionID: "native-session-1",
-          part: { type: "text", messageID: "native-message-1", text: "hello" },
+          part: {
+            id: "native-part-1",
+            type: "text",
+            messageID: "native-message-1",
+            text: "hello",
+          },
         },
       },
       {
@@ -223,6 +228,7 @@ describe("OpenCodeNativeAdapter", () => {
         type: "session.status",
         properties: { sessionID: "native-session-1", status: { type: "busy" } },
       },
+      { id: "e-idle", type: "session.idle", properties: { sessionID: "native-session-1" } },
       {
         id: "e-permission",
         type: "permission.asked",
@@ -244,12 +250,11 @@ describe("OpenCodeNativeAdapter", () => {
 
     expect(observations).toEqual([
       expect.objectContaining({
-        id: "e-message",
-        kind: "transcript.message",
-        message: { id: "native-message-1", role: "assistant", parts: [] },
+        id: "e-busy",
+        kind: "turn.started",
       }),
       expect.objectContaining({
-        id: "e-part",
+        id: expect.stringMatching(/^message:native-message-1:/),
         kind: "transcript.message",
         message: {
           id: "native-message-1",
@@ -257,7 +262,7 @@ describe("OpenCodeNativeAdapter", () => {
           parts: [{ type: "text", text: "hello" }],
         },
       }),
-      expect.objectContaining({ id: "e-busy", kind: "turn.started" }),
+      expect.objectContaining({ id: "e-idle", kind: "turn.completed" }),
       expect.objectContaining({
         id: "e-permission",
         kind: "interaction.opened",
@@ -322,8 +327,18 @@ describe("OpenCodeNativeAdapter", () => {
             id: "reasoning",
             messageID: "provider-assistant",
             type: "reasoning",
-            text: "think",
           },
+        },
+      },
+      {
+        id: "reasoning-start",
+        type: "message.part.delta",
+        properties: {
+          sessionID: "native-session-1",
+          messageID: "provider-assistant",
+          partID: "reasoning",
+          field: "text",
+          delta: "think",
         },
       },
       {
@@ -571,7 +586,7 @@ describe("OpenCodeNativeAdapter", () => {
     expect(JSON.stringify(probe.capabilities.catalog)).not.toContain("/private/user/path");
   });
 
-  it("maps OpenCode 1.17 Part text, reasoning, and tool lifecycle without leaking tool payloads", async () => {
+  it("maps finalized OpenCode text, reasoning, and tool lifecycle without leaking payloads", async () => {
     const { adapter } = composition([
       {
         id: "parts",
@@ -664,68 +679,46 @@ describe("OpenCodeNativeAdapter", () => {
       },
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(observations).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "parts",
-          message: expect.objectContaining({
-            parts: [
-              { type: "text", text: "Visible answer" },
-              { type: "reasoning", text: "Visible reasoning" },
-              {
-                type: "dynamic-tool",
-                toolName: "bash",
-                toolCallId: "call-running",
-                title: "Run checks",
-                state: "input-streaming",
-              },
-              {
-                type: "dynamic-tool",
-                toolName: "search",
-                toolCallId: "call-pending",
-                state: "input-streaming",
-              },
-              {
-                type: "dynamic-tool",
-                toolName: "read",
-                toolCallId: "call-complete",
-                title: "Read file",
-                state: "output-available",
-                input: null,
-                output: null,
-              },
-              {
-                type: "dynamic-tool",
-                toolName: "write",
-                toolCallId: "call-error",
-                state: "output-error",
-                input: null,
-                errorText: "Tool failed",
-              },
-            ],
-          }),
+    expect(observations.filter(({ kind }) => kind === "transcript.message")).toEqual([
+      expect.objectContaining({
+        message: expect.objectContaining({
+          parts: [
+            { type: "text", text: "Visible answer" },
+            { type: "reasoning", text: "Visible reasoning" },
+            {
+              type: "dynamic-tool",
+              toolName: "bash",
+              toolCallId: "call-running",
+              title: "Run checks",
+              state: "input-streaming",
+            },
+            {
+              type: "dynamic-tool",
+              toolName: "search",
+              toolCallId: "call-pending",
+              state: "input-streaming",
+            },
+            {
+              type: "dynamic-tool",
+              toolName: "read",
+              toolCallId: "call-complete",
+              title: "Read file",
+              state: "output-available",
+              input: null,
+              output: null,
+            },
+            {
+              type: "dynamic-tool",
+              toolName: "write",
+              toolCallId: "call-error",
+              state: "output-error",
+              input: null,
+              errorText: "Tool failed",
+            },
+          ],
         }),
-        expect.objectContaining({
-          id: "reasoning-delta",
-          message: expect.objectContaining({
-            id: "assistant-with-parts",
-            parts: [{ type: "reasoning", text: "streamed thought" }],
-          }),
-        }),
-        expect.objectContaining({
-          id: "reasoning-empty",
-          message: expect.objectContaining({ parts: [] }),
-        }),
-        expect.objectContaining({
-          id: "tool-malformed",
-          message: expect.objectContaining({ parts: [] }),
-        }),
-        expect.objectContaining({
-          id: "tool-unknown-state",
-          message: expect.objectContaining({ parts: [] }),
-        }),
-      ]),
-    );
+      }),
+    ]);
     expect(JSON.stringify(observations)).not.toContain("must-not-leak");
   });
 
@@ -887,6 +880,54 @@ describe("OpenCodeNativeAdapter", () => {
     expect(reconciliation.cursor).toEqual({ eventId: "reconcile:status" });
   });
 
+  it("uses the same immutable observation identity for streamed and reconciled messages", async () => {
+    const streamed = composition([
+      {
+        id: "stream-message",
+        type: "message.updated",
+        properties: {
+          sessionID: "native-session-1",
+          info: { id: "stable-message", role: "assistant" },
+        },
+      },
+      {
+        id: "stream-part",
+        type: "message.part.updated",
+        properties: {
+          sessionID: "native-session-1",
+          part: {
+            id: "stable-part",
+            messageID: "stable-message",
+            type: "text",
+            text: "Stable",
+          },
+        },
+      },
+      { id: "stream-idle", type: "session.idle", properties: { sessionID: "native-session-1" } },
+    ]);
+    const streamedObservations: HarnessObservation[] = [];
+    await streamed.adapter.attach(spec(), {
+      emit: async (observation) => {
+        streamedObservations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const streamedMessage = streamedObservations.find(({ kind }) => kind === "transcript.message");
+
+    const reconciled = composition();
+    reconciled.network.messageResponse = {
+      info: { id: "stable-message", role: "assistant" },
+      parts: [{ type: "text", text: "Stable" }],
+    };
+    const handle = await reconciled.adapter.attach(spec(), { emit: async () => undefined });
+    const reconciledMessage = (await handle.reconcile(null)).observations.find(
+      ({ kind }) => kind === "transcript.message",
+    );
+
+    expect(streamedMessage?.id).toMatch(/^message:stable-message:/);
+    expect(reconciledMessage?.id).toBe(streamedMessage?.id);
+  });
+
   it("reconciles documented message responses and only native-session interactions", async () => {
     const { adapter, network } = composition();
     network.messageResponse = {
@@ -939,6 +980,40 @@ describe("OpenCodeNativeAdapter", () => {
         }),
       ]),
     );
+  });
+
+  it("suppresses reconciled user echoes except during initial native history import", async () => {
+    const userMessage = {
+      info: { id: "provider-user-history", role: "user" },
+      parts: [{ type: "text", text: "Native prompt" }],
+    };
+    const fresh = composition();
+    fresh.network.messageResponse = userMessage;
+    const freshHandle = await fresh.adapter.attach(spec(), { emit: async () => undefined });
+    expect(
+      (await freshHandle.reconcile(null)).observations.filter(
+        ({ kind }) => kind === "transcript.message",
+      ),
+    ).toEqual([]);
+
+    const resumed = composition();
+    resumed.network.messageResponse = userMessage;
+    const resumedHandle = await resumed.adapter.attach(spec("/workspace/one", "native_resume"), {
+      emit: async () => undefined,
+    });
+    expect(
+      (await resumedHandle.reconcile(null)).observations.filter(
+        ({ kind }) => kind === "transcript.message",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        message: {
+          id: "provider-user-history",
+          role: "user",
+          parts: [{ type: "text", text: "Native prompt" }],
+        },
+      }),
+    ]);
   });
 
   it("uses the documented legacy resolution endpoints", async () => {
@@ -1342,6 +1417,22 @@ describe("OpenCodeNativeAdapter", () => {
         properties: { sessionID: "native-session-1", delta: "d" },
       },
       {
+        id: "part-missing",
+        type: "message.part.updated",
+        properties: { sessionID: "native-session-1" },
+      },
+      {
+        id: "orphan-delta",
+        type: "message.part.delta",
+        properties: {
+          sessionID: "native-session-1",
+          messageID: "missing-message",
+          partID: "missing-part",
+          field: "text",
+          delta: "ignored",
+        },
+      },
+      {
         id: "busy-nested",
         type: "session.status",
         properties: { sessionID: "native-session-1", status: { type: "busy" } },
@@ -1378,7 +1469,6 @@ describe("OpenCodeNativeAdapter", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(observations.map(({ id }) => id)).toEqual([
-      "delta",
       "busy-nested",
       "idle",
       "retry",
@@ -1386,11 +1476,11 @@ describe("OpenCodeNativeAdapter", () => {
       "opencode:sse-disconnected:native-session-1",
       "opencode:sse-binding-failed:native-session-1",
     ]);
-    expect(observations[3]).toMatchObject({
+    expect(observations[2]).toMatchObject({
       kind: "attention.raised",
       attention: { kind: "transport_retrying", detail: "again" },
     });
-    expect(observations[4]).toMatchObject({
+    expect(observations[3]).toMatchObject({
       kind: "attention.raised",
       attention: { kind: "adapter_unrecoverable", detail: "bad" },
     });
@@ -1604,7 +1694,31 @@ describe("OpenCodeNativeAdapter", () => {
     const originalRequest = network.request.bind(network);
     network.request = async (input) => {
       if (input.path.includes("/message"))
-        return { status: 200, body: { items: [{ info: {} }, 7] } };
+        return {
+          status: 200,
+          body: {
+            items: [
+              { info: {} },
+              { info: { id: "missing-parts", role: "assistant" } },
+              {
+                info: { id: "malformed-parts", role: "tool" },
+                parts: [
+                  { type: "text", text: 7 },
+                  { type: "reasoning", text: 7 },
+                  { type: "future" },
+                  { type: "tool" },
+                  {
+                    type: "tool",
+                    tool: "future",
+                    callID: "future-call",
+                    state: { status: "future" },
+                  },
+                ],
+              },
+              7,
+            ],
+          },
+        };
       if (input.path.startsWith("/session/status"))
         return { status: 200, body: { type: "unknown" } };
       if (input.path.startsWith("/permission") || input.path.startsWith("/question"))
@@ -1688,21 +1802,6 @@ describe("OpenCodeNativeAdapter", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(observations).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          kind: "transcript.message",
-          message: expect.objectContaining({
-            id: "raw",
-            role: "assistant",
-            parts: [{ type: "text", text: "kept" }],
-          }),
-        }),
-        expect.objectContaining({
-          kind: "transcript.message",
-          message: expect.objectContaining({
-            id: "outer",
-            parts: [{ type: "text", text: "nested" }],
-          }),
-        }),
         expect.objectContaining({
           kind: "interaction.resolved",
           interactionId: "permission:p",
@@ -2066,24 +2165,6 @@ describe("OpenCodeNativeAdapter", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(observations).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          id: "message-fallback",
-          kind: "transcript.message",
-          message: expect.objectContaining({ id: "message-fallback", parts: [] }),
-        }),
-        expect.objectContaining({
-          id: "part-nested",
-          kind: "transcript.message",
-          message: expect.objectContaining({
-            id: "nested",
-            parts: [{ type: "text", text: "delta" }],
-          }),
-        }),
-        expect.objectContaining({
-          id: "part-fallback",
-          kind: "transcript.message",
-          message: expect.objectContaining({ id: "part-fallback", parts: [] }),
-        }),
         expect.objectContaining({
           id: "error-raw",
           attention: expect.objectContaining({ detail: null, diagnostic: null }),
