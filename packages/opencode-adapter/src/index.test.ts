@@ -1670,6 +1670,27 @@ describe("OpenCodeNativeAdapter", () => {
         },
       },
       {
+        id: "error-name-only",
+        type: "session.error",
+        properties: {
+          sessionID: "native-session-1",
+          error: { name: "MessageAbortedError" },
+        },
+      },
+      {
+        id: "error-status-only",
+        type: "session.error",
+        properties: {
+          sessionID: "native-session-1",
+          error: { name: "FutureError", data: { statusCode: 503 } },
+        },
+      },
+      {
+        id: "error-empty",
+        type: "session.error",
+        properties: { sessionID: "native-session-1", error: { data: {} } },
+      },
+      {
         id: "unknown-status",
         type: "session.status",
         properties: { sessionID: "native-session-1", status: { type: "gone" } },
@@ -1694,6 +1715,9 @@ describe("OpenCodeNativeAdapter", () => {
       "idle",
       "retry",
       "error",
+      "error-name-only",
+      "error-status-only",
+      "error-empty",
       "opencode:sse-disconnected:native-session-1",
       "opencode:sse-binding-failed:native-session-1",
     ]);
@@ -1712,6 +1736,21 @@ describe("OpenCodeNativeAdapter", () => {
         detail: "OpenCode APIError (status 502)",
         diagnostic: { name: "APIError", statusCode: 502, isRetryable: false },
       },
+    });
+    expect(observations[4]).toMatchObject({
+      attention: {
+        detail: "OpenCode MessageAbortedError",
+        diagnostic: { name: "MessageAbortedError" },
+      },
+    });
+    expect(observations[5]).toMatchObject({
+      attention: {
+        detail: "OpenCode session error (status 503)",
+        diagnostic: { statusCode: 503 },
+      },
+    });
+    expect(observations[6]).toMatchObject({
+      attention: { detail: null, diagnostic: null },
     });
     expect(JSON.stringify(observations)).not.toContain("must-not-leak");
   });
@@ -1990,6 +2029,7 @@ describe("OpenCodeNativeAdapter", () => {
                   },
                 ],
               },
+              { id: "raw-valid", role: "assistant", parts: [] },
               7,
             ],
           },

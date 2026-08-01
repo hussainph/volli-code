@@ -830,6 +830,7 @@ class OpenCodeBinding implements BindingHandle {
     eventType = "session.status",
   ): HarnessObservation | null {
     if (eventType === "session.error") {
+      const failure = safeOpenCodeError(raw);
       return {
         id,
         kind: "attention.raised",
@@ -837,8 +838,8 @@ class OpenCodeBinding implements BindingHandle {
         attention: {
           id: `opencode:error:${id}`,
           kind: "adapter_unrecoverable",
-          detail: objectString(nested(raw, "error") ?? raw, "message"),
-          diagnostic: detail(raw),
+          detail: failure.detail,
+          diagnostic: failure.diagnostic,
         },
       };
     }
@@ -870,6 +871,7 @@ class OpenCodeBinding implements BindingHandle {
       };
     }
     if (status === "retry") {
+      const retry = safeOpenCodeRetry(sessionStatus);
       return {
         id,
         kind: "attention.raised",
@@ -877,8 +879,8 @@ class OpenCodeBinding implements BindingHandle {
         attention: {
           id: `opencode:retry:${id}`,
           kind: "transport_retrying",
-          detail: objectString(nested(raw, "status") ?? raw, "message"),
-          diagnostic: detail(raw),
+          detail: retry.detail,
+          diagnostic: retry.diagnostic,
         },
       };
     }
@@ -1050,22 +1052,6 @@ function arrayBody(value: unknown): readonly unknown[] {
   return [];
 }
 
-function detail(value: unknown): SessionNativeDetail | null {
-  return isSessionNativeDetail(value) ? value : null;
-}
-
-function isSessionNativeDetail(value: unknown): value is SessionNativeDetail {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  )
-    return true;
-  if (Array.isArray(value)) return value.every(isSessionNativeDetail);
-  return isRecord(value) && Object.values(value).every(isSessionNativeDetail);
-}
-
 function messageRole(raw: unknown): "system" | "user" | "assistant" {
   return explicitMessageRole(raw) ?? "assistant";
 }
@@ -1220,14 +1206,88 @@ function messageResponses(body: unknown): readonly unknown[] {
 }
 
 function isSuccessfulMessageResponse(response: OpenCodeHttpResponse): boolean {
-  if (response.status < 200 || response.status >= 300) return false;
+  if (Math.floor(response.status / 100) !== 2) return false;
   const body = response.body;
-  return (
-    Array.isArray(body) ||
-    (isRecord(body) && Array.isArray(body.items)) ||
-    (isRecord(body) && isRecord(body.info) && Array.isArray(body.parts))
-  );
+  if (isMessageResponse(body)) return true;
+  const responses = Array.isArray(body)
+    ? body
+    : isRecord(body) && Array.isArray(body.items)
+      ? body.items
+      : null;
+  return responses !== null && (responses.length === 0 || responses.some(isMessageResponse));
 }
+
+function isMessageResponse(value: unknown): boolean {
+  if (!isRecord(value) || !Array.isArray(value.parts)) return false;
+  const info = nested(value, "info") ?? value;
+  return objectString(info, "id") !== null && explicitMessageRole(info) !== null;
+}
+
+function safeOpenCodeRetry(raw: unknown): {
+  detail: string | null;
+  diagnostic: SessionNativeDetail | null;
+} {
+  const status = nested(raw, "status") ?? raw;
+  const diagnostic: Record<string, SessionNativeDetail> = {};
+  const attempt = objectFiniteNumber(status, "attempt");
+  const next = objectFiniteNumber(status, "next");
+  if (attempt !== null) diagnostic.attempt = attempt;
+  if (next !== null) diagnostic.next = next;
+  return {
+    detail: Object.keys(diagnostic).length > 0 ? "OpenCode is retrying" : null,
+    diagnostic: Object.keys(diagnostic).length > 0 ? diagnostic : null,
+  };
+}
+
+function safeOpenCodeError(raw: unknown): {
+  detail: string | null;
+  diagnostic: SessionNativeDetail | null;
+} {
+  const error = nested(raw, "error");
+  if (!error) return { detail: null, diagnostic: null };
+  const data = nested(error, "data");
+  const diagnostic: Record<string, SessionNativeDetail> = {};
+  const name = safeOpenCodeErrorName(objectString(error, "name"));
+  const statusCode = objectFiniteNumber(data, "statusCode");
+  const isRetryable = objectBoolean(data, "isRetryable");
+  if (name) diagnostic.name = name;
+  if (statusCode !== null) diagnostic.statusCode = statusCode;
+  if (isRetryable !== null) diagnostic.isRetryable = isRetryable;
+  const hasDiagnostic = Object.keys(diagnostic).length > 0;
+  return {
+    detail: name
+      ? `OpenCode ${name}${statusCode === null ? "" : ` (status ${statusCode})`}`
+      : statusCode === null
+        ? null
+        : `OpenCode session error (status ${statusCode})`,
+    diagnostic: hasDiagnostic ? diagnostic : null,
+  };
+}
+
+function safeOpenCodeErrorName(name: string | null): string | null {
+  return name && SAFE_OPEN_CODE_ERROR_NAMES.has(name) ? name : null;
+}
+
+function objectFiniteNumber(value: unknown, key: string): number | null {
+  const candidate = isRecord(value) ? value[key] : null;
+  return typeof candidate === "number" ? candidate : null;
+}
+
+function objectBoolean(value: unknown, key: string): boolean | null {
+  if (!isRecord(value) || typeof value[key] !== "boolean") return null;
+  return value[key];
+}
+
+const SAFE_OPEN_CODE_ERROR_NAMES = new Set([
+  "ProviderAuthError",
+  "UnknownError",
+  "MessageOutputLengthError",
+  "MessageAbortedError",
+  "StructuredOutputError",
+  "ContextOverflowError",
+  "ContentFilterError",
+  "APIError",
+]);
 
 /**
  * Maps the legacy OpenCode Part union to transcript-safe AI SDK UI parts.
