@@ -22,6 +22,10 @@ class Deferred<T> {
   }
 }
 
+function waitForever(): Promise<void> {
+  return new Promise<void>(() => undefined);
+}
+
 class FakeProcess implements OpenCodeProcessPort {
   spawns: Array<{
     path: string;
@@ -71,6 +75,7 @@ class FakeNetwork implements OpenCodeNetworkPort {
   healthStatuses: number[] = [];
   messageResponse: unknown = [{ id: "history-1", role: "assistant" }];
   events: readonly OpenCodeSseEvent[] = [];
+  holdEventStream = false;
   async request(input: Parameters<OpenCodeNetworkPort["request"]>[0]) {
     this.requests.push({
       path: input.path,
@@ -103,7 +108,12 @@ class FakeNetwork implements OpenCodeNetworkPort {
   ): Promise<AsyncIterable<OpenCodeSseEvent>> {
     this.subscriptions.push(input);
     const values = this.events;
+    const holdEventStream = this.holdEventStream;
     return (async function* () {
+      if (holdEventStream) {
+        await new Promise<void>((resolve) => input.signal.addEventListener("abort", resolve));
+        return;
+      }
       for (const event of values) yield event;
     })();
   }
@@ -148,7 +158,14 @@ function composition(events: readonly OpenCodeSseEvent[] = []) {
   const process = new FakeProcess();
   const network = new FakeNetwork();
   network.events = events;
-  const adapter = createOpenCodeNativeAdapter({ process, network, now: () => 1234 });
+  const adapter = createOpenCodeNativeAdapter({
+    process,
+    network,
+    now: () => 1234,
+    // Most fixtures deliberately close their finite stream. Keep the binding
+    // in its reconnect delay after that first verified disconnect.
+    sleep: () => new Promise<void>(() => undefined),
+  });
   return { adapter, process, network };
 }
 
@@ -279,11 +296,6 @@ describe("OpenCodeNativeAdapter", () => {
           detail: "OpenCode event stream ended",
         }),
       }),
-      expect.objectContaining({
-        id: "opencode:sse-binding-failed:native-session-1",
-        kind: "attachment.failed",
-        detail: "OpenCode event stream ended",
-      }),
     ]);
   });
 
@@ -355,8 +367,11 @@ describe("OpenCodeNativeAdapter", () => {
         id: "assistant-message",
         type: "message.updated",
         properties: {
-          sessionID: "native-session-1",
-          info: { id: "provider-assistant", role: "assistant" },
+          info: {
+            id: "provider-assistant",
+            sessionID: "native-session-1",
+            role: "assistant",
+          },
         },
       },
       {
@@ -432,9 +447,9 @@ describe("OpenCodeNativeAdapter", () => {
         id: "tool-running",
         type: "message.part.updated",
         properties: {
-          sessionID: "native-session-1",
           part: {
             id: "tool-part",
+            sessionID: "native-session-1",
             messageID: "provider-assistant",
             type: "tool",
             tool: "read",
@@ -452,9 +467,9 @@ describe("OpenCodeNativeAdapter", () => {
         id: "tool-completed",
         type: "message.part.updated",
         properties: {
-          sessionID: "native-session-1",
           part: {
             id: "tool-part",
+            sessionID: "native-session-1",
             messageID: "provider-assistant",
             type: "tool",
             tool: "read",
@@ -462,6 +477,7 @@ describe("OpenCodeNativeAdapter", () => {
             state: {
               status: "completed",
               output: { content: 'case "transcript.message"' },
+              attachments: [{ id: "artifact-1", mime: "text/plain" }],
               time: { start: 1, end: 2 },
             },
           },
@@ -524,6 +540,7 @@ describe("OpenCodeNativeAdapter", () => {
               title: "Read Session runtime",
               toolMetadata: {
                 opencode: {
+                  attachments: [{ id: "artifact-1", mime: "text/plain" }],
                   metadata: { source: "workspace" },
                   time: { start: 1, end: 2 },
                 },
@@ -992,6 +1009,7 @@ describe("OpenCodeNativeAdapter", () => {
   it("waits for the shared server health endpoint before its first attach", async () => {
     const { network } = composition();
     network.healthStatuses = [503, 503, 200];
+    network.holdEventStream = true;
     const delays: number[] = [];
     const retrying = createOpenCodeNativeAdapter({
       process: new FakeProcess(),
@@ -1014,6 +1032,7 @@ describe("OpenCodeNativeAdapter", () => {
   it("gives a cold server a multi-second default startup budget", async () => {
     const process = new FakeProcess();
     const network = new FakeNetwork();
+    network.holdEventStream = true;
     const request = network.request.bind(network);
     let transientFailures = 9;
     network.request = async (input) => {
@@ -1083,6 +1102,7 @@ describe("OpenCodeNativeAdapter", () => {
   it("bounds child shutdown if its exit promise never settles", async () => {
     const process = new FakeProcess();
     const network = new FakeNetwork();
+    network.holdEventStream = true;
     const delays: number[] = [];
     const adapter = createOpenCodeNativeAdapter({
       process,
@@ -1424,6 +1444,7 @@ describe("OpenCodeNativeAdapter", () => {
       process: new FakeProcess(),
       network,
       now: () => 1234,
+      sleep: waitForever,
     });
     const handle = await adapter.attach(spec(), {
       emit: async () => {
@@ -1994,7 +2015,6 @@ describe("OpenCodeNativeAdapter", () => {
       "error-status-only",
       "error-empty",
       "opencode:sse-disconnected:native-session-1",
-      "opencode:sse-binding-failed:native-session-1",
     ]);
     expect(observations[2]).toMatchObject({
       kind: "attention.raised",
@@ -2038,7 +2058,12 @@ describe("OpenCodeNativeAdapter", () => {
         yield { id: "repeat", type: "session.idle", properties: { sessionID: "native-session-1" } };
         throw new Error("stream closed");
       })();
-    const adapter = createOpenCodeNativeAdapter({ process, network, now: () => 1234 });
+    const adapter = createOpenCodeNativeAdapter({
+      process,
+      network,
+      now: () => 1234,
+      sleep: waitForever,
+    });
     const observations: HarnessObservation[] = [];
     await adapter.attach(spec(), {
       emit: async (observation) => {
@@ -2052,11 +2077,6 @@ describe("OpenCodeNativeAdapter", () => {
         id: "opencode:sse-disconnected:native-session-1",
         kind: "attention.raised",
         attention: expect.objectContaining({ detail: "stream closed" }),
-      }),
-      expect.objectContaining({
-        id: "opencode:sse-binding-failed:native-session-1",
-        kind: "attachment.failed",
-        detail: "stream closed",
       }),
     ]);
   });
@@ -2075,6 +2095,7 @@ describe("OpenCodeNativeAdapter", () => {
       process: new FakeProcess(),
       network,
       now: () => 1234,
+      sleep: waitForever,
     });
     let emits = 0;
     const attempted: HarnessObservation[] = [];
@@ -2087,21 +2108,13 @@ describe("OpenCodeNativeAdapter", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // The binding terminal fact is independently attempted even if both the
-    // source event and durable attention were rejected by the sink.
-    expect(emits).toBe(3);
-    expect(attempted.map(({ kind }) => kind)).toEqual([
-      "turn.completed",
-      "attention.raised",
-      "attachment.failed",
-    ]);
+    // A transient stream failure remains retryable even when both the source
+    // event and its durable attention fail to persist.
+    expect(emits).toBe(2);
+    expect(attempted.map(({ kind }) => kind)).toEqual(["turn.completed", "attention.raised"]);
     expect(attempted[1]).toMatchObject({
       id: "opencode:sse-disconnected:native-session-1",
       attention: { kind: "adapter_disconnected", detail: "durable store unavailable" },
-    });
-    expect(attempted[2]).toMatchObject({
-      id: "opencode:sse-binding-failed:native-session-1",
-      detail: "durable store unavailable",
     });
   });
 
@@ -2140,6 +2153,7 @@ describe("OpenCodeNativeAdapter", () => {
       process: new FakeProcess(),
       network: stringFailure,
       now: () => 1234,
+      sleep: waitForever,
     });
     const stringObservations: HarnessObservation[] = [];
     await stringAdapter.attach(spec(), {
@@ -2152,10 +2166,6 @@ describe("OpenCodeNativeAdapter", () => {
       expect.objectContaining({
         kind: "attention.raised",
         attention: expect.objectContaining({ detail: "OpenCode event stream disconnected" }),
-      }),
-      expect.objectContaining({
-        kind: "attachment.failed",
-        detail: "OpenCode event stream disconnected",
       }),
     ]);
   });
