@@ -20,6 +20,7 @@ import { openVolliDb } from "../db";
 import { insertProject } from "../db/projects-repo";
 import { insertTicket } from "../db/tickets-repo";
 import { createDesktopSessionRuntime } from "../session-runtime";
+import { createRuntimeCatalog } from "../runtime-catalog";
 
 export { LAB_SESSION_RPC_PATH } from "../../lab-session-rpc-path";
 
@@ -103,6 +104,7 @@ interface LabResources {
   readonly db: ReturnType<typeof openVolliDb>;
   readonly adapter: OpenCodeNativeAdapter;
   readonly runtime: ReturnType<typeof createDesktopSessionRuntime>;
+  readonly runtimeCatalog: ReturnType<typeof createRuntimeCatalog>;
   readonly router: ReturnType<typeof createSessionRouter>;
   readonly diagnostics: RpcDiagnosticLog;
 }
@@ -176,6 +178,7 @@ export class LabSessionRpcServer {
         path,
         createContext: () => ({
           runtime: resources.runtime,
+          runtimeCatalog: resources.runtimeCatalog,
           diagnostics: resources.diagnostics,
           transport: "lab-http" as const,
         }),
@@ -320,11 +323,24 @@ export class LabSessionRpcServer {
         now: this.#now,
       });
       this.#runtime = runtime;
+      const runtimeCatalog = createRuntimeCatalog({
+        db,
+        directory: workspace,
+        adapters: [
+          {
+            id: adapter.manifest.id,
+            profileId: "native",
+            discover: (context, signal) => adapter.probe(context, signal),
+          },
+        ],
+        now: this.#now,
+      });
       return {
         directory,
         db,
         adapter,
         runtime,
+        runtimeCatalog,
         router: createSessionRouter(),
         diagnostics: new RpcDiagnosticLog(),
       };

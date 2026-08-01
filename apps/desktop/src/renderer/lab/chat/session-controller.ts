@@ -1,15 +1,18 @@
 import * as React from "react";
-import type { SessionCapabilitySnapshot, SessionEvent, SessionProjection } from "@volli/shared";
+import type {
+  RuntimeCatalogChoices,
+  RuntimeSelection,
+  SessionEvent,
+  SessionProjection,
+} from "@volli/shared";
 import type { RpcDiagnosticEntry } from "@volli/session-rpc";
 import type { UIMessage } from "ai";
 
+import { useRuntimeCatalogClient } from "@renderer/lib/runtime-catalog-client";
+
 import { LAB_SESSION_PROJECT_ID, LAB_SESSION_TICKET_ID } from "../../../lab-session-rpc-path";
 import { createSessionRpcClient, type SessionRpcClient } from "../session-rpc-client";
-import {
-  deriveRuntimeCatalog,
-  resolveRuntimeSelection,
-  type RuntimeSelection,
-} from "./session-model";
+import { resolveRuntimeSelection } from "./session-model";
 
 const DIAGNOSTIC_LIMIT = 100;
 const CAPABILITY_REFRESH_INTERVAL_MS = 45_000;
@@ -19,6 +22,7 @@ const EMPTY_SELECTION: RuntimeSelection = {
   variant: "",
   agent: "",
 };
+const EMPTY_CATALOG: RuntimeCatalogChoices = { providers: [], models: [], agents: [] };
 
 export type SessionLifecycle = "idle" | "starting" | "ready" | "working" | "error";
 export type MessageDelivery = "queue" | "steer" | "replace";
@@ -40,7 +44,7 @@ export interface LabSessionController {
   status: string;
   selection: RuntimeSelection;
   setSelection(next: RuntimeSelection): void;
-  catalog: ReturnType<typeof deriveRuntimeCatalog>;
+  catalog: RuntimeCatalogChoices;
   liveAttachmentId: string | null;
   start(): Promise<void>;
   submit(text: string, delivery: MessageDelivery): Promise<boolean>;
@@ -51,6 +55,7 @@ export interface LabSessionController {
 }
 
 export function useLabSessionController(): LabSessionController {
+  const runtimeCatalog = useRuntimeCatalogClient();
   const client = React.useRef<SessionRpcClient | null>(null);
   const [sessionId, setSessionId] = React.useState("");
   const [projection, setProjection] = React.useState<SessionProjection | null>(null);
@@ -61,6 +66,27 @@ export function useLabSessionController(): LabSessionController {
   const [lifecycle, setLifecycle] = React.useState<SessionLifecycle>("idle");
   const [status, setStatus] = React.useState("Ready to start in a disposable workspace");
   const [selection, setSelection] = React.useState<RuntimeSelection>(EMPTY_SELECTION);
+  const [catalog, setCatalog] = React.useState<RuntimeCatalogChoices>(EMPTY_CATALOG);
+
+  React.useEffect(() => {
+    if (!runtimeCatalog) return;
+    let active = true;
+    void runtimeCatalog
+      .resolve({ adapterId: "opencode" })
+      .then((resolved) => {
+        if (!active) return;
+        setCatalog(resolved.catalog);
+        setSelection((current) =>
+          resolveRuntimeSelection(resolved.catalog, current.modelId ? current : resolved.selection),
+        );
+      })
+      .catch((error: unknown) => {
+        if (active) reportError("runtime catalog", error);
+      });
+    return () => {
+      active = false;
+    };
+  }, [runtimeCatalog]);
 
   React.useEffect(() => {
     const rpc = createSessionRpcClient();
@@ -103,6 +129,8 @@ export function useLabSessionController(): LabSessionController {
     let subscription: { unsubscribe(): void } | null = null;
     let projectionRefresh: Promise<void> | null = null;
     let projectionRefreshQueued = false;
+    let frameFlush: number | null = null;
+    const pendingFrames = new Map<number, LabSessionFrame>();
     const refreshProjection = () => {
       if (projectionRefresh) {
         projectionRefreshQueued = true;
@@ -143,8 +171,24 @@ export function useLabSessionController(): LabSessionController {
             if (!active) return;
             const frame = labSessionFrame(trackedFrame.data);
             if (!frame) return;
-            setFramesBySequence((current) => new Map(current).set(frame.sequence, frame));
-            refreshProjection();
+            pendingFrames.set(frame.sequence, frame);
+            if (frameFlush !== null) return;
+            // Native adapters may emit several transcript/tool frames in one
+            // paint. Commit them as one renderer update and one projection
+            // refresh so shell motion never competes with an event-by-event
+            // React/render/query loop.
+            frameFlush = window.requestAnimationFrame(() => {
+              frameFlush = null;
+              if (!active) return;
+              const batch = [...pendingFrames.values()];
+              pendingFrames.clear();
+              setFramesBySequence((current) => {
+                const next = new Map(current);
+                for (const entry of batch) next.set(entry.sequence, entry);
+                return next;
+              });
+              refreshProjection();
+            });
           },
           onError: (error) => {
             if (active) setConnectionError(error);
@@ -157,6 +201,8 @@ export function useLabSessionController(): LabSessionController {
     });
     return () => {
       active = false;
+      if (frameFlush !== null) window.cancelAnimationFrame(frameFlush);
+      pendingFrames.clear();
       subscription?.unsubscribe();
     };
   }, [sessionId]);
@@ -170,8 +216,6 @@ export function useLabSessionController(): LabSessionController {
     [frames],
   );
   const liveAttachmentId = projection?.liveExecutor?.id ?? null;
-  const capabilities = latestCapabilities(projection?.capabilities ?? [], liveAttachmentId);
-  const catalog = React.useMemo(() => deriveRuntimeCatalog(capabilities), [capabilities]);
   const working = liveAttachmentId !== null && latestTurnIsActive(frames);
 
   React.useEffect(() => {
@@ -194,10 +238,6 @@ export function useLabSessionController(): LabSessionController {
       window.clearInterval(interval);
     };
   }, [liveAttachmentId, sessionId]);
-
-  React.useEffect(() => {
-    setSelection((current) => resolveRuntimeSelection(catalog, current));
-  }, [catalog]);
 
   React.useEffect(() => {
     if (!sessionId || lifecycle === "starting" || lifecycle === "error") return;
@@ -238,7 +278,6 @@ export function useLabSessionController(): LabSessionController {
     setSessionId("");
     setProjection(null);
     setFramesBySequence(new Map());
-    setSelection(EMPTY_SELECTION);
     try {
       const created = await rpc.session.command.mutate({
         commandId: nextId(),
@@ -373,24 +412,6 @@ export function useLabSessionController(): LabSessionController {
     reconcile,
     release,
   };
-}
-
-function latestCapabilities(
-  capabilities: readonly SessionCapabilitySnapshot[],
-  attachmentId: string | null,
-): SessionCapabilitySnapshot | null {
-  return (
-    capabilities
-      .filter(
-        (capability) =>
-          (capability.expiresAt === null || capability.expiresAt > Date.now()) &&
-          (!attachmentId || capability.attachmentId === attachmentId),
-      )
-      .toSorted(
-        (left, right) => left.observedAt - right.observedAt || left.revision - right.revision,
-      )
-      .at(-1) ?? null
-  );
 }
 
 function latestTurnIsActive(frames: readonly LabSessionFrame[]): boolean {

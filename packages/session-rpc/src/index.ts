@@ -1,5 +1,6 @@
 import { initTRPC, tracked } from "@trpc/server";
 import type {
+  RuntimeCatalog,
   SessionClientCommand,
   SessionRuntime,
   SessionRuntimeCommandRequest,
@@ -15,6 +16,7 @@ type RpcUiMessage = Extract<SessionClientCommand, { kind: "message.submit" }>["m
  */
 export interface SessionRouterContext {
   runtime: SessionRuntime;
+  runtimeCatalog?: RuntimeCatalog;
   diagnostics: RpcDiagnosticLog;
   transport?: "electron-ipc" | "lab-http" | "unknown";
 }
@@ -168,6 +170,18 @@ const sseCursor = z
   .refine((value) => Number.isSafeInteger(Number(value)), "Expected a safe non-negative integer");
 const nullableString = z.string().nullable();
 const uiMessageSchema = z.custom<RpcUiMessage>(isUiMessage, "Expected an AI SDK UIMessage");
+const runtimeModelRefSchema = z.object({ providerId: nonEmptyString, modelId: nonEmptyString });
+const runtimeSelectionSchema = z.object({
+  providerId: z.string().max(MAX_IDENTIFIER_LENGTH),
+  modelId: z.string().max(MAX_IDENTIFIER_LENGTH),
+  variant: z.string().max(MAX_IDENTIFIER_LENGTH),
+  agent: z.string().max(MAX_IDENTIFIER_LENGTH),
+});
+const runtimePreferencesSchema = z.object({
+  version: z.literal(1),
+  enabledModels: z.array(runtimeModelRefSchema).max(1_000),
+  defaults: runtimeSelectionSchema,
+});
 
 const commandSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -254,6 +268,26 @@ const instrumentedProcedure = t.procedure.use(async ({ ctx, path, next }) => {
 /** Creates the reusable Session API used by both Electron IPC and Lab HTTP/SSE adapters. */
 export function createSessionRouter() {
   return t.router({
+    runtimeCatalog: t.router({
+      inspect: instrumentedProcedure
+        .input(
+          z.object({
+            adapterId: nonEmptyString,
+            providerId: nonEmptyString.optional(),
+            query: z.string().max(200).optional(),
+            offset: nonNegativeSafeInteger.optional(),
+            limit: z.number().int().min(1).max(100).optional(),
+            refresh: z.boolean().optional(),
+          }),
+        )
+        .query(({ ctx, input }) => requireRuntimeCatalog(ctx).inspect(input)),
+      save: instrumentedProcedure
+        .input(z.object({ adapterId: nonEmptyString, preferences: runtimePreferencesSchema }))
+        .mutation(({ ctx, input }) => requireRuntimeCatalog(ctx).save(input)),
+      resolve: instrumentedProcedure
+        .input(z.object({ adapterId: nonEmptyString }))
+        .query(({ ctx, input }) => requireRuntimeCatalog(ctx).resolve(input)),
+    }),
     session: t.router({
       snapshot: instrumentedProcedure
         .input(z.object({ sessionId: nonEmptyString }))
@@ -344,6 +378,11 @@ export function createSessionRouter() {
         }),
     }),
   });
+}
+
+function requireRuntimeCatalog(context: SessionRouterContext): RuntimeCatalog {
+  if (!context.runtimeCatalog) throw new Error("Runtime Catalog is unavailable on this transport");
+  return context.runtimeCatalog;
 }
 
 export type AppRouter = ReturnType<typeof createSessionRouter>;

@@ -19,6 +19,7 @@ import type {
   HarnessRegisteredResult,
   Result,
   RetentionStateResult,
+  RetentionTtlResult,
   SessionsResult,
   TicketLatestSignalsResult,
   TicketRetentionState,
@@ -40,6 +41,7 @@ import { labels, project, projects, sessions, signals, tickets } from "./fixture
  * retention badge, so the affordance is visible without every card shouting.
  */
 const ARCHIVE_READY_TICKET_ID = "tkt-11";
+let retentionTtlDays = 14;
 
 function retentionState(ticketId: string): TicketRetentionState {
   const archiveReady = ticketId === ARCHIVE_READY_TICKET_ID;
@@ -114,6 +116,12 @@ export const appApi: ApiOverrides = {
   retention: {
     state: (ticketId: string): Promise<RetentionStateResult> =>
       Promise.resolve({ ok: true, state: retentionState(ticketId) }),
+    getTtlDays: (): Promise<RetentionTtlResult> =>
+      Promise.resolve({ ok: true, days: retentionTtlDays }),
+    setTtlDays: (days: number): Promise<RetentionTtlResult> => {
+      retentionTtlDays = Math.max(1, Math.round(days));
+      return Promise.resolve({ ok: true, days: retentionTtlDays });
+    },
   },
 };
 

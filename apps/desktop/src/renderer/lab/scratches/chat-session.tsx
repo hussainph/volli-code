@@ -12,6 +12,7 @@ import {
   SquareIcon,
   TerminalWindowIcon,
 } from "@phosphor-icons/react";
+import type { SessionEvent } from "@volli/shared";
 import type { DynamicToolUIPart, UIMessage } from "ai";
 
 import {
@@ -33,11 +34,14 @@ import { Reasoning, ReasoningContent, ReasoningTrigger } from "@ai-elements/reas
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@ai-elements/tool";
 import { AppShell } from "@renderer/components/app-shell";
 import { ContentColumn } from "@renderer/components/layout/content-column";
+import { SettingsPage } from "@renderer/components/pages/settings-page";
 import { TicketTabStrip, type TicketTabDescriptor } from "@renderer/components/ticket/ticket-tabs";
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
+import { useUiStore } from "@renderer/stores/ui";
 
 import { useLabSessionController, type MessageDelivery } from "../chat/session-controller";
+import { LabRuntimeCatalogProvider } from "../runtime-catalog-client";
 import { appApi, seedApp } from "../seed";
 
 export const title = "Ticket chat · OpenCode";
@@ -55,7 +59,25 @@ type RailView = "context" | "events";
 type DebugDensity = "normal" | "inspect" | "wire";
 
 export default function ChatSessionScratch() {
-  return <AppShell mainContent={<TicketChatWorkspace />} />;
+  return (
+    <LabRuntimeCatalogProvider>
+      <AppShell mainContent={<LabMainContent />} />
+    </LabRuntimeCatalogProvider>
+  );
+}
+
+/** Keep the prototype Session alive while Settings takes over the canvas. */
+function LabMainContent() {
+  const settingsOpen = useUiStore((state) => state.settingsOpen);
+
+  return (
+    <>
+      <div className={cn("min-h-0 flex-1", settingsOpen && "hidden")}>
+        <TicketChatWorkspace />
+      </div>
+      {settingsOpen ? <SettingsPage /> : null}
+    </>
+  );
 }
 
 function TicketChatWorkspace() {
@@ -89,25 +111,18 @@ function TicketChatWorkspace() {
             />
           )}
         </main>
-        <aside
-          aria-hidden={!railOpen}
-          inert={!railOpen}
-          className={cn(
-            "shrink-0 overflow-hidden bg-sidebar transition-[width,opacity] duration-200 ease-swift",
-            railOpen
-              ? "w-80 border-l border-sidebar-border opacity-100"
-              : "w-0 border-l-0 opacity-0",
-          )}
-        >
-          <div className="flex h-full w-80 flex-col">
-            <RailHeader view={railView} onChange={setRailView} />
-            {railView === "context" ? (
-              <ContextRail session={session} />
-            ) : (
-              <DebugRail session={session} />
-            )}
-          </div>
-        </aside>
+        {railOpen ? (
+          <aside className="w-80 shrink-0 overflow-hidden border-l border-sidebar-border bg-sidebar">
+            <div className="flex h-full w-80 flex-col">
+              <RailHeader view={railView} onChange={setRailView} />
+              {railView === "context" ? (
+                <ContextRail session={session} />
+              ) : (
+                <DebugRail session={session} />
+              )}
+            </div>
+          </aside>
+        ) : null}
       </div>
     </div>
   );
@@ -573,7 +588,10 @@ function DebugRail({ session }: { session: ReturnType<typeof useLabSessionContro
               title="Interactions"
               values={session.projection?.interactions.active ?? []}
             />
-            <InspectList title="Capabilities" values={session.projection?.capabilities ?? []} />
+            <InspectList
+              title="Capabilities"
+              values={(session.projection?.capabilities ?? []).map(capabilityDebugValue)}
+            />
           </div>
         ) : (
           <div className="space-y-5 font-mono text-label">
@@ -581,7 +599,7 @@ function DebugRail({ session }: { session: ReturnType<typeof useLabSessionContro
               title="Ordered Session events"
               values={session.frames.map((frame) => ({
                 sequence: frame.sequence,
-                event: frame.event,
+                event: compactDebugEvent(frame.event),
               }))}
             />
             <WireList title="Sanitized RPC" values={session.diagnostics} />
@@ -665,7 +683,8 @@ function InspectList({ title: heading, values }: { title: string; values: readon
 }
 
 function WireList({ title: heading, values }: { title: string; values: readonly unknown[] }) {
-  const copy = () => void navigator.clipboard.writeText(JSON.stringify(values, null, 2));
+  const visible = values.slice(-100);
+  const copy = () => void navigator.clipboard.writeText(JSON.stringify(visible, null, 2));
   return (
     <section>
       <div className="mb-2 flex items-center justify-between">
@@ -675,11 +694,16 @@ function WireList({ title: heading, values }: { title: string; values: readonly 
           <span className="sr-only">Copy {heading}</span>
         </Button>
       </div>
-      {values.length === 0 ? (
+      {visible.length === 0 ? (
         <p className="text-muted-foreground">None</p>
       ) : (
         <div className="space-y-2">
-          {values.map((value) => (
+          {values.length > visible.length ? (
+            <p className="text-muted-foreground">
+              Latest {visible.length} of {values.length}
+            </p>
+          ) : null}
+          {visible.map((value) => (
             <pre
               key={debugValueKey(value)}
               className="overflow-x-auto whitespace-pre-wrap border-l border-border pl-2 text-foreground"
@@ -691,6 +715,35 @@ function WireList({ title: heading, values }: { title: string; values: readonly 
       )}
     </section>
   );
+}
+
+function capabilityDebugValue(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const capability = value as Record<string, unknown>;
+  const catalog = Array.isArray(capability.catalog) ? capability.catalog : [];
+  const byKind: Record<string, number> = {};
+  const byState: Record<string, number> = {};
+  for (const item of catalog) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const record = item as Record<string, unknown>;
+    const kind = typeof record.kind === "string" ? record.kind : "unknown";
+    const state = typeof record.state === "string" ? record.state : "unknown";
+    byKind[kind] = (byKind[kind] ?? 0) + 1;
+    byState[state] = (byState[state] ?? 0) + 1;
+  }
+  const { catalog: _catalog, ...summary } = capability;
+  return { ...summary, catalog: { total: catalog.length, byKind, byState } };
+}
+
+function compactDebugEvent(event: SessionEvent): unknown {
+  if (event.payload.kind !== "capabilities.updated") return event;
+  return {
+    ...event,
+    payload: {
+      ...event.payload,
+      snapshot: capabilityDebugValue(event.payload.snapshot),
+    },
+  };
 }
 
 function debugValueKey(value: unknown): string {

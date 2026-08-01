@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import type {
+  RuntimeCatalog,
   SessionRuntime,
   SessionRuntimeCommandRequest,
   SessionRuntimeSnapshot,
@@ -258,6 +259,63 @@ describe("AsyncQueue", () => {
 });
 
 describe("Session tRPC router", () => {
+  it("exposes bounded Runtime Catalog browsing and shortlist resolution to Lab clients", async () => {
+    const fixture = runtimeFixture();
+    const calls: string[] = [];
+    const runtimeCatalog: RuntimeCatalog = {
+      inspect: async (input) => {
+        calls.push(`inspect:${input.providerId ?? "overview"}`);
+        return {
+          adapterId: input.adapterId,
+          status: "available",
+          reason: null,
+          observedAt: 10,
+          runtimeVersion: "1.0.0",
+          providers: [],
+          models: [],
+          modelTotal: 0,
+          preferences: {
+            version: 1,
+            enabledModels: [],
+            defaults: { providerId: "", modelId: "", variant: "", agent: "" },
+          },
+        };
+      },
+      save: async (input) => {
+        calls.push(`save:${input.preferences.enabledModels.length}`);
+        return input.preferences;
+      },
+      resolve: async (input) => {
+        calls.push(`resolve:${input.adapterId}`);
+        return {
+          adapterId: input.adapterId,
+          observedAt: 10,
+          catalog: { providers: [], models: [], agents: [] },
+          selection: { providerId: "", modelId: "", variant: "", agent: "" },
+        };
+      },
+    };
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      runtimeCatalog,
+      diagnostics: new RpcDiagnosticLog(),
+      transport: "lab-http",
+    });
+
+    await caller.runtimeCatalog.inspect({ adapterId: "opencode", providerId: "openai" });
+    await caller.runtimeCatalog.save({
+      adapterId: "opencode",
+      preferences: {
+        version: 1,
+        enabledModels: [{ providerId: "openai", modelId: "codex" }],
+        defaults: { providerId: "openai", modelId: "codex", variant: "high", agent: "build" },
+      },
+    });
+    await caller.runtimeCatalog.resolve({ adapterId: "opencode" });
+
+    expect(calls).toEqual(["inspect:openai", "save:1", "resolve:opencode"]);
+  });
+
   it("passes a structurally valid create command to the runtime without a session identifier", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({
