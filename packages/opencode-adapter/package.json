@@ -1,5 +1,5 @@
 {
-  "name": "@volli/session-engine",
+  "name": "@volli/opencode-adapter",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -15,10 +15,11 @@
     "test:coverage": "vp test run --coverage"
   },
   "dependencies": {
-    "@volli/shared": "workspace:*",
-    "ai": "^7.0.47"
+    "@volli/session-engine": "workspace:*",
+    "@volli/shared": "workspace:*"
   },
   "devDependencies": {
+    "@types/node": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   }

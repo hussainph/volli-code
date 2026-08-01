@@ -1,5 +1,5 @@
 {
-  "name": "@volli/session-engine",
+  "name": "@volli/session-rpc",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -15,8 +15,10 @@
     "test:coverage": "vp test run --coverage"
   },
   "dependencies": {
-    "@volli/shared": "workspace:*",
-    "ai": "^7.0.47"
+    "@trpc/client": "^11.18.0",
+    "@trpc/server": "^11.18.0",
+    "@volli/session-engine": "workspace:*",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "typescript": "catalog:",
