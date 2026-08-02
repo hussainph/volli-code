@@ -22,17 +22,23 @@ A turn reads top to bottom: activity → prose answer → artifact card → atte
 
 Only the final answer renders as prose. Mid-turn narration folds into the activity block, following Codex's `phase: Commentary | FinalAnswer` split. This is a data-model decision, not a styling one — the adapter must classify assistant text before the renderer sees it.
 
-## Density: one mechanism, two timescales
+## Density: one flat list, one bundle
 
-Rows fold upward into the header above them. The same mechanism runs at two scales.
+Superseded 2026-08-03. The transcript was four nested levels — turn fold over block over group header over rows — with a fold mechanism at each. Every level needed its own spacing rule and its own left edge, and they composed into a rhythm no single rule could fix. The build is now flat.
 
-**Within a live turn — rolling tail.** The active line (thought verb or running tool) is pinned at the bottom. Above it, at most 3 completed rows. As new rows land the oldest is absorbed into the counted header, which ticks `Explored 12 tools` → `Explored 13 tools`. Turn height is therefore constant: 30 tool calls occupy the same space as 4. The composer never moves and the answer is never pushed off screen.
+**The list.** Two kinds of thing: what the agent said, and one **bundle** per contiguous run of everything else. Nothing else. Reasoning is a row inside a bundle, not a shape of its own.
 
-**On settle — durable rows only.** The moment nothing in a run is active the tail tightens again: commands drop into the header, and only the rows that changed the workspace stay on screen. The read-only group has always collapsed to nothing here, so this is one rule at both ends rather than two rules that disagree. Edits and writes are exempt because they are the turn's answer, not evidence for it — but they remain tail-bounded, so a twelve-file change still folds to its last three. `isDurableActivity` is deliberately *not* the complement of `isReadOnlyActivity`: a command usually does touch the disk, but no harness reports that it did, and the transcript may not claim what it was not told.
+**One left edge.** A bundle's rows sit at exactly the summary's left edge, and an expanded payload is a flush framed card rather than a rule hanging off a margin. Depth is never spelled as indentation — the caret and adjacency say it. Opening something makes the list longer instead of making it a tree.
 
-**Across turns — recency budget.** A turn folds to `Worked for 4m 31s ›` once *both* hold: a newer turn has completed, **and** the turn is out of view. The off-screen guard is load-bearing — it makes it structurally impossible for content to collapse under the reader or shift scroll position. Following Codex, the `Worked for` header only renders past 60s; shorter turns get a hairline.
+**Rest and live are the same one row.** A bundle rests as `Read 4 files, ran 3 commands, edited activity.ts` — phrases per kind in first-appearance order, so the sentence tracks the work. Durable kinds are *named* up to `NAMED_SUBJECT_LIMIT` and counted past it: the deliverable is the point of the row, and `edited 2 files` makes you open it to find out what the turn was for. While a turn streams the same row carries the whole report, taking the present participle for the kind still in flight — `Read 2 files, running 1 command…` — and ticking in place. It never auto-expands; watching the work is a click, not a default.
 
-Never auto-collapse a group the user opened by hand, and never collapse on replay of a stored session (guard on "streamed in this mount", or a restored 200-turn session fires 200 simultaneous collapses at boot).
+**Height is capped, not folded.** An open bundle scrolls inside itself past `BUNDLE_CAP`, and a tool payload past its own. Expanding must not cost the reader their place, and a cap does that without hiding anything behind a count.
+
+**Turns are not folded at all.** Every agent message stays in view; navigation is the minimap, not truncation. `foldTurn`, `foldRun` and `rollingTail` are gone.
+
+Open state is derived — `userOpen ?? bundleNeedsAttention(rows)` — never animated into and never raced against a timer, so a restored 200-turn session fires no transitions at boot and a bundle holding a failure is open before anyone asks. An approval request is the one thing that leaves the bundle: it blocks the reader, so it must not sit behind a disclosure at all. Failures stay inside, confessed in red by the summary.
+
+**Two spacing constants.** 12px between segments *and* between messages — OpenCode splits one reply into a message per step, and a wider gap at that seam would put 24px between two bundles and 12px between two others purely on where the harness cut the stream. 2px between rows inside a bundle. There is no third value.
 
 ## Tool lines
 
