@@ -495,6 +495,19 @@ describe("reasoningStatus", () => {
     ).toEqual({ verb: "Checking the reducer", meta: "4.0s" });
   });
 
+  it("treats a blank bold capture as no header at all", () => {
+    // `**  **` trims to "", which `??` would keep — rendering a status line
+    // carrying a duration and no words.
+    expect(reasoningStatus("**  **\nrest", { streaming: true, durationMs: 4000 })).toEqual({
+      verb: "Thinking…",
+      meta: "4.0s",
+    });
+    expect(reasoningStatus("**  **\nrest", { streaming: false, durationMs: 23000 })).toEqual({
+      verb: "Thought for 23s",
+      meta: null,
+    });
+  });
+
   it("falls back to a duration sentence when nothing is bold", () => {
     expect(reasoningStatus("plain thought", { streaming: false, durationMs: 8000 })).toEqual({
       verb: "Thought for 8.0s",

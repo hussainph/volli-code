@@ -675,7 +675,10 @@ export function reasoningStatus(
   text: string,
   options: { streaming: boolean; durationMs?: number | null },
 ): ReasoningStatus {
-  const header = FIRST_BOLD.exec(text)?.[1]?.trim() ?? null;
+  // `??` would keep a blank capture: `**  **` trims to "" and renders a status
+  // line with a duration and no words at all.
+  const matched = FIRST_BOLD.exec(text)?.[1]?.trim();
+  const header = matched !== undefined && matched.length > 0 ? matched : null;
   const elapsed = formatDuration(options.durationMs ?? null);
   if (options.streaming) return { verb: header ?? "Thinking…", meta: elapsed };
   if (header) return { verb: header, meta: elapsed };
