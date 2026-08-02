@@ -56,11 +56,13 @@ export type ReasoningLineProps = {
   verb: string;
   meta: string | null;
   streaming: boolean;
+  /** Sits against the verb, ahead of the meta — the disclosure caret's slot. */
+  after?: React.ReactNode;
   className?: string;
 };
 
 export const ReasoningLine = React.memo(
-  ({ verb, meta, streaming, className }: ReasoningLineProps) => (
+  ({ verb, meta, streaming, after, className }: ReasoningLineProps) => (
     // `flex-1` matters: this row is sometimes a block child and sometimes a
     // flex item beside a caret. As a flex item it would otherwise shrink to its
     // content, which kills the `ml-auto` below and lets a growing verb shove the
@@ -84,6 +86,7 @@ export const ReasoningLine = React.memo(
       ) : (
         <span className="min-w-0 truncate">{verb}</span>
       )}
+      {after}
       {meta ? <span className="ml-auto shrink-0 font-mono tabular-nums">{meta}</span> : null}
     </div>
   ),

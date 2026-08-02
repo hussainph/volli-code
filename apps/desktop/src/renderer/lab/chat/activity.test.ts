@@ -12,6 +12,8 @@ import {
   diffStat,
   formatBytes,
   formatDuration,
+  notableDuration,
+  NOTABLE_DURATION_MS,
   groupMessageParts,
   isAwaitingFirstOutput,
   parseDiff,
@@ -26,6 +28,18 @@ import {
 } from "./activity";
 
 type MessagePart = UIMessage["parts"][number];
+
+const emptyOutcome = {
+  exitCode: null,
+  matchCount: null,
+  fileCount: null,
+  lineCount: null,
+  bytes: null,
+  addedLines: null,
+  removedLines: null,
+  diff: null,
+  summary: null,
+};
 
 function descriptor(
   kind: ActivityKind,
@@ -353,17 +367,6 @@ describe("presenters", () => {
   });
 
   it("list-directory and fetch-url carry their own numbers", () => {
-    const emptyOutcome = {
-      exitCode: null,
-      matchCount: null,
-      fileCount: null,
-      lineCount: null,
-      bytes: null,
-      addedLines: null,
-      removedLines: null,
-      diff: null,
-      summary: null,
-    };
     expect(
       describeActivity(
         tool("list-directory", { descriptor: { outcome: { ...emptyOutcome, fileCount: 12 } } }),
@@ -427,6 +430,38 @@ describe("formatters", () => {
     expect(formatDuration(45_000)).toBe("45s");
     expect(formatDuration(72_000)).toBe("1m12s");
     expect(formatDuration(null)).toBeNull();
+  });
+
+  it("withholds a duration that is not worth a column", () => {
+    // Duration is the fallback meta. Sub-second work is instant, and printing
+    // `3ms` beside a read leaves the eye hunting for the numbers that matter.
+    expect(notableDuration(3)).toBeNull();
+    expect(notableDuration(940)).toBeNull();
+    expect(notableDuration(NOTABLE_DURATION_MS)).toBe("1.0s");
+    expect(notableDuration(72_000)).toBe("1m12s");
+    expect(notableDuration(null)).toBeNull();
+  });
+
+  it("drops a trivial duration from the row but keeps a real one", () => {
+    const trivial = ACTIVITY_PRESENTERS["run-command"](
+      activityContext(tool("run-command", { descriptor: { startedAt: 0, endedAt: 3 } })),
+    );
+    expect(trivial.meta).toBeNull();
+    const real = ACTIVITY_PRESENTERS["run-command"](
+      activityContext(tool("run-command", { descriptor: { startedAt: 0, endedAt: 2400 } })),
+    );
+    expect(real.meta).toBe("2.4s");
+  });
+
+  it("never thresholds a semantic meta — it says what happened, not how long", () => {
+    const failed = ACTIVITY_PRESENTERS["run-command"](
+      activityContext(
+        tool("run-command", {
+          descriptor: { startedAt: 0, endedAt: 3, outcome: { ...emptyOutcome, exitCode: 1 } },
+        }),
+      ),
+    );
+    expect(failed.meta).toBe("exit 1");
   });
 
   it("formats bytes and diff stats", () => {

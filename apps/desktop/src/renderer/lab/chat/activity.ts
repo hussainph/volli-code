@@ -532,8 +532,25 @@ export function diffStat(descriptor: ActivityDescriptor): string | null {
   return `+${added ?? 0} −${removed ?? 0}`;
 }
 
+/**
+ * Sub-second work is instant, and instant needs no number.
+ *
+ * Duration is the *fallback* meta — what a row shows when it has nothing
+ * semantic to report. Printing `3ms` on a read spends the column on noise and
+ * leaves the eye hunting for the numbers that matter (`exit 127`, `+49 −12`,
+ * `1m38s`) among ones that never did. Zed gates its stopwatch at 30s for the
+ * same reason. Semantic metas are never thresholded: they say what happened,
+ * not how long it took.
+ */
+export const NOTABLE_DURATION_MS = 1000;
+
+export function notableDuration(ms: number | null): string | null {
+  if (ms === null || !Number.isFinite(ms) || ms < NOTABLE_DURATION_MS) return null;
+  return formatDuration(ms);
+}
+
 function durationMeta(context: ActivityContext): string | null {
-  return isSettled(context.status) ? formatDuration(context.durationMs) : null;
+  return isSettled(context.status) ? notableDuration(context.durationMs) : null;
 }
 
 function searchMeta(context: ActivityContext): string | null {
@@ -707,7 +724,7 @@ export function reasoningStatus(
   // line with a duration and no words at all.
   const matched = FIRST_BOLD.exec(text)?.[1]?.trim();
   const header = matched !== undefined && matched.length > 0 ? matched : null;
-  const elapsed = formatDuration(options.durationMs ?? null);
+  const elapsed = notableDuration(options.durationMs ?? null);
   // A live thought carries no number. Its duration is not known yet, and a
   // counter pinned beside a verb that is still being written is exactly the
   // layout fight the reference apps document avoiding — the number is a receipt

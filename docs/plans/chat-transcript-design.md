@@ -83,6 +83,14 @@ Surveyed against Codex (`codex-rs/tui`), Zed (`crates/agent_ui`), OpenCode's TUI
 
 Related, and load-bearing: any component that paints text through `bg-clip-text` must keep the words on a layer with a real `color`. A single-element shimmer has to set `color: transparent` for the clip to show, which makes the gradient the sole source of colour — and then one unresolvable token (a `@theme inline`-pruned `--color-*`, or `currentColor`, which by then *is* the transparency) drops the declaration and the text renders as nothing at full width. Split into base + `aria-hidden` overlay, the worst case is a line that does not shimmer. This failure is invisible to jsdom and to the fixture gallery — the text is in the DOM the whole time — so only a real browser reading computed style catches it.
 
+### Three columns, three jobs
+
+Left glyph says what happened. The caret sits **against the label it opens**, inline. The far right belongs to the number alone.
+
+Parking the caret at the right edge — which container rows and leaf rows each did in their own way — makes it share that edge with the meta, and durations then land on as many different margins as there are row shapes. Perplexity's transcript settles it the same way: `Searching Cursor Anysphere valuation 2026 ›` with `1m 32s` alone on the right.
+
+**Duration is the fallback meta and is thresholded at 1s.** Sub-second work is instant, and instant needs no number; `3ms` on a read spends the column on noise and leaves the eye hunting for `exit 127` among numbers that never mattered. Zed gates its stopwatch at 30s for the same reason, and Perplexity shows a duration on one row in a turn. Semantic metas (`+49 −12`, `exit 1`, `14 in 6 files`, `12 entries`) are never thresholded — they say what happened, not how long it took.
+
 ## Attention
 
 Errors, denials and approval requests **always** break out as a full-width card. They can never sit inside a rolling window or a folded group.

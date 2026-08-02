@@ -75,13 +75,14 @@ const COLLAPSE = "duration-[400ms] ease-swift motion-reduce:transition-none";
 const COLLAPSE_FADE = "duration-[240ms] ease-swift motion-reduce:transition-none";
 
 /**
- * The one caret, and it always rides the right edge.
+ * The one caret, and it always sits against the label it opens.
  *
- * The left column of every row means one thing — what happened: a check, a
- * cross, a spinner, a thought's dot. A caret there would put two meanings in
- * one column, which is exactly how this read as inconsistent when container
- * rows disclosed on the left and leaf rows on the right. Left is outcome, right
- * is "there is more".
+ * Three columns, three jobs: the left glyph says what happened, the caret hugs
+ * the text it discloses, and the far right belongs to the number alone. Parked
+ * at the right edge instead — as container rows and leaf rows each did in their
+ * own way — the caret shares that edge with the meta, and durations come out on
+ * as many different margins as there are row shapes. Perplexity's transcript
+ * settles it the same way.
  *
  * Rotated, never swapped — a swapped glyph cannot animate, and reads as a
  * flicker. `hidden` keeps the slot so the meta column stays aligned across rows
@@ -270,6 +271,7 @@ export function ToolRow({
         <Icon aria-hidden className="size-3.5 shrink-0" />
         <span className="shrink-0">{row.verb}</span>
         {row.object ? <RowObject row={row} onOpenFile={onOpenFile} /> : null}
+        <Caret open={open} hidden={!expandable} />
         <RowActions row={row} />
         {row.meta ? (
           <span
@@ -279,7 +281,6 @@ export function ToolRow({
             {row.meta}
           </span>
         ) : null}
-        <Caret open={open} hidden={!expandable} />
       </div>
       {row.detail ? (
         <Disclosure open={open}>
@@ -494,7 +495,7 @@ export function ToolRun({
           className={TRIGGER_CLASS}
         >
           <Summary segments={runSummary(items)} />
-          <Caret open={expanded} className="ml-auto" />
+          <Caret open={expanded} />
         </button>
       ) : null}
       <div className="space-y-0.5">
@@ -543,9 +544,14 @@ export function ActivityGroup({
   };
 
   // One disclosure per group means one caret. It rides the tool header when
-  // there are tools, and the reasoning line when reasoning is all there is.
+  // there are tools, and the reasoning line when reasoning is all there is —
+  // inline against the verb either way, so the right edge stays the meta's.
   const reasoningLine = reasoning ? (
-    <ReasoningStatus part={reasoning.part} streaming={streaming && tools.length === 0} />
+    <ReasoningStatus
+      part={reasoning.part}
+      streaming={streaming && tools.length === 0}
+      after={summary.length === 0 && body !== null ? <Caret open={open} /> : null}
+    />
   ) : null;
 
   return (
@@ -553,13 +559,12 @@ export function ActivityGroup({
       {summary.length > 0 ? (
         <button type="button" onClick={toggle} className={TRIGGER_CLASS}>
           <Summary segments={summary} />
-          <Caret open={open} className="ml-auto" />
+          <Caret open={open} />
         </button>
       ) : null}
       {reasoningLine && summary.length === 0 && body !== null ? (
         <button type="button" onClick={toggle} className={TRIGGER_CLASS}>
           {reasoningLine}
-          <Caret open={open} />
         </button>
       ) : (
         reasoningLine
@@ -583,13 +588,17 @@ export function ActivityGroup({
 function ReasoningStatus({
   part,
   streaming,
+  after,
 }: {
   part: Extract<ActivityItem, { kind: "reasoning" }>["part"];
   streaming: boolean;
+  after?: React.ReactNode;
 }) {
   const elapsed = useElapsed(streaming);
   const status = reasoningStatus(part.text, { streaming, durationMs: elapsed });
-  return <ReasoningLine verb={status.verb} meta={status.meta} streaming={streaming} />;
+  return (
+    <ReasoningLine verb={status.verb} meta={status.meta} streaming={streaming} after={after} />
+  );
 }
 
 /* ---------------------------------------------------------------- attention */
@@ -710,7 +719,7 @@ export function SessionTodoDock({ todos }: { todos: readonly SessionTodo[] }) {
         {active ? (
           <span className="min-w-0 truncate text-muted-foreground">{active.content}</span>
         ) : null}
-        <Caret open={open} className="ml-auto" />
+        <Caret open={open} />
       </button>
       <Disclosure open={open}>
         <ul className="space-y-1 border-t border-border/70 px-3 py-2">
