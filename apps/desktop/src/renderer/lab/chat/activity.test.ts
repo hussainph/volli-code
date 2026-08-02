@@ -11,6 +11,7 @@ import {
   compactSignature,
   describeActivity,
   diffStat,
+  groupTurns,
   formatBytes,
   formatDuration,
   isBundleStreaming,
@@ -24,6 +25,7 @@ import {
   reasoningBody,
   reasoningStatus,
   segmentMessageParts,
+  segmentTurn,
   splitPath,
   type BundleRow,
   type ChatSegment,
@@ -118,6 +120,14 @@ function tool(
     input: overrides.input ?? null,
     output: overrides.output ?? null,
   };
+}
+
+function message(
+  id: string,
+  parts: UIMessage["parts"],
+  role: UIMessage["role"] = "assistant",
+): UIMessage {
+  return { id, role, parts };
 }
 
 /** A tool whose descriptor carries a real subject, so the summary can name it. */
@@ -225,6 +235,76 @@ describe("segmentMessageParts", () => {
     expect(row.kind).toBe("other");
     expect(row.verb).toBe("linear_create_issue");
     expect(row.object).toBe("VC-12 chat seam");
+  });
+});
+
+describe("segmentTurn", () => {
+  it("merges the messages a harness split one reply across", () => {
+    const segments = segmentTurn([
+      message("a1", [tool("read-file"), tool("run-command")]),
+      message("a2", [tool("run-command"), tool("run-command")]),
+    ]);
+    // One bundle, not two stacked headers each summarizing half the work. The
+    // step boundary is the harness's, and the reader cannot see it.
+    expect(segments.map((segment) => segment.kind)).toEqual(["bundle"]);
+    expect(summaryText(bundleOf(segments))).toEqual(["Read 1 file, ran 3 commands"]);
+  });
+
+  it("absorbs a step that only thought instead of leaving it stranded", () => {
+    const segments = segmentTurn([
+      message("a1", [tool("read-file")]),
+      message("a2", [{ type: "reasoning", text: "**Planning the next probe**" }]),
+      message("a3", [tool("run-command")]),
+    ]);
+    // Alone, the middle message was a bundle with nothing to count, so it
+    // rendered as a bare reasoning row that split the run in two.
+    expect(segments.map((segment) => segment.kind)).toEqual(["bundle"]);
+    expect(bundleOf(segments).map((row) => row.kind)).toEqual(["tool", "reasoning", "tool"]);
+  });
+
+  it("still breaks a bundle where the agent actually spoke", () => {
+    const segments = segmentTurn([
+      message("a1", [tool("read-file")]),
+      message("a2", [{ type: "text", text: "Found the seam." }]),
+      message("a3", [tool("run-command")]),
+    ]);
+    // Prose is a real boundary; only the invisible ones are merged away.
+    expect(segments.map((segment) => segment.kind)).toEqual(["bundle", "text", "bundle"]);
+  });
+
+  it("keys rows by their own message, so a merged turn has no collisions", () => {
+    const segments = segmentTurn([
+      message("a1", [tool("read-file")]),
+      message("a2", [tool("read-file")]),
+    ]);
+    const keys = bundleOf(segments).map((row) => row.key);
+    expect(keys).toEqual(["a1:0", "a2:0"]);
+  });
+});
+
+describe("groupTurns", () => {
+  it("runs consecutive assistant messages together and breaks at the user", () => {
+    const grouped = groupTurns([
+      message("u1", [{ type: "text", text: "go" }], "user"),
+      message("a1", [tool("read-file")]),
+      message("a2", [tool("run-command")]),
+      message("u2", [{ type: "text", text: "again" }], "user"),
+      message("a3", [tool("read-file")]),
+    ]);
+    expect(grouped.map((turn) => turn.map((entry) => entry.id))).toEqual([
+      ["u1"],
+      ["a1", "a2"],
+      ["u2"],
+      ["a3"],
+    ]);
+  });
+
+  it("keeps user messages apart even when they arrive back to back", () => {
+    const grouped = groupTurns([
+      message("u1", [{ type: "text", text: "one" }], "user"),
+      message("u2", [{ type: "text", text: "two" }], "user"),
+    ]);
+    expect(grouped).toHaveLength(2);
   });
 });
 

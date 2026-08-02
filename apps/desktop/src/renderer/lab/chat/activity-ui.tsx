@@ -18,7 +18,6 @@ import {
   BrainIcon,
   CaretRightIcon,
   CheckCircleIcon,
-  CheckIcon,
   CircleDashedIcon,
   CircleIcon,
   CopyIcon,
@@ -234,21 +233,18 @@ const KIND_ICONS: Record<ActivityKind, Icon> = {
 };
 
 /**
- * The gutter every transcript line shares.
- *
- * There is exactly one glyph column, 14px wide, and a line either fills it or
- * reserves it — never neither. Folded headers used to skip it while reasoning
- * took one slot and tool rows took two, so three kinds of line in the same
- * column started their text at 0, 20 and 40px. Nothing was communicated by the
- * difference; it just read as three columns that could not agree.
+ * Every transcript line fills the same 14px glyph column — never reserves it
+ * empty. Folded headers used to skip it while reasoning took one slot and tool
+ * rows took two, so three kinds of line started their text at 0, 20 and 40px.
+ * A bundle header left blank there read as a hole in the column, so it gets the
+ * wrench: one universal mark for "this stands for tools", the same way each row
+ * below it carries the mark for its own kind.
  */
-function Gutter({ children }: React.PropsWithChildren) {
-  return (
-    <span aria-hidden className="flex size-3.5 shrink-0 items-center justify-center">
-      {children}
-    </span>
-  );
+function BundleGlyph() {
+  return <WrenchIcon aria-hidden className={GLYPH_CLASS} weight="fill" />;
 }
+
+const GLYPH_CLASS = "size-3.5 shrink-0 text-muted-foreground";
 
 /**
  * The one glyph a tool row gets.
@@ -263,9 +259,15 @@ function Gutter({ children }: React.PropsWithChildren) {
 function RowGlyph({ kind, status }: { kind: ActivityKind; status: ActivityStatus }) {
   if (status !== "done") return <StatusGlyph status={status} />;
   const Icon = KIND_ICONS[kind];
-  return <Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />;
+  return <Icon aria-hidden className={GLYPH_CLASS} weight="fill" />;
 }
 
+/**
+ * Filled weights throughout — the outline set reads thin and unresolved beside
+ * the app's type. The two exceptions are the states whose meaning *is* the
+ * outline: a filled spinner-gap is a disc with no gap to rotate, and a filled
+ * dashed circle is a disc with no dashes.
+ */
 function StatusGlyph({ status }: { status: ActivityStatus }) {
   const className = "size-3.5 shrink-0";
   switch (status) {
@@ -282,9 +284,17 @@ function StatusGlyph({ status }: { status: ActivityStatus }) {
         <XCircleIcon aria-hidden className={cn(className, "text-destructive")} weight="fill" />
       );
     case "denied":
-      return <ProhibitIcon aria-hidden className={cn(className, "text-destructive")} />;
+      return (
+        <ProhibitIcon aria-hidden className={cn(className, "text-destructive")} weight="fill" />
+      );
     default:
-      return <CheckIcon aria-hidden className={cn(className, "text-muted-foreground")} />;
+      return (
+        <CheckCircleIcon
+          aria-hidden
+          className={cn(className, "text-muted-foreground")}
+          weight="fill"
+        />
+      );
   }
 }
 
@@ -589,7 +599,7 @@ export function ActivityBundle({
         aria-expanded={open}
         className={cn(ROW_CLASS, ROW_INTERACTIVE)}
       >
-        <Gutter />
+        <BundleGlyph />
         <Summary segments={summary} />
         <Caret open={open} pinned />
       </button>
@@ -636,7 +646,7 @@ function ReasoningRow({ part, streaming }: { part: ReasoningUIPart; streaming: b
         {streaming ? (
           <SpinnerGapIcon aria-hidden className="size-3.5 shrink-0 animate-spin text-primary" />
         ) : (
-          <BrainIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+          <BrainIcon aria-hidden className={GLYPH_CLASS} weight="fill" />
         )}
         <span className="min-w-0 truncate">{status.verb}</span>
         <Caret open={open} hidden={!expandable} />
@@ -738,7 +748,7 @@ export function AttentionReceipt({ part }: { part: DynamicToolUIPart }) {
       {approved ? (
         <CheckCircleIcon aria-hidden className="size-3.5 shrink-0 text-primary" weight="fill" />
       ) : (
-        <ProhibitIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+        <ProhibitIcon aria-hidden className={GLYPH_CLASS} weight="fill" />
       )}
       <span className="shrink-0">You {approved ? "allowed" : "denied"}</span>
       {row.object ? (

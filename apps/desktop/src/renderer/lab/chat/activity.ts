@@ -103,10 +103,53 @@ export function isBlankText(text: string): boolean {
   return text.replace(/[\u200B-\u200D\uFEFF]/g, "").trim().length === 0;
 }
 
+interface KeyedPart {
+  part: MessagePart;
+  key: string;
+}
+
 export function segmentMessageParts(
   parts: readonly MessagePart[],
   messageId: string,
 ): ChatSegment[] {
+  return segmentParts(parts.map((part, index) => ({ part, key: `${messageId}:${index}` })));
+}
+
+/**
+ * One turn's segments, across however many messages the harness split it into.
+ *
+ * OpenCode emits an assistant message *per step*, so a single reply arrives as
+ * a dozen messages. Segmenting each one alone put a bundle boundary at every
+ * step: four stacked `Ran 2 commands` headers where one `Ran 8 commands` was
+ * meant, and any step that only thought became a bare reasoning row between
+ * them. That seam is invisible to the reader and must not be felt — a turn is
+ * everything the agent did between two things the *user* said.
+ */
+export function segmentTurn(messages: readonly UIMessage[]): ChatSegment[] {
+  const parts: KeyedPart[] = [];
+  for (const message of messages) {
+    message.parts.forEach((part, index) => parts.push({ part, key: `${message.id}:${index}` }));
+  }
+  return segmentParts(parts);
+}
+
+/**
+ * Consecutive assistant messages collapse into one turn; anything else stands
+ * alone. Grouping by adjacency rather than by a stamped `turnId` keeps this
+ * working for a harness that never stamps one — a user message is the only
+ * thing that can start a turn, and that is observable everywhere.
+ */
+export function groupTurns(messages: readonly UIMessage[]): UIMessage[][] {
+  const turns: UIMessage[][] = [];
+  for (const message of messages) {
+    const last = turns[turns.length - 1];
+    if (last && message.role === "assistant" && last[0]?.role === "assistant") last.push(message);
+    else turns.push([message]);
+  }
+  return turns;
+}
+
+function segmentParts(entries: readonly KeyedPart[]): ChatSegment[] {
   const segments: ChatSegment[] = [];
   let bundle: BundleRow[] | null = null;
 
@@ -117,8 +160,7 @@ export function segmentMessageParts(
     bundle = null;
   };
 
-  parts.forEach((part, index) => {
-    const key = `${messageId}:${index}`;
+  entries.forEach(({ part, key }) => {
     if (part.type === "text") {
       // A blank text part is not a segment. A harness opens one before it has
       // words (OpenCode does) and can leave a whitespace-only one between tool
@@ -163,9 +205,13 @@ export function segmentMessageParts(
  * words, instead of being the thing that has to hold the floor while empty.
  */
 export function isAwaitingFirstOutput(messages: readonly UIMessage[]): boolean {
-  const last = messages[messages.length - 1];
-  if (!last || last.role !== "assistant") return true;
-  return segmentMessageParts(last.parts, last.id).length === 0;
+  const turns = groupTurns(messages);
+  const turn = turns[turns.length - 1];
+  if (!turn || turn[0]?.role !== "assistant") return true;
+  // The whole turn, not its newest message: a harness that opens a fresh
+  // message per step would otherwise re-arm the placeholder at every step,
+  // under a bundle that is already reporting the same work.
+  return segmentTurn(turn).length === 0;
 }
 
 /* ----------------------------------------------------------------- summary */

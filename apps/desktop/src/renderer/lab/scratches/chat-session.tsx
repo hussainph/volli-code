@@ -27,9 +27,10 @@ import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
 
 import {
+  groupTurns,
   isAwaitingFirstOutput,
   projectSessionTodos,
-  segmentMessageParts,
+  segmentTurn,
   type ChatSegment,
   type SessionTodo,
 } from "../chat/activity";
@@ -342,10 +343,10 @@ function ChatPlane({
               </ConversationEmptyState>
             ) : (
               <ContentColumn className={MESSAGE_GAP}>
-                {session.messages.map((message) => (
-                  <ChatMessage
-                    key={message.id}
-                    message={message}
+                {groupTurns(session.messages).map((turn) => (
+                  <ChatTurn
+                    key={turn[0]?.id}
+                    messages={turn}
                     working={working}
                     onOpenFile={onOpenFile}
                   />
@@ -465,34 +466,43 @@ const SEGMENT_GAP = "space-y-3";
  */
 const MESSAGE_GAP = "flex flex-col gap-3";
 
-function ChatMessage({
-  message,
+/**
+ * One turn — however many messages the harness split it into.
+ *
+ * Segmenting per message put a bundle boundary at every step, which is what
+ * stacked four `Ran 2 commands` headers where one belonged and left a step that
+ * only thought as a bare reasoning row between them.
+ */
+function ChatTurn({
+  messages,
   working,
   onOpenFile,
 }: {
-  message: UIMessage;
+  messages: readonly UIMessage[];
   working: boolean;
   onOpenFile(path: string): void;
 }) {
-  const segments =
-    message.role === "assistant" ? segmentMessageParts(message.parts, message.id) : null;
+  const first = messages[0];
+  if (!first) return null;
+  const role = first.role;
+  const segments = role === "assistant" ? segmentTurn(messages) : null;
   // A user message is prose only; the assistant path owns every other shape.
-  const prose = message.parts.flatMap((part, index) =>
-    part.type === "text" ? [{ key: `${message.id}:${index}`, text: part.text }] : [],
+  const prose = messages.flatMap((message) =>
+    message.parts.flatMap((part, index) =>
+      part.type === "text" ? [{ key: `${message.id}:${index}`, text: part.text }] : [],
+    ),
   );
 
   // Plan-only projections must not leave an empty bubble.
   if (segments && segments.length === 0) return null;
 
   return (
-    <Message from={message.role} className="max-w-full">
+    <Message from={role} className="max-w-full">
       <MessageContent className="gap-0 group-[.is-user]:rounded-xl group-[.is-user]:bg-muted group-[.is-user]:px-3.5 group-[.is-user]:py-2.5">
         <div className={SEGMENT_GAP}>
           {segments
             ? segments.map((segment) => (
-                <div key={segment.key}>
-                  {renderSegment(segment, { working, role: message.role, onOpenFile })}
-                </div>
+                <div key={segment.key}>{renderSegment(segment, { working, role, onOpenFile })}</div>
               ))
             : prose.map((entry) => <MessageResponse key={entry.key}>{entry.text}</MessageResponse>)}
         </div>
