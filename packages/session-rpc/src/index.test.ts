@@ -415,6 +415,18 @@ describe("Session tRPC router", () => {
     expect(calls).toEqual(["inspect:openai", "save:1", "resolve:opencode"]);
   });
 
+  it("rejects Runtime Catalog procedures on a transport that carries no catalog", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await expect(caller.runtimeCatalog.resolve({ adapterId: "opencode" })).rejects.toThrow(
+      "Runtime Catalog is unavailable on this transport",
+    );
+  });
+
   it("passes a structurally valid create command to the runtime without a session identifier", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({
