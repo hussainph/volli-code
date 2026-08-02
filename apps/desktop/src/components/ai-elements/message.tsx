@@ -19,6 +19,8 @@ import type { ComponentProps, HTMLAttributes, ReactElement } from "react";
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Streamdown } from "streamdown";
 
+import { chatMarkdownComponents } from "./chat-markdown";
+
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];
 };
@@ -282,11 +284,17 @@ const streamdownPlugins = { cjk, code, math, mermaid };
 const immediateStreamingAnimation = { duration: 0, stagger: 0 } as const;
 
 export const MessageResponse = memo(
-  ({ className, animated = immediateStreamingAnimation, ...props }: MessageResponseProps) => (
+  ({
+    className,
+    animated = immediateStreamingAnimation,
+    components,
+    ...props
+  }: MessageResponseProps) => (
     <Streamdown
       className={cn("size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", className)}
       animated={animated}
       plugins={streamdownPlugins}
+      components={{ ...chatMarkdownComponents, ...components }}
       {...props}
     />
   ),
