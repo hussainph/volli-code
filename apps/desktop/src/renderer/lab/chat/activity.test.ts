@@ -16,6 +16,7 @@ import {
   parseDiff,
   parseMatches,
   projectSessionTodos,
+  reasoningBody,
   reasoningStatus,
   rollingTail,
   runSummary,
@@ -493,6 +494,15 @@ describe("reasoningStatus", () => {
     expect(
       reasoningStatus("**Checking the reducer**\n", { streaming: false, durationMs: 4000 }),
     ).toEqual({ verb: "Checking the reducer", meta: "4.0s" });
+  });
+
+  it("strips the promoted header from the body so it is not said twice", () => {
+    expect(reasoningBody("**Running tests**\n\nChecking the reducer path.")).toBe(
+      "Checking the reducer path.",
+    );
+    expect(reasoningBody("**Running tests**")).toBe(null);
+    expect(reasoningBody("plain thought")).toBe("plain thought");
+    expect(reasoningBody("   ")).toBe(null);
   });
 
   it("treats a blank bold capture as no header at all", () => {

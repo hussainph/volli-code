@@ -671,6 +671,16 @@ export interface ReasoningStatus {
  * Codex and Cursor all landed on this independently. No collapsible: the full
  * text stays in the durable transcript for the inspector.
  */
+/**
+ * The body with the promoted line removed. That line is already the status verb,
+ * so leaving it in place says the same sentence twice the moment the row expands.
+ * Null when the header was the whole thought.
+ */
+export function reasoningBody(text: string): string | null {
+  const stripped = text.replace(FIRST_BOLD, "").trim();
+  return stripped.length > 0 ? stripped : null;
+}
+
 export function reasoningStatus(
   text: string,
   options: { streaming: boolean; durationMs?: number | null },

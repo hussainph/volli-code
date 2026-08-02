@@ -49,6 +49,7 @@ import {
   detailText,
   isActivityStreaming,
   isRowActive,
+  reasoningBody,
   reasoningStatus,
   rollingTail,
   runSummary,
@@ -453,7 +454,7 @@ export function ActivityGroup({
   // Opened by hand means audit everything; opened by streaming means the
   // rolling tail, so a live turn's height never grows with the tool count.
   const rows = userOpen === true ? tools : open ? tail.visible : [];
-  const body = reasoning?.part.text.trim() ? reasoning.part.text : null;
+  const body = reasoning ? reasoningBody(reasoning.part.text) : null;
   const toggle = () => {
     if (hasTextSelection()) return;
     setUserOpen(!open);
