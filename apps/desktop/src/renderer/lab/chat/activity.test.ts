@@ -141,6 +141,11 @@ function bundleOf(segments: readonly ChatSegment[]): BundleRow[] {
   return bundle.rows;
 }
 
+/** Which thoughts in a bundle still claim to be running, in order. */
+function thoughts(rows: readonly BundleRow[]): boolean[] {
+  return rows.filter((row) => row.kind === "reasoning").map((row) => row.streaming);
+}
+
 function summaryText(rows: readonly BundleRow[]): string[] {
   return bundleSummary(rows).map((segment) => segment.text);
 }
@@ -397,6 +402,66 @@ describe("bundleSummary", () => {
       { text: "1 failed", tone: "danger" },
       { text: "1 denied", tone: "danger" },
     ]);
+  });
+});
+
+describe("thought settlement", () => {
+  const live = {
+    type: "reasoning" as const,
+    text: "**Tracing the seam**",
+    state: "streaming" as const,
+  };
+
+  it("stops a thought the moment a tool call follows it", () => {
+    const rows = bundleOf(segmentMessageParts([live, tool("read-file")], "t1"));
+    // The part still says `streaming` — OpenCode never flips it back — but the
+    // model plainly finished thinking, or it could not have called a tool.
+    expect(thoughts(rows)).toEqual([false]);
+  });
+
+  it("stops a thought when the agent starts speaking", () => {
+    const segments = segmentMessageParts([live, { type: "text", text: "Found it." }], "t2");
+    expect(thoughts(bundleOf(segments))).toEqual([false]);
+  });
+
+  it("leaves only the last of several thoughts running", () => {
+    const rows = bundleOf(segmentMessageParts([live, live, live], "t3"));
+    expect(thoughts(rows)).toEqual([false, false, true]);
+  });
+
+  it("keeps the final thought running while it is genuinely the last row", () => {
+    const rows = bundleOf(segmentMessageParts([tool("read-file"), live], "t4"));
+    expect(thoughts(rows)).toEqual([true]);
+  });
+
+  it("settles a thought that a later message overtook", () => {
+    // The whole point of merging the turn: the tool arrives in its own message,
+    // and per-message segmentation could never have seen it.
+    const rows = bundleOf(segmentTurn([message("a1", [live]), message("a2", [tool("read-file")])]));
+    expect(thoughts(rows)).toEqual([false]);
+  });
+
+  it("drops a wordless thought that nothing will ever fill", () => {
+    const rows = bundleOf(
+      segmentMessageParts(
+        [{ type: "reasoning", text: "", state: "streaming" }, tool("read-file")],
+        "t6",
+      ),
+    );
+    expect(rows.map((row) => row.kind)).toEqual(["tool"]);
+  });
+
+  it("keeps a wordless thought that is still being written", () => {
+    const rows = bundleOf(
+      segmentMessageParts([{ type: "reasoning", text: "", state: "streaming" }], "t7"),
+    );
+    // Before the first token there is nothing else holding the floor.
+    expect(thoughts(rows)).toEqual([true]);
+  });
+
+  it("does not report a settled thought as live work", () => {
+    const rows = bundleOf(segmentMessageParts([live, { type: "text", text: "x" }], "t8"));
+    expect(isBundleStreaming(rows)).toBe(false);
   });
 });
 

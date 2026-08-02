@@ -32,7 +32,20 @@ type MessagePart = UIMessage["parts"][number];
  * thing twice and gave the transcript a second left edge to disagree about.
  */
 export type BundleRow =
-  | { kind: "reasoning"; part: ReasoningUIPart; key: string }
+  | {
+      kind: "reasoning";
+      part: ReasoningUIPart;
+      key: string;
+      /**
+       * Whether the model is still writing *this* thought — which is not what
+       * the part's own state says. OpenCode leaves a reasoning part `streaming`
+       * for the rest of the turn, so a row trusting it spins forever and its
+       * timer reports the whole turn's duration as the thought's. A thought is
+       * over the moment anything follows it, and the projection is the only
+       * place that knows what followed.
+       */
+      streaming: boolean;
+    }
   | { kind: "tool"; part: DynamicToolUIPart; key: string };
 
 /**
@@ -174,11 +187,10 @@ function segmentParts(entries: readonly KeyedPart[]): ChatSegment[] {
       return;
     }
     if (part.type === "reasoning") {
-      // Same rule as text: a reasoning part that never got words is not a row.
-      // While it streams it still is, because "Thinking…" is the sign of life.
-      if (part.state !== "streaming" && isBlankText(part.text)) return;
       bundle ??= [];
-      bundle.push({ kind: "reasoning", part, key });
+      // Settled by default; `settleThoughts` promotes the one that is still
+      // being written, and drops the wordless ones nothing will ever fill.
+      bundle.push({ kind: "reasoning", part, key, streaming: false });
       return;
     }
     if (part.type !== "dynamic-tool") return;
@@ -193,7 +205,42 @@ function segmentParts(entries: readonly KeyedPart[]): ChatSegment[] {
   });
 
   flush();
-  return segments;
+  return settleThoughts(segments);
+}
+
+/**
+ * Exactly one thought may be live, and only if nothing came after it.
+ *
+ * The harness cannot be trusted for this: OpenCode never flips a reasoning part
+ * back off `streaming`, so every thought in a turn claimed to still be running
+ * and each one's timer counted from its own start to the end of the turn. But
+ * the transcript already knows the answer structurally — a tool call, a
+ * sentence, or another thought after this one all mean the model finished
+ * thinking. Only the final row in the turn can still be in progress.
+ *
+ * Wordless thoughts are dropped in the same pass rather than at push time,
+ * because whether an empty part is a placeholder or a leftover depends entirely
+ * on whether anything followed it — the same question.
+ */
+function settleThoughts(segments: readonly ChatSegment[]): ChatSegment[] {
+  const last = segments[segments.length - 1];
+  const live = last?.kind === "bundle" ? last.rows[last.rows.length - 1] : undefined;
+  if (live?.kind === "reasoning" && live.part.state === "streaming") live.streaming = true;
+
+  const kept: ChatSegment[] = [];
+  for (const segment of segments) {
+    if (segment.kind !== "bundle") {
+      kept.push(segment);
+      continue;
+    }
+    const rows = segment.rows.filter(
+      (row) => row.kind !== "reasoning" || row.streaming || !isBlankText(row.part.text),
+    );
+    // The key was stamped when the bundle opened, so dropping rows out of it
+    // never re-keys the segment and never remounts an open disclosure.
+    if (rows.length > 0) kept.push({ ...segment, rows });
+  }
+  return kept;
 }
 
 /**
@@ -255,9 +302,7 @@ export function bundleToolRows(rows: readonly BundleRow[]): Extract<BundleRow, {
 }
 
 export function isBundleStreaming(rows: readonly BundleRow[]): boolean {
-  return rows.some((row) =>
-    row.kind === "reasoning" ? row.part.state === "streaming" : isRowActive(row.part),
-  );
+  return rows.some((row) => (row.kind === "reasoning" ? row.streaming : isRowActive(row.part)));
 }
 
 /** A failure or a denial inside the bundle, which is reason enough to open it. */

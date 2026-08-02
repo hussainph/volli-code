@@ -619,7 +619,7 @@ export function ActivityBundle({
 
 function BundleRowView({ row, onOpenFile }: { row: BundleRow; onOpenFile?(path: string): void }) {
   if (row.kind === "reasoning") {
-    return <ReasoningRow part={row.part} streaming={row.part.state === "streaming"} />;
+    return <ReasoningRow part={row.part} streaming={row.streaming} />;
   }
   return <ToolRow part={row.part} onOpenFile={onOpenFile} />;
 }

@@ -470,6 +470,7 @@ export default function ChatActivityScratch() {
             {
               kind: "reasoning",
               key: "r1",
+              streaming: false,
               part: reasoning(
                 "**Checking the reducer**\n\nThe queue drains one message at a time.",
               ),
@@ -486,7 +487,12 @@ export default function ChatActivityScratch() {
       <Section label="Bundle · reasoning alone is its own summary">
         <ActivityBundle
           rows={[
-            { kind: "reasoning", key: "r2", part: reasoning("Plain thinking, no bold line.") },
+            {
+              kind: "reasoning",
+              key: "r2",
+              streaming: false,
+              part: reasoning("Plain thinking, no bold line."),
+            },
           ]}
         />
       </Section>
@@ -494,7 +500,12 @@ export default function ChatActivityScratch() {
       <Section label="Bundle · thinking still being written">
         <ActivityBundle
           rows={[
-            { kind: "reasoning", key: "r3", part: reasoning("**Tracing the seam**", "streaming") },
+            {
+              kind: "reasoning",
+              key: "r3",
+              streaming: true,
+              part: reasoning("**Tracing the seam**", "streaming"),
+            },
           ]}
         />
       </Section>
