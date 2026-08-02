@@ -174,6 +174,39 @@ const KIND_ICONS: Record<ActivityKind, Icon> = {
   other: WrenchIcon,
 };
 
+/**
+ * The gutter every transcript line shares.
+ *
+ * There is exactly one glyph column, 14px wide, and a line either fills it or
+ * reserves it — never neither. Folded headers used to skip it while reasoning
+ * took one slot and tool rows took two, so three kinds of line in the same
+ * column started their text at 0, 20 and 40px. Nothing was communicated by the
+ * difference; it just read as three columns that could not agree.
+ */
+function Gutter({ children }: React.PropsWithChildren) {
+  return (
+    <span aria-hidden className="flex size-3.5 shrink-0 items-center justify-center">
+      {children}
+    </span>
+  );
+}
+
+/**
+ * The one glyph a tool row gets.
+ *
+ * At rest it is the kind icon, which is there to be scanned rather than read —
+ * the verb beside it already says `Ran`, `Read`, `Edited`. Anything that is not
+ * a plain completion takes the slot instead, because a row that is waiting,
+ * blocked or broken has exactly one thing to say. Dropping the permanent
+ * checkmark column costs nothing: the meta on the right is the receipt, and a
+ * settled row that says nothing else is a row that went fine.
+ */
+function RowGlyph({ kind, status }: { kind: ActivityKind; status: ActivityStatus }) {
+  if (status !== "done") return <StatusGlyph status={status} />;
+  const Icon = KIND_ICONS[kind];
+  return <Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />;
+}
+
 function StatusGlyph({ status }: { status: ActivityStatus }) {
   const className = "size-3.5 shrink-0";
   switch (status) {
@@ -243,7 +276,6 @@ export function ToolRow({
   const row = describeActivity(part);
   const [open, setOpen] = React.useState(false);
   const expandable = row.detail !== null;
-  const Icon = KIND_ICONS[row.kind];
 
   const toggle = () => {
     if (hasTextSelection() || !expandable) return;
@@ -268,8 +300,7 @@ export function ToolRow({
             "cursor-pointer hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
         )}
       >
-        <StatusGlyph status={row.status} />
-        <Icon aria-hidden className="size-3.5 shrink-0" />
+        <RowGlyph kind={row.kind} status={row.status} />
         <span className="shrink-0">{row.verb}</span>
         {row.object ? <RowObject row={row} onOpenFile={onOpenFile} /> : null}
         <Caret open={open} hidden={!expandable} />
@@ -499,6 +530,7 @@ export function ToolRun({
           onClick={() => setExpanded((value) => !value)}
           className={TRIGGER_CLASS}
         >
+          <Gutter />
           <Summary segments={runSummary(items)} />
           <Caret open={expanded} />
         </button>
@@ -563,6 +595,7 @@ export function ActivityGroup({
     <div className="not-prose">
       {summary.length > 0 ? (
         <button type="button" onClick={toggle} className={TRIGGER_CLASS}>
+          <Gutter />
           <Summary segments={summary} />
           <Caret open={open} />
         </button>
@@ -639,7 +672,6 @@ export function AttentionCard({
   onDecide?(decision: AttentionDecision): void;
 }) {
   const row = describeActivity(part);
-  const Icon = KIND_ICONS[row.kind];
   const pending = row.status === "approval";
   const body = row.errorText ?? detailText(row.detail);
 
@@ -651,8 +683,7 @@ export function AttentionCard({
       )}
     >
       <div className="flex min-w-0 items-center gap-1.5 text-xs">
-        <StatusGlyph status={row.status} />
-        <Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+        <RowGlyph kind={row.kind} status={row.status} />
         <span className="shrink-0 text-muted-foreground">{row.verb}</span>
         {row.object ? <RowObject row={row} onOpenFile={onOpenFile} /> : null}
       </div>
