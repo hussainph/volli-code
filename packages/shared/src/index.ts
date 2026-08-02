@@ -7,6 +7,7 @@ export * from "./doctor";
 export * from "./harness-command";
 export * from "./harness";
 export * from "./agent-surface";
+export * from "./session-activity";
 export * from "./ticket-branch";
 export * from "./ticket-comment";
 export * from "./ticket-attachment";
