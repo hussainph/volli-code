@@ -447,6 +447,16 @@ interface BufferedOpenCodeMessage {
 }
 
 /**
+ * The tool call an open permission gates. OpenCode asks for permission on a
+ * channel of its own, but names the call it is blocking on — so the prompt can
+ * be raised on that tool row instead of only beside the transcript.
+ */
+interface OpenCodeApprovalTarget {
+  readonly messageId: string;
+  readonly callId: string;
+}
+
+/**
  * What OpenCode reports about an assistant turn itself, rather than its parts.
  * Every field is nullable: absent is not zero, and a turn header must be able to
  * render with nothing but the model id.
@@ -491,6 +501,8 @@ class OpenCodeBinding implements BindingHandle {
   readonly #streamSnapshotTriggers = new Map<string, string>();
   readonly #deferredEvents: OpenCodeSseEvent[] = [];
   readonly #questions = new Map<string, readonly OpenCodeQuestion[]>();
+  /** Open tool-gating permissions, by OpenCode's permission id. */
+  readonly #pendingApprovals = new Map<string, OpenCodeApprovalTarget>();
   readonly #streamAbort = new AbortController();
   #sink: ObservationSink | null = null;
   #emissionQueue: Promise<void> = Promise.resolve();
@@ -649,6 +661,19 @@ class OpenCodeBinding implements BindingHandle {
       return true;
     };
     let completesNativeHistoryImport = false;
+    // Project permissions before messages — they are what tells a hydrated tool
+    // row it is gated — but keep them behind messages in the emitted batch, so
+    // the order a resuming consumer sees is the order it always saw.
+    const permissionObservations = arrayBody(permissionResponse.body)
+      .filter((candidate) => hasSessionId(candidate, this.#nativeSessionId))
+      .flatMap((permission) => {
+        const observation = this.#interactionObservation(
+          "permission.asked",
+          permission,
+          `permission:${objectString(permission, "id") ?? "unknown"}`,
+        );
+        return observation ? [observation] : [];
+      });
     if (isSuccessfulMessageResponse(messages)) {
       const importNativeHistory = this.#importNativeHistory;
       completesNativeHistoryImport = importNativeHistory;
@@ -663,16 +688,7 @@ class OpenCodeBinding implements BindingHandle {
         }
       }
     }
-    for (const permission of arrayBody(permissionResponse.body).filter((candidate) =>
-      hasSessionId(candidate, this.#nativeSessionId),
-    )) {
-      const observation = this.#interactionObservation(
-        "permission.asked",
-        permission,
-        `permission:${objectString(permission, "id") ?? "unknown"}`,
-      );
-      if (observation) push(observation);
-    }
+    for (const observation of permissionObservations) push(observation);
     for (const question of arrayBody(questionResponse.body).filter((candidate) =>
       hasSessionId(candidate, this.#nativeSessionId),
     )) {
@@ -741,6 +757,7 @@ class OpenCodeBinding implements BindingHandle {
     await this.#drainInFlightEmit();
     this.#sink = null;
     this.#messages.clear();
+    this.#pendingApprovals.clear();
     this.#deferredEvents.length = 0;
     this.#pendingReconciliation = null;
     this.#onRelease();
@@ -973,9 +990,18 @@ class OpenCodeBinding implements BindingHandle {
       case "question.asked": {
         const observation = this.#interactionObservation(event.type, event.properties, event.id);
         if (observation) await this.#emit(observation);
+        // Nothing further arrives on the gated call until a human answers, so
+        // repaint now or the prompt would not reach its tool row until the
+        // reply that already dismissed it.
+        this.#scheduleStreamSnapshot(approvalTarget(event.properties)?.messageId ?? null, event.id);
         return;
       }
-      case "permission.replied":
+      case "permission.replied": {
+        const observation = this.#resolvedInteractionObservation(event);
+        if (observation) await this.#emit(observation);
+        this.#clearApproval(event);
+        return;
+      }
       case "question.replied":
       case "question.rejected": {
         const observation = this.#resolvedInteractionObservation(event);
@@ -1094,8 +1120,9 @@ class OpenCodeBinding implements BindingHandle {
     const triggerId = this.#streamSnapshotTriggers.get(messageId);
     if (!buffered?.role || buffered.role === "user" || !triggerId) return;
     const turnBusy = this.#turnStatus !== "idle";
+    const approvals = this.#approvalsForMessage(messageId);
     const parts = buffered.partOrder.flatMap((partId) =>
-      openCodePart(buffered.parts.get(partId), { reasoningStreaming: turnBusy }),
+      openCodePart(buffered.parts.get(partId), { reasoningStreaming: turnBusy, approvals }),
     );
     if (parts.length === 0) return;
     // Fallback for the window before `time.end` lands: a thought is live only
@@ -1154,8 +1181,11 @@ class OpenCodeBinding implements BindingHandle {
         this.#messages.delete(messageId);
         continue;
       }
+      // Same gate as the streaming path: one message must not project two ways
+      // depending on which path emitted it.
+      const approvals = this.#approvalsForMessage(messageId);
       const parts = buffered.partOrder.flatMap((partId) =>
-        openCodePart(buffered.parts.get(partId), { reasoningStreaming: false }),
+        openCodePart(buffered.parts.get(partId), { reasoningStreaming: false, approvals }),
       );
       if (parts.length === 0) {
         this.#messages.delete(messageId);
@@ -1196,7 +1226,7 @@ class OpenCodeBinding implements BindingHandle {
     const message: UIMessage = {
       id: messageId,
       role,
-      parts: messageParts(raw),
+      parts: messageParts(raw, this.#approvalsForMessage(messageId)),
       ...(metadata ? { metadata } : {}),
     };
     return {
@@ -1362,6 +1392,10 @@ class OpenCodeBinding implements BindingHandle {
       native: { id: nativeId, detail: kind === "question" ? questionDetail(questions(raw)) : null },
     };
     if (kind === "question") this.#questions.set(nativeId, questions(raw));
+    // Both the SSE event and the hydrate sweep land here, so one record keeps a
+    // permission opened before this binding attached gating its row too.
+    const target = kind === "permission" ? approvalTarget(raw) : null;
+    if (target) this.#pendingApprovals.set(nativeId, target);
     return {
       id,
       kind: "interaction.opened",
@@ -1412,6 +1446,34 @@ class OpenCodeBinding implements BindingHandle {
         response: null,
       },
     };
+  }
+
+  /**
+   * An answered permission stops gating its call, whoever answered it. Drop the
+   * gate and repaint: allowed, the row goes back to running; rejected, OpenCode
+   * fails the call itself and the row settles into that error. The adapter
+   * never states a verdict OpenCode has not reported.
+   */
+  #clearApproval(event: OpenCodeSseEvent): void {
+    const permissionId = objectString(event.properties, "requestID");
+    if (!permissionId) return;
+    const target = this.#pendingApprovals.get(permissionId);
+    if (!target) return;
+    this.#pendingApprovals.delete(permissionId);
+    this.#scheduleStreamSnapshot(target.messageId, event.id);
+  }
+
+  /**
+   * OpenCode keys permissions by their own id; a message projects by call id. A
+   * session blocks on its first open permission, so this map holds ones — a
+   * scan beats keeping a second index true to the first.
+   */
+  #approvalsForMessage(messageId: string): ReadonlyMap<string, string> {
+    const byCallId = new Map<string, string>();
+    for (const [permissionId, target] of this.#pendingApprovals) {
+      if (target.messageId === messageId) byCallId.set(target.callId, permissionId);
+    }
+    return byCallId;
   }
 
   async #resolveInteraction(
@@ -1766,9 +1828,9 @@ const SAFE_OPEN_CODE_ERROR_NAMES = new Set([
 ]);
 
 /** Maps the legacy OpenCode Part union to durable AI SDK UI parts. */
-function messageParts(raw: unknown): UIMessage["parts"] {
+function messageParts(raw: unknown, approvals: ReadonlyMap<string, string>): UIMessage["parts"] {
   if (!isRecord(raw) || !Array.isArray(raw.parts)) return [];
-  return raw.parts.flatMap((part) => openCodePart(part));
+  return raw.parts.flatMap((part) => openCodePart(part, { approvals }));
 }
 
 function transcriptObservationId(message: UIMessage): string {
@@ -1780,9 +1842,17 @@ function transcriptObservationId(message: UIMessage): string {
   return `message:${message.id}:${digest}`;
 }
 
+/** Reads the call a `permission.asked` payload gates, when it gates one at all. */
+function approvalTarget(raw: unknown): OpenCodeApprovalTarget | null {
+  const tool = nested(raw, "tool");
+  const messageId = objectString(tool, "messageID");
+  const callId = objectString(tool, "callID");
+  return messageId && callId ? { messageId, callId } : null;
+}
+
 function openCodePart(
   part: unknown,
-  options?: { reasoningStreaming?: boolean },
+  options?: { reasoningStreaming?: boolean; approvals?: ReadonlyMap<string, string> },
 ): UIMessage["parts"] {
   const type = objectString(part, "type");
   if (type === "text") {
@@ -1821,7 +1891,23 @@ function openCodePart(
     ...(title ? { title } : {}),
     toolMetadata: openCodeToolMetadata(state, toolName),
   };
-  switch (objectString(state, "status")) {
+  const status = objectString(state, "status");
+  // A permission only gates a call still in flight. Once OpenCode reports the
+  // call settled that verdict is the newer fact, so the row recovers on its own
+  // even if the reply lifting the gate never reached this binding.
+  const approvalId =
+    status === "pending" || status === "running" ? options?.approvals?.get(toolCallId) : undefined;
+  if (approvalId !== undefined) {
+    return [
+      {
+        ...base,
+        state: "approval-requested",
+        input: state.input ?? null,
+        approval: { id: approvalId },
+      },
+    ];
+  }
+  switch (status) {
     case "pending":
       return [
         {

@@ -78,6 +78,66 @@ const toolPart = (tool: string, callID: string, state: Record<string, unknown>) 
   state,
 });
 
+/** Every tool row the transcript projected, in the order it projected them. */
+function toolRows(observations: readonly HarnessObservation[]) {
+  return observations.flatMap((observation) =>
+    observation.kind !== "transcript.message"
+      ? []
+      : observation.message.parts.flatMap((part) => (part.type === "dynamic-tool" ? [part] : [])),
+  );
+}
+
+/**
+ * One assistant turn holding a running tool call, then whatever the permission
+ * channel does to it. The stream never ends, so a gated row observed here is a
+ * live gate rather than an artifact of the turn settling.
+ */
+function gatedTurn(
+  tail: readonly OpenCodeSseEvent[],
+  hold: Deferred<void>,
+  callState: Record<string, unknown> = { status: "running", input: { path: "src/index.ts" } },
+) {
+  const network = new FakeNetwork();
+  network.subscribe = async (input) => {
+    network.subscriptions.push(input);
+    return (async function* () {
+      yield {
+        id: "assistant",
+        type: "message.updated",
+        properties: {
+          info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+        },
+      };
+      yield {
+        id: "call",
+        type: "message.part.updated",
+        properties: {
+          sessionID: "native-session-1",
+          part: {
+            id: "p1",
+            messageID: "provider-assistant",
+            ...toolPart("write", "call-write", callState),
+          },
+        },
+      };
+      yield* tail;
+      await hold.promise;
+    })();
+  };
+  return network;
+}
+
+const askedFor = (callID: string, messageID = "provider-assistant") => ({
+  id: "asked",
+  type: "permission.asked",
+  properties: {
+    sessionID: "native-session-1",
+    id: "per_1",
+    title: "Allow write",
+    tool: { messageID, callID },
+  },
+});
+
 function activity(
   kind: ActivityKind,
   nativeToolName: string,
@@ -4283,6 +4343,267 @@ describe("OpenCodeNativeAdapter", () => {
         },
       }),
     );
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("raises an open permission on the tool row it gates, mid-turn", async () => {
+    const hold = new Deferred<void>();
+    const network = gatedTurn([askedFor("call-write")], hold);
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // The prompt lands on the call it is about, while that call is still live.
+    expect(toolRows(observations).at(-1)).toMatchObject({
+      toolCallId: "call-write",
+      state: "approval-requested",
+      input: { path: "src/index.ts" },
+      approval: { id: "per_1" },
+    });
+    // Additive: the parallel interaction channel the ledger reads is untouched.
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        kind: "interaction.opened",
+        interaction: expect.objectContaining({ id: "permission:per_1", kind: "permission" }),
+      }),
+    );
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("gates a call whose input OpenCode has not reported", async () => {
+    const hold = new Deferred<void>();
+    const network = gatedTurn([askedFor("call-write")], hold, { status: "running" });
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Absent arguments are null, not a missing key: the row a human is asked to
+    // approve still has to be a complete part.
+    expect(toolRows(observations).at(-1)).toMatchObject({
+      toolCallId: "call-write",
+      state: "approval-requested",
+      input: null,
+      approval: { id: "per_1" },
+    });
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("returns a gated row to its running state once the permission is allowed", async () => {
+    const hold = new Deferred<void>();
+    const network = gatedTurn(
+      [
+        askedFor("call-write"),
+        {
+          id: "allowed",
+          type: "permission.replied",
+          properties: { sessionID: "native-session-1", requestID: "per_1", reply: "once" },
+        },
+      ],
+      hold,
+    );
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // The answer lifts the gate on its own: nothing about the call itself
+    // changed, so a row still reading approval-requested here would be stuck.
+    const rows = toolRows(observations);
+    expect(rows.at(-1)).toMatchObject({ toolCallId: "call-write", state: "input-available" });
+    expect(rows.at(-1)).not.toHaveProperty("approval");
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("lets a rejected permission settle into the failure OpenCode reports", async () => {
+    const hold = new Deferred<void>();
+    const network = gatedTurn(
+      [
+        askedFor("call-write"),
+        {
+          id: "rejected",
+          type: "permission.replied",
+          properties: { sessionID: "native-session-1", requestID: "per_1", reply: "reject" },
+        },
+        // OpenCode fails the call itself on a rejection, so the row settles on
+        // its verdict rather than one the adapter invented.
+        {
+          id: "failed",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "p1",
+              messageID: "provider-assistant",
+              ...toolPart("write", "call-write", {
+                status: "error",
+                input: { path: "src/index.ts" },
+                error: "The user rejected this request",
+              }),
+            },
+          },
+        },
+      ],
+      hold,
+    );
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(toolRows(observations).at(-1)).toMatchObject({
+      toolCallId: "call-write",
+      state: "output-error",
+      errorText: "The user rejected this request",
+    });
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("keeps a settled call on OpenCode's verdict when a permission outlives it", async () => {
+    const hold = new Deferred<void>();
+    const network = gatedTurn(
+      [
+        {
+          id: "done",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "p1",
+              messageID: "provider-assistant",
+              ...toolPart("write", "call-write", {
+                status: "completed",
+                input: { path: "src/index.ts" },
+                output: "written",
+              }),
+            },
+          },
+        },
+        askedFor("call-write"),
+      ],
+      hold,
+    );
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // A reply this binding never saw must not strand the row on a stale prompt.
+    expect(toolRows(observations).every(({ state }) => state !== "approval-requested")).toBe(true);
+    expect(toolRows(observations).at(-1)).toMatchObject({
+      toolCallId: "call-write",
+      state: "output-available",
+      output: "written",
+    });
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("hydrates a gated tool row for a permission opened before this binding attached", async () => {
+    const { adapter, network } = composition();
+    network.messageResponse = {
+      info: { id: "history-1", role: "assistant" },
+      parts: [toolPart("write", "call-write", { status: "running", input: { path: "src/a.ts" } })],
+    };
+    const originalRequest = network.request.bind(network);
+    network.request = async (input) =>
+      input.path.startsWith("/permission")
+        ? {
+            status: 200,
+            body: [
+              {
+                sessionID: "native-session-1",
+                id: "per_1",
+                title: "Allow write",
+                tool: { messageID: "history-1", callID: "call-write" },
+              },
+            ],
+          }
+        : originalRequest(input);
+    const handle = await adapter.attach(spec(), { emit: async () => undefined });
+    const { observations } = await handle.reconcile(null);
+
+    // A permission blocks on a human, so it routinely outlives the connection
+    // that first reported it. Resuming has to redraw the gate, not lose it.
+    expect(toolRows(observations).at(-1)).toMatchObject({
+      toolCallId: "call-write",
+      state: "approval-requested",
+      approval: { id: "per_1" },
+    });
+    // Messages still precede interactions in the resumed batch.
+    expect(observations.findIndex(({ kind }) => kind === "transcript.message")).toBeLessThan(
+      observations.findIndex(({ kind }) => kind === "interaction.opened"),
+    );
+  });
+
+  it("gates only the call a permission names, not every call in flight", async () => {
+    const hold = new Deferred<void>();
+    const network = gatedTurn(
+      [
+        // A permission opened against a different message must not leak onto
+        // this one's identically named call.
+        askedFor("call-write", "other-assistant"),
+        {
+          id: "anonymous-reply",
+          type: "permission.replied",
+          properties: { sessionID: "native-session-1", reply: "once" },
+        },
+        {
+          id: "more",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "t1",
+              messageID: "provider-assistant",
+              type: "text",
+              text: "Still working",
+            },
+          },
+        },
+      ],
+      hold,
+    );
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(toolRows(observations).every(({ state }) => state !== "approval-requested")).toBe(true);
+    expect(toolRows(observations).at(-1)).toMatchObject({
+      toolCallId: "call-write",
+      state: "input-available",
+    });
     hold.resolve(undefined);
     await handle.release("requested");
   });
