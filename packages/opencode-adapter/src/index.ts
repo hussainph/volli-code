@@ -1098,18 +1098,16 @@ class OpenCodeBinding implements BindingHandle {
       openCodePart(buffered.parts.get(partId), { reasoningStreaming: turnBusy }),
     );
     if (parts.length === 0) return;
-    // Only the trailing reasoning part stays "streaming" — earlier thought
-    // blocks in the same turn should collapse instead of fighting the live one.
+    // A thought is live only while it is the message's *final* part. Once text
+    // or a tool call follows it the model has moved on, even though the turn is
+    // still busy — and a reasoning part left "streaming" makes the renderer's
+    // elapsed counter tick forever against a thought that finished long ago.
     if (turnBusy) {
-      let lastReasoning = -1;
-      for (let index = 0; index < parts.length; index += 1) {
-        if (parts[index]?.type === "reasoning") lastReasoning = index;
-      }
+      const lastIndex = parts.length - 1;
       for (let index = 0; index < parts.length; index += 1) {
         const part = parts[index];
-        if (part?.type === "reasoning" && index !== lastReasoning) {
-          parts[index] = { ...part, state: "done" };
-        }
+        if (part?.type !== "reasoning" || index === lastIndex) continue;
+        parts[index] = { ...part, state: "done" };
       }
     }
     const message: UIMessage = {

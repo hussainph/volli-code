@@ -2146,6 +2146,76 @@ describe("OpenCodeNativeAdapter", () => {
     });
   });
 
+  it("settles a thought once the model answers past it, mid-turn", async () => {
+    const network = new FakeNetwork();
+    const hold = new Deferred<void>();
+    network.subscribe = async (input) => {
+      network.subscriptions.push(input);
+      return (async function* () {
+        yield {
+          id: "assistant",
+          type: "message.updated",
+          properties: {
+            info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+          },
+        };
+        yield {
+          id: "think",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "r1",
+              messageID: "provider-assistant",
+              type: "reasoning",
+              text: "Overtaken",
+            },
+          },
+        };
+        yield {
+          id: "answer",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "t1",
+              messageID: "provider-assistant",
+              type: "text",
+              text: "Answer so far",
+            },
+          },
+        };
+        // The turn never goes idle, so anything still "streaming" here is
+        // genuinely live rather than an artifact of the stream closing.
+        await hold.promise;
+      })();
+    };
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Text after the thought means the model moved on: the elapsed counter must
+    // freeze even though the turn is still busy.
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        kind: "transcript.message",
+        message: expect.objectContaining({
+          parts: [
+            { type: "reasoning", text: "Overtaken", state: "done" },
+            { type: "text", text: "Answer so far" },
+          ],
+        }),
+      }),
+    );
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
   it("maps every status family and ignores malformed or unrelated SSE events", async () => {
     const { adapter } = composition([
       {
