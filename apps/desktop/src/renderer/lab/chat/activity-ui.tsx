@@ -97,16 +97,30 @@ function Caret({
   className?: string;
 }) {
   return (
-    <CaretRightIcon
-      aria-hidden
+    // Two elements because the two transitions have different jobs: the wrapper
+    // fades on hover at hover speed, the glyph rotates in lockstep with the
+    // body it opens. Collapsed onto one node, `transition-opacity` would win the
+    // merge and the rotation would snap.
+    <span
       className={cn(
-        "size-3 shrink-0 text-muted-foreground transition-transform",
-        COLLAPSE,
-        open && "rotate-90",
+        // Zed's `visible_on_hover`. A caret on every row is a column of
+        // permanent weight for something you only need when you reach for it.
+        // An open row keeps its caret — the way back out is never hidden.
+        "shrink-0 opacity-0 transition-opacity duration-150 ease-swift group-focus-within/row:opacity-100 group-hover/row:opacity-100 motion-reduce:transition-none",
+        open && "opacity-100",
         hidden && "invisible",
         className,
       )}
-    />
+    >
+      <CaretRightIcon
+        aria-hidden
+        className={cn(
+          "size-3 text-muted-foreground transition-transform",
+          COLLAPSE,
+          open && "rotate-90",
+        )}
+      />
+    </span>
   );
 }
 
@@ -141,7 +155,7 @@ function hasTextSelection(): boolean {
 
 /** Every folded header is the same row: the counted summary, then the caret. */
 const TRIGGER_CLASS =
-  "flex w-full min-w-0 items-center gap-1.5 rounded-md py-0.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring";
+  "group/row flex w-full min-w-0 items-center gap-1.5 rounded-md py-0.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring";
 
 /* -------------------------------------------------------------------- atoms */
 
@@ -329,13 +343,58 @@ function RowActions({ row }: { row: ActivityRow }) {
 /* -------------------------------------------------------------------- detail */
 
 const DETAIL_FRAME =
-  "mt-1 mb-1 ml-[0.4375rem] overflow-x-auto border-l border-border/70 pl-3 font-mono text-xs leading-5";
+  "mt-1 mb-1 ml-[0.4375rem] max-h-80 overflow-auto border-l border-border/70 pl-3 font-mono text-xs leading-5";
+
+/**
+ * The detail is a window, not a dump.
+ *
+ * An expanded row used to paste its whole output into the feed — up to the 400
+ * line parse budget — which shoves everything below it off-screen and destroys
+ * the reader's place. Zed constrains the same surface (`max_h_64` plus a fade)
+ * and scrolls inside it. The full artifact is one click away on the mono object
+ * anyway, which is the row's other click target.
+ *
+ * The fade is measured rather than always-on: painted unconditionally it would
+ * dim the last line of a three-line output and promise more that is not there.
+ */
+function DetailFrame({
+  revision,
+  className,
+  children,
+}: React.PropsWithChildren<{ revision: number; className?: string }>) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  const [clipped, setClipped] = React.useState(false);
+
+  React.useLayoutEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    const measure = () => setClipped(node.scrollHeight > node.clientHeight + 1);
+    measure();
+    // `revision` catches content arriving as a tool streams; the observer
+    // catches the width changing under it, which re-wraps and can flip whether
+    // the same content clips at all.
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [revision]);
+
+  return (
+    <div className="relative">
+      <div ref={ref} className={cn(DETAIL_FRAME, className)}>
+        {children}
+      </div>
+      {clipped ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-1 h-8 bg-gradient-to-t from-background to-transparent" />
+      ) : null}
+    </div>
+  );
+}
 
 function ToolDetail({ detail }: { detail: ActivityDetail }) {
   switch (detail.view) {
     case "diff":
       return (
-        <div className={DETAIL_FRAME}>
+        <DetailFrame revision={detail.lines.length}>
           {detail.lines.map((line) => (
             <div
               key={line.id}
@@ -350,11 +409,11 @@ function ToolDetail({ detail }: { detail: ActivityDetail }) {
               {line.text || " "}
             </div>
           ))}
-        </div>
+        </DetailFrame>
       );
     case "numbered":
       return (
-        <div className={DETAIL_FRAME}>
+        <DetailFrame revision={detail.lines.length}>
           {detail.lines.map((line) => (
             <div key={line.number} className="flex gap-3 whitespace-pre">
               <span className="w-8 shrink-0 text-right text-muted-foreground/50 tabular-nums">
@@ -363,11 +422,11 @@ function ToolDetail({ detail }: { detail: ActivityDetail }) {
               <span className="text-muted-foreground">{line.text || " "}</span>
             </div>
           ))}
-        </div>
+        </DetailFrame>
       );
     case "matches":
       return (
-        <div className={cn(DETAIL_FRAME, "space-y-1.5")}>
+        <DetailFrame revision={detail.groups.length} className="space-y-1.5">
           {detail.groups.map((group) => (
             <div key={group.file}>
               <div className="truncate text-foreground">
@@ -383,19 +442,25 @@ function ToolDetail({ detail }: { detail: ActivityDetail }) {
               ) : null}
             </div>
           ))}
-        </div>
+        </DetailFrame>
       );
     case "signature":
       return (
-        <pre className={cn(DETAIL_FRAME, "whitespace-pre-wrap text-muted-foreground/70")}>
+        <DetailFrame
+          revision={detail.text.length}
+          className="whitespace-pre-wrap text-muted-foreground/70"
+        >
           {detail.text}
-        </pre>
+        </DetailFrame>
       );
     default:
       return (
-        <pre className={cn(DETAIL_FRAME, "whitespace-pre-wrap text-muted-foreground")}>
+        <DetailFrame
+          revision={detail.text.length}
+          className="whitespace-pre-wrap text-muted-foreground"
+        >
           {detail.text}
-        </pre>
+        </DetailFrame>
       );
   }
 }
@@ -637,7 +702,7 @@ export function SessionTodoDock({ todos }: { todos: readonly SessionTodo[] }) {
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        className="group/row flex w-full items-center gap-2 px-3 py-2 text-left text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
         <span className="font-medium tabular-nums text-foreground">
           {done}/{todos.length}

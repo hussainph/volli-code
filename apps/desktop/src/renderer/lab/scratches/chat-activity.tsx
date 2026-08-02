@@ -352,6 +352,26 @@ export default function ChatActivityScratch() {
         ))}
       </Section>
 
+      {/* The only fixture long enough to reach the detail frame's height cap.
+          Everything else here fits well inside it, so without this row the
+          gallery cannot show — or regress — the clipped state and its fade. */}
+      <Section label="Row · output past the height cap">
+        <ToolRow
+          part={tool(
+            descriptor("run-command", {
+              subject: { label: "pnpm run -r test", path: null, lineRange: null },
+            }),
+            {
+              output: Array.from(
+                { length: 60 },
+                (_, index) => `  ✓ src/renderer/lab/chat/activity.test.ts:${index + 1}  passed`,
+              ).join("\n"),
+            },
+          )}
+          onOpenFile={() => undefined}
+        />
+      </Section>
+
       <Section label="Rows · in flight">
         <ToolRow
           part={tool(
