@@ -312,11 +312,12 @@ function ChatPlane({
     <div className="relative flex min-h-0 flex-1 flex-col" style={planeStyle}>
       <FileMentionProvider onOpenFile={onOpenFile}>
         <Conversation className="min-h-0 bg-background">
-          {/* The bottom gap has to clear the composer *and* the fade above it —
-              at +2rem the last lines of the transcript came to rest inside the
-              gradient and sat there dimmed. +5rem clears the h-16 fade with air
-              to spare, so the final line lands on clean background. */}
-          <ConversationContent className="gap-6 px-0 pt-8 pb-[calc(var(--composer-height)+5rem)]">
+          {/* Only the part of this that clears the h-16 gradient reads as empty,
+              so the honest figure is 4rem of fade plus 8rem of clean background
+              — and the composer growing as you type eats into it from below.
+              At +2rem the last line sat inside the gradient; at +5rem it had
+              16px of real air, which is nothing. */}
+          <ConversationContent className="gap-6 px-0 pt-8 pb-[calc(var(--composer-height)+12rem)]">
             {session.messages.length === 0 ? (
               <ConversationEmptyState className="min-h-80">
                 <div className="flex size-10 items-center justify-center rounded-xl border border-border bg-card shadow-[var(--shadow-raised)]">
@@ -369,8 +370,14 @@ function ChatPlane({
 
               Tall enough to contain that button, which floats 12px above the
               composer and stands 28px: at h-8 its top sat above the fade, on
-              crisp text, and sliced it. */}
-          <div className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16 bg-gradient-to-t from-background to-transparent" />
+              crisp text, and sliced it.
+
+              The bottom 2rem is *solid*, not ramping. A plain linear fade only
+              reaches full background on its very last pixel, so a line sitting
+              10px above the composer was still ~84% opaque — a legible ghost,
+              then hard-cut by the card. Anything within 2rem of the cut is now
+              already background, and there is nothing left to slice. */}
+          <div className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16 bg-[linear-gradient(to_top,var(--background)_0,var(--background)_2rem,transparent_100%)]" />
 
           {/* Glass, not a plug. This button only exists while the reader is
               scrolled up, so there is always live text behind it; an opaque
