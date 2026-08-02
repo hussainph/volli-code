@@ -15,7 +15,6 @@
 import {
   activityDuration,
   isDurableActivity,
-  isReadOnlyActivity,
   readActivityDescriptor,
   type ActivityDescriptor,
   type ActivityKind,
@@ -24,27 +23,47 @@ import type { DynamicToolUIPart, ReasoningUIPart, UIMessage } from "ai";
 
 type MessagePart = UIMessage["parts"][number];
 
-/* ------------------------------------------------------------------ blocks */
+/* ---------------------------------------------------------------- segments */
 
-export type ActivityItem =
+/**
+ * A row inside a bundle. Reasoning is not special: it is a row like any other,
+ * with its own glyph and its own disclosure, which is where Cursor and t3code
+ * both landed. A standalone "Thought" header above the machinery said the same
+ * thing twice and gave the transcript a second left edge to disagree about.
+ */
+export type BundleRow =
   | { kind: "reasoning"; part: ReasoningUIPart; key: string }
   | { kind: "tool"; part: DynamicToolUIPart; key: string };
 
-export type ToolItem = { part: DynamicToolUIPart; key: string };
-
-export type ChatBlock =
+/**
+ * The transcript is a flat list of two things: what the agent said, and one
+ * bundle per contiguous run of everything else.
+ *
+ * The old model had four nested levels — turn fold over block over group header
+ * over rows — and each level needed its own spacing rule, its own left edge and
+ * its own fold state. They composed into a rhythm no single rule could fix.
+ * Here depth is never indentation: a bundle's rows sit at the same left edge as
+ * the summary that counts them, and the caret is the only thing that says one
+ * contains the other.
+ *
+ * An approval request is the exception, and the only one. It blocks the reader,
+ * so it leaves the bundle and stands on its own where nothing can fold over it.
+ * Failures stay in the bundle — the summary confesses them in red, and the
+ * bundle opens itself so the row is on screen anyway.
+ */
+export type ChatSegment =
   | { kind: "text"; part: Extract<MessagePart, { type: "text" }>; key: string }
-  | { kind: "activity"; items: ActivityItem[]; key: string }
-  | { kind: "tool-run"; items: ToolItem[]; key: string }
+  | { kind: "bundle"; rows: BundleRow[]; key: string }
   | { kind: "attention"; part: DynamicToolUIPart; key: string };
 
-/**
- * Errors, denials and approval requests can never sit inside a rolling window
- * or a folded group — they break out as their own block so a failed read is
- * never invisible behind "Explored 4 reads".
- */
+/** Outcomes a bundle must not swallow silently. */
 export function needsAttention(state: DynamicToolUIPart["state"]): boolean {
   return state === "output-error" || state === "output-denied" || state === "approval-requested";
+}
+
+/** The one state that leaves the bundle: it blocks, and it needs buttons. */
+export function isBlocking(state: DynamicToolUIPart["state"]): boolean {
+  return state === "approval-requested";
 }
 
 /**
@@ -84,78 +103,55 @@ export function isBlankText(text: string): boolean {
   return text.replace(/[\u200B-\u200D\uFEFF]/g, "").trim().length === 0;
 }
 
-export function groupMessageParts(parts: readonly MessagePart[], messageId: string): ChatBlock[] {
-  const blocks: ChatBlock[] = [];
-  let activity: ActivityItem[] | null = null;
-  let run: ToolItem[] | null = null;
+export function segmentMessageParts(
+  parts: readonly MessagePart[],
+  messageId: string,
+): ChatSegment[] {
+  const segments: ChatSegment[] = [];
+  let bundle: BundleRow[] | null = null;
 
-  const flushActivity = () => {
-    if (activity && activity.length > 0) {
-      blocks.push({
-        kind: "activity",
-        items: activity,
-        key: `${messageId}:activity:${blocks.length}`,
-      });
-    }
-    activity = null;
-  };
-  const flushRun = () => {
-    if (run && run.length > 0) {
-      blocks.push({ kind: "tool-run", items: run, key: `${messageId}:run:${blocks.length}` });
-    }
-    run = null;
-  };
   const flush = () => {
-    flushActivity();
-    flushRun();
+    const first = bundle?.[0];
+    if (bundle && first)
+      segments.push({ kind: "bundle", rows: bundle, key: `${first.key}:bundle` });
+    bundle = null;
   };
 
   parts.forEach((part, index) => {
     const key = `${messageId}:${index}`;
     if (part.type === "text") {
-      // A blank text part is not a block. A harness opens one before it has
+      // A blank text part is not a segment. A harness opens one before it has
       // words (OpenCode does) and can leave a whitespace-only one between tool
-      // calls; rendered, it is a zero-height block that still collects the gap
-      // on *both* sides of itself, so one boundary measures 12px and its
-      // neighbour 24px for no reason the reader can see. Worse, it `flush()`es
-      // — which is what splits a single run of exploration into two stacked
-      // headers that each summarize half of it.
+      // calls; rendered, it is a zero-height row that still collects the gap on
+      // *both* sides of itself, and it `flush()`es — which is what split a
+      // single run of exploration into two stacked headers each summarizing
+      // half of it.
       if (isBlankText(part.text)) return;
       flush();
-      blocks.push({ kind: "text", part, key });
+      segments.push({ kind: "text", part, key });
       return;
     }
     if (part.type === "reasoning") {
-      flushRun();
-      activity ??= [];
-      activity.push({ kind: "reasoning", part, key });
+      // Same rule as text: a reasoning part that never got words is not a row.
+      // While it streams it still is, because "Thinking…" is the sign of life.
+      if (part.state !== "streaming" && isBlankText(part.text)) return;
+      bundle ??= [];
+      bundle.push({ kind: "reasoning", part, key });
       return;
     }
     if (part.type !== "dynamic-tool") return;
     if (isPlanActivity(part)) return;
-
-    const readOnly = isReadOnlyActivity(activityDescriptor(part).kind);
-    if (needsAttention(part.state)) {
-      // Counted by the group it came from — a collapsed group may hide detail,
-      // never outcome — then flushed so the card stands on its own.
-      if (readOnly && activity) activity.push({ kind: "tool", part, key });
+    if (isBlocking(part.state)) {
       flush();
-      blocks.push({ kind: "attention", part, key });
+      segments.push({ kind: "attention", part, key });
       return;
     }
-    if (readOnly) {
-      flushRun();
-      activity ??= [];
-      activity.push({ kind: "tool", part, key });
-      return;
-    }
-    flushActivity();
-    run ??= [];
-    run.push({ part, key });
+    bundle ??= [];
+    bundle.push({ kind: "tool", part, key });
   });
 
   flush();
-  return blocks;
+  return segments;
 }
 
 /**
@@ -169,233 +165,133 @@ export function groupMessageParts(parts: readonly MessagePart[], messageId: stri
 export function isAwaitingFirstOutput(messages: readonly UIMessage[]): boolean {
   const last = messages[messages.length - 1];
   if (!last || last.role !== "assistant") return true;
-  return groupMessageParts(last.parts, last.id).length === 0;
-}
-
-/* -------------------------------------------------------------------- turn */
-
-/** Every tool part the turn ran, in order, wherever the projection put it. */
-export function turnToolParts(blocks: readonly ChatBlock[]): DynamicToolUIPart[] {
-  const parts: DynamicToolUIPart[] = [];
-  for (const block of blocks) {
-    if (block.kind === "activity") {
-      for (const item of block.items) if (item.kind === "tool") parts.push(item.part);
-    } else if (block.kind === "tool-run") {
-      for (const item of block.items) parts.push(item.part);
-    } else if (block.kind === "attention") {
-      parts.push(block.part);
-    }
-  }
-  return parts;
-}
-
-/**
- * Wall-clock across the turn, from the first tool that started to the last that
- * ended. Not the sum of the parts: work overlaps, and the reader is asking how
- * long they waited, not how much the machine did.
- */
-export function turnDuration(blocks: readonly ChatBlock[]): number | null {
-  let first: number | null = null;
-  let last: number | null = null;
-  for (const part of turnToolParts(blocks)) {
-    const { startedAt, endedAt } = activityDescriptor(part);
-    if (startedAt !== null && (first === null || startedAt < first)) first = startedAt;
-    if (endedAt !== null && (last === null || endedAt > last)) last = endedAt;
-  }
-  if (first === null || last === null || last < first) return null;
-  return last - first;
-}
-
-/**
- * The receipt a folded turn leaves. Duration when the harness timestamped its
- * work, a step count when it did not — Perplexity's phrasing, and the honest
- * fallback, since a count is something we can always derive. A turn that only
- * thought says so.
- */
-export function turnSummary(blocks: readonly ChatBlock[]): string {
-  const elapsed = formatDuration(turnDuration(blocks));
-  if (elapsed !== null) return `Worked for ${elapsed}`;
-  const steps = turnToolParts(blocks).length;
-  if (steps > 0) return `Completed ${steps} ${steps === 1 ? "step" : "steps"}`;
-  return "Thought";
-}
-
-export interface TurnFold {
-  /** Blocks a folded turn still shows, in order. */
-  visible: ChatBlock[];
-  /** How many blocks the fold hides. Zero means this turn has nothing to fold. */
-  hidden: number;
-  /** Header text, empty when `hidden` is zero. */
-  summary: string;
-}
-
-/**
- * What a turn shows once it is scrollback.
- *
- * The deliverable survives and the process folds — the split Cursor, Codex and
- * Perplexity all landed on, and the reason their transcripts read as answers
- * while ours read as machinery. The deliverable is the *trailing* run of prose:
- * mid-turn narration is commentary on work you are no longer looking at, but
- * the last thing said is what the turn was for.
- *
- * A turn holding an unresolved question or a failure never folds. Those are the
- * two things the transcript must not make the reader go hunting for.
- */
-export function foldTurn(blocks: readonly ChatBlock[]): TurnFold {
-  if (blocks.some((block) => block.kind === "attention")) {
-    return { visible: [...blocks], hidden: 0, summary: "" };
-  }
-  let start = blocks.length;
-  while (start > 0 && blocks[start - 1]?.kind === "text") start -= 1;
-  if (start === 0) return { visible: [...blocks], hidden: 0, summary: "" };
-  return {
-    visible: blocks.slice(start),
-    hidden: start,
-    summary: turnSummary(blocks.slice(0, start)),
-  };
+  return segmentMessageParts(last.parts, last.id).length === 0;
 }
 
 /* ----------------------------------------------------------------- summary */
 
-export type SummaryTone = "neutral" | "muted" | "danger";
+export type SummaryTone = "neutral" | "muted" | "danger" | "attention";
 export interface SummarySegment {
   text: string;
   tone: SummaryTone;
 }
 
-const KIND_NOUNS: Record<ActivityKind, { one: string; many: string }> = {
-  "run-command": { one: "command", many: "commands" },
-  "read-file": { one: "read", many: "reads" },
-  "edit-file": { one: "edit", many: "edits" },
-  "write-file": { one: "file", many: "files" },
-  search: { one: "search", many: "searches" },
-  "list-directory": { one: "list", many: "lists" },
-  "fetch-url": { one: "fetch", many: "fetches" },
-  plan: { one: "plan", many: "plans" },
-  delegate: { one: "subagent", many: "subagents" },
-  other: { one: "tool", many: "tools" },
+interface KindPhrase {
+  past: string;
+  present: string;
+  one: string;
+  many: string;
+}
+
+const KIND_PHRASES: Record<ActivityKind, KindPhrase> = {
+  "run-command": { past: "ran", present: "running", one: "command", many: "commands" },
+  "read-file": { past: "read", present: "reading", one: "file", many: "files" },
+  "edit-file": { past: "edited", present: "editing", one: "file", many: "files" },
+  "write-file": { past: "created", present: "creating", one: "file", many: "files" },
+  search: { past: "searched", present: "searching", one: "time", many: "times" },
+  "list-directory": { past: "listed", present: "listing", one: "directory", many: "directories" },
+  "fetch-url": { past: "fetched", present: "fetching", one: "page", many: "pages" },
+  plan: { past: "planned", present: "planning", one: "plan", many: "plans" },
+  delegate: { past: "delegated", present: "delegating", one: "task", many: "tasks" },
+  other: { past: "used", present: "using", one: "tool", many: "tools" },
 };
 
-/** Rows the group renders. The attention states already left as their own card. */
-export function activityToolItems(
-  items: readonly ActivityItem[],
-): Extract<ActivityItem, { kind: "tool" }>[] {
-  return items.filter(
-    (item): item is Extract<ActivityItem, { kind: "tool" }> =>
-      item.kind === "tool" && !needsAttention(item.part.state),
+/**
+ * How many files a phrase will name before it starts counting them instead.
+ * Naming is the point — `edited activity.ts and activity-ui.tsx` tells you what
+ * the turn was for, where `edited 2 files` makes you open it to find out — but
+ * past a few names the row stops being a summary and becomes the list again.
+ */
+export const NAMED_SUBJECT_LIMIT = 3;
+
+export function bundleToolRows(rows: readonly BundleRow[]): Extract<BundleRow, { kind: "tool" }>[] {
+  return rows.filter((row): row is Extract<BundleRow, { kind: "tool" }> => row.kind === "tool");
+}
+
+export function isBundleStreaming(rows: readonly BundleRow[]): boolean {
+  return rows.some((row) =>
+    row.kind === "reasoning" ? row.part.state === "streaming" : isRowActive(row.part),
   );
 }
 
-export function isActivityStreaming(items: readonly ActivityItem[]): boolean {
-  return items.some(
-    (item) =>
-      (item.kind === "reasoning" && item.part.state === "streaming") ||
-      (item.kind === "tool" &&
-        (item.part.state === "input-streaming" ||
-          item.part.state === "input-available" ||
-          item.part.state === "approval-requested")),
-  );
+/** A failure or a denial inside the bundle, which is reason enough to open it. */
+export function bundleNeedsAttention(rows: readonly BundleRow[]): boolean {
+  return bundleToolRows(rows).some((row) => needsAttention(row.part.state));
 }
 
 /**
- * The folded header, which counts the tools and nothing else — reasoning speaks
- * for itself on its own status line, so a header that also said "Thought" would
- * be saying it twice. Empty when the group is reasoning only.
+ * The one line a bundle shows at rest: `Read 4 files, ran 3 commands, edited
+ * activity.ts`.
  *
- * Segments rather than a string so a group can confess an outcome —
- * `Explored 4 reads · 1 failed` — with the failure carrying its own tone
- * instead of hiding inside neutral prose.
+ * Phrases are per kind in first-appearance order, so the sentence reads in the
+ * order the work happened. A kind still in flight takes the present participle
+ * and the whole phrase takes an ellipsis, which is how a live bundle reports
+ * progress without expanding — the only thing on screen while the agent works,
+ * so it has to carry the whole load.
+ *
+ * Reasoning is deliberately uncounted. It is a row inside, and a header that
+ * also said "thought twice" would be describing the rows rather than the work.
+ * Empty for a bundle that is reasoning only: then the row *is* the summary, and
+ * a header above it would be the same sentence at two indents.
  */
-export function activitySummary(
-  items: readonly ActivityItem[],
-  options?: { streaming?: boolean },
-): SummarySegment[] {
-  const tools = items.filter((item): item is Extract<ActivityItem, { kind: "tool" }> => {
-    return item.kind === "tool";
-  });
+export function bundleSummary(rows: readonly BundleRow[]): SummarySegment[] {
+  const tools = bundleToolRows(rows);
   if (tools.length === 0) return [];
-  const streaming = options?.streaming === true || isActivityStreaming(items);
-  const failed = tools.filter((item) => needsAttention(item.part.state)).length;
-  const phrase = countPhrase(tools.map((item) => activityDescriptor(item.part).kind));
-  const segments: SummarySegment[] = [
-    { text: `${streaming ? "Exploring" : "Explored"} ${phrase}`, tone: "neutral" },
-  ];
+
+  const order: ActivityKind[] = [];
+  const groups = new Map<ActivityKind, DynamicToolUIPart[]>();
+  for (const row of tools) {
+    const kind = activityDescriptor(row.part).kind;
+    const group = groups.get(kind);
+    if (group) group.push(row.part);
+    else {
+      groups.set(kind, [row.part]);
+      order.push(kind);
+    }
+  }
+
+  const phrase = order
+    .map((kind) => kindPhrase(kind, groups.get(kind) ?? []))
+    .join(", ")
+    .replace(/^./, (character) => character.toUpperCase());
+  const streaming = tools.some((row) => isRowActive(row.part));
+  const segments: SummarySegment[] = [{ text: streaming ? `${phrase}…` : phrase, tone: "neutral" }];
+
+  const failed = tools.filter((row) => row.part.state === "output-error").length;
+  const denied = tools.filter((row) => row.part.state === "output-denied").length;
   if (failed > 0) segments.push({ text: `${failed} failed`, tone: "danger" });
+  if (denied > 0) segments.push({ text: `${denied} denied`, tone: "danger" });
   return segments;
 }
 
-/** The counted header above a rolling tail of tool rows. Ticks as the run grows. */
-export function runSummary(items: readonly ToolItem[]): SummarySegment[] {
-  const kinds = items.map((item) => activityDescriptor(item.part).kind);
-  const failed = items.filter((item) => needsAttention(item.part.state)).length;
-  const segments: SummarySegment[] = [{ text: countPhrase(kinds) || "Activity", tone: "neutral" }];
-  if (failed > 0) segments.push({ text: `${failed} failed`, tone: "danger" });
-  return segments;
+function kindPhrase(kind: ActivityKind, parts: readonly DynamicToolUIPart[]): string {
+  const phrase = KIND_PHRASES[kind];
+  const verb = parts.some(isRowActive) ? phrase.present : phrase.past;
+  if (isDurableActivity(kind) && parts.length <= NAMED_SUBJECT_LIMIT) {
+    const names = parts.map(subjectName).filter((name): name is string => name !== null);
+    if (names.length === parts.length && names.length > 0) return `${verb} ${joinNames(names)}`;
+  }
+  return `${verb} ${parts.length} ${parts.length === 1 ? phrase.one : phrase.many}`;
 }
 
-/** First-appearance order, so the phrase reads in the order the work happened. */
-function countPhrase(kinds: readonly ActivityKind[]): string {
-  const counts = new Map<ActivityKind, number>();
-  for (const kind of kinds) counts.set(kind, (counts.get(kind) ?? 0) + 1);
-  return [...counts]
-    .map(([kind, count]) => {
-      const noun = KIND_NOUNS[kind];
-      return `${count} ${count === 1 ? noun.one : noun.many}`;
-    })
-    .join(", ");
+/** Basename only: the phrase is a sentence, and a sentence with a path in it is not. */
+function subjectName(part: DynamicToolUIPart): string | null {
+  const label = activityDescriptor(part).subject.label;
+  if (label === null || label.trim().length === 0) return null;
+  return splitPath(label).basename || label;
 }
 
-/* -------------------------------------------------------------------- tail */
-
-export const TAIL_LIMIT = 3;
-
-/**
- * The rolling tail. The active row is pinned; at most `limit` completed rows sit
- * above it and everything older is absorbed into the counted header. Turn height
- * is therefore constant — 30 tool calls occupy the space of 4.
- */
-export function rollingTail<T>(
-  rows: readonly T[],
-  isActive: (row: T) => boolean,
-  limit: number = TAIL_LIMIT,
-): { hidden: number; visible: T[] } {
-  const last = rows[rows.length - 1];
-  const budget = last !== undefined && isActive(last) ? limit + 1 : limit;
-  if (rows.length <= budget) return { hidden: 0, visible: [...rows] };
-  return { hidden: rows.length - budget, visible: rows.slice(rows.length - budget) };
+function joinNames(names: readonly string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
+
+/* ----------------------------------------------------------------- rows */
 
 export function isRowActive(part: DynamicToolUIPart): boolean {
   const status = activityStatus(part);
   return status === "pending" || status === "running" || status === "approval";
 }
-
-/**
- * What a run of mutating rows shows when nobody has opened it.
- *
- * Live, it is the rolling tail — work in progress is worth watching. Settled,
- * only the durable rows survive. A finished command run was holding a header
- * plus three rows open forever, in scrollback nobody re-reads, and across a
- * long session that is where the transcript's bulk came from; the group of
- * read-only rows beside it has always folded to nothing on settle, so this is
- * the asymmetry closing rather than a new rule.
- *
- * Edits and writes stay because they are the turn's answer, but they stay
- * *tail-bounded* — a twelve-file change still folds to its last three and a
- * header, the same cap every other row obeys.
- *
- * `hidden` counts everything off screen, so a single header covers both the
- * rows the fold dropped and the ones the tail trimmed.
- */
-export function foldRun(items: readonly ToolItem[]): { hidden: number; visible: ToolItem[] } {
-  const active = (item: ToolItem) => isRowActive(item.part);
-  if (items.some(active)) return rollingTail(items, active);
-  const durable = items.filter((item) => isDurableActivity(activityDescriptor(item.part).kind));
-  const { visible } = rollingTail(durable, active);
-  return { hidden: items.length - visible.length, visible };
-}
-
-/* ----------------------------------------------------------------- rows */
 
 export type ActivityStatus = "pending" | "running" | "approval" | "done" | "denied" | "failed";
 

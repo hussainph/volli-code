@@ -27,20 +27,17 @@ import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
 
 import {
-  foldTurn,
   isAwaitingFirstOutput,
   projectSessionTodos,
-  groupMessageParts,
-  type ChatBlock,
+  segmentMessageParts,
+  type ChatSegment,
   type SessionTodo,
 } from "../chat/activity";
 import {
-  ActivityGroup,
+  ActivityBundle,
   AttentionBlock,
   SessionTodoDock,
   SessionTodoList,
-  ToolRun,
-  TurnFoldHeader,
 } from "../chat/activity-ui";
 import { SessionComposer } from "../chat/composer-ui";
 import { useLabSessionController } from "../chat/session-controller";
@@ -344,13 +341,12 @@ function ChatPlane({
                 )}
               </ConversationEmptyState>
             ) : (
-              <ContentColumn className="flex flex-col gap-6">
-                {session.messages.map((message, index) => (
+              <ContentColumn className={MESSAGE_GAP}>
+                {session.messages.map((message) => (
                   <ChatMessage
                     key={message.id}
                     message={message}
                     working={working}
-                    past={index < session.messages.length - 1}
                     onOpenFile={onOpenFile}
                   />
                 ))}
@@ -452,99 +448,74 @@ function useMeasuredHeight<T extends HTMLElement>(): {
   return { ref, height };
 }
 
+/**
+ * The gap between every top-level unit in a turn: prose to bundle, bundle to
+ * prose, prose to prose. One constant, applied by the container, because the
+ * old per-pair rule made the same boundary measure 8, 12 or 16px depending only
+ * on which kinds happened to be adjacent. Rows *inside* a bundle have their own,
+ * tighter rhythm — that is the only other spacing value in the transcript.
+ */
+const SEGMENT_GAP = "space-y-3";
+
+/**
+ * And the same value between messages, because OpenCode splits one reply into a
+ * message per step. A wider gap here would put 24px between two tool bundles and
+ * 12px between two others purely on where the harness chose to cut the stream —
+ * a seam the reader cannot see and must not feel.
+ */
+const MESSAGE_GAP = "flex flex-col gap-3";
+
 function ChatMessage({
   message,
   working,
-  past,
   onOpenFile,
 }: {
   message: UIMessage;
   working: boolean;
-  /** A newer turn exists, so this one is scrollback and folds by default. */
-  past: boolean;
   onOpenFile(path: string): void;
 }) {
-  const [userOpen, setUserOpen] = React.useState<boolean | null>(null);
-  const blocks = message.role === "assistant" ? groupMessageParts(message.parts, message.id) : null;
+  const segments =
+    message.role === "assistant" ? segmentMessageParts(message.parts, message.id) : null;
   // A user message is prose only; the assistant path owns every other shape.
   const prose = message.parts.flatMap((part, index) =>
     part.type === "text" ? [{ key: `${message.id}:${index}`, text: part.text }] : [],
   );
 
   // Plan-only projections must not leave an empty bubble.
-  if (blocks && blocks.length === 0) return null;
-
-  const fold = blocks ? foldTurn(blocks) : null;
-  // Derived, never animated into. A turn is born folded once it is scrollback,
-  // so restoring a long session does not fire one collapse per turn at boot —
-  // and the turn you just watched stays open until you send the next message,
-  // which is the only moment nothing can collapse under the reader.
-  const open = userOpen ?? !past;
-  const shown = fold && fold.hidden > 0 && !open ? fold.visible : blocks;
+  if (segments && segments.length === 0) return null;
 
   return (
     <Message from={message.role} className="max-w-full">
       <MessageContent className="gap-0 group-[.is-user]:rounded-xl group-[.is-user]:bg-muted group-[.is-user]:px-3.5 group-[.is-user]:py-2.5">
-        {fold && fold.hidden > 0 ? (
-          <div className={shown && shown.length > 0 ? "mb-3" : ""}>
-            <TurnFoldHeader
-              summary={fold.summary}
-              open={open}
-              onToggle={() => setUserOpen(!open)}
-            />
-          </div>
-        ) : null}
-        {shown
-          ? shown.map((block, index) => (
-              <div key={block.key} className={blockSpacing(shown[index - 1], block)}>
-                {renderBlock(block, { working, role: message.role, onOpenFile })}
-              </div>
-            ))
-          : prose.map((entry) => <MessageResponse key={entry.key}>{entry.text}</MessageResponse>)}
+        <div className={SEGMENT_GAP}>
+          {segments
+            ? segments.map((segment) => (
+                <div key={segment.key}>
+                  {renderSegment(segment, { working, role: message.role, onOpenFile })}
+                </div>
+              ))
+            : prose.map((entry) => <MessageResponse key={entry.key}>{entry.text}</MessageResponse>)}
+        </div>
       </MessageContent>
     </Message>
   );
 }
 
-/**
- * The container owns the rhythm, not the blocks. Machine rows sit flush so a run
- * of tool lines reads as one list whether or not the projection split it into
- * separate blocks; prose and bordered cards get a real gap. Blocks carrying
- * their own margins is what made the same boundary measure 8, 12 or 16px
- * depending only on which kinds happened to be adjacent.
- */
-function isRowBlock(block: ChatBlock): boolean {
-  return block.kind === "activity" || block.kind === "tool-run";
-}
-
-function blockSpacing(previous: ChatBlock | undefined, current: ChatBlock): string {
-  if (!previous) return "";
-  return isRowBlock(previous) && isRowBlock(current) ? "" : "mt-3";
-}
-
-function renderBlock(
-  block: ChatBlock,
+function renderSegment(
+  segment: ChatSegment,
   context: { working: boolean; role: UIMessage["role"]; onOpenFile(path: string): void },
 ): React.ReactNode {
-  switch (block.kind) {
+  switch (segment.kind) {
     case "text":
       return (
         <MessageResponse isAnimating={context.working && context.role === "assistant"}>
-          {block.part.text}
+          {segment.part.text}
         </MessageResponse>
       );
-    case "activity":
-      return (
-        <ActivityGroup
-          items={block.items}
-          working={context.working}
-          onOpenFile={context.onOpenFile}
-        />
-      );
-    case "tool-run":
-      return <ToolRun items={block.items} onOpenFile={context.onOpenFile} />;
+    case "bundle":
+      return <ActivityBundle rows={segment.rows} onOpenFile={context.onOpenFile} />;
     case "attention":
-      return <AttentionBlock part={block.part} onOpenFile={context.onOpenFile} />;
+      return <AttentionBlock part={segment.part} onOpenFile={context.onOpenFile} />;
     default:
       return null;
   }

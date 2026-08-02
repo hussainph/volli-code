@@ -1,17 +1,21 @@
 /**
  * Chat activity presentation.
  *
- * Three shapes, one rule: a caret means process you can audit, a border means an
- * object you can act on, bare text means the answer. Rows are borderless and
- * collapse; the attention card is bordered and never collapses.
+ * One left edge. Every line in the transcript — the bundle summary, the rows it
+ * counts, reasoning, an expanded payload — starts at the same x, and depth is
+ * never spelled as indentation. Containment is said by the caret and by
+ * adjacency; a row's disclosure opens *in line*, so opening something makes the
+ * list longer rather than making it a tree. The only bordered shape is the
+ * approval card, which is an object you act on rather than process you audit.
  *
- * Every row is the same primitive — `‹status› ‹icon› ‹Verb› ‹object›` left,
- * `‹meta›` right — and all variance lives in the per-kind presenters in
- * `activity.ts`. Two click targets: the row expands its detail, the mono object
- * opens the real artifact.
+ * Every row is the same primitive — `‹glyph› ‹Verb› ‹object›` left, `‹meta›`
+ * right — and all variance lives in the per-kind presenters in `activity.ts`.
+ * Two click targets: the row expands its detail, the mono object opens the real
+ * artifact.
  */
 import {
   ArrowBendUpLeftIcon,
+  BrainIcon,
   CaretRightIcon,
   CheckCircleIcon,
   CheckIcon,
@@ -35,34 +39,28 @@ import {
   type Icon,
 } from "@phosphor-icons/react";
 import type { ActivityKind } from "@volli/shared";
-import type { DynamicToolUIPart } from "ai";
+import type { DynamicToolUIPart, ReasoningUIPart } from "ai";
 import * as React from "react";
 
-import { ReasoningBody, ReasoningLine, useElapsed } from "@ai-elements/reasoning";
+import { ReasoningBody, useElapsed } from "@ai-elements/reasoning";
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
 
 import {
-  activitySummary,
-  activityToolItems,
+  bundleNeedsAttention,
+  bundleSummary,
   describeActivity,
   detailText,
-  foldRun,
-  isActivityStreaming,
-  isRowActive,
   reasoningBody,
   reasoningStatus,
-  rollingTail,
-  runSummary,
   splitPath,
   type ActivityDetail,
-  type ActivityItem,
   type ActivityRow,
   type ActivityStatus,
+  type BundleRow,
   type SessionTodo,
   type SummarySegment,
   type SummaryTone,
-  type ToolItem,
 } from "./activity";
 
 /* ------------------------------------------------------------------- motion */
@@ -158,9 +156,67 @@ function hasTextSelection(): boolean {
   return (window.getSelection()?.toString().length ?? 0) > 0;
 }
 
-/** Every folded header is the same row: the counted summary, then the caret. */
-const TRIGGER_CLASS =
-  "group/row flex w-full min-w-0 items-center gap-1.5 rounded-md py-0.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring";
+/**
+ * One row shell, one left edge.
+ *
+ * The summary, every row it counts, and the reasoning line beside them all use
+ * this. Nothing in the transcript is indented to show containment — a bundle's
+ * rows sit at exactly the summary's left edge and the caret is the only thing
+ * that says one holds the other. Indentation would put the machine columns on
+ * their own margin, which is the ragged left edge this design exists to remove.
+ */
+const ROW_CLASS =
+  "group/row flex w-full min-w-0 items-center gap-1.5 rounded-md py-0.5 text-left text-xs text-muted-foreground outline-none transition-colors";
+const ROW_INTERACTIVE =
+  "cursor-pointer hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring";
+
+/** Click, Enter and Space open a row; dragging a selection across it does not. */
+function useRowToggle(expandable: boolean) {
+  const [open, setOpen] = React.useState(false);
+  const toggle = () => {
+    if (hasTextSelection() || !expandable) return;
+    setOpen((value) => !value);
+  };
+  return {
+    open,
+    props: {
+      role: expandable ? ("button" as const) : undefined,
+      tabIndex: expandable ? 0 : undefined,
+      "aria-expanded": expandable ? open : undefined,
+      onClick: toggle,
+      onKeyDown: (event: React.KeyboardEvent) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        toggle();
+      },
+    },
+  };
+}
+
+/**
+ * Whether a capped box is hiding content past its own bottom edge.
+ *
+ * Measured rather than assumed: painted unconditionally, the fade would dim the
+ * last line of a three-line output and promise more that is not there. The
+ * observer catches width changes, which re-wrap and can flip whether the same
+ * content clips at all; `revision` catches content arriving as a tool streams.
+ */
+function useClipped<T extends HTMLElement>(revision: number) {
+  const ref = React.useRef<T>(null);
+  const [clipped, setClipped] = React.useState(false);
+
+  React.useLayoutEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    const measure = () => setClipped(node.scrollHeight > node.clientHeight + 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [revision]);
+
+  return { ref, clipped };
+}
 
 /* -------------------------------------------------------------------- atoms */
 
@@ -236,6 +292,7 @@ const TONE_CLASS: Record<SummaryTone, string> = {
   neutral: "text-muted-foreground",
   muted: "text-muted-foreground/70",
   danger: "text-destructive",
+  attention: "text-primary",
 };
 
 function Summary({ segments }: { segments: readonly SummarySegment[] }) {
@@ -277,32 +334,12 @@ export function ToolRow({
   className?: string;
 }) {
   const row = describeActivity(part);
-  const [open, setOpen] = React.useState(false);
   const expandable = row.detail !== null;
-
-  const toggle = () => {
-    if (hasTextSelection() || !expandable) return;
-    setOpen((value) => !value);
-  };
+  const { open, props } = useRowToggle(expandable);
 
   return (
     <div className={cn("group/row not-prose", className)}>
-      <div
-        role={expandable ? "button" : undefined}
-        tabIndex={expandable ? 0 : undefined}
-        aria-expanded={expandable ? open : undefined}
-        onClick={toggle}
-        onKeyDown={(event) => {
-          if (event.key !== "Enter" && event.key !== " ") return;
-          event.preventDefault();
-          toggle();
-        }}
-        className={cn(
-          "flex min-w-0 items-center gap-1.5 rounded-md py-0.5 text-xs text-muted-foreground outline-none",
-          expandable &&
-            "cursor-pointer hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
-        )}
-      >
+      <div {...props} className={cn(ROW_CLASS, expandable && ROW_INTERACTIVE)}>
         <RowGlyph kind={row.kind} status={row.status} />
         <span className="shrink-0">{row.verb}</span>
         {row.object ? <RowObject row={row} onOpenFile={onOpenFile} /> : null}
@@ -379,48 +416,34 @@ function RowActions({ row }: { row: ActivityRow }) {
 /* -------------------------------------------------------------------- detail */
 
 const DETAIL_FRAME =
-  "mt-1 mb-1 ml-[0.4375rem] max-h-80 overflow-auto border-l border-border/70 pl-3 font-mono text-xs leading-5";
+  "max-h-72 overflow-auto overscroll-contain rounded-md border border-border/60 bg-muted/25 p-2 font-mono text-xs leading-5";
 
 /**
- * The detail is a window, not a dump.
+ * The detail is a window, not a dump — and it is flush, not indented.
  *
- * An expanded row used to paste its whole output into the feed — up to the 400
- * line parse budget — which shoves everything below it off-screen and destroys
- * the reader's place. Zed constrains the same surface (`max_h_64` plus a fade)
- * and scrolls inside it. The full artifact is one click away on the mono object
- * anyway, which is the row's other click target.
+ * An expanded row used to paste its whole output into the feed, up to the 400
+ * line parse budget, which shoves everything below it off screen and destroys
+ * the reader's place. It is capped and scrolls instead; the full artifact is one
+ * click away on the mono object, which is the row's other click target.
  *
- * The fade is measured rather than always-on: painted unconditionally it would
- * dim the last line of a three-line output and promise more that is not there.
+ * The frame is a card at the row's own left edge rather than a rule hanging off
+ * a margin. A left border plus padding reads as a second column, and a
+ * transcript that indents its payloads ends up with as many left edges as it has
+ * kinds of disclosure.
  */
 function DetailFrame({
   revision,
   className,
   children,
 }: React.PropsWithChildren<{ revision: number; className?: string }>) {
-  const ref = React.useRef<HTMLDivElement>(null);
-  const [clipped, setClipped] = React.useState(false);
-
-  React.useLayoutEffect(() => {
-    const node = ref.current;
-    if (!node) return;
-    const measure = () => setClipped(node.scrollHeight > node.clientHeight + 1);
-    measure();
-    // `revision` catches content arriving as a tool streams; the observer
-    // catches the width changing under it, which re-wraps and can flip whether
-    // the same content clips at all.
-    const observer = new ResizeObserver(measure);
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [revision]);
-
+  const { ref, clipped } = useClipped<HTMLDivElement>(revision);
   return (
-    <div className="relative">
+    <div className="relative my-1">
       <div ref={ref} className={cn(DETAIL_FRAME, className)}>
         {children}
       </div>
       {clipped ? (
-        <div className="pointer-events-none absolute inset-x-0 bottom-1 h-8 bg-gradient-to-t from-background to-transparent" />
+        <div className="pointer-events-none absolute inset-x-px bottom-px h-8 rounded-b-md bg-gradient-to-t from-card to-transparent" />
       ) : null}
     </div>
   );
@@ -501,176 +524,137 @@ function ToolDetail({ detail }: { detail: ActivityDetail }) {
   }
 }
 
-/* --------------------------------------------------------------- tool runs */
+/* ------------------------------------------------------------------ bundle */
 
 /**
- * A run of first-class rows under a rolling tail: the active line is pinned at
- * the bottom, at most three completed rows sit above it, and everything older
- * is absorbed into a counted header that ticks. Turn height therefore stays
- * constant as tool calls accumulate.
+ * How tall an open bundle may get before it scrolls inside itself.
  *
- * Once the run settles the fold tightens — see `foldRun`. The header survives
- * that, so the whole run is always one click away.
+ * Expanding must not cost the reader their place. Without a cap, opening a run
+ * of thirty rows — or one row holding a 300-line diff — pushes everything below
+ * it off screen, and the feed you were reading becomes a feed you have to find
+ * again. Capped, the bundle stays the size of a paragraph no matter what is
+ * inside it, and the overflow is the bundle's problem rather than the page's.
  */
-export function ToolRun({
-  items,
+const BUNDLE_CAP = "max-h-96";
+
+/**
+ * Everything the agent did between two things it said, behind one line.
+ *
+ * At rest this is a single row — `Read 4 files, ran 3 commands, edited
+ * activity.ts` — and that row carries the whole load while the turn is live,
+ * ticking its counts in place rather than expanding. Opening it reveals the rows
+ * *at the same left edge*: no indent, no rule, no second column. The list simply
+ * got longer, and the caret is what says why.
+ *
+ * Open state is derived — `userOpen ?? needsAttention` — so restoring a session
+ * fires no transitions at boot, and a bundle holding a failure is open before
+ * anyone asks. A pending approval never reaches here; it left the bundle
+ * upstream, because the one thing that blocks the reader must not be behind a
+ * disclosure at all.
+ */
+export function ActivityBundle({
+  rows,
   onOpenFile,
 }: {
-  items: readonly ToolItem[];
-  onOpenFile?(path: string): void;
-}) {
-  const [expanded, setExpanded] = React.useState(false);
-  // Folded state is computed unconditionally, never through `expanded`: it is
-  // what tells us the run *can* fold, so the way back in survives opening it.
-  const fold = foldRun(items);
-  const rows = expanded ? items : fold.visible;
-
-  return (
-    <div className="not-prose">
-      {fold.hidden > 0 ? (
-        <button
-          type="button"
-          onClick={() => setExpanded((value) => !value)}
-          className={TRIGGER_CLASS}
-        >
-          <Gutter />
-          <Summary segments={runSummary(items)} />
-          <Caret open={expanded} />
-        </button>
-      ) : null}
-      <div className="space-y-0.5">
-        {rows.map((item) => (
-          <ToolRow key={item.key} part={item.part} onOpenFile={onOpenFile} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/* --------------------------------------------------------------- turn fold */
-
-/**
- * The receipt a past turn collapses to.
- *
- * It sits in the machine column with everything else it stands for, one level
- * above the rows it hides — prose keeps the outer edge, so the transcript has
- * exactly two left edges and each means something.
- */
-export function TurnFoldHeader({
-  summary,
-  open,
-  onToggle,
-}: {
-  summary: string;
-  open: boolean;
-  onToggle(): void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-expanded={open}
-      className={cn(TRIGGER_CLASS, "not-prose")}
-    >
-      <Gutter />
-      <span className="min-w-0 truncate">{summary}</span>
-      <Caret open={open} pinned />
-    </button>
-  );
-}
-
-/* ------------------------------------------------------------ activity group */
-
-/**
- * Reasoning plus read-only exploration, folded into one row.
- *
- * Open state is derived — `userOpen ?? streaming` — rather than raced against a
- * timer, so the disclosure is interruptible by construction and never fights a
- * click that lands mid-collapse.
- */
-export function ActivityGroup({
-  items,
-  working,
-  onOpenFile,
-}: {
-  items: readonly ActivityItem[];
-  working: boolean;
+  rows: readonly BundleRow[];
   onOpenFile?(path: string): void;
 }) {
   const [userOpen, setUserOpen] = React.useState<boolean | null>(null);
-  const tools = activityToolItems(items);
-  const reasoning = items.find((item) => item.kind === "reasoning");
-  const streaming =
-    isActivityStreaming(items) ||
-    (working && reasoning !== undefined && tools.length === 0 && reasoning.part.state !== "done");
-  const open = userOpen ?? streaming;
-  const summary = activitySummary(items, { streaming });
-  const tail = rollingTail(tools, (item) => isRowActive(item.part));
-  // Opened by hand means audit everything; opened by streaming means the
-  // rolling tail, so a live turn's height never grows with the tool count.
-  const rows = userOpen === true ? tools : open ? tail.visible : [];
-  const body = reasoning ? reasoningBody(reasoning.part.text) : null;
+  const summary = bundleSummary(rows);
+  const open = userOpen ?? bundleNeedsAttention(rows);
+  const { ref, clipped } = useClipped<HTMLDivElement>(rows.length);
+
+  const list = (
+    <div className="space-y-0.5">
+      {rows.map((row) => (
+        <BundleRowView key={row.key} row={row} onOpenFile={onOpenFile} />
+      ))}
+    </div>
+  );
+
+  // Reasoning alone has nothing to count, so the row *is* the summary. A header
+  // above it would be the same sentence twice, on two different lines.
+  if (summary.length === 0) return <div className="not-prose">{list}</div>;
+
   const toggle = () => {
     if (hasTextSelection()) return;
     setUserOpen(!open);
   };
 
-  // One disclosure per group means one caret. It rides the tool header when
-  // there are tools, and the reasoning line when reasoning is all there is —
-  // inline against the verb either way, so the right edge stays the meta's.
-  const reasoningLine = reasoning ? (
-    <ReasoningStatus
-      part={reasoning.part}
-      streaming={streaming && tools.length === 0}
-      after={summary.length === 0 && body !== null ? <Caret open={open} /> : null}
-    />
-  ) : null;
-
   return (
     <div className="not-prose">
-      {summary.length > 0 ? (
-        <button type="button" onClick={toggle} className={TRIGGER_CLASS}>
-          <Gutter />
-          <Summary segments={summary} />
-          <Caret open={open} />
-        </button>
-      ) : null}
-      {reasoningLine && summary.length === 0 && body !== null ? (
-        <button type="button" onClick={toggle} className={TRIGGER_CLASS}>
-          {reasoningLine}
-        </button>
-      ) : (
-        reasoningLine
-      )}
-      <div className="space-y-0.5">
-        {rows.map((item) => (
-          <ToolRow key={item.key} part={item.part} onOpenFile={onOpenFile} />
-        ))}
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        className={cn(ROW_CLASS, ROW_INTERACTIVE)}
+      >
+        <Gutter />
+        <Summary segments={summary} />
+        <Caret open={open} pinned />
+      </button>
+      <Disclosure open={open}>
+        <div className="relative">
+          <div ref={ref} className={cn(BUNDLE_CAP, "overflow-auto overscroll-contain")}>
+            {list}
+          </div>
+          {clipped ? (
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-background to-transparent" />
+          ) : null}
+        </div>
+      </Disclosure>
+    </div>
+  );
+}
+
+function BundleRowView({ row, onOpenFile }: { row: BundleRow; onOpenFile?(path: string): void }) {
+  if (row.kind === "reasoning") {
+    return <ReasoningRow part={row.part} streaming={row.part.state === "streaming"} />;
+  }
+  return <ToolRow part={row.part} onOpenFile={onOpenFile} />;
+}
+
+/**
+ * Reasoning as an ordinary row.
+ *
+ * Same shell, same gutter, same caret as a tool call — the only difference is
+ * the glyph. Cursor and t3code both render thinking through the identical row
+ * component, and the reason is structural rather than aesthetic: a bespoke
+ * reasoning block is a second kind of line in the same column, and two kinds of
+ * line cannot share one left edge for long.
+ */
+function ReasoningRow({ part, streaming }: { part: ReasoningUIPart; streaming: boolean }) {
+  const elapsed = useElapsed(streaming);
+  const status = reasoningStatus(part.text, { streaming, durationMs: elapsed });
+  const body = reasoningBody(part.text);
+  const expandable = body !== null;
+  const { open, props } = useRowToggle(expandable);
+
+  return (
+    <div className="group/row not-prose">
+      <div {...props} className={cn(ROW_CLASS, expandable && ROW_INTERACTIVE)}>
+        {streaming ? (
+          <SpinnerGapIcon aria-hidden className="size-3.5 shrink-0 animate-spin text-primary" />
+        ) : (
+          <BrainIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+        )}
+        <span className="min-w-0 truncate">{status.verb}</span>
+        <Caret open={open} hidden={!expandable} />
+        <span className="ml-auto" />
+        {status.meta ? (
+          <span className="shrink-0 font-mono tabular-nums text-muted-foreground/70">
+            {status.meta}
+          </span>
+        ) : null}
       </div>
       {body !== null ? (
-        <Disclosure open={userOpen === true}>
-          <ReasoningBody className="ml-[0.4375rem] border-l border-border/70 py-1 pl-3">
+        <Disclosure open={open}>
+          <ReasoningBody className="my-1 rounded-md border border-border/60 bg-muted/25 p-2 text-xs leading-5">
             {body}
           </ReasoningBody>
         </Disclosure>
       ) : null}
     </div>
-  );
-}
-
-function ReasoningStatus({
-  part,
-  streaming,
-  after,
-}: {
-  part: Extract<ActivityItem, { kind: "reasoning" }>["part"];
-  streaming: boolean;
-  after?: React.ReactNode;
-}) {
-  const elapsed = useElapsed(streaming);
-  const status = reasoningStatus(part.text, { streaming, durationMs: elapsed });
-  return (
-    <ReasoningLine verb={status.verb} meta={status.meta} streaming={streaming} after={after} />
   );
 }
 

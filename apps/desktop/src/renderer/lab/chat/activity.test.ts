@@ -6,28 +6,27 @@ import {
   ACTIVITY_PRESENTERS,
   activityContext,
   activityStatus,
-  activitySummary,
+  bundleNeedsAttention,
+  bundleSummary,
   compactSignature,
   describeActivity,
   diffStat,
-  foldRun,
-  foldTurn,
   formatBytes,
   formatDuration,
+  isBundleStreaming,
   notableDuration,
   NOTABLE_DURATION_MS,
-  groupMessageParts,
+  NAMED_SUBJECT_LIMIT,
   isAwaitingFirstOutput,
   parseDiff,
   parseMatches,
   projectSessionTodos,
   reasoningBody,
   reasoningStatus,
-  rollingTail,
-  runSummary,
+  segmentMessageParts,
   splitPath,
-  TAIL_LIMIT,
-  turnDuration,
+  type BundleRow,
+  type ChatSegment,
 } from "./activity";
 
 type MessagePart = UIMessage["parts"][number];
@@ -121,16 +120,23 @@ function tool(
   };
 }
 
-function runItems(...parts: DynamicToolUIPart[]) {
-  return parts.map((part, index) => ({ part, key: `r${index}` }));
+/** A tool whose descriptor carries a real subject, so the summary can name it. */
+function named(kind: ActivityKind, label: string): DynamicToolUIPart {
+  return tool(kind, { descriptor: { subject: { label, path: label, lineRange: null } } });
 }
 
-function kinds(items: readonly { part: DynamicToolUIPart }[]) {
-  return items.map((item) => activityContext(item.part).descriptor.kind);
+function bundleOf(segments: readonly ChatSegment[]): BundleRow[] {
+  const bundle = segments.find((segment) => segment.kind === "bundle");
+  if (bundle?.kind !== "bundle") throw new Error("expected a bundle");
+  return bundle.rows;
 }
 
-describe("groupMessageParts", () => {
-  it("folds reasoning + read-only activity into one block and keeps mutations first-class", () => {
+function summaryText(rows: readonly BundleRow[]): string[] {
+  return bundleSummary(rows).map((segment) => segment.text);
+}
+
+describe("segmentMessageParts", () => {
+  it("bundles every non-prose part between two things the agent said", () => {
     const parts: MessagePart[] = [
       { type: "reasoning", text: "plan" },
       tool("read-file"),
@@ -139,19 +145,21 @@ describe("groupMessageParts", () => {
       tool("edit-file"),
       { type: "text", text: "done" },
     ];
-    const blocks = groupMessageParts(parts, "m1");
-    expect(blocks.map((block) => block.kind)).toEqual(["activity", "tool-run", "text"]);
-    expect(blocks[0]?.kind === "activity" && blocks[0].items).toHaveLength(3);
-    expect(blocks[1]?.kind === "tool-run" && blocks[1].items).toHaveLength(2);
+    const segments = segmentMessageParts(parts, "m1");
+    // One bundle, not a reasoning group beside a tool run: the split between
+    // read-only and mutating work was invisible to the reader and cost the
+    // transcript a second header on its own left edge.
+    expect(segments.map((segment) => segment.kind)).toEqual(["bundle", "text"]);
+    expect(bundleOf(segments)).toHaveLength(5);
   });
 
   it("hides plan activity from the transcript", () => {
-    expect(groupMessageParts([tool("plan")], "m2")).toEqual([]);
+    expect(segmentMessageParts([tool("plan")], "m2")).toEqual([]);
   });
 
-  it("does not let a blank text part split one group into two headers", () => {
-    for (const blank of ["", "   ", "\n\n", "\u200B"]) {
-      const blocks = groupMessageParts(
+  it("does not let a blank text part split one bundle into two", () => {
+    for (const blank of ["", "   ", "\n\n", "​"]) {
+      const segments = segmentMessageParts(
         [
           tool("search"),
           tool("search"),
@@ -160,289 +168,178 @@ describe("groupMessageParts", () => {
         ],
         "m2b",
       );
-      expect(blocks.map((block) => block.kind)).toEqual(["activity"]);
-      expect(blocks[0]?.kind === "activity" && blocks[0].items).toHaveLength(3);
+      expect(segments.map((segment) => segment.kind)).toEqual(["bundle"]);
+      expect(bundleOf(segments)).toHaveLength(3);
     }
-  });
-
-  it("does not let a blank text part push two runs apart", () => {
-    const blocks = groupMessageParts(
-      [tool("run-command"), { type: "text", text: " " }, tool("run-command")],
-      "m2c",
-    );
-    // One block, not two with an invisible one between them collecting a gap
-    // on either side.
-    expect(blocks.map((block) => block.kind)).toEqual(["tool-run"]);
-    expect(blocks[0]?.kind === "tool-run" && blocks[0].items).toHaveLength(2);
   });
 
   it("keeps text that only looks blank", () => {
-    const blocks = groupMessageParts([{ type: "text", text: "·" }], "m2d");
-    expect(blocks.map((block) => block.kind)).toEqual(["text"]);
+    const segments = segmentMessageParts([{ type: "text", text: "·" }], "m2d");
+    expect(segments.map((segment) => segment.kind)).toEqual(["text"]);
   });
 
-  it("escapes errors, denials and approval requests to their own block", () => {
-    for (const state of ["output-error", "output-denied", "approval-requested"] as const) {
-      const blocks = groupMessageParts([tool("read-file", { state })], "m3");
-      expect(blocks.map((block) => block.kind)).toEqual(["attention"]);
+  it("drops a reasoning part that settled without ever getting words", () => {
+    const segments = segmentMessageParts(
+      [{ type: "reasoning", text: "  ", state: "done" }, tool("read-file")],
+      "m2e",
+    );
+    expect(bundleOf(segments)).toHaveLength(1);
+  });
+
+  it("keeps a reasoning part that is still streaming, words or not", () => {
+    // "Thinking..." is the sign of life; an empty streaming part is the only
+    // thing holding the floor before the first token lands.
+    const segments = segmentMessageParts(
+      [{ type: "reasoning", text: "", state: "streaming" }],
+      "m2f",
+    );
+    expect(bundleOf(segments)).toHaveLength(1);
+  });
+
+  it("breaks an approval request out of the bundle", () => {
+    const segments = segmentMessageParts(
+      [tool("read-file"), tool("run-command", { state: "approval-requested" })],
+      "m3",
+    );
+    // The one thing that blocks the reader must not sit behind a disclosure.
+    expect(segments.map((segment) => segment.kind)).toEqual(["bundle", "attention"]);
+  });
+
+  it("keeps failures and denials inside the bundle", () => {
+    for (const state of ["output-error", "output-denied"] as const) {
+      const segments = segmentMessageParts([tool("read-file"), tool("read-file", { state })], "m4");
+      // The summary confesses these in red and the bundle opens itself, so
+      // breaking them out would only cost the transcript another left edge.
+      expect(segments.map((segment) => segment.kind)).toEqual(["bundle"]);
+      expect(bundleNeedsAttention(bundleOf(segments))).toBe(true);
     }
   });
 
-  it("keeps a failed read counted by the group it broke out of", () => {
-    const parts: MessagePart[] = [
-      tool("read-file"),
-      tool("read-file"),
-      tool("read-file"),
-      tool("read-file", { state: "output-error" }),
-    ];
-    const blocks = groupMessageParts(parts, "m4");
-    expect(blocks.map((block) => block.kind)).toEqual(["activity", "attention"]);
-    const activity = blocks[0];
-    if (activity?.kind !== "activity") throw new Error("expected activity");
-    expect(activitySummary(activity.items)).toEqual([
-      { text: "Explored 4 reads", tone: "neutral" },
-      { text: "1 failed", tone: "danger" },
-    ]);
-    expect(blocks[1]?.kind === "attention" && blocks[1].part.state).toBe("output-error");
-  });
-
   it("degrades to a first-class 'other' row when no descriptor is stamped", () => {
-    const blocks = groupMessageParts(
-      [tool(null, { toolName: "linear_create_issue", input: { query: "VC-12 chat seam" } })],
-      "m5",
-    );
-    expect(blocks.map((block) => block.kind)).toEqual(["tool-run"]);
-    const row = describeActivity(
-      tool(null, { toolName: "linear_create_issue", input: { query: "VC-12 chat seam" } }),
-    );
+    const part = tool(null, {
+      toolName: "linear_create_issue",
+      input: { query: "VC-12 chat seam" },
+    });
+    expect(segmentMessageParts([part], "m5").map((segment) => segment.kind)).toEqual(["bundle"]);
+    const row = describeActivity(part);
     expect(row.kind).toBe("other");
     expect(row.verb).toBe("linear_create_issue");
     expect(row.object).toBe("VC-12 chat seam");
   });
 });
 
-describe("foldTurn", () => {
-  const timed = (kind: ActivityKind, startedAt: number, endedAt: number) =>
-    tool(kind, { descriptor: { startedAt, endedAt } });
-
-  it("keeps the trailing prose and folds the process behind it", () => {
-    const blocks = groupMessageParts(
-      [
-        { type: "reasoning", text: "**Planning**" },
-        tool("read-file"),
-        { type: "text", text: "Checking the seam." },
-        tool("run-command"),
-        { type: "text", text: "Implemented and verified." },
-      ],
-      "t1",
+describe("bundleSummary", () => {
+  it("reads as one sentence, in the order the work happened", () => {
+    const rows = bundleOf(
+      segmentMessageParts(
+        [tool("read-file"), tool("read-file"), tool("run-command"), tool("read-file")],
+        "s1",
+      ),
     );
-    const fold = foldTurn(blocks);
-    // Mid-turn narration is commentary on work you can no longer see; only the
-    // last thing said is the deliverable.
-    expect(fold.visible.map((block) => block.kind)).toEqual(["text"]);
-    expect(fold.visible[0]?.kind === "text" && fold.visible[0].part.text).toBe(
-      "Implemented and verified.",
+    // Kinds group even when interleaved, but the phrase order is first
+    // appearance -- the sentence tracks the work, not the alphabet.
+    expect(summaryText(rows)).toEqual(["Read 3 files, ran 1 command"]);
+  });
+
+  it("names the files a turn changed instead of counting them", () => {
+    const rows = bundleOf(
+      segmentMessageParts(
+        [
+          tool("read-file"),
+          named("edit-file", "src/renderer/lab/chat/activity.ts"),
+          named("edit-file", "src/renderer/lab/chat/activity-ui.tsx"),
+        ],
+        "s2",
+      ),
     );
-    // activity(reasoning + read) · text · tool-run · text — all but the last.
-    expect(fold.hidden).toBe(3);
+    // The deliverable is the point of the row; `edited 2 files` makes you open
+    // the bundle to find out what the turn was even for.
+    expect(summaryText(rows)).toEqual(["Read 1 file, edited activity.ts and activity-ui.tsx"]);
   });
 
-  it("keeps every trailing prose block, not just the last", () => {
-    const blocks = groupMessageParts(
-      [
-        tool("run-command"),
-        { type: "text", text: "First paragraph." },
-        { type: "text", text: "Second paragraph." },
-      ],
-      "t2",
+  it("counts once naming would become the list again", () => {
+    const rows = bundleOf(
+      segmentMessageParts(
+        Array.from({ length: NAMED_SUBJECT_LIMIT + 1 }, (_, index) =>
+          named("edit-file", `file-${index}.ts`),
+        ),
+        "s3",
+      ),
     );
-    // Two adjacent text parts are one deliverable split by the harness, not a
-    // narration followed by an answer.
-    expect(foldTurn(blocks).visible).toHaveLength(2);
-    expect(foldTurn(blocks).hidden).toBe(1);
+    expect(summaryText(rows)).toEqual([`Edited ${NAMED_SUBJECT_LIMIT + 1} files`]);
   });
 
-  it("never folds a turn holding a question or a failure", () => {
-    for (const state of ["approval-requested", "output-error"] as const) {
-      const blocks = groupMessageParts(
-        [tool("run-command"), tool("run-command", { state }), { type: "text", text: "Done." }],
-        "t3",
-      );
-      const fold = foldTurn(blocks);
-      expect(fold.hidden).toBe(0);
-      expect(fold.visible).toHaveLength(blocks.length);
-    }
-  });
-
-  it("does not fold a turn that is only prose", () => {
-    const blocks = groupMessageParts([{ type: "text", text: "Just an answer." }], "t4");
-    expect(foldTurn(blocks)).toEqual({ visible: blocks, hidden: 0, summary: "" });
-  });
-
-  it("folds a turn that produced no prose down to its receipt alone", () => {
-    const blocks = groupMessageParts([tool("run-command"), tool("edit-file")], "t5");
-    const fold = foldTurn(blocks);
-    expect(fold.visible).toEqual([]);
-    expect(fold.hidden).toBe(1);
-  });
-
-  it("reports wall-clock across the turn, not the sum of its parts", () => {
-    const blocks = groupMessageParts(
-      [
-        // Overlapping work: 0→5000 and 1000→3000. The reader waited 5s.
-        timed("run-command", 0, 5000),
-        timed("run-command", 1000, 3000),
-        { type: "text", text: "Done." },
-      ],
-      "t6",
+  it("falls back to counting when a durable row has no subject", () => {
+    const rows = bundleOf(
+      segmentMessageParts([named("edit-file", "a.ts"), tool("edit-file")], "s4"),
     );
-    expect(turnDuration(blocks)).toBe(5000);
-    expect(foldTurn(blocks).summary).toBe("Worked for 5.0s");
+    expect(summaryText(rows)).toEqual(["Edited 2 files"]);
   });
 
-  it("counts steps when the harness stamped no timestamps", () => {
-    const blocks = groupMessageParts(
-      [tool("run-command"), tool("read-file"), tool("search"), { type: "text", text: "Done." }],
-      "t7",
+  it("takes the present participle for work still in flight", () => {
+    const rows = bundleOf(
+      segmentMessageParts(
+        [tool("read-file"), tool("read-file"), tool("run-command", { state: "input-available" })],
+        "s5",
+      ),
     );
-    expect(turnDuration(blocks)).toBeNull();
-    expect(foldTurn(blocks).summary).toBe("Completed 3 steps");
+    // Settled kinds stay in the past; only the kind still working moves. This
+    // line is the whole report while a turn streams, so it has to say which.
+    expect(summaryText(rows)).toEqual(["Read 2 files, running 1 command…"]);
   });
 
-  it("singularizes one step and names a turn that only thought", () => {
-    const one = groupMessageParts([tool("run-command"), { type: "text", text: "Done." }], "t8");
-    expect(foldTurn(one).summary).toBe("Completed 1 step");
-    const thought = groupMessageParts(
-      [
-        { type: "reasoning", text: "**Weighing it**" },
-        { type: "text", text: "Done." },
-      ],
-      "t9",
-    );
-    expect(foldTurn(thought).summary).toBe("Thought");
+  it("says nothing for a bundle that only thought", () => {
+    const rows = bundleOf(segmentMessageParts([{ type: "reasoning", text: "**Planning**" }], "s6"));
+    // The reasoning row is its own summary; a header would say it twice.
+    expect(summaryText(rows)).toEqual([]);
   });
 
-  it("ignores a backwards or half-open timestamp pair", () => {
-    const partial = groupMessageParts(
-      [tool("run-command", { descriptor: { startedAt: 500 } }), { type: "text", text: "Done." }],
-      "t10",
+  it("does not count reasoning among the tools", () => {
+    const rows = bundleOf(
+      segmentMessageParts([{ type: "reasoning", text: "**Planning**" }, tool("read-file")], "s7"),
     );
-    expect(turnDuration(partial)).toBeNull();
-    const backwards = groupMessageParts(
-      [timed("run-command", 900, 100), { type: "text", text: "Done." }],
-      "t11",
-    );
-    expect(turnDuration(backwards)).toBeNull();
+    expect(summaryText(rows)).toEqual(["Read 1 file"]);
   });
-});
 
-describe("activitySummary", () => {
-  it("counts by kind, not by tool name", () => {
-    const items = groupMessageParts(
-      [
-        { type: "reasoning", text: "x", state: "done" },
-        tool("search"),
-        tool("search"),
-        tool("read-file"),
-      ],
-      "m",
-    )[0];
-    if (items?.kind !== "activity") throw new Error("expected activity");
-    expect(activitySummary(items.items)).toEqual([
-      { text: "Explored 2 searches, 1 read", tone: "neutral" },
+  it("confesses failures and denials in their own tone", () => {
+    const rows = bundleOf(
+      segmentMessageParts(
+        [
+          tool("run-command"),
+          tool("run-command", { state: "output-error" }),
+          tool("read-file", { state: "output-denied" }),
+        ],
+        "s8",
+      ),
+    );
+    expect(bundleSummary(rows)).toEqual([
+      { text: "Ran 2 commands, read 1 file", tone: "neutral" },
+      { text: "1 failed", tone: "danger" },
+      { text: "1 denied", tone: "danger" },
     ]);
   });
-
-  it("says nothing when the group is reasoning only — the status line speaks", () => {
-    const items = groupMessageParts([{ type: "reasoning", text: "x", state: "done" }], "m")[0];
-    if (items?.kind !== "activity") throw new Error("expected activity");
-    expect(activitySummary(items.items)).toEqual([]);
-  });
-
-  it("reports live work while streaming", () => {
-    const items = groupMessageParts([tool("read-file", { state: "input-available" })], "m")[0];
-    if (items?.kind !== "activity") throw new Error("expected activity");
-    expect(activitySummary(items.items)).toEqual([{ text: "Exploring 1 read", tone: "neutral" }]);
-  });
 });
 
-describe("runSummary", () => {
-  it("names the run by kind so the header can tick", () => {
-    const run = groupMessageParts([tool("edit-file"), tool("edit-file")], "m")[0];
-    if (run?.kind !== "tool-run") throw new Error("expected tool-run");
-    expect(runSummary(run.items)).toEqual([{ text: "2 edits", tone: "neutral" }]);
-  });
-});
-
-describe("rollingTail", () => {
-  const rows = [1, 2, 3, 4, 5, 6];
-
-  it("keeps the limit when nothing is active", () => {
-    expect(rollingTail(rows, () => false)).toEqual({ hidden: 3, visible: [4, 5, 6] });
-  });
-
-  it("pins the active row and keeps the limit above it", () => {
-    expect(rollingTail(rows, (row) => row === 6)).toEqual({ hidden: 2, visible: [3, 4, 5, 6] });
-  });
-
-  it("hides nothing under the budget", () => {
-    expect(rollingTail([1, 2], () => false)).toEqual({ hidden: 0, visible: [1, 2] });
-    expect(TAIL_LIMIT).toBe(3);
-  });
-});
-
-describe("foldRun", () => {
-  it("keeps the rolling tail while any row is still working", () => {
-    const items = runItems(
-      tool("run-command"),
-      tool("run-command"),
-      tool("run-command"),
-      tool("run-command"),
-      tool("run-command", { state: "input-available" }),
+describe("bundle state", () => {
+  it("is streaming while any row is unsettled", () => {
+    const live = bundleOf(
+      segmentMessageParts([tool("run-command", { state: "input-available" })], "b1"),
     );
-    const fold = foldRun(items);
-    expect(fold.visible).toHaveLength(4);
-    expect(fold.hidden).toBe(1);
+    const settled = bundleOf(segmentMessageParts([tool("run-command")], "b2"));
+    expect(isBundleStreaming(live)).toBe(true);
+    expect(isBundleStreaming(settled)).toBe(false);
   });
 
-  it("drops a settled command run to its header alone", () => {
-    const fold = foldRun(runItems(tool("run-command"), tool("run-command")));
-    expect(fold.visible).toEqual([]);
-    expect(fold.hidden).toBe(2);
-  });
-
-  it("keeps the rows that changed the workspace and folds the rest", () => {
-    const fold = foldRun(
-      runItems(tool("run-command"), tool("edit-file"), tool("run-command"), tool("write-file")),
+  it("is streaming while reasoning is still being written", () => {
+    const rows = bundleOf(
+      segmentMessageParts([{ type: "reasoning", text: "half a th", state: "streaming" }], "b3"),
     );
-    expect(kinds(fold.visible)).toEqual(["edit-file", "write-file"]);
-    expect(fold.hidden).toBe(2);
+    expect(isBundleStreaming(rows)).toBe(true);
   });
 
-  it("shows a lone edit with no header at all", () => {
-    expect(foldRun(runItems(tool("edit-file")))).toEqual({
-      hidden: 0,
-      visible: [expect.objectContaining({ key: "r0" })],
-    });
-  });
-
-  it("keeps surviving edits tail-bounded so a wide change is not a wall", () => {
-    const fold = foldRun(runItems(...Array.from({ length: 12 }, () => tool("edit-file"))));
-    expect(fold.visible).toHaveLength(TAIL_LIMIT);
-    expect(fold.hidden).toBe(9);
-    // The tail keeps the *last* edits, which are the ones still on screen above
-    // the answer.
-    expect(fold.visible.map((item) => item.key)).toEqual(["r9", "r10", "r11"]);
-  });
-
-  it("still counts a failed row it cannot show", () => {
-    // Attention states leave as their own card, but a run assembled by hand (or
-    // by a harness that never stamped a descriptor) must not under-report.
-    const fold = foldRun(
-      runItems(tool("run-command", { state: "output-error" }), tool("edit-file")),
-    );
-    expect(kinds(fold.visible)).toEqual(["edit-file"]);
-    expect(fold.hidden).toBe(1);
+  it("needs attention only for an outcome the summary would otherwise bury", () => {
+    const clean = bundleOf(segmentMessageParts([tool("read-file")], "b4"));
+    expect(bundleNeedsAttention(clean)).toBe(false);
   });
 });
 

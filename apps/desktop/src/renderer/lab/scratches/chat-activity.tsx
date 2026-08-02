@@ -37,13 +37,11 @@ import { Button } from "@renderer/components/ui/button";
 
 import { type SessionTodo } from "../chat/activity";
 import {
-  ActivityGroup,
+  ActivityBundle,
   AttentionCard,
   AttentionReceipt,
   SessionTodoDock,
   ToolRow,
-  ToolRun,
-  TurnFoldHeader,
 } from "../chat/activity-ui";
 import { SessionComposer } from "../chat/composer-ui";
 import { enqueueMessage, type ComposerAgent, type QueuedMessage } from "../chat/session-model";
@@ -466,10 +464,9 @@ export default function ChatActivityScratch() {
         />
       </Section>
 
-      <Section label="Group · reasoning with a parsed header">
-        <ActivityGroup
-          working={false}
-          items={[
+      <Section label="Bundle · everything between two things the agent said">
+        <ActivityBundle
+          rows={[
             {
               kind: "reasoning",
               key: "r1",
@@ -477,45 +474,64 @@ export default function ChatActivityScratch() {
                 "**Checking the reducer**\n\nThe queue drains one message at a time.",
               ),
             },
-            ...EXPLORE_RUN.slice(0, 3).map((part, index) => ({
+            ...SETTLED_RUN.map((part, index) => ({
               kind: "tool" as const,
-              key: `g1-${index}`,
+              key: `b1-${index}`,
               part,
             })),
           ]}
         />
       </Section>
 
-      <Section label="Group · reasoning with no header">
-        <ActivityGroup
-          working={false}
-          items={[
+      <Section label="Bundle · reasoning alone is its own summary">
+        <ActivityBundle
+          rows={[
             { kind: "reasoning", key: "r2", part: reasoning("Plain thinking, no bold line.") },
           ]}
         />
       </Section>
 
-      <Section label="Group · streaming">
-        <ActivityGroup
-          working
-          items={[
+      <Section label="Bundle · thinking still being written">
+        <ActivityBundle
+          rows={[
             { kind: "reasoning", key: "r3", part: reasoning("**Tracing the seam**", "streaming") },
           ]}
         />
       </Section>
 
-      <Section label="Group · one failed read confessed by the header">
-        <ActivityGroup
-          working={false}
-          items={[
-            ...EXPLORE_RUN.slice(0, 2).map((part, index) => ({
+      <Section label="Bundle · live, the one row carries the whole report">
+        <ActivityBundle
+          rows={[
+            ...EXPLORE_RUN.slice(0, 3).map((part, index) => ({
               kind: "tool" as const,
-              key: `g4-${index}`,
+              key: `b4-${index}`,
               part,
             })),
             {
               kind: "tool" as const,
-              key: "g4-fail",
+              key: "b4-live",
+              part: tool(
+                descriptor("run-command", {
+                  subject: { label: "vp run -r test", path: null, lineRange: null },
+                }),
+                { state: "input-available" },
+              ),
+            },
+          ]}
+        />
+      </Section>
+
+      <Section label="Bundle · a failure opens it without being asked">
+        <ActivityBundle
+          rows={[
+            ...EXPLORE_RUN.slice(0, 2).map((part, index) => ({
+              kind: "tool" as const,
+              key: `b5-${index}`,
+              part,
+            })),
+            {
+              kind: "tool" as const,
+              key: "b5-fail",
               part: tool(
                 descriptor("read-file", {
                   subject: { label: "packages/gone.ts", path: "packages/gone.ts", lineRange: null },
@@ -527,25 +543,14 @@ export default function ChatActivityScratch() {
         />
       </Section>
 
-      <Section label="Turn · folded to its receipt">
-        <TurnFoldHeader summary="Worked for 4m 31s" open={false} onToggle={() => undefined} />
-      </Section>
-
-      <Section label="Turn · opened, and a turn with no timestamps to report">
-        <TurnFoldHeader summary="Worked for 4m 31s" open onToggle={() => undefined} />
-        <TurnFoldHeader summary="Completed 13 steps" open={false} onToggle={() => undefined} />
-      </Section>
-
-      <Section label="Run · live, rolling tail folds the oldest rows">
-        <ToolRun items={EXPLORE_RUN.map((part, index) => ({ part, key: `tail-${index}` }))} />
-      </Section>
-
-      <Section label="Run · settled, only the rows that touched disk survive">
-        <ToolRun items={SETTLED_RUN.map((part, index) => ({ part, key: `settled-${index}` }))} />
-      </Section>
-
-      <Section label="Run · settled commands leave nothing but the header">
-        <ToolRun items={CHECK_RUN.map((part, index) => ({ part, key: `checks-${index}` }))} />
+      <Section label="Bundle · past the height cap, it scrolls inside itself">
+        <ActivityBundle
+          rows={[...CHECK_RUN, ...EXPLORE_RUN, ...SETTLED_RUN].map((part, index) => ({
+            kind: "tool" as const,
+            key: `b6-${index}`,
+            part,
+          }))}
+        />
       </Section>
 
       <Section label="Attention">
