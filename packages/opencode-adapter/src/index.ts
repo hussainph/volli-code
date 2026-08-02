@@ -737,8 +737,7 @@ class OpenCodeBinding implements BindingHandle {
     try {
       for await (const event of stream) {
         if (this.#released) return disconnected;
-        const sessionId = eventSessionId(event.properties);
-        if (sessionId !== this.#nativeSessionId || this.#streamEventsSeen.has(event.id)) continue;
+        if (!this.#ownsStreamEvent(event) || this.#streamEventsSeen.has(event.id)) continue;
         await this.#handleEvent(event);
         this.#rememberStreamEvent(event.id);
       }
@@ -746,6 +745,19 @@ class OpenCodeBinding implements BindingHandle {
       disconnected = error instanceof Error ? error.message : "OpenCode event stream disconnected";
     }
     return disconnected;
+  }
+
+  /**
+   * OpenCode tags snapshots with their Session, but its high-frequency text
+   * deltas can be scoped only by message and part. Accept that compact shape
+   * only after a trusted, Session-tagged message or part established ownership.
+   */
+  #ownsStreamEvent(event: OpenCodeSseEvent): boolean {
+    const sessionId = eventSessionId(event.properties);
+    if (sessionId !== null) return sessionId === this.#nativeSessionId;
+    if (event.type !== "message.part.delta" && event.type !== "message.part.removed") return false;
+    const messageId = objectString(event.properties, "messageID");
+    return messageId !== null && this.#messages.has(messageId);
   }
 
   #subscribe(): Promise<AsyncIterable<OpenCodeSseEvent>> {

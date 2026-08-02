@@ -276,11 +276,16 @@ export const MessageBranchPage = ({ className, ...props }: MessageBranchPageProp
 export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 
 const streamdownPlugins = { cjk, code, math, mermaid };
+// Streamdown uses a React transition for streaming updates unless an animation
+// plugin is present. Keep updates synchronous, while avoiding a second visual
+// typewriter delay on top of the provider's token stream.
+const immediateStreamingAnimation = { duration: 0, stagger: 0 } as const;
 
 export const MessageResponse = memo(
-  ({ className, ...props }: MessageResponseProps) => (
+  ({ className, animated = immediateStreamingAnimation, ...props }: MessageResponseProps) => (
     <Streamdown
       className={cn("size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", className)}
+      animated={animated}
       plugins={streamdownPlugins}
       {...props}
     />
