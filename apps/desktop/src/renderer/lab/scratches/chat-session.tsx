@@ -352,23 +352,28 @@ function ChatPlane({
               </ContentColumn>
             )}
           </ConversationContent>
+          {/* A short fade over the transcript, keyed to the measured composer
+              rather than a magic offset that breaks the moment the plan dock
+              expands. The old full-height scrim repainted the card rung over
+              itself and read as a grey wash.
+
+              It lives inside the Conversation, ahead of the button, so paint
+              order is structural: content, then fade, then button. As a later
+              sibling of the whole Conversation it painted *over* the button
+              and washed its lower half toward the background — which read as
+              the button being clipped.
+
+              Tall enough to contain that button, which floats 12px above the
+              composer and stands 28px: at h-8 its top sat above the fade, on
+              crisp text, and sliced it. */}
+          <div className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16 bg-gradient-to-t from-background to-transparent" />
+
           {/* Glass, not a plug. This button only exists while the reader is
               scrolled up, so there is always live text behind it; an opaque
-              circle punches a hole in that text. Translucent over the fade
-              below, the line it covers reads as receding rather than cut. */}
+              circle punches a hole in that text. */}
           <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-[var(--shadow-raised)] backdrop-blur-md dark:bg-background/70 dark:hover:bg-muted/70" />
         </Conversation>
       </FileMentionProvider>
-
-      {/* A short fade over the transcript, keyed to the measured composer rather
-          than a magic offset that breaks the moment the plan dock expands. The
-          old full-height scrim repainted the card rung over itself and read as
-          a grey wash.
-
-          Tall enough to contain the jump-to-bottom button, which floats 12px
-          above the composer and stands 28px: at h-8 its top sat above the fade,
-          on crisp text, and sliced it. */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16 bg-gradient-to-t from-background to-transparent" />
 
       <div
         ref={composerHeight.ref}
@@ -411,7 +416,14 @@ function useMeasuredHeight<T extends HTMLElement>(): {
     if (!node) return;
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0];
-      if (entry) setHeight(entry.contentRect.height);
+      if (!entry) return;
+      // Border box, not `contentRect`: the content box drops the observed
+      // node's own padding. The composer carries pb-5, so this under-reported
+      // by 20px — and every consumer of it (the transcript's bottom padding,
+      // the fade, the jump-to-bottom button) sat 20px too low. The fade's
+      // opaque end landed below the composer's hard top edge, which is why a
+      // line got cut while still partly visible.
+      setHeight(entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height);
     });
     observer.observe(node);
     return () => observer.disconnect();
