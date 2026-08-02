@@ -5,6 +5,7 @@ import {
   type SessionClientCommand,
   type SessionRuntime,
   type SessionRuntimeCommandRequest,
+  type SessionRuntimeSnapshot,
   type SessionStreamFrame,
 } from "@volli/session-engine";
 import { z } from "zod";
@@ -292,7 +293,7 @@ export function createSessionRouter() {
     session: t.router({
       snapshot: instrumentedProcedure
         .input(z.object({ sessionId: nonEmptyString }))
-        .query(({ ctx, input }) => ctx.runtime.snapshot(input)),
+        .query(async ({ ctx, input }) => rendererSnapshot(await ctx.runtime.snapshot(input))),
       subscribe: instrumentedProcedure
         .input(sessionSubscriptionSchema)
         .subscription(async function* ({ ctx, input, signal }) {
@@ -301,7 +302,7 @@ export function createSessionRouter() {
           const queue = new AsyncQueue<SessionStreamFrame>();
           const unsubscribe = await ctx.runtime.subscribe(
             { sessionId: input.sessionId, afterSequence },
-            (frame) => queue.push(frame),
+            (frame) => queue.push(rendererFrame(frame)),
           );
           if (signal?.aborted) {
             unsubscribe();
@@ -330,7 +331,9 @@ export function createSessionRouter() {
         .mutation(({ ctx, input }) => ctx.runtime.command(toSessionRuntimeCommandRequest(input))),
       refreshCapabilities: instrumentedProcedure
         .input(z.object({ sessionId: nonEmptyString, attachmentId: nonEmptyString }))
-        .mutation(({ ctx, input }) => ctx.runtime.refreshCapabilities(input)),
+        .mutation(async ({ ctx, input }) =>
+          rendererCapabilitySnapshot(await ctx.runtime.refreshCapabilities(input)),
+        ),
       reconcile: instrumentedProcedure
         .input(z.object({ sessionId: nonEmptyString, attachmentId: nonEmptyString }))
         .mutation(({ ctx, input }) => ctx.runtime.reconcile(input)),
@@ -379,6 +382,41 @@ export function createSessionRouter() {
         }),
     }),
   });
+}
+
+/**
+ * Capability inventories remain durable server evidence. Renderer clients get
+ * feature state only; model and tool discovery belongs to Runtime Catalog Settings.
+ */
+function rendererCapabilitySnapshot(
+  snapshot: SessionRuntimeSnapshot["projection"]["capabilities"][number],
+): SessionRuntimeSnapshot["projection"]["capabilities"][number] {
+  return { ...snapshot, catalog: [] };
+}
+
+function rendererFrame(frame: SessionStreamFrame): SessionStreamFrame {
+  if (frame.event.payload.kind !== "capabilities.updated") return frame;
+  return {
+    ...frame,
+    event: {
+      ...frame.event,
+      payload: {
+        kind: "capabilities.updated",
+        snapshot: rendererCapabilitySnapshot(frame.event.payload.snapshot),
+      },
+    },
+  };
+}
+
+function rendererSnapshot(snapshot: SessionRuntimeSnapshot): SessionRuntimeSnapshot {
+  return {
+    ...snapshot,
+    projection: {
+      ...snapshot.projection,
+      capabilities: snapshot.projection.capabilities.map(rendererCapabilitySnapshot),
+    },
+    frames: snapshot.frames.map(rendererFrame),
+  };
 }
 
 function requireRuntimeCatalog(context: SessionRouterContext): RuntimeCatalog {

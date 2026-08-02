@@ -8,6 +8,11 @@ import type {
 } from "@volli/session-engine";
 import { AsyncQueue, createSessionRouter, RpcDiagnosticLog, sanitizeDiagnosticText } from "./index";
 
+type CapabilitySnapshot = Extract<
+  SessionStreamFrame["event"]["payload"],
+  { kind: "capabilities.updated" }
+>["snapshot"];
+
 function frame(sequence: number): SessionStreamFrame {
   return {
     sessionId: "session-1",
@@ -58,6 +63,40 @@ function snapshot(): SessionRuntimeSnapshot {
     throughSequence: 4,
     frames: [frame(4)],
     transcript: [],
+  };
+}
+
+function capabilitySnapshot(): CapabilitySnapshot {
+  return {
+    id: "capabilities-1",
+    adapterId: "opencode",
+    attachmentId: "attachment-1",
+    profileId: "native",
+    revision: 1,
+    observedAt: 10,
+    expiresAt: 70,
+    features: [{ id: "message.submit", state: "available", evidence: "verified", detail: null }],
+    catalog: [
+      {
+        kind: "model",
+        id: "provider/model-with-exhaustive-detail",
+        label: "Exhaustive model inventory",
+        state: "available",
+        evidence: "reported",
+        detail: { payload: "must stay behind the server boundary" },
+      },
+    ],
+  };
+}
+
+function capabilityFrame(sequence: number): SessionStreamFrame {
+  const base = frame(sequence);
+  return {
+    ...base,
+    event: {
+      ...base.event,
+      payload: { kind: "capabilities.updated", snapshot: capabilitySnapshot() },
+    },
   };
 }
 
@@ -259,6 +298,52 @@ describe("AsyncQueue", () => {
 });
 
 describe("Session tRPC router", () => {
+  it("keeps exhaustive capability catalogs out of renderer snapshots and streams", async () => {
+    const fixture = runtimeFixture();
+    const base = snapshot();
+    const runtime: SessionRuntime = {
+      ...fixture.runtime,
+      snapshot: async () => ({
+        ...base,
+        projection: { ...base.projection, capabilities: [capabilitySnapshot()] },
+        frames: [capabilityFrame(4)],
+      }),
+      refreshCapabilities: async () => capabilitySnapshot(),
+    };
+    const caller = createSessionRouter().createCaller({
+      runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    const resolved = await caller.session.snapshot({ sessionId: "session-1" });
+    expect(resolved.projection.capabilities[0]?.catalog).toEqual([]);
+    expect(
+      resolved.frames[0]?.event.payload.kind === "capabilities.updated"
+        ? resolved.frames[0].event.payload.snapshot.catalog
+        : null,
+    ).toEqual([]);
+
+    const refreshed = await caller.session.refreshCapabilities({
+      sessionId: "session-1",
+      attachmentId: "attachment-1",
+    });
+    expect(refreshed.catalog).toEqual([]);
+
+    const stream = await caller.session.subscribe({ sessionId: "session-1" });
+    const iterator = stream[Symbol.asyncIterator]();
+    const pending = iterator.next();
+    await Promise.resolve();
+    fixture.emit(capabilityFrame(5));
+    const tracked = trackedValue((await pending).value);
+    const streamed = tracked.data as SessionStreamFrame;
+    expect(
+      streamed.event.payload.kind === "capabilities.updated"
+        ? streamed.event.payload.snapshot.catalog
+        : null,
+    ).toEqual([]);
+    await iterator.return?.();
+  });
+
   it("exposes bounded Runtime Catalog browsing and shortlist resolution to Lab clients", async () => {
     const fixture = runtimeFixture();
     const calls: string[] = [];
