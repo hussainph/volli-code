@@ -75,11 +75,27 @@ const COLLAPSE = "duration-[400ms] ease-swift motion-reduce:transition-none";
 const COLLAPSE_FADE = "duration-[240ms] ease-swift motion-reduce:transition-none";
 
 /**
- * The one caret. Rotated, never swapped — a swapped glyph cannot animate, and
- * reads as a flicker. `hidden` keeps the slot so the meta column stays aligned
- * across rows that can and cannot expand.
+ * The one caret, and it always rides the right edge.
+ *
+ * The left column of every row means one thing — what happened: a check, a
+ * cross, a spinner, a thought's dot. A caret there would put two meanings in
+ * one column, which is exactly how this read as inconsistent when container
+ * rows disclosed on the left and leaf rows on the right. Left is outcome, right
+ * is "there is more".
+ *
+ * Rotated, never swapped — a swapped glyph cannot animate, and reads as a
+ * flicker. `hidden` keeps the slot so the meta column stays aligned across rows
+ * that can and cannot expand.
  */
-function Caret({ open, hidden }: { open: boolean; hidden?: boolean }) {
+function Caret({
+  open,
+  hidden,
+  className,
+}: {
+  open: boolean;
+  hidden?: boolean;
+  className?: string;
+}) {
   return (
     <CaretRightIcon
       aria-hidden
@@ -88,6 +104,7 @@ function Caret({ open, hidden }: { open: boolean; hidden?: boolean }) {
         COLLAPSE,
         open && "rotate-90",
         hidden && "invisible",
+        className,
       )}
     />
   );
@@ -122,7 +139,7 @@ function hasTextSelection(): boolean {
   return (window.getSelection()?.toString().length ?? 0) > 0;
 }
 
-/** Every folded header is the same row: caret, then the counted summary. */
+/** Every folded header is the same row: the counted summary, then the caret. */
 const TRIGGER_CLASS =
   "flex w-full min-w-0 items-center gap-1.5 rounded-md py-0.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring";
 
@@ -411,8 +428,8 @@ export function ToolRun({
           onClick={() => setExpanded((value) => !value)}
           className={TRIGGER_CLASS}
         >
-          <Caret open={expanded} />
           <Summary segments={runSummary(items)} />
+          <Caret open={expanded} className="ml-auto" />
         </button>
       ) : null}
       <div className="space-y-0.5">
@@ -470,14 +487,14 @@ export function ActivityGroup({
     <div className="not-prose">
       {summary.length > 0 ? (
         <button type="button" onClick={toggle} className={TRIGGER_CLASS}>
-          <Caret open={open} />
           <Summary segments={summary} />
+          <Caret open={open} className="ml-auto" />
         </button>
       ) : null}
       {reasoningLine && summary.length === 0 && body !== null ? (
         <button type="button" onClick={toggle} className={TRIGGER_CLASS}>
-          <Caret open={open} />
           {reasoningLine}
+          <Caret open={open} />
         </button>
       ) : (
         reasoningLine
@@ -622,13 +639,13 @@ export function SessionTodoDock({ todos }: { todos: readonly SessionTodo[] }) {
         onClick={() => setOpen((value) => !value)}
         className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
-        <Caret open={open} />
         <span className="font-medium tabular-nums text-foreground">
           {done}/{todos.length}
         </span>
         {active ? (
           <span className="min-w-0 truncate text-muted-foreground">{active.content}</span>
         ) : null}
+        <Caret open={open} className="ml-auto" />
       </button>
       <Disclosure open={open}>
         <ul className="space-y-1 border-t border-border/70 px-3 py-2">
