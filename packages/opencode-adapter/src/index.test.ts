@@ -2216,6 +2216,202 @@ describe("OpenCodeNativeAdapter", () => {
     await handle.release("requested");
   });
 
+  it("settles the message's last thought on OpenCode's own time.end, mid-turn", async () => {
+    const network = new FakeNetwork();
+    const hold = new Deferred<void>();
+    network.subscribe = async (input) => {
+      network.subscriptions.push(input);
+      return (async function* () {
+        yield {
+          id: "assistant",
+          type: "message.updated",
+          properties: {
+            info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+          },
+        };
+        // OpenCode opens a reasoning part with an empty text and a start time,
+        // then streams the body as deltas.
+        yield {
+          id: "think-open",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "r1",
+              messageID: "provider-assistant",
+              type: "reasoning",
+              text: "",
+              time: { start: 1 },
+            },
+          },
+        };
+        yield {
+          id: "think-delta",
+          type: "message.part.delta",
+          properties: {
+            sessionID: "native-session-1",
+            messageID: "provider-assistant",
+            partID: "r1",
+            field: "text",
+            delta: "Weighing the trade-offs",
+          },
+        };
+        // Long enough to earn its own coalesced snapshot, so the thought is
+        // observed live before anything settles it.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        yield {
+          id: "think-finished",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "r1",
+              messageID: "provider-assistant",
+              type: "reasoning",
+              text: "Weighing the trade-offs",
+              time: { start: 1, end: 2 },
+            },
+          },
+        };
+        await hold.promise;
+      })();
+    };
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    // The thought is the message's only part throughout, so position cannot
+    // explain the settle — `time.end` is the whole signal. And the opening
+    // empty snapshot never drew a part of its own.
+    expect(
+      observations.flatMap((observation) =>
+        observation.kind === "transcript.message"
+          ? observation.message.parts.flatMap((part) =>
+              part.type === "reasoning" ? [{ text: part.text, state: part.state }] : [],
+            )
+          : [],
+      ),
+    ).toEqual([
+      { text: "Weighing the trade-offs", state: "streaming" },
+      { text: "Weighing the trade-offs", state: "done" },
+    ]);
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("keeps a streaming thought when a re-hydrated snapshot serves it empty", async () => {
+    const network = new FakeNetwork();
+    const hold = new Deferred<void>();
+    network.subscribe = async (input) => {
+      network.subscriptions.push(input);
+      return (async function* () {
+        yield {
+          id: "assistant",
+          type: "message.updated",
+          properties: {
+            info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+          },
+        };
+        yield {
+          id: "think-open",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "r1",
+              messageID: "provider-assistant",
+              type: "reasoning",
+              text: "",
+              time: { start: 1 },
+            },
+          },
+        };
+        yield {
+          id: "think-delta",
+          type: "message.part.delta",
+          properties: {
+            sessionID: "native-session-1",
+            messageID: "provider-assistant",
+            partID: "r1",
+            field: "text",
+            delta: "Still thinking",
+          },
+        };
+        // What a mid-stream re-hydrate serves for a live part: OpenCode never
+        // projects deltas to its database, so the text comes back empty.
+        yield {
+          id: "think-rehydrated",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "r1",
+              messageID: "provider-assistant",
+              type: "reasoning",
+              text: "",
+              time: { start: 1 },
+            },
+          },
+        };
+        await hold.promise;
+      })();
+    };
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        kind: "transcript.message",
+        message: expect.objectContaining({
+          parts: [{ type: "reasoning", text: "Still thinking", state: "streaming" }],
+        }),
+      }),
+    );
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("draws no part for a thought that is only whitespace", async () => {
+    const { adapter } = composition([
+      {
+        id: "assistant",
+        type: "message.updated",
+        properties: {
+          sessionID: "native-session-1",
+          info: { id: "provider-assistant", role: "assistant" },
+          parts: [
+            { id: "r1", type: "reasoning", text: " \n " },
+            { id: "t1", type: "text", text: "Answer" },
+          ],
+        },
+      },
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(observations.filter(({ kind }) => kind === "transcript.message")).toEqual([
+      expect.objectContaining({
+        message: expect.objectContaining({ parts: [{ type: "text", text: "Answer" }] }),
+      }),
+    ]);
+  });
+
   it("maps every status family and ignores malformed or unrelated SSE events", async () => {
     const { adapter } = composition([
       {

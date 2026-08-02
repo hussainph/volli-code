@@ -1098,10 +1098,10 @@ class OpenCodeBinding implements BindingHandle {
       openCodePart(buffered.parts.get(partId), { reasoningStreaming: turnBusy }),
     );
     if (parts.length === 0) return;
-    // A thought is live only while it is the message's *final* part. Once text
-    // or a tool call follows it the model has moved on, even though the turn is
-    // still busy — and a reasoning part left "streaming" makes the renderer's
-    // elapsed counter tick forever against a thought that finished long ago.
+    // Fallback for the window before `time.end` lands: a thought is live only
+    // while it is the message's *final* part. Once text or a tool call follows
+    // it the model has moved on, even though the turn is still busy — and a
+    // reasoning part left "streaming" makes the elapsed counter tick forever.
     if (turnBusy) {
       const lastIndex = parts.length - 1;
       for (let index = 0; index < parts.length; index += 1) {
@@ -1791,12 +1791,20 @@ function openCodePart(
   }
   if (type === "reasoning") {
     const text = objectString(part, "text");
-    if (text === null) return [];
+    // OpenCode opens every reasoning part with `text: ""` and serves the same
+    // empty string to a mid-stream re-hydrate, because deltas never reach its
+    // database. Both project to nothing worth drawing.
+    if (text === null || text.trim() === "") return [];
+    // `finishReasoning` stamps `time.end` the moment a thought settles, which is
+    // its own event — independent of the turn ending or of anything following
+    // the part. Trust it over the turn's busy flag, or the renderer's elapsed
+    // counter keeps ticking against a thought that finished long ago.
+    const settled = Number.isFinite(nested(part, "time")?.end);
     return [
       {
         type: "reasoning",
         text,
-        state: options?.reasoningStreaming ? "streaming" : "done",
+        state: options?.reasoningStreaming && !settled ? "streaming" : "done",
       },
     ];
   }
@@ -1870,12 +1878,15 @@ function mergeOpenCodePart(previous: unknown, next: Record<string, unknown>): un
       state: { ...previousState, ...nextState },
     };
   }
-  // Carry forward text accumulated by deltas when the typed snapshot omits it
-  // (common for reasoning: part.updated with type only, then deltas).
+  // Deltas only ever append, so a buffer already holding text outranks any
+  // snapshot carrying a prefix of it — whether the snapshot omits the field
+  // (reasoning opens with type only, then deltas) or spells it as the empty
+  // string OpenCode opens with and re-serves on a mid-stream re-hydrate. A
+  // snapshot that diverges is genuinely newer and replaces the buffer.
   if (isRecord(previous)) {
     const previousText = objectString(previous, "text");
     const nextText = objectString(next, "text");
-    if (previousText !== null && nextText === null) {
+    if (previousText && (nextText === null || previousText.startsWith(nextText))) {
       return { ...next, text: previousText };
     }
   }
