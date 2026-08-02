@@ -34,7 +34,15 @@ export interface RuntimeCatalogAgent {
   id: string;
   label: string;
   state: SessionCapabilityState;
+  /**
+   * `mode` and `hidden` are the harness's own declaration of which agents a
+   * person may pick. OpenCode marks its internal machinery (compaction, title,
+   * summary) `hidden` and its subagents `mode: "subagent"`; a picker filters on
+   * these rather than on a denylist of names, so a second harness needs no UI
+   * change to hide its own internals.
+   */
   mode: string | null;
+  hidden: boolean | null;
   description: string | null;
 }
 

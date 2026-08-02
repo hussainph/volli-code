@@ -186,6 +186,7 @@ function capabilityCatalog(result: NativeProbeResult): {
         label: item.label,
         state: item.state,
         mode: detail ? nonEmptyString(detail["mode"]) : null,
+        hidden: detail ? booleanValue(detail["hidden"]) : null,
         description: detail ? nonEmptyString(detail["description"]) : null,
       });
     }
@@ -265,6 +266,9 @@ function compactStoredAgent(agent: RuntimeCatalogAgent): RuntimeCatalogAgent {
     label: agent.label,
     state: agent.state,
     mode: agent.mode,
+    // Kept alongside `mode` because the composer's agent picker filters on both;
+    // dropping it here is what let `compaction` reach the picker.
+    hidden: agent.hidden,
     // Settings owns exhaustive descriptions. Chat needs only a compact mode label.
     description: null,
   };
@@ -397,6 +401,7 @@ function parseStoredAgent(value: unknown): RuntimeCatalogAgent[] {
       label,
       state,
       mode: nonEmptyString(value["mode"]),
+      hidden: booleanValue(value["hidden"]),
       description: null,
     },
   ];
@@ -421,6 +426,10 @@ function clampInteger(
   fallback: number,
 ): number {
   return Number.isInteger(value) ? Math.min(max, Math.max(min, value!)) : fallback;
+}
+
+function booleanValue(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
 }
 
 function nonEmptyString(value: unknown): string | null {
