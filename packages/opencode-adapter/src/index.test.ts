@@ -337,7 +337,7 @@ describe("OpenCodeNativeAdapter", () => {
     ]);
   });
 
-  it("commits a message-scoped text delta before the native turn becomes idle", async () => {
+  it("commits a first text delta before OpenCode has sent a full part snapshot", async () => {
     const network = new FakeNetwork();
     const allowIdle = new Deferred<void>();
     network.subscribe = async (input) => {
@@ -351,26 +351,13 @@ describe("OpenCodeNativeAdapter", () => {
           },
         };
         yield {
-          id: "part",
-          type: "message.part.updated",
-          properties: {
-            sessionID: "native-session-1",
-            part: {
-              id: "answer",
-              messageID: "provider-assistant",
-              type: "text",
-              text: "Stream",
-            },
-          },
-        };
-        yield {
           id: "delta",
           type: "message.part.delta",
           properties: {
             messageID: "provider-assistant",
             partID: "answer",
             field: "text",
-            delta: " this now",
+            delta: "Stream this now",
           },
         };
         await allowIdle.promise;

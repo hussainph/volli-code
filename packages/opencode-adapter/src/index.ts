@@ -985,8 +985,18 @@ class OpenCodeBinding implements BindingHandle {
     const delta = objectString(raw, "delta");
     if (!messageId || !partId || field !== "text" || delta === null) return null;
     const message = this.#messages.get(messageId);
-    const part = message?.parts.get(partId);
-    if (!message || !isRecord(part)) return null;
+    if (!message) return null;
+    const part = message.parts.get(partId);
+    if (!isRecord(part)) {
+      message.partOrder.push(partId);
+      message.parts.set(partId, {
+        id: partId,
+        messageID: messageId,
+        type: "text",
+        text: delta,
+      });
+      return messageId;
+    }
     message.parts.set(partId, {
       ...part,
       [field]: `${objectString(part, field) ?? ""}${delta}`,
