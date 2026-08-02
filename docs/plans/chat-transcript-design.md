@@ -66,11 +66,22 @@ Rules that hold across all of them:
 
 No collapsible. The model's own first `**bold**` line becomes the status verb — OpenCode's TUI (`reasoningSummary()`, regex `^\*\*([^*\n]+)\*\*`), Codex (`extract_first_bold`) and Cursor all converge on this independently.
 
-- Live: `· Checking the reducer` with elapsed time.
+- Live: `· Checking the reducer`, pulsing dot, **no number**.
 - Settled, header found: one dim line, `· Checking the reducer   4s`.
 - Settled, no header: `· Thought for 8s`.
 
 Full reasoning text stays in the durable transcript for the inspector. It does not render in the feed. Reasoning markdown must be neutered where it does render — a footnote must never out-bold the answer, which is the bug behind the current `Thought / **Marking task complete**` screenshot.
+
+### Four rules the row must not break
+
+Surveyed against Codex (`codex-rs/tui`), Zed (`crates/agent_ui`), OpenCode's TUI and desktop client, and t3code. They disagree about almost everything else and agree on these.
+
+1. **A live thought carries no number.** None of the five runs a ticking counter beside reasoning text that is still growing. OpenCode shows a spinner and prints the duration only once the server sets `time.end`; t3code puts its ticking timer in a separate row; Codex pins the elapsed/interrupt segment and appends variable text *after* it, with the comment that core affordances must stay in a fixed visual location. Ours ticked at 200ms — five React commits a second to animate a number — and, because the row was a shrink-wrapped flex item, a growing verb pushed that number across the screen.
+2. **The row fills its container.** `flex-1`, always. `ml-auto` only pins the meta to the right edge if there is a right edge to pin to.
+3. **An empty reasoning part renders nothing.** Zed returns early on `trim().is_empty()`; OpenCode's TUI guards `<Show when={content()}>`. The placeholder belongs one level up, at the turn — that is where OpenCode's desktop client, Codex and t3code all put it, and it is why a reasoning part is never asked to hold the floor while empty.
+4. **A header only ever replaces a complete header.** Codex's `extract_first_bold` returns `None` while the closing `**` is missing and the delta handler early-returns rather than writing a partial one. The promoted line is anchored to the start of the part, not to any line: a provider emits one summary per part, so a bold phrase opening a later line is body text, not a title.
+
+Related, and load-bearing: any component that paints text through `bg-clip-text` must keep the words on a layer with a real `color`. A single-element shimmer has to set `color: transparent` for the clip to show, which makes the gradient the sole source of colour — and then one unresolvable token (a `@theme inline`-pruned `--color-*`, or `currentColor`, which by then *is* the transparency) drops the declaration and the text renders as nothing at full width. Split into base + `aria-hidden` overlay, the worst case is a line that does not shimmer. This failure is invisible to jsdom and to the fixture gallery — the text is in the DOM the whole time — so only a real browser reading computed style catches it.
 
 ## Attention
 
