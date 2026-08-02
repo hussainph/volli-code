@@ -1,14 +1,104 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { HarnessCommand, HarnessObservation, ObservationSink } from "@volli/session-engine";
 import {
+  ACTIVITY_METADATA_KEY,
+  readActivityDescriptor,
+  type ActivityKind,
+  type ActivityOutcome,
+  type ActivitySubject,
+} from "@volli/shared";
+import {
   createOpenCodeNativeAdapter,
+  openCodeActivityKind,
   parseOpenCodeSse,
+  OPENCODE_ACTIVITY,
   type OpenCodeChild,
   type OpenCodeHttpResponse,
   type OpenCodeNetworkPort,
   type OpenCodeProcessPort,
   type OpenCodeSseEvent,
 } from "./index";
+
+const NO_OUTCOME: ActivityOutcome = {
+  exitCode: null,
+  matchCount: null,
+  fileCount: null,
+  lineCount: null,
+  bytes: null,
+  addedLines: null,
+  removedLines: null,
+  diff: null,
+  summary: null,
+};
+
+/**
+ * The activity descriptor the adapter now stamps beside its `opencode`
+ * namespace. Spelled out here rather than matched loosely — the descriptor is
+ * the renderer's only contract, so a silent change to it must fail a test.
+ */
+/** Mirrors MAX_INFERRED_LABEL_LENGTH — the point past which a scalar is a body, not a name. */
+const MAX_LABEL = 200;
+
+/**
+ * Every tool part's descriptor, read back through the shared contract and with
+ * null outcome fields elided, so an expectation reads as the row the UI draws.
+ */
+function descriptors(observations: readonly HarnessObservation[]) {
+  return observations.flatMap((observation) =>
+    observation.kind !== "transcript.message"
+      ? []
+      : observation.message.parts.flatMap((part) => {
+          if (part.type !== "dynamic-tool") return [];
+          const descriptor = readActivityDescriptor(part.toolMetadata);
+          if (!descriptor) throw new Error(`no activity descriptor on ${part.toolCallId}`);
+          return [
+            {
+              call: part.toolCallId,
+              kind: descriptor.kind,
+              label: descriptor.subject.label,
+              path: descriptor.subject.path,
+              lineRange: descriptor.subject.lineRange,
+              outcome:
+                descriptor.outcome &&
+                Object.fromEntries(
+                  Object.entries(descriptor.outcome).filter(([, value]) => value !== null),
+                ),
+              startedAt: descriptor.startedAt,
+              endedAt: descriptor.endedAt,
+            },
+          ];
+        }),
+  );
+}
+
+const toolPart = (tool: string, callID: string, state: Record<string, unknown>) => ({
+  type: "tool",
+  tool,
+  callID,
+  state,
+});
+
+function activity(
+  kind: ActivityKind,
+  nativeToolName: string,
+  overrides: Partial<ActivitySubject> & {
+    outcome?: Partial<ActivityOutcome>;
+    startedAt?: number;
+    endedAt?: number;
+  } = {},
+): Record<string, unknown> {
+  const { outcome, startedAt, endedAt, ...subject } = overrides;
+  return {
+    [ACTIVITY_METADATA_KEY]: {
+      kind,
+      nativeToolName,
+      subject: { label: null, path: null, lineRange: null, ...subject },
+      outcome: outcome ? { ...NO_OUTCOME, ...outcome } : null,
+      startedAt: startedAt ?? null,
+      endedAt: endedAt ?? null,
+    },
+  };
+}
 
 class Deferred<T> {
   readonly promise: Promise<T>;
@@ -103,6 +193,7 @@ class FakeNetwork implements OpenCodeNetworkPort {
       return { status: 200, body: { "native-session-1": { type: "idle" } } };
     if (input.path.startsWith("/permission")) return { status: 200, body: [] };
     if (input.path.startsWith("/question")) return { status: 200, body: [] };
+    if (input.path.includes("/todo")) return { status: 200, body: [] };
     return { status: 200, body: [{ id: "reported", name: "Reported" }] };
   }
   async subscribe(
@@ -621,7 +712,7 @@ describe("OpenCodeNativeAdapter", () => {
           id: "provider-assistant",
           role: "assistant",
           parts: [
-            { type: "reasoning", text: "thinking" },
+            { type: "reasoning", text: "thinking", state: "done" },
             { type: "text", text: "READY" },
             {
               type: "dynamic-tool",
@@ -632,6 +723,13 @@ describe("OpenCodeNativeAdapter", () => {
               output: { content: 'case "transcript.message"' },
               title: "Read Session runtime",
               toolMetadata: {
+                ...activity("read-file", "read", {
+                  label: "src/session-runtime.ts",
+                  path: "src/session-runtime.ts",
+                  outcome: {},
+                  startedAt: 1,
+                  endedAt: 2,
+                }),
                 opencode: {
                   attachments: [{ id: "artifact-1", mime: "text/plain" }],
                   metadata: { source: "workspace" },
@@ -908,14 +1006,17 @@ describe("OpenCodeNativeAdapter", () => {
         message: expect.objectContaining({
           parts: [
             { type: "text", text: "Visible answer" },
-            { type: "reasoning", text: "Visible reasoning" },
+            { type: "reasoning", text: "Visible reasoning", state: "done" },
+            // A committed, executing call is input-available — the state that
+            // earns a spinner. Only a call still forming its input is streaming.
             {
               type: "dynamic-tool",
               toolName: "bash",
               toolCallId: "call-running",
-              state: "input-streaming",
+              state: "input-available",
               input: { path: "src/session-runtime.ts" },
               title: "Read Session runtime",
+              toolMetadata: activity("run-command", "bash", { label: "src/session-runtime.ts" }),
             },
             {
               type: "dynamic-tool",
@@ -924,6 +1025,7 @@ describe("OpenCodeNativeAdapter", () => {
               state: "input-streaming",
               input: { pattern: "transcript.message" },
               toolMetadata: {
+                ...activity("search", "search", { label: "transcript.message" }),
                 opencode: { raw: "Preparing repository search" },
               },
             },
@@ -936,6 +1038,13 @@ describe("OpenCodeNativeAdapter", () => {
               output: { content: 'case "transcript.message"', truncated: false },
               title: "Read transcript mapping",
               toolMetadata: {
+                ...activity("read-file", "read", {
+                  label: "src/session-runtime.ts",
+                  path: "src/session-runtime.ts",
+                  outcome: {},
+                  startedAt: 1,
+                  endedAt: 2,
+                }),
                 opencode: { metadata: { bytes: 42 }, time: { start: 1, end: 2 } },
               },
             },
@@ -948,6 +1057,13 @@ describe("OpenCodeNativeAdapter", () => {
               errorText: "File not found",
               title: "Read missing file",
               toolMetadata: {
+                ...activity("write-file", "write", {
+                  label: "src/missing.ts",
+                  path: "src/missing.ts",
+                  outcome: {},
+                  startedAt: 3,
+                  endedAt: 4,
+                }),
                 opencode: { metadata: { code: "ENOENT" }, time: { start: 3, end: 4 } },
               },
             },
@@ -956,6 +1072,7 @@ describe("OpenCodeNativeAdapter", () => {
               toolName: "pending-empty",
               toolCallId: "call-pending-empty",
               state: "input-streaming",
+              toolMetadata: activity("other", "pending-empty"),
             },
             {
               type: "dynamic-tool",
@@ -964,6 +1081,7 @@ describe("OpenCodeNativeAdapter", () => {
               state: "output-available",
               input: null,
               output: null,
+              toolMetadata: activity("other", "completed-empty", { outcome: {} }),
             },
             {
               type: "dynamic-tool",
@@ -972,6 +1090,7 @@ describe("OpenCodeNativeAdapter", () => {
               state: "output-error",
               input: null,
               errorText: "Tool failed",
+              toolMetadata: activity("other", "error-empty", { outcome: {} }),
             },
           ],
         }),
@@ -3115,6 +3234,50 @@ describe("OpenCodeNativeAdapter", () => {
     );
   });
 
+  it("projects todo.updated into a synthetic todowrite transcript message", async () => {
+    const { adapter } = composition([
+      {
+        id: "todos-1",
+        type: "todo.updated",
+        properties: {
+          sessionID: "native-session-1",
+          todos: [
+            { content: "Inspect wiring", status: "in_progress", priority: "high" },
+            { content: "Ship fix", status: "pending", priority: "medium" },
+          ],
+        },
+      },
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        kind: "transcript.message",
+        message: expect.objectContaining({
+          id: "opencode:todos:native-session-1",
+          parts: [
+            expect.objectContaining({
+              type: "dynamic-tool",
+              toolName: "todowrite",
+              state: "output-available",
+              input: {
+                todos: [
+                  { content: "Inspect wiring", status: "in_progress", priority: "high" },
+                  { content: "Ship fix", status: "pending", priority: "medium" },
+                ],
+              },
+            }),
+          ],
+        }),
+      }),
+    );
+  });
+
   it("deduplicates reconciled interaction identities, normalizes primitive catalogs, and accepts unframed SSE input", async () => {
     const { adapter, network } = composition([
       { id: "question:q", type: "session.idle", properties: { sessionID: "native-session-1" } },
@@ -3153,5 +3316,708 @@ describe("OpenCodeNativeAdapter", () => {
     for await (const event of parseOpenCodeSse(sseBody(["comment only\n\n", ""])))
       empty.push(event);
     expect(empty).toEqual([]);
+  });
+
+  it.each(Object.entries(OPENCODE_ACTIVITY))("classifies the %s tool as %s", (tool, kind) => {
+    expect(openCodeActivityKind(tool)).toBe(kind);
+  });
+
+  it("classifies unmapped and MCP tool names as the first-class other kind", () => {
+    // MCP tools are named <server>_<tool>; no prefix rule can anticipate them.
+    expect(openCodeActivityKind("linear_create_issue")).toBe("other");
+    expect(openCodeActivityKind("")).toBe("other");
+    expect(openCodeActivityKind("BASH")).toBe("run-command");
+  });
+
+  it("stamps a subject, a file path and measured outcomes on every tool part", async () => {
+    const { adapter } = composition([
+      {
+        id: "assistant-activity",
+        type: "message.updated",
+        properties: {
+          sessionID: "native-session-1",
+          info: {
+            id: "assistant-activity",
+            role: "assistant",
+            modelID: "gpt-5",
+            tokens: { input: 12, output: 4 },
+          },
+          parts: [
+            toolPart("bash", "c-bash-running", { status: "running" }),
+            toolPart("bash", "c-bash", {
+              status: "completed",
+              input: { command: "pnpm test" },
+              metadata: { exit: 1, truncated: false },
+              time: { start: 10, end: 42 },
+            }),
+            toolPart("read", "c-read-partial", {
+              status: "completed",
+              input: { path: "src/index.ts", offset: 10 },
+              metadata: {
+                display: {
+                  type: "file",
+                  path: "/workspace/one/src/index.ts",
+                  lineStart: 10,
+                  lineEnd: 48,
+                  totalLines: 210,
+                  truncated: true,
+                },
+              },
+            }),
+            toolPart("read", "c-read-whole", {
+              status: "completed",
+              input: { path: "src/whole.ts" },
+              metadata: {
+                display: {
+                  type: "file",
+                  path: "/w/whole.ts",
+                  lineStart: 1,
+                  lineEnd: 12,
+                  totalLines: 12,
+                  truncated: false,
+                },
+              },
+            }),
+            toolPart("read", "c-read-no-start", {
+              status: "completed",
+              input: { file_path: "src/a.ts" },
+              metadata: { display: { type: "file", lineEnd: 48, truncated: true } },
+            }),
+            toolPart("read", "c-read-no-end", {
+              status: "completed",
+              input: { file_path: "src/b.ts" },
+              metadata: { display: { type: "file", lineStart: 10, truncated: true } },
+            }),
+            toolPart("read", "c-read-directory", {
+              status: "completed",
+              input: { path: "src" },
+              metadata: { display: { type: "directory", path: "src", totalEntries: 12 } },
+            }),
+            toolPart("read", "c-read-bare", { status: "pending" }),
+            toolPart("edit", "c-edit", {
+              status: "completed",
+              input: { filePath: "src/a.ts" },
+              metadata: {
+                diff: "--- a\n+++ b",
+                filediff: { file: "/w/src/a.ts", additions: 49, deletions: 12 },
+              },
+            }),
+            toolPart("write", "c-write-new", {
+              status: "completed",
+              input: { filePath: "src/new.ts", content: "one\ntwo\nthree" },
+              metadata: { filepath: "/w/src/new.ts", exists: false },
+            }),
+            toolPart("write", "c-write-over", {
+              status: "completed",
+              input: { filePath: "src/old.ts", content: "one" },
+              metadata: { exists: true },
+            }),
+            toolPart("write", "c-write-binary", {
+              status: "completed",
+              input: { filePath: "src/blob.bin", content: 7 },
+              metadata: { exists: false },
+            }),
+            toolPart("grep", "c-grep", {
+              status: "completed",
+              input: { pattern: "useSession" },
+              metadata: { matches: 14, truncated: false },
+            }),
+            toolPart("glob", "c-glob", {
+              status: "completed",
+              input: { glob: "**/*.ts" },
+              metadata: { count: 6 },
+            }),
+            toolPart("webfetch", "c-fetch", {
+              status: "completed",
+              input: { url: "https://example.com" },
+              metadata: {},
+            }),
+            toolPart("websearch", "c-search", {
+              status: "completed",
+              input: { query: "streaming seam" },
+              metadata: { provider: "exa" },
+            }),
+            toolPart("task", "c-task", {
+              status: "completed",
+              input: { description: "Find the streaming seam", subagent_type: "explore" },
+              metadata: { sessionId: "sub-1" },
+            }),
+            toolPart("linear_create_issue", "c-mcp", {
+              status: "completed",
+              input: { title: "VC-12 chat seam" },
+            }),
+            toolPart("linear_comment", "c-mcp-multiline", {
+              status: "completed",
+              input: { body: "line one\nline two" },
+            }),
+            toolPart("linear_upload", "c-mcp-long", {
+              status: "completed",
+              input: { blob: "x".repeat(MAX_LABEL + 1) },
+            }),
+            toolPart("linear_ping", "c-mcp-blank", { status: "completed", input: { note: "   " } }),
+          ],
+        },
+      },
+      { id: "idle", type: "session.idle", properties: { sessionID: "native-session-1" } },
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(observations.find(({ kind }) => kind === "transcript.message")).toMatchObject({
+      message: {
+        metadata: {
+          providerId: null,
+          modelId: "gpt-5",
+          cost: null,
+          tokens: { input: 12, output: 4, reasoning: null, cacheRead: null, cacheWrite: null },
+        },
+      },
+    });
+    expect(descriptors(observations)).toEqual([
+      {
+        call: "c-bash-running",
+        kind: "run-command",
+        label: null,
+        path: null,
+        lineRange: null,
+        outcome: null,
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-bash",
+        kind: "run-command",
+        label: "pnpm test",
+        path: null,
+        lineRange: null,
+        outcome: { exitCode: 1 },
+        startedAt: 10,
+        endedAt: 42,
+      },
+      {
+        call: "c-read-partial",
+        kind: "read-file",
+        label: "src/index.ts",
+        path: "/workspace/one/src/index.ts",
+        lineRange: { start: 10, end: 48 },
+        outcome: { lineCount: 210 },
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-read-whole",
+        kind: "read-file",
+        label: "src/whole.ts",
+        path: "/w/whole.ts",
+        lineRange: null,
+        outcome: { lineCount: 12 },
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-read-no-start",
+        kind: "read-file",
+        label: "src/a.ts",
+        path: null,
+        lineRange: null,
+        outcome: {},
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-read-no-end",
+        kind: "read-file",
+        label: "src/b.ts",
+        path: null,
+        lineRange: null,
+        outcome: {},
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-read-directory",
+        kind: "read-file",
+        label: "src",
+        path: "src",
+        lineRange: null,
+        outcome: { fileCount: 12 },
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-read-bare",
+        kind: "read-file",
+        label: null,
+        path: null,
+        lineRange: null,
+        outcome: null,
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-edit",
+        kind: "edit-file",
+        label: "src/a.ts",
+        path: "/w/src/a.ts",
+        lineRange: null,
+        outcome: { addedLines: 49, removedLines: 12, diff: "--- a\n+++ b" },
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-write-new",
+        kind: "write-file",
+        label: "src/new.ts",
+        path: "/w/src/new.ts",
+        lineRange: null,
+        outcome: { addedLines: 3 },
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-write-over",
+        kind: "write-file",
+        label: "src/old.ts",
+        path: "src/old.ts",
+        lineRange: null,
+        outcome: {},
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-write-binary",
+        kind: "write-file",
+        label: "src/blob.bin",
+        path: "src/blob.bin",
+        lineRange: null,
+        outcome: {},
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-grep",
+        kind: "search",
+        label: "useSession",
+        path: null,
+        lineRange: null,
+        outcome: { matchCount: 14 },
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-glob",
+        kind: "search",
+        label: "**/*.ts",
+        path: null,
+        lineRange: null,
+        outcome: { fileCount: 6 },
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-fetch",
+        kind: "fetch-url",
+        label: "https://example.com",
+        path: null,
+        lineRange: null,
+        outcome: {},
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-search",
+        kind: "search",
+        label: "streaming seam",
+        path: null,
+        lineRange: null,
+        outcome: {},
+        startedAt: null,
+        endedAt: null,
+      },
+      // No named key matches, so the first phrase-shaped scalar names the call.
+      {
+        call: "c-task",
+        kind: "delegate",
+        label: "Find the streaming seam",
+        path: null,
+        lineRange: null,
+        outcome: {},
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-mcp",
+        kind: "other",
+        label: "VC-12 chat seam",
+        path: null,
+        lineRange: null,
+        outcome: {},
+        startedAt: null,
+        endedAt: null,
+      },
+      // A body, a blob and blank whitespace are not names. Better no label than a blob.
+      {
+        call: "c-mcp-multiline",
+        kind: "other",
+        label: null,
+        path: null,
+        lineRange: null,
+        outcome: {},
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-mcp-long",
+        kind: "other",
+        label: null,
+        path: null,
+        lineRange: null,
+        outcome: {},
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-mcp-blank",
+        kind: "other",
+        label: null,
+        path: null,
+        lineRange: null,
+        outcome: {},
+        startedAt: null,
+        endedAt: null,
+      },
+    ]);
+  });
+
+  it("keeps assistant usage across snapshots and collapses all but the live thought", async () => {
+    const network = new FakeNetwork();
+    const hold = new Deferred<void>();
+    network.subscribe = async (input) => {
+      network.subscriptions.push(input);
+      return (async function* () {
+        yield {
+          id: "assistant",
+          type: "message.updated",
+          properties: {
+            info: {
+              id: "provider-assistant",
+              sessionID: "native-session-1",
+              role: "assistant",
+              providerID: "anthropic",
+              modelID: "claude-sonnet-4-5",
+              cost: 0.0123,
+              tokens: {
+                input: 1200,
+                output: 340,
+                reasoning: 96,
+                cache: { read: 8000, write: 512 },
+              },
+            },
+          },
+        };
+        yield {
+          id: "think-1",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: { id: "r1", messageID: "provider-assistant", type: "reasoning", text: "First" },
+          },
+        };
+        yield {
+          id: "think-2",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: { id: "r2", messageID: "provider-assistant", type: "reasoning", text: "Second" },
+          },
+        };
+        // A repeat snapshot that carries its own text simply replaces it.
+        yield {
+          id: "think-1-again",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "r1",
+              messageID: "provider-assistant",
+              type: "reasoning",
+              text: "First, restated",
+            },
+          },
+        };
+        // A repeat snapshot that omits the accumulated text must not erase it.
+        yield {
+          id: "think-2-retype",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: { id: "r2", messageID: "provider-assistant", type: "reasoning" },
+          },
+        };
+        // A later snapshot without usage must not erase what the first reported.
+        yield {
+          id: "assistant-partial",
+          type: "message.updated",
+          properties: {
+            info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+          },
+        };
+        // Neither of these earns a snapshot: one is the user's own turn, the
+        // other projects to no durable part at all.
+        yield {
+          id: "user-turn",
+          type: "message.updated",
+          properties: {
+            info: { id: "provider-user", sessionID: "native-session-1", role: "user" },
+            parts: [{ id: "u1", type: "text", text: "Ask something" }],
+          },
+        };
+        yield {
+          id: "unprojectable",
+          type: "message.updated",
+          properties: {
+            info: { id: "provider-empty", sessionID: "native-session-1", role: "assistant" },
+            parts: [{ id: "f1", type: "file", url: "data:text/plain;base64,AA==" }],
+          },
+        };
+        await hold.promise;
+      })();
+    };
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        kind: "transcript.message",
+        message: {
+          id: "provider-assistant",
+          role: "assistant",
+          metadata: {
+            providerId: "anthropic",
+            modelId: "claude-sonnet-4-5",
+            cost: 0.0123,
+            tokens: { input: 1200, output: 340, reasoning: 96, cacheRead: 8000, cacheWrite: 512 },
+          },
+          parts: [
+            { type: "reasoning", text: "First, restated", state: "done" },
+            { type: "reasoning", text: "Second", state: "streaming" },
+          ],
+        },
+      }),
+    );
+    expect(
+      observations.flatMap((observation) =>
+        observation.kind === "transcript.message" ? [observation.message.id] : [],
+      ),
+    ).toEqual(["provider-assistant"]);
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("carries model identity through native history reconcile even without usage", async () => {
+    const { adapter, network } = composition();
+    network.messageResponse = [
+      {
+        info: { id: "history-usage", role: "assistant", providerID: "openai", modelID: "gpt-5" },
+        parts: [{ type: "text", text: "Reconciled" }],
+      },
+    ];
+    const handle = await adapter.attach(spec(), { emit: async () => undefined });
+    const { observations } = await handle.reconcile(null);
+
+    expect(observations.find(({ kind }) => kind === "transcript.message")).toMatchObject({
+      message: {
+        metadata: { providerId: "openai", modelId: "gpt-5", cost: null, tokens: null },
+      },
+    });
+  });
+
+  it("keeps todo projection scoped to this session and survives a failed todo read", async () => {
+    const { adapter, network } = composition([
+      {
+        id: "todo-foreign",
+        type: "todo.updated",
+        properties: { sessionID: "another-session", todos: [{ content: "Not ours" }] },
+      },
+      { id: "todo-primitive", type: "todo.updated", properties: 7 },
+      {
+        // Session ownership established by `info`, so the lowercase `sessionId`
+        // spelling is the only scope OpenCode reported for the list itself.
+        id: "todo-lowercase-foreign",
+        type: "todo.updated",
+        properties: {
+          info: { sessionID: "native-session-1" },
+          sessionId: "another-session",
+          todos: [{ content: "Not ours" }],
+        },
+      },
+      {
+        id: "todo-wrapped",
+        type: "todo.updated",
+        properties: {
+          sessionID: "native-session-1",
+          todos: { items: [{ id: "t-9", content: "Wrapped", status: "pending", priority: "low" }] },
+        },
+      },
+    ]);
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(observations.filter(({ kind }) => kind === "transcript.message")).toEqual([
+      expect.objectContaining({
+        message: expect.objectContaining({
+          parts: [
+            expect.objectContaining({
+              input: {
+                todos: [{ id: "t-9", content: "Wrapped", status: "pending", priority: "low" }],
+              },
+            }),
+          ],
+        }),
+      }),
+    ]);
+
+    const originalRequest = network.request.bind(network);
+    network.request = async (input) => {
+      if (input.path.includes("/todo"))
+        return { status: 200, body: { items: [{ id: "t-1", content: "Ship it" }, 7] } };
+      return originalRequest(input);
+    };
+    const reconciled = await handle.reconcile(null);
+    expect(reconciled.observations.find(({ kind }) => kind === "transcript.message")).toMatchObject(
+      {
+        message: {
+          parts: [
+            expect.objectContaining({
+              input: { todos: [{ id: "t-1", content: "Ship it" }] },
+              toolMetadata: expect.objectContaining({
+                [ACTIVITY_METADATA_KEY]: expect.objectContaining({
+                  kind: "plan",
+                  nativeToolName: "todowrite",
+                }),
+              }),
+            }),
+          ],
+        },
+      },
+    );
+
+    network.request = async (input) => {
+      if (input.path.includes("/todo")) throw new Error("todo unavailable");
+      if (input.path.startsWith("/session/status")) return { status: 500, body: {} };
+      return originalRequest(input);
+    };
+    // Acknowledge the pending reconciliation, or the next call replays it.
+    const failed = await handle.reconcile(reconciled.cursor);
+    expect(failed.observations.some(({ kind }) => kind === "transcript.message")).toBe(false);
+  });
+
+  it("ignores stream events that never established session ownership", async () => {
+    const { adapter } = composition([
+      { id: "untagged-snapshot", type: "message.updated", properties: { info: { id: "x" } } },
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(observations.some(({ kind }) => kind === "transcript.message")).toBe(false);
+  });
+
+  it("keeps a failing sink from escaping the coalesced snapshot timer", async () => {
+    const network = new FakeNetwork();
+    const hold = new Deferred<void>();
+    network.subscribe = async (input) => {
+      network.subscriptions.push(input);
+      return (async function* () {
+        yield {
+          id: "assistant",
+          type: "message.updated",
+          properties: {
+            info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+            parts: [{ id: "t1", type: "text", text: "Painting" }],
+          },
+        };
+        await hold.promise;
+      })();
+    };
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const handle = await adapter.attach(spec(), {
+      emit: async () => {
+        throw new Error("sink unavailable");
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    hold.resolve(undefined);
+    await expect(handle.release("requested")).resolves.toBeUndefined();
+  });
+
+  it("snapshots a settled turn and tolerates removing a message with no pending snapshot", async () => {
+    const network = new FakeNetwork();
+    const hold = new Deferred<void>();
+    network.subscribe = async (input) => {
+      network.subscriptions.push(input);
+      return (async function* () {
+        yield {
+          id: "idle-first",
+          type: "session.idle",
+          properties: { sessionID: "native-session-1" },
+        };
+        yield {
+          id: "late-assistant",
+          type: "message.updated",
+          properties: {
+            info: { id: "late", sessionID: "native-session-1", role: "assistant" },
+            parts: [{ id: "r1", type: "reasoning", text: "Late thought" }],
+          },
+        };
+        yield {
+          id: "ghost-removed",
+          type: "message.removed",
+          properties: { sessionID: "native-session-1", messageID: "ghost" },
+        };
+        await hold.promise;
+      })();
+    };
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // The turn already settled, so nothing in the snapshot is still thinking.
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        kind: "transcript.message",
+        message: {
+          id: "late",
+          role: "assistant",
+          parts: [{ type: "reasoning", text: "Late thought", state: "done" }],
+        },
+      }),
+    );
+    hold.resolve(undefined);
+    await handle.release("requested");
   });
 });
