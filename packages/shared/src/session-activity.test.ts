@@ -6,6 +6,7 @@ import {
   EMPTY_ACTIVITY_SUBJECT,
   activityDuration,
   isActivityKind,
+  isDurableActivity,
   isReadOnlyActivity,
   readActivityDescriptor,
   type ActivityDescriptor,
@@ -260,5 +261,33 @@ describe("isReadOnlyActivity", () => {
       "list-directory",
       "fetch-url",
     ]);
+  });
+});
+
+describe("isDurableActivity", () => {
+  it.each([
+    ["edit-file", true],
+    ["write-file", true],
+    ["read-file", false],
+    ["search", false],
+    ["list-directory", false],
+    ["fetch-url", false],
+    ["run-command", false],
+    ["plan", false],
+    ["delegate", false],
+    ["other", false],
+  ] as const)("reports %s as %s", (kind, expected) => {
+    expect(isDurableActivity(kind)).toBe(expected);
+  });
+
+  it("classifies every declared kind", () => {
+    expect(ACTIVITY_KINDS.filter(isDurableActivity)).toEqual(["edit-file", "write-file"]);
+  });
+
+  it("is not the complement of read-only — some kinds are neither", () => {
+    const neither = ACTIVITY_KINDS.filter(
+      (kind) => !isReadOnlyActivity(kind) && !isDurableActivity(kind),
+    );
+    expect(neither).toEqual(["run-command", "plan", "delegate", "other"]);
   });
 });

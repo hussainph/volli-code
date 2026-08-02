@@ -124,6 +124,21 @@ export function isReadOnlyActivity(kind: ActivityKind): boolean {
   );
 }
 
+/**
+ * Kinds that left something behind on disk. These are the rows a settled run
+ * keeps: the commands it ran and the checks it made are scrollback once the
+ * turn has an answer, but an edit is the turn's deliverable, and folding that
+ * under a count makes the most important thing in the turn the least visible.
+ *
+ * Deliberately not the complement of `isReadOnlyActivity` — `run-command`,
+ * `delegate`, `plan` and `other` are neither. A command very often does change
+ * the disk; the point is that the harness never tells us whether it did, so
+ * the transcript cannot claim it as a result.
+ */
+export function isDurableActivity(kind: ActivityKind): boolean {
+  return kind === "edit-file" || kind === "write-file";
+}
+
 function readSubject(value: unknown): ActivitySubject {
   if (!isRecord(value)) return EMPTY_ACTIVITY_SUBJECT;
   return {

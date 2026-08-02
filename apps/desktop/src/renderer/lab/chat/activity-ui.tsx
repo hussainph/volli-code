@@ -47,6 +47,7 @@ import {
   activityToolItems,
   describeActivity,
   detailText,
+  foldRun,
   isActivityStreaming,
   isRowActive,
   reasoningBody,
@@ -473,6 +474,9 @@ function ToolDetail({ detail }: { detail: ActivityDetail }) {
  * the bottom, at most three completed rows sit above it, and everything older
  * is absorbed into a counted header that ticks. Turn height therefore stays
  * constant as tool calls accumulate.
+ *
+ * Once the run settles the fold tightens — see `foldRun`. The header survives
+ * that, so the whole run is always one click away.
  */
 export function ToolRun({
   items,
@@ -482,13 +486,14 @@ export function ToolRun({
   onOpenFile?(path: string): void;
 }) {
   const [expanded, setExpanded] = React.useState(false);
-  const tail = rollingTail(items, (item) => isRowActive(item.part));
-  const folded = tail.hidden > 0 && !expanded;
-  const rows = folded ? tail.visible : items;
+  // Folded state is computed unconditionally, never through `expanded`: it is
+  // what tells us the run *can* fold, so the way back in survives opening it.
+  const fold = foldRun(items);
+  const rows = expanded ? items : fold.visible;
 
   return (
     <div className="not-prose">
-      {tail.hidden > 0 ? (
+      {fold.hidden > 0 ? (
         <button
           type="button"
           onClick={() => setExpanded((value) => !value)}

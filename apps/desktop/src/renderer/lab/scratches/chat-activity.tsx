@@ -278,6 +278,59 @@ const EXPLORE_RUN: DynamicToolUIPart[] = [
   ),
 ];
 
+/**
+ * A finished run. Nothing here is active, which is the whole point: a live run
+ * shows its rolling tail, and this is what is left once it settles.
+ */
+const CHECK_RUN: DynamicToolUIPart[] = [
+  tool(
+    descriptor("run-command", {
+      subject: { label: "pnpm run -r typecheck", path: null, lineRange: null },
+      outcome: outcome({ exitCode: 0 }),
+    }),
+    { output: "0 errors" },
+  ),
+  tool(
+    descriptor("run-command", {
+      subject: { label: "pnpm run -r test", path: null, lineRange: null },
+      outcome: outcome({ exitCode: 0 }),
+    }),
+    { output: "Test Files  186 passed (186)\nTests  3068 passed (3068)" },
+  ),
+  tool(
+    descriptor("run-command", {
+      subject: { label: "vp check", path: null, lineRange: null },
+      outcome: outcome({ exitCode: 0 }),
+    }),
+    { output: "818 files formatted\n786 files linted" },
+  ),
+];
+
+const SETTLED_RUN: DynamicToolUIPart[] = [
+  ...CHECK_RUN,
+  tool(
+    descriptor("edit-file", {
+      subject: {
+        label: "src/renderer/lab/chat/activity.ts",
+        path: "src/renderer/lab/chat/activity.ts",
+        lineRange: null,
+      },
+      outcome: outcome({ addedLines: 24, removedLines: 3, diff: DIFF }),
+    }),
+  ),
+  tool(
+    descriptor("write-file", {
+      subject: {
+        label: "src/renderer/lab/chat/fold.test.ts",
+        path: "src/renderer/lab/chat/fold.test.ts",
+        lineRange: null,
+      },
+      outcome: outcome({ addedLines: 41 }),
+    }),
+    { input: 'import { expect, it } from "vite-plus/test";\n\nit("folds", () => {});' },
+  ),
+];
+
 const TODOS: SessionTodo[] = [
   { id: "t1", content: "Read the streaming seam", status: "completed", priority: "medium" },
   {
@@ -473,8 +526,16 @@ export default function ChatActivityScratch() {
         />
       </Section>
 
-      <Section label="Run · rolling tail folds the oldest rows">
+      <Section label="Run · live, rolling tail folds the oldest rows">
         <ToolRun items={EXPLORE_RUN.map((part, index) => ({ part, key: `tail-${index}` }))} />
+      </Section>
+
+      <Section label="Run · settled, only the rows that touched disk survive">
+        <ToolRun items={SETTLED_RUN.map((part, index) => ({ part, key: `settled-${index}` }))} />
+      </Section>
+
+      <Section label="Run · settled commands leave nothing but the header">
+        <ToolRun items={CHECK_RUN.map((part, index) => ({ part, key: `checks-${index}` }))} />
       </Section>
 
       <Section label="Attention">

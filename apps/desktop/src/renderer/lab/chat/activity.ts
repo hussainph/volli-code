@@ -14,6 +14,7 @@
  */
 import {
   activityDuration,
+  isDurableActivity,
   isReadOnlyActivity,
   readActivityDescriptor,
   type ActivityDescriptor,
@@ -267,6 +268,31 @@ export function rollingTail<T>(
 export function isRowActive(part: DynamicToolUIPart): boolean {
   const status = activityStatus(part);
   return status === "pending" || status === "running" || status === "approval";
+}
+
+/**
+ * What a run of mutating rows shows when nobody has opened it.
+ *
+ * Live, it is the rolling tail — work in progress is worth watching. Settled,
+ * only the durable rows survive. A finished command run was holding a header
+ * plus three rows open forever, in scrollback nobody re-reads, and across a
+ * long session that is where the transcript's bulk came from; the group of
+ * read-only rows beside it has always folded to nothing on settle, so this is
+ * the asymmetry closing rather than a new rule.
+ *
+ * Edits and writes stay because they are the turn's answer, but they stay
+ * *tail-bounded* — a twelve-file change still folds to its last three and a
+ * header, the same cap every other row obeys.
+ *
+ * `hidden` counts everything off screen, so a single header covers both the
+ * rows the fold dropped and the ones the tail trimmed.
+ */
+export function foldRun(items: readonly ToolItem[]): { hidden: number; visible: ToolItem[] } {
+  const active = (item: ToolItem) => isRowActive(item.part);
+  if (items.some(active)) return rollingTail(items, active);
+  const durable = items.filter((item) => isDurableActivity(activityDescriptor(item.part).kind));
+  const { visible } = rollingTail(durable, active);
+  return { hidden: items.length - visible.length, visible };
 }
 
 /* ----------------------------------------------------------------- rows */

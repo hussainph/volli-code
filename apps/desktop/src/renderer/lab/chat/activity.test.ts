@@ -10,6 +10,7 @@ import {
   compactSignature,
   describeActivity,
   diffStat,
+  foldRun,
   formatBytes,
   formatDuration,
   notableDuration,
@@ -116,6 +117,14 @@ function tool(
     input: overrides.input ?? null,
     output: overrides.output ?? null,
   };
+}
+
+function runItems(...parts: DynamicToolUIPart[]) {
+  return parts.map((part, index) => ({ part, key: `r${index}` }));
+}
+
+function kinds(items: readonly { part: DynamicToolUIPart }[]) {
+  return items.map((item) => activityContext(item.part).descriptor.kind);
 }
 
 describe("groupMessageParts", () => {
@@ -230,6 +239,61 @@ describe("rollingTail", () => {
   it("hides nothing under the budget", () => {
     expect(rollingTail([1, 2], () => false)).toEqual({ hidden: 0, visible: [1, 2] });
     expect(TAIL_LIMIT).toBe(3);
+  });
+});
+
+describe("foldRun", () => {
+  it("keeps the rolling tail while any row is still working", () => {
+    const items = runItems(
+      tool("run-command"),
+      tool("run-command"),
+      tool("run-command"),
+      tool("run-command"),
+      tool("run-command", { state: "input-available" }),
+    );
+    const fold = foldRun(items);
+    expect(fold.visible).toHaveLength(4);
+    expect(fold.hidden).toBe(1);
+  });
+
+  it("drops a settled command run to its header alone", () => {
+    const fold = foldRun(runItems(tool("run-command"), tool("run-command")));
+    expect(fold.visible).toEqual([]);
+    expect(fold.hidden).toBe(2);
+  });
+
+  it("keeps the rows that changed the workspace and folds the rest", () => {
+    const fold = foldRun(
+      runItems(tool("run-command"), tool("edit-file"), tool("run-command"), tool("write-file")),
+    );
+    expect(kinds(fold.visible)).toEqual(["edit-file", "write-file"]);
+    expect(fold.hidden).toBe(2);
+  });
+
+  it("shows a lone edit with no header at all", () => {
+    expect(foldRun(runItems(tool("edit-file")))).toEqual({
+      hidden: 0,
+      visible: [expect.objectContaining({ key: "r0" })],
+    });
+  });
+
+  it("keeps surviving edits tail-bounded so a wide change is not a wall", () => {
+    const fold = foldRun(runItems(...Array.from({ length: 12 }, () => tool("edit-file"))));
+    expect(fold.visible).toHaveLength(TAIL_LIMIT);
+    expect(fold.hidden).toBe(9);
+    // The tail keeps the *last* edits, which are the ones still on screen above
+    // the answer.
+    expect(fold.visible.map((item) => item.key)).toEqual(["r9", "r10", "r11"]);
+  });
+
+  it("still counts a failed row it cannot show", () => {
+    // Attention states leave as their own card, but a run assembled by hand (or
+    // by a harness that never stamped a descriptor) must not under-report.
+    const fold = foldRun(
+      runItems(tool("run-command", { state: "output-error" }), tool("edit-file")),
+    );
+    expect(kinds(fold.visible)).toEqual(["edit-file"]);
+    expect(fold.hidden).toBe(1);
   });
 });
 
