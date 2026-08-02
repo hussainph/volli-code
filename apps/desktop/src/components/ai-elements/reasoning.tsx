@@ -25,11 +25,15 @@ import { Streamdown, type Components } from "streamdown";
 import { chatMarkdownComponents } from "./chat-markdown";
 import { Shimmer } from "./shimmer";
 
-const ELAPSED_TICK_MS = 200;
-
 /**
- * Elapsed time for a stream that carries no timestamps. Freezes on settle so a
- * finished line stops counting instead of tracking the wall clock.
+ * How long a thought took, for streams that carry no timestamps of their own.
+ *
+ * It deliberately does not tick. The duration is only ever shown once the
+ * thought has settled, so an interval would re-render the row several times a
+ * second to animate a number that is not on screen. Codex, Zed, OpenCode and
+ * t3code all refuse to run a live counter beside reasoning text that is still
+ * growing; the pulsing dot is the liveness signal, and the number is the
+ * receipt.
  */
 export function useElapsed(streaming: boolean): number | null {
   const startedAt = React.useRef<number | null>(null);
@@ -38,16 +42,11 @@ export function useElapsed(streaming: boolean): number | null {
   React.useEffect(() => {
     if (streaming) {
       startedAt.current ??= Date.now();
-      const tick = () => setElapsed(Date.now() - (startedAt.current ?? Date.now()));
-      tick();
-      const timer = window.setInterval(tick, ELAPSED_TICK_MS);
-      return () => window.clearInterval(timer);
+      return;
     }
-    if (startedAt.current !== null) {
-      setElapsed(Date.now() - startedAt.current);
-      startedAt.current = null;
-    }
-    return undefined;
+    if (startedAt.current === null) return;
+    setElapsed(Date.now() - startedAt.current);
+    startedAt.current = null;
   }, [streaming]);
 
   return elapsed;
@@ -62,9 +61,14 @@ export type ReasoningLineProps = {
 
 export const ReasoningLine = React.memo(
   ({ verb, meta, streaming, className }: ReasoningLineProps) => (
+    // `flex-1` matters: this row is sometimes a block child and sometimes a
+    // flex item beside a caret. As a flex item it would otherwise shrink to its
+    // content, which kills the `ml-auto` below and lets a growing verb shove the
+    // elapsed time rightwards across the row. Codex pins the same affordance for
+    // the same reason — the clock does not move because the label got longer.
     <div
       className={cn(
-        "flex min-w-0 items-center gap-1.5 py-0.5 text-xs text-muted-foreground",
+        "flex min-w-0 flex-1 items-center gap-1.5 py-0.5 text-xs text-muted-foreground",
         className,
       )}
     >
