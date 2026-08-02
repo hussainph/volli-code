@@ -1,19 +1,12 @@
 import * as React from "react";
 import {
-  ArrowClockwiseIcon,
-  ArrowUpIcon,
-  BugIcon,
   CheckCircleIcon,
   CircleNotchIcon,
   CodeIcon,
-  CopyIcon,
   PlayIcon,
-  SidebarSimpleIcon,
-  SquareIcon,
   TerminalWindowIcon,
 } from "@phosphor-icons/react";
-import type { SessionEvent } from "@volli/shared";
-import type { DynamicToolUIPart, UIMessage } from "ai";
+import type { UIMessage } from "ai";
 
 import {
   Conversation,
@@ -21,26 +14,33 @@ import {
   ConversationEmptyState,
   ConversationScrollButton,
 } from "@ai-elements/conversation";
+import { FileMentionProvider } from "@ai-elements/chat-markdown";
 import { Message, MessageContent, MessageResponse } from "@ai-elements/message";
-import {
-  PromptInput,
-  PromptInputBody,
-  PromptInputFooter,
-  PromptInputSubmit,
-  PromptInputTextarea,
-  PromptInputTools,
-} from "@ai-elements/prompt-input";
-import { Reasoning, ReasoningContent, ReasoningTrigger } from "@ai-elements/reasoning";
-import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@ai-elements/tool";
 import { AppShell } from "@renderer/components/app-shell";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { SettingsPage } from "@renderer/components/pages/settings-page";
+import { RailDrawer } from "@renderer/components/ticket/rail-drawer";
 import { TicketTabStrip, type TicketTabDescriptor } from "@renderer/components/ticket/ticket-tabs";
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
 
-import { useLabSessionController, type MessageDelivery } from "../chat/session-controller";
+import { projectSessionTodos, groupMessageParts, type SessionTodo } from "../chat/activity";
+import {
+  ActivityGroup,
+  AttentionBlock,
+  SessionTodoDock,
+  SessionTodoList,
+  ToolRun,
+} from "../chat/activity-ui";
+import { SessionComposer } from "../chat/composer-ui";
+import { useLabSessionController } from "../chat/session-controller";
+import {
+  enqueueMessage,
+  nextRelease,
+  type ComposerIntent,
+  type QueuedMessage,
+} from "../chat/session-model";
 import { LabRuntimeCatalogProvider } from "../runtime-catalog-client";
 import { appApi, seedApp } from "../seed";
 
@@ -50,13 +50,7 @@ export const viewport = "window" as const;
 export const seed = seedApp;
 export const api = appApi;
 
-const TABS: readonly TicketTabDescriptor[] = [
-  { id: "doc", kind: "body", label: "LAB-14" },
-  { id: "native-chat", kind: "session", label: "OpenCode 1" },
-];
-
-type RailView = "context" | "events";
-type DebugDensity = "normal" | "inspect" | "wire";
+const SESSION_TAB_ID = "native-chat";
 
 export default function ChatSessionScratch() {
   return (
@@ -82,18 +76,69 @@ function LabMainContent() {
 
 function TicketChatWorkspace() {
   const session = useLabSessionController();
-  const [activeTabId, setActiveTabId] = React.useState("native-chat");
-  const [railView, setRailView] = React.useState<RailView>("context");
-  const [railOpen, setRailOpen] = React.useState(true);
+  const [activeTabId, setActiveTabId] = React.useState(SESSION_TAB_ID);
+  const [fileTabs, setFileTabs] = React.useState<TicketTabDescriptor[]>([]);
+  const [todos, setTodos] = React.useState<SessionTodo[] | null>(null);
+  // The rail's width and collapsed state are app-wide chrome the ChromeBar
+  // already owns, so this surface reads them rather than growing a second
+  // toggle beside the one in the window's title band.
+  const railWidth = useUiStore((state) => state.railWidth);
+  const railCollapsed = useUiStore((state) => state.railCollapsed);
+
+  const tabs = React.useMemo<TicketTabDescriptor[]>(
+    () => [
+      { id: "doc", kind: "body", label: "LAB-14" },
+      {
+        id: SESSION_TAB_ID,
+        kind: "session",
+        label: "OpenCode 1",
+        // The Session's liveness rides its own tab. The chat plane below has no
+        // header of its own: a third chrome band would only repeat this word.
+        status: session.lifecycle,
+      },
+      ...fileTabs,
+    ],
+    [fileTabs, session.lifecycle],
+  );
+
+  // Live todos from the plan activity; clear leftovers when the Session goes
+  // idle (OpenCode paradigm — unfinished plans do not reopen later).
+  React.useEffect(() => {
+    if (session.lifecycle === "idle") {
+      setTodos(null);
+      return;
+    }
+    const projected = projectSessionTodos(session.messages);
+    if (projected !== null) setTodos(projected.length > 0 ? projected : null);
+  }, [session.lifecycle, session.messages]);
+
+  const openFileTab = React.useCallback((path: string) => {
+    const id = `file:${path}`;
+    setFileTabs((current) => {
+      if (current.some((tab) => tab.id === id)) return current;
+      const label = path.includes("/") ? (path.split("/").pop() ?? path) : path;
+      return [...current, { id, kind: "file", label, relPath: path }];
+    });
+    setActiveTabId(id);
+  }, []);
+
+  const onSession = activeTabId === SESSION_TAB_ID;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <TicketTabStrip
-        tabs={TABS}
+        tabs={tabs}
         activeTabId={activeTabId}
         creating={session.lifecycle === "starting"}
         onSelectTab={setActiveTabId}
-        onCloseTab={() => setActiveTabId("doc")}
+        onCloseTab={(tab) => {
+          if (tab.kind === "file") {
+            setFileTabs((current) => current.filter((entry) => entry.id !== tab.id));
+            setActiveTabId(SESSION_TAB_ID);
+            return;
+          }
+          setActiveTabId("doc");
+        }}
         onRenameSessionTab={() => undefined}
         onNewSession={() => void session.start()}
         canFocusTerminal={false}
@@ -102,28 +147,72 @@ function TicketChatWorkspace() {
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           {activeTabId === "doc" ? (
-            <TicketIntent onOpenSession={() => setActiveTabId("native-chat")} />
+            <TicketIntent onOpenSession={() => setActiveTabId(SESSION_TAB_ID)} />
+          ) : activeTabId.startsWith("file:") ? (
+            <LabFilePreview path={activeTabId.slice("file:".length)} />
           ) : (
-            <ChatPlane
-              session={session}
-              inspectorOpen={railOpen}
-              onToggleRail={() => setRailOpen((open) => !open)}
-            />
+            <ChatPlane session={session} todos={todos} onOpenFile={openFileTab} />
           )}
         </main>
-        {railOpen ? (
-          <aside className="w-80 shrink-0 overflow-hidden border-l border-sidebar-border bg-sidebar">
-            <div className="flex h-full w-80 flex-col">
-              <RailHeader view={railView} onChange={setRailView} />
-              {railView === "context" ? (
-                <ContextRail session={session} />
-              ) : (
-                <DebugRail session={session} />
-              )}
-            </div>
+        {onSession && !railCollapsed ? (
+          <aside
+            className="flex shrink-0 flex-col overflow-hidden border-l border-sidebar-border bg-sidebar"
+            style={{ width: railWidth }}
+          >
+            <SessionRail todos={todos} />
           </aside>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Standing state, consulted rather than monitored — the transcript already
+ * holds this turn's narrative. Only what has no other home lives here; changes
+ * and files stay in the rail modes that already own them.
+ */
+function SessionRail({ todos }: { todos: SessionTodo[] | null }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto [scrollbar-gutter:stable]">
+      <SessionRailDrawer label="Plan" count={todos?.length ?? 0}>
+        {todos && todos.length > 0 ? (
+          <div className="px-4 pb-3">
+            <SessionTodoList todos={todos} />
+          </div>
+        ) : null}
+      </SessionRailDrawer>
+      <SessionRailDrawer label="Subagents" count={0} />
+      <SessionRailDrawer label="Background processes" count={0} />
+    </div>
+  );
+}
+
+/**
+ * Derived open state — a drawer opens because it has something in it, and stays
+ * wherever the user last put it after that. No timer, so a click mid-transition
+ * wins by construction.
+ */
+function SessionRailDrawer({
+  label,
+  count,
+  children,
+}: React.PropsWithChildren<{ label: string; count: number }>) {
+  const [userOpen, setUserOpen] = React.useState<boolean | null>(null);
+  const open = userOpen ?? count > 0;
+  return (
+    <RailDrawer label={label} count={count} open={open} onOpenChange={setUserOpen}>
+      {children}
+    </RailDrawer>
+  );
+}
+
+function LabFilePreview({ path }: { path: string }) {
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto pt-8 [scrollbar-gutter:stable]">
+      <ContentColumn>
+        <h1 className="font-mono text-heading font-semibold">{path}</h1>
+      </ContentColumn>
     </div>
   );
 }
@@ -168,601 +257,213 @@ function TicketIntent({ onOpenSession }: { onOpenSession(): void }) {
 
 function ChatPlane({
   session,
-  inspectorOpen,
-  onToggleRail,
+  todos,
+  onOpenFile,
 }: {
   session: ReturnType<typeof useLabSessionController>;
-  inspectorOpen: boolean;
-  onToggleRail(): void;
+  todos: SessionTodo[] | null;
+  onOpenFile(path: string): void;
 }) {
   const [input, setInput] = React.useState("");
-  const [delivery, setDelivery] = React.useState<MessageDelivery>("queue");
+  const [queued, setQueued] = React.useState<readonly QueuedMessage[]>([]);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
+  const composerHeight = useMeasuredHeight<HTMLDivElement>();
   const working = session.lifecycle === "working";
   const needsRuntimeChoice = session.catalog.models.length === 0;
 
+  const { submit, selection, liveAttachmentId } = session;
+  const ready = liveAttachmentId !== null && selection.modelId.length > 0;
+
+  const send = React.useCallback(
+    (text: string, intent: ComposerIntent) => {
+      if (intent === "queue") {
+        setQueued((current) => enqueueMessage(current, { id: nextId(), text }));
+        setInput("");
+        return;
+      }
+      void submit(text, intent === "steer" ? "steer" : "queue").then((sent) => {
+        if (sent) setInput("");
+      });
+    },
+    [submit],
+  );
+
+  // A queue drains one message into an idle Session. The released id is latched
+  // so a re-render between the state write and the send cannot deliver twice.
+  const released = React.useRef<string | null>(null);
   React.useEffect(() => {
-    if (working && delivery === "queue") setDelivery("steer");
-    if (!working && delivery === "steer") setDelivery("queue");
-  }, [delivery, working]);
+    const next = nextRelease(queued, { working, ready });
+    if (!next || released.current === next.id) return;
+    released.current = next.id;
+    setQueued((current) => current.filter((entry) => entry.id !== next.id));
+    void submit(next.text, "queue");
+  }, [queued, ready, submit, working]);
+
+  const planeStyle = { "--composer-height": `${composerHeight.height}px` } as React.CSSProperties;
 
   return (
-    <>
-      <header className="flex min-h-12 items-center gap-3 border-b border-border px-4">
-        <StatusDot lifecycle={session.lifecycle} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-baseline gap-2">
-            <h1 className="text-ui font-semibold">OpenCode</h1>
-            <span className="truncate text-xs text-muted-foreground">{session.status}</span>
-          </div>
-        </div>
-        <span className="hidden rounded-full border border-border px-2 py-0.5 font-mono text-label text-muted-foreground xl:inline">
-          disposable workspace
-        </span>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={inspectorOpen ? "Hide Session inspector" : "Show Session inspector"}
-          aria-pressed={!inspectorOpen}
-          onClick={onToggleRail}
-        >
-          <SidebarSimpleIcon className="size-4" />
-        </Button>
-      </header>
+    <div className="relative flex min-h-0 flex-1 flex-col" style={planeStyle}>
+      <FileMentionProvider onOpenFile={onOpenFile}>
+        <Conversation className="min-h-0 bg-background">
+          <ConversationContent className="gap-6 px-0 pt-8 pb-[calc(var(--composer-height)+2rem)]">
+            {session.messages.length === 0 ? (
+              <ConversationEmptyState className="min-h-80">
+                <div className="flex size-10 items-center justify-center rounded-xl border border-border bg-card shadow-[var(--shadow-raised)]">
+                  <CodeIcon className="size-5 text-muted-foreground" />
+                </div>
+                {needsRuntimeChoice ? (
+                  <Button variant="outline" onClick={() => setSettingsOpen(true)}>
+                    Choose OpenCode models
+                  </Button>
+                ) : session.liveAttachmentId ? null : (
+                  <Button
+                    disabled={session.lifecycle === "starting"}
+                    onClick={() => void session.start()}
+                  >
+                    {session.lifecycle === "starting" ? (
+                      <CircleNotchIcon className="size-4 animate-spin" />
+                    ) : (
+                      <PlayIcon className="size-4" weight="fill" />
+                    )}
+                    {session.sessionId ? "Start new Session" : "Start OpenCode"}
+                  </Button>
+                )}
+              </ConversationEmptyState>
+            ) : (
+              <ContentColumn className="flex flex-col gap-6">
+                {session.messages.map((message) => (
+                  <ChatMessage
+                    key={message.id}
+                    message={message}
+                    working={working}
+                    onOpenFile={onOpenFile}
+                  />
+                ))}
+              </ContentColumn>
+            )}
+          </ConversationContent>
+          <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)]" />
+        </Conversation>
+      </FileMentionProvider>
 
-      <Conversation className="min-h-0 bg-background">
-        <ConversationContent className="mx-auto w-full max-w-3xl gap-6 px-6 pb-44 pt-8">
-          {session.messages.length === 0 ? (
-            <ConversationEmptyState className="min-h-80">
-              <div className="flex size-10 items-center justify-center rounded-xl border border-border bg-card shadow-sm">
-                <CodeIcon className="size-5 text-muted-foreground" />
-              </div>
-              <div className="mt-1 space-y-1 text-center">
-                <h2 className="text-heading font-semibold">Work the ticket with OpenCode</h2>
-                <p className="text-sm text-muted-foreground">
-                  One durable Session. One disposable repository.
-                </p>
-              </div>
-              {needsRuntimeChoice ? (
-                <Button className="mt-3" variant="outline" onClick={() => setSettingsOpen(true)}>
-                  Choose OpenCode models
-                </Button>
-              ) : session.liveAttachmentId ? null : (
-                <Button
-                  className="mt-3"
-                  disabled={session.lifecycle === "starting"}
-                  onClick={() => void session.start()}
-                >
-                  {session.lifecycle === "starting" ? (
-                    <CircleNotchIcon className="size-4 animate-spin" />
-                  ) : (
-                    <PlayIcon className="size-4" weight="fill" />
-                  )}
-                  {session.sessionId ? "Start new Session" : "Start OpenCode"}
-                </Button>
-              )}
-            </ConversationEmptyState>
-          ) : (
-            session.messages.map((message) => (
-              <ChatMessage key={message.id} message={message} working={working} />
-            ))
-          )}
-        </ConversationContent>
-        <ConversationScrollButton className="bottom-36" />
-      </Conversation>
+      {/* A short fade over the transcript, keyed to the measured composer rather
+          than a magic offset that breaks the moment the plan dock expands. The
+          old full-height scrim repainted the card rung over itself and read as
+          a grey wash. */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-8 bg-gradient-to-t from-background to-transparent" />
 
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-background via-background to-transparent px-6 pb-5 pt-12">
-        <PromptInput
-          className="pointer-events-auto mx-auto w-full max-w-3xl border-border bg-card/95 shadow-lg backdrop-blur-xl"
-          onSubmit={async ({ text }) => {
-            const sent = await session.submit(text, delivery);
-            if (sent) setInput("");
-          }}
-        >
-          <PromptInputBody>
-            <PromptInputTextarea
-              value={input}
-              onChange={(event) => setInput(event.currentTarget.value)}
-              disabled={!session.liveAttachmentId}
-              placeholder={working ? "Steer the active turn…" : "Ask, plan, or implement…"}
-              className="min-h-16 text-sm"
-            />
-          </PromptInputBody>
-          <PromptInputFooter className="flex-wrap border-t border-border/70 pt-2">
-            <PromptInputTools className="flex-wrap">
-              <RuntimeSelects session={session} delivery={delivery} onDelivery={setDelivery} />
-            </PromptInputTools>
-            <div className="ml-auto flex items-center gap-1">
-              {working ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => void session.interrupt()}
-                >
-                  <SquareIcon className="size-3.5" weight="fill" />
-                  <span className="sr-only">Stop OpenCode</span>
-                </Button>
-              ) : null}
-              <PromptInputSubmit
-                status="ready"
-                disabled={!input.trim() || !session.liveAttachmentId || !session.selection.modelId}
-              >
-                <ArrowUpIcon className="size-4" weight="bold" />
-              </PromptInputSubmit>
-            </div>
-          </PromptInputFooter>
-        </PromptInput>
+      <div
+        ref={composerHeight.ref}
+        className="pointer-events-none absolute inset-x-0 bottom-0 pb-5"
+      >
+        <ContentColumn>
+          {todos && todos.length > 0 && !todosEveryDone(todos) ? (
+            <SessionTodoDock todos={todos} />
+          ) : null}
+          <SessionComposer
+            value={input}
+            onValueChange={setInput}
+            models={session.catalog.models}
+            agents={session.catalog.agents}
+            selection={selection}
+            onSelectionChange={session.setSelection}
+            working={working}
+            ready={ready}
+            queued={queued}
+            onQueuedChange={setQueued}
+            onSubmit={send}
+            onStop={() => void session.interrupt()}
+          />
+        </ContentColumn>
       </div>
-    </>
+    </div>
   );
 }
 
-function RuntimeSelects({
-  session,
-  delivery,
-  onDelivery,
+/** Live height of a node, so a layout can be keyed to it instead of a constant. */
+function useMeasuredHeight<T extends HTMLElement>(): {
+  ref: React.RefObject<T | null>;
+  height: number;
+} {
+  const ref = React.useRef<T>(null);
+  const [height, setHeight] = React.useState(0);
+
+  React.useLayoutEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) setHeight(entry.contentRect.height);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  return { ref, height };
+}
+
+function ChatMessage({
+  message,
+  working,
+  onOpenFile,
 }: {
-  session: ReturnType<typeof useLabSessionController>;
-  delivery: MessageDelivery;
-  onDelivery(next: MessageDelivery): void;
+  message: UIMessage;
+  working: boolean;
+  onOpenFile(path: string): void;
 }) {
-  const models = session.catalog.models.filter(
-    (model) => model.providerId === session.selection.providerId,
+  const blocks = message.role === "assistant" ? groupMessageParts(message.parts, message.id) : null;
+  // A user message is prose only; the assistant path owns every other shape.
+  const prose = message.parts.flatMap((part, index) =>
+    part.type === "text" ? [{ key: `${message.id}:${index}`, text: part.text }] : [],
   );
-  const selectedModel = models.find((model) => model.modelId === session.selection.modelId);
-  const update = (patch: Partial<typeof session.selection>) =>
-    session.setSelection({ ...session.selection, ...patch });
 
-  return (
-    <>
-      <CompactSelect
-        label="Provider"
-        value={session.selection.providerId}
-        disabled={session.catalog.providers.length === 0}
-        onChange={(providerId) => {
-          const model = session.catalog.models.find(
-            (candidate) => candidate.providerId === providerId && candidate.state === "available",
-          );
-          update({
-            providerId,
-            modelId: model?.modelId ?? "",
-            variant: model?.variants[0] ?? "",
-          });
-        }}
-        options={session.catalog.providers.map((provider) => ({
-          value: provider,
-          label: provider,
-        }))}
-      />
-      <CompactSelect
-        label="Model"
-        value={session.selection.modelId}
-        disabled={models.length === 0}
-        onChange={(modelId) => {
-          const model = models.find((candidate) => candidate.modelId === modelId);
-          update({ modelId, variant: model?.variants[0] ?? "" });
-        }}
-        options={models.map((model) => ({
-          value: model.modelId,
-          label: model.label,
-          disabled: model.state !== "available",
-        }))}
-      />
-      <CompactSelect
-        label="Effort"
-        value={session.selection.variant}
-        disabled={!selectedModel || selectedModel.variants.length === 0}
-        onChange={(variant) => update({ variant })}
-        options={(selectedModel?.variants ?? []).map((variant) => ({
-          value: variant,
-          label: variant,
-        }))}
-        emptyLabel="default effort"
-      />
-      <CompactSelect
-        label="Mode"
-        value={session.selection.agent}
-        disabled={session.catalog.agents.length === 0}
-        onChange={(agent) => update({ agent })}
-        options={session.catalog.agents.map((entry) => ({
-          value: entry.id,
-          label: entry.label,
-          disabled: entry.state !== "available",
-        }))}
-        emptyLabel="default mode"
-      />
-      <CompactSelect
-        label="Delivery"
-        value={delivery}
-        onChange={(value) => onDelivery(value as MessageDelivery)}
-        options={[
-          { value: "queue", label: "queue" },
-          { value: "steer", label: "steer" },
-          { value: "replace", label: "replace" },
-        ]}
-      />
-    </>
-  );
-}
+  // Plan-only projections must not leave an empty bubble.
+  if (blocks && blocks.length === 0) return null;
 
-function CompactSelect({
-  label,
-  value,
-  options,
-  disabled,
-  onChange,
-  emptyLabel,
-}: {
-  label: string;
-  value: string;
-  options: readonly { value: string; label: string; disabled?: boolean }[];
-  disabled?: boolean;
-  onChange(value: string): void;
-  emptyLabel?: string;
-}) {
-  return (
-    <select
-      aria-label={label}
-      title={label}
-      value={value}
-      disabled={disabled}
-      onChange={(event) => onChange(event.target.value)}
-      className="h-6 max-w-36 rounded-full border-0 bg-transparent px-2 text-xs text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
-    >
-      {value ? null : <option value="">{emptyLabel ?? `no ${label.toLowerCase()}`}</option>}
-      {options.map((option) => (
-        <option key={option.value} value={option.value} disabled={option.disabled}>
-          {option.label}
-        </option>
-      ))}
-    </select>
-  );
-}
-
-function ChatMessage({ message, working }: { message: UIMessage; working: boolean }) {
   return (
     <Message from={message.role} className="max-w-full">
       <MessageContent className="group-[.is-user]:rounded-xl group-[.is-user]:bg-muted group-[.is-user]:px-3.5 group-[.is-user]:py-2.5">
-        {message.parts.map((part, index) => {
-          const key = `${message.id}:${index}`;
-          switch (part.type) {
-            case "text":
-              return (
-                <MessageResponse key={key} isAnimating={working && message.role === "assistant"}>
-                  {part.text}
-                </MessageResponse>
-              );
-            case "reasoning":
-              return (
-                <Reasoning key={key} isStreaming={working && message.role === "assistant"}>
-                  <ReasoningTrigger />
-                  <ReasoningContent>{part.text}</ReasoningContent>
-                </Reasoning>
-              );
-            case "dynamic-tool":
-              return <ChatTool key={key} part={part} />;
-            default:
-              return null;
-          }
-        })}
+        {blocks
+          ? blocks.map((block) => {
+              switch (block.kind) {
+                case "text":
+                  return (
+                    <MessageResponse
+                      key={block.key}
+                      isAnimating={working && message.role === "assistant"}
+                    >
+                      {block.part.text}
+                    </MessageResponse>
+                  );
+                case "activity":
+                  return (
+                    <ActivityGroup
+                      key={block.key}
+                      items={block.items}
+                      working={working}
+                      onOpenFile={onOpenFile}
+                    />
+                  );
+                case "tool-run":
+                  return <ToolRun key={block.key} items={block.items} onOpenFile={onOpenFile} />;
+                case "attention":
+                  return (
+                    <AttentionBlock key={block.key} part={block.part} onOpenFile={onOpenFile} />
+                  );
+                default:
+                  return null;
+              }
+            })
+          : prose.map((entry) => <MessageResponse key={entry.key}>{entry.text}</MessageResponse>)}
       </MessageContent>
     </Message>
   );
 }
 
-function ChatTool({ part }: { part: DynamicToolUIPart }) {
-  const output = "output" in part ? part.output : undefined;
-  const errorText = "errorText" in part ? part.errorText : undefined;
-  return (
-    <Tool defaultOpen={part.state === "output-error"} className="mb-2 border-border bg-card/60">
-      <ToolHeader
-        type="dynamic-tool"
-        state={part.state}
-        toolName={part.toolName}
-        title={part.title}
-      />
-      <ToolContent>
-        {"input" in part ? <ToolInput input={part.input} /> : null}
-        <ToolOutput output={output} errorText={errorText} />
-      </ToolContent>
-    </Tool>
-  );
+function todosEveryDone(todos: readonly SessionTodo[]): boolean {
+  return todos.every((todo) => todo.status === "completed" || todo.status === "cancelled");
 }
 
-function StatusDot({
-  lifecycle,
-}: {
-  lifecycle: ReturnType<typeof useLabSessionController>["lifecycle"];
-}) {
-  return (
-    <span
-      className={cn(
-        "size-2 rounded-full",
-        lifecycle === "working" &&
-          "bg-primary shadow-[0_0_0_3px_color-mix(in_oklab,var(--primary)_18%,transparent)]",
-        lifecycle === "ready" && "bg-primary",
-        lifecycle === "error" && "bg-destructive",
-        (lifecycle === "idle" || lifecycle === "starting") && "bg-muted-foreground",
-      )}
-    />
-  );
-}
-
-function RailHeader({ view, onChange }: { view: RailView; onChange(view: RailView): void }) {
-  return (
-    <div className="flex min-h-12 items-center gap-1 border-b border-sidebar-border px-3">
-      <Button
-        size="sm"
-        variant={view === "context" ? "secondary" : "ghost"}
-        onClick={() => onChange("context")}
-      >
-        Context
-      </Button>
-      <Button
-        size="sm"
-        variant={view === "events" ? "secondary" : "ghost"}
-        onClick={() => onChange("events")}
-      >
-        <BugIcon className="size-3.5" />
-        Events
-      </Button>
-    </div>
-  );
-}
-
-function ContextRail({ session }: { session: ReturnType<typeof useLabSessionController> }) {
-  const selectedAgent = session.catalog.agents.find(
-    (agent) => agent.id === session.selection.agent,
-  );
-  return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-4 text-ui [scrollbar-gutter:stable]">
-      <RailSection title="Ticket">
-        <p className="font-medium text-foreground">LAB-14 · Greeting task</p>
-        <p className="mt-1 text-xs leading-5 text-muted-foreground">
-          Ticket body and acceptance criteria form the Runtime Brief.
-        </p>
-      </RailSection>
-      <RailSection title="Workspace">
-        <div className="flex items-center gap-2 text-foreground">
-          <TerminalWindowIcon className="size-4 text-muted-foreground" />
-          Disposable git repository
-        </div>
-        <p className="mt-1 font-mono text-label text-muted-foreground">
-          TASK.md · src/greeting.ts · test/greeting.test.ts
-        </p>
-      </RailSection>
-      <RailSection title="Runtime">
-        <KeyValue label="Harness" value="OpenCode · native" />
-        <KeyValue
-          label="Model"
-          value={
-            session.selection.modelId
-              ? `${session.selection.providerId}/${session.selection.modelId}`
-              : "Not reported"
-          }
-        />
-        <KeyValue label="Effort" value={session.selection.variant || "Provider default"} />
-        <KeyValue label="Mode" value={selectedAgent?.label ?? "Provider default"} />
-      </RailSection>
-      <RailSection title="Session">
-        <KeyValue label="Identity" value={session.sessionId || "Not created"} mono />
-        <KeyValue label="Attachment" value={session.liveAttachmentId || "Not attached"} mono />
-      </RailSection>
-    </div>
-  );
-}
-
-function DebugRail({ session }: { session: ReturnType<typeof useLabSessionController> }) {
-  const [density, setDensity] = React.useState<DebugDensity>("normal");
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex gap-1 border-b border-sidebar-border px-3 py-2">
-        {(["normal", "inspect", "wire"] as const).map((value) => (
-          <Button
-            key={value}
-            size="xs"
-            variant={density === value ? "secondary" : "ghost"}
-            onClick={() => setDensity(value)}
-          >
-            {value}
-          </Button>
-        ))}
-        <Button
-          className="ml-auto"
-          size="icon-xs"
-          variant="ghost"
-          disabled={!session.liveAttachmentId}
-          onClick={() => void session.reconcile()}
-        >
-          <ArrowClockwiseIcon className="size-3.5" />
-          <span className="sr-only">Reconcile</span>
-        </Button>
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-3 [scrollbar-gutter:stable]">
-        {density === "normal" ? (
-          <div className="space-y-3">
-            <DebugCard label="State" value={session.status} />
-            <DebugCard label="Events" value={`${session.frames.length} committed`} />
-            <DebugCard label="Messages" value={`${session.messages.length} transcript frames`} />
-            <DebugCard
-              label="Attention"
-              value={`${session.projection?.attention.active.length ?? 0} active`}
-            />
-          </div>
-        ) : density === "inspect" ? (
-          <div className="space-y-5 text-xs">
-            <InspectList title="Receipts" values={session.projection?.receipts ?? []} />
-            <InspectList title="Attention" values={session.projection?.attention.active ?? []} />
-            <InspectList
-              title="Interactions"
-              values={session.projection?.interactions.active ?? []}
-            />
-            <InspectList
-              title="Capabilities"
-              values={(session.projection?.capabilities ?? []).map(capabilityDebugValue)}
-            />
-          </div>
-        ) : (
-          <div className="space-y-5 font-mono text-label">
-            <WireList
-              title="Ordered Session events"
-              values={session.frames.map((frame) => ({
-                sequence: frame.sequence,
-                event: compactDebugEvent(frame.event),
-              }))}
-            />
-            <WireList title="Sanitized RPC" values={session.diagnostics} />
-          </div>
-        )}
-      </div>
-      <div className="flex gap-2 border-t border-sidebar-border p-3">
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={!session.liveAttachmentId}
-          onClick={() => void session.refreshCapabilities()}
-        >
-          Refresh caps
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={!session.liveAttachmentId}
-          onClick={() => void session.release()}
-        >
-          Release
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function RailSection({ title: heading, children }: React.PropsWithChildren<{ title: string }>) {
-  return (
-    <section className="border-b border-sidebar-border py-4 first:pt-0 last:border-0">
-      <h2 className="mb-3 text-label uppercase text-muted-foreground">{heading}</h2>
-      {children}
-    </section>
-  );
-}
-
-function KeyValue({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2 py-1.5 text-xs">
-      <span className="text-muted-foreground">{label}</span>
-      <span
-        className={cn("truncate text-foreground", mono && "font-mono text-label")}
-        title={value}
-      >
-        {value}
-      </span>
-    </div>
-  );
-}
-
-function DebugCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-sidebar-border bg-card/50 p-3">
-      <p className="text-label uppercase text-muted-foreground">{label}</p>
-      <p className="mt-1 text-ui text-foreground">{value}</p>
-    </div>
-  );
-}
-
-function InspectList({ title: heading, values }: { title: string; values: readonly unknown[] }) {
-  return (
-    <section>
-      <h3 className="mb-2 text-label uppercase text-muted-foreground">{heading}</h3>
-      {values.length === 0 ? (
-        <p className="text-xs text-muted-foreground">None</p>
-      ) : (
-        <div className="space-y-2">
-          {values.map((value) => (
-            <pre
-              key={debugValueKey(value)}
-              className="overflow-x-auto whitespace-pre-wrap rounded-md bg-muted/50 p-2 text-label text-foreground"
-            >
-              {JSON.stringify(value, null, 2)}
-            </pre>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function WireList({ title: heading, values }: { title: string; values: readonly unknown[] }) {
-  const visible = values.slice(-100);
-  const copy = () => void navigator.clipboard.writeText(JSON.stringify(visible, null, 2));
-  return (
-    <section>
-      <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-label uppercase text-muted-foreground">{heading}</h3>
-        <Button size="icon-xs" variant="ghost" onClick={copy}>
-          <CopyIcon className="size-3.5" />
-          <span className="sr-only">Copy {heading}</span>
-        </Button>
-      </div>
-      {visible.length === 0 ? (
-        <p className="text-muted-foreground">None</p>
-      ) : (
-        <div className="space-y-2">
-          {values.length > visible.length ? (
-            <p className="text-muted-foreground">
-              Latest {visible.length} of {values.length}
-            </p>
-          ) : null}
-          {visible.map((value) => (
-            <pre
-              key={debugValueKey(value)}
-              className="overflow-x-auto whitespace-pre-wrap border-l border-border pl-2 text-foreground"
-            >
-              {JSON.stringify(value, null, 2)}
-            </pre>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function capabilityDebugValue(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-  const capability = value as Record<string, unknown>;
-  const catalog = Array.isArray(capability.catalog) ? capability.catalog : [];
-  const byKind: Record<string, number> = {};
-  const byState: Record<string, number> = {};
-  for (const item of catalog) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-    const record = item as Record<string, unknown>;
-    const kind = typeof record.kind === "string" ? record.kind : "unknown";
-    const state = typeof record.state === "string" ? record.state : "unknown";
-    byKind[kind] = (byKind[kind] ?? 0) + 1;
-    byState[state] = (byState[state] ?? 0) + 1;
-  }
-  const { catalog: _catalog, ...summary } = capability;
-  return { ...summary, catalog: { total: catalog.length, byKind, byState } };
-}
-
-function compactDebugEvent(event: SessionEvent): unknown {
-  if (event.payload.kind !== "capabilities.updated") return event;
-  return {
-    ...event,
-    payload: {
-      ...event.payload,
-      snapshot: capabilityDebugValue(event.payload.snapshot),
-    },
-  };
-}
-
-function debugValueKey(value: unknown): string {
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    if (typeof record.id === "string" || typeof record.id === "number") {
-      return String(record.id);
-    }
-    if (typeof record.sequence === "number") return `sequence:${record.sequence}`;
-  }
-  return JSON.stringify(value) ?? String(value);
+function nextId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `queued-${Date.now()}-${Math.random()}`;
 }
