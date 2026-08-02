@@ -2472,6 +2472,41 @@ describe("OpenCodeNativeAdapter", () => {
     ]);
   });
 
+  it("draws no part for a text part that never got words", async () => {
+    const { adapter } = composition([
+      {
+        id: "assistant",
+        type: "message.updated",
+        properties: {
+          sessionID: "native-session-1",
+          info: { id: "provider-assistant", role: "assistant" },
+          parts: [
+            // A step that ran tools and ended without prose. OpenCode opens the
+            // text part regardless, and it survives to the transcript as a block
+            // that draws nothing but still separates the activity around it.
+            { id: "t1", type: "text", text: "" },
+            { id: "tool1", type: "tool", tool: "bash", state: { status: "completed" } },
+            { id: "t2", type: "text", text: " \n " },
+            { id: "t3", type: "text", text: "Answer" },
+          ],
+        },
+      },
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const message = observations.find(({ kind }) => kind === "transcript.message");
+    const parts = (message as { message: { parts: readonly { type: string }[] } }).message.parts;
+    expect(parts.filter((part) => part.type === "text")).toEqual([
+      { type: "text", text: "Answer" },
+    ]);
+  });
+
   it("maps every status family and ignores malformed or unrelated SSE events", async () => {
     const { adapter } = composition([
       {

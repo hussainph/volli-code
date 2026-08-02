@@ -43,6 +43,7 @@ import {
   SessionTodoDock,
   ToolRow,
   ToolRun,
+  TurnFoldHeader,
 } from "../chat/activity-ui";
 import { SessionComposer } from "../chat/composer-ui";
 import { enqueueMessage, type ComposerAgent, type QueuedMessage } from "../chat/session-model";
@@ -524,6 +525,15 @@ export default function ChatActivityScratch() {
             },
           ]}
         />
+      </Section>
+
+      <Section label="Turn · folded to its receipt">
+        <TurnFoldHeader summary="Worked for 4m 31s" open={false} onToggle={() => undefined} />
+      </Section>
+
+      <Section label="Turn · opened, and a turn with no timestamps to report">
+        <TurnFoldHeader summary="Worked for 4m 31s" open onToggle={() => undefined} />
+        <TurnFoldHeader summary="Completed 13 steps" open={false} onToggle={() => undefined} />
       </Section>
 
       <Section label="Run · live, rolling tail folds the oldest rows">

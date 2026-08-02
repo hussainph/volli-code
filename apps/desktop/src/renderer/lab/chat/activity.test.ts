@@ -11,6 +11,7 @@ import {
   describeActivity,
   diffStat,
   foldRun,
+  foldTurn,
   formatBytes,
   formatDuration,
   notableDuration,
@@ -26,6 +27,7 @@ import {
   runSummary,
   splitPath,
   TAIL_LIMIT,
+  turnDuration,
 } from "./activity";
 
 type MessagePart = UIMessage["parts"][number];
@@ -147,6 +149,38 @@ describe("groupMessageParts", () => {
     expect(groupMessageParts([tool("plan")], "m2")).toEqual([]);
   });
 
+  it("does not let a blank text part split one group into two headers", () => {
+    for (const blank of ["", "   ", "\n\n", "\u200B"]) {
+      const blocks = groupMessageParts(
+        [
+          tool("search"),
+          tool("search"),
+          { type: "text", text: blank },
+          { type: "reasoning", text: "**Reading project files**" },
+        ],
+        "m2b",
+      );
+      expect(blocks.map((block) => block.kind)).toEqual(["activity"]);
+      expect(blocks[0]?.kind === "activity" && blocks[0].items).toHaveLength(3);
+    }
+  });
+
+  it("does not let a blank text part push two runs apart", () => {
+    const blocks = groupMessageParts(
+      [tool("run-command"), { type: "text", text: " " }, tool("run-command")],
+      "m2c",
+    );
+    // One block, not two with an invisible one between them collecting a gap
+    // on either side.
+    expect(blocks.map((block) => block.kind)).toEqual(["tool-run"]);
+    expect(blocks[0]?.kind === "tool-run" && blocks[0].items).toHaveLength(2);
+  });
+
+  it("keeps text that only looks blank", () => {
+    const blocks = groupMessageParts([{ type: "text", text: "·" }], "m2d");
+    expect(blocks.map((block) => block.kind)).toEqual(["text"]);
+  });
+
   it("escapes errors, denials and approval requests to their own block", () => {
     for (const state of ["output-error", "output-denied", "approval-requested"] as const) {
       const blocks = groupMessageParts([tool("read-file", { state })], "m3");
@@ -184,6 +218,121 @@ describe("groupMessageParts", () => {
     expect(row.kind).toBe("other");
     expect(row.verb).toBe("linear_create_issue");
     expect(row.object).toBe("VC-12 chat seam");
+  });
+});
+
+describe("foldTurn", () => {
+  const timed = (kind: ActivityKind, startedAt: number, endedAt: number) =>
+    tool(kind, { descriptor: { startedAt, endedAt } });
+
+  it("keeps the trailing prose and folds the process behind it", () => {
+    const blocks = groupMessageParts(
+      [
+        { type: "reasoning", text: "**Planning**" },
+        tool("read-file"),
+        { type: "text", text: "Checking the seam." },
+        tool("run-command"),
+        { type: "text", text: "Implemented and verified." },
+      ],
+      "t1",
+    );
+    const fold = foldTurn(blocks);
+    // Mid-turn narration is commentary on work you can no longer see; only the
+    // last thing said is the deliverable.
+    expect(fold.visible.map((block) => block.kind)).toEqual(["text"]);
+    expect(fold.visible[0]?.kind === "text" && fold.visible[0].part.text).toBe(
+      "Implemented and verified.",
+    );
+    // activity(reasoning + read) · text · tool-run · text — all but the last.
+    expect(fold.hidden).toBe(3);
+  });
+
+  it("keeps every trailing prose block, not just the last", () => {
+    const blocks = groupMessageParts(
+      [
+        tool("run-command"),
+        { type: "text", text: "First paragraph." },
+        { type: "text", text: "Second paragraph." },
+      ],
+      "t2",
+    );
+    // Two adjacent text parts are one deliverable split by the harness, not a
+    // narration followed by an answer.
+    expect(foldTurn(blocks).visible).toHaveLength(2);
+    expect(foldTurn(blocks).hidden).toBe(1);
+  });
+
+  it("never folds a turn holding a question or a failure", () => {
+    for (const state of ["approval-requested", "output-error"] as const) {
+      const blocks = groupMessageParts(
+        [tool("run-command"), tool("run-command", { state }), { type: "text", text: "Done." }],
+        "t3",
+      );
+      const fold = foldTurn(blocks);
+      expect(fold.hidden).toBe(0);
+      expect(fold.visible).toHaveLength(blocks.length);
+    }
+  });
+
+  it("does not fold a turn that is only prose", () => {
+    const blocks = groupMessageParts([{ type: "text", text: "Just an answer." }], "t4");
+    expect(foldTurn(blocks)).toEqual({ visible: blocks, hidden: 0, summary: "" });
+  });
+
+  it("folds a turn that produced no prose down to its receipt alone", () => {
+    const blocks = groupMessageParts([tool("run-command"), tool("edit-file")], "t5");
+    const fold = foldTurn(blocks);
+    expect(fold.visible).toEqual([]);
+    expect(fold.hidden).toBe(1);
+  });
+
+  it("reports wall-clock across the turn, not the sum of its parts", () => {
+    const blocks = groupMessageParts(
+      [
+        // Overlapping work: 0→5000 and 1000→3000. The reader waited 5s.
+        timed("run-command", 0, 5000),
+        timed("run-command", 1000, 3000),
+        { type: "text", text: "Done." },
+      ],
+      "t6",
+    );
+    expect(turnDuration(blocks)).toBe(5000);
+    expect(foldTurn(blocks).summary).toBe("Worked for 5.0s");
+  });
+
+  it("counts steps when the harness stamped no timestamps", () => {
+    const blocks = groupMessageParts(
+      [tool("run-command"), tool("read-file"), tool("search"), { type: "text", text: "Done." }],
+      "t7",
+    );
+    expect(turnDuration(blocks)).toBeNull();
+    expect(foldTurn(blocks).summary).toBe("Completed 3 steps");
+  });
+
+  it("singularizes one step and names a turn that only thought", () => {
+    const one = groupMessageParts([tool("run-command"), { type: "text", text: "Done." }], "t8");
+    expect(foldTurn(one).summary).toBe("Completed 1 step");
+    const thought = groupMessageParts(
+      [
+        { type: "reasoning", text: "**Weighing it**" },
+        { type: "text", text: "Done." },
+      ],
+      "t9",
+    );
+    expect(foldTurn(thought).summary).toBe("Thought");
+  });
+
+  it("ignores a backwards or half-open timestamp pair", () => {
+    const partial = groupMessageParts(
+      [tool("run-command", { descriptor: { startedAt: 500 } }), { type: "text", text: "Done." }],
+      "t10",
+    );
+    expect(turnDuration(partial)).toBeNull();
+    const backwards = groupMessageParts(
+      [timed("run-command", 900, 100), { type: "text", text: "Done." }],
+      "t11",
+    );
+    expect(turnDuration(backwards)).toBeNull();
   });
 });
 

@@ -92,10 +92,13 @@ const COLLAPSE_FADE = "duration-[240ms] ease-swift motion-reduce:transition-none
 function Caret({
   open,
   hidden,
+  pinned,
   className,
 }: {
   open: boolean;
   hidden?: boolean;
+  /** Always visible. A collapsed turn must advertise its own way back in. */
+  pinned?: boolean;
   className?: string;
 }) {
   return (
@@ -109,7 +112,7 @@ function Caret({
         // permanent weight for something you only need when you reach for it.
         // An open row keeps its caret — the way back out is never hidden.
         "shrink-0 opacity-0 transition-opacity duration-150 ease-swift group-focus-within/row:opacity-100 group-hover/row:opacity-100 motion-reduce:transition-none",
-        open && "opacity-100",
+        (open || pinned) && "opacity-100",
         hidden && "invisible",
         className,
       )}
@@ -541,6 +544,38 @@ export function ToolRun({
         ))}
       </div>
     </div>
+  );
+}
+
+/* --------------------------------------------------------------- turn fold */
+
+/**
+ * The receipt a past turn collapses to.
+ *
+ * It sits in the machine column with everything else it stands for, one level
+ * above the rows it hides — prose keeps the outer edge, so the transcript has
+ * exactly two left edges and each means something.
+ */
+export function TurnFoldHeader({
+  summary,
+  open,
+  onToggle,
+}: {
+  summary: string;
+  open: boolean;
+  onToggle(): void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      className={cn(TRIGGER_CLASS, "not-prose")}
+    >
+      <Gutter />
+      <span className="min-w-0 truncate">{summary}</span>
+      <Caret open={open} pinned />
+    </button>
   );
 }
 

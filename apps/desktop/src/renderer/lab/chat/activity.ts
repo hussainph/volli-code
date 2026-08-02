@@ -75,6 +75,15 @@ export function isPlanActivity(part: DynamicToolUIPart): boolean {
   return activityDescriptor(part).kind === "plan";
 }
 
+/**
+ * `trim()` alone is not enough: zero-width space and word joiner are not
+ * whitespace per spec, and a text part carrying only those renders nothing
+ * while still costing a block.
+ */
+export function isBlankText(text: string): boolean {
+  return text.replace(/[\u200B-\u200D\uFEFF]/g, "").trim().length === 0;
+}
+
 export function groupMessageParts(parts: readonly MessagePart[], messageId: string): ChatBlock[] {
   const blocks: ChatBlock[] = [];
   let activity: ActivityItem[] | null = null;
@@ -104,6 +113,14 @@ export function groupMessageParts(parts: readonly MessagePart[], messageId: stri
   parts.forEach((part, index) => {
     const key = `${messageId}:${index}`;
     if (part.type === "text") {
+      // A blank text part is not a block. A harness opens one before it has
+      // words (OpenCode does) and can leave a whitespace-only one between tool
+      // calls; rendered, it is a zero-height block that still collects the gap
+      // on *both* sides of itself, so one boundary measures 12px and its
+      // neighbour 24px for no reason the reader can see. Worse, it `flush()`es
+      // — which is what splits a single run of exploration into two stacked
+      // headers that each summarize half of it.
+      if (isBlankText(part.text)) return;
       flush();
       blocks.push({ kind: "text", part, key });
       return;
@@ -153,6 +170,89 @@ export function isAwaitingFirstOutput(messages: readonly UIMessage[]): boolean {
   const last = messages[messages.length - 1];
   if (!last || last.role !== "assistant") return true;
   return groupMessageParts(last.parts, last.id).length === 0;
+}
+
+/* -------------------------------------------------------------------- turn */
+
+/** Every tool part the turn ran, in order, wherever the projection put it. */
+export function turnToolParts(blocks: readonly ChatBlock[]): DynamicToolUIPart[] {
+  const parts: DynamicToolUIPart[] = [];
+  for (const block of blocks) {
+    if (block.kind === "activity") {
+      for (const item of block.items) if (item.kind === "tool") parts.push(item.part);
+    } else if (block.kind === "tool-run") {
+      for (const item of block.items) parts.push(item.part);
+    } else if (block.kind === "attention") {
+      parts.push(block.part);
+    }
+  }
+  return parts;
+}
+
+/**
+ * Wall-clock across the turn, from the first tool that started to the last that
+ * ended. Not the sum of the parts: work overlaps, and the reader is asking how
+ * long they waited, not how much the machine did.
+ */
+export function turnDuration(blocks: readonly ChatBlock[]): number | null {
+  let first: number | null = null;
+  let last: number | null = null;
+  for (const part of turnToolParts(blocks)) {
+    const { startedAt, endedAt } = activityDescriptor(part);
+    if (startedAt !== null && (first === null || startedAt < first)) first = startedAt;
+    if (endedAt !== null && (last === null || endedAt > last)) last = endedAt;
+  }
+  if (first === null || last === null || last < first) return null;
+  return last - first;
+}
+
+/**
+ * The receipt a folded turn leaves. Duration when the harness timestamped its
+ * work, a step count when it did not — Perplexity's phrasing, and the honest
+ * fallback, since a count is something we can always derive. A turn that only
+ * thought says so.
+ */
+export function turnSummary(blocks: readonly ChatBlock[]): string {
+  const elapsed = formatDuration(turnDuration(blocks));
+  if (elapsed !== null) return `Worked for ${elapsed}`;
+  const steps = turnToolParts(blocks).length;
+  if (steps > 0) return `Completed ${steps} ${steps === 1 ? "step" : "steps"}`;
+  return "Thought";
+}
+
+export interface TurnFold {
+  /** Blocks a folded turn still shows, in order. */
+  visible: ChatBlock[];
+  /** How many blocks the fold hides. Zero means this turn has nothing to fold. */
+  hidden: number;
+  /** Header text, empty when `hidden` is zero. */
+  summary: string;
+}
+
+/**
+ * What a turn shows once it is scrollback.
+ *
+ * The deliverable survives and the process folds — the split Cursor, Codex and
+ * Perplexity all landed on, and the reason their transcripts read as answers
+ * while ours read as machinery. The deliverable is the *trailing* run of prose:
+ * mid-turn narration is commentary on work you are no longer looking at, but
+ * the last thing said is what the turn was for.
+ *
+ * A turn holding an unresolved question or a failure never folds. Those are the
+ * two things the transcript must not make the reader go hunting for.
+ */
+export function foldTurn(blocks: readonly ChatBlock[]): TurnFold {
+  if (blocks.some((block) => block.kind === "attention")) {
+    return { visible: [...blocks], hidden: 0, summary: "" };
+  }
+  let start = blocks.length;
+  while (start > 0 && blocks[start - 1]?.kind === "text") start -= 1;
+  if (start === 0) return { visible: [...blocks], hidden: 0, summary: "" };
+  return {
+    visible: blocks.slice(start),
+    hidden: start,
+    summary: turnSummary(blocks.slice(0, start)),
+  };
 }
 
 /* ----------------------------------------------------------------- summary */

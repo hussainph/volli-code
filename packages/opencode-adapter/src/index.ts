@@ -1857,7 +1857,13 @@ function openCodePart(
   const type = objectString(part, "type");
   if (type === "text") {
     const text = objectString(part, "text");
-    return text === null ? [] : [{ type: "text", text }];
+    // Same habit as reasoning below: OpenCode opens a text part before it has
+    // words, and a step that ends without prose leaves that empty part behind
+    // between two tool calls. It draws nothing, but downstream it is still a
+    // block — one that separates activity that belongs together and collects a
+    // margin on either side of itself.
+    if (text === null || text.trim() === "") return [];
+    return [{ type: "text", text }];
   }
   if (type === "reasoning") {
     const text = objectString(part, "text");

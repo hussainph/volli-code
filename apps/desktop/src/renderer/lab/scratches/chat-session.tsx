@@ -27,6 +27,7 @@ import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
 
 import {
+  foldTurn,
   isAwaitingFirstOutput,
   projectSessionTodos,
   groupMessageParts,
@@ -39,6 +40,7 @@ import {
   SessionTodoDock,
   SessionTodoList,
   ToolRun,
+  TurnFoldHeader,
 } from "../chat/activity-ui";
 import { SessionComposer } from "../chat/composer-ui";
 import { useLabSessionController } from "../chat/session-controller";
@@ -343,11 +345,12 @@ function ChatPlane({
               </ConversationEmptyState>
             ) : (
               <ContentColumn className="flex flex-col gap-6">
-                {session.messages.map((message) => (
+                {session.messages.map((message, index) => (
                   <ChatMessage
                     key={message.id}
                     message={message}
                     working={working}
+                    past={index < session.messages.length - 1}
                     onOpenFile={onOpenFile}
                   />
                 ))}
@@ -452,12 +455,16 @@ function useMeasuredHeight<T extends HTMLElement>(): {
 function ChatMessage({
   message,
   working,
+  past,
   onOpenFile,
 }: {
   message: UIMessage;
   working: boolean;
+  /** A newer turn exists, so this one is scrollback and folds by default. */
+  past: boolean;
   onOpenFile(path: string): void;
 }) {
+  const [userOpen, setUserOpen] = React.useState<boolean | null>(null);
   const blocks = message.role === "assistant" ? groupMessageParts(message.parts, message.id) : null;
   // A user message is prose only; the assistant path owns every other shape.
   const prose = message.parts.flatMap((part, index) =>
@@ -467,12 +474,29 @@ function ChatMessage({
   // Plan-only projections must not leave an empty bubble.
   if (blocks && blocks.length === 0) return null;
 
+  const fold = blocks ? foldTurn(blocks) : null;
+  // Derived, never animated into. A turn is born folded once it is scrollback,
+  // so restoring a long session does not fire one collapse per turn at boot —
+  // and the turn you just watched stays open until you send the next message,
+  // which is the only moment nothing can collapse under the reader.
+  const open = userOpen ?? !past;
+  const shown = fold && fold.hidden > 0 && !open ? fold.visible : blocks;
+
   return (
     <Message from={message.role} className="max-w-full">
       <MessageContent className="gap-0 group-[.is-user]:rounded-xl group-[.is-user]:bg-muted group-[.is-user]:px-3.5 group-[.is-user]:py-2.5">
-        {blocks
-          ? blocks.map((block, index) => (
-              <div key={block.key} className={blockSpacing(blocks[index - 1], block)}>
+        {fold && fold.hidden > 0 ? (
+          <div className={shown && shown.length > 0 ? "mb-3" : ""}>
+            <TurnFoldHeader
+              summary={fold.summary}
+              open={open}
+              onToggle={() => setUserOpen(!open)}
+            />
+          </div>
+        ) : null}
+        {shown
+          ? shown.map((block, index) => (
+              <div key={block.key} className={blockSpacing(shown[index - 1], block)}>
                 {renderBlock(block, { working, role: message.role, onOpenFile })}
               </div>
             ))
