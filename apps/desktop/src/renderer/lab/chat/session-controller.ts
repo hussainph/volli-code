@@ -9,13 +9,13 @@ import type { RpcDiagnosticEntry } from "@volli/session-rpc";
 import type { UIMessage } from "ai";
 
 import { useRuntimeCatalogClient } from "@renderer/lib/runtime-catalog-client";
+import { useUiStore } from "@renderer/stores/ui";
 
 import { LAB_SESSION_PROJECT_ID, LAB_SESSION_TICKET_ID } from "../../../lab-session-rpc-path";
 import { createSessionRpcClient, type SessionRpcClient } from "../session-rpc-client";
 import { resolveRuntimeSelection } from "./session-model";
 
 const DIAGNOSTIC_LIMIT = 100;
-const CAPABILITY_REFRESH_INTERVAL_MS = 45_000;
 const EMPTY_SELECTION: RuntimeSelection = {
   providerId: "",
   modelId: "",
@@ -56,6 +56,7 @@ export interface LabSessionController {
 
 export function useLabSessionController(): LabSessionController {
   const runtimeCatalog = useRuntimeCatalogClient();
+  const settingsOpen = useUiStore((state) => state.settingsOpen);
   const client = React.useRef<SessionRpcClient | null>(null);
   const [sessionId, setSessionId] = React.useState("");
   const [projection, setProjection] = React.useState<SessionProjection | null>(null);
@@ -86,7 +87,7 @@ export function useLabSessionController(): LabSessionController {
     return () => {
       active = false;
     };
-  }, [runtimeCatalog]);
+  }, [runtimeCatalog, settingsOpen]);
 
   React.useEffect(() => {
     const rpc = createSessionRpcClient();
@@ -217,27 +218,6 @@ export function useLabSessionController(): LabSessionController {
   );
   const liveAttachmentId = projection?.liveExecutor?.id ?? null;
   const working = liveAttachmentId !== null && latestTurnIsActive(frames);
-
-  React.useEffect(() => {
-    const rpc = client.current;
-    if (!rpc || !sessionId || !liveAttachmentId) return;
-    let active = true;
-    const refresh = async () => {
-      try {
-        await rpc.session.refreshCapabilities.mutate({
-          sessionId,
-          attachmentId: liveAttachmentId,
-        });
-      } catch (error) {
-        if (active) reportError("capabilities", error);
-      }
-    };
-    const interval = window.setInterval(() => void refresh(), CAPABILITY_REFRESH_INTERVAL_MS);
-    return () => {
-      active = false;
-      window.clearInterval(interval);
-    };
-  }, [liveAttachmentId, sessionId]);
 
   React.useEffect(() => {
     if (!sessionId || lifecycle === "starting" || lifecycle === "error") return;

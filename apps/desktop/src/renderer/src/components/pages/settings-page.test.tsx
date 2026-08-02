@@ -29,6 +29,14 @@ describe("SettingsPage (app-wide)", () => {
 
     expect(html).not.toContain("Default base branch");
   });
+
+  it("can open directly on Harness Runtimes for a blocked chat", () => {
+    const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="harness" />);
+
+    expect(html).toContain('aria-current="page"');
+    expect(html).toContain("Runtimes");
+    expect(html).not.toContain("Archive Done tickets after");
+  });
 });
 
 describe("parseTtlDaysInput", () => {

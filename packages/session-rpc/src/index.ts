@@ -1,10 +1,11 @@
 import { initTRPC, tracked } from "@trpc/server";
-import type {
-  RuntimeCatalog,
-  SessionClientCommand,
-  SessionRuntime,
-  SessionRuntimeCommandRequest,
-  SessionStreamFrame,
+import {
+  MAX_RUNTIME_PREFERENCE_MODELS,
+  type RuntimeCatalog,
+  type SessionClientCommand,
+  type SessionRuntime,
+  type SessionRuntimeCommandRequest,
+  type SessionStreamFrame,
 } from "@volli/session-engine";
 import { z } from "zod";
 
@@ -179,7 +180,7 @@ const runtimeSelectionSchema = z.object({
 });
 const runtimePreferencesSchema = z.object({
   version: z.literal(1),
-  enabledModels: z.array(runtimeModelRefSchema).max(1_000),
+  enabledModels: z.array(runtimeModelRefSchema).max(MAX_RUNTIME_PREFERENCE_MODELS),
   defaults: runtimeSelectionSchema,
 });
 

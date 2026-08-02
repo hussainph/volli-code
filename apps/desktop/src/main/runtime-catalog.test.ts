@@ -87,7 +87,7 @@ describe("Runtime Catalog", () => {
         id: "openai",
         modelCount: 2,
         availableModelCount: 2,
-        enabledModelCount: 2,
+        enabledModelCount: 0,
       }),
     ]);
     expect(overview.models).toEqual([]);
@@ -106,8 +106,25 @@ describe("Runtime Catalog", () => {
     expect(fixture.directories).toEqual(["/owned/lab/workspace"]);
   });
 
+  it("keeps Chat empty and does not discover providers before Settings curates models", async () => {
+    const fixture = setup();
+
+    const resolved = await fixture.catalog.resolve({ adapterId: "opencode" });
+
+    expect(resolved.catalog).toEqual({ providers: [], models: [], agents: [] });
+    expect(resolved.selection).toEqual({
+      providerId: "",
+      modelId: "",
+      variant: "",
+      agent: "",
+    });
+    expect(fixture.probes()).toBe(0);
+  });
+
   it("persists only the curated allowlist and resolves chat choices against availability", async () => {
     const fixture = setup();
+
+    await fixture.catalog.inspect({ adapterId: "opencode" });
 
     await fixture.catalog.save({
       adapterId: "opencode",
@@ -144,14 +161,14 @@ describe("Runtime Catalog", () => {
     expect(stored).toBeDefined();
     expect(stored).toContain("anthropic");
     expect(stored).not.toContain("Can edit files");
-    expect(stored!.length).toBeLessThan(500);
+    expect(stored!.length).toBeLessThan(1_000);
   });
 
   it("reuses discovery until Settings explicitly refreshes it", async () => {
     const fixture = setup();
 
-    await fixture.catalog.resolve({ adapterId: "opencode" });
     await fixture.catalog.inspect({ adapterId: "opencode", providerId: "openai" });
+    await fixture.catalog.resolve({ adapterId: "opencode" });
     expect(fixture.probes()).toBe(1);
 
     await fixture.catalog.inspect({ adapterId: "opencode", refresh: true });

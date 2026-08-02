@@ -313,6 +313,20 @@ describe("Session tRPC router", () => {
     });
     await caller.runtimeCatalog.resolve({ adapterId: "opencode" });
 
+    await expect(
+      caller.runtimeCatalog.save({
+        adapterId: "opencode",
+        preferences: {
+          version: 1,
+          enabledModels: Array.from({ length: 51 }, (_, index) => ({
+            providerId: "provider",
+            modelId: `model-${index}`,
+          })),
+          defaults: { providerId: "", modelId: "", variant: "", agent: "" },
+        },
+      }),
+    ).rejects.toThrow();
+
     expect(calls).toEqual(["inspect:openai", "save:1", "resolve:opencode"]);
   });
 

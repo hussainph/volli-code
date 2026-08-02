@@ -1,18 +1,21 @@
 import type Database from "better-sqlite3";
 import type { NativeProbeContext, NativeProbeResult, RuntimeCatalog } from "@volli/session-engine";
-import type {
-  RuntimeCatalogAgent,
-  RuntimeCatalogModel,
-  RuntimeCatalogProvider,
-  RuntimeModelRef,
-  RuntimePreferences,
-  RuntimeSelection,
+import {
+  MAX_RUNTIME_PREFERENCE_MODELS,
+  type RuntimeCatalogAgent,
+  type RuntimeCatalogModel,
+  type RuntimeCatalogProvider,
+  type RuntimeModelRef,
+  type RuntimePreferences,
+  type RuntimeSelection,
 } from "@volli/shared";
 
 import { getAllAppState, setAppState } from "./db/app-state-repo";
 
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 100;
+const MAX_CURATED_AGENTS = 50;
+const MAX_MODEL_VARIANTS = 20;
 
 export interface RuntimeCatalogDiscoveryAdapter {
   id: string;
@@ -30,6 +33,13 @@ export interface RuntimeCatalogOptions {
 interface DiscoverySnapshot {
   observedAt: number;
   result: NativeProbeResult;
+}
+
+interface StoredRuntimeRecord {
+  preferences: RuntimePreferences;
+  observedAt: number;
+  models: readonly RuntimeCatalogModel[];
+  agents: readonly RuntimeCatalogAgent[];
 }
 
 /**
@@ -71,8 +81,7 @@ export function createRuntimeCatalog(options: RuntimeCatalogOptions): RuntimeCat
       const snapshot = await discover(input.adapterId, input.refresh);
       const catalog = capabilityCatalog(snapshot.result);
       const preferences = effectivePreferences(
-        loadPreferences(options.db, input.adapterId),
-        catalog.models,
+        loadStoredRecord(options.db, input.adapterId)?.preferences ?? null,
         catalog.agents,
       );
       const providers = providerSummaries(catalog.models, preferences.enabledModels);
@@ -104,30 +113,45 @@ export function createRuntimeCatalog(options: RuntimeCatalogOptions): RuntimeCat
 
     async save(input) {
       const normalized = normalizePreferences(input.preferences);
-      setAppState(options.db, preferenceKey(input.adapterId), JSON.stringify(normalized), now());
+      const snapshot = snapshots.get(input.adapterId);
+      if (!snapshot) {
+        throw new Error("Inspect the Runtime Catalog before saving model preferences");
+      }
+      const discovered = capabilityCatalog(snapshot.result);
+      const enabled = new Set(normalized.enabledModels.map(modelRefKey));
+      const record: StoredRuntimeRecord = {
+        preferences: normalized,
+        observedAt: snapshot.observedAt,
+        models: discovered.models
+          .filter((model) => enabled.has(modelRefKey(model)))
+          .slice(0, MAX_RUNTIME_PREFERENCE_MODELS)
+          .map(compactStoredModel),
+        agents: discovered.agents.slice(0, MAX_CURATED_AGENTS).map(compactStoredAgent),
+      };
+      setAppState(
+        options.db,
+        preferenceKey(input.adapterId),
+        JSON.stringify({ recordVersion: 1, ...record }),
+        now(),
+      );
       return normalized;
     },
 
     async resolve(input) {
-      const snapshot = await discover(input.adapterId);
-      const catalog = capabilityCatalog(snapshot.result);
-      const preferences = effectivePreferences(
-        loadPreferences(options.db, input.adapterId),
-        catalog.models,
-        catalog.agents,
-      );
-      const enabled = new Set(preferences.enabledModels.map(modelRefKey));
-      const models = catalog.models.filter(
+      const stored = loadStoredRecord(options.db, input.adapterId);
+      if (!stored) return emptyResolvedCatalog(input.adapterId);
+      const enabled = new Set(stored.preferences.enabledModels.map(modelRefKey));
+      const models = stored.models.filter(
         (model) => model.state === "available" && enabled.has(modelRefKey(model)),
       );
-      const selection = repairSelection(preferences.defaults, models, catalog.agents);
+      const selection = repairSelection(stored.preferences.defaults, models, stored.agents);
       return {
         adapterId: input.adapterId,
-        observedAt: snapshot.observedAt,
+        observedAt: stored.observedAt,
         catalog: {
           providers: [...new Set(models.map((model) => model.providerId))],
           models,
-          agents: catalog.agents,
+          agents: stored.agents,
         },
         selection,
       };
@@ -200,21 +224,49 @@ function providerSummaries(
 
 function effectivePreferences(
   stored: RuntimePreferences | null,
-  models: readonly RuntimeCatalogModel[],
   agents: readonly RuntimeCatalogAgent[],
 ): RuntimePreferences {
   if (stored) return normalizePreferences(stored);
-  const available = models.filter((model) => model.state === "available");
-  const first = available[0];
   return {
     version: 1,
-    enabledModels: available.map(({ providerId, modelId }) => ({ providerId, modelId })),
+    enabledModels: [],
     defaults: {
-      providerId: first?.providerId ?? "",
-      modelId: first?.modelId ?? "",
-      variant: first?.variants[0] ?? "",
+      providerId: "",
+      modelId: "",
+      variant: "",
       agent: agents.find((agent) => agent.state === "available")?.id ?? "",
     },
+  };
+}
+
+function emptyResolvedCatalog(adapterId: string) {
+  return {
+    adapterId,
+    observedAt: 0,
+    catalog: { providers: [], models: [], agents: [] },
+    selection: { providerId: "", modelId: "", variant: "", agent: "" },
+  };
+}
+
+function compactStoredModel(model: RuntimeCatalogModel): RuntimeCatalogModel {
+  return {
+    id: model.id,
+    label: model.label,
+    state: model.state,
+    providerId: model.providerId,
+    modelId: model.modelId,
+    variants: model.variants.slice(0, MAX_MODEL_VARIANTS),
+  };
+}
+
+function compactStoredAgent(agent: RuntimeCatalogAgent): RuntimeCatalogAgent {
+  return {
+    id: agent.id,
+    label: agent.label,
+    state: agent.state,
+    mode: agent.mode,
+    // Settings owns exhaustive descriptions. Chat needs only a compact mode label.
+    description: null,
   };
 }
 
@@ -243,14 +295,16 @@ function repairSelection(
 
 function normalizePreferences(value: RuntimePreferences): RuntimePreferences {
   const seen = new Set<string>();
-  const enabledModels = value.enabledModels.flatMap((model) => {
-    const providerId = model.providerId.trim();
-    const modelId = model.modelId.trim();
-    const key = modelRefKey({ providerId, modelId });
-    if (!providerId || !modelId || seen.has(key)) return [];
-    seen.add(key);
-    return [{ providerId, modelId }];
-  });
+  const enabledModels = value.enabledModels
+    .slice(0, MAX_RUNTIME_PREFERENCE_MODELS)
+    .flatMap((model) => {
+      const providerId = model.providerId.trim();
+      const modelId = model.modelId.trim();
+      const key = modelRefKey({ providerId, modelId });
+      if (!providerId || !modelId || seen.has(key)) return [];
+      seen.add(key);
+      return [{ providerId, modelId }];
+    });
   return {
     version: 1,
     enabledModels,
@@ -263,11 +317,25 @@ function normalizePreferences(value: RuntimePreferences): RuntimePreferences {
   };
 }
 
-function loadPreferences(db: Database.Database, adapterId: string): RuntimePreferences | null {
+function loadStoredRecord(db: Database.Database, adapterId: string): StoredRuntimeRecord | null {
   const raw = getAllAppState(db)[preferenceKey(adapterId)];
   if (!raw) return null;
   try {
-    return parsePreferences(JSON.parse(raw));
+    const value: unknown = JSON.parse(raw);
+    if (!isRecord(value)) return null;
+    const preferences = parsePreferences(
+      isRecord(value["preferences"]) ? value["preferences"] : value,
+    );
+    if (!preferences) return null;
+    if (!Array.isArray(value["models"]) || !Array.isArray(value["agents"])) return null;
+    const observedAt = value["observedAt"];
+    if (typeof observedAt !== "number" || !Number.isFinite(observedAt)) return null;
+    return {
+      preferences,
+      observedAt,
+      models: value["models"].flatMap(parseStoredModel).slice(0, MAX_RUNTIME_PREFERENCE_MODELS),
+      agents: value["agents"].flatMap(parseStoredAgent).slice(0, MAX_CURATED_AGENTS),
+    };
   } catch {
     return null;
   }
@@ -295,6 +363,47 @@ function parsePreferences(value: unknown): RuntimePreferences | null {
     enabledModels,
     defaults: { providerId, modelId, variant, agent },
   });
+}
+
+function parseStoredModel(value: unknown): RuntimeCatalogModel[] {
+  if (!isRecord(value)) return [];
+  const id = nonEmptyString(value["id"]);
+  const label = nonEmptyString(value["label"]);
+  const providerId = nonEmptyString(value["providerId"]);
+  const modelId = nonEmptyString(value["modelId"]);
+  const state = capabilityState(value["state"]);
+  if (!id || !label || !providerId || !modelId || !state) return [];
+  return [
+    {
+      id,
+      label,
+      providerId,
+      modelId,
+      state,
+      variants: stringArray(value["variants"]).slice(0, MAX_MODEL_VARIANTS),
+    },
+  ];
+}
+
+function parseStoredAgent(value: unknown): RuntimeCatalogAgent[] {
+  if (!isRecord(value)) return [];
+  const id = nonEmptyString(value["id"]);
+  const label = nonEmptyString(value["label"]);
+  const state = capabilityState(value["state"]);
+  if (!id || !label || !state) return [];
+  return [
+    {
+      id,
+      label,
+      state,
+      mode: nonEmptyString(value["mode"]),
+      description: null,
+    },
+  ];
+}
+
+function capabilityState(value: unknown): RuntimeCatalogModel["state"] | null {
+  return value === "available" || value === "unavailable" || value === "unknown" ? value : null;
 }
 
 function preferenceKey(adapterId: string): string {

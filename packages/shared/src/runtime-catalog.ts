@@ -1,5 +1,8 @@
 import type { SessionCapabilityState } from "./session-ledger";
 
+/** Hard ceiling for the small user-curated model list any chat surface may receive. */
+export const MAX_RUNTIME_PREFERENCE_MODELS = 50;
+
 /** Stable model identity stored as user intent; labels and availability remain discovery facts. */
 export interface RuntimeModelRef {
   providerId: string;

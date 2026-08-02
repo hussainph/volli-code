@@ -6,6 +6,8 @@ import type {
   RuntimePreferences,
 } from "@volli/shared";
 
+export { MAX_RUNTIME_PREFERENCE_MODELS } from "@volli/shared";
+
 /**
  * The transport-neutral Runtime Catalog Interface. Settings may inspect and
  * save; chat receives only `resolve`, never the exhaustive adapter inventory.

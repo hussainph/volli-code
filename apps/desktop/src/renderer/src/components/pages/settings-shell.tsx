@@ -30,11 +30,18 @@ export interface SettingsCategory {
 export function SettingsShell({
   title,
   categories,
+  initialCategoryKey,
 }: {
   title: string;
   categories: readonly SettingsCategory[];
+  initialCategoryKey?: string;
 }) {
-  const [activeKey, setActiveKey] = useState(() => categories[0]?.key ?? "");
+  const [activeKey, setActiveKey] = useState(
+    () =>
+      categories.find((category) => category.key === initialCategoryKey)?.key ??
+      categories[0]?.key ??
+      "",
+  );
   const active = categories.find((category) => category.key === activeKey) ?? categories[0] ?? null;
 
   return (

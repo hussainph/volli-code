@@ -41,7 +41,7 @@ import { toastError } from "@renderer/lib/toast";
  * (components/pages/configure-page.tsx); everything here applies across every
  * project. Grouped into categories via the shared {@link SettingsShell}.
  */
-export function SettingsPage() {
+export function SettingsPage({ initialCategoryKey }: { initialCategoryKey?: string } = {}) {
   const categories: readonly SettingsCategory[] = [
     {
       key: "general",
@@ -69,7 +69,13 @@ export function SettingsPage() {
     },
   ];
 
-  return <SettingsShell title="Settings" categories={categories} />;
+  return (
+    <SettingsShell
+      title="Settings"
+      categories={categories}
+      initialCategoryKey={initialCategoryKey}
+    />
+  );
 }
 
 /** General category: app-wide retention (Done-ticket archiving). */

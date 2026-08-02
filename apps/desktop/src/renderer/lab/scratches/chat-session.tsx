@@ -75,7 +75,7 @@ function LabMainContent() {
       <div className={cn("min-h-0 flex-1", settingsOpen && "hidden")}>
         <TicketChatWorkspace />
       </div>
-      {settingsOpen ? <SettingsPage /> : null}
+      {settingsOpen ? <SettingsPage initialCategoryKey="harness" /> : null}
     </>
   );
 }
@@ -177,7 +177,9 @@ function ChatPlane({
 }) {
   const [input, setInput] = React.useState("");
   const [delivery, setDelivery] = React.useState<MessageDelivery>("queue");
+  const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
   const working = session.lifecycle === "working";
+  const needsRuntimeChoice = session.catalog.models.length === 0;
 
   React.useEffect(() => {
     if (working && delivery === "queue") setDelivery("steer");
@@ -221,7 +223,11 @@ function ChatPlane({
                   One durable Session. One disposable repository.
                 </p>
               </div>
-              {session.liveAttachmentId ? null : (
+              {needsRuntimeChoice ? (
+                <Button className="mt-3" variant="outline" onClick={() => setSettingsOpen(true)}>
+                  Choose OpenCode models
+                </Button>
+              ) : session.liveAttachmentId ? null : (
                 <Button
                   className="mt-3"
                   disabled={session.lifecycle === "starting"}
