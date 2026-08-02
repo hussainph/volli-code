@@ -379,9 +379,15 @@ function ChatPlane({
         </Conversation>
       </FileMentionProvider>
 
+      {/* Opaque, because this is the composer's footprint and the transcript
+          scrolls the full height of the plane behind it. The card itself has a
+          background but the wrapper did not, so the pb-5 strip beneath it — and
+          the margins either side — let content scroll through and surface below
+          the textbox. The fade above hands off to this; between them the
+          transcript ends where the composer begins. */}
       <div
         ref={composerHeight.ref}
-        className="pointer-events-none absolute inset-x-0 bottom-0 pb-5"
+        className="pointer-events-none absolute inset-x-0 bottom-0 bg-background pb-5"
       >
         <ContentColumn>
           {todos && todos.length > 0 && !todosEveryDone(todos) ? (
