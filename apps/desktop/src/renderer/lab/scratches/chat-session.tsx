@@ -25,7 +25,12 @@ import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
 
-import { projectSessionTodos, groupMessageParts, type SessionTodo } from "../chat/activity";
+import {
+  projectSessionTodos,
+  groupMessageParts,
+  type ChatBlock,
+  type SessionTodo,
+} from "../chat/activity";
 import {
   ActivityGroup,
   AttentionBlock,
@@ -422,42 +427,61 @@ function ChatMessage({
 
   return (
     <Message from={message.role} className="max-w-full">
-      <MessageContent className="group-[.is-user]:rounded-xl group-[.is-user]:bg-muted group-[.is-user]:px-3.5 group-[.is-user]:py-2.5">
+      <MessageContent className="gap-0 group-[.is-user]:rounded-xl group-[.is-user]:bg-muted group-[.is-user]:px-3.5 group-[.is-user]:py-2.5">
         {blocks
-          ? blocks.map((block) => {
-              switch (block.kind) {
-                case "text":
-                  return (
-                    <MessageResponse
-                      key={block.key}
-                      isAnimating={working && message.role === "assistant"}
-                    >
-                      {block.part.text}
-                    </MessageResponse>
-                  );
-                case "activity":
-                  return (
-                    <ActivityGroup
-                      key={block.key}
-                      items={block.items}
-                      working={working}
-                      onOpenFile={onOpenFile}
-                    />
-                  );
-                case "tool-run":
-                  return <ToolRun key={block.key} items={block.items} onOpenFile={onOpenFile} />;
-                case "attention":
-                  return (
-                    <AttentionBlock key={block.key} part={block.part} onOpenFile={onOpenFile} />
-                  );
-                default:
-                  return null;
-              }
-            })
+          ? blocks.map((block, index) => (
+              <div key={block.key} className={blockSpacing(blocks[index - 1], block)}>
+                {renderBlock(block, { working, role: message.role, onOpenFile })}
+              </div>
+            ))
           : prose.map((entry) => <MessageResponse key={entry.key}>{entry.text}</MessageResponse>)}
       </MessageContent>
     </Message>
   );
+}
+
+/**
+ * The container owns the rhythm, not the blocks. Machine rows sit flush so a run
+ * of tool lines reads as one list whether or not the projection split it into
+ * separate blocks; prose and bordered cards get a real gap. Blocks carrying
+ * their own margins is what made the same boundary measure 8, 12 or 16px
+ * depending only on which kinds happened to be adjacent.
+ */
+function isRowBlock(block: ChatBlock): boolean {
+  return block.kind === "activity" || block.kind === "tool-run";
+}
+
+function blockSpacing(previous: ChatBlock | undefined, current: ChatBlock): string {
+  if (!previous) return "";
+  return isRowBlock(previous) && isRowBlock(current) ? "" : "mt-3";
+}
+
+function renderBlock(
+  block: ChatBlock,
+  context: { working: boolean; role: UIMessage["role"]; onOpenFile(path: string): void },
+): React.ReactNode {
+  switch (block.kind) {
+    case "text":
+      return (
+        <MessageResponse isAnimating={context.working && context.role === "assistant"}>
+          {block.part.text}
+        </MessageResponse>
+      );
+    case "activity":
+      return (
+        <ActivityGroup
+          items={block.items}
+          working={context.working}
+          onOpenFile={context.onOpenFile}
+        />
+      );
+    case "tool-run":
+      return <ToolRun items={block.items} onOpenFile={context.onOpenFile} />;
+    case "attention":
+      return <AttentionBlock part={block.part} onOpenFile={context.onOpenFile} />;
+    default:
+      return null;
+  }
 }
 
 function todosEveryDone(todos: readonly SessionTodo[]): boolean {

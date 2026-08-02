@@ -403,7 +403,7 @@ export function ToolRun({
   const rows = folded ? tail.visible : items;
 
   return (
-    <div className="not-prose my-1">
+    <div className="not-prose">
       {tail.hidden > 0 ? (
         <button
           type="button"
@@ -466,7 +466,7 @@ export function ActivityGroup({
   ) : null;
 
   return (
-    <div className="not-prose my-1">
+    <div className="not-prose">
       {summary.length > 0 ? (
         <button type="button" onClick={toggle} className={TRIGGER_CLASS}>
           <Caret open={open} />
@@ -549,7 +549,7 @@ export function AttentionCard({
   return (
     <div
       className={cn(
-        "not-prose my-2 w-full rounded-lg border bg-card p-3 shadow-[var(--shadow-raised)]",
+        "not-prose w-full rounded-lg border bg-card p-3 shadow-[var(--shadow-raised)]",
         pending ? "border-primary/40" : "border-destructive/40",
       )}
     >
@@ -587,7 +587,7 @@ export function AttentionReceipt({ part }: { part: DynamicToolUIPart }) {
   const row = describeActivity(part);
   const approved = row.status !== "denied";
   return (
-    <div className="not-prose my-1 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+    <div className="not-prose flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
       {approved ? (
         <CheckCircleIcon aria-hidden className="size-3.5 shrink-0 text-primary" weight="fill" />
       ) : (
