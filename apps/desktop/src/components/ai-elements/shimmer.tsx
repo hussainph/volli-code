@@ -47,15 +47,20 @@ const ShimmerComponent = ({
       animate={{ backgroundPosition: "0% center" }}
       className={cn(
         "relative inline-block bg-[length:250%_100%,auto] bg-clip-text text-transparent",
-        "[--bg:linear-gradient(90deg,#0000_calc(50%-var(--spread)),var(--color-background),#0000_calc(50%+var(--spread)))] [background-repeat:no-repeat,padding-box]",
+        "[--bg:linear-gradient(90deg,#0000_calc(50%-var(--spread)),var(--background),#0000_calc(50%+var(--spread)))] [background-repeat:no-repeat,padding-box]",
         className,
       )}
       initial={{ backgroundPosition: "100% center" }}
       style={
         {
           "--spread": `${dynamicSpread}px`,
-          backgroundImage:
-            "var(--bg), linear-gradient(var(--color-muted-foreground), var(--color-muted-foreground))",
+          // The text's only colour comes from this gradient, so every reference
+          // here has to resolve at runtime. `@theme inline` inlines --color-*
+          // into utilities and prunes the custom properties, so referencing one
+          // from JS yields an invalid gradient, no background, and — under
+          // bg-clip-text/text-transparent — invisible text. currentColor always
+          // resolves and inherits whatever the row already set.
+          backgroundImage: "var(--bg), linear-gradient(currentColor, currentColor)",
         } as CSSProperties
       }
       transition={{
