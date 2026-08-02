@@ -140,6 +140,20 @@ export function groupMessageParts(parts: readonly MessagePart[], messageId: stri
   return blocks;
 }
 
+/**
+ * Whether the turn still owes the reader a sign of life.
+ *
+ * The placeholder lives here, at the turn, rather than inside the reasoning row
+ * — the arrangement OpenCode's desktop client, Codex and t3code all converged
+ * on. It means a reasoning part is free to render nothing until it actually has
+ * words, instead of being the thing that has to hold the floor while empty.
+ */
+export function isAwaitingFirstOutput(messages: readonly UIMessage[]): boolean {
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== "assistant") return true;
+  return groupMessageParts(last.parts, last.id).length === 0;
+}
+
 /* ----------------------------------------------------------------- summary */
 
 export type SummaryTone = "neutral" | "muted" | "danger";
@@ -659,7 +673,11 @@ export function splitPath(value: string): { directory: string; basename: string 
 
 /* ---------------------------------------------------------------- reasoning */
 
-const FIRST_BOLD = /^\s*\*\*([^*\n]+)\*\*/m;
+// Anchored to the part, not to any line: a provider emits one summary per
+// reasoning part (OpenAI gives each `summary_index` its own part), so the
+// promotable header is always at position zero. With the `m` flag this promoted
+// whatever bold phrase happened to open a later line mid-thought.
+const FIRST_BOLD = /^\s*\*\*([^*\n]+)\*\*/;
 
 export interface ReasoningStatus {
   verb: string;
@@ -690,7 +708,11 @@ export function reasoningStatus(
   const matched = FIRST_BOLD.exec(text)?.[1]?.trim();
   const header = matched !== undefined && matched.length > 0 ? matched : null;
   const elapsed = formatDuration(options.durationMs ?? null);
-  if (options.streaming) return { verb: header ?? "Thinking…", meta: elapsed };
+  // A live thought carries no number. Its duration is not known yet, and a
+  // counter pinned beside a verb that is still being written is exactly the
+  // layout fight the reference apps document avoiding — the number is a receipt
+  // for a finished thought, not a progress bar for a running one.
+  if (options.streaming) return { verb: header ?? "Thinking…", meta: null };
   if (header) return { verb: header, meta: elapsed };
   return { verb: elapsed ? `Thought for ${elapsed}` : "Thought", meta: null };
 }

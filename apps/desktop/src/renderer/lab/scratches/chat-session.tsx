@@ -16,6 +16,7 @@ import {
 } from "@ai-elements/conversation";
 import { FileMentionProvider } from "@ai-elements/chat-markdown";
 import { Message, MessageContent, MessageResponse } from "@ai-elements/message";
+import { ReasoningLine } from "@ai-elements/reasoning";
 import { AppShell } from "@renderer/components/app-shell";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { SettingsPage } from "@renderer/components/pages/settings-page";
@@ -26,6 +27,7 @@ import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
 
 import {
+  isAwaitingFirstOutput,
   projectSessionTodos,
   groupMessageParts,
   type ChatBlock,
@@ -344,6 +346,9 @@ function ChatPlane({
                     onOpenFile={onOpenFile}
                   />
                 ))}
+                {working && isAwaitingFirstOutput(session.messages) ? (
+                  <ReasoningLine verb="Working" meta={null} streaming />
+                ) : null}
               </ContentColumn>
             )}
           </ConversationContent>

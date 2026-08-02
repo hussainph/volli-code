@@ -13,6 +13,7 @@ import {
   formatBytes,
   formatDuration,
   groupMessageParts,
+  isAwaitingFirstOutput,
   parseDiff,
   parseMatches,
   projectSessionTodos,
@@ -483,6 +484,31 @@ describe("detail parsers", () => {
   });
 });
 
+function assistant(parts: MessagePart[]): UIMessage {
+  return { id: "a1", role: "assistant", parts };
+}
+
+describe("isAwaitingFirstOutput", () => {
+  it("holds the floor until the assistant has something to show", () => {
+    expect(isAwaitingFirstOutput([])).toBe(true);
+    expect(isAwaitingFirstOutput([{ id: "u1", role: "user", parts: [] }])).toBe(true);
+    expect(isAwaitingFirstOutput([assistant([])])).toBe(true);
+  });
+
+  it("stands down as soon as the turn renders anything", () => {
+    expect(isAwaitingFirstOutput([assistant([{ type: "text", text: "Here" }])])).toBe(false);
+    expect(isAwaitingFirstOutput([assistant([{ type: "reasoning", text: "**Checking**" }])])).toBe(
+      false,
+    );
+  });
+
+  it("keeps holding when the only part is one the transcript hides", () => {
+    // A plan projects to the rail, not the feed — counting it would leave the
+    // reader staring at an empty turn.
+    expect(isAwaitingFirstOutput([assistant([tool("plan")])])).toBe(true);
+  });
+});
+
 describe("reasoningStatus", () => {
   it("promotes the first bold line to the status verb", () => {
     expect(
@@ -490,10 +516,31 @@ describe("reasoningStatus", () => {
         streaming: true,
         durationMs: 4000,
       }),
-    ).toEqual({ verb: "Checking the reducer", meta: "4.0s" });
+    ).toEqual({ verb: "Checking the reducer", meta: null });
     expect(
       reasoningStatus("**Checking the reducer**\n", { streaming: false, durationMs: 4000 }),
     ).toEqual({ verb: "Checking the reducer", meta: "4.0s" });
+  });
+
+  it("carries no duration while the thought is still live", () => {
+    // The number is a receipt for a finished thought. Pinning a counter beside a
+    // verb that is still being written is the layout fight every reference app
+    // documents avoiding.
+    expect(reasoningStatus("thinking out loud", { streaming: true, durationMs: 9000 })).toEqual({
+      verb: "Thinking…",
+      meta: null,
+    });
+  });
+
+  it("only promotes a bold line that opens the part", () => {
+    // A provider emits one summary per reasoning part, so the promotable header
+    // is at position zero. A bold phrase opening a later line is body text.
+    expect(
+      reasoningStatus("First I check the reducer.\n\n**Not a header**", {
+        streaming: false,
+        durationMs: 4000,
+      }),
+    ).toEqual({ verb: "Thought for 4.0s", meta: null });
   });
 
   it("strips the promoted header from the body so it is not said twice", () => {
@@ -510,7 +557,7 @@ describe("reasoningStatus", () => {
     // carrying a duration and no words.
     expect(reasoningStatus("**  **\nrest", { streaming: true, durationMs: 4000 })).toEqual({
       verb: "Thinking…",
-      meta: "4.0s",
+      meta: null,
     });
     expect(reasoningStatus("**  **\nrest", { streaming: false, durationMs: 23000 })).toEqual({
       verb: "Thought for 23s",
