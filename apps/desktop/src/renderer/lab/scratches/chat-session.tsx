@@ -312,7 +312,11 @@ function ChatPlane({
     <div className="relative flex min-h-0 flex-1 flex-col" style={planeStyle}>
       <FileMentionProvider onOpenFile={onOpenFile}>
         <Conversation className="min-h-0 bg-background">
-          <ConversationContent className="gap-6 px-0 pt-8 pb-[calc(var(--composer-height)+2rem)]">
+          {/* The bottom gap has to clear the composer *and* the fade above it —
+              at +2rem the last lines of the transcript came to rest inside the
+              gradient and sat there dimmed. +5rem clears the h-16 fade with air
+              to spare, so the final line lands on clean background. */}
+          <ConversationContent className="gap-6 px-0 pt-8 pb-[calc(var(--composer-height)+5rem)]">
             {session.messages.length === 0 ? (
               <ConversationEmptyState className="min-h-80">
                 <div className="flex size-10 items-center justify-center rounded-xl border border-border bg-card shadow-[var(--shadow-raised)]">
