@@ -13,6 +13,7 @@ import { useUiStore } from "@renderer/stores/ui";
 
 import { LAB_SESSION_PROJECT_ID, LAB_SESSION_TICKET_ID } from "../../../lab-session-rpc-path";
 import { createSessionRpcClient, type SessionRpcClient } from "../session-rpc-client";
+import { projectTranscriptMessages } from "./message-projection";
 import { resolveRuntimeSelection } from "./session-model";
 
 const DIAGNOSTIC_LIMIT = 100;
@@ -212,10 +213,7 @@ export function useLabSessionController(): LabSessionController {
     () => [...framesBySequence.values()].toSorted((left, right) => left.sequence - right.sequence),
     [framesBySequence],
   );
-  const messages = React.useMemo(
-    () => frames.flatMap((frame) => (frame.transcript ? [frame.transcript.message] : [])),
-    [frames],
-  );
+  const messages = React.useMemo(() => projectTranscriptMessages(frames), [frames]);
   const liveAttachmentId = projection?.liveExecutor?.id ?? null;
   const working = liveAttachmentId !== null && latestTurnIsActive(frames);
 

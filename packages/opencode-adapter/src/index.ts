@@ -38,6 +38,7 @@ const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_DEFERRED_EVENTS = 1_000;
 const MAX_REMEMBERED_EVENT_IDS = 10_000;
 const MAX_SSE_BUFFER_LENGTH = 1_048_576;
+const STREAM_SNAPSHOT_DELAY_MS = 32;
 
 export interface OpenCodeChild {
   readonly exited: Promise<number | null>;
@@ -462,11 +463,13 @@ class OpenCodeBinding implements BindingHandle {
   readonly #seen = new Set<string>();
   readonly #streamEventsSeen = new Set<string>();
   readonly #messages = new Map<string, BufferedOpenCodeMessage>();
+  readonly #streamSnapshotTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  readonly #streamSnapshotTriggers = new Map<string, string>();
   readonly #deferredEvents: OpenCodeSseEvent[] = [];
   readonly #questions = new Map<string, readonly OpenCodeQuestion[]>();
   readonly #streamAbort = new AbortController();
   #sink: ObservationSink | null = null;
-  #inFlightEmit: Promise<void> | null = null;
+  #emissionQueue: Promise<void> = Promise.resolve();
   #released = false;
   #cursor: SessionNativeDetail | null = null;
   #importNativeHistory: boolean;
@@ -694,6 +697,7 @@ class OpenCodeBinding implements BindingHandle {
       return;
     }
     this.#released = true;
+    this.#clearScheduledStreamSnapshots();
     this.#streamAbort.abort();
     await this.#drainInFlightEmit();
     this.#sink = null;
@@ -704,8 +708,7 @@ class OpenCodeBinding implements BindingHandle {
   }
 
   async #drainInFlightEmit(): Promise<void> {
-    const emission = this.#inFlightEmit;
-    if (emission) await Promise.allSettled([emission]);
+    await Promise.allSettled([this.#emissionQueue]);
   }
 
   async #pump(initialStream: AsyncIterable<OpenCodeSseEvent>): Promise<void> {
@@ -793,20 +796,23 @@ class OpenCodeBinding implements BindingHandle {
   }
 
   async #emit(observation: HarnessObservation): Promise<boolean> {
+    const emission = this.#emissionQueue.then(() => this.#emitNow(observation));
+    this.#emissionQueue = emission.then(
+      () => undefined,
+      () => undefined,
+    );
+    return emission;
+  }
+
+  async #emitNow(observation: HarnessObservation): Promise<boolean> {
     if (this.#seen.has(observation.id)) return true;
     const sink = this.#sink;
     if (this.#released || !sink) return false;
-    const emission = sink.emit(observation);
-    this.#inFlightEmit = emission;
-    try {
-      await emission;
-      if (this.#released || this.#sink !== sink) return false;
-      this.#remember(observation);
-      this.#cursor = observation.cursor ?? { eventId: observation.id };
-      return true;
-    } finally {
-      this.#inFlightEmit = null;
-    }
+    await sink.emit(observation);
+    if (this.#released || this.#sink !== sink) return false;
+    this.#remember(observation);
+    this.#cursor = observation.cursor ?? { eventId: observation.id };
+    return true;
   }
 
   #remember(observation: HarnessObservation): void {
@@ -861,22 +867,33 @@ class OpenCodeBinding implements BindingHandle {
       return;
     }
     switch (event.type) {
-      case "message.updated":
-        this.#bufferMessage(event.properties);
+      case "message.updated": {
+        const messageId = this.#bufferMessage(event.properties);
+        this.#scheduleStreamSnapshot(messageId, event.id);
         return;
-      case "message.part.updated":
-        this.#bufferPart(event.properties);
+      }
+      case "message.part.updated": {
+        const messageId = this.#bufferPart(event.properties);
+        this.#scheduleStreamSnapshot(messageId, event.id);
         return;
-      case "message.part.delta":
-        this.#applyPartDelta(event.properties);
+      }
+      case "message.part.delta": {
+        const messageId = this.#applyPartDelta(event.properties);
+        this.#scheduleStreamSnapshot(messageId, event.id);
         return;
-      case "message.part.removed":
-        this.#removePart(event.properties);
+      }
+      case "message.part.removed": {
+        const messageId = this.#removePart(event.properties);
+        this.#scheduleStreamSnapshot(messageId, event.id);
         return;
+      }
       case "message.removed": {
         const messageId =
           objectString(event.properties, "messageID") ?? objectString(event.properties, "id");
-        if (messageId) this.#messages.delete(messageId);
+        if (messageId) {
+          this.#clearScheduledStreamSnapshot(messageId);
+          this.#messages.delete(messageId);
+        }
         return;
       }
       case "session.status":
@@ -919,14 +936,14 @@ class OpenCodeBinding implements BindingHandle {
     }
   }
 
-  #bufferMessage(raw: unknown): void {
+  #bufferMessage(raw: unknown): string | null {
     const info = nested(raw, "info") ?? raw;
     const messageId = objectString(info, "id");
-    if (!messageId) return;
+    if (!messageId) return null;
     const message = this.#message(messageId);
     const role = explicitMessageRole(info);
     if (role) message.role = role;
-    if (!isRecord(raw) || !Array.isArray(raw.parts)) return;
+    if (!isRecord(raw) || !Array.isArray(raw.parts)) return messageId;
     message.parts.clear();
     message.partOrder.length = 0;
     raw.parts.forEach((part, index) => {
@@ -934,43 +951,47 @@ class OpenCodeBinding implements BindingHandle {
       message.partOrder.push(partId);
       message.parts.set(partId, part);
     });
+    return messageId;
   }
 
-  #bufferPart(raw: unknown): void {
+  #bufferPart(raw: unknown): string | null {
     const part = nested(raw, "part");
-    if (!part) return;
+    if (!part) return null;
     const messageId = objectString(raw, "messageID") ?? objectString(part, "messageID");
     const partId = objectString(part, "id");
-    if (!messageId || !partId) return;
+    if (!messageId || !partId) return null;
     const message = this.#message(messageId);
     if (!message.parts.has(partId)) message.partOrder.push(partId);
     message.parts.set(partId, mergeOpenCodePart(message.parts.get(partId), part));
+    return messageId;
   }
 
-  #applyPartDelta(raw: unknown): void {
+  #applyPartDelta(raw: unknown): string | null {
     const messageId = objectString(raw, "messageID");
     const partId = objectString(raw, "partID");
     const field = objectString(raw, "field");
     const delta = objectString(raw, "delta");
-    if (!messageId || !partId || field !== "text" || delta === null) return;
+    if (!messageId || !partId || field !== "text" || delta === null) return null;
     const message = this.#messages.get(messageId);
     const part = message?.parts.get(partId);
-    if (!message || !isRecord(part)) return;
+    if (!message || !isRecord(part)) return null;
     message.parts.set(partId, {
       ...part,
       [field]: `${objectString(part, field) ?? ""}${delta}`,
     });
+    return messageId;
   }
 
-  #removePart(raw: unknown): void {
+  #removePart(raw: unknown): string | null {
     const messageId = objectString(raw, "messageID");
     const partId = objectString(raw, "partID");
-    if (!messageId || !partId) return;
+    if (!messageId || !partId) return null;
     const message = this.#messages.get(messageId);
-    if (!message) return;
+    if (!message) return null;
     message.parts.delete(partId);
     const orderIndex = message.partOrder.indexOf(partId);
     if (orderIndex >= 0) message.partOrder.splice(orderIndex, 1);
+    return messageId;
   }
 
   #message(messageId: string): BufferedOpenCodeMessage {
@@ -982,7 +1003,53 @@ class OpenCodeBinding implements BindingHandle {
     return message;
   }
 
+  #scheduleStreamSnapshot(messageId: string | null, triggerId: string): void {
+    if (!messageId || this.#released || !this.#messages.has(messageId)) return;
+    this.#streamSnapshotTriggers.set(messageId, triggerId);
+    if (this.#streamSnapshotTimers.has(messageId)) return;
+    const timer = setTimeout(() => {
+      this.#streamSnapshotTimers.delete(messageId);
+      void this.#emitStreamSnapshot(messageId).catch(() => undefined);
+    }, STREAM_SNAPSHOT_DELAY_MS);
+    this.#streamSnapshotTimers.set(messageId, timer);
+  }
+
+  async #emitStreamSnapshot(messageId: string): Promise<void> {
+    const buffered = this.#messages.get(messageId);
+    const triggerId = this.#streamSnapshotTriggers.get(messageId);
+    if (!buffered?.role || buffered.role === "user" || !triggerId) return;
+    const parts = buffered.partOrder.flatMap((partId) => openCodePart(buffered.parts.get(partId)));
+    if (parts.length === 0) return;
+    const message: UIMessage = { id: messageId, role: buffered.role, parts };
+    await this.#emit({
+      id: transcriptObservationId(message),
+      kind: "transcript.message",
+      occurredAt: this.#now(),
+      cursor: { eventId: triggerId },
+      threadId: `thread:${this.#spec.sessionId}:root`,
+      branchId: `branch:${this.#spec.sessionId}:main`,
+      attemptId: `attempt:${messageId}`,
+      turnId: null,
+      message,
+    });
+  }
+
+  #clearScheduledStreamSnapshot(messageId: string): void {
+    const timer = this.#streamSnapshotTimers.get(messageId);
+    if (timer) clearTimeout(timer);
+    this.#streamSnapshotTimers.delete(messageId);
+    this.#streamSnapshotTriggers.delete(messageId);
+  }
+
+  #clearScheduledStreamSnapshots(): void {
+    for (const timer of this.#streamSnapshotTimers.values()) clearTimeout(timer);
+    this.#streamSnapshotTimers.clear();
+    this.#streamSnapshotTriggers.clear();
+  }
+
   async #flushMessages(triggerId: string): Promise<void> {
+    this.#clearScheduledStreamSnapshots();
+    await this.#drainInFlightEmit();
     for (const [messageId, buffered] of this.#messages) {
       if (!buffered.role) {
         this.#messages.delete(messageId);

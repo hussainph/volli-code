@@ -72,7 +72,7 @@ function LabMainContent() {
 
   return (
     <>
-      <div className={cn("min-h-0 flex-1", settingsOpen && "hidden")}>
+      <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden", settingsOpen && "hidden")}>
         <TicketChatWorkspace />
       </div>
       {settingsOpen ? <SettingsPage initialCategoryKey="harness" /> : null}
@@ -428,7 +428,11 @@ function ChatMessage({ message, working }: { message: UIMessage; working: boolea
           const key = `${message.id}:${index}`;
           switch (part.type) {
             case "text":
-              return <MessageResponse key={key}>{part.text}</MessageResponse>;
+              return (
+                <MessageResponse key={key} isAnimating={working && message.role === "assistant"}>
+                  {part.text}
+                </MessageResponse>
+              );
             case "reasoning":
               return (
                 <Reasoning key={key} isStreaming={working && message.role === "assistant"}>

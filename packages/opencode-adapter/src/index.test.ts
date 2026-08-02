@@ -337,6 +337,75 @@ describe("OpenCodeNativeAdapter", () => {
     ]);
   });
 
+  it("commits a transcript snapshot before the native turn becomes idle", async () => {
+    const network = new FakeNetwork();
+    const allowIdle = new Deferred<void>();
+    network.subscribe = async (input) => {
+      network.subscriptions.push(input);
+      return (async function* () {
+        yield {
+          id: "message",
+          type: "message.updated",
+          properties: {
+            info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+          },
+        };
+        yield {
+          id: "part",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "answer",
+              messageID: "provider-assistant",
+              type: "text",
+              text: "Stream",
+            },
+          },
+        };
+        yield {
+          id: "delta",
+          type: "message.part.delta",
+          properties: {
+            sessionID: "native-session-1",
+            messageID: "provider-assistant",
+            partID: "answer",
+            field: "text",
+            delta: " this now",
+          },
+        };
+        await allowIdle.promise;
+        yield { id: "idle", type: "session.idle", properties: { sessionID: "native-session-1" } };
+      })();
+    };
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        kind: "transcript.message",
+        message: {
+          id: "provider-assistant",
+          role: "assistant",
+          parts: [{ type: "text", text: "Stream this now" }],
+        },
+      }),
+    );
+    expect(observations.some((observation) => observation.kind === "turn.completed")).toBe(false);
+
+    allowIdle.resolve(undefined);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(observations.some((observation) => observation.kind === "turn.completed")).toBe(true);
+    await handle.release("requested");
+  });
+
   it("emits one turn fact per native status transition", async () => {
     const { adapter } = composition([
       {
