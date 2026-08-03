@@ -947,15 +947,23 @@ function decodeInteraction(
     detail: readNullableString(row.detail, `${context}.detail`),
     options: row.options.map((item, index) => {
       const option = asRecord(item, `${context}.options[${index}]`);
-      const description = readOptionalString(
+      // Both absences, because both occur. `SessionInteractionOption.description`
+      // is `string | null` and every adapter writes the explicit `null` — while
+      // events persisted before that contract simply omit the key. Reading only
+      // `undefined` as absent threw on the null, which killed the whole
+      // `interaction.opened` event at the persistence boundary: no durable
+      // interaction, an always-empty `projection.interactions`, and an approval
+      // nothing could ever resolve. The throw surfaced nowhere, so the gate
+      // still drew its buttons from the adapter's in-memory state and simply
+      // did not respond.
+      const description = readAbsentableString(
         option.description,
         `${context}.options[${index}].description`,
       );
       return {
         id: readString(option.id, `${context}.options[${index}].id`),
         label: readString(option.label, `${context}.options[${index}].label`),
-        // Older persisted events predate the explicit nullability contract.
-        description: description ?? null,
+        description,
       };
     }),
     multiple: readBoolean(row.multiple, `${context}.multiple`),
@@ -1114,8 +1122,9 @@ function readNullableString(value: unknown, context: string): string | null {
   return value === null ? null : readString(value, context);
 }
 
-function readOptionalString(value: unknown, context: string): string | undefined {
-  return value === undefined ? undefined : readString(value, context);
+/** Absent either way — an explicit `null` or a key an older event never wrote. */
+function readAbsentableString(value: unknown, context: string): string | null {
+  return value === null || value === undefined ? null : readString(value, context);
 }
 
 function readBoolean(value: unknown, context: string): boolean {

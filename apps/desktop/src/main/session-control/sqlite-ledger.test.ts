@@ -375,7 +375,14 @@ describe("SqliteSessionLedger", () => {
         kind: "permission",
         title: "Allow write?",
         detail: null,
-        options: [{ id: "once", label: "Allow once", description: "This request only" }],
+        // The shape every real adapter writes: `description` is `string | null`
+        // and OpenCode's own permission options carry the null. Covering this
+        // only with a string is what let a decoder that rejected null survive —
+        // and rejecting it killed the event, so no permission was ever durable.
+        options: [
+          { id: "once", label: "Allow once", description: null },
+          { id: "reject", label: "Reject", description: "Refuse this request" },
+        ],
         multiple: false,
         native: { id: "native-permission-1", detail: null },
       },
@@ -428,6 +435,11 @@ describe("SqliteSessionLedger", () => {
       capabilities: [{ id: "snapshot-1", catalog: [{ detail: { variants: ["high"] } }] }],
       interactions: { active: [], resolved: [{ interaction: { id: "permission-1" } }] },
     });
+    // Both option shapes survive the round trip to SQLite and back.
+    expect(projection?.interactions.resolved[0]?.interaction.options).toEqual([
+      { id: "once", label: "Allow once", description: null },
+      { id: "reject", label: "Reject", description: "Refuse this request" },
+    ]);
     expect(projection?.commands.at(-1)).toMatchObject({
       intent: { kind: "interaction.resolve", interactionId: "permission-1" },
     });
