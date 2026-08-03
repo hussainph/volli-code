@@ -450,5 +450,283 @@ describe("SqliteSessionLedger", () => {
         }),
       ]),
     );
+    // A record written before interactions carried per-question detail decodes
+    // back without the keys — not with an empty array, and not with one
+    // synthesised from the flat fields. `readInteractionPrompts` is what turns
+    // absence into a single prompt, and only at the read seam.
+    const resolved = projection?.interactions.resolved[0];
+    expect(resolved && "prompts" in resolved.interaction).toBe(false);
+    expect(resolved && "answers" in resolved.resolution).toBe(false);
+    expect(resolved?.resolution).toEqual({ optionIds: ["once"], response: null });
+  });
+
+  it("round-trips an interaction's prompts and a resolution's answers through SQLite", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-prompts",
+      projectId,
+      ticketId: null,
+      title: "Prompts",
+      provenance,
+    });
+    const start = await control.submit({
+      commandId: "start-prompts",
+      sessionId: created.session.id,
+      intent: { kind: "executor.start", adapterId: "opencode", continuity: "fresh" },
+      provenance,
+    });
+    const adapterProvenance = {
+      source: { kind: "adapter" as const, id: "opencode", detail: null },
+      venue: { id: "local", kind: "local" as const },
+    };
+    await control.observe({
+      id: "opened-prompts",
+      kind: "attachment.opened",
+      sessionId: created.session.id,
+      commandId: start.command.id,
+      occurredAt: 300,
+      provenance: adapterProvenance,
+      attachment: {
+        id: "attachment-prompts",
+        sessionId: created.session.id,
+        adapterId: "opencode",
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+        native: { id: "native-2", detail: null },
+      },
+    });
+    const prompts = [
+      {
+        id: "prompt:0",
+        label: "Which files?",
+        detail: "Pick every file the change touches",
+        options: [
+          { id: "prompt:0:src", label: "src", description: null },
+          { id: "prompt:0:docs", label: "docs", description: "Documentation only" },
+        ],
+        multiple: true,
+        custom: false,
+      },
+      {
+        id: "prompt:1",
+        label: "Anything else?",
+        detail: null,
+        options: [{ id: "prompt:1:no", label: "No", description: null }],
+        multiple: false,
+        custom: true,
+      },
+    ];
+    const interaction = {
+      id: "question-1",
+      attachmentId: "attachment-prompts",
+      kind: "question" as const,
+      title: "Two questions",
+      detail: null,
+      // The flat set stays the union of every prompt's options, because that is
+      // what a reader written before prompts falls back to.
+      options: [...prompts[0]!.options, ...prompts[1]!.options],
+      multiple: true,
+      prompts,
+      native: { id: "native-question-1", detail: null },
+    };
+    await control.observe({
+      id: "interaction-opened-prompts",
+      kind: "interaction.opened",
+      sessionId: created.session.id,
+      attachmentId: "attachment-prompts",
+      occurredAt: 301,
+      provenance: adapterProvenance,
+      interaction,
+    });
+    const answered = {
+      optionIds: ["prompt:0:src", "prompt:1:no"],
+      response: null,
+      answers: [
+        { promptId: "prompt:0", optionIds: ["prompt:0:src"], response: null },
+        { promptId: "prompt:1", optionIds: ["prompt:1:no"], response: "nothing further" },
+      ],
+    };
+    const resolution = await control.submit({
+      commandId: "resolve-prompts",
+      sessionId: created.session.id,
+      intent: {
+        kind: "interaction.resolve",
+        attachmentId: "attachment-prompts",
+        interactionId: "question-1",
+        resolution: answered,
+        reference: {
+          id: "sha256:answers",
+          digest: "sha256:answers",
+          mediaType: "application/vnd.volli.ui-message+json;version=1",
+        },
+      },
+      provenance,
+    });
+    await control.observe({
+      id: "interaction-resolved-prompts",
+      kind: "interaction.resolved",
+      sessionId: created.session.id,
+      attachmentId: "attachment-prompts",
+      occurredAt: 302,
+      provenance: adapterProvenance,
+      commandId: resolution.command.id,
+      interactionId: "question-1",
+      resolution: answered,
+    });
+
+    const projection = await control.getSession({ sessionId: created.session.id });
+    const resolved = projection?.interactions.resolved[0];
+    // Encode then decode returns the identical record, both fields intact.
+    expect(resolved?.interaction).toEqual(interaction);
+    expect(resolved?.resolution).toEqual(answered);
+    // The command intent carries the same answers to the adapter on replay.
+    expect(projection?.commands.at(-1)).toMatchObject({
+      intent: { kind: "interaction.resolve", resolution: answered },
+    });
+  });
+
+  it("rejects an interaction whose prompts or answers are structurally wrong", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-invalid",
+      projectId,
+      ticketId: null,
+      title: "Invalid",
+      provenance,
+    });
+    const start = await control.submit({
+      commandId: "start-invalid",
+      sessionId: created.session.id,
+      intent: { kind: "executor.start", adapterId: "opencode", continuity: "fresh" },
+      provenance,
+    });
+    const adapterProvenance = {
+      source: { kind: "adapter" as const, id: "opencode", detail: null },
+      venue: { id: "local", kind: "local" as const },
+    };
+    await control.observe({
+      id: "opened-invalid",
+      kind: "attachment.opened",
+      sessionId: created.session.id,
+      commandId: start.command.id,
+      occurredAt: 400,
+      provenance: adapterProvenance,
+      attachment: {
+        id: "attachment-invalid",
+        sessionId: created.session.id,
+        adapterId: "opencode",
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+        native: { id: "native-3", detail: null },
+      },
+    });
+    await control.observe({
+      id: "interaction-opened-invalid",
+      kind: "interaction.opened",
+      sessionId: created.session.id,
+      attachmentId: "attachment-invalid",
+      occurredAt: 401,
+      provenance: adapterProvenance,
+      interaction: {
+        id: "question-2",
+        attachmentId: "attachment-invalid",
+        kind: "question",
+        title: "One question",
+        detail: null,
+        options: [{ id: "yes", label: "Yes", description: null }],
+        multiple: false,
+        prompts: [
+          {
+            id: "prompt:0",
+            label: "One question",
+            detail: null,
+            options: [{ id: "yes", label: "Yes", description: null }],
+            multiple: false,
+            custom: false,
+          },
+        ],
+        native: { id: "native-question-2", detail: null },
+      },
+    });
+    await control.observe({
+      id: "interaction-resolved-invalid",
+      kind: "interaction.resolved",
+      sessionId: created.session.id,
+      attachmentId: "attachment-invalid",
+      occurredAt: 402,
+      provenance: adapterProvenance,
+      interactionId: "question-2",
+      resolution: {
+        optionIds: ["yes"],
+        response: null,
+        answers: [{ promptId: "prompt:0", optionIds: ["yes"], response: null }],
+      },
+    });
+
+    // Decode is a trust boundary: this data came off disk, so a stored record
+    // whose optional structure is not the declared shape fails loudly rather
+    // than projecting a half-read interaction.
+    ctx.db.pragma("ignore_check_constraints = ON");
+    const rewrite = (id: string, payload: unknown) =>
+      ctx.db
+        .prepare("UPDATE session_events SET payload = ? WHERE id = ?")
+        .run(JSON.stringify(payload), id);
+    const read = (id: string) =>
+      JSON.parse(
+        (
+          ctx.db.prepare("SELECT payload FROM session_events WHERE id = ?").get(id) as {
+            payload: string;
+          }
+        ).payload,
+      ) as { interaction?: { prompts: unknown }; resolution?: { answers: unknown } };
+    const project = () => control.getSession({ sessionId: created.session.id });
+
+    const opened = read("interaction-opened-invalid");
+    opened.interaction!.prompts = "prompt:0";
+    rewrite("interaction-opened-invalid", opened);
+    await expect(project()).rejects.toThrow("prompts must be an array");
+
+    opened.interaction!.prompts = [{ id: "prompt:0", label: "One question", detail: null }];
+    rewrite("interaction-opened-invalid", opened);
+    await expect(project()).rejects.toThrow("prompts[0].options must be an array");
+
+    opened.interaction!.prompts = [
+      {
+        id: "prompt:0",
+        label: "One question",
+        detail: null,
+        options: [{ id: "yes", label: "Yes", description: null }],
+        multiple: false,
+        custom: "no",
+      },
+    ];
+    rewrite("interaction-opened-invalid", opened);
+    await expect(project()).rejects.toThrow("prompts[0].custom must be a boolean");
+
+    opened.interaction!.prompts = [
+      {
+        id: "prompt:0",
+        label: "One question",
+        detail: null,
+        options: [{ id: "yes", label: "Yes", description: null }],
+        multiple: false,
+        custom: false,
+      },
+    ];
+    rewrite("interaction-opened-invalid", opened);
+
+    const answered = read("interaction-resolved-invalid");
+    answered.resolution!.answers = { "prompt:0": ["yes"] };
+    rewrite("interaction-resolved-invalid", answered);
+    await expect(project()).rejects.toThrow("answers must be an array");
+
+    answered.resolution!.answers = [{ promptId: "prompt:0", optionIds: "yes", response: null }];
+    rewrite("interaction-resolved-invalid", answered);
+    await expect(project()).rejects.toThrow("answers[0].optionIds must be an array");
+
+    answered.resolution!.answers = [{ promptId: 0, optionIds: ["yes"], response: null }];
+    rewrite("interaction-resolved-invalid", answered);
+    await expect(project()).rejects.toThrow("answers[0].promptId must be a string");
+    ctx.db.pragma("ignore_check_constraints = OFF");
   });
 });
