@@ -13,10 +13,13 @@ import {
   interactionForApproval,
   interactionQuestions,
   interactionResolution,
+  interactionSubmitLabel,
   isPromptAnswered,
   needsOwnRefusal,
   optionPolarity,
+  optionSubmitsOnSelect,
   promptDraft,
+  promptFieldOpen,
   promptFieldRole,
   promptRedirected,
   promptTextCarrier,
@@ -190,6 +193,67 @@ describe("the field's role", () => {
       "redirection",
     );
   });
+
+  it("stands the box open wherever the words are a way of answering", () => {
+    // `custom` makes them the answer; a question nothing else can carry them
+    // for has no other escape.
+    expect(promptFieldOpen(prompt({ custom: true }), {})).toBe(true);
+    expect(promptFieldOpen(prompt({ custom: false }), {})).toBe(true);
+  });
+
+  it("keeps it behind a control on a permission until the refusal is chosen", () => {
+    // Three declared verdicts are the whole of the ordinary case, so an open
+    // box is the tallest thing on the card in the one interaction nobody types
+    // into. Refusing is the answer whose words matter.
+    const [permissionPrompt] = permission().prompts ?? [];
+    if (!permissionPrompt) throw new Error("fixture has no prompt");
+    expect(promptFieldOpen(permissionPrompt, {})).toBe(false);
+    expect(promptFieldOpen(permissionPrompt, selectOption({}, permissionPrompt, "once"))).toBe(
+      false,
+    );
+    expect(promptFieldOpen(permissionPrompt, selectOption({}, permissionPrompt, "reject"))).toBe(
+      true,
+    );
+  });
+});
+
+describe("what the primary control says", () => {
+  it("names the act it is waiting for while there is nothing to send", () => {
+    // A single question has no counter to say what is left, so a control
+    // reading the same word before and after its gate said nothing at all.
+    const interaction = permission();
+    expect(interactionSubmitLabel(interaction, emptyInteractionDraft(interaction))).toBe("Choose");
+    const many = question([prompt({ id: "prompt:0" }), prompt({ id: "prompt:1" })]);
+    expect(interactionSubmitLabel(many, emptyInteractionDraft(many))).toBe("Submit");
+  });
+
+  it("names the verdict once one is chosen", () => {
+    const interaction = permission();
+    const [only] = interactionQuestions(interaction);
+    if (!only) throw new Error("no prompt projected");
+    expect(interactionSubmitLabel(interaction, selectOption({}, only.prompt, "always"))).toBe(
+      "Allow always",
+    );
+    expect(interactionSubmitLabel(interaction, selectOption({}, only.prompt, "reject"))).toBe(
+      "Reject",
+    );
+  });
+
+  it("keeps the neutral word where the label is an answer rather than a verdict", () => {
+    // A question's option ids are the harness's own encoded values, so its
+    // labels state no verdict the button could speak for.
+    const asked = question([prompt()]);
+    expect(interactionSubmitLabel(asked, selectOption({}, prompt(), "question:0:bWFpbg"))).toBe(
+      "Submit",
+    );
+  });
+
+  it("says send where the words refuse the ask and travel after it", () => {
+    const asked = question([prompt()]);
+    expect(
+      interactionSubmitLabel(asked, setPromptResponse({}, "prompt:0", "neither — rebase first")),
+    ).toBe("Send");
+  });
 });
 
 describe("none of these work", () => {
@@ -350,6 +414,59 @@ describe("submit", () => {
     ).toBe(false);
   });
 
+  it("sends a one-time yes on the click that chose it", () => {
+    // The commonest gesture in the app used to cost one click; a radio plus a
+    // generic confirm doubles it on every turn and the confirm adds nothing.
+    const interaction = permission();
+    const [only] = interactionQuestions(interaction);
+    if (!only) throw new Error("no prompt projected");
+    const once = { id: "once", label: "Allow once", description: null };
+    const draft = emptyInteractionDraft(interaction);
+    expect(optionSubmitsOnSelect(interaction, only.prompt, once, draft)).toBe(true);
+  });
+
+  it("still asks twice for a standing grant, a refusal, and an opaque answer", () => {
+    // A standing grant outlives the turn and must never be the cheapest thing
+    // on the card; a refusal is the verdict whose words matter; a question's
+    // option ids are the harness's own values and state no verdict at all.
+    const interaction = permission();
+    const [only] = interactionQuestions(interaction);
+    if (!only) throw new Error("no prompt projected");
+    const draft = emptyInteractionDraft(interaction);
+    for (const option of PERMISSION_OPTIONS.filter((entry) => entry.id !== "once")) {
+      expect(optionSubmitsOnSelect(interaction, only.prompt, option, draft)).toBe(false);
+    }
+    const asked = question([prompt()]);
+    const [opaque] = prompt().options;
+    if (!opaque) throw new Error("no option declared");
+    expect(optionSubmitsOnSelect(asked, prompt(), opaque, emptyInteractionDraft(asked))).toBe(
+      false,
+    );
+  });
+
+  it("waits for Submit once the click is not the whole answer", () => {
+    // More than one question, a list still being built, free text that is part
+    // of the answer, or words already typed beside it.
+    const once = { id: "once", label: "Allow once", description: null };
+    const single = permission();
+    const [only] = interactionQuestions(single);
+    if (!only) throw new Error("no prompt projected");
+    const many = permission({
+      prompts: [only.prompt, { ...only.prompt, id: "prompt:1", label: "And the next one?" }],
+    });
+    expect(optionSubmitsOnSelect(many, only.prompt, once, emptyInteractionDraft(many))).toBe(false);
+    expect(optionSubmitsOnSelect(single, { ...only.prompt, multiple: true }, once, {})).toBe(false);
+    expect(optionSubmitsOnSelect(single, { ...only.prompt, custom: true }, once, {})).toBe(false);
+    expect(
+      optionSubmitsOnSelect(
+        single,
+        only.prompt,
+        once,
+        setPromptResponse({}, "prompt:0", "only if you skip the tests"),
+      ),
+    ).toBe(false);
+  });
+
   it("answers a stored interaction that predates prompts", () => {
     // `readInteractionPrompts` is total, so a record written before the field
     // existed is one prompt built from its flat options — nothing here branches
@@ -448,6 +565,48 @@ describe("receipt", () => {
     expect(
       describeInteractionResolution(legacy, { optionIds: ["once"], response: null }).verdict,
     ).toBe("allowed");
+  });
+
+  it("keeps every question's answer, not just the first one's", () => {
+    // Each answer's ids are read against its *own* question's options. Filtering
+    // one flat union against one prompt's list kept `main` and dropped `origin`,
+    // so a two-question request read back as half of what was answered.
+    const branch = prompt({ id: "prompt:0" });
+    const remote = prompt({
+      id: "prompt:1",
+      label: "Which remote?",
+      options: [
+        { id: "question:1:b3JpZ2lu", label: "origin", description: null },
+        { id: "question:1:dXBzdHJlYW0", label: "upstream", description: null },
+      ],
+    });
+    const interaction = question([branch, remote]);
+    const draft = selectOption(
+      selectOption(emptyInteractionDraft(interaction), branch, "question:0:bWFpbg"),
+      remote,
+      "question:1:b3JpZ2lu",
+    );
+    expect(
+      describeInteractionResolution(interaction, interactionResolution(interaction, draft)),
+    ).toEqual({
+      verdict: "answered",
+      lead: "You answered",
+      subject: "Before I continue",
+      trailer: "main, origin",
+    });
+  });
+
+  it("drops an id no question declared rather than naming it wrongly", () => {
+    // The flat union is the fallback for records stored before `answers`, and it
+    // must not turn one question's id into another question's label.
+    const interaction = question([prompt()]);
+    expect(
+      describeInteractionResolution(interaction, {
+        optionIds: ["question:9:Z29uZQ"],
+        response: null,
+        answers: [{ promptId: "prompt:0", optionIds: ["question:9:Z29uZQ"], response: "kept" }],
+      }).trailer,
+    ).toBeNull();
   });
 });
 
@@ -582,6 +741,79 @@ describe("the durable answer in scrollback", () => {
         parts: [{ type: "data-interaction-resolution", data: { optionIds: ["once"] } }],
       }),
     ).toBeNull();
+  });
+
+  it("reads back every question's answer from the durable part", () => {
+    // The runtime writes the whole resolution, `answers` included. Decoding
+    // only the flat pair left the receipt to the single-answer fallback, which
+    // stamps the union onto the first prompt — so the second question's choice
+    // never reached scrollback at all.
+    const branch = prompt({ id: "prompt:0" });
+    const remote = prompt({
+      id: "prompt:1",
+      label: "Which remote?",
+      options: [{ id: "question:1:b3JpZ2lu", label: "origin", description: null }],
+    });
+    const interaction = question([branch, remote]);
+    const resolution = interactionResolution(
+      interaction,
+      selectOption(
+        selectOption(emptyInteractionDraft(interaction), branch, "question:0:bWFpbg"),
+        remote,
+        "question:1:b3JpZ2lu",
+      ),
+    );
+    // Exactly what `session-runtime` commits: the resolution, verbatim, as the
+    // message's only part.
+    const read = readInteractionResolutionMessage({
+      metadata: { kind: "interaction-resolution", interactionId: "question:q1" },
+      parts: [{ type: "data-interaction-resolution", data: resolution }],
+    });
+    if (!read) throw new Error("the resolution message read as an ordinary one");
+    expect(read.resolution.answers).toEqual([
+      { promptId: "prompt:0", optionIds: ["question:0:bWFpbg"], response: null },
+      { promptId: "prompt:1", optionIds: ["question:1:b3JpZ2lu"], response: null },
+    ]);
+    expect(describeInteractionResolution(interaction, read.resolution).trailer).toBe(
+      "main, origin",
+    );
+  });
+
+  it("keeps a stored answer it cannot read out of the answers it can", () => {
+    // Crossing the RPC edge as JSON, so an entry with no prompt id or no option
+    // array is skipped rather than throwing inside a render.
+    expect(
+      readInteractionResolutionMessage({
+        metadata: { interactionId: "question:q1" },
+        parts: [
+          {
+            type: "data-interaction-resolution",
+            data: {
+              optionIds: ["a"],
+              response: null,
+              answers: [
+                { promptId: "prompt:0", optionIds: ["a", 7], response: 3 },
+                { optionIds: ["b"] },
+                "not an answer",
+              ],
+            },
+          },
+        ],
+      })?.resolution.answers,
+    ).toEqual([{ promptId: "prompt:0", optionIds: ["a"], response: null }]);
+  });
+
+  it("leaves a resolution stored before answers existed reading flat", () => {
+    // Undefined, not an empty array: an empty one would read as an interaction
+    // answered with nothing, which is how a refusal reads.
+    expect(
+      readInteractionResolutionMessage({
+        metadata: { interactionId: "permission:p1" },
+        parts: [
+          { type: "data-interaction-resolution", data: { optionIds: ["once"], answers: [] } },
+        ],
+      })?.resolution,
+    ).toEqual({ optionIds: ["once"], response: null });
   });
 
   it("keeps a resolution with no text as one with no text", () => {

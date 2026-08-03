@@ -24,6 +24,7 @@ import {
   type SessionEventPayload,
   type SessionInteraction,
   type SessionInteractionAnswer,
+  type SessionInteractionOption,
   type SessionInteractionPrompt,
   type SessionInteractionResolution,
 } from "@volli/shared";
@@ -174,6 +175,28 @@ export function promptFieldRole(
 }
 
 /**
+ * Whether the box stands open, or waits behind a control of its own.
+ *
+ * That a reader can always say "none of these work" is settled; *how much of
+ * the card that costs before they want to* is not. The box is open wherever the
+ * words are a way of answering — the prompt declares `custom`, so they are the
+ * answer, or nothing but a following message can carry them, so the box is the
+ * only escape the question has.
+ *
+ * A permission is the exception, and it is the commonest card in the app: three
+ * declared verdicts are the whole of the ordinary case, so an empty box is the
+ * tallest thing on screen in the one interaction nobody types into. It opens
+ * the moment a refusal is chosen, which is the answer whose words matter.
+ */
+export function promptFieldOpen(
+  prompt: SessionInteractionPrompt,
+  draft: InteractionDraft,
+): boolean {
+  if (promptTextCarrier(prompt) !== "note") return true;
+  return promptFieldRole(prompt, draft) === "redirection";
+}
+
+/**
  * Whether a redirection has superseded this question's options.
  *
  * Saying "none of these work" and choosing one of them are contradictory, and
@@ -314,6 +337,73 @@ export function interactionSubmission(
   if (redirect !== null) return { resolution: refusalResolution(interaction), message: redirect };
   if (!canSubmitInteraction(interaction, draft)) return null;
   return { resolution: interactionResolution(interaction, draft), message: null };
+}
+
+/**
+ * Whether choosing this option is the whole decision, so the card can send it
+ * on the click instead of asking for it twice.
+ *
+ * Answering a permission is the most frequent gesture in the app and it used to
+ * cost one click. A radio plus a generic confirm doubles it on every turn, and
+ * the confirm adds nothing: there is one question, and the option says what it
+ * does.
+ *
+ * Scoped to the case where the click really is the whole answer — one question,
+ * one choice, no free text riding along, nothing already typed — and to an
+ * option whose polarity we recognize. A harness question's option ids are its
+ * own encoded values and mean nothing to us, so those still wait for Submit.
+ *
+ * `standing` and `reject` are excluded deliberately. A standing grant consents
+ * to every future call of its kind and must never be the cheapest thing on the
+ * card; a refusal is the verdict whose words matter, and sending it on the
+ * click takes the box away before it can be typed in.
+ */
+export function optionSubmitsOnSelect(
+  interaction: SessionInteraction,
+  prompt: SessionInteractionPrompt,
+  option: SessionInteractionOption,
+  draft: InteractionDraft,
+): boolean {
+  if (readInteractionPrompts(interaction).length !== 1) return false;
+  if (prompt.multiple || prompt.custom) return false;
+  if (promptDraft(draft, prompt.id).response.trim().length > 0) return false;
+  return optionPolarity(option) === "allow";
+}
+
+/**
+ * What the primary control says it will do.
+ *
+ * Three states, and none of them is a sentence:
+ *
+ * - **Nothing to send.** A request with several questions has a counter saying
+ *   what is left; one question has nothing else on the card that could, so the
+ *   control names the act it is waiting for rather than sitting inert under a
+ *   word for a press that cannot happen.
+ * - **Words that only a message can carry.** They refuse the ask and travel
+ *   after it, so the press is a send.
+ * - **A declared verdict.** It names itself: "Allow always" says what the press
+ *   does and "Submit" does not. A question's labels are answers rather than
+ *   verdicts — the ids are the harness's own encoded values — so those keep the
+ *   neutral word, and so does a request that asked more than one thing.
+ */
+export function interactionSubmitLabel(
+  interaction: SessionInteraction,
+  draft: InteractionDraft,
+): string {
+  const prompts = readInteractionPrompts(interaction);
+  const only = prompts.length === 1 ? (prompts[0] ?? null) : null;
+  const submission = interactionSubmission(interaction, draft);
+  if (submission === null) {
+    if (only === null) return "Submit";
+    return only.options.length > 0 ? "Choose" : "Answer";
+  }
+  if (submission.message !== null) return "Send";
+  if (only === null) return "Submit";
+  const chosen = only.options.filter((option) =>
+    promptDraft(draft, only.id).optionIds.includes(option.id),
+  );
+  const verdict = chosen.length === 1 ? chosen[0] : undefined;
+  return verdict && optionPolarity(verdict) !== "answer" ? verdict.label : "Submit";
 }
 
 export function interactionAnswers(
@@ -490,11 +580,20 @@ export function describeInteractionResolution(
 ): InteractionReceipt {
   const prompts = readInteractionPrompts(interaction);
   const answers = readInteractionAnswers(interaction, resolution);
+  // Each answer's ids are read against its *own* question's options, which is
+  // the whole of why `answers` is carried: filtering one flat union against one
+  // prompt's list keeps the first question's labels and silently drops every
+  // other question's. The interaction's flat options are the fallback, and only
+  // for a resolution stored before `answers` existed — its ids belong to no
+  // prompt this record can name.
   const chosen = answers.flatMap((answer) => {
-    const prompt = prompts.find((candidate) => candidate.id === answer.promptId);
-    return (prompt?.options ?? interaction.options).filter((option) =>
-      answer.optionIds.includes(option.id),
-    );
+    const declared = prompts.find((candidate) => candidate.id === answer.promptId)?.options ?? [];
+    return answer.optionIds.flatMap((id) => {
+      const option =
+        declared.find((candidate) => candidate.id === id) ??
+        interaction.options.find((candidate) => candidate.id === id);
+      return option ? [option] : [];
+    });
   });
   const chose = (polarity: InteractionOptionPolarity) =>
     chosen.some((option) => optionPolarity(option) === polarity);
@@ -572,6 +671,13 @@ export interface InteractionResolutionMessage {
  * Read structurally and defensively — this crosses the RPC edge as JSON, and a
  * shape we do not recognize reads as "not a resolution" rather than throwing
  * inside a render.
+ *
+ * **`answers` is read, not re-derived.** The runtime writes the whole
+ * resolution to the artifact, so the per-question answers are already there.
+ * Decoding only the flat pair threw them away and left the receipt to
+ * `readInteractionAnswers`'s fallback, which stamps the flattened union onto
+ * the first prompt — so a two-question request rendered as one question's
+ * labels and every later answer vanished from the transcript.
  */
 export function readInteractionResolutionMessage(message: {
   metadata?: unknown;
@@ -584,15 +690,39 @@ export function readInteractionResolutionMessage(message: {
     const data = objectField(part, "data");
     const optionIds = data?.optionIds;
     if (!Array.isArray(optionIds)) continue;
-    return {
-      interactionId,
-      resolution: {
-        optionIds: optionIds.filter((id): id is string => typeof id === "string"),
-        response: typeof data?.response === "string" ? data.response : null,
-      },
+    const answers = readStoredAnswers(data?.answers);
+    const resolution: SessionInteractionResolution = {
+      optionIds: optionIds.filter((id): id is string => typeof id === "string"),
+      response: typeof data?.response === "string" ? data.response : null,
     };
+    return { interactionId, resolution: answers ? { ...resolution, answers } : resolution };
   }
   return null;
+}
+
+/**
+ * The per-question answers a stored resolution carries, or undefined where it
+ * carries none we can read.
+ *
+ * Undefined rather than an empty array on purpose: that is the value
+ * `readInteractionAnswers` treats as "not written with answers", so a record
+ * from before the field existed keeps its flat reading instead of projecting as
+ * an interaction that was answered with nothing — which is how a refusal reads.
+ */
+function readStoredAnswers(value: unknown): readonly SessionInteractionAnswer[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const answers = value.flatMap((entry) => {
+    const promptId = stringField(entry, "promptId");
+    if (promptId === null || !isRecord(entry) || !Array.isArray(entry.optionIds)) return [];
+    return [
+      {
+        promptId,
+        optionIds: entry.optionIds.filter((id): id is string => typeof id === "string"),
+        response: typeof entry.response === "string" ? entry.response : null,
+      },
+    ];
+  });
+  return answers.length > 0 ? answers : undefined;
 }
 
 function objectField(value: unknown, key: string): Record<string, unknown> | null {

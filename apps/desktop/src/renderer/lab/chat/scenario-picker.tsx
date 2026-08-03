@@ -23,7 +23,7 @@ export interface LabScenarioPickerProps {
 export function LabScenarioPicker({ value, onChange }: LabScenarioPickerProps) {
   const id = React.useId();
   return (
-    <div className="fixed right-3 bottom-12 z-[9999] flex items-center gap-2 rounded-full border border-border bg-background/90 px-3 py-1.5 text-label text-muted-foreground shadow-lg backdrop-blur">
+    <div className="fixed right-3 bottom-12 z-50 flex items-center gap-2 rounded-full border border-border bg-background/90 px-3 py-1.5 text-label text-muted-foreground shadow-[var(--shadow-raised)] backdrop-blur">
       <label htmlFor={id}>Scenario</label>
       <select
         id={id}

@@ -32,12 +32,14 @@
  * and travels as the empty resolution.
  *
  * Every question has a box, and saying "none of these work" is never gated on a
- * harness capability — only *how the words travel* is, and that is
- * `promptTextCarrier`'s decision, not this file's.
+ * harness capability — only *how the words travel* is, and how much of the card
+ * the box costs before anyone wants it. Both are `interaction.ts`'s decisions
+ * (`promptTextCarrier`, `promptFieldOpen`), not this file's.
  *
  * Decision logic lives in `interaction.ts`. Everything here is presentation
- * plus the two things only a mounted card can own: where focus is, and that
- * there is no gesture which throws a pending decision away.
+ * plus the three things only a mounted card can own: where focus is, that the
+ * reader asked for a box that was not already open, and that there is no
+ * gesture which throws a pending decision away.
  */
 import * as React from "react";
 import { CaretLeftIcon, CaretRightIcon, HandPalmIcon, SquareIcon } from "@phosphor-icons/react";
@@ -53,9 +55,12 @@ import {
   interactionCarousel,
   interactionQuestions,
   interactionSubmission,
+  interactionSubmitLabel,
   needsOwnRefusal,
   optionPolarity,
+  optionSubmitsOnSelect,
   promptDraft,
+  promptFieldOpen,
   promptFieldRole,
   promptRedirected,
   refusalSubmission,
@@ -123,13 +128,30 @@ export function InteractionCard({
   // The composer this replaced held the focus. Taking it here keeps the
   // keyboard on the one thing that can move the turn forward instead of
   // dropping it on the document body when the composer unmounts.
+  //
+  // On the first answerable control, not on the form. Focusing the form left
+  // the caret on a `tabIndex={-1}` element, so the first keystroke after the
+  // card mounted did nothing and the keyboard path to a one-word decision was
+  // Tab, then an arrow, then Enter. Read off the DOM rather than threaded down
+  // as a ref, because which control comes first is a fact about what the
+  // harness declared — options, or nothing but a box — and the query answers
+  // that without every question shape having to say so.
+  //
+  // Focus is not selection: an unchecked radio stays unchecked when it takes
+  // focus, so nothing here preselects a verdict.
   React.useEffect(() => {
-    if (autoFocus) own.current?.focus();
+    if (!autoFocus) return;
+    const form = own.current;
+    const first = form?.querySelector<HTMLElement>("input:not(:disabled), textarea:not(:disabled)");
+    (first ?? form)?.focus();
   }, [autoFocus]);
 
-  const submit = () => {
-    if (resolving || !submission) return;
-    onResolve(submission);
+  // Takes the draft rather than reading it, because the card can send on the
+  // click that answers it — and the state that click set is not on `draft` yet.
+  const submit = (next: InteractionDraft = draft) => {
+    if (resolving) return;
+    const sending = next === draft ? submission : interactionSubmission(interaction, next);
+    if (sending) onResolve(sending);
   };
 
   return (
@@ -158,13 +180,17 @@ export function InteractionCard({
         <HandPalmIcon aria-hidden className="mt-0.5 size-3.5 shrink-0 text-primary" weight="fill" />
         <div className="min-w-0 flex-1">
           <p className="text-sm leading-5 text-foreground">{interaction.title}</p>
+          {/* The object of the decision, not a caption on it. This is the
+              command or the path being authorized, and at the foot mount it is
+              the only place the subject appears at all — truncated to one
+              muted line it was the dimmest thing on a card whose whole purpose
+              is to show it. Machine text stays mono and `text-xs`; what
+              changes is the ink and that it is readable in full, the way the
+              scrollable `pre` this card replaced showed it. */}
           {interaction.detail ? (
-            <p
-              className="truncate font-mono text-xs text-muted-foreground"
-              title={interaction.detail}
-            >
+            <pre className="mt-0.5 max-h-32 overflow-y-auto font-mono text-xs whitespace-pre-wrap break-words text-foreground">
               {interaction.detail}
-            </p>
+            </pre>
           ) : null}
         </div>
         {carousel ? (
@@ -219,14 +245,21 @@ export function InteractionCard({
         {/* Disabled rather than swapped for a spinner: the round trip is one
             HTTP reply and the harness's own verdict is what replaces the card,
             so a progress affordance would flash for less time than it reads.
-            What matters is that a second click cannot land. */}
+            What matters is that a second click cannot land.
+
+            The label is `interactionSubmitLabel`'s, not the word "Submit": a
+            dimmed control saying "Submit" is the same word before and after
+            the thing it is waiting for, so on a single question — where there
+            is no counter to say what is left — the gate said nothing at all.
+            Naming the act, and then the verdict, is the gate and the receipt
+            in one control, with no line of prose under it. */}
         <Button
           type="submit"
           size="sm"
           className={cn(!refusable && "ml-auto")}
           disabled={!submittable}
         >
-          Submit
+          {interactionSubmitLabel(interaction, draft)}
         </Button>
       </div>
     </form>
@@ -256,13 +289,25 @@ function InteractionQuestionFields({
   draft: InteractionDraft;
   disabled?: boolean;
   onDraftChange(next: InteractionDraft): void;
-  onSubmit(): void;
+  /**
+   * Takes the draft the caller wants sent, because a click that answers the
+   * card also submits it and that draft is one render ahead of this one.
+   */
+  onSubmit(next?: InteractionDraft): void;
 }) {
   const { prompt, label } = question;
   // Words that only a following message can carry contradict every option
   // beside them, and the contradiction resolves toward the words. Dimming the
   // list says so, instead of leaving it live and discarding it at submit.
   const superseded = promptRedirected(prompt, draft);
+  const written = promptDraft(draft, prompt.id).response;
+  // The one thing only a mounted card can own: the reader asked for the box.
+  // Whether it stands open on its own is `promptFieldOpen`'s call, and text
+  // already written keeps it open across a step away and back — the draft is
+  // what survives the remount, not this flag.
+  const [revealed, setRevealed] = React.useState(false);
+  const fieldRole = promptFieldRole(prompt, draft);
+  const fieldOpen = promptFieldOpen(prompt, draft) || revealed || written.length > 0;
   return (
     <fieldset className="min-w-0">
       {label ? <legend className="mb-1 text-sm leading-5 text-foreground">{label}</legend> : null}
@@ -273,15 +318,14 @@ function InteractionQuestionFields({
           return (
             // A standing grant is not a louder yes: it consents to every future
             // call of its kind, so it must never carry the same weight as the
-            // one-time one beside it. Muting the label alone left the two rows
-            // the same size and the same shape, which is what "identical
-            // weight" looked like on screen; the secondary tier is a step down
-            // the type scale as well.
+            // one-time one beside it. The down-weighting is ink, not size —
+            // a smaller row is a smaller *hit target* for a live control, it
+            // sits below the control floor of the pill scale, and it left the
+            // options in one list at two different heights.
             <label
               key={option.id}
               className={cn(
-                "flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-muted/40 has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-ring",
-                polarity === "standing" ? "text-xs" : "text-sm",
+                "flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-sm transition-colors hover:bg-muted/40 has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-ring",
                 superseded && "opacity-50",
               )}
             >
@@ -290,7 +334,14 @@ function InteractionQuestionFields({
                 name={`${interaction.id}:${prompt.id}`}
                 checked={checked}
                 disabled={disabled || superseded}
-                onChange={() => onDraftChange(selectOption(draft, prompt, option.id))}
+                onChange={() => {
+                  const next = selectOption(draft, prompt, option.id);
+                  onDraftChange(next);
+                  // One question, one verdict, nothing else to say: the click
+                  // is the whole decision, so it sends. `optionSubmitsOnSelect`
+                  // owns which clicks those are.
+                  if (optionSubmitsOnSelect(interaction, prompt, option, draft)) onSubmit(next);
+                }}
                 className={cn(
                   "size-3.5 shrink-0 accent-primary outline-none",
                   polarity === "standing" && "opacity-70",
@@ -304,8 +355,13 @@ function InteractionQuestionFields({
               >
                 {option.label}
               </span>
+              {/* `flex-1` and not a second `auto` basis: two truncating
+                  siblings shrink in proportion to their content, so a long
+                  description ate the label it exists to explain. At basis zero
+                  the label takes the width it needs and the description fills
+                  whatever is left. */}
               {option.description ? (
-                <span className="min-w-0 truncate text-xs text-muted-foreground">
+                <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
                   {option.description}
                 </span>
               ) : null}
@@ -313,27 +369,42 @@ function InteractionQuestionFields({
           );
         })}
       </div>
-      {/* Always here. Where the words reach the harness is the harness's
-          business — `promptTextCarrier` decides whether they are this
-          question's own answer, a note on the verdict, or a refusal and a
-          following message — but that a reader can say "none of these work" is
-          not conditional on a capability. The placeholder is the only label it
-          needs: the control talks. */}
-      <Textarea
-        value={promptDraft(draft, prompt.id).response}
-        disabled={disabled}
-        placeholder={FIELD_PLACEHOLDER[promptFieldRole(prompt, draft)]}
-        onChange={(event) =>
-          onDraftChange(setPromptResponse(draft, prompt.id, event.currentTarget.value))
-        }
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-            event.preventDefault();
-            onSubmit();
+      {/* That a reader can say "none of these work" is not conditional on a
+          harness capability, and where the words reach the harness is
+          `promptTextCarrier`'s business — this is only whether the box is
+          already open or one press away. Open, it is the tallest thing on the
+          card, which is the wrong shape for a permission: three declared
+          verdicts are the whole of the ordinary case and nobody types. The
+          placeholder is the only label either form needs — the control talks. */}
+      {fieldOpen ? (
+        <Textarea
+          autoFocus={revealed}
+          value={written}
+          disabled={disabled}
+          placeholder={FIELD_PLACEHOLDER[fieldRole]}
+          onChange={(event) =>
+            onDraftChange(setPromptResponse(draft, prompt.id, event.currentTarget.value))
           }
-        }}
-        className="mt-1.5 min-h-9 resize-none rounded-md text-sm shadow-none"
-      />
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault();
+              onSubmit();
+            }
+          }}
+          className="mt-1.5 min-h-9 resize-none rounded-md text-sm shadow-none"
+        />
+      ) : (
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          className="mt-1 ml-0.5 text-muted-foreground"
+          disabled={disabled}
+          onClick={() => setRevealed(true)}
+        >
+          {FIELD_PLACEHOLDER[fieldRole]}
+        </Button>
+      )}
     </fieldset>
   );
 }
