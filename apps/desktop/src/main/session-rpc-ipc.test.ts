@@ -52,6 +52,7 @@ function runtimeFixture(): {
           transcript: [],
         } as never;
       },
+      projection: async () => ({ projection: { capabilities: [] }, throughSequence: 0 }) as never,
       subscribe: async ({ afterSequence }, next) => {
         calls.subscribe.push(afterSequence);
         listener = (nextFrame) => void next(nextFrame);

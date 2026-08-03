@@ -5,6 +5,7 @@ import {
   type SessionClientCommand,
   type SessionRuntime,
   type SessionRuntimeCommandRequest,
+  type SessionRuntimeProjectionSnapshot,
   type SessionRuntimeSnapshot,
   type SessionStreamFrame,
 } from "@volli/session-engine";
@@ -319,6 +320,14 @@ export function createSessionRouter() {
       snapshot: instrumentedProcedure
         .input(z.object({ sessionId: nonEmptyString }))
         .query(async ({ ctx, input }) => rendererSnapshot(await ctx.runtime.snapshot(input))),
+      // The same durable state without the transcript replay beside it. A
+      // surface that already holds the stream re-reads Session state often and
+      // the frames never — and shipping them anyway costs an artifact read per
+      // transcript event and a structured clone of the whole transcript, per
+      // read. `snapshot` above stays for the callers that replay history.
+      projection: instrumentedProcedure
+        .input(z.object({ sessionId: nonEmptyString }))
+        .query(async ({ ctx, input }) => rendererProjection(await ctx.runtime.projection(input))),
       subscribe: instrumentedProcedure
         .input(sessionSubscriptionSchema)
         .subscription(async function* ({ ctx, input, signal }) {
@@ -441,13 +450,22 @@ function rendererFrame(frame: SessionStreamFrame): SessionStreamFrame {
   };
 }
 
-function rendererSnapshot(snapshot: SessionRuntimeSnapshot): SessionRuntimeSnapshot {
+function rendererProjection(
+  snapshot: SessionRuntimeProjectionSnapshot,
+): SessionRuntimeProjectionSnapshot {
   return {
-    ...snapshot,
     projection: {
       ...snapshot.projection,
       capabilities: snapshot.projection.capabilities.map(rendererCapabilitySnapshot),
     },
+    throughSequence: snapshot.throughSequence,
+  };
+}
+
+function rendererSnapshot(snapshot: SessionRuntimeSnapshot): SessionRuntimeSnapshot {
+  return {
+    ...snapshot,
+    ...rendererProjection(snapshot),
     frames: snapshot.frames.map(rendererFrame),
   };
 }

@@ -52,6 +52,23 @@ export interface LabSessionFrame {
   transcript: { message: UIMessage } | null;
 }
 
+/**
+ * What the stream alone can say, kept between batches.
+ *
+ * Every fact this surface needs about a live turn is already in the frames it
+ * is subscribed to, so this is folded forward as they arrive rather than
+ * re-derived from the whole transcript on every render: `turnActive` used to be
+ * a scan of all frames in the render body, and the ordered list used to be a
+ * copy-and-sort of a Map per animation frame. Both are now linear in the batch.
+ */
+interface LabTranscriptState {
+  frames: readonly LabSessionFrame[];
+  throughSequence: number;
+  turnActive: boolean;
+}
+
+const EMPTY_TRANSCRIPT: LabTranscriptState = { frames: [], throughSequence: 0, turnActive: false };
+
 export interface LabSessionController {
   sessionId: string;
   projection: SessionProjection | null;
@@ -133,9 +150,7 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
   const client = React.useRef<SessionRpcClient | null>(null);
   const [sessionId, setSessionId] = React.useState("");
   const [projection, setProjection] = React.useState<SessionProjection | null>(null);
-  const [framesBySequence, setFramesBySequence] = React.useState<
-    ReadonlyMap<number, LabSessionFrame>
-  >(new Map());
+  const [transcript, setTranscript] = React.useState<LabTranscriptState>(EMPTY_TRANSCRIPT);
   const [diagnostics, setDiagnostics] = React.useState<readonly RpcDiagnosticEntry[]>([]);
   const [lifecycle, setLifecycle] = React.useState<SessionLifecycle>("idle");
   const [sessionError, setError] = React.useState<string | null>(null);
@@ -183,7 +198,7 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
   React.useEffect(() => {
     if (!sessionId || !client.current) {
       setProjection(null);
-      setFramesBySequence(new Map());
+      setTranscript(EMPTY_TRANSCRIPT);
       return;
     }
     const rpc = client.current;
@@ -193,12 +208,17 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
     let projectionRefreshQueued = false;
     let frameFlush: number | null = null;
     const pendingFrames = new Map<number, LabSessionFrame>();
+    // Session state only, and only when a frame could have moved it. This used
+    // to be the frames-carrying snapshot on every animation frame: the whole
+    // transcript re-read, re-projected and cloned across the process boundary
+    // ~30 times a second, for a `projection` field the surface then kept and
+    // frames it threw away.
     const refreshProjection = () => {
       if (projectionRefresh) {
         projectionRefreshQueued = true;
         return;
       }
-      projectionRefresh = rpc.session.snapshot
+      projectionRefresh = rpc.session.projection
         .query({ sessionId })
         .then((snapshot) => {
           if (active) setProjection(snapshot.projection);
@@ -215,14 +235,17 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
         });
     };
     const connect = async () => {
+      // The one read that genuinely wants frames: a surface opening on a
+      // Session that already has history has no other way to get it.
       const snapshot = await rpc.session.snapshot.query({ sessionId });
       if (!active) return;
       setProjection(snapshot.projection);
-      setFramesBySequence(
-        new Map(
+      setTranscript(
+        appendFrames(
+          EMPTY_TRANSCRIPT,
           snapshot.frames.flatMap((frame) => {
             const normalized = labSessionFrame(frame);
-            return normalized ? [[normalized.sequence, normalized] as const] : [];
+            return normalized ? [normalized] : [];
           }),
         ),
       );
@@ -244,12 +267,8 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
               if (!active) return;
               const batch = [...pendingFrames.values()];
               pendingFrames.clear();
-              setFramesBySequence((current) => {
-                const next = new Map(current);
-                for (const entry of batch) next.set(entry.sequence, entry);
-                return next;
-              });
-              refreshProjection();
+              setTranscript((current) => appendFrames(current, batch));
+              if (batch.some(movesProjection)) refreshProjection();
             });
           },
           onError: (error) => {
@@ -269,13 +288,10 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
     };
   }, [sessionId]);
 
-  const frames = React.useMemo(
-    () => [...framesBySequence.values()].toSorted((left, right) => left.sequence - right.sequence),
-    [framesBySequence],
-  );
+  const frames = transcript.frames;
   const messages = React.useMemo(() => projectTranscriptMessages(frames), [frames]);
   const liveAttachmentId = projection?.liveExecutor?.id ?? null;
-  const working = liveAttachmentId !== null && latestTurnIsActive(frames);
+  const working = liveAttachmentId !== null && transcript.turnActive;
 
   /**
    * Which models exist is a question only a running harness can answer.
@@ -356,7 +372,7 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
     setError(null);
     setSessionId("");
     setProjection(null);
-    setFramesBySequence(new Map());
+    setTranscript(EMPTY_TRANSCRIPT);
     try {
       const created = await rpc.session.command.mutate({
         commandId: nextId(),
@@ -581,13 +597,40 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
   };
 }
 
-function latestTurnIsActive(frames: readonly LabSessionFrame[]): boolean {
-  let active = false;
-  for (const frame of frames) {
-    if (frame.event.payload.kind === "turn.started") active = true;
-    else if (frame.event.payload.kind === "turn.completed") active = false;
+/**
+ * Adds one batch of frames and carries the turn state across it.
+ *
+ * Frames arrive in strict sequence order — the subscription drains its cursor
+ * one step at a time, and the snapshot that seeds it is ordered too — so this
+ * appends rather than merges, and drops anything at or below the cursor so a
+ * replayed frame cannot double-count a turn boundary.
+ */
+function appendFrames(
+  state: LabTranscriptState,
+  batch: readonly LabSessionFrame[],
+): LabTranscriptState {
+  const fresh = batch.filter((frame) => frame.sequence > state.throughSequence);
+  const last = fresh.at(-1);
+  if (!last) return state;
+  let turnActive = state.turnActive;
+  for (const frame of fresh) {
+    if (frame.event.payload.kind === "turn.started") turnActive = true;
+    else if (frame.event.payload.kind === "turn.completed") turnActive = false;
   }
-  return active;
+  return { frames: [...state.frames, ...fresh], throughSequence: last.sequence, turnActive };
+}
+
+/**
+ * Whether a frame can move what this surface reads off the projection.
+ *
+ * Everything except a transcript reference: those are the flood — one per
+ * stream snapshot, several per animation frame — and they carry a message this
+ * surface already has in `frames`. Every other fact is rare and changes
+ * something read off the projection (the live executor, an open interaction,
+ * an attention, a turn boundary), so it earns its round trip.
+ */
+function movesProjection(frame: LabSessionFrame): boolean {
+  return frame.event.payload.kind !== "transcript.referenced";
 }
 
 function appendDiagnostics(

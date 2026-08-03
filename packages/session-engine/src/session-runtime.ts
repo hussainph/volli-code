@@ -1,3 +1,4 @@
+import { projectSession } from "@volli/shared";
 import type {
   CommandReceipt,
   Session,
@@ -138,9 +139,21 @@ export interface SessionStreamFrame {
   transcript: SessionTranscriptArtifact | null;
 }
 
-export interface SessionRuntimeSnapshot {
+/**
+ * A Session's durable state on its own.
+ *
+ * The frames beside it in {@link SessionRuntimeSnapshot} are a transcript
+ * replay: one per event since the Session began, each transcript event costing
+ * an artifact read. A surface that is already subscribed to the stream has
+ * every one of those frames and needs only this, so it is a separate answer
+ * rather than a field a caller is trusted to ignore.
+ */
+export interface SessionRuntimeProjectionSnapshot {
   projection: SessionProjection;
   throughSequence: number;
+}
+
+export interface SessionRuntimeSnapshot extends SessionRuntimeProjectionSnapshot {
   frames: readonly SessionStreamFrame[];
   transcript: readonly SessionTranscriptArtifact[];
 }
@@ -148,6 +161,8 @@ export interface SessionRuntimeSnapshot {
 export interface SessionRuntime {
   command(request: SessionRuntimeCommandRequest): Promise<SessionRuntimeCommandResult>;
   snapshot(input: { sessionId: string }): Promise<SessionRuntimeSnapshot>;
+  /** Durable Session state without the transcript replay a fresh surface needs. */
+  projection(input: { sessionId: string }): Promise<SessionRuntimeProjectionSnapshot>;
   subscribe(
     input: { sessionId: string; afterSequence: number },
     listener: (frame: SessionStreamFrame) => void | Promise<void>,
@@ -242,8 +257,37 @@ class BufferedObservationSink implements ObservationSink {
   }
 }
 
+/**
+ * One Session's history, folded once.
+ *
+ * `projection` is always exactly `projectSession(session, events, foldedAt)` —
+ * the fold stays a pure total function over the whole log, and this only keeps
+ * its result and the events it consumed so the next read folds the same log
+ * plus whatever arrived after `throughSequence`.
+ */
+interface ProjectedHistory {
+  projection: SessionProjection;
+  events: readonly SessionEvent[];
+  throughSequence: number;
+  /**
+   * When this fold stops being true on its own, or null if it never does.
+   *
+   * `now` is the single non-durable input to `projectSession`: a capability
+   * snapshot leaves the projection the moment it expires, with no event to
+   * announce it. This is the earliest such moment among the snapshots the fold
+   * kept, and reaching it invalidates the entry as surely as a new event does.
+   */
+  staleAt: number | null;
+}
+
 const ADAPTER_PROBE_TIMEOUT_MS = 15_000;
 const EVENT_PAGE_SIZE = 500;
+/**
+ * How many Sessions keep a folded history. A Session's events are held for as
+ * long as its entry lives, so this is the bound on that memory; the desktop
+ * reads one or two Sessions at a time and an evicted entry costs one re-read.
+ */
+const PROJECTION_CACHE_LIMIT = 8;
 
 class DefaultSessionRuntime implements SessionRuntime {
   readonly #bindings = new Map<string, BindingRecord>();
@@ -252,6 +296,8 @@ class DefaultSessionRuntime implements SessionRuntime {
   readonly #subscribers = new Map<string, Set<Subscriber>>();
   readonly #capabilityRevisions = new Map<string, number>();
   readonly #capabilityWrites = new Map<string, Promise<SessionCapabilitySnapshot>>();
+  /** Insertion-ordered, so the first key is the least recently read Session. */
+  readonly #histories = new Map<string, ProjectedHistory>();
   readonly #probeControllers = new Set<AbortController>();
   #closed = false;
 
@@ -489,8 +535,10 @@ class DefaultSessionRuntime implements SessionRuntime {
     adapter: NativeHarnessAdapter,
     location: SessionLocation,
   ): Promise<SessionRuntimeCommandResult> {
-    const projection = await this.#requireSession(request.sessionId);
-    const events = await this.#listEventsPaged({ sessionId: request.sessionId });
+    // One read of the folded history: the projection and the events below are
+    // the same fold, so a recovery decision can never be made against a
+    // projection from one moment and a log from another.
+    const { projection, events } = await this.#history(request.sessionId);
     const outcome = events.find(
       (event) =>
         event.commandId === request.commandId &&
@@ -866,21 +914,26 @@ class DefaultSessionRuntime implements SessionRuntime {
 
   async snapshot(input: { sessionId: string }): Promise<SessionRuntimeSnapshot> {
     this.#assertOpen();
-    const projection = await this.#requireSession(input.sessionId);
-    const events = await this.#listEventsPaged({ sessionId: input.sessionId });
+    const history = await this.#history(input.sessionId);
     const frames: SessionStreamFrame[] = [];
     const transcript: SessionTranscriptArtifact[] = [];
-    for (const event of events) {
+    for (const event of history.events) {
       const frame = await this.#frame(event);
       frames.push(frame);
       if (frame.transcript) transcript.push(frame.transcript);
     }
     return {
-      projection,
-      throughSequence: events.at(-1)?.sequence ?? 0,
+      projection: history.projection,
+      throughSequence: history.throughSequence,
       frames,
       transcript,
     };
+  }
+
+  async projection(input: { sessionId: string }): Promise<SessionRuntimeProjectionSnapshot> {
+    this.#assertOpen();
+    const history = await this.#history(input.sessionId);
+    return { projection: history.projection, throughSequence: history.throughSequence };
   }
 
   async subscribe(
@@ -978,6 +1031,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       for (const subscriber of subscribers) subscriber.active = false;
     }
     this.#subscribers.clear();
+    this.#histories.clear();
     await this.#releaseBindingsAfterClose();
   }
 
@@ -1517,9 +1571,63 @@ class DefaultSessionRuntime implements SessionRuntime {
   }
 
   async #requireSession(sessionId: string): Promise<SessionProjection> {
-    const projection = await this.ports.engine.getSession({ sessionId });
-    if (!projection) throw new SessionRuntimeNotFoundError(`Session ${sessionId} was not found`);
-    return projection;
+    return (await this.#history(sessionId)).projection;
+  }
+
+  /**
+   * A Session's folded history, kept between reads.
+   *
+   * Every read asked the ledger for the whole log and folded it again, which is
+   * linear in Session length per read and quadratic across a streaming turn.
+   * This keeps the fold's *result* and the events behind it, and asks the
+   * ledger only for what arrived after `throughSequence`.
+   *
+   * The entry is served unchanged only when both of its inputs are unchanged:
+   * the ledger returned no event past the cursor, and the clock has not reached
+   * `staleAt`. Otherwise the log it holds is extended and re-folded from the
+   * top, so `projection` is never a partial fold and `projectSession` is never
+   * asked to resume from one.
+   *
+   * That makes the invalidation rule the ledger's own contract: a Session's
+   * events are append-only and sequence-ordered (`SessionLedgerTransaction`
+   * offers `appendEvent` and no way to rewrite or remove one), so nothing below
+   * the cursor can change under a live entry, and everything above it is read
+   * every time — including facts appended by another writer. History rewritten
+   * out of band, beneath that contract, would not be seen; `close()` drops
+   * every entry, and a runtime that outlives such a rewrite must be rebuilt.
+   *
+   * Two concurrent reads may both fold and the slower one may install the older
+   * result. That entry is still exactly the fold of the events it holds — only
+   * its cursor is behind — so the next read picks the difference back up.
+   */
+  async #history(sessionId: string): Promise<ProjectedHistory> {
+    const now = this.ports.clock.now();
+    const cached = this.#histories.get(sessionId);
+    if (!cached) {
+      const known = await this.ports.engine.getSession({ sessionId });
+      if (!known) throw new SessionRuntimeNotFoundError(`Session ${sessionId} was not found`);
+      const events = await this.#listEventsPaged({ sessionId });
+      return this.#keepHistory(sessionId, foldHistory(known.session, events, now));
+    }
+    const appended = await this.#listEventsPaged({
+      sessionId,
+      afterSequence: cached.throughSequence,
+    });
+    if (appended.length === 0 && (cached.staleAt === null || now < cached.staleAt)) {
+      return this.#keepHistory(sessionId, cached);
+    }
+    const events = appended.length === 0 ? cached.events : [...cached.events, ...appended];
+    return this.#keepHistory(sessionId, foldHistory(cached.projection.session, events, now));
+  }
+
+  #keepHistory(sessionId: string, history: ProjectedHistory): ProjectedHistory {
+    this.#histories.delete(sessionId);
+    this.#histories.set(sessionId, history);
+    for (const oldest of this.#histories.keys()) {
+      if (this.#histories.size <= PROJECTION_CACHE_LIMIT) break;
+      this.#histories.delete(oldest);
+    }
+    return history;
   }
 
   #requireAdapter(adapterId: string): NativeHarnessAdapter {
@@ -1544,6 +1652,31 @@ class DefaultSessionRuntime implements SessionRuntime {
 
 export function createSessionRuntime(ports: SessionRuntimePorts): SessionRuntime {
   return new DefaultSessionRuntime(ports);
+}
+
+function foldHistory(
+  session: Session,
+  events: readonly SessionEvent[],
+  now: number,
+): ProjectedHistory {
+  const projection = projectSession(session, events, now);
+  return {
+    projection,
+    events,
+    throughSequence: events.at(-1)?.sequence ?? 0,
+    staleAt: earliestCapabilityExpiry(projection.capabilities),
+  };
+}
+
+function earliestCapabilityExpiry(
+  capabilities: readonly SessionCapabilitySnapshot[],
+): number | null {
+  let earliest: number | null = null;
+  for (const snapshot of capabilities) {
+    if (snapshot.expiresAt === null) continue;
+    if (earliest === null || snapshot.expiresAt < earliest) earliest = snapshot.expiresAt;
+  }
+  return earliest;
 }
 
 function userProvenance(venue: SessionExecutionVenue | null): SessionEventProvenance {

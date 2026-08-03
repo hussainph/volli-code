@@ -146,6 +146,10 @@ function runtimeFixture(): {
       };
     },
     snapshot: async () => snapshot(),
+    projection: async () => {
+      const { projection, throughSequence } = snapshot();
+      return { projection, throughSequence };
+    },
     subscribe: async (input, next) => {
       calls.subscribeAfter.push(input.afterSequence);
       listener = (value) => void next(value);
@@ -355,6 +359,31 @@ describe("Session tRPC router", () => {
         : null,
     ).toEqual([]);
     await iterator.return?.();
+  });
+
+  it("answers a projection read with Session state alone and no transcript replay", async () => {
+    const fixture = runtimeFixture();
+    const base = snapshot();
+    const runtime: SessionRuntime = {
+      ...fixture.runtime,
+      projection: async () => ({
+        projection: { ...base.projection, capabilities: [capabilitySnapshot()] },
+        throughSequence: 9,
+      }),
+    };
+    const diagnostics = new RpcDiagnosticLog();
+    const caller = createSessionRouter().createCaller({ runtime, diagnostics });
+
+    const resolved = await caller.session.projection({ sessionId: "session-1" });
+
+    expect(Object.keys(resolved).toSorted()).toEqual(["projection", "throughSequence"]);
+    expect(resolved.throughSequence).toBe(9);
+    // The one thing this edge still owes the renderer: no exhaustive inventory.
+    expect(resolved.projection.capabilities[0]?.catalog).toEqual([]);
+    expect(diagnostics.list().map((entry) => `${entry.procedure}:${entry.phase}`)).toEqual([
+      "session.projection:start",
+      "session.projection:success",
+    ]);
   });
 
   it("exposes bounded Runtime Catalog browsing and shortlist resolution to Lab clients", async () => {
