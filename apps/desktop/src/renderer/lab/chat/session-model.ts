@@ -250,6 +250,62 @@ export function nextRelease(
   return queue[0] ?? null;
 }
 
+/* -------------------------------------------------------------- approvals */
+
+/** What the approval card offers. Deliberately narrower than what a harness may declare. */
+export type ApprovalDecision = "allow" | "deny" | "steer";
+
+/**
+ * The open interaction a transcript row's gate belongs to.
+ *
+ * The row carries the harness's own permission id (`part.approval.id`); the
+ * command needs the Session's interaction id. The adapter happens to mint the
+ * latter as `permission:<native>`, but reconstructing that string here would
+ * make the renderer depend on a naming convention it cannot see change. The
+ * projection already publishes both, so matching on `native.id` is the honest
+ * lookup and stays correct for a harness that numbers its interactions
+ * differently.
+ */
+export function findInteractionByNativeId<T extends { native: { id: string | null } }>(
+  interactions: readonly T[],
+  nativeId: string,
+): T | null {
+  // A null native id belongs to an interaction the harness never correlated to a
+  // call, so it can match no row — and must never match by being equally absent.
+  return interactions.find((interaction) => interaction.native.id === nativeId) ?? null;
+}
+
+/**
+ * Which declared option a decision means.
+ *
+ * Option *polarity* is not a declared fact yet — `SessionInteractionOption` has
+ * an id, a label and a description, and nothing that says "this one is the no".
+ * So the vocabulary below is the seam where that fact belongs when a harness
+ * starts stating it, and until then it is matched against the ids the harness
+ * actually declared rather than assumed. OpenCode declares `once` / `always` /
+ * `reject`; a harness declaring none of these still resolves, because the
+ * fallback keeps a rejection from ever being read as consent: an unrecognized
+ * allow is a no-op, an unrecognized deny is the last option.
+ *
+ * `steer` denies. It is a rejection with a follow-up instruction, and the
+ * instruction is an ordinary message — OpenCode has no "reject with a reason"
+ * reply, and inventing one here would make the transcript claim the harness saw
+ * text it never received.
+ */
+const ALLOW_OPTION_IDS = ["once", "allow", "approve", "accept", "yes"];
+const DENY_OPTION_IDS = ["reject", "deny", "decline", "no", "cancel"];
+
+export function approvalOptionId(
+  options: readonly { id: string }[],
+  decision: ApprovalDecision,
+): string | null {
+  const vocabulary = decision === "allow" ? ALLOW_OPTION_IDS : DENY_OPTION_IDS;
+  const declared = options.find((option) => vocabulary.includes(option.id.toLowerCase()));
+  if (declared) return declared.id;
+  if (decision === "allow") return null;
+  return options[options.length - 1]?.id ?? null;
+}
+
 /* ------------------------------------------------------------------ shared */
 
 function recordString(record: Record<string, unknown>, key: string): string | null {

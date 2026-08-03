@@ -54,6 +54,18 @@ export async function createLabTaskWorkspace(parentDirectory: string): Promise<s
       `${JSON.stringify({ name: "volli-agent-lab", private: true, type: "module", scripts: { test: "node --test test/*.test.ts" } }, null, 2)}\n`,
       { mode: 0o600 },
     ),
+    // The approval gate is the one interaction the Lab could not reach. Left to
+    // the developer's own OpenCode config it never fired, so the card with Allow
+    // / Deny / Steer on it — the whole trust boundary of a chat-first Session —
+    // was only ever exercised against fixtures. Asking on `bash` puts a real
+    // permission in a real transcript on the way to running the task's own
+    // tests. Scoped to the disposable workspace, so it changes nothing else, and
+    // `edit` stays silent: a prompt per file would drown the thing being tested.
+    writeFile(
+      join(workspace, "opencode.json"),
+      `${JSON.stringify({ $schema: "https://opencode.ai/config.json", permission: { bash: "ask" } }, null, 2)}\n`,
+      { mode: 0o600 },
+    ),
     writeFile(
       join(workspace, "src/greeting.ts"),
       [
@@ -80,7 +92,7 @@ export async function createLabTaskWorkspace(parentDirectory: string): Promise<s
     ),
   ]);
   await execFileAsync("git", ["init", "--initial-branch=main"], { cwd: workspace });
-  await execFileAsync("git", ["add", "TASK.md", "package.json", "src", "test"], {
+  await execFileAsync("git", ["add", "TASK.md", "package.json", "opencode.json", "src", "test"], {
     cwd: workspace,
   });
   await execFileAsync(

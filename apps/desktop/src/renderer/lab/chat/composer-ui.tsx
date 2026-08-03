@@ -64,6 +64,8 @@ import {
 export interface SessionComposerProps {
   value: string;
   onValueChange(value: string): void;
+  /** Lets a decision elsewhere in the Session hand the cursor back to the reader. */
+  textareaRef?: React.Ref<HTMLTextAreaElement>;
   models: readonly RuntimeCatalogModel[];
   agents: readonly ComposerAgent[];
   selection: RuntimeSelection;
@@ -82,6 +84,7 @@ export interface SessionComposerProps {
 export function SessionComposer({
   value,
   onValueChange,
+  textareaRef,
   models,
   agents,
   selection,
@@ -151,6 +154,7 @@ export function SessionComposer({
 
       <PromptInputBody>
         <PromptInputTextarea
+          ref={textareaRef}
           value={value}
           disabled={!ready}
           placeholder="Ask, plan, or implement…"

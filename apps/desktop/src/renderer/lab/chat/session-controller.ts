@@ -3,6 +3,8 @@ import type {
   RuntimeCatalogChoices,
   RuntimeSelection,
   SessionEvent,
+  SessionInteraction,
+  SessionInteractionResolution,
   SessionProjection,
 } from "@volli/shared";
 import type { RpcDiagnosticEntry } from "@volli/session-rpc";
@@ -28,6 +30,17 @@ const EMPTY_CATALOG: RuntimeCatalogChoices = { providers: [], models: [], agents
 export type SessionLifecycle = "idle" | "starting" | "ready" | "working" | "error";
 export type MessageDelivery = "queue" | "steer" | "replace";
 
+/**
+ * Whether the runtime catalog has answered yet.
+ *
+ * `loading` and `empty` are different facts and were being conflated: the
+ * catalog starts as `EMPTY_CATALOG` and resolves over IPC, so a surface reading
+ * `models.length === 0` as "nothing is configured" tells the user to go choose
+ * models for as long as that round trip takes — and then contradicts itself.
+ * Only `empty` is a blocked state, and only it earns a recovery action.
+ */
+export type CatalogState = "loading" | "ready" | "empty" | "error";
+
 export interface LabSessionFrame {
   sessionId: string;
   sequence: number;
@@ -42,17 +55,35 @@ export interface LabSessionController {
   messages: readonly UIMessage[];
   diagnostics: readonly RpcDiagnosticEntry[];
   lifecycle: SessionLifecycle;
-  status: string;
+  /**
+   * The one thing about a Session's plumbing a person needs told.
+   *
+   * There is no `status` beside it any more. Attachment ids, receipt codes and
+   * "OpenCode is working" were state the surface computed and nothing displayed,
+   * because a chat has no honest home for them — the tab's dot already says
+   * live, and someone opening a Session wants to type, not to be briefed on a
+   * transport. A failure is the exception: it stops the typing, so it gets said.
+   */
+  error: string | null;
   selection: RuntimeSelection;
   setSelection(next: RuntimeSelection): void;
   catalog: RuntimeCatalogChoices;
+  catalogState: CatalogState;
+  /** Open interactions, so a gated transcript row can find the one it belongs to. */
+  interactions: readonly SessionInteraction[];
   liveAttachmentId: string | null;
   start(): Promise<void>;
   submit(text: string, delivery: MessageDelivery): Promise<boolean>;
+  resolveInteraction(
+    interactionId: string,
+    resolution: SessionInteractionResolution,
+  ): Promise<void>;
   interrupt(): Promise<void>;
   refreshCapabilities(): Promise<void>;
   reconcile(): Promise<void>;
   release(): Promise<void>;
+  /** The single action an error row offers; which one it is depends on what broke. */
+  recover(): Promise<void>;
 }
 
 export function useLabSessionController(): LabSessionController {
@@ -66,29 +97,10 @@ export function useLabSessionController(): LabSessionController {
   >(new Map());
   const [diagnostics, setDiagnostics] = React.useState<readonly RpcDiagnosticEntry[]>([]);
   const [lifecycle, setLifecycle] = React.useState<SessionLifecycle>("idle");
-  const [status, setStatus] = React.useState("Ready to start in a disposable workspace");
+  const [sessionError, setError] = React.useState<string | null>(null);
   const [selection, setSelection] = React.useState<RuntimeSelection>(EMPTY_SELECTION);
   const [catalog, setCatalog] = React.useState<RuntimeCatalogChoices>(EMPTY_CATALOG);
-
-  React.useEffect(() => {
-    if (!runtimeCatalog) return;
-    let active = true;
-    void runtimeCatalog
-      .resolve({ adapterId: "opencode" })
-      .then((resolved) => {
-        if (!active) return;
-        setCatalog(resolved.catalog);
-        setSelection((current) =>
-          resolveRuntimeSelection(resolved.catalog, current.modelId ? current : resolved.selection),
-        );
-      })
-      .catch((error: unknown) => {
-        if (active) reportError("runtime catalog", error);
-      });
-    return () => {
-      active = false;
-    };
-  }, [runtimeCatalog, settingsOpen]);
+  const [catalogState, setCatalogState] = React.useState<CatalogState>("loading");
 
   React.useEffect(() => {
     const rpc = createSessionRpcClient();
@@ -217,17 +229,48 @@ export function useLabSessionController(): LabSessionController {
   const liveAttachmentId = projection?.liveExecutor?.id ?? null;
   const working = liveAttachmentId !== null && latestTurnIsActive(frames);
 
+  /**
+   * Which models exist is a question only a running harness can answer.
+   *
+   * This used to ask once on mount and again whenever Settings closed, which
+   * was survivable while a person pressed Start themselves — by the time they
+   * did, OpenCode was up. Opening the Session now starts it, so the first ask
+   * races the attach and loses, and an empty answer arrives as the confident
+   * claim that nothing is configured. Re-asking when an executor appears is
+   * what makes `empty` mean empty.
+   */
+  React.useEffect(() => {
+    if (!runtimeCatalog) return;
+    let active = true;
+    void runtimeCatalog
+      .resolve({ adapterId: "opencode" })
+      .then((resolved) => {
+        if (!active) return;
+        setCatalog(resolved.catalog);
+        setCatalogState(resolved.catalog.models.length > 0 ? "ready" : "empty");
+        setSelection((current) =>
+          resolveRuntimeSelection(resolved.catalog, current.modelId ? current : resolved.selection),
+        );
+      })
+      .catch((unresolved: unknown) => {
+        if (!active) return;
+        // The last known catalog stays on screen. A refresh that fails is not
+        // evidence that the models a person already picked have gone away, and
+        // blanking the picker would take away the one control they could still
+        // use while the failure is on screen.
+        reportError("runtime catalog", unresolved);
+        setCatalogState("error");
+        setError(`Models unavailable: ${errorMessage(unresolved)}`);
+      });
+    return () => {
+      active = false;
+    };
+  }, [liveAttachmentId, runtimeCatalog, settingsOpen]);
+
   React.useEffect(() => {
     if (!sessionId || lifecycle === "starting" || lifecycle === "error") return;
     setLifecycle(working ? "working" : "ready");
-    setStatus(
-      working
-        ? "OpenCode is working"
-        : liveAttachmentId
-          ? "Ready for your next instruction"
-          : "OpenCode is not attached",
-    );
-  }, [lifecycle, liveAttachmentId, sessionId, working]);
+  }, [lifecycle, sessionId, working]);
 
   const run = React.useCallback(
     async (
@@ -236,13 +279,12 @@ export function useLabSessionController(): LabSessionController {
     ) => {
       const rpc = client.current;
       if (!rpc || !sessionId) return;
-      setStatus(`${label}…`);
       try {
-        const result = await action(rpc, sessionId);
-        setStatus(`${label}: ${receiptStatus(result)}`);
-      } catch (error) {
+        await action(rpc, sessionId);
+        setError(null);
+      } catch (failure) {
         setLifecycle("error");
-        setStatus(`${label}: ${errorMessage(error)}`);
+        setError(`${label}: ${errorMessage(failure)}`);
       }
     },
     [sessionId],
@@ -252,7 +294,7 @@ export function useLabSessionController(): LabSessionController {
     const rpc = client.current;
     if (!rpc || lifecycle === "starting") return;
     setLifecycle("starting");
-    setStatus("Creating durable Session…");
+    setError(null);
     setSessionId("");
     setProjection(null);
     setFramesBySequence(new Map());
@@ -267,8 +309,7 @@ export function useLabSessionController(): LabSessionController {
         },
       });
       setSessionId(created.sessionId);
-      setStatus("Attaching OpenCode…");
-      const attached = await rpc.session.command.mutate({
+      await rpc.session.command.mutate({
         commandId: nextId(),
         sessionId: created.sessionId,
         command: {
@@ -279,10 +320,9 @@ export function useLabSessionController(): LabSessionController {
         },
       });
       setLifecycle("ready");
-      setStatus(`OpenCode attached: ${receiptStatus(attached)}`);
-    } catch (error) {
+    } catch (failure) {
       setLifecycle("error");
-      setStatus(`Start failed: ${errorMessage(error)}`);
+      setError(`Could not start OpenCode: ${errorMessage(failure)}`);
     }
   }, [lifecycle]);
 
@@ -292,9 +332,8 @@ export function useLabSessionController(): LabSessionController {
       if (!rpc || !sessionId || !liveAttachmentId || !selection.modelId || !text.trim()) {
         return false;
       }
-      setStatus(delivery === "steer" ? "Steering active turn…" : "Submitting instruction…");
       try {
-        const result = await rpc.session.command.mutate({
+        await rpc.session.command.mutate({
           commandId: nextId(),
           sessionId,
           command: {
@@ -307,15 +346,32 @@ export function useLabSessionController(): LabSessionController {
           },
         });
         setLifecycle("working");
-        setStatus(`Instruction ${receiptStatus(result)}`);
+        setError(null);
         return true;
-      } catch (error) {
+      } catch (failure) {
         setLifecycle("error");
-        setStatus(`Submit failed: ${errorMessage(error)}`);
+        setError(`Message not delivered: ${errorMessage(failure)}`);
         return false;
       }
     },
     [liveAttachmentId, selection, sessionId],
+  );
+
+  const resolveInteraction = React.useCallback(
+    (interactionId: string, resolution: SessionInteractionResolution) =>
+      run("Decision not delivered", (rpc, activeSessionId) =>
+        rpc.session.command.mutate({
+          commandId: nextId(),
+          sessionId: activeSessionId,
+          command: {
+            kind: "interaction.resolve",
+            interactionId,
+            // The wire schema owns its own array; the projection's is readonly.
+            resolution: { optionIds: [...resolution.optionIds], response: resolution.response },
+          },
+        }),
+      ),
+    [run],
   );
 
   const interrupt = React.useCallback(
@@ -366,9 +422,35 @@ export function useLabSessionController(): LabSessionController {
     [liveAttachmentId, run],
   );
 
-  function setConnectionError(error: unknown) {
+  /**
+   * One button, and which one is not the user's problem to work out.
+   *
+   * A dropped stream and a Session that never started need opposite answers:
+   * reconciling a Session that does not exist does nothing, and starting a new
+   * one to recover a live stream throws away the transcript. The controller is
+   * the only place that knows which happened, so it decides here rather than
+   * offering two buttons and making the reader diagnose their own transport.
+   */
+  const recover = React.useCallback(
+    () => (liveAttachmentId ? reconcile() : start()),
+    [liveAttachmentId, reconcile, start],
+  );
+
+  // Opening a Session starts it. There was a button here, and it asked a person
+  // who had just opened a chat to confirm that they wanted a chat — the answer
+  // is always yes, and the wait is the same either way. `started` latches so a
+  // failure stops at the error row with its own Retry instead of relaunching in
+  // a loop, and so StrictMode's double mount attaches once.
+  const started = React.useRef(false);
+  React.useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    void start();
+  }, [start]);
+
+  function setConnectionError(failure: unknown) {
     setLifecycle("error");
-    setStatus(`Session stream: ${errorMessage(error)}`);
+    setError(`Lost the Session stream: ${errorMessage(failure)}`);
   }
 
   return {
@@ -378,17 +460,21 @@ export function useLabSessionController(): LabSessionController {
     messages,
     diagnostics,
     lifecycle,
-    status,
+    error: sessionError,
     selection,
     setSelection,
     catalog,
+    catalogState,
+    interactions: projection?.interactions.active ?? [],
     liveAttachmentId,
     start,
     submit,
+    resolveInteraction,
     interrupt,
     refreshCapabilities,
     reconcile,
     release,
+    recover,
   };
 }
 
@@ -410,13 +496,6 @@ function appendDiagnostics(
   return [...merged.values()]
     .toSorted((left, right) => left.id - right.id)
     .slice(-DIAGNOSTIC_LIMIT);
-}
-
-function receiptStatus(result: unknown): string {
-  if (!isRecord(result) || !isRecord(result.receipt)) return "completed";
-  const status = typeof result.receipt.status === "string" ? result.receipt.status : "unknown";
-  const code = typeof result.receipt.code === "string" ? result.receipt.code : null;
-  return code ? `${status} (${code})` : status;
 }
 
 function nextId(): string {

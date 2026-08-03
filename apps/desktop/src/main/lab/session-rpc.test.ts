@@ -178,6 +178,11 @@ describe("Lab task workspace", () => {
       await expect(readFile(`${workspace}/src/greeting.ts`, "utf8")).resolves.toContain(
         "export function greeting",
       );
+      // The workspace asks before it runs anything, so the Lab can reach the
+      // approval gate without a developer editing their own OpenCode config.
+      await expect(readFile(`${workspace}/opencode.json`, "utf8")).resolves.toContain(
+        '"bash": "ask"',
+      );
 
       const status = await new Promise<string>((resolve, reject) => {
         execFile("git", ["status", "--short"], { cwd: workspace }, (error, stdout) => {
