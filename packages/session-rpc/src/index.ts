@@ -184,6 +184,31 @@ const runtimePreferencesSchema = z.object({
   enabledModels: z.array(runtimeModelRefSchema).max(MAX_RUNTIME_PREFERENCE_MODELS),
   defaults: runtimeSelectionSchema,
 });
+/** One prompt's answer, as `SessionInteractionAnswer` declares it. */
+const interactionAnswerSchema = z.object({
+  promptId: nonEmptyString,
+  optionIds: z.array(nonEmptyString),
+  response: nullableString,
+});
+/**
+ * `answers` is optional in both directions. A resolution without it is the flat
+ * single-prompt shape `readInteractionAnswers` projects, so the edge neither
+ * invents an empty array nor keeps a key it was handed empty-handed.
+ */
+const interactionResolutionSchema = z
+  .object({
+    optionIds: z.array(nonEmptyString),
+    response: nullableString,
+    answers: z.array(interactionAnswerSchema).optional(),
+  })
+  // An optional key that arrives explicitly `undefined` parses as a key that is
+  // present and unserialisable — Electron's structured clone keeps one where
+  // JSON would have dropped it. The ledger encodes a command intent behind a
+  // strict JSON assertion, so carrying that key through turns an ordinary flat
+  // resolution into a throw at the persistence boundary.
+  .transform(({ optionIds, response, answers }) =>
+    answers === undefined ? { optionIds, response } : { optionIds, response, answers },
+  );
 
 const commandSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -210,7 +235,7 @@ const commandSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("interaction.resolve"),
     interactionId: nonEmptyString,
-    resolution: z.object({ optionIds: z.array(nonEmptyString), response: nullableString }),
+    resolution: interactionResolutionSchema,
   }),
   z.object({ kind: z.literal("adapter.release"), attachmentId: nonEmptyString }),
 ]);

@@ -447,6 +447,70 @@ describe("Session tRPC router", () => {
     ]);
   });
 
+  it("carries per-prompt answers through a resolve command and leaves absent ones absent", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await caller.session.command({
+      commandId: "resolve-answered",
+      sessionId: "session-1",
+      command: {
+        kind: "interaction.resolve",
+        interactionId: "question:1",
+        resolution: {
+          optionIds: ["prompt:0:yes", "prompt:1:no"],
+          response: null,
+          answers: [
+            { promptId: "prompt:0", optionIds: ["prompt:0:yes"], response: null },
+            { promptId: "prompt:1", optionIds: ["prompt:1:no"], response: "because" },
+          ],
+        },
+      },
+    });
+    await caller.session.command({
+      commandId: "resolve-flat",
+      sessionId: "session-1",
+      command: {
+        kind: "interaction.resolve",
+        interactionId: "permission:1",
+        resolution: { optionIds: ["once"], response: null },
+      },
+    });
+    // The shape Electron's structured clone delivers when a client spreads an
+    // answer it did not compute: the key survives the wire, so the edge is what
+    // has to drop it before the ledger tries to encode it.
+    await caller.session.command({
+      commandId: "resolve-undefined",
+      sessionId: "session-1",
+      command: {
+        kind: "interaction.resolve",
+        interactionId: "permission:2",
+        resolution: { optionIds: ["reject"], response: null, answers: undefined },
+      },
+    });
+
+    const resolutions = fixture.calls.command.map((request) =>
+      request.command.kind === "interaction.resolve" ? request.command.resolution : null,
+    );
+    expect(resolutions[0]).toEqual({
+      optionIds: ["prompt:0:yes", "prompt:1:no"],
+      response: null,
+      answers: [
+        { promptId: "prompt:0", optionIds: ["prompt:0:yes"], response: null },
+        { promptId: "prompt:1", optionIds: ["prompt:1:no"], response: "because" },
+      ],
+    });
+    expect(resolutions[1]).toEqual({ optionIds: ["once"], response: null });
+    expect(resolutions[1] && "answers" in resolutions[1]).toBe(false);
+    // Not merely `answers === undefined`: the ledger encodes an intent behind a
+    // strict JSON assertion that rejects an undefined value on a present key.
+    expect(resolutions[2] && "answers" in resolutions[2]).toBe(false);
+    expect(resolutions[2]).toEqual({ optionIds: ["reject"], response: null });
+  });
+
   it("calls the durable runtime without retaining client prompt payloads in diagnostics", async () => {
     const fixture = runtimeFixture();
     const diagnostics = new RpcDiagnosticLog();
