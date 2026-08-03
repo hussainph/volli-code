@@ -127,6 +127,67 @@ function gatedTurn(
   return network;
 }
 
+/**
+ * One assistant turn that delegated to a subagent, then whatever happens while
+ * that subagent runs. OpenCode states the child Session on the `task` part
+ * itself, which is the only place the two ids are ever related.
+ *
+ * The tail waits out the snapshot coalescing window first, because a subagent
+ * takes seconds to reach the call it needs answered: the `task` row has long
+ * since painted by then, and anything that gates it has to say so itself. A
+ * fixture that yields the tail in the same tick tests a race that never runs.
+ */
+function delegatedTurn(tail: readonly OpenCodeSseEvent[], hold: Deferred<void>) {
+  const network = new FakeNetwork();
+  network.subscribe = async (input) => {
+    network.subscriptions.push(input);
+    return (async function* () {
+      yield {
+        id: "assistant",
+        type: "message.updated",
+        properties: {
+          info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+        },
+      };
+      yield {
+        id: "task-call",
+        type: "message.part.updated",
+        properties: {
+          sessionID: "native-session-1",
+          part: {
+            id: "p1",
+            messageID: "provider-assistant",
+            ...toolPart("task", "call-task", {
+              status: "running",
+              input: { description: "Review lab task" },
+              metadata: { parentSessionId: "native-session-1", sessionId: "child-session-1" },
+            }),
+          },
+        },
+      };
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      yield* tail;
+      await hold.promise;
+    })();
+  };
+  return network;
+}
+
+/**
+ * A permission raised inside a subagent: tagged with the child Session, naming
+ * a call in the child's transcript. Neither id means anything to the Session
+ * that has to answer it.
+ */
+const subagentAskedFor = (sessionID: string) => ({
+  id: "asked",
+  type: "permission.asked",
+  properties: {
+    sessionID,
+    id: "per_1",
+    tool: { messageID: "child-message-1", callID: "child-call-1" },
+  },
+});
+
 const askedFor = (callID: string, messageID = "provider-assistant") => ({
   id: "asked",
   type: "permission.asked",
@@ -4409,6 +4470,162 @@ describe("OpenCodeNativeAdapter", () => {
       }),
     );
     hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("raises a subagent's permission on the task row that is waiting for it", async () => {
+    const hold = new Deferred<void>();
+    const network = delegatedTurn([subagentAskedFor("child-session-1")], hold);
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // The prompt names a call in the child's transcript, which this Session does
+    // not hold — so it is raised on the `task` row that is blocked on it.
+    expect(toolRows(observations).at(-1)).toMatchObject({
+      toolCallId: "call-task",
+      state: "approval-requested",
+      approval: { id: "per_1" },
+    });
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        kind: "interaction.opened",
+        interaction: expect.objectContaining({ id: "permission:per_1", kind: "permission" }),
+      }),
+    );
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("keeps a subagent's transcript out of the Session that delegated to it", async () => {
+    const hold = new Deferred<void>();
+    const network = delegatedTurn(
+      [
+        {
+          id: "child-says",
+          type: "message.updated",
+          properties: {
+            info: { id: "child-message-1", sessionID: "child-session-1", role: "assistant" },
+            parts: [{ id: "c1", type: "text", text: "I am the subagent." }],
+          },
+        },
+      ],
+      hold,
+    );
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // The `task` row is how a subagent appears here. Merging its prose would
+    // interleave a second agent's voice into this one's transcript.
+    expect(
+      observations.flatMap((observation) =>
+        observation.kind === "transcript.message" ? [observation.message.id] : [],
+      ),
+    ).not.toContain("child-message-1");
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("ignores a permission raised by a Session it never delegated to", async () => {
+    const hold = new Deferred<void>();
+    const network = delegatedTurn([subagentAskedFor("someone-elses-session")], hold);
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(observations.filter(({ kind }) => kind === "interaction.opened")).toEqual([]);
+    expect(toolRows(observations).at(-1)).not.toHaveProperty("approval");
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("recovers a subagent's open permission when it reconciles", async () => {
+    const network = new FakeNetwork();
+    network.holdEventStream = true;
+    network.messageResponse = [
+      {
+        info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+        parts: [
+          {
+            // A task OpenCode has accepted but not yet given a Session to. It
+            // names no subagent, and must not be mistaken for one.
+            id: "p0",
+            messageID: "provider-assistant",
+            ...toolPart("task", "call-task-pending", {
+              status: "pending",
+              input: { description: "Not started" },
+            }),
+          },
+          {
+            id: "p1",
+            messageID: "provider-assistant",
+            ...toolPart("task", "call-task", {
+              status: "running",
+              input: { description: "Review lab task" },
+              metadata: { parentSessionId: "native-session-1", sessionId: "child-session-1" },
+            }),
+          },
+        ],
+      },
+    ];
+    const base = network.request.bind(network);
+    network.request = async (input) => {
+      const response = await base(input);
+      return input.path.startsWith("/permission")
+        ? {
+            status: 200,
+            body: [
+              // Belongs to no Session this one can name, so it is not this
+              // Session's to answer.
+              { id: "per_orphan", tool: { messageID: "m", callID: "c" } },
+              {
+                id: "per_1",
+                sessionID: "child-session-1",
+                tool: { messageID: "child-message-1", callID: "child-call-1" },
+              },
+            ],
+          }
+        : response;
+    };
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const handle = await adapter.attach(spec(), { emit: async () => undefined });
+
+    // Reconciling is the one action that looks like it should free a Session
+    // stuck behind a subagent, so it has to know the same Sessions the stream
+    // does — and it learns them from the `task` parts in its own history.
+    const reconciliation = await handle.reconcile(null);
+    expect(reconciliation.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "interaction.opened",
+        interaction: expect.objectContaining({ id: "permission:per_1", kind: "permission" }),
+      }),
+    );
+    expect(toolRows(reconciliation.observations).at(-1)).toMatchObject({
+      toolCallId: "call-task",
+      state: "approval-requested",
+      approval: { id: "per_1" },
+    });
+    expect(
+      reconciliation.observations.flatMap((observation) =>
+        observation.kind === "interaction.opened" ? [observation.interaction.id] : [],
+      ),
+    ).toEqual(["permission:per_1"]);
     await handle.release("requested");
   });
 

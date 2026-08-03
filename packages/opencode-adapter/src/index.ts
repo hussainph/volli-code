@@ -44,6 +44,18 @@ const MAX_DEFERRED_EVENTS = 1_000;
 const MAX_REMEMBERED_EVENT_IDS = 10_000;
 const MAX_SSE_BUFFER_LENGTH = 1_048_576;
 const STREAM_SNAPSHOT_DELAY_MS = 32;
+/**
+ * The only events a subagent's Session may contribute to this one. Its
+ * transcript belongs to the `task` row; a prompt it is blocked on belongs to
+ * whoever can answer it.
+ */
+const INTERACTION_EVENT_TYPES = new Set([
+  "permission.asked",
+  "permission.replied",
+  "question.asked",
+  "question.replied",
+  "question.rejected",
+]);
 
 export interface OpenCodeChild {
   readonly exited: Promise<number | null>;
@@ -503,6 +515,8 @@ class OpenCodeBinding implements BindingHandle {
   readonly #questions = new Map<string, readonly OpenCodeQuestion[]>();
   /** Open tool-gating permissions, by OpenCode's permission id. */
   readonly #pendingApprovals = new Map<string, OpenCodeApprovalTarget>();
+  /** Subagent Sessions this one spawned, by the `task` row each belongs to. */
+  readonly #subagents = new Map<string, OpenCodeApprovalTarget>();
   readonly #streamAbort = new AbortController();
   #sink: ObservationSink | null = null;
   #emissionQueue: Promise<void> = Promise.resolve();
@@ -661,11 +675,21 @@ class OpenCodeBinding implements BindingHandle {
       return true;
     };
     let completesNativeHistoryImport = false;
+    // Which Sessions are this one's subagents is a fact carried by the `task`
+    // parts of its own history, so it has to be recovered before the sweeps
+    // below can tell a subagent's open permission from a stranger's. Without
+    // it, reconciling is the one action that looks like it should free a
+    // Session blocked on a subagent and reliably does not.
+    if (isSuccessfulMessageResponse(messages)) {
+      for (const message of messageResponses(messages.body)) {
+        this.#registerSubagentsInMessage(message);
+      }
+    }
     // Project permissions before messages — they are what tells a hydrated tool
     // row it is gated — but keep them behind messages in the emitted batch, so
     // the order a resuming consumer sees is the order it always saw.
     const permissionObservations = arrayBody(permissionResponse.body)
-      .filter((candidate) => hasSessionId(candidate, this.#nativeSessionId))
+      .filter((candidate) => this.#ownsInteraction(candidate))
       .flatMap((permission) => {
         const observation = this.#interactionObservation(
           "permission.asked",
@@ -690,7 +714,7 @@ class OpenCodeBinding implements BindingHandle {
     }
     for (const observation of permissionObservations) push(observation);
     for (const question of arrayBody(questionResponse.body).filter((candidate) =>
-      hasSessionId(candidate, this.#nativeSessionId),
+      this.#ownsInteraction(candidate),
     )) {
       const observation = this.#interactionObservation(
         "question.asked",
@@ -758,6 +782,7 @@ class OpenCodeBinding implements BindingHandle {
     this.#sink = null;
     this.#messages.clear();
     this.#pendingApprovals.clear();
+    this.#subagents.clear();
     this.#deferredEvents.length = 0;
     this.#pendingReconciliation = null;
     this.#onRelease();
@@ -807,13 +832,55 @@ class OpenCodeBinding implements BindingHandle {
    * OpenCode tags snapshots with their Session, but its high-frequency text
    * deltas can be scoped only by message and part. Accept that compact shape
    * only after a trusted, Session-tagged message or part established ownership.
+   *
+   * A subagent runs in a Session of its own, and everything it says is already
+   * represented here by the `task` row that is waiting for it — merging its
+   * transcript would interleave a second agent's prose into this one's. Its
+   * *interactions* are the exception, and not a cosmetic one: a permission
+   * raised inside a subagent blocks this turn, and a dropped one is a Session
+   * that stays busy forever with no way back out. See {@link #ownsInteraction},
+   * which the reconcile sweep applies to the same effect.
    */
   #ownsStreamEvent(event: OpenCodeSseEvent): boolean {
     const sessionId = eventSessionId(event.properties);
-    if (sessionId !== null) return sessionId === this.#nativeSessionId;
+    if (sessionId !== null) {
+      if (sessionId === this.#nativeSessionId) return true;
+      return this.#subagents.has(sessionId) && INTERACTION_EVENT_TYPES.has(event.type);
+    }
     if (event.type !== "message.part.delta" && event.type !== "message.part.removed") return false;
     const messageId = objectString(event.properties, "messageID");
     return messageId !== null && this.#messages.has(messageId);
+  }
+
+  /** This Session or one of its subagents — the rule the stream filter applies. */
+  #ownsInteraction(raw: unknown): boolean {
+    const sessionId = objectString(raw, "sessionID");
+    if (sessionId === null) return false;
+    return sessionId === this.#nativeSessionId || this.#subagents.has(sessionId);
+  }
+
+  /**
+   * The `task` call a subagent Session belongs to.
+   *
+   * OpenCode states both ids on the task part itself, which is the only place
+   * they are related: a permission raised inside the subagent names a call in
+   * the child's transcript, and nothing this Session holds. Registering the
+   * pair as the part streams is what later lets that permission be raised on
+   * the row a person is already watching spin.
+   */
+  #registerSubagent(part: unknown, messageId: string | null): void {
+    if (objectString(part, "tool") !== "task") return;
+    const childSessionId = objectString(nested(nested(part, "state"), "metadata"), "sessionId");
+    const callId = objectString(part, "callID");
+    if (!childSessionId || !messageId || !callId) return;
+    this.#subagents.set(childSessionId, { messageId, callId });
+  }
+
+  #registerSubagentsInMessage(raw: unknown): void {
+    const info = nested(raw, "info") ?? raw;
+    const messageId = objectString(info, "id");
+    if (!isRecord(raw) || !Array.isArray(raw.parts)) return;
+    for (const part of raw.parts) this.#registerSubagent(part, messageId);
   }
 
   #subscribe(): Promise<AsyncIterable<OpenCodeSseEvent>> {
@@ -992,8 +1059,13 @@ class OpenCodeBinding implements BindingHandle {
         if (observation) await this.#emit(observation);
         // Nothing further arrives on the gated call until a human answers, so
         // repaint now or the prompt would not reach its tool row until the
-        // reply that already dismissed it.
-        this.#scheduleStreamSnapshot(approvalTarget(event.properties)?.messageId ?? null, event.id);
+        // reply that already dismissed it. Resolved the same way the gate
+        // itself is: a subagent's permission names a message this Session does
+        // not hold, and repainting *that* one repaints nothing.
+        this.#scheduleStreamSnapshot(
+          this.#approvalTarget(event.properties)?.messageId ?? null,
+          event.id,
+        );
         return;
       }
       case "permission.replied": {
@@ -1037,6 +1109,7 @@ class OpenCodeBinding implements BindingHandle {
       const partId = objectString(part, "id") ?? `snapshot:${index}`;
       message.partOrder.push(partId);
       message.parts.set(partId, part);
+      this.#registerSubagent(part, messageId);
     });
     return messageId;
   }
@@ -1049,7 +1122,9 @@ class OpenCodeBinding implements BindingHandle {
     if (!messageId || !partId) return null;
     const message = this.#message(messageId);
     if (!message.parts.has(partId)) message.partOrder.push(partId);
-    message.parts.set(partId, mergeOpenCodePart(message.parts.get(partId), part));
+    const merged = mergeOpenCodePart(message.parts.get(partId), part);
+    message.parts.set(partId, merged);
+    this.#registerSubagent(merged, messageId);
     return messageId;
   }
 
@@ -1394,7 +1469,7 @@ class OpenCodeBinding implements BindingHandle {
     if (kind === "question") this.#questions.set(nativeId, questions(raw));
     // Both the SSE event and the hydrate sweep land here, so one record keeps a
     // permission opened before this binding attached gating its row too.
-    const target = kind === "permission" ? approvalTarget(raw) : null;
+    const target = kind === "permission" ? this.#approvalTarget(raw) : null;
     if (target) this.#pendingApprovals.set(nativeId, target);
     return {
       id,
@@ -1403,6 +1478,21 @@ class OpenCodeBinding implements BindingHandle {
       cursor: { eventId: id },
       interaction,
     };
+  }
+
+  /**
+   * The row a permission gates.
+   *
+   * A subagent's permission names a call inside its own Session, which this
+   * transcript does not contain — so there is no row for it to land on and it
+   * would render as a bare card beside work whose connection to it is left for
+   * the reader to guess. The `task` call is the thing actually blocked, and it
+   * is already on screen with a spinner, so the prompt is raised there.
+   */
+  #approvalTarget(raw: unknown): OpenCodeApprovalTarget | null {
+    /* v8 ignore next 2 -- both callers establish a non-null sessionID first; the fallback key matches nothing. */
+    const subagent = this.#subagents.get(objectString(raw, "sessionID") ?? "");
+    return subagent ?? approvalTarget(raw);
   }
 
   #resolvedInteractionObservation(event: OpenCodeSseEvent): HarnessObservation | null {
@@ -1732,10 +1822,6 @@ function questionAnswerOptionIds(
 
 function requestId(raw: unknown): string | null {
   return objectString(raw, "requestID") ?? objectString(raw, "id");
-}
-
-function hasSessionId(raw: unknown, sessionId: string): boolean {
-  return objectString(raw, "sessionID") === sessionId;
 }
 
 function messageResponses(body: unknown): readonly unknown[] {
