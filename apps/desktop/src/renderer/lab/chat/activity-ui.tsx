@@ -166,30 +166,70 @@ function hasTextSelection(): boolean {
  */
 const ROW_CLASS =
   "group/row flex w-full min-w-0 items-center gap-1.5 rounded-md py-0.5 text-left text-xs text-muted-foreground outline-none transition-colors";
-const ROW_INTERACTIVE =
-  "cursor-pointer hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring";
+const ROW_INTERACTIVE = "cursor-pointer hover:text-foreground";
+/** Only for rows that are themselves a control — a tool row's ring is on its caret. */
+const ROW_FOCUSABLE = "focus-visible:ring-1 focus-visible:ring-ring";
 
-/** Click, Enter and Space open a row; dragging a selection across it does not. */
+/**
+ * Click opens a row; dragging a selection across it does not.
+ *
+ * The row itself is deliberately not a button. It used to be — `role="button"`,
+ * `tabIndex`, and a keydown handler — and that made everything interactive
+ * inside it (the mono object that opens the file, Copy) a control nested in a
+ * control. That is invalid ARIA, and it was a live bug: Enter on the focused
+ * file object bubbled to the row's handler, which called `preventDefault()`, and
+ * cancelling that keydown cancels the click the browser was about to synthesize
+ * on the button that had focus. The file never opened, the row toggled instead,
+ * and a file was simply unreachable from the keyboard.
+ *
+ * So the div keeps `onClick` as a generous pointer target, and {@link RowDisclosure}
+ * is the real focusable control that owns the caret. Three honest tab stops per
+ * row — disclosure, object, Copy — in place of one that lied about the other two.
+ */
 function useRowToggle(expandable: boolean) {
   const [open, setOpen] = React.useState(false);
   const toggle = () => {
     if (hasTextSelection() || !expandable) return;
     setOpen((value) => !value);
   };
-  return {
-    open,
-    props: {
-      role: expandable ? ("button" as const) : undefined,
-      tabIndex: expandable ? 0 : undefined,
-      "aria-expanded": expandable ? open : undefined,
-      onClick: toggle,
-      onKeyDown: (event: React.KeyboardEvent) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        toggle();
-      },
-    },
-  };
+  /** The row shell, for the pointer only. It carries no role: it holds controls. */
+  return { open, toggle, rowProps: { onClick: toggle } };
+}
+
+/**
+ * The disclosure as a real control.
+ *
+ * Labelled by the row's own verb rather than a string of its own — the caret
+ * discloses what that word names, so a screen reader should say "Ran command,
+ * button, collapsed" and nothing we had to invent. `stopPropagation` keeps the
+ * row's pointer handler from undoing this one's toggle.
+ */
+function RowDisclosure({
+  open,
+  expandable,
+  labelId,
+  onToggle,
+}: {
+  open: boolean;
+  expandable: boolean;
+  labelId: string;
+  onToggle(): void;
+}) {
+  if (!expandable) return <Caret open={false} hidden />;
+  return (
+    <button
+      type="button"
+      aria-expanded={open}
+      aria-labelledby={labelId}
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggle();
+      }}
+      className="flex shrink-0 rounded outline-none focus-visible:ring-1 focus-visible:ring-ring"
+    >
+      <Caret open={open} />
+    </button>
+  );
 }
 
 /**
@@ -345,15 +385,18 @@ export function ToolRow({
 }) {
   const row = describeActivity(part);
   const expandable = row.detail !== null;
-  const { open, props } = useRowToggle(expandable);
+  const { open, toggle, rowProps } = useRowToggle(expandable);
+  const verbId = React.useId();
 
   return (
     <div className={cn("group/row not-prose", className)}>
-      <div {...props} className={cn(ROW_CLASS, expandable && ROW_INTERACTIVE)}>
+      <div {...rowProps} className={cn(ROW_CLASS, expandable && ROW_INTERACTIVE)}>
         <RowGlyph kind={row.kind} status={row.status} />
-        <span className="shrink-0">{row.verb}</span>
+        <span id={verbId} className="shrink-0">
+          {row.verb}
+        </span>
         {row.object ? <RowObject row={row} onOpenFile={onOpenFile} /> : null}
-        <Caret open={open} hidden={!expandable} />
+        <RowDisclosure open={open} expandable={expandable} labelId={verbId} onToggle={toggle} />
         <RowActions row={row} />
         {row.meta ? (
           <span
@@ -597,7 +640,7 @@ export function ActivityBundle({
         type="button"
         onClick={toggle}
         aria-expanded={open}
-        className={cn(ROW_CLASS, ROW_INTERACTIVE)}
+        className={cn(ROW_CLASS, ROW_INTERACTIVE, ROW_FOCUSABLE)}
       >
         <BundleGlyph />
         <Summary segments={summary} />
@@ -638,18 +681,21 @@ function ReasoningRow({ part, streaming }: { part: ReasoningUIPart; streaming: b
   const status = reasoningStatus(part.text, { streaming, durationMs: elapsed });
   const body = reasoningBody(part.text);
   const expandable = body !== null;
-  const { open, props } = useRowToggle(expandable);
+  const { open, toggle, rowProps } = useRowToggle(expandable);
+  const verbId = React.useId();
 
   return (
     <div className="group/row not-prose">
-      <div {...props} className={cn(ROW_CLASS, expandable && ROW_INTERACTIVE)}>
+      <div {...rowProps} className={cn(ROW_CLASS, expandable && ROW_INTERACTIVE)}>
         {streaming ? (
           <SpinnerGapIcon aria-hidden className="size-3.5 shrink-0 animate-spin text-primary" />
         ) : (
           <BrainIcon aria-hidden className={GLYPH_CLASS} weight="fill" />
         )}
-        <span className="min-w-0 truncate">{status.verb}</span>
-        <Caret open={open} hidden={!expandable} />
+        <span id={verbId} className="min-w-0 truncate">
+          {status.verb}
+        </span>
+        <RowDisclosure open={open} expandable={expandable} labelId={verbId} onToggle={toggle} />
         <span className="ml-auto" />
         {status.meta ? (
           <span className="shrink-0 font-mono tabular-nums text-muted-foreground/70">
@@ -682,23 +728,30 @@ export function AttentionBlock({
   part,
   onOpenFile,
   onDecide,
+  deciding,
 }: {
   part: DynamicToolUIPart;
   onOpenFile?(path: string): void;
   onDecide?(decision: AttentionDecision): void;
+  deciding?: boolean;
 }) {
   if (part.state === "output-denied") return <AttentionReceipt part={part} />;
-  return <AttentionCard part={part} onOpenFile={onOpenFile} onDecide={onDecide} />;
+  return (
+    <AttentionCard part={part} onOpenFile={onOpenFile} onDecide={onDecide} deciding={deciding} />
+  );
 }
 
 export function AttentionCard({
   part,
   onOpenFile,
   onDecide,
+  deciding,
 }: {
   part: DynamicToolUIPart;
   onOpenFile?(path: string): void;
   onDecide?(decision: AttentionDecision): void;
+  /** A decision is in flight. The harness's own verdict is what clears the card. */
+  deciding?: boolean;
 }) {
   const row = describeActivity(part);
   const pending = row.status === "approval";
@@ -722,15 +775,19 @@ export function AttentionCard({
         </pre>
       ) : null}
       {pending && onDecide ? (
+        // Disabled rather than swapped for a spinner: the round trip is one HTTP
+        // reply and the card is about to be replaced by the harness's own
+        // verdict, so a progress affordance would flash for less time than it
+        // takes to read. What matters is that a second click cannot land.
         <div className="mt-3 flex flex-wrap items-center justify-end gap-1.5">
-          <Button size="sm" variant="ghost" onClick={() => onDecide("steer")}>
+          <Button size="sm" variant="ghost" disabled={deciding} onClick={() => onDecide("steer")}>
             <ArrowBendUpLeftIcon className="size-3.5" />
             No, and tell it what to do differently
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => onDecide("deny")}>
+          <Button size="sm" variant="ghost" disabled={deciding} onClick={() => onDecide("deny")}>
             Deny
           </Button>
-          <Button size="sm" onClick={() => onDecide("allow")}>
+          <Button size="sm" disabled={deciding} onClick={() => onDecide("allow")}>
             Allow
           </Button>
         </div>
