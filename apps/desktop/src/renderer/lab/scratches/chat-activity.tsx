@@ -690,6 +690,11 @@ export default function ChatActivityScratch() {
           interaction={QUESTION}
           resolution={{ optionIds: ["question:0:bWFpbg"], response: null }}
         />
+        {/* The out-of-band refusal: nothing selected, nothing said. */}
+        <InteractionReceiptLine
+          interaction={QUESTION}
+          resolution={{ optionIds: [], response: null }}
+        />
         <AttentionReceipt
           part={tool(
             descriptor("run-command", {

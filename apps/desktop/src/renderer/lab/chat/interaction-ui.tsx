@@ -13,6 +13,11 @@
  * question is an invitation to write into a void — so the card takes the whole
  * foot surface, and the plan dock and the blocked row stand down for it.
  *
+ * A refusal is not always one of the options. A permission declares `reject`,
+ * an id we mint; a question's option ids are the harness's own encoded values
+ * and none of them can mean "no", so a refusal there is a control of the card's
+ * and travels as the empty resolution.
+ *
  * Decision logic lives in `interaction.ts`. Everything here is presentation
  * plus the two things only a mounted card can own: where focus is, and that
  * there is no gesture which throws a pending decision away.
@@ -31,10 +36,12 @@ import {
   emptyInteractionDraft,
   interactionQuestions,
   interactionResolution,
+  needsOwnRefusal,
   optionPolarity,
   promptDraft,
   promptFieldRole,
   promptTakesText,
+  refusalResolution,
   selectOption,
   setPromptResponse,
   type InteractionDraft,
@@ -121,6 +128,7 @@ export function InteractionCard({
     emptyInteractionDraft(interaction),
   );
   const questions = interactionQuestions(interaction);
+  const refusable = needsOwnRefusal(interaction);
   const submittable = canSubmitInteraction(interaction, draft) && !resolving;
   const own = React.useRef<HTMLFormElement>(null);
 
@@ -248,11 +256,34 @@ export function InteractionCard({
             <SquareIcon className="size-3.5" weight="fill" />
           </Button>
         ) : null}
+        {/* A refusal the harness did not declare an option for. It is a control
+            rather than a row in the list because none of a question's option
+            ids can mean "no" — they are the harness's own encoded values, and
+            one labelled `reject` would otherwise refuse itself when chosen. It
+            sends the empty resolution, so whatever was selected and abandoned
+            goes with it rather than travelling alongside the refusal. */}
+        {refusable ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="ml-auto"
+            disabled={resolving}
+            onClick={() => onResolve(refusalResolution(interaction))}
+          >
+            Reject
+          </Button>
+        ) : null}
         {/* Disabled rather than swapped for a spinner: the round trip is one
             HTTP reply and the harness's own verdict is what replaces the card,
             so a progress affordance would flash for less time than it reads.
             What matters is that a second click cannot land. */}
-        <Button type="submit" size="sm" className="ml-auto" disabled={!submittable}>
+        <Button
+          type="submit"
+          size="sm"
+          className={cn(!refusable && "ml-auto")}
+          disabled={!submittable}
+        >
           Submit
         </Button>
       </div>

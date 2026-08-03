@@ -11,9 +11,12 @@ import {
   interactionQuestions,
   interactionResolution,
   isPromptAnswered,
+  needsOwnRefusal,
   optionPolarity,
+  promptTakesText,
   promptDraft,
   promptFieldRole,
+  refusalResolution,
   selectOption,
   setPromptResponse,
 } from "./interaction";
@@ -166,6 +169,54 @@ describe("the field's role", () => {
   it("is the answer itself where the harness accepts one and nothing is chosen", () => {
     expect(promptFieldRole(prompt({ custom: true }), {})).toBe("answer");
     expect(promptFieldRole(prompt({ custom: false }), {})).toBe("note");
+  });
+});
+
+describe("refusal", () => {
+  it("stays a declared option on a permission", () => {
+    // `reject` is an id we mint, so selecting it is unambiguous and it belongs
+    // in the list with the other two.
+    expect(needsOwnRefusal(permission())).toBe(false);
+  });
+
+  it("becomes the card's own control on a question", () => {
+    // A question's option ids are the harness's encoded values, so none of them
+    // can mean "no" — including one whose label is literally "reject".
+    const rejectish = prompt({
+      options: [{ id: "question:0:cmVqZWN0", label: "reject", description: null }],
+    });
+    expect(needsOwnRefusal(question([rejectish]))).toBe(true);
+  });
+
+  it("selects nothing and says nothing, whatever was typed first", () => {
+    // What no harness value can impersonate. A selection the reader made and
+    // then abandoned must not travel alongside the refusal.
+    const interaction = question([prompt({ custom: true })]);
+    expect(refusalResolution(interaction)).toEqual({
+      optionIds: [],
+      response: null,
+      answers: [{ promptId: "prompt:0", optionIds: [], response: null }],
+    });
+  });
+
+  it("reads back as a refusal rather than an empty answer", () => {
+    const interaction = question([prompt()]);
+    expect(
+      describeInteractionResolution(interaction, refusalResolution(interaction)),
+    ).toMatchObject({ verdict: "rejected", lead: "You rejected", trailer: null });
+  });
+});
+
+describe("where a box is offered", () => {
+  it("follows the harness, not the shape of the question", () => {
+    // A prompt declaring `custom` is answered in words, and a permission's
+    // refusal carries a `message`. A question refused out of band sends a body
+    // -less reject, so a box there would take a sentence nobody would read.
+    const [permissionPrompt] = permission().prompts ?? [];
+    if (!permissionPrompt) throw new Error("fixture has no prompt");
+    expect(promptTakesText(permissionPrompt)).toBe(true);
+    expect(promptTakesText(prompt({ custom: true }))).toBe(true);
+    expect(promptTakesText(prompt({ custom: false }))).toBe(false);
   });
 });
 

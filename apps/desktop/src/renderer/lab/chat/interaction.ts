@@ -126,13 +126,20 @@ export function setPromptResponse(
 export type InteractionFieldRole = "answer" | "note" | "redirection";
 
 /**
- * Whether this question has a box at all.
+ * Whether this question has a box at all — and it only does where the words
+ * actually reach the harness.
  *
- * A prompt the harness accepts free text for always does. So does one that can
- * be refused, because a refusal with no direction leaves the agent to guess
- * what to do instead — that is the steer the old card spelled as a third
- * button. A plain multiple choice that can only be answered gets none, so a
- * three-question survey is three lists rather than three boxes nobody fills.
+ * Two shapes qualify. A prompt declaring `custom` accepts free text as an
+ * answer, and the OpenCode adapter carries it as an entry in that question's
+ * own answer array. A prompt declaring a refusal among its options is a
+ * permission, whose reply carries a `message` beside the verdict, so the
+ * redirection travels with the no.
+ *
+ * Nothing else gets one. A question refused out of band (see
+ * {@link needsOwnRefusal}) sends `/question/{id}/reject`, which has no body —
+ * a box there would take a sentence nobody would ever read. The correction to
+ * a refused question is an ordinary message, and the composer comes back the
+ * moment the card resolves.
  */
 export function promptTakesText(prompt: SessionInteractionPrompt): boolean {
   return prompt.custom || prompt.options.some((option) => optionPolarity(option) === "reject");
@@ -175,6 +182,33 @@ export function canSubmitInteraction(
   draft: InteractionDraft,
 ): boolean {
   return readInteractionPrompts(interaction).every((prompt) => isPromptAnswered(prompt, draft));
+}
+
+/**
+ * Whether refusing needs an affordance of the card's own.
+ *
+ * A permission declares its refusal — `reject` is an id we mint, so selecting
+ * it is unambiguous. A question's option ids are the harness's own encoded
+ * values, and none of them can mean "no": a question declaring an option
+ * literally labelled `reject` would otherwise refuse itself when chosen. So a
+ * refusal there is carried out of band, as a resolution that selects nothing
+ * and says nothing, which no harness value can impersonate. The card offers it
+ * as its own control rather than as a row in a list of answers.
+ */
+export function needsOwnRefusal(interaction: SessionInteraction): boolean {
+  return readInteractionPrompts(interaction).every(
+    (prompt) => !prompt.options.some((option) => optionPolarity(option) === "reject"),
+  );
+}
+
+/**
+ * The refusal, which is exactly the empty draft: nothing selected anywhere and
+ * nothing typed. Written this way rather than as a literal so it stays one
+ * answer per prompt, and so refusing can never send a selection the reader made
+ * and then abandoned.
+ */
+export function refusalResolution(interaction: SessionInteraction): SessionInteractionResolution {
+  return interactionResolution(interaction, emptyInteractionDraft(interaction));
 }
 
 export function interactionAnswers(
@@ -265,7 +299,8 @@ export function describeInteractionResolution(
   resolution: SessionInteractionResolution,
 ): InteractionReceipt {
   const prompts = readInteractionPrompts(interaction);
-  const chosen = readInteractionAnswers(interaction, resolution).flatMap((answer) => {
+  const answers = readInteractionAnswers(interaction, resolution);
+  const chosen = answers.flatMap((answer) => {
     const prompt = prompts.find((candidate) => candidate.id === answer.promptId);
     return (prompt?.options ?? interaction.options).filter((option) =>
       answer.optionIds.includes(option.id),
@@ -273,16 +308,23 @@ export function describeInteractionResolution(
   });
   const chose = (polarity: InteractionOptionPolarity) =>
     chosen.some((option) => optionPolarity(option) === polarity);
+  // The out-of-band refusal, read back the same way the adapter routes it: a
+  // resolution that selected nothing and said nothing is a no, not an empty
+  // answer, and the transcript has to record which of those happened.
+  const declined = answers.every(
+    (answer) => answer.optionIds.length === 0 && (answer.response ?? "") === "",
+  );
   // A refusal outranks everything else in the same resolution: what a reader
   // said no to is the fact the transcript owes them, even where they answered
   // three other questions in the same submit.
-  const verdict = chose("reject")
-    ? "rejected"
-    : chose("standing")
-      ? "standing"
-      : chose("allow")
-        ? "allowed"
-        : "answered";
+  const verdict =
+    declined || chose("reject")
+      ? "rejected"
+      : chose("standing")
+        ? "standing"
+        : chose("allow")
+          ? "allowed"
+          : "answered";
   return {
     verdict,
     lead: RECEIPT_LEADS[verdict],
@@ -343,12 +385,12 @@ export interface InteractionResolutionMessage {
  */
 export function readInteractionResolutionMessage(message: {
   metadata?: unknown;
-  parts: readonly { type: string }[];
+  parts: readonly unknown[];
 }): InteractionResolutionMessage | null {
   const interactionId = stringField(message.metadata, "interactionId");
   if (interactionId === null) return null;
   for (const part of message.parts) {
-    if (part.type !== "data-interaction-resolution") continue;
+    if (stringField(part, "type") !== "data-interaction-resolution") continue;
     const data = objectField(part, "data");
     const optionIds = data?.optionIds;
     if (!Array.isArray(optionIds)) continue;
