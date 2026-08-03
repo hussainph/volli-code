@@ -21,6 +21,7 @@
 import {
   readInteractionAnswers,
   readInteractionPrompts,
+  SESSION_REFUSAL_OPTION_IDS,
   type SessionEventPayload,
   type SessionInteraction,
   type SessionInteractionAnswer,
@@ -42,7 +43,7 @@ export type InteractionOptionPolarity = "allow" | "standing" | "reject" | "answe
 
 const ALLOW_OPTION_IDS = new Set(["once", "allow", "approve", "accept", "yes"]);
 const STANDING_OPTION_IDS = new Set(["always", "always_allow", "alwaysallow", "remember"]);
-const REJECT_OPTION_IDS = new Set(["reject", "deny", "decline", "no", "cancel"]);
+const REJECT_OPTION_IDS = new Set(SESSION_REFUSAL_OPTION_IDS);
 
 export function optionPolarity(option: { id: string }): InteractionOptionPolarity {
   const id = option.id.toLowerCase();

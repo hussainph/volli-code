@@ -617,6 +617,80 @@ describe("OpenCodeNativeAdapter", () => {
     await handle.release("requested");
   });
 
+  it("carries a settled part's projection from one stream snapshot into the next", async () => {
+    const hold = new Deferred<void>();
+    const network = new FakeNetwork();
+    network.subscribe = async (input) => {
+      network.subscriptions.push(input);
+      return (async function* () {
+        yield {
+          id: "assistant",
+          type: "message.updated",
+          properties: {
+            info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+          },
+        };
+        yield {
+          id: "first",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "p1",
+              messageID: "provider-assistant",
+              type: "text",
+              text: "The tree is stale.",
+            },
+          },
+        };
+        // Past the coalescing window, so the part below lands in a snapshot of
+        // its own rather than the same one as the part above.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        yield {
+          id: "second",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "p2",
+              messageID: "provider-assistant",
+              type: "text",
+              text: "Reinstalling now.",
+            },
+          },
+        };
+        await hold.promise;
+      })();
+    };
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    const snapshots = observations.flatMap((observation) =>
+      observation.kind === "transcript.message" ? [observation] : [],
+    );
+    expect(snapshots.map(({ message }) => message.parts)).toEqual([
+      [{ type: "text", text: "The tree is stale." }],
+      [
+        { type: "text", text: "The tree is stale." },
+        { type: "text", text: "Reinstalling now." },
+      ],
+    ]);
+    // A part nothing has touched since the last snapshot is the same projection,
+    // not an equal one — which is what keeps a long reply from being serialized
+    // again in full, and hashed again in full, every 32 milliseconds.
+    expect(snapshots[1]?.message.parts[0]).toBe(snapshots[0]?.message.parts[0]);
+    // And the identity still moves with the content it stands for.
+    expect(snapshots[0]?.id).not.toBe(snapshots[1]?.id);
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
   it("emits one turn fact per native status transition", async () => {
     const { adapter } = composition([
       {
@@ -1567,7 +1641,9 @@ describe("OpenCodeNativeAdapter", () => {
     const { adapter, network } = composition();
     network.messageResponse = {
       info: { id: "history-1", role: "assistant" },
-      parts: [{ type: "text", text: "Recovered" }],
+      // A provider payload is JSON, so a part can be anything at all. One that
+      // is not even a record projects to nothing rather than to a broken row.
+      parts: [null, { type: "text", text: "Recovered" }],
     };
     const originalRequest = network.request.bind(network);
     network.request = async (input) => {
@@ -5312,6 +5388,89 @@ describe("OpenCodeNativeAdapter", () => {
     expect(observations.findIndex(({ kind }) => kind === "transcript.message")).toBeLessThan(
       observations.findIndex(({ kind }) => kind === "interaction.opened"),
     );
+  });
+
+  it("forgets the gate a permission sweep no longer reports, and keeps the one it does", async () => {
+    const hold = new Deferred<void>();
+    const network = gatedTurn(
+      [
+        {
+          id: "second-call",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "p2",
+              messageID: "provider-assistant",
+              ...toolPart("read", "call-read", { status: "running", input: { path: "src/b.ts" } }),
+            },
+          },
+        },
+        askedFor("call-write"),
+        {
+          id: "asked-second",
+          type: "permission.asked",
+          properties: {
+            sessionID: "native-session-1",
+            id: "per_2",
+            title: "Allow read",
+            tool: { messageID: "provider-assistant", callID: "call-read" },
+          },
+        },
+      ],
+      hold,
+    );
+    network.messageResponse = {
+      info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+      parts: [
+        toolPart("write", "call-write", { status: "running", input: { path: "src/a.ts" } }),
+        toolPart("read", "call-read", { status: "running", input: { path: "src/b.ts" } }),
+      ],
+    };
+    const originalRequest = network.request.bind(network);
+    network.request = async (input) =>
+      input.path.startsWith("/permission")
+        ? {
+            status: 200,
+            body: [
+              {
+                sessionID: "native-session-1",
+                id: "per_2",
+                title: "Allow read",
+                tool: { messageID: "provider-assistant", callID: "call-read" },
+              },
+            ],
+          }
+        : originalRequest(input);
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Two gates on one message: each row waits on the permission that names it,
+    // and neither wears the other's id.
+    expect(toolRows(observations).slice(-2)).toMatchObject([
+      { toolCallId: "call-write", state: "approval-requested", approval: { id: "per_1" } },
+      { toolCallId: "call-read", state: "approval-requested", approval: { id: "per_2" } },
+    ]);
+
+    const rows = toolRows((await handle.reconcile(null)).observations);
+
+    // A permission is otherwise only ever forgotten by the reply that closes it,
+    // and a reply that landed while this binding was away never arrives. The
+    // sweep is the open set, so a gate it does not list is gone — while one it
+    // still lists is still gating.
+    expect(rows).toMatchObject([
+      { toolCallId: "call-write", state: "input-available" },
+      { toolCallId: "call-read", state: "approval-requested", approval: { id: "per_2" } },
+    ]);
+    expect(rows[0]).not.toHaveProperty("approval");
+    hold.resolve(undefined);
+    await handle.release("requested");
   });
 
   it("gates only the call a permission names, not every call in flight", async () => {

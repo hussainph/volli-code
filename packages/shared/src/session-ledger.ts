@@ -87,6 +87,34 @@ export interface SessionInteractionOption {
 }
 
 /**
+ * What a permission offers. These three ids are Volli's own vocabulary, not any
+ * harness's — an adapter maps its provider's reply onto them — so they are
+ * defined once here and every producer, adapter or fixture, mints them from
+ * this list rather than restating it.
+ */
+export const SESSION_PERMISSION_OPTIONS: readonly SessionInteractionOption[] = [
+  { id: "once", label: "Allow once", description: null },
+  { id: "always", label: "Allow always", description: null },
+  { id: "reject", label: "Reject", description: null },
+];
+
+/**
+ * The option ids that mean "no".
+ *
+ * Refusing is its own act, and both halves of the seam have to agree on which
+ * ids carry it: a surface that offers refusal and an adapter that recognizes it
+ * are the same decision read twice. Compared lowercased, and only ever against
+ * an id no harness declared — a provider's own value outranks this vocabulary.
+ */
+export const SESSION_REFUSAL_OPTION_IDS: readonly string[] = [
+  "reject",
+  "deny",
+  "decline",
+  "no",
+  "cancel",
+];
+
+/**
  * One question inside an interaction. A permission is a single prompt; a
  * harness that asks several things at once declares one prompt per question,
  * each with its own options and its own answer rules.

@@ -20,6 +20,9 @@ import type {
 } from "@volli/session-engine";
 import {
   ACTIVITY_METADATA_KEY,
+  SESSION_PERMISSION_OPTIONS,
+  SESSION_REFUSAL_OPTION_IDS,
+  promptId,
   readInteractionAnswers,
   readInteractionPrompts,
 } from "@volli/shared";
@@ -56,6 +59,8 @@ const MAX_DEFERRED_EVENTS = 1_000;
 const MAX_REMEMBERED_EVENT_IDS = 10_000;
 const MAX_SSE_BUFFER_LENGTH = 1_048_576;
 const STREAM_SNAPSHOT_DELAY_MS = 32;
+/** What a message with nothing gated projects against, shared so it is one map. */
+const NO_APPROVALS: ReadonlyMap<string, string> = new Map();
 /**
  * The only events a subagent's Session may contribute to this one. Its
  * transcript belongs to the `task` row; a prompt it is blocked on belongs to
@@ -527,6 +532,8 @@ class OpenCodeBinding implements BindingHandle {
   readonly #questions = new Map<string, readonly OpenCodeQuestion[]>();
   /** Open tool-gating permissions, by OpenCode's permission id. */
   readonly #pendingApprovals = new Map<string, OpenCodeApprovalTarget>();
+  /** The same permissions inverted for projection. Null until the next read. */
+  #approvalIndex: ReadonlyMap<string, ReadonlyMap<string, string>> | null = null;
   /** Subagent Sessions this one spawned, by the `task` row each belongs to. */
   readonly #subagents = new Map<string, OpenCodeApprovalTarget>();
   readonly #streamAbort = new AbortController();
@@ -709,6 +716,25 @@ class OpenCodeBinding implements BindingHandle {
         this.#registerSubagentsInMessage(message);
       }
     }
+    // A gate is otherwise only ever forgotten by the reply that closes it, and a
+    // reply that landed while this binding was disconnected never arrives — so a
+    // permission answered elsewhere would keep its row gated, and its entry
+    // kept, for the rest of the binding's life. The sweep is the authoritative
+    // open set, so a sweep that answered is also what says which gates are gone.
+    // A build without the endpoint answers 404 and states nothing; forgetting
+    // every gate on that answer is the one thing reconciling must not do.
+    if (Math.floor(permissionResponse.status / 100) === 2) {
+      const open = new Set(
+        arrayBody(permissionResponse.body).flatMap((candidate) => {
+          const id = requestId(candidate);
+          return id ? [id] : [];
+        }),
+      );
+      for (const permissionId of this.#pendingApprovals.keys()) {
+        if (!open.has(permissionId)) this.#pendingApprovals.delete(permissionId);
+      }
+      this.#approvalIndex = null;
+    }
     // Project permissions before messages — they are what tells a hydrated tool
     // row it is gated — but keep them behind messages in the emitted batch, so
     // the order a resuming consumer sees is the order it always saw.
@@ -806,6 +832,7 @@ class OpenCodeBinding implements BindingHandle {
     this.#sink = null;
     this.#messages.clear();
     this.#pendingApprovals.clear();
+    this.#approvalIndex = null;
     this.#subagents.clear();
     this.#deferredEvents.length = 0;
     this.#pendingReconciliation = null;
@@ -1479,7 +1506,7 @@ class OpenCodeBinding implements BindingHandle {
       objectString(raw, "title") ??
       (kind === "permission" ? "Permission required" : "Question required");
     const detail = objectString(raw, "description") ?? objectString(raw, "pattern");
-    const options = kind === "permission" ? PERMISSION_OPTIONS : questionOptions(asked);
+    const options = kind === "permission" ? SESSION_PERMISSION_OPTIONS : questionOptions(asked);
     const interaction: Omit<SessionInteraction, "attachmentId"> = {
       id: `${kind}:${nativeId}`,
       kind,
@@ -1500,7 +1527,10 @@ class OpenCodeBinding implements BindingHandle {
     // Both the SSE event and the hydrate sweep land here, so one record keeps a
     // permission opened before this binding attached gating its row too.
     const target = kind === "permission" ? this.#approvalTarget(raw) : null;
-    if (target) this.#pendingApprovals.set(nativeId, target);
+    if (target) {
+      this.#pendingApprovals.set(nativeId, target);
+      this.#approvalIndex = null;
+    }
     return {
       id,
       kind: "interaction.opened",
@@ -1585,20 +1615,32 @@ class OpenCodeBinding implements BindingHandle {
     const target = this.#pendingApprovals.get(permissionId);
     if (!target) return;
     this.#pendingApprovals.delete(permissionId);
+    this.#approvalIndex = null;
     this.#scheduleStreamSnapshot(target.messageId, event.id);
   }
 
   /**
-   * OpenCode keys permissions by their own id; a message projects by call id. A
-   * session blocks on its first open permission, so this map holds ones — a
-   * scan beats keeping a second index true to the first.
+   * OpenCode keys permissions by their own id; a message projects by call id.
+   *
+   * Inverted once per change to the permission set rather than per read: a
+   * streaming message asks this on every snapshot, and answering by scanning
+   * would put the whole open set — and a fresh Map — in a loop that runs dozens
+   * of times a second. Every mutation below drops the index; nothing else may
+   * touch `#pendingApprovals` without doing the same. The shared empty map is
+   * what most messages get back, and its stable identity is what lets a
+   * projection be reused across snapshots.
    */
   #approvalsForMessage(messageId: string): ReadonlyMap<string, string> {
-    const byCallId = new Map<string, string>();
-    for (const [permissionId, target] of this.#pendingApprovals) {
-      if (target.messageId === messageId) byCallId.set(target.callId, permissionId);
+    if (!this.#approvalIndex) {
+      const index = new Map<string, Map<string, string>>();
+      for (const [permissionId, target] of this.#pendingApprovals) {
+        const byCallId = index.get(target.messageId);
+        if (byCallId) byCallId.set(target.callId, permissionId);
+        else index.set(target.messageId, new Map([[target.callId, permissionId]]));
+      }
+      this.#approvalIndex = index;
     }
-    return byCallId;
+    return this.#approvalIndex.get(messageId) ?? NO_APPROVALS;
   }
 
   async #resolveInteraction(
@@ -1814,18 +1856,6 @@ function questionOptions(
   );
 }
 
-/** The three ids a permission offers. They are ours, not OpenCode's. */
-const PERMISSION_OPTIONS: readonly SessionInteractionOption[] = [
-  { id: "once", label: "Allow once", description: null },
-  { id: "always", label: "Allow always", description: null },
-  { id: "reject", label: "Reject", description: null },
-];
-
-/** Prompts are `prompt:${index}`; index 0 is `DEFAULT_INTERACTION_PROMPT_ID`. */
-function promptId(index: number): string {
-  return `prompt:${index}`;
-}
-
 /**
  * One prompt per QuestionInfo, each carrying that question's own answer rules.
  * Inside its own prompt an option needs no question prefix — the flat list
@@ -1852,15 +1882,21 @@ function questionOptionId(questionIndex: number, value: string): string {
   return `question:${questionIndex}:${Buffer.from(value).toString("base64url")}`;
 }
 
-/** The id a caller written before rejection left the option list still sends. */
-const LEGACY_REJECT_OPTION_ID = "reject";
+/**
+ * A refusal id a caller written before rejection left the option list still
+ * sends. The vocabulary is shared with the surface that offers the choice, so
+ * neither half can recognize a refusal the other does not.
+ */
+function isRefusalOptionId(id: string): boolean {
+  return SESSION_REFUSAL_OPTION_IDS.includes(id.toLowerCase());
+}
 
 /**
  * Whether this resolution refuses the question rather than answering it.
  *
  * Rejecting is its own endpoint and its own act, so the signal for it must be
  * one OpenCode cannot also declare: no option chosen anywhere and nothing
- * typed. `reject` stays honoured as the id earlier callers sent, but only
+ * typed. A refusal id stays honoured as the id earlier callers sent, but only
  * while no prompt declares an option by that id — a harness's own value always
  * outranks our sentinel, which is what kept a question offering "reject" as an
  * answer from being rejected instead of answered.
@@ -1874,9 +1910,9 @@ function declinesQuestion(
   );
   if (!answered) return true;
   const declared = prompts.some((prompt) =>
-    prompt.options.some((option) => option.id === LEGACY_REJECT_OPTION_ID),
+    prompt.options.some((option) => isRefusalOptionId(option.id)),
   );
-  return !declared && answers.some((answer) => answer.optionIds.includes(LEGACY_REJECT_OPTION_ID));
+  return !declared && answers.some((answer) => answer.optionIds.some(isRefusalOptionId));
 }
 
 /**
@@ -2134,13 +2170,38 @@ function messageParts(raw: unknown, approvals: ReadonlyMap<string, string>): UIM
   return raw.parts.flatMap((part) => openCodePart(part, { approvals }));
 }
 
+/**
+ * The durable identity of a projected message.
+ *
+ * It is content-addressed on purpose: the Session engine keeps it as the event
+ * id and rejects a second event that reuses it carrying different evidence, and
+ * it is what lets the streamed, the flushed and the reconciled projection of one
+ * message be recognized as the same fact rather than recorded three times. So it
+ * stays a hash of everything the message says.
+ *
+ * What it must not be is that hash recomputed from nothing every
+ * `STREAM_SNAPSHOT_DELAY_MS`: a streaming reply would re-serialize everything it
+ * has already serialized dozens of times a second, which is quadratic in its own
+ * length. Each part version is hashed once instead — `openCodePart` holds a
+ * projection alive for as long as the part it came from is unchanged, so the
+ * digest below is keyed on the projected object — and a snapshot then costs one
+ * hash over one short digest per part.
+ */
 function transcriptObservationId(message: UIMessage): string {
-  const digest = createHash("sha256")
-    .update("volli:opencode:transcript:v1\0")
-    .update(JSON.stringify(message))
-    .digest("hex")
-    .slice(0, 24);
-  return `message:${message.id}:${digest}`;
+  const hash = createHash("sha256").update("volli:opencode:transcript:v1\0").update(message.role);
+  if (message.metadata !== undefined) hash.update(`\0${JSON.stringify(message.metadata)}`);
+  for (const part of message.parts) hash.update(`\0${partDigest(part)}`);
+  return `message:${message.id}:${hash.digest("hex").slice(0, 24)}`;
+}
+
+const partDigests = new WeakMap<UIMessage["parts"][number], string>();
+
+function partDigest(part: UIMessage["parts"][number]): string {
+  const cached = partDigests.get(part);
+  if (cached !== undefined) return cached;
+  const digest = createHash("sha256").update(JSON.stringify(part)).digest("hex").slice(0, 24);
+  partDigests.set(part, digest);
+  return digest;
 }
 
 /** Reads the call a `permission.asked` payload gates, when it gates one at all. */
@@ -2151,9 +2212,48 @@ function approvalTarget(raw: unknown): OpenCodeApprovalTarget | null {
   return messageId && callId ? { messageId, callId } : null;
 }
 
+interface ProjectedOpenCodePart {
+  readonly reasoningStreaming: boolean | undefined;
+  readonly approvals: ReadonlyMap<string, string> | undefined;
+  readonly parts: UIMessage["parts"];
+}
+
+/**
+ * Projected parts, remembered against the part they were projected from.
+ *
+ * A streaming message is projected in full on every snapshot, and the buffer
+ * replaces a part object whenever anything about it changes — a delta and a
+ * merge both write a new one — so the source object *is* the version, and a
+ * projection keyed on it stays true until it is replaced. The two facts that do
+ * not come from the part itself are keyed beside it, because a permission
+ * opening or a turn ending re-projects the very same part into a different row.
+ */
+const projectedParts = new WeakMap<Record<string, unknown>, ProjectedOpenCodePart>();
+
 function openCodePart(
   part: unknown,
   options?: { reasoningStreaming?: boolean; approvals?: ReadonlyMap<string, string> },
+): UIMessage["parts"] {
+  if (!isRecord(part)) return [];
+  const reasoningStreaming = options?.reasoningStreaming;
+  const approvals = options?.approvals;
+  const cached = projectedParts.get(part);
+  if (
+    cached &&
+    cached.reasoningStreaming === reasoningStreaming &&
+    cached.approvals === approvals
+  ) {
+    return cached.parts;
+  }
+  const parts = projectOpenCodePart(part, reasoningStreaming, approvals);
+  projectedParts.set(part, { reasoningStreaming, approvals, parts });
+  return parts;
+}
+
+function projectOpenCodePart(
+  part: Record<string, unknown>,
+  reasoningStreaming: boolean | undefined,
+  approvals: ReadonlyMap<string, string> | undefined,
 ): UIMessage["parts"] {
   const type = objectString(part, "type");
   if (type === "text") {
@@ -2181,7 +2281,7 @@ function openCodePart(
       {
         type: "reasoning",
         text,
-        state: options?.reasoningStreaming && !settled ? "streaming" : "done",
+        state: reasoningStreaming && !settled ? "streaming" : "done",
       },
     ];
   }
@@ -2203,7 +2303,7 @@ function openCodePart(
   // call settled that verdict is the newer fact, so the row recovers on its own
   // even if the reply lifting the gate never reached this binding.
   const approvalId =
-    status === "pending" || status === "running" ? options?.approvals?.get(toolCallId) : undefined;
+    status === "pending" || status === "running" ? approvals?.get(toolCallId) : undefined;
   if (approvalId !== undefined) {
     return [
       {

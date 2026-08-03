@@ -22,12 +22,8 @@
  * state that cannot be written here is a state a harness cannot report either.
  */
 import type { HarnessObservation } from "@volli/session-engine";
-import type {
-  ActivityDescriptor,
-  SessionInteraction,
-  SessionInteractionOption,
-} from "@volli/shared";
-import { ACTIVITY_METADATA_KEY } from "@volli/shared";
+import type { ActivityDescriptor, SessionInteraction } from "@volli/shared";
+import { ACTIVITY_METADATA_KEY, SESSION_PERMISSION_OPTIONS, promptId } from "@volli/shared";
 import type { DynamicToolUIPart, UIMessage } from "ai";
 
 /** The adapter id the lab registers its scripted harness under. */
@@ -182,13 +178,6 @@ function plan(id: string): LabScenarioBeat {
   ]);
 }
 
-/** The three ids a permission offers. They are ours, exactly as the adapter mints them. */
-const PERMISSION_OPTIONS: readonly SessionInteractionOption[] = [
-  { id: "once", label: "Allow once", description: null },
-  { id: "always", label: "Allow always", description: null },
-  { id: "reject", label: "Reject", description: null },
-];
-
 function permission(
   nativeId: string,
   title: string,
@@ -199,14 +188,14 @@ function permission(
     kind: "permission",
     title,
     detail,
-    options: PERMISSION_OPTIONS,
+    options: SESSION_PERMISSION_OPTIONS,
     multiple: false,
     prompts: [
       {
-        id: "prompt:0",
+        id: promptId(0),
         label: title,
         detail,
-        options: PERMISSION_OPTIONS,
+        options: SESSION_PERMISSION_OPTIONS,
         multiple: false,
         custom: false,
       },
@@ -298,7 +287,7 @@ export const LAB_SCENARIOS: readonly LabScenario[] = [
         multiple: true,
         prompts: [
           {
-            id: "prompt:0",
+            id: promptId(0),
             label: "Which branch should this land on?",
             detail: null,
             options: [
@@ -341,7 +330,7 @@ export const LAB_SCENARIOS: readonly LabScenario[] = [
         multiple: true,
         prompts: [
           {
-            id: "prompt:0",
+            id: promptId(0),
             label: "Which branch should this land on?",
             detail: null,
             options: [
@@ -352,7 +341,7 @@ export const LAB_SCENARIOS: readonly LabScenario[] = [
             custom: false,
           },
           {
-            id: "prompt:1",
+            id: promptId(1),
             label: "What should I update along the way?",
             detail: "Pick as many as apply",
             options: [
@@ -368,7 +357,7 @@ export const LAB_SCENARIOS: readonly LabScenario[] = [
             custom: false,
           },
           {
-            id: "prompt:2",
+            id: promptId(2),
             label: "Anything else I should know?",
             detail: null,
             options: [{ id: QUESTION_OPTION_IDS.note, label: "no", description: null }],
@@ -401,7 +390,7 @@ export const LAB_SCENARIOS: readonly LabScenario[] = [
         multiple: true,
         prompts: [
           {
-            id: "prompt:0",
+            id: promptId(0),
             label: "Merge?",
             detail: null,
             options: [
