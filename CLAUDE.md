@@ -38,6 +38,7 @@ A local-first macOS workspace for planning and running coding sessions, built wi
 - Surface every failed mutation (alert/toast) — never silently swallow errors.
 - Ticket worktree branches: `volli/<DISPLAY-ID>-<slug>` (e.g. `volli/VC-12-mcp-server`).
 - Changes go through branch + commit + PR — never commit directly to `main`. Strict TypeScript; no `any` at module boundaries.
+- **Fix the obvious open item; don't file it back to me.** A stale doc line, a claim the code no longer supports, a TODO the change just made answerable, a leftover from a review — if it is in scope and the answer is not genuinely in doubt, do it and say what you did. Ask only when the readings diverge enough to change the work, or when the act is destructive or outward-facing.
 
 ## Commands
 
