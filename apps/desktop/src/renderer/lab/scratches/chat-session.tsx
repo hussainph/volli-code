@@ -404,17 +404,25 @@ function ChatPlane({
    * prop for a thousand rows and defeats {@link ChatTurn}'s memo outright. Each
    * member above is either state, a stable callback, or held by content — which
    * is what leaves this recomputing only when something in it actually changed.
+   *
+   * `working` is deliberately not a member. It flips at the start and end of
+   * every turn, so carrying it here changed this object twice a turn and
+   * re-rendered the whole transcript both times — and the cost was not the
+   * re-render but `isAnimating` changing under every settled turn, which makes
+   * Streamdown re-parse markdown that has not moved in an hour. Measured at
+   * 3000 turns it was the largest number anywhere: 2,150 ms, against 83 ms with
+   * the animation flag pinned. Only the live turn can animate, so only the live
+   * turn is told about it.
    */
   const turnContext = React.useMemo<TurnContext>(
     () => ({
-      working,
       onOpenFile,
       interactions: openedInteractions,
       open: interactions,
       resolving,
       onResolve: answer,
     }),
-    [answer, interactions, onOpenFile, openedInteractions, resolving, working],
+    [answer, interactions, onOpenFile, openedInteractions, resolving],
   );
 
   // Grouping is O(messages) and ran inline in the JSX below, so it re-ran on
@@ -452,8 +460,13 @@ function ChatPlane({
               </ConversationEmptyState>
             ) : (
               <ContentColumn className={MESSAGE_GAP}>
-                {turns.map((turn) => (
-                  <ChatTurn key={turn[0]?.id} messages={turn} context={turnContext} />
+                {turns.map((turn, index) => (
+                  <ChatTurn
+                    key={turn[0]?.id}
+                    messages={turn}
+                    context={turnContext}
+                    live={working && index === turns.length - 1}
+                  />
                 ))}
                 {working && isAwaitingFirstOutput(session.messages) ? (
                   <ReasoningLine verb="Working" meta={null} streaming />
@@ -999,8 +1012,7 @@ const MESSAGE_GAP = "flex flex-col gap-3";
  * stacked four `Ran 2 commands` headers where one belonged and left a step that
  * only thought as a bare reasoning row between them.
  */
-interface TurnContext {
-  working: boolean;
+export interface TurnContext {
   onOpenFile(path: string): void;
   /** Every interaction opened this Session, for the receipts they left behind. */
   interactions: ReadonlyMap<string, SessionInteraction>;
@@ -1019,12 +1031,15 @@ interface TurnContext {
  * output and file contents on each render, so that is the whole frame budget at
  * a few hundred rows.
  */
-const ChatTurn = React.memo(function ChatTurn({
+export const ChatTurn = React.memo(function ChatTurn({
   messages,
   context,
+  live,
 }: {
   messages: readonly UIMessage[];
   context: TurnContext;
+  /** This turn is the one the harness is still writing into. Only it animates. */
+  live: boolean;
 }) {
   const first = messages[0] ?? null;
   const role = first?.role ?? null;
@@ -1075,7 +1090,7 @@ const ChatTurn = React.memo(function ChatTurn({
         <div className={SEGMENT_GAP}>
           {segments
             ? segments.map((segment) => (
-                <div key={segment.key}>{renderSegment(segment, role, context)}</div>
+                <div key={segment.key}>{renderSegment(segment, role, context, live)}</div>
               ))
             : prose.map((entry) => <MessageResponse key={entry.key}>{entry.text}</MessageResponse>)}
         </div>
@@ -1088,11 +1103,12 @@ function renderSegment(
   segment: ChatSegment,
   role: UIMessage["role"],
   context: TurnContext,
+  live: boolean,
 ): React.ReactNode {
   switch (segment.kind) {
     case "text":
       return (
-        <MessageResponse isAnimating={context.working && role === "assistant"}>
+        <MessageResponse isAnimating={live && role === "assistant"}>
           {segment.part.text}
         </MessageResponse>
       );
