@@ -20,7 +20,7 @@ import {
   ConversationScrollButton,
 } from "@ai-elements/conversation";
 import { FileMentionProvider } from "@ai-elements/chat-markdown";
-import { Message, MessageContent, MessageResponse } from "@ai-elements/message";
+import { Message, MessageContent } from "@ai-elements/message";
 import { ReasoningLine } from "@ai-elements/reasoning";
 import { AppShell } from "@renderer/components/app-shell";
 import { ContentColumn } from "@renderer/components/layout/content-column";
@@ -43,6 +43,7 @@ import {
 } from "../chat/activity";
 import { ActivityBundle, SessionTodoDock, SessionTodoList, ToolRow } from "../chat/activity-ui";
 import { SessionComposer } from "../chat/composer-ui";
+import { GuardedResponse } from "../chat/markdown-boundary";
 import {
   footInteraction,
   indexOpenedInteractions,
@@ -1092,7 +1093,7 @@ export const ChatTurn = React.memo(function ChatTurn({
             ? segments.map((segment) => (
                 <div key={segment.key}>{renderSegment(segment, role, context, live)}</div>
               ))
-            : prose.map((entry) => <MessageResponse key={entry.key}>{entry.text}</MessageResponse>)}
+            : prose.map((entry) => <GuardedResponse key={entry.key}>{entry.text}</GuardedResponse>)}
         </div>
       </MessageContent>
     </Message>
@@ -1108,9 +1109,9 @@ function renderSegment(
   switch (segment.kind) {
     case "text":
       return (
-        <MessageResponse isAnimating={live && role === "assistant"}>
+        <GuardedResponse isAnimating={live && role === "assistant"}>
           {segment.part.text}
-        </MessageResponse>
+        </GuardedResponse>
       );
     case "bundle":
       return <ActivityBundle rows={segment.rows} onOpenFile={context.onOpenFile} />;

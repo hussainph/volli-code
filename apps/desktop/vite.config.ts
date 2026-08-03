@@ -34,6 +34,23 @@ const bundleWorkspacePackages = (id: string): boolean => id.startsWith("@volli/"
 export default defineConfig(({ mode }) => ({
   // Renderer (React) app build. `root` points Vite at the renderer's index.html.
   root: "src/renderer",
+  // THE LAB GETS ITS OWN DEP CACHE. Everything rooted at apps/desktop defaults
+  // to node_modules/.vite — the app dev server (which `pnpm lab` is explicitly
+  // built to run ALONGSIDE) and vitest included. Vite's optimizer publishes a
+  // run by deleting `deps/` and renaming `deps_temp/` over it, so a second
+  // process bundling deps swaps that directory out from under a live lab page.
+  //
+  // Statically imported deps survive it: they are already in the browser's
+  // module registry and are never re-fetched. What does not survive is anything
+  // fetched LAZILY. Streamdown's syntax highlighter is exactly that — a
+  // dynamic-entry chunk (`highlighted-body-<hash>.js`) requested the first time
+  // a fenced code block renders, which can be hours after the page loaded. It
+  // comes back 504 `Outdated Optimize Dep` (the same code Vite uses when the
+  // file is simply gone), the import rejects, and the throw lands in render.
+  // A separate directory means no other process can invalidate the lab's deps.
+  ...(mode === "lab"
+    ? { cacheDir: fileURLToPath(new URL("./node_modules/.vite-lab", import.meta.url)) }
+    : {}),
   // CRITICAL: assets stay relative so the built index and worker chunks resolve
   // beneath volli-app://bundle/ in packaged builds. Plain Vite defaults to "/".
   base: "./",

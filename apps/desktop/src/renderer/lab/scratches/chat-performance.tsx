@@ -32,13 +32,16 @@
  * meaningfully faster). The scaling across 100/1000/3000 and the ratio between
  * the token case and the `working` case are the trustworthy signal.
  *
- * One fixture gap, and it is the dev server's rather than a choice: no fenced
- * code blocks. Streamdown lazy-imports its highlighter as an optimized-dep
- * chunk, and this server answers that chunk with 504 Outdated Optimize Dep,
- * which throws inside an async import and takes the root down with it. Prose,
- * headings, lists, inline code, tool rows, diffs and long outputs are all here;
- * shiki is not, so a transcript thick with code fences costs more than these
- * numbers say.
+ * Fenced code is in the fixture — one assistant turn in four ends on a 22–37
+ * line block — and it is the single biggest thing in these numbers: it more
+ * than doubles the DOM, because Shiki gives every token its own span. `?nocode`
+ * drops the fences and reproduces the prose-only figures this scratch used to
+ * report, so the two are comparable from one run.
+ *
+ * The fences cycle three texts rather than being unique per turn, and Shiki
+ * caches tokenization by code text, so all but the first three highlight out of
+ * that cache. Real transcripts have distinct blocks and pay tokenization every
+ * time. Treat the with-code figures as a floor, not a ceiling.
  */
 import * as React from "react";
 import { flushSync } from "react-dom";
@@ -498,6 +501,85 @@ const LONG_OUTPUT = Array.from(
     `${String(index + 1).padStart(4)}  const frame${index} = frames[${index}] ?? fallbackFrame("f-${index}");`,
 ).join("\n");
 
+/**
+ * Fenced code, which is the most expensive thing a transcript renders: every
+ * line becomes a row of per-token spans, and Streamdown hands the block to
+ * Shiki asynchronously, so a fence costs a second commit after the mount as
+ * well as the mount itself. Three shapes and three languages, 22–37 lines, so
+ * no single grammar or length is the whole measurement.
+ */
+const CODE_FENCES = [
+  `\`\`\`ts
+const PARTS = new WeakMap<Frame, UIMessage>();
+
+interface ProjectionCache {
+  readonly frames: readonly Frame[];
+  readonly messages: readonly UIMessage[];
+  readonly projection: SessionProjection;
+}
+
+export function projectSession(
+  frames: readonly Frame[],
+  cache: ProjectionCache,
+): SessionProjection {
+  if (frames === cache.frames) return cache.projection;
+
+  const messages = frames.map((frame) => {
+    const held = PARTS.get(frame);
+    if (held) return held;
+    const message: UIMessage = {
+      id: frame.id,
+      role: frame.role,
+      parts: frame.parts,
+    };
+    PARTS.set(frame, message);
+    return message;
+  });
+
+  if (sameMessages(messages, cache.messages)) return cache.projection;
+  return { messages, interactions: openInteractions(frames) };
+}
+\`\`\``,
+  `\`\`\`tsx
+const ChatTurn = React.memo(function ChatTurn({
+  messages,
+  context,
+  live,
+}: ChatTurnProps) {
+  const segments = React.useMemo(
+    () => (messages[0]?.role === "assistant" ? segmentTurn(messages) : null),
+    [messages],
+  );
+
+  if (segments?.length === 0) return null;
+
+  return (
+    <Message from={messages[0].role}>
+      <MessageContent>
+        {segments?.map((segment) => (
+          <div key={segment.key}>{renderSegment(segment, context, live)}</div>
+        ))}
+      </MessageContent>
+    </Message>
+  );
+});
+\`\`\``,
+  `\`\`\`bash
+# reproduce, then measure
+pnpm lab &
+sleep 3
+
+for turns in 100 1000 3000; do
+  echo "--- $turns turns"
+  node scripts/chat-perf.mjs --turns "$turns" --json > "perf-$turns.json"
+done
+
+vp run -r typecheck
+vp run -r test
+vp fmt
+\`\`\``,
+];
+
 const PROSE = [
   "I traced the projection seam and the cache is holding: the incremental path only rebuilds the frames that actually moved, so a batch of one arrives as a batch of one all the way down to the transcript.",
   "Two things were re-deriving on every tick. The first was `groupTurns`, which ran inline in the JSX and so re-grouped the whole transcript for one token. The second was the segmentation, which parses diffs and grep output on the way through.\n\nBoth are keyed now.",
@@ -528,8 +610,32 @@ const LONG_PROSE = [
   "Neither is free. Which one to reach for depends entirely on whether mount or repaint is the binding constraint, which is what this scratch is for.",
 ].join("\n");
 
-/** One assistant turn's messages. Shapes cycle so no size is a single case. */
+/**
+ * The control: `?nocode` builds the same transcript with no fences, which is
+ * what this scratch measured before they were in the fixture. Read once, so a
+ * run cannot change shape halfway through.
+ */
+const CONTROL_NO_CODE = new URLSearchParams(window.location.search).has("nocode");
+
+/**
+ * One assistant turn's messages. Shapes cycle so no size is a single case, and
+ * every fourth turn ends on a fenced block — the share a real coding transcript
+ * carries, and the reason these numbers are higher than the prose-only ones.
+ */
 function assistantTurn(index: number): UIMessage[] {
+  const messages = assistantTurnBody(index);
+  if (CONTROL_NO_CODE || index % 4 !== 0) return messages;
+  const last = messages[messages.length - 1];
+  if (last) {
+    last.parts = [
+      ...last.parts,
+      { type: "text", text: CODE_FENCES[(index / 4) % CODE_FENCES.length] ?? "" },
+    ];
+  }
+  return messages;
+}
+
+function assistantTurnBody(index: number): UIMessage[] {
   const id = `a-${index}`;
   const shape = index % 5;
   const failing = index % 23 === 7;
