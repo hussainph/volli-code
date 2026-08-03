@@ -9,6 +9,7 @@ import {
   emptyInteractionDraft,
   footInteraction,
   interactionAnswers,
+  interactionCarousel,
   interactionForApproval,
   interactionQuestions,
   interactionResolution,
@@ -362,6 +363,49 @@ describe("interactionQuestions", () => {
       "Which branch?",
       "Which remote?",
     ]);
+  });
+});
+
+describe("one question at a time", () => {
+  it("grows no chrome for a request that asked one thing", () => {
+    expect(interactionCarousel(permission(), {}, 0)).toBeNull();
+    expect(interactionCarousel(permission({ prompts: undefined }), {}, 0)).toBeNull();
+  });
+
+  it("reports the position and which way it can move", () => {
+    const interaction = question([
+      prompt({ id: "prompt:0" }),
+      prompt({ id: "prompt:1" }),
+      prompt({ id: "prompt:2" }),
+    ]);
+    expect(interactionCarousel(interaction, {}, 0)).toMatchObject({
+      index: 0,
+      count: 3,
+      hasPrevious: false,
+      hasNext: true,
+    });
+    expect(interactionCarousel(interaction, {}, 2)).toMatchObject({
+      index: 2,
+      hasPrevious: true,
+      hasNext: false,
+    });
+  });
+
+  it("clamps a step that would land off the end", () => {
+    const interaction = question([prompt({ id: "prompt:0" }), prompt({ id: "prompt:1" })]);
+    expect(interactionCarousel(interaction, {}, 9)?.index).toBe(1);
+    expect(interactionCarousel(interaction, {}, -3)?.index).toBe(0);
+  });
+
+  it("says which questions already have something to send", () => {
+    // Free movement is the point: answering the last one first must read back
+    // as answered, and Submit still waits for the other.
+    const first = prompt({ id: "prompt:0" });
+    const second = prompt({ id: "prompt:1" });
+    const interaction = question([first, second]);
+    const draft = selectOption({}, second, "question:0:bWFpbg");
+    expect(interactionCarousel(interaction, draft, 0)?.answered).toEqual([false, true]);
+    expect(canSubmitInteraction(interaction, draft)).toBe(false);
   });
 });
 

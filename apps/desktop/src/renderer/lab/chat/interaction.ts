@@ -268,6 +268,50 @@ export function interactionQuestions(
   }));
 }
 
+/**
+ * Where the reader is in a request that asked more than one thing.
+ *
+ * Stacked, three questions with their own options and their own answer rules
+ * read as one undifferentiated pile — which is the shape the flat `options`
+ * list used to force and the reason `prompts` exists at all. One at a time, with
+ * a counter and a step either way, is what a reader can actually hold.
+ *
+ * **Movement is free.** Stepping never requires an answer and never advances on
+ * one: a reader may skip the hard question, answer the last two and come back.
+ * What is *not* free is submitting — OpenCode takes one `answers` array per
+ * request, so the card is atomic and {@link canSubmitInteraction} still holds
+ * the button until every question has been given something.
+ *
+ * Null for a single question, which must not grow chrome for a position it
+ * cannot leave.
+ */
+export interface InteractionCarousel {
+  /** Clamped, so a stale step from a card that shrank cannot land off the end. */
+  index: number;
+  count: number;
+  hasPrevious: boolean;
+  hasNext: boolean;
+  /** Per question, in prompt order — what the counter dims and Submit waits on. */
+  answered: readonly boolean[];
+}
+
+export function interactionCarousel(
+  interaction: SessionInteraction,
+  draft: InteractionDraft,
+  index: number,
+): InteractionCarousel | null {
+  const prompts = readInteractionPrompts(interaction);
+  if (prompts.length < 2) return null;
+  const at = Math.min(Math.max(Math.trunc(index), 0), prompts.length - 1);
+  return {
+    index: at,
+    count: prompts.length,
+    hasPrevious: at > 0,
+    hasNext: at < prompts.length - 1,
+    answered: prompts.map((prompt) => isPromptAnswered(prompt, draft)),
+  };
+}
+
 /* -------------------------------------------------------------- where it draws */
 
 /**

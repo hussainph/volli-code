@@ -21,6 +21,11 @@
  * interaction with no call could not be answered at all. This one is the real
  * interaction in both places, which is why it must not be forked into two.
  *
+ * A request that asks several things shows one of them at a time, with a
+ * counter and a step either way. Movement is free and submission is not: the
+ * reader may answer in any order, and Submit waits for all of them because
+ * OpenCode takes one `answers` array per request.
+ *
  * A refusal is not always one of the options. A permission declares `reject`,
  * an id we mint; a question's option ids are the harness's own encoded values
  * and none of them can mean "no", so a refusal there is a control of the card's
@@ -31,7 +36,7 @@
  * there is no gesture which throws a pending decision away.
  */
 import * as React from "react";
-import { HandPalmIcon, SquareIcon } from "@phosphor-icons/react";
+import { CaretLeftIcon, CaretRightIcon, HandPalmIcon, SquareIcon } from "@phosphor-icons/react";
 import type { SessionInteraction, SessionInteractionResolution } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
@@ -42,6 +47,7 @@ import {
   canSubmitInteraction,
   describeInteractionResolution,
   emptyInteractionDraft,
+  interactionCarousel,
   interactionQuestions,
   interactionResolution,
   needsOwnRefusal,
@@ -52,8 +58,10 @@ import {
   refusalResolution,
   selectOption,
   setPromptResponse,
+  type InteractionCarousel,
   type InteractionDraft,
   type InteractionFieldRole,
+  type InteractionQuestion,
 } from "./interaction";
 
 /* ------------------------------------------------------------------- card */
@@ -99,7 +107,10 @@ export function InteractionCard({
   const [draft, setDraft] = React.useState<InteractionDraft>(() =>
     emptyInteractionDraft(interaction),
   );
+  const [step, setStep] = React.useState(0);
   const questions = interactionQuestions(interaction);
+  const carousel = interactionCarousel(interaction, draft, step);
+  const asked = questions[carousel?.index ?? 0];
   const refusable = needsOwnRefusal(interaction);
   const submittable = canSubmitInteraction(interaction, draft) && !resolving;
   const own = React.useRef<HTMLFormElement>(null);
@@ -151,79 +162,23 @@ export function InteractionCard({
             </p>
           ) : null}
         </div>
+        {carousel ? (
+          <InteractionSteps carousel={carousel} disabled={resolving} onStep={setStep} />
+        ) : null}
       </div>
 
-      <div className="space-y-3 px-3 pt-2.5">
-        {questions.map(({ prompt, label }) => (
-          <fieldset key={prompt.id} className="min-w-0">
-            {label ? (
-              <legend className="mb-1 text-sm leading-5 text-foreground">{label}</legend>
-            ) : null}
-            <div className="flex flex-col">
-              {prompt.options.map((option) => {
-                const polarity = optionPolarity(option);
-                const checked = promptDraft(draft, prompt.id).optionIds.includes(option.id);
-                return (
-                  // A standing grant is not a louder yes: it consents to every
-                  // future call of its kind, so it must never carry the same
-                  // weight as the one-time one beside it. Muting the label
-                  // alone left the two rows the same size and the same shape,
-                  // which is what "identical weight" looked like on screen; the
-                  // secondary tier is a step down the type scale as well.
-                  <label
-                    key={option.id}
-                    className={cn(
-                      "flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-muted/40 has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-ring",
-                      polarity === "standing" ? "text-xs" : "text-sm",
-                    )}
-                  >
-                    <input
-                      type={prompt.multiple ? "checkbox" : "radio"}
-                      name={`${interaction.id}:${prompt.id}`}
-                      checked={checked}
-                      disabled={resolving}
-                      onChange={() => setDraft(selectOption(draft, prompt, option.id))}
-                      className={cn(
-                        "size-3.5 shrink-0 accent-primary outline-none",
-                        polarity === "standing" && "opacity-70",
-                      )}
-                    />
-                    <span
-                      className={cn(
-                        "min-w-0 truncate",
-                        polarity === "standing" ? "text-muted-foreground" : "text-foreground",
-                      )}
-                    >
-                      {option.label}
-                    </span>
-                    {option.description ? (
-                      <span className="min-w-0 truncate text-xs text-muted-foreground">
-                        {option.description}
-                      </span>
-                    ) : null}
-                  </label>
-                );
-              })}
-            </div>
-            {promptTakesText(prompt) ? (
-              <Textarea
-                value={promptDraft(draft, prompt.id).response}
-                disabled={resolving}
-                placeholder={FIELD_PLACEHOLDER[promptFieldRole(prompt, draft)]}
-                onChange={(event) =>
-                  setDraft(setPromptResponse(draft, prompt.id, event.currentTarget.value))
-                }
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                    event.preventDefault();
-                    submit();
-                  }
-                }}
-                className="mt-1.5 min-h-9 resize-none rounded-md text-sm shadow-none"
-              />
-            ) : null}
-          </fieldset>
-        ))}
+      <div className="px-3 pt-2.5">
+        {asked ? (
+          <InteractionQuestionFields
+            key={asked.prompt.id}
+            interaction={interaction}
+            question={asked}
+            draft={draft}
+            disabled={resolving === true}
+            onDraftChange={setDraft}
+            onSubmit={submit}
+          />
+        ) : null}
       </div>
 
       <div className="mt-2.5 flex items-center gap-1 border-t border-border/70 px-3 py-2">
@@ -270,6 +225,152 @@ export function InteractionCard({
         </Button>
       </div>
     </form>
+  );
+}
+
+/* -------------------------------------------------------------- questions */
+
+/**
+ * One question's options and its one text field.
+ *
+ * Keyed on the prompt at the call site, so stepping through a carousel mounts a
+ * fresh set of inputs rather than re-labelling the last one's — which is what
+ * keeps a radio group's `name` honest and stops the browser carrying a checked
+ * state across two questions that merely sat at the same index.
+ */
+function InteractionQuestionFields({
+  interaction,
+  question,
+  draft,
+  disabled,
+  onDraftChange,
+  onSubmit,
+}: {
+  interaction: SessionInteraction;
+  question: InteractionQuestion;
+  draft: InteractionDraft;
+  disabled: boolean;
+  onDraftChange(next: InteractionDraft): void;
+  onSubmit(): void;
+}) {
+  const { prompt, label } = question;
+  return (
+    <fieldset className="min-w-0">
+      {label ? <legend className="mb-1 text-sm leading-5 text-foreground">{label}</legend> : null}
+      <div className="flex flex-col">
+        {prompt.options.map((option) => {
+          const polarity = optionPolarity(option);
+          const checked = promptDraft(draft, prompt.id).optionIds.includes(option.id);
+          return (
+            // A standing grant is not a louder yes: it consents to every future
+            // call of its kind, so it must never carry the same weight as the
+            // one-time one beside it. Muting the label alone left the two rows
+            // the same size and the same shape, which is what "identical
+            // weight" looked like on screen; the secondary tier is a step down
+            // the type scale as well.
+            <label
+              key={option.id}
+              className={cn(
+                "flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-muted/40 has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-ring",
+                polarity === "standing" ? "text-xs" : "text-sm",
+              )}
+            >
+              <input
+                type={prompt.multiple ? "checkbox" : "radio"}
+                name={`${interaction.id}:${prompt.id}`}
+                checked={checked}
+                disabled={disabled}
+                onChange={() => onDraftChange(selectOption(draft, prompt, option.id))}
+                className={cn(
+                  "size-3.5 shrink-0 accent-primary outline-none",
+                  polarity === "standing" && "opacity-70",
+                )}
+              />
+              <span
+                className={cn(
+                  "min-w-0 truncate",
+                  polarity === "standing" ? "text-muted-foreground" : "text-foreground",
+                )}
+              >
+                {option.label}
+              </span>
+              {option.description ? (
+                <span className="min-w-0 truncate text-xs text-muted-foreground">
+                  {option.description}
+                </span>
+              ) : null}
+            </label>
+          );
+        })}
+      </div>
+      {promptTakesText(prompt) ? (
+        <Textarea
+          value={promptDraft(draft, prompt.id).response}
+          disabled={disabled}
+          placeholder={FIELD_PLACEHOLDER[promptFieldRole(prompt, draft)]}
+          onChange={(event) =>
+            onDraftChange(setPromptResponse(draft, prompt.id, event.currentTarget.value))
+          }
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault();
+              onSubmit();
+            }
+          }}
+          className="mt-1.5 min-h-9 resize-none rounded-md text-sm shadow-none"
+        />
+      ) : null}
+    </fieldset>
+  );
+}
+
+/**
+ * The counter and the two steps, and nothing else.
+ *
+ * A number, not a sentence: `2 of 3` is the whole report. It dims while the
+ * question in view has nothing to send, so stepping through a request tells the
+ * reader what Submit is still waiting on without a line of prose saying so.
+ */
+function InteractionSteps({
+  carousel,
+  disabled,
+  onStep,
+}: {
+  carousel: InteractionCarousel;
+  disabled?: boolean;
+  onStep(index: number): void;
+}) {
+  return (
+    <div className="flex shrink-0 items-center gap-0.5">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        aria-label="Previous question"
+        disabled={disabled || !carousel.hasPrevious}
+        onClick={() => onStep(carousel.index - 1)}
+      >
+        <CaretLeftIcon className="size-3" />
+      </Button>
+      <span
+        className={cn(
+          "shrink-0 font-mono text-xs tabular-nums",
+          carousel.answered[carousel.index] ? "text-foreground" : "text-muted-foreground",
+        )}
+      >
+        {carousel.index + 1} of {carousel.count}
+      </span>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        aria-label="Next question"
+        disabled={disabled || !carousel.hasNext}
+        onClick={() => onStep(carousel.index + 1)}
+      >
+        <CaretRightIcon className="size-3" />
+      </Button>
+    </div>
   );
 }
 
