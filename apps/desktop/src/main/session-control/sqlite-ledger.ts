@@ -22,7 +22,11 @@ import type {
   SessionLedgerTransaction,
   SessionNativeDetail,
 } from "@volli/shared";
-import { isSessionAttachmentContinuity, sameCommandReceipt } from "@volli/shared";
+import {
+  isSessionAttachmentContinuity,
+  sameCommandReceipt,
+  SESSION_INTERACTION_CANCEL_REASONS,
+} from "@volli/shared";
 
 type SqlRow = Record<string, unknown>;
 
@@ -635,6 +639,16 @@ function decodePayload(value: unknown, context: string): SessionEventPayload {
         attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
         interactionId: readString(record.interactionId, `${context}.interactionId`),
         resolution: decodeInteractionResolution(record.resolution, `${context}.resolution`),
+      };
+    // No resolution is read back, because none was written: the reason is the
+    // whole fact. Decoding one here would be inventing the decision the event
+    // exists to say nobody made.
+    case "interaction.cancelled":
+      return {
+        kind,
+        attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
+        interactionId: readString(record.interactionId, `${context}.interactionId`),
+        reason: enumValue(record.reason, SESSION_INTERACTION_CANCEL_REASONS, `${context}.reason`),
       };
     case "command.receipt.recorded":
       return { kind, receipt: decodeReceipt(record.receipt, `${context}.receipt`) };

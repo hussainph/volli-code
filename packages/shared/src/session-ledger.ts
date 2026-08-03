@@ -134,23 +134,44 @@ export interface SessionInteractionResolution {
   answers?: readonly SessionInteractionAnswer[];
 }
 
+export const SESSION_INTERACTION_CANCEL_REASONS = ["abandoned", "superseded", "withdrawn"] as const;
+
 /**
- * The prompt id a single-prompt interaction carries. Prompts are `prompt:${index}`,
- * so a harness that declares one question and a stored record that predates
- * `prompts` project to the same id.
+ * Why an interaction stopped waiting without a decision: the user left it
+ * unanswered, a newer interaction replaced it, or the harness stopped asking.
+ * None of them is an answer — a cancelled interaction never carries a
+ * resolution, so nothing downstream can read one as a refusal.
  */
-export const DEFAULT_INTERACTION_PROMPT_ID = "prompt:0";
+export type SessionInteractionCancelReason = (typeof SESSION_INTERACTION_CANCEL_REASONS)[number];
+
+/**
+ * The id of the prompt at `index`. Every producer of a synthesized prompt id —
+ * adapters, fixtures, and the fallback below — goes through this one definition
+ * so a harness that declares one question and a stored record that predates
+ * `prompts` cannot drift apart.
+ */
+export function promptId(index: number): string {
+  return `prompt:${index}`;
+}
+
+/** The prompt id a single-prompt interaction carries. */
+export const DEFAULT_INTERACTION_PROMPT_ID = promptId(0);
 
 /**
  * The questions an interaction asks, whether or not it was written with
  * `prompts`. A record without them is one prompt built from the flat fields;
  * no consumer should branch on their absence itself.
+ *
+ * A declared empty list is returned as it stands. Absent means "written before
+ * an interaction could carry questions"; empty means "this interaction asks
+ * none", and collapsing the second into the first would answer a question the
+ * record never asked.
  */
 export function readInteractionPrompts(
   interaction: SessionInteraction,
 ): readonly SessionInteractionPrompt[] {
   const { prompts } = interaction;
-  if (prompts && prompts.length > 0) return prompts;
+  if (prompts !== undefined) return prompts;
   return [
     {
       id: DEFAULT_INTERACTION_PROMPT_ID,
@@ -168,13 +189,18 @@ export function readInteractionPrompts(
 /**
  * The answers a resolution gave, whether or not it was written with `answers`.
  * A flat resolution answers the interaction's first (or only) prompt.
+ *
+ * A declared empty list is returned as it stands, for the reason
+ * `readInteractionPrompts` keeps one: an adapter that answers no prompts writes
+ * `answers: []`, and synthesizing a single option-less answer for it reads
+ * downstream as a refusal the user never gave.
  */
 export function readInteractionAnswers(
   interaction: SessionInteraction,
   resolution: SessionInteractionResolution,
 ): readonly SessionInteractionAnswer[] {
   const { answers } = resolution;
-  if (answers && answers.length > 0) return answers;
+  if (answers !== undefined) return answers;
   return [
     {
       promptId: interaction.prompts?.[0]?.id ?? DEFAULT_INTERACTION_PROMPT_ID,
@@ -294,6 +320,17 @@ export type SessionEventPayload =
       interactionId: string;
       resolution: SessionInteractionResolution;
     }
+  /**
+   * The interaction stopped waiting and nobody decided it. It is a distinct
+   * fact from `interaction.resolved` precisely because history is immutable:
+   * an empty resolution would print a refusal the user never made.
+   */
+  | {
+      kind: "interaction.cancelled";
+      attachmentId: string;
+      interactionId: string;
+      reason: SessionInteractionCancelReason;
+    }
   | { kind: "command.receipt.recorded"; receipt: CommandReceipt }
   | {
       kind: "adapter.observed";
@@ -394,6 +431,12 @@ export type SessionObservation =
       resolution: SessionInteractionResolution;
     })
   | (SessionObservationBase & {
+      kind: "interaction.cancelled";
+      attachmentId: string;
+      interactionId: string;
+      reason: SessionInteractionCancelReason;
+    })
+  | (SessionObservationBase & {
       kind: "adapter.observed";
       attachmentId: string | null;
       name: string;
@@ -459,6 +502,13 @@ export function observationPayload(observation: SessionObservation): SessionEven
         attachmentId: observation.attachmentId,
         interactionId: observation.interactionId,
         resolution: observation.resolution,
+      };
+    case "interaction.cancelled":
+      return {
+        kind: observation.kind,
+        attachmentId: observation.attachmentId,
+        interactionId: observation.interactionId,
+        reason: observation.reason,
       };
     case "command.receipt":
       throw new Error("Command receipt observations require Session Engine stamping");
@@ -770,6 +820,13 @@ export function projectSession(
         }
         break;
       }
+      // A cancelled interaction stops waiting and joins neither list: it has no
+      // resolution to project, and `resolved` is where the UI reads the answer
+      // back out. The durable `interaction.cancelled` event is what history
+      // keeps, and it says the interaction ended undecided.
+      case "interaction.cancelled":
+        interactions.delete(event.payload.interactionId);
+        break;
       case "command.receipt.recorded":
         receipts.push(event.payload.receipt);
         if (event.payload.receipt.status === "rejected") {

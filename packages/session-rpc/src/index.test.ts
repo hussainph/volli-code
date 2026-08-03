@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import type {
+  CancelInteractionRequest,
   RuntimeCatalog,
   SessionRuntime,
   SessionRuntimeCommandRequest,
@@ -110,12 +111,21 @@ function trackedValue(value: unknown): { id: string; data: unknown } {
 
 function runtimeFixture(): {
   runtime: SessionRuntime;
-  calls: { command: SessionRuntimeCommandRequest[]; subscribeAfter: number[] };
+  calls: {
+    command: SessionRuntimeCommandRequest[];
+    subscribeAfter: number[];
+    cancelled: CancelInteractionRequest[];
+  };
   emit: (next: SessionStreamFrame) => void;
 } {
-  const calls: { command: SessionRuntimeCommandRequest[]; subscribeAfter: number[] } = {
+  const calls: {
+    command: SessionRuntimeCommandRequest[];
+    subscribeAfter: number[];
+    cancelled: CancelInteractionRequest[];
+  } = {
     command: [],
     subscribeAfter: [],
+    cancelled: [],
   };
   let listener: ((next: SessionStreamFrame) => void) | null = null;
   const runtime: SessionRuntime = {
@@ -142,6 +152,9 @@ function runtimeFixture(): {
       return () => {
         listener = null;
       };
+    },
+    cancelInteraction: async (request) => {
+      calls.cancelled.push(request);
     },
     refreshCapabilities: async () => ({
       id: "capability-1",
@@ -538,10 +551,19 @@ describe("Session tRPC router", () => {
       attachmentId: "attachment-1",
     });
     await caller.session.reconcile({ sessionId: "session-1", attachmentId: "attachment-1" });
+    await caller.session.cancelInteraction({
+      sessionId: "session-1",
+      interactionId: "question-1",
+    });
     await caller.labDiagnostics.list();
 
     expect(fixture.calls.command).toEqual([
       expect.objectContaining({ commandId: "command-1", sessionId: "session-1" }),
+    ]);
+    // The transport carries no reason of its own: what it knows is that a user
+    // left the interaction undecided.
+    expect(fixture.calls.cancelled).toEqual([
+      { sessionId: "session-1", interactionId: "question-1", reason: "abandoned" },
     ]);
     expect(diagnostics.list().map((entry) => entry.procedure)).toEqual([
       "session.snapshot",
@@ -552,6 +574,8 @@ describe("Session tRPC router", () => {
       "session.refreshCapabilities",
       "session.reconcile",
       "session.reconcile",
+      "session.cancelInteraction",
+      "session.cancelInteraction",
       "labDiagnostics.list",
       "labDiagnostics.list",
     ]);

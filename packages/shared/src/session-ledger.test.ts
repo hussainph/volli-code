@@ -11,10 +11,12 @@ import {
   sameSessionCommandRequest,
   sameSessionEventPayload,
   sameSessionEventProvenance,
+  promptId,
   readInteractionAnswers,
   readInteractionPrompts,
   SESSION_ATTACHMENT_CONTINUITIES,
   SESSION_ATTENTION_KINDS,
+  SESSION_INTERACTION_CANCEL_REASONS,
 } from "./session-ledger";
 import type {
   Session,
@@ -119,10 +121,14 @@ describe("interaction prompts", () => {
     ]);
   });
 
-  it("reads an empty prompt list as no prompts at all", () => {
-    expect(readInteractionPrompts({ ...flatPermission, prompts: [] })).toEqual(
-      readInteractionPrompts(flatPermission),
-    );
+  it("keeps a declared empty prompt list distinct from an absent one", () => {
+    expect(readInteractionPrompts({ ...flatPermission, prompts: [] })).toEqual([]);
+    expect(readInteractionPrompts(flatPermission)).toHaveLength(1);
+  });
+
+  it("names every synthesized prompt through one definition", () => {
+    expect(promptId(0)).toBe(DEFAULT_INTERACTION_PROMPT_ID);
+    expect(promptId(2)).toBe("prompt:2");
   });
 
   it("returns declared prompts untouched", () => {
@@ -166,14 +172,21 @@ describe("interaction prompts", () => {
     ).toEqual([{ promptId: DEFAULT_INTERACTION_PROMPT_ID, optionIds: [], response: null }]);
   });
 
-  it("reads an empty answer list as no answers at all", () => {
+  // A resolution that answered nothing is not a resolution that was never
+  // written with `answers`. Synthesizing one here hands the reader an answer
+  // with no options selected, which every downstream reader takes for a refusal
+  // the user never made.
+  it("keeps a declared empty answer list distinct from an absent one", () => {
     expect(
       readInteractionAnswers(flatPermission, {
-        optionIds: ["reject"],
+        optionIds: [],
         response: null,
         answers: [],
       }),
-    ).toEqual([{ promptId: DEFAULT_INTERACTION_PROMPT_ID, optionIds: ["reject"], response: null }]);
+    ).toEqual([]);
+    expect(readInteractionAnswers(flatPermission, { optionIds: [], response: null })).toEqual([
+      { promptId: DEFAULT_INTERACTION_PROMPT_ID, optionIds: [], response: null },
+    ]);
   });
 
   it("returns declared answers untouched", () => {
@@ -398,8 +411,24 @@ describe("observationPayload", () => {
         interactionId: "permission-1",
         resolution: { optionIds: ["once"], response: null },
       },
+      {
+        id: "14-interaction-cancelled",
+        sessionId: session.id,
+        occurredAt: 14,
+        provenance,
+        kind: "interaction.cancelled",
+        attachmentId: attachment.id,
+        interactionId: "question-1",
+        reason: "abandoned",
+      },
     ];
 
+    expect(observationPayload(observations.at(-1)!)).toEqual({
+      kind: "interaction.cancelled",
+      attachmentId: attachment.id,
+      interactionId: "question-1",
+      reason: "abandoned",
+    });
     expect(observations.map(observationPayload).map(({ kind }) => kind)).toEqual([
       "attachment.opened",
       "attachment.native_referenced",
@@ -416,6 +445,7 @@ describe("observationPayload", () => {
       "capabilities.updated",
       "interaction.opened",
       "interaction.resolved",
+      "interaction.cancelled",
     ]);
     expect(
       observationPayload({
@@ -520,6 +550,45 @@ describe("observationPayload", () => {
         resolvedAt: 40,
       },
     ]);
+  });
+
+  it("drops a cancelled interaction without recording a decision for it", () => {
+    const interaction = {
+      id: "question-1",
+      attachmentId: "attachment-1",
+      kind: "question" as const,
+      title: "Which files?",
+      detail: null,
+      options: [{ id: "all", label: "All of them", description: null }],
+      multiple: false,
+      native: { id: "native-question-1", detail: null },
+    };
+    const remaining = { ...interaction, id: "question-2" };
+
+    const projection = projectSession(session, [
+      event(1, { kind: "interaction.opened", interaction }),
+      event(2, { kind: "interaction.opened", interaction: remaining }),
+      event(3, {
+        kind: "interaction.cancelled",
+        attachmentId: interaction.attachmentId,
+        interactionId: interaction.id,
+        reason: "abandoned",
+      }),
+      // A cancellation for something no longer open is inert, exactly as a
+      // resolution for one is.
+      event(4, {
+        kind: "interaction.cancelled",
+        attachmentId: interaction.attachmentId,
+        interactionId: "missing",
+        reason: "withdrawn",
+      }),
+    ]);
+
+    expect(projection.interactions).toEqual({ active: [remaining], resolved: [] });
+  });
+
+  it("keeps every cancel reason in the vocabulary", () => {
+    expect(SESSION_INTERACTION_CANCEL_REASONS).toEqual(["abandoned", "superseded", "withdrawn"]);
   });
 
   it("does not project an expired capability snapshot", () => {

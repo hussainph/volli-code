@@ -8,6 +8,7 @@ import type {
   SessionEvent,
   SessionEventProvenance,
   SessionExecutionVenue,
+  SessionInteractionCancelReason,
   SessionInteractionResolution,
   SessionNativeDetail,
   SessionNativeReference,
@@ -123,6 +124,13 @@ export interface SessionRuntimeCommandResult {
   throughSequence: number;
 }
 
+export interface CancelInteractionRequest {
+  sessionId: string;
+  interactionId: string;
+  /** Required: an interaction that stops waiting always states why it stopped. */
+  reason: SessionInteractionCancelReason;
+}
+
 export interface SessionStreamFrame {
   sessionId: string;
   sequence: number;
@@ -144,6 +152,7 @@ export interface SessionRuntime {
     input: { sessionId: string; afterSequence: number },
     listener: (frame: SessionStreamFrame) => void | Promise<void>,
   ): Promise<() => void>;
+  cancelInteraction(request: CancelInteractionRequest): Promise<void>;
   refreshCapabilities(input: {
     sessionId: string;
     attachmentId: string;
@@ -753,6 +762,35 @@ class DefaultSessionRuntime implements SessionRuntime {
     return this.#result(request.sessionId, submitted.command, durable);
   }
 
+  /**
+   * The third interaction verb, beside `#resolveInteraction` and the answer it
+   * delivers. Cancelling records one durable fact and dispatches nothing: the
+   * harness was never told an answer, so Volli must not claim it heard one.
+   * That is also why this is not a Session command — a command earns a delivery
+   * receipt, and there is no delivery here to receipt.
+   */
+  async #cancelInteraction(request: CancelInteractionRequest): Promise<void> {
+    const projection = await this.#requireSession(request.sessionId);
+    const interaction = projection.interactions.active.find(
+      ({ id }) => id === request.interactionId,
+    );
+    if (!interaction) {
+      throw new SessionRuntimeNotFoundError(`Interaction ${request.interactionId} is not open`);
+    }
+    const location = await this.ports.locations.resolve(projection.session);
+    const event = await this.ports.engine.observe({
+      id: this.#id("event"),
+      sessionId: request.sessionId,
+      attachmentId: interaction.attachmentId,
+      occurredAt: this.ports.clock.now(),
+      provenance: userProvenance(location.venue),
+      kind: "interaction.cancelled",
+      interactionId: interaction.id,
+      reason: request.reason,
+    });
+    await this.#publish([event]);
+  }
+
   async #release(
     request: ReleaseCommandRequest,
     projection: SessionProjection,
@@ -882,6 +920,11 @@ class DefaultSessionRuntime implements SessionRuntime {
       subscribers?.delete(subscriber);
       if (subscribers?.size === 0) this.#subscribers.delete(input.sessionId);
     };
+  }
+
+  async cancelInteraction(request: CancelInteractionRequest): Promise<void> {
+    this.#assertOpen();
+    await this.#cancelInteraction(request);
   }
 
   async refreshCapabilities(input: {

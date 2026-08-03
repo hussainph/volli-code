@@ -654,6 +654,65 @@ describe("SessionRuntime native adapter contract", () => {
     ).rejects.toBeInstanceOf(SessionRuntimeNotFoundError);
   });
 
+  it("cancels a pending interaction as a fact, without answering it or telling the harness", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    await adapter.emit({
+      id: "question-1",
+      kind: "interaction.opened",
+      occurredAt: 300,
+      interaction: {
+        id: "question-1",
+        kind: "question",
+        title: "Which files should I read?",
+        detail: null,
+        options: [{ id: "prompt:0/option:0", label: "All of them", description: null }],
+        multiple: true,
+        native: { id: "native-question-1", detail: null },
+      },
+    });
+    const dispatchesBefore = adapter.dispatches;
+
+    await runtime.cancelInteraction({
+      sessionId,
+      interactionId: "question-1",
+      reason: "abandoned",
+    });
+
+    const { projection, frames } = await runtime.snapshot({ sessionId });
+    expect(projection.interactions).toMatchObject({ active: [], resolved: [] });
+    // No delivery, so no receipt: the harness was never told an answer and
+    // Volli does not pretend otherwise.
+    expect(adapter.dispatches).toBe(dispatchesBefore);
+    expect(frames.map(({ event }) => event.payload).at(-1)).toEqual({
+      kind: "interaction.cancelled",
+      attachmentId,
+      interactionId: "question-1",
+      reason: "abandoned",
+    });
+    expect(frames.at(-1)?.event.provenance.source).toEqual({
+      kind: "user",
+      id: "session-client",
+      detail: null,
+    });
+    expect(projection.receipts.some(({ commandId }) => commandId.includes("question-1"))).toBe(
+      false,
+    );
+
+    await expect(
+      runtime.cancelInteraction({
+        sessionId,
+        interactionId: "question-1",
+        reason: "withdrawn",
+      }),
+    ).rejects.toBeInstanceOf(SessionRuntimeNotFoundError);
+    await runtime.close();
+    await expect(
+      runtime.cancelInteraction({ sessionId, interactionId: "question-1", reason: "superseded" }),
+    ).rejects.toThrow("Session runtime is closed");
+  });
+
   it("normalizes attention facts and advances capability revisions only after a healthy probe", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);

@@ -729,4 +729,96 @@ describe("SqliteSessionLedger", () => {
     await expect(project()).rejects.toThrow("answers[0].promptId must be a string");
     ctx.db.pragma("ignore_check_constraints = OFF");
   });
+
+  it("round-trips a cancelled interaction without a resolution and rejects an unknown reason", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-cancelled",
+      projectId,
+      ticketId: null,
+      title: "Cancelled",
+      provenance,
+    });
+    const start = await control.submit({
+      commandId: "start-cancelled",
+      sessionId: created.session.id,
+      intent: { kind: "executor.start", adapterId: "opencode", continuity: "fresh" },
+      provenance,
+    });
+    const adapterProvenance = {
+      source: { kind: "adapter" as const, id: "opencode", detail: null },
+      venue: { id: "local", kind: "local" as const },
+    };
+    await control.observe({
+      id: "opened-cancelled",
+      kind: "attachment.opened",
+      sessionId: created.session.id,
+      commandId: start.command.id,
+      occurredAt: 500,
+      provenance: adapterProvenance,
+      attachment: {
+        id: "attachment-cancelled",
+        sessionId: created.session.id,
+        adapterId: "opencode",
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+        native: { id: "native-4", detail: null },
+      },
+    });
+    await control.observe({
+      id: "interaction-opened-cancelled",
+      kind: "interaction.opened",
+      sessionId: created.session.id,
+      attachmentId: "attachment-cancelled",
+      occurredAt: 501,
+      provenance: adapterProvenance,
+      interaction: {
+        id: "question-3",
+        attachmentId: "attachment-cancelled",
+        kind: "question",
+        title: "Which files?",
+        detail: null,
+        options: [{ id: "all", label: "All of them", description: null }],
+        multiple: true,
+        native: { id: "native-question-3", detail: null },
+      },
+    });
+    // The user walked away, so the fact carries Volli's own provenance rather
+    // than the adapter's: no harness reported this.
+    await control.observe({
+      id: "interaction-cancelled",
+      kind: "interaction.cancelled",
+      sessionId: created.session.id,
+      attachmentId: "attachment-cancelled",
+      occurredAt: 502,
+      provenance,
+      interactionId: "question-3",
+      reason: "abandoned",
+    });
+
+    const projection = await control.getSession({ sessionId: created.session.id });
+    expect(projection?.interactions).toEqual({ active: [], resolved: [] });
+    const events = await control.listEvents({ sessionId: created.session.id });
+    expect(events.find(({ id }) => id === "interaction-cancelled")?.payload).toEqual({
+      kind: "interaction.cancelled",
+      attachmentId: "attachment-cancelled",
+      interactionId: "question-3",
+      reason: "abandoned",
+    });
+
+    ctx.db.pragma("ignore_check_constraints = ON");
+    ctx.db.prepare("UPDATE session_events SET payload = ? WHERE id = ?").run(
+      JSON.stringify({
+        kind: "interaction.cancelled",
+        attachmentId: "attachment-cancelled",
+        interactionId: "question-3",
+        reason: "resolved",
+      }),
+      "interaction-cancelled",
+    );
+    await expect(control.getSession({ sessionId: created.session.id })).rejects.toThrow(
+      "reason has an unsupported value",
+    );
+    ctx.db.pragma("ignore_check_constraints = OFF");
+  });
 });

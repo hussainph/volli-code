@@ -354,6 +354,14 @@ export function createSessionRouter() {
       command: instrumentedProcedure
         .input(commandRequestSchema)
         .mutation(({ ctx, input }) => ctx.runtime.command(toSessionRuntimeCommandRequest(input))),
+      // A pending interaction the user walked away from. The reason is fixed
+      // here rather than taken as input: this transport is the user seam, and
+      // the only thing it can honestly report is that they left it undecided.
+      cancelInteraction: instrumentedProcedure
+        .input(z.object({ sessionId: nonEmptyString, interactionId: nonEmptyString }))
+        .mutation(({ ctx, input }) =>
+          ctx.runtime.cancelInteraction({ ...input, reason: "abandoned" }),
+        ),
       refreshCapabilities: instrumentedProcedure
         .input(z.object({ sessionId: nonEmptyString, attachmentId: nonEmptyString }))
         .mutation(async ({ ctx, input }) =>

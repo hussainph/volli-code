@@ -59,6 +59,7 @@ function runtimeFixture(): {
           listener = null;
         };
       },
+      cancelInteraction: async () => undefined,
       refreshCapabilities: async () => ({}) as never,
       reconcile: async () => undefined,
       close: async () => undefined,
