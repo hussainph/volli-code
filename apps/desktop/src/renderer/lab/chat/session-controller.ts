@@ -14,6 +14,7 @@ import type { UIMessage } from "ai";
 import { useRuntimeCatalogClient } from "@renderer/lib/runtime-catalog-client";
 import { useUiStore } from "@renderer/stores/ui";
 
+import { LAB_SCENARIO_ADAPTER_ID } from "../../../lab-scenarios";
 import { LAB_SESSION_PROJECT_ID, LAB_SESSION_TICKET_ID } from "../../../lab-session-rpc-path";
 import { createSessionRpcClient, type SessionRpcClient } from "../session-rpc-client";
 import { projectTranscriptMessages } from "./message-projection";
@@ -98,7 +99,17 @@ export interface LabSessionController {
   recover(): Promise<void>;
 }
 
-export function useLabSessionController(): LabSessionController {
+/**
+ * Drives one lab Session.
+ *
+ * `scenarioId` names a scripted harness profile to attach instead of the live
+ * one — the lab's only way to reach a state OpenCode raises when it feels like
+ * it. It is a profile, not a mode: everything below is unchanged, because a
+ * scenario is delivered by an adapter and the whole point is that this surface
+ * cannot tell. Null is the live harness, which is what a Session opened without
+ * a pick gets.
+ */
+export function useLabSessionController(scenarioId: string | null = null): LabSessionController {
   const runtimeCatalog = useRuntimeCatalogClient();
   const settingsOpen = useUiStore((state) => state.settingsOpen);
   const client = React.useRef<SessionRpcClient | null>(null);
@@ -329,8 +340,10 @@ export function useLabSessionController(): LabSessionController {
         sessionId: created.sessionId,
         command: {
           kind: "adapter.attach",
-          adapterId: "opencode",
-          profileId: "native",
+          adapterId: scenarioId ? LAB_SCENARIO_ADAPTER_ID : "opencode",
+          // A scenario is a harness profile of the scripted adapter, so the
+          // pick rides the attach the runtime already validates.
+          profileId: scenarioId ?? "native",
           continuity: "fresh",
         },
       });
@@ -339,7 +352,7 @@ export function useLabSessionController(): LabSessionController {
       setLifecycle("error");
       setError(`Could not start OpenCode: ${errorMessage(failure)}`);
     }
-  }, [lifecycle]);
+  }, [lifecycle, scenarioId]);
 
   const submit = React.useCallback(
     async (text: string, delivery: MessageDelivery): Promise<boolean> => {

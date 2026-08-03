@@ -47,6 +47,7 @@ import {
   InteractionFocusProvider,
   InteractionReceiptLine,
 } from "../chat/interaction-ui";
+import { LabScenarioPicker } from "../chat/scenario-picker";
 import { useLabSessionController } from "../chat/session-controller";
 import {
   enqueueMessage,
@@ -76,19 +77,24 @@ export default function ChatSessionScratch() {
 /** Keep the prototype Session alive while Settings takes over the canvas. */
 function LabMainContent() {
   const settingsOpen = useUiStore((state) => state.settingsOpen);
+  const [scenario, setScenario] = React.useState<string | null>(null);
 
   return (
     <>
       <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden", settingsOpen && "hidden")}>
-        <TicketChatWorkspace />
+        {/* Keyed on the pick so a scenario gets a Session of its own rather
+            than a second attachment on the last one's history. Remounting is
+            also what re-arms the controller's start-once latch. */}
+        <TicketChatWorkspace key={scenario ?? "live"} scenarioId={scenario} />
       </div>
       {settingsOpen ? <SettingsPage initialCategoryKey="harness" /> : null}
+      <LabScenarioPicker value={scenario} onChange={setScenario} />
     </>
   );
 }
 
-function TicketChatWorkspace() {
-  const session = useLabSessionController();
+function TicketChatWorkspace({ scenarioId }: { scenarioId: string | null }) {
+  const session = useLabSessionController(scenarioId);
   const [activeTabId, setActiveTabId] = React.useState(SESSION_TAB_ID);
   const [fileTabs, setFileTabs] = React.useState<TicketTabDescriptor[]>([]);
   const [todos, setTodos] = React.useState<SessionTodo[] | null>(null);
