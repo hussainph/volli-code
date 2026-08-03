@@ -28,6 +28,7 @@
  */
 import "@fontsource-variable/geist-mono/wght.css";
 import "@fontsource-variable/mona-sans/wght.css";
+import "@fontsource-variable/mona-sans/wght-italic.css";
 // `globals.css` by way of lab.css, which additionally registers this folder as
 // a Tailwind source — see the note there; importing globals.css directly leaves
 // every lab-only utility silently ungenerated.

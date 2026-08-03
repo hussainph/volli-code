@@ -26,3 +26,5 @@
  */
 @import "../src/globals.css";
 @source "./";
+@source "../../components/ai-elements";
+@source "../../../node_modules/streamdown/dist/*.js";

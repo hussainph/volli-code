@@ -14,6 +14,7 @@ import {
 } from "@volli/shared";
 
 import { AppearanceSettings } from "@renderer/components/pages/appearance-settings";
+import { RuntimeCatalogSettings } from "@renderer/components/pages/runtime-catalog-settings";
 import {
   SettingsRow,
   SettingsSection,
@@ -40,7 +41,7 @@ import { toastError } from "@renderer/lib/toast";
  * (components/pages/configure-page.tsx); everything here applies across every
  * project. Grouped into categories via the shared {@link SettingsShell}.
  */
-export function SettingsPage() {
+export function SettingsPage({ initialCategoryKey }: { initialCategoryKey?: string } = {}) {
   const categories: readonly SettingsCategory[] = [
     {
       key: "general",
@@ -68,7 +69,13 @@ export function SettingsPage() {
     },
   ];
 
-  return <SettingsShell title="Settings" categories={categories} />;
+  return (
+    <SettingsShell
+      title="Settings"
+      categories={categories}
+      initialCategoryKey={initialCategoryKey}
+    />
+  );
 }
 
 /** General category: app-wide retention (Done-ticket archiving). */
@@ -181,19 +188,18 @@ function DoneTtlField() {
  */
 function HarnessRuntimesSettings() {
   return (
-    <SettingsSection
-      title="Runtimes"
-      icon={CpuIcon}
-      description="Custom commands and resume flags are coming soon."
-    >
-      {FIRST_CLASS_HARNESS_IDS.map((id) => (
-        <SettingsRow key={id} label={HARNESS_LABELS[id]}>
-          <span className="rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground">
-            Built-in
-          </span>
-        </SettingsRow>
-      ))}
-    </SettingsSection>
+    <>
+      <RuntimeCatalogSettings />
+      <SettingsSection title="Runtimes" icon={CpuIcon}>
+        {FIRST_CLASS_HARNESS_IDS.map((id) => (
+          <SettingsRow key={id} label={HARNESS_LABELS[id]}>
+            <span className="rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground">
+              Built-in
+            </span>
+          </SettingsRow>
+        ))}
+      </SettingsSection>
+    </>
   );
 }
 

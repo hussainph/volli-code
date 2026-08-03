@@ -45,7 +45,12 @@ function runtimeFixture(): {
       command: async () => ({}) as never,
       snapshot: async ({ sessionId }) => {
         calls.snapshot.push(sessionId);
-        return { projection: {}, throughSequence: 0, frames: [], transcript: [] } as never;
+        return {
+          projection: { capabilities: [] },
+          throughSequence: 0,
+          frames: [],
+          transcript: [],
+        } as never;
       },
       subscribe: async ({ afterSequence }, next) => {
         calls.subscribe.push(afterSequence);

@@ -273,6 +273,43 @@ describe("SessionRuntime native adapter contract", () => {
     expect((await runtime.snapshot({ sessionId })).projection.liveExecutor).toBeNull();
   });
 
+  it("keeps unavailable catalog inventory out of the durable Session stream", async () => {
+    const { runtime, adapter } = composition();
+    adapter.probeResult = {
+      status: "available",
+      runtime: { path: "/trusted/fake", version: "1.0.0", fingerprint: "sha256:fake" },
+      capabilities: {
+        features: [],
+        catalog: [
+          {
+            kind: "model",
+            id: "provider/usable",
+            label: "Usable",
+            state: "available",
+            evidence: "reported",
+            detail: null,
+          },
+          {
+            kind: "model",
+            id: "provider/exhaustive-inventory",
+            label: "Exhaustive inventory",
+            state: "unavailable",
+            evidence: "reported",
+            detail: { payload: "does not belong in every Session snapshot" },
+          },
+        ],
+      },
+    };
+
+    const sessionId = await createAndAttach(runtime);
+    const snapshot = await runtime.snapshot({ sessionId });
+
+    expect(snapshot.projection.capabilities.at(-1)?.catalog).toEqual([
+      expect.objectContaining({ id: "provider/usable" }),
+    ]);
+    expect(JSON.stringify(snapshot.frames)).not.toContain("exhaustive-inventory");
+  });
+
   it("coalesces duplicate submissions and never dispatches an accepted command twice", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);

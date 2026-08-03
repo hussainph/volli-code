@@ -1037,7 +1037,10 @@ class DefaultSessionRuntime implements SessionRuntime {
       observedAt,
       expiresAt: observedAt + 60_000,
       features: report.features,
-      catalog: report.catalog,
+      // Exhaustive provider inventory belongs behind the Runtime Catalog
+      // Module, not in every immutable Session event and renderer snapshot.
+      // Keep only entries this attachment can actually offer now.
+      catalog: report.catalog.filter((item) => item.state !== "unavailable"),
     };
     const event = await this.ports.engine.observe({
       id: this.#id("event"),

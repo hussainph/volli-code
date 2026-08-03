@@ -1,14 +1,225 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { HarnessCommand, HarnessObservation, ObservationSink } from "@volli/session-engine";
 import {
+  ACTIVITY_METADATA_KEY,
+  readActivityDescriptor,
+  type ActivityKind,
+  type ActivityOutcome,
+  type ActivitySubject,
+} from "@volli/shared";
+import {
   createOpenCodeNativeAdapter,
+  openCodeActivityKind,
   parseOpenCodeSse,
+  OPENCODE_ACTIVITY,
   type OpenCodeChild,
   type OpenCodeHttpResponse,
   type OpenCodeNetworkPort,
   type OpenCodeProcessPort,
   type OpenCodeSseEvent,
 } from "./index";
+
+const NO_OUTCOME: ActivityOutcome = {
+  exitCode: null,
+  matchCount: null,
+  fileCount: null,
+  lineCount: null,
+  bytes: null,
+  addedLines: null,
+  removedLines: null,
+  diff: null,
+  summary: null,
+};
+
+/**
+ * The activity descriptor the adapter now stamps beside its `opencode`
+ * namespace. Spelled out here rather than matched loosely — the descriptor is
+ * the renderer's only contract, so a silent change to it must fail a test.
+ */
+/** Mirrors MAX_INFERRED_LABEL_LENGTH — the point past which a scalar is a body, not a name. */
+const MAX_LABEL = 200;
+
+/**
+ * Every tool part's descriptor, read back through the shared contract and with
+ * null outcome fields elided, so an expectation reads as the row the UI draws.
+ */
+function descriptors(observations: readonly HarnessObservation[]) {
+  return observations.flatMap((observation) =>
+    observation.kind !== "transcript.message"
+      ? []
+      : observation.message.parts.flatMap((part) => {
+          if (part.type !== "dynamic-tool") return [];
+          const descriptor = readActivityDescriptor(part.toolMetadata);
+          if (!descriptor) throw new Error(`no activity descriptor on ${part.toolCallId}`);
+          return [
+            {
+              call: part.toolCallId,
+              kind: descriptor.kind,
+              label: descriptor.subject.label,
+              path: descriptor.subject.path,
+              lineRange: descriptor.subject.lineRange,
+              outcome:
+                descriptor.outcome &&
+                Object.fromEntries(
+                  Object.entries(descriptor.outcome).filter(([, value]) => value !== null),
+                ),
+              startedAt: descriptor.startedAt,
+              endedAt: descriptor.endedAt,
+            },
+          ];
+        }),
+  );
+}
+
+const toolPart = (tool: string, callID: string, state: Record<string, unknown>) => ({
+  type: "tool",
+  tool,
+  callID,
+  state,
+});
+
+/** Every tool row the transcript projected, in the order it projected them. */
+function toolRows(observations: readonly HarnessObservation[]) {
+  return observations.flatMap((observation) =>
+    observation.kind !== "transcript.message"
+      ? []
+      : observation.message.parts.flatMap((part) => (part.type === "dynamic-tool" ? [part] : [])),
+  );
+}
+
+/**
+ * One assistant turn holding a running tool call, then whatever the permission
+ * channel does to it. The stream never ends, so a gated row observed here is a
+ * live gate rather than an artifact of the turn settling.
+ */
+function gatedTurn(
+  tail: readonly OpenCodeSseEvent[],
+  hold: Deferred<void>,
+  callState: Record<string, unknown> = { status: "running", input: { path: "src/index.ts" } },
+) {
+  const network = new FakeNetwork();
+  network.subscribe = async (input) => {
+    network.subscriptions.push(input);
+    return (async function* () {
+      yield {
+        id: "assistant",
+        type: "message.updated",
+        properties: {
+          info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+        },
+      };
+      yield {
+        id: "call",
+        type: "message.part.updated",
+        properties: {
+          sessionID: "native-session-1",
+          part: {
+            id: "p1",
+            messageID: "provider-assistant",
+            ...toolPart("write", "call-write", callState),
+          },
+        },
+      };
+      yield* tail;
+      await hold.promise;
+    })();
+  };
+  return network;
+}
+
+/**
+ * One assistant turn that delegated to a subagent, then whatever happens while
+ * that subagent runs. OpenCode states the child Session on the `task` part
+ * itself, which is the only place the two ids are ever related.
+ *
+ * The tail waits out the snapshot coalescing window first, because a subagent
+ * takes seconds to reach the call it needs answered: the `task` row has long
+ * since painted by then, and anything that gates it has to say so itself. A
+ * fixture that yields the tail in the same tick tests a race that never runs.
+ */
+function delegatedTurn(tail: readonly OpenCodeSseEvent[], hold: Deferred<void>) {
+  const network = new FakeNetwork();
+  network.subscribe = async (input) => {
+    network.subscriptions.push(input);
+    return (async function* () {
+      yield {
+        id: "assistant",
+        type: "message.updated",
+        properties: {
+          info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+        },
+      };
+      yield {
+        id: "task-call",
+        type: "message.part.updated",
+        properties: {
+          sessionID: "native-session-1",
+          part: {
+            id: "p1",
+            messageID: "provider-assistant",
+            ...toolPart("task", "call-task", {
+              status: "running",
+              input: { description: "Review lab task" },
+              metadata: { parentSessionId: "native-session-1", sessionId: "child-session-1" },
+            }),
+          },
+        },
+      };
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      yield* tail;
+      await hold.promise;
+    })();
+  };
+  return network;
+}
+
+/**
+ * A permission raised inside a subagent: tagged with the child Session, naming
+ * a call in the child's transcript. Neither id means anything to the Session
+ * that has to answer it.
+ */
+const subagentAskedFor = (sessionID: string) => ({
+  id: "asked",
+  type: "permission.asked",
+  properties: {
+    sessionID,
+    id: "per_1",
+    tool: { messageID: "child-message-1", callID: "child-call-1" },
+  },
+});
+
+const askedFor = (callID: string, messageID = "provider-assistant") => ({
+  id: "asked",
+  type: "permission.asked",
+  properties: {
+    sessionID: "native-session-1",
+    id: "per_1",
+    title: "Allow write",
+    tool: { messageID, callID },
+  },
+});
+
+function activity(
+  kind: ActivityKind,
+  nativeToolName: string,
+  overrides: Partial<ActivitySubject> & {
+    outcome?: Partial<ActivityOutcome>;
+    startedAt?: number;
+    endedAt?: number;
+  } = {},
+): Record<string, unknown> {
+  const { outcome, startedAt, endedAt, ...subject } = overrides;
+  return {
+    [ACTIVITY_METADATA_KEY]: {
+      kind,
+      nativeToolName,
+      subject: { label: null, path: null, lineRange: null, ...subject },
+      outcome: outcome ? { ...NO_OUTCOME, ...outcome } : null,
+      startedAt: startedAt ?? null,
+      endedAt: endedAt ?? null,
+    },
+  };
+}
 
 class Deferred<T> {
   readonly promise: Promise<T>;
@@ -103,6 +314,7 @@ class FakeNetwork implements OpenCodeNetworkPort {
       return { status: 200, body: { "native-session-1": { type: "idle" } } };
     if (input.path.startsWith("/permission")) return { status: 200, body: [] };
     if (input.path.startsWith("/question")) return { status: 200, body: [] };
+    if (input.path.includes("/todo")) return { status: 200, body: [] };
     return { status: 200, body: [{ id: "reported", name: "Reported" }] };
   }
   async subscribe(
@@ -155,6 +367,18 @@ function messageCommand(): Extract<HarnessCommand, { kind: "message.submit" }> {
     agent: "build",
     variant: "high",
     message: { id: "message-9", role: "user", parts: [{ type: "text", text: "Fix the tracer" }] },
+  };
+}
+
+/** A 429 `session.error` carrying whatever header bag the provider sent. */
+function rateLimited(id: string, responseHeaders: unknown): OpenCodeSseEvent {
+  return {
+    id,
+    type: "session.error",
+    properties: {
+      sessionID: "native-session-1",
+      error: { name: "APIError", data: { statusCode: 429, responseHeaders } },
+    },
   };
 }
 
@@ -335,6 +559,61 @@ describe("OpenCodeNativeAdapter", () => {
         }),
       }),
     ]);
+  });
+
+  it("commits a first text delta before OpenCode has sent a full part snapshot", async () => {
+    const network = new FakeNetwork();
+    const allowIdle = new Deferred<void>();
+    network.subscribe = async (input) => {
+      network.subscriptions.push(input);
+      return (async function* () {
+        yield {
+          id: "message",
+          type: "message.updated",
+          properties: {
+            info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+          },
+        };
+        yield {
+          id: "delta",
+          type: "message.part.delta",
+          properties: {
+            messageID: "provider-assistant",
+            partID: "answer",
+            field: "text",
+            delta: "Stream this now",
+          },
+        };
+        await allowIdle.promise;
+        yield { id: "idle", type: "session.idle", properties: { sessionID: "native-session-1" } };
+      })();
+    };
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        kind: "transcript.message",
+        message: {
+          id: "provider-assistant",
+          role: "assistant",
+          parts: [{ type: "text", text: "Stream this now" }],
+        },
+      }),
+    );
+    expect(observations.some((observation) => observation.kind === "turn.completed")).toBe(false);
+
+    allowIdle.resolve(undefined);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(observations.some((observation) => observation.kind === "turn.completed")).toBe(true);
+    await handle.release("requested");
   });
 
   it("emits one turn fact per native status transition", async () => {
@@ -566,7 +845,7 @@ describe("OpenCodeNativeAdapter", () => {
           id: "provider-assistant",
           role: "assistant",
           parts: [
-            { type: "reasoning", text: "thinking" },
+            { type: "reasoning", text: "thinking", state: "done" },
             { type: "text", text: "READY" },
             {
               type: "dynamic-tool",
@@ -577,6 +856,13 @@ describe("OpenCodeNativeAdapter", () => {
               output: { content: 'case "transcript.message"' },
               title: "Read Session runtime",
               toolMetadata: {
+                ...activity("read-file", "read", {
+                  label: "src/session-runtime.ts",
+                  path: "src/session-runtime.ts",
+                  outcome: {},
+                  startedAt: 1,
+                  endedAt: 2,
+                }),
                 opencode: {
                   attachments: [{ id: "artifact-1", mime: "text/plain" }],
                   metadata: { source: "workspace" },
@@ -853,14 +1139,17 @@ describe("OpenCodeNativeAdapter", () => {
         message: expect.objectContaining({
           parts: [
             { type: "text", text: "Visible answer" },
-            { type: "reasoning", text: "Visible reasoning" },
+            { type: "reasoning", text: "Visible reasoning", state: "done" },
+            // A committed, executing call is input-available — the state that
+            // earns a spinner. Only a call still forming its input is streaming.
             {
               type: "dynamic-tool",
               toolName: "bash",
               toolCallId: "call-running",
-              state: "input-streaming",
+              state: "input-available",
               input: { path: "src/session-runtime.ts" },
               title: "Read Session runtime",
+              toolMetadata: activity("run-command", "bash", { label: "src/session-runtime.ts" }),
             },
             {
               type: "dynamic-tool",
@@ -869,6 +1158,7 @@ describe("OpenCodeNativeAdapter", () => {
               state: "input-streaming",
               input: { pattern: "transcript.message" },
               toolMetadata: {
+                ...activity("search", "search", { label: "transcript.message" }),
                 opencode: { raw: "Preparing repository search" },
               },
             },
@@ -881,6 +1171,13 @@ describe("OpenCodeNativeAdapter", () => {
               output: { content: 'case "transcript.message"', truncated: false },
               title: "Read transcript mapping",
               toolMetadata: {
+                ...activity("read-file", "read", {
+                  label: "src/session-runtime.ts",
+                  path: "src/session-runtime.ts",
+                  outcome: {},
+                  startedAt: 1,
+                  endedAt: 2,
+                }),
                 opencode: { metadata: { bytes: 42 }, time: { start: 1, end: 2 } },
               },
             },
@@ -893,6 +1190,13 @@ describe("OpenCodeNativeAdapter", () => {
               errorText: "File not found",
               title: "Read missing file",
               toolMetadata: {
+                ...activity("write-file", "write", {
+                  label: "src/missing.ts",
+                  path: "src/missing.ts",
+                  outcome: {},
+                  startedAt: 3,
+                  endedAt: 4,
+                }),
                 opencode: { metadata: { code: "ENOENT" }, time: { start: 3, end: 4 } },
               },
             },
@@ -901,6 +1205,7 @@ describe("OpenCodeNativeAdapter", () => {
               toolName: "pending-empty",
               toolCallId: "call-pending-empty",
               state: "input-streaming",
+              toolMetadata: activity("other", "pending-empty"),
             },
             {
               type: "dynamic-tool",
@@ -909,6 +1214,7 @@ describe("OpenCodeNativeAdapter", () => {
               state: "output-available",
               input: null,
               output: null,
+              toolMetadata: activity("other", "completed-empty", { outcome: {} }),
             },
             {
               type: "dynamic-tool",
@@ -917,6 +1223,7 @@ describe("OpenCodeNativeAdapter", () => {
               state: "output-error",
               input: null,
               errorText: "Tool failed",
+              toolMetadata: activity("other", "error-empty", { outcome: {} }),
             },
           ],
         }),
@@ -1972,6 +2279,307 @@ describe("OpenCodeNativeAdapter", () => {
     });
   });
 
+  it("settles a thought once the model answers past it, mid-turn", async () => {
+    const network = new FakeNetwork();
+    const hold = new Deferred<void>();
+    network.subscribe = async (input) => {
+      network.subscriptions.push(input);
+      return (async function* () {
+        yield {
+          id: "assistant",
+          type: "message.updated",
+          properties: {
+            info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+          },
+        };
+        yield {
+          id: "think",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "r1",
+              messageID: "provider-assistant",
+              type: "reasoning",
+              text: "Overtaken",
+            },
+          },
+        };
+        yield {
+          id: "answer",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "t1",
+              messageID: "provider-assistant",
+              type: "text",
+              text: "Answer so far",
+            },
+          },
+        };
+        // The turn never goes idle, so anything still "streaming" here is
+        // genuinely live rather than an artifact of the stream closing.
+        await hold.promise;
+      })();
+    };
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Text after the thought means the model moved on: the elapsed counter must
+    // freeze even though the turn is still busy.
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        kind: "transcript.message",
+        message: expect.objectContaining({
+          parts: [
+            { type: "reasoning", text: "Overtaken", state: "done" },
+            { type: "text", text: "Answer so far" },
+          ],
+        }),
+      }),
+    );
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("settles the message's last thought on OpenCode's own time.end, mid-turn", async () => {
+    const network = new FakeNetwork();
+    const hold = new Deferred<void>();
+    network.subscribe = async (input) => {
+      network.subscriptions.push(input);
+      return (async function* () {
+        yield {
+          id: "assistant",
+          type: "message.updated",
+          properties: {
+            info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+          },
+        };
+        // OpenCode opens a reasoning part with an empty text and a start time,
+        // then streams the body as deltas.
+        yield {
+          id: "think-open",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "r1",
+              messageID: "provider-assistant",
+              type: "reasoning",
+              text: "",
+              time: { start: 1 },
+            },
+          },
+        };
+        yield {
+          id: "think-delta",
+          type: "message.part.delta",
+          properties: {
+            sessionID: "native-session-1",
+            messageID: "provider-assistant",
+            partID: "r1",
+            field: "text",
+            delta: "Weighing the trade-offs",
+          },
+        };
+        // Long enough to earn its own coalesced snapshot, so the thought is
+        // observed live before anything settles it.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        yield {
+          id: "think-finished",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "r1",
+              messageID: "provider-assistant",
+              type: "reasoning",
+              text: "Weighing the trade-offs",
+              time: { start: 1, end: 2 },
+            },
+          },
+        };
+        await hold.promise;
+      })();
+    };
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    // The thought is the message's only part throughout, so position cannot
+    // explain the settle — `time.end` is the whole signal. And the opening
+    // empty snapshot never drew a part of its own.
+    expect(
+      observations.flatMap((observation) =>
+        observation.kind === "transcript.message"
+          ? observation.message.parts.flatMap((part) =>
+              part.type === "reasoning" ? [{ text: part.text, state: part.state }] : [],
+            )
+          : [],
+      ),
+    ).toEqual([
+      { text: "Weighing the trade-offs", state: "streaming" },
+      { text: "Weighing the trade-offs", state: "done" },
+    ]);
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("keeps a streaming thought when a re-hydrated snapshot serves it empty", async () => {
+    const network = new FakeNetwork();
+    const hold = new Deferred<void>();
+    network.subscribe = async (input) => {
+      network.subscriptions.push(input);
+      return (async function* () {
+        yield {
+          id: "assistant",
+          type: "message.updated",
+          properties: {
+            info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+          },
+        };
+        yield {
+          id: "think-open",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "r1",
+              messageID: "provider-assistant",
+              type: "reasoning",
+              text: "",
+              time: { start: 1 },
+            },
+          },
+        };
+        yield {
+          id: "think-delta",
+          type: "message.part.delta",
+          properties: {
+            sessionID: "native-session-1",
+            messageID: "provider-assistant",
+            partID: "r1",
+            field: "text",
+            delta: "Still thinking",
+          },
+        };
+        // What a mid-stream re-hydrate serves for a live part: OpenCode never
+        // projects deltas to its database, so the text comes back empty.
+        yield {
+          id: "think-rehydrated",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "r1",
+              messageID: "provider-assistant",
+              type: "reasoning",
+              text: "",
+              time: { start: 1 },
+            },
+          },
+        };
+        await hold.promise;
+      })();
+    };
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        kind: "transcript.message",
+        message: expect.objectContaining({
+          parts: [{ type: "reasoning", text: "Still thinking", state: "streaming" }],
+        }),
+      }),
+    );
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("draws no part for a thought that is only whitespace", async () => {
+    const { adapter } = composition([
+      {
+        id: "assistant",
+        type: "message.updated",
+        properties: {
+          sessionID: "native-session-1",
+          info: { id: "provider-assistant", role: "assistant" },
+          parts: [
+            { id: "r1", type: "reasoning", text: " \n " },
+            { id: "t1", type: "text", text: "Answer" },
+          ],
+        },
+      },
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(observations.filter(({ kind }) => kind === "transcript.message")).toEqual([
+      expect.objectContaining({
+        message: expect.objectContaining({ parts: [{ type: "text", text: "Answer" }] }),
+      }),
+    ]);
+  });
+
+  it("draws no part for a text part that never got words", async () => {
+    const { adapter } = composition([
+      {
+        id: "assistant",
+        type: "message.updated",
+        properties: {
+          sessionID: "native-session-1",
+          info: { id: "provider-assistant", role: "assistant" },
+          parts: [
+            // A step that ran tools and ended without prose. OpenCode opens the
+            // text part regardless, and it survives to the transcript as a block
+            // that draws nothing but still separates the activity around it.
+            { id: "t1", type: "text", text: "" },
+            { id: "tool1", type: "tool", tool: "bash", state: { status: "completed" } },
+            { id: "t2", type: "text", text: " \n " },
+            { id: "t3", type: "text", text: "Answer" },
+          ],
+        },
+      },
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const message = observations.find(({ kind }) => kind === "transcript.message");
+    const parts = (message as { message: { parts: readonly { type: string }[] } }).message.parts;
+    expect(parts.filter((part) => part.type === "text")).toEqual([
+      { type: "text", text: "Answer" },
+    ]);
+  });
+
   it("maps every status family and ignores malformed or unrelated SSE events", async () => {
     const { adapter } = composition([
       {
@@ -2054,6 +2662,38 @@ describe("OpenCodeNativeAdapter", () => {
         properties: { sessionID: "native-session-1", error: { data: {} } },
       },
       {
+        id: "error-auth",
+        type: "session.error",
+        properties: {
+          sessionID: "native-session-1",
+          error: { name: "ProviderAuthError", data: { message: "must-not-leak" } },
+        },
+      },
+      {
+        id: "error-context",
+        type: "session.error",
+        properties: {
+          sessionID: "native-session-1",
+          error: { name: "ContextOverflowError" },
+        },
+      },
+      {
+        id: "error-rate-limited",
+        type: "session.error",
+        properties: {
+          sessionID: "native-session-1",
+          error: { name: "APIError", data: { statusCode: 429, isRetryable: true } },
+        },
+      },
+      {
+        id: "error-unauthorized",
+        type: "session.error",
+        properties: {
+          sessionID: "native-session-1",
+          error: { name: "APIError", data: { statusCode: 401 } },
+        },
+      },
+      {
         id: "unknown-status",
         type: "session.status",
         properties: { sessionID: "native-session-1", status: { type: "gone" } },
@@ -2081,6 +2721,10 @@ describe("OpenCodeNativeAdapter", () => {
       "error-name-only",
       "error-status-only",
       "error-empty",
+      "error-auth",
+      "error-context",
+      "error-rate-limited",
+      "error-unauthorized",
       "opencode:sse-disconnected:native-session-1",
     ]);
     expect(observations[2]).toMatchObject({
@@ -2101,19 +2745,91 @@ describe("OpenCodeNativeAdapter", () => {
     });
     expect(observations[4]).toMatchObject({
       attention: {
+        kind: "partial_turn_interrupted",
         detail: "OpenCode MessageAbortedError",
         diagnostic: { name: "MessageAbortedError" },
       },
     });
+    // An unrecognized name is redacted to null, so it classifies by the same
+    // rule an absent one does rather than by a string OpenCode may add later.
     expect(observations[5]).toMatchObject({
       attention: {
+        kind: "adapter_unrecoverable",
         detail: "OpenCode session error (status 503)",
         diagnostic: { statusCode: 503 },
       },
     });
     expect(observations[6]).toMatchObject({
-      attention: { detail: null, diagnostic: null },
+      attention: { kind: "adapter_unrecoverable", detail: null, diagnostic: null },
     });
+    // Each of these used to arrive as `adapter_unrecoverable`, which is why an
+    // expired token and a context overflow offered the same recovery: none.
+    expect(observations[7]).toMatchObject({
+      attention: { kind: "auth_required", detail: "OpenCode ProviderAuthError" },
+    });
+    expect(observations[8]).toMatchObject({
+      attention: { kind: "context_limit_reached", detail: "OpenCode ContextOverflowError" },
+    });
+    // 429 is read from the status because the error union has no rate-limit
+    // member; with no Retry-After header there is no time to state.
+    expect(observations[9]).toMatchObject({
+      attention: { kind: "rate_limited", detail: "OpenCode APIError (status 429)", retryAt: null },
+    });
+    // A 401 is *not* auth_required. OpenCode names auth failures itself, so
+    // reading one out of a status would second-guess the classification it
+    // declined to make — and a 403 covers entitlement and policy blocks that
+    // re-authenticating cannot fix.
+    expect(observations[10]).toMatchObject({ attention: { kind: "adapter_unrecoverable" } });
+  });
+
+  it("states when a rate limit lifts only when the provider sent a Retry-After it can read", async () => {
+    const { adapter } = composition([
+      // Case-insensitive: providers send both spellings. Clock is 1234.
+      rateLimited("seconds", { "Retry-After": "30", authorization: "must-not-leak" }),
+      rateLimited("date", { "retry-after": "Wed, 21 Oct 2026 07:28:00 GMT" }),
+      rateLimited("negative", { "retry-after": "-5" }),
+      rateLimited("blank", { "retry-after": "   " }),
+      rateLimited("unparseable", { "retry-after": "soon" }),
+      rateLimited("wrong-type", { "retry-after": 30 }),
+      rateLimited("other-headers", { "content-type": "application/json" }),
+      // delta-seconds is `1*DIGIT`. Every one of these is a number to
+      // `Number` and none of them is a Retry-After.
+      rateLimited("hex", { "retry-after": "0x1F" }),
+      rateLimited("exponent", { "retry-after": "1e3" }),
+      rateLimited("decimal", { "retry-after": "30.9" }),
+      rateLimited("signed", { "retry-after": "+30" }),
+      // Syntactically valid, but past the last instant a Date can hold.
+      rateLimited("overflow", { "retry-after": "99999999999999" }),
+      // A time already gone states no wait.
+      rateLimited("past-date", { "retry-after": "Thu, 01 Jan 1970 00:00:00 GMT" }),
+      // Not an HTTP-date; Date.parse would read it in local time, so the
+      // answer would differ per machine.
+      rateLimited("bare-date", { "retry-after": "12 Jan 2030" }),
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const retryAt = observations
+      .filter(
+        (observation) =>
+          observation.kind === "attention.raised" &&
+          observation.attention.id.startsWith("opencode:error:"),
+      )
+      .map((observation) =>
+        observation.kind === "attention.raised" ? observation.attention.retryAt : undefined,
+      );
+    expect(retryAt).toEqual([
+      1234 + 30_000,
+      Date.parse("Wed, 21 Oct 2026 07:28:00 GMT"),
+      ...Array.from({ length: 12 }, () => null),
+    ]);
+    // Only the one header leaves the adapter, and it leaves as a number.
+    expect(JSON.stringify(observations)).not.toContain("must-not-leak");
   });
 
   it("does not repeat SSE observations and raises durable attention when the stream drops", async () => {
@@ -2590,8 +3306,11 @@ describe("OpenCodeNativeAdapter", () => {
         };
       if (input.path.startsWith("/session/status"))
         return { status: 200, body: { type: "unknown" } };
+      // How a build that lacks the endpoint actually answers — a status, not
+      // a rejection. A rejection is a transport failure and means something
+      // else entirely.
       if (input.path.startsWith("/permission") || input.path.startsWith("/question"))
-        throw new Error("not supported");
+        return { status: 404, body: { error: "not supported" } };
       return originalRequest(input);
     };
     const handle = await adapter.attach(spec(), { emit: async () => undefined });
@@ -3060,6 +3779,50 @@ describe("OpenCodeNativeAdapter", () => {
     );
   });
 
+  it("projects todo.updated into a synthetic todowrite transcript message", async () => {
+    const { adapter } = composition([
+      {
+        id: "todos-1",
+        type: "todo.updated",
+        properties: {
+          sessionID: "native-session-1",
+          todos: [
+            { content: "Inspect wiring", status: "in_progress", priority: "high" },
+            { content: "Ship fix", status: "pending", priority: "medium" },
+          ],
+        },
+      },
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        kind: "transcript.message",
+        message: expect.objectContaining({
+          id: "opencode:todos:native-session-1",
+          parts: [
+            expect.objectContaining({
+              type: "dynamic-tool",
+              toolName: "todowrite",
+              state: "output-available",
+              input: {
+                todos: [
+                  { content: "Inspect wiring", status: "in_progress", priority: "high" },
+                  { content: "Ship fix", status: "pending", priority: "medium" },
+                ],
+              },
+            }),
+          ],
+        }),
+      }),
+    );
+  });
+
   it("deduplicates reconciled interaction identities, normalizes primitive catalogs, and accepts unframed SSE input", async () => {
     const { adapter, network } = composition([
       { id: "question:q", type: "session.idle", properties: { sessionID: "native-session-1" } },
@@ -3098,5 +3861,1140 @@ describe("OpenCodeNativeAdapter", () => {
     for await (const event of parseOpenCodeSse(sseBody(["comment only\n\n", ""])))
       empty.push(event);
     expect(empty).toEqual([]);
+  });
+
+  it.each(Object.entries(OPENCODE_ACTIVITY))("classifies the %s tool as %s", (tool, kind) => {
+    expect(openCodeActivityKind(tool)).toBe(kind);
+  });
+
+  it("classifies unmapped and MCP tool names as the first-class other kind", () => {
+    // MCP tools are named <server>_<tool>; no prefix rule can anticipate them.
+    expect(openCodeActivityKind("linear_create_issue")).toBe("other");
+    expect(openCodeActivityKind("")).toBe("other");
+    expect(openCodeActivityKind("BASH")).toBe("run-command");
+  });
+
+  it("stamps a subject, a file path and measured outcomes on every tool part", async () => {
+    const { adapter } = composition([
+      {
+        id: "assistant-activity",
+        type: "message.updated",
+        properties: {
+          sessionID: "native-session-1",
+          info: {
+            id: "assistant-activity",
+            role: "assistant",
+            modelID: "gpt-5",
+            tokens: { input: 12, output: 4 },
+          },
+          parts: [
+            toolPart("bash", "c-bash-running", { status: "running" }),
+            toolPart("bash", "c-bash", {
+              status: "completed",
+              input: { command: "pnpm test" },
+              metadata: { exit: 1, truncated: false },
+              time: { start: 10, end: 42 },
+            }),
+            toolPart("read", "c-read-partial", {
+              status: "completed",
+              input: { path: "src/index.ts", offset: 10 },
+              metadata: {
+                display: {
+                  type: "file",
+                  path: "/workspace/one/src/index.ts",
+                  lineStart: 10,
+                  lineEnd: 48,
+                  totalLines: 210,
+                  truncated: true,
+                },
+              },
+            }),
+            toolPart("read", "c-read-whole", {
+              status: "completed",
+              input: { path: "src/whole.ts" },
+              metadata: {
+                display: {
+                  type: "file",
+                  path: "/w/whole.ts",
+                  lineStart: 1,
+                  lineEnd: 12,
+                  totalLines: 12,
+                  truncated: false,
+                },
+              },
+            }),
+            toolPart("read", "c-read-no-start", {
+              status: "completed",
+              input: { file_path: "src/a.ts" },
+              metadata: { display: { type: "file", lineEnd: 48, truncated: true } },
+            }),
+            toolPart("read", "c-read-no-end", {
+              status: "completed",
+              input: { file_path: "src/b.ts" },
+              metadata: { display: { type: "file", lineStart: 10, truncated: true } },
+            }),
+            toolPart("read", "c-read-directory", {
+              status: "completed",
+              input: { path: "src" },
+              metadata: { display: { type: "directory", path: "src", totalEntries: 12 } },
+            }),
+            toolPart("read", "c-read-bare", { status: "pending" }),
+            toolPart("edit", "c-edit", {
+              status: "completed",
+              input: { filePath: "src/a.ts" },
+              metadata: {
+                diff: "--- a\n+++ b",
+                filediff: { file: "/w/src/a.ts", additions: 49, deletions: 12 },
+              },
+            }),
+            toolPart("write", "c-write-new", {
+              status: "completed",
+              input: { filePath: "src/new.ts", content: "one\ntwo\nthree" },
+              metadata: { filepath: "/w/src/new.ts", exists: false },
+            }),
+            toolPart("write", "c-write-over", {
+              status: "completed",
+              input: { filePath: "src/old.ts", content: "one" },
+              metadata: { exists: true },
+            }),
+            toolPart("write", "c-write-binary", {
+              status: "completed",
+              input: { filePath: "src/blob.bin", content: 7 },
+              metadata: { exists: false },
+            }),
+            toolPart("grep", "c-grep", {
+              status: "completed",
+              input: { pattern: "useSession" },
+              metadata: { matches: 14, truncated: false },
+            }),
+            toolPart("glob", "c-glob", {
+              status: "completed",
+              input: { glob: "**/*.ts" },
+              metadata: { count: 6 },
+            }),
+            toolPart("webfetch", "c-fetch", {
+              status: "completed",
+              input: { url: "https://example.com" },
+              metadata: {},
+            }),
+            toolPart("websearch", "c-search", {
+              status: "completed",
+              input: { query: "streaming seam" },
+              metadata: { provider: "exa" },
+            }),
+            toolPart("task", "c-task", {
+              status: "completed",
+              input: { description: "Find the streaming seam", subagent_type: "explore" },
+              metadata: { sessionId: "sub-1" },
+            }),
+            toolPart("linear_create_issue", "c-mcp", {
+              status: "completed",
+              input: { title: "VC-12 chat seam" },
+            }),
+            toolPart("linear_comment", "c-mcp-multiline", {
+              status: "completed",
+              input: { body: "line one\nline two" },
+            }),
+            toolPart("linear_upload", "c-mcp-long", {
+              status: "completed",
+              input: { blob: "x".repeat(MAX_LABEL + 1) },
+            }),
+            toolPart("linear_ping", "c-mcp-blank", { status: "completed", input: { note: "   " } }),
+          ],
+        },
+      },
+      { id: "idle", type: "session.idle", properties: { sessionID: "native-session-1" } },
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(observations.find(({ kind }) => kind === "transcript.message")).toMatchObject({
+      message: {
+        metadata: {
+          providerId: null,
+          modelId: "gpt-5",
+          cost: null,
+          tokens: { input: 12, output: 4, reasoning: null, cacheRead: null, cacheWrite: null },
+        },
+      },
+    });
+    expect(descriptors(observations)).toEqual([
+      {
+        call: "c-bash-running",
+        kind: "run-command",
+        label: null,
+        path: null,
+        lineRange: null,
+        outcome: null,
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-bash",
+        kind: "run-command",
+        label: "pnpm test",
+        path: null,
+        lineRange: null,
+        outcome: { exitCode: 1 },
+        startedAt: 10,
+        endedAt: 42,
+      },
+      {
+        call: "c-read-partial",
+        kind: "read-file",
+        label: "src/index.ts",
+        path: "/workspace/one/src/index.ts",
+        lineRange: { start: 10, end: 48 },
+        outcome: { lineCount: 210 },
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-read-whole",
+        kind: "read-file",
+        label: "src/whole.ts",
+        path: "/w/whole.ts",
+        lineRange: null,
+        outcome: { lineCount: 12 },
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-read-no-start",
+        kind: "read-file",
+        label: "src/a.ts",
+        path: null,
+        lineRange: null,
+        outcome: {},
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-read-no-end",
+        kind: "read-file",
+        label: "src/b.ts",
+        path: null,
+        lineRange: null,
+        outcome: {},
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-read-directory",
+        kind: "read-file",
+        label: "src",
+        path: "src",
+        lineRange: null,
+        outcome: { fileCount: 12 },
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-read-bare",
+        kind: "read-file",
+        label: null,
+        path: null,
+        lineRange: null,
+        outcome: null,
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-edit",
+        kind: "edit-file",
+        label: "src/a.ts",
+        path: "/w/src/a.ts",
+        lineRange: null,
+        outcome: { addedLines: 49, removedLines: 12, diff: "--- a\n+++ b" },
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-write-new",
+        kind: "write-file",
+        label: "src/new.ts",
+        path: "/w/src/new.ts",
+        lineRange: null,
+        outcome: { addedLines: 3 },
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-write-over",
+        kind: "write-file",
+        label: "src/old.ts",
+        path: "src/old.ts",
+        lineRange: null,
+        outcome: {},
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-write-binary",
+        kind: "write-file",
+        label: "src/blob.bin",
+        path: "src/blob.bin",
+        lineRange: null,
+        outcome: {},
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-grep",
+        kind: "search",
+        label: "useSession",
+        path: null,
+        lineRange: null,
+        outcome: { matchCount: 14 },
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-glob",
+        kind: "search",
+        label: "**/*.ts",
+        path: null,
+        lineRange: null,
+        outcome: { fileCount: 6 },
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-fetch",
+        kind: "fetch-url",
+        label: "https://example.com",
+        path: null,
+        lineRange: null,
+        outcome: {},
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-search",
+        kind: "search",
+        label: "streaming seam",
+        path: null,
+        lineRange: null,
+        outcome: {},
+        startedAt: null,
+        endedAt: null,
+      },
+      // No named key matches, so the first phrase-shaped scalar names the call.
+      {
+        call: "c-task",
+        kind: "delegate",
+        label: "Find the streaming seam",
+        path: null,
+        lineRange: null,
+        outcome: {},
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-mcp",
+        kind: "other",
+        label: "VC-12 chat seam",
+        path: null,
+        lineRange: null,
+        outcome: {},
+        startedAt: null,
+        endedAt: null,
+      },
+      // A body, a blob and blank whitespace are not names. Better no label than a blob.
+      {
+        call: "c-mcp-multiline",
+        kind: "other",
+        label: null,
+        path: null,
+        lineRange: null,
+        outcome: {},
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-mcp-long",
+        kind: "other",
+        label: null,
+        path: null,
+        lineRange: null,
+        outcome: {},
+        startedAt: null,
+        endedAt: null,
+      },
+      {
+        call: "c-mcp-blank",
+        kind: "other",
+        label: null,
+        path: null,
+        lineRange: null,
+        outcome: {},
+        startedAt: null,
+        endedAt: null,
+      },
+    ]);
+  });
+
+  it("keeps assistant usage across snapshots and collapses all but the live thought", async () => {
+    const network = new FakeNetwork();
+    const hold = new Deferred<void>();
+    network.subscribe = async (input) => {
+      network.subscriptions.push(input);
+      return (async function* () {
+        yield {
+          id: "assistant",
+          type: "message.updated",
+          properties: {
+            info: {
+              id: "provider-assistant",
+              sessionID: "native-session-1",
+              role: "assistant",
+              providerID: "anthropic",
+              modelID: "claude-sonnet-4-5",
+              cost: 0.0123,
+              tokens: {
+                input: 1200,
+                output: 340,
+                reasoning: 96,
+                cache: { read: 8000, write: 512 },
+              },
+            },
+          },
+        };
+        yield {
+          id: "think-1",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: { id: "r1", messageID: "provider-assistant", type: "reasoning", text: "First" },
+          },
+        };
+        yield {
+          id: "think-2",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: { id: "r2", messageID: "provider-assistant", type: "reasoning", text: "Second" },
+          },
+        };
+        // A repeat snapshot that carries its own text simply replaces it.
+        yield {
+          id: "think-1-again",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "r1",
+              messageID: "provider-assistant",
+              type: "reasoning",
+              text: "First, restated",
+            },
+          },
+        };
+        // A repeat snapshot that omits the accumulated text must not erase it.
+        yield {
+          id: "think-2-retype",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: { id: "r2", messageID: "provider-assistant", type: "reasoning" },
+          },
+        };
+        // A later snapshot without usage must not erase what the first reported.
+        yield {
+          id: "assistant-partial",
+          type: "message.updated",
+          properties: {
+            info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+          },
+        };
+        // Neither of these earns a snapshot: one is the user's own turn, the
+        // other projects to no durable part at all.
+        yield {
+          id: "user-turn",
+          type: "message.updated",
+          properties: {
+            info: { id: "provider-user", sessionID: "native-session-1", role: "user" },
+            parts: [{ id: "u1", type: "text", text: "Ask something" }],
+          },
+        };
+        yield {
+          id: "unprojectable",
+          type: "message.updated",
+          properties: {
+            info: { id: "provider-empty", sessionID: "native-session-1", role: "assistant" },
+            parts: [{ id: "f1", type: "file", url: "data:text/plain;base64,AA==" }],
+          },
+        };
+        await hold.promise;
+      })();
+    };
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        kind: "transcript.message",
+        message: {
+          id: "provider-assistant",
+          role: "assistant",
+          metadata: {
+            providerId: "anthropic",
+            modelId: "claude-sonnet-4-5",
+            cost: 0.0123,
+            tokens: { input: 1200, output: 340, reasoning: 96, cacheRead: 8000, cacheWrite: 512 },
+          },
+          parts: [
+            { type: "reasoning", text: "First, restated", state: "done" },
+            { type: "reasoning", text: "Second", state: "streaming" },
+          ],
+        },
+      }),
+    );
+    expect(
+      observations.flatMap((observation) =>
+        observation.kind === "transcript.message" ? [observation.message.id] : [],
+      ),
+    ).toEqual(["provider-assistant"]);
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("carries model identity through native history reconcile even without usage", async () => {
+    const { adapter, network } = composition();
+    network.messageResponse = [
+      {
+        info: { id: "history-usage", role: "assistant", providerID: "openai", modelID: "gpt-5" },
+        parts: [{ type: "text", text: "Reconciled" }],
+      },
+    ];
+    const handle = await adapter.attach(spec(), { emit: async () => undefined });
+    const { observations } = await handle.reconcile(null);
+
+    expect(observations.find(({ kind }) => kind === "transcript.message")).toMatchObject({
+      message: {
+        metadata: { providerId: "openai", modelId: "gpt-5", cost: null, tokens: null },
+      },
+    });
+  });
+
+  it("keeps todo projection scoped to this session and survives a failed todo read", async () => {
+    const { adapter, network } = composition([
+      {
+        id: "todo-foreign",
+        type: "todo.updated",
+        properties: { sessionID: "another-session", todos: [{ content: "Not ours" }] },
+      },
+      { id: "todo-primitive", type: "todo.updated", properties: 7 },
+      {
+        // Session ownership established by `info`, so the lowercase `sessionId`
+        // spelling is the only scope OpenCode reported for the list itself.
+        id: "todo-lowercase-foreign",
+        type: "todo.updated",
+        properties: {
+          info: { sessionID: "native-session-1" },
+          sessionId: "another-session",
+          todos: [{ content: "Not ours" }],
+        },
+      },
+      {
+        id: "todo-wrapped",
+        type: "todo.updated",
+        properties: {
+          sessionID: "native-session-1",
+          todos: { items: [{ id: "t-9", content: "Wrapped", status: "pending", priority: "low" }] },
+        },
+      },
+    ]);
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(observations.filter(({ kind }) => kind === "transcript.message")).toEqual([
+      expect.objectContaining({
+        message: expect.objectContaining({
+          parts: [
+            expect.objectContaining({
+              input: {
+                todos: [{ id: "t-9", content: "Wrapped", status: "pending", priority: "low" }],
+              },
+            }),
+          ],
+        }),
+      }),
+    ]);
+
+    const originalRequest = network.request.bind(network);
+    network.request = async (input) => {
+      if (input.path.includes("/todo"))
+        return { status: 200, body: { items: [{ id: "t-1", content: "Ship it" }, 7] } };
+      return originalRequest(input);
+    };
+    const reconciled = await handle.reconcile(null);
+    expect(reconciled.observations.find(({ kind }) => kind === "transcript.message")).toMatchObject(
+      {
+        message: {
+          parts: [
+            expect.objectContaining({
+              input: { todos: [{ id: "t-1", content: "Ship it" }] },
+              toolMetadata: expect.objectContaining({
+                [ACTIVITY_METADATA_KEY]: expect.objectContaining({
+                  kind: "plan",
+                  nativeToolName: "todowrite",
+                }),
+              }),
+            }),
+          ],
+        },
+      },
+    );
+
+    network.request = async (input) => {
+      if (input.path.includes("/todo")) throw new Error("todo unavailable");
+      if (input.path.startsWith("/session/status")) return { status: 500, body: {} };
+      return originalRequest(input);
+    };
+    // Acknowledge the pending reconciliation, or the next call replays it.
+    const failed = await handle.reconcile(reconciled.cursor);
+    expect(failed.observations.some(({ kind }) => kind === "transcript.message")).toBe(false);
+  });
+
+  it("fails reconciliation rather than reporting a failed permission read as nothing pending", async () => {
+    const { adapter, network } = composition();
+    network.subscribe = async () => (async function* () {})();
+    const originalRequest = network.request.bind(network);
+    network.request = async (input) => {
+      if (input.path.startsWith("/permission")) throw new Error("connection reset");
+      return originalRequest(input);
+    };
+    const handle = await adapter.attach(spec(), { emit: async () => undefined });
+
+    // Silently reconciling to "no permissions" is what would strand a Session
+    // blocked on one raised while the stream was down.
+    await expect(handle.reconcile(null)).rejects.toThrow("connection reset");
+  });
+
+  it("ignores stream events that never established session ownership", async () => {
+    const { adapter } = composition([
+      { id: "untagged-snapshot", type: "message.updated", properties: { info: { id: "x" } } },
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(observations.some(({ kind }) => kind === "transcript.message")).toBe(false);
+  });
+
+  it("keeps a failing sink from escaping the coalesced snapshot timer", async () => {
+    const network = new FakeNetwork();
+    const hold = new Deferred<void>();
+    network.subscribe = async (input) => {
+      network.subscriptions.push(input);
+      return (async function* () {
+        yield {
+          id: "assistant",
+          type: "message.updated",
+          properties: {
+            info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+            parts: [{ id: "t1", type: "text", text: "Painting" }],
+          },
+        };
+        await hold.promise;
+      })();
+    };
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const handle = await adapter.attach(spec(), {
+      emit: async () => {
+        throw new Error("sink unavailable");
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    hold.resolve(undefined);
+    await expect(handle.release("requested")).resolves.toBeUndefined();
+  });
+
+  it("snapshots a settled turn and tolerates removing a message with no pending snapshot", async () => {
+    const network = new FakeNetwork();
+    const hold = new Deferred<void>();
+    network.subscribe = async (input) => {
+      network.subscriptions.push(input);
+      return (async function* () {
+        yield {
+          id: "idle-first",
+          type: "session.idle",
+          properties: { sessionID: "native-session-1" },
+        };
+        yield {
+          id: "late-assistant",
+          type: "message.updated",
+          properties: {
+            info: { id: "late", sessionID: "native-session-1", role: "assistant" },
+            parts: [{ id: "r1", type: "reasoning", text: "Late thought" }],
+          },
+        };
+        yield {
+          id: "ghost-removed",
+          type: "message.removed",
+          properties: { sessionID: "native-session-1", messageID: "ghost" },
+        };
+        await hold.promise;
+      })();
+    };
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // The turn already settled, so nothing in the snapshot is still thinking.
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        kind: "transcript.message",
+        message: {
+          id: "late",
+          role: "assistant",
+          parts: [{ type: "reasoning", text: "Late thought", state: "done" }],
+        },
+      }),
+    );
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("raises an open permission on the tool row it gates, mid-turn", async () => {
+    const hold = new Deferred<void>();
+    const network = gatedTurn([askedFor("call-write")], hold);
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // The prompt lands on the call it is about, while that call is still live.
+    expect(toolRows(observations).at(-1)).toMatchObject({
+      toolCallId: "call-write",
+      state: "approval-requested",
+      input: { path: "src/index.ts" },
+      approval: { id: "per_1" },
+    });
+    // Additive: the parallel interaction channel the ledger reads is untouched.
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        kind: "interaction.opened",
+        interaction: expect.objectContaining({ id: "permission:per_1", kind: "permission" }),
+      }),
+    );
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("raises a subagent's permission on the task row that is waiting for it", async () => {
+    const hold = new Deferred<void>();
+    const network = delegatedTurn([subagentAskedFor("child-session-1")], hold);
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // The prompt names a call in the child's transcript, which this Session does
+    // not hold — so it is raised on the `task` row that is blocked on it.
+    expect(toolRows(observations).at(-1)).toMatchObject({
+      toolCallId: "call-task",
+      state: "approval-requested",
+      approval: { id: "per_1" },
+    });
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        kind: "interaction.opened",
+        interaction: expect.objectContaining({ id: "permission:per_1", kind: "permission" }),
+      }),
+    );
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("keeps a subagent's transcript out of the Session that delegated to it", async () => {
+    const hold = new Deferred<void>();
+    const network = delegatedTurn(
+      [
+        {
+          id: "child-says",
+          type: "message.updated",
+          properties: {
+            info: { id: "child-message-1", sessionID: "child-session-1", role: "assistant" },
+            parts: [{ id: "c1", type: "text", text: "I am the subagent." }],
+          },
+        },
+      ],
+      hold,
+    );
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // The `task` row is how a subagent appears here. Merging its prose would
+    // interleave a second agent's voice into this one's transcript.
+    expect(
+      observations.flatMap((observation) =>
+        observation.kind === "transcript.message" ? [observation.message.id] : [],
+      ),
+    ).not.toContain("child-message-1");
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("ignores a permission raised by a Session it never delegated to", async () => {
+    const hold = new Deferred<void>();
+    const network = delegatedTurn([subagentAskedFor("someone-elses-session")], hold);
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(observations.filter(({ kind }) => kind === "interaction.opened")).toEqual([]);
+    expect(toolRows(observations).at(-1)).not.toHaveProperty("approval");
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("recovers a subagent's open permission when it reconciles", async () => {
+    const network = new FakeNetwork();
+    network.holdEventStream = true;
+    network.messageResponse = [
+      {
+        info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+        parts: [
+          {
+            // A task OpenCode has accepted but not yet given a Session to. It
+            // names no subagent, and must not be mistaken for one.
+            id: "p0",
+            messageID: "provider-assistant",
+            ...toolPart("task", "call-task-pending", {
+              status: "pending",
+              input: { description: "Not started" },
+            }),
+          },
+          {
+            id: "p1",
+            messageID: "provider-assistant",
+            ...toolPart("task", "call-task", {
+              status: "running",
+              input: { description: "Review lab task" },
+              metadata: { parentSessionId: "native-session-1", sessionId: "child-session-1" },
+            }),
+          },
+        ],
+      },
+    ];
+    const base = network.request.bind(network);
+    network.request = async (input) => {
+      const response = await base(input);
+      return input.path.startsWith("/permission")
+        ? {
+            status: 200,
+            body: [
+              // Belongs to no Session this one can name, so it is not this
+              // Session's to answer.
+              { id: "per_orphan", tool: { messageID: "m", callID: "c" } },
+              {
+                id: "per_1",
+                sessionID: "child-session-1",
+                tool: { messageID: "child-message-1", callID: "child-call-1" },
+              },
+            ],
+          }
+        : response;
+    };
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const handle = await adapter.attach(spec(), { emit: async () => undefined });
+
+    // Reconciling is the one action that looks like it should free a Session
+    // stuck behind a subagent, so it has to know the same Sessions the stream
+    // does — and it learns them from the `task` parts in its own history.
+    const reconciliation = await handle.reconcile(null);
+    expect(reconciliation.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "interaction.opened",
+        interaction: expect.objectContaining({ id: "permission:per_1", kind: "permission" }),
+      }),
+    );
+    expect(toolRows(reconciliation.observations).at(-1)).toMatchObject({
+      toolCallId: "call-task",
+      state: "approval-requested",
+      approval: { id: "per_1" },
+    });
+    expect(
+      reconciliation.observations.flatMap((observation) =>
+        observation.kind === "interaction.opened" ? [observation.interaction.id] : [],
+      ),
+    ).toEqual(["permission:per_1"]);
+    await handle.release("requested");
+  });
+
+  it("gates a call whose input OpenCode has not reported", async () => {
+    const hold = new Deferred<void>();
+    const network = gatedTurn([askedFor("call-write")], hold, { status: "running" });
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Absent arguments are null, not a missing key: the row a human is asked to
+    // approve still has to be a complete part.
+    expect(toolRows(observations).at(-1)).toMatchObject({
+      toolCallId: "call-write",
+      state: "approval-requested",
+      input: null,
+      approval: { id: "per_1" },
+    });
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("returns a gated row to its running state once the permission is allowed", async () => {
+    const hold = new Deferred<void>();
+    const network = gatedTurn(
+      [
+        askedFor("call-write"),
+        {
+          id: "allowed",
+          type: "permission.replied",
+          properties: { sessionID: "native-session-1", requestID: "per_1", reply: "once" },
+        },
+      ],
+      hold,
+    );
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // The answer lifts the gate on its own: nothing about the call itself
+    // changed, so a row still reading approval-requested here would be stuck.
+    const rows = toolRows(observations);
+    expect(rows.at(-1)).toMatchObject({ toolCallId: "call-write", state: "input-available" });
+    expect(rows.at(-1)).not.toHaveProperty("approval");
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("lets a rejected permission settle into the failure OpenCode reports", async () => {
+    const hold = new Deferred<void>();
+    const network = gatedTurn(
+      [
+        askedFor("call-write"),
+        {
+          id: "rejected",
+          type: "permission.replied",
+          properties: { sessionID: "native-session-1", requestID: "per_1", reply: "reject" },
+        },
+        // OpenCode fails the call itself on a rejection, so the row settles on
+        // its verdict rather than one the adapter invented.
+        {
+          id: "failed",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "p1",
+              messageID: "provider-assistant",
+              ...toolPart("write", "call-write", {
+                status: "error",
+                input: { path: "src/index.ts" },
+                error: "The user rejected this request",
+              }),
+            },
+          },
+        },
+      ],
+      hold,
+    );
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(toolRows(observations).at(-1)).toMatchObject({
+      toolCallId: "call-write",
+      state: "output-error",
+      errorText: "The user rejected this request",
+    });
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("keeps a settled call on OpenCode's verdict when a permission outlives it", async () => {
+    const hold = new Deferred<void>();
+    const network = gatedTurn(
+      [
+        {
+          id: "done",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "p1",
+              messageID: "provider-assistant",
+              ...toolPart("write", "call-write", {
+                status: "completed",
+                input: { path: "src/index.ts" },
+                output: "written",
+              }),
+            },
+          },
+        },
+        askedFor("call-write"),
+      ],
+      hold,
+    );
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // A reply this binding never saw must not strand the row on a stale prompt.
+    expect(toolRows(observations).every(({ state }) => state !== "approval-requested")).toBe(true);
+    expect(toolRows(observations).at(-1)).toMatchObject({
+      toolCallId: "call-write",
+      state: "output-available",
+      output: "written",
+    });
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("hydrates a gated tool row for a permission opened before this binding attached", async () => {
+    const { adapter, network } = composition();
+    network.messageResponse = {
+      info: { id: "history-1", role: "assistant" },
+      parts: [toolPart("write", "call-write", { status: "running", input: { path: "src/a.ts" } })],
+    };
+    const originalRequest = network.request.bind(network);
+    network.request = async (input) =>
+      input.path.startsWith("/permission")
+        ? {
+            status: 200,
+            body: [
+              {
+                sessionID: "native-session-1",
+                id: "per_1",
+                title: "Allow write",
+                tool: { messageID: "history-1", callID: "call-write" },
+              },
+            ],
+          }
+        : originalRequest(input);
+    const handle = await adapter.attach(spec(), { emit: async () => undefined });
+    const { observations } = await handle.reconcile(null);
+
+    // A permission blocks on a human, so it routinely outlives the connection
+    // that first reported it. Resuming has to redraw the gate, not lose it.
+    expect(toolRows(observations).at(-1)).toMatchObject({
+      toolCallId: "call-write",
+      state: "approval-requested",
+      approval: { id: "per_1" },
+    });
+    // Messages still precede interactions in the resumed batch.
+    expect(observations.findIndex(({ kind }) => kind === "transcript.message")).toBeLessThan(
+      observations.findIndex(({ kind }) => kind === "interaction.opened"),
+    );
+  });
+
+  it("gates only the call a permission names, not every call in flight", async () => {
+    const hold = new Deferred<void>();
+    const network = gatedTurn(
+      [
+        // A permission opened against a different message must not leak onto
+        // this one's identically named call.
+        askedFor("call-write", "other-assistant"),
+        {
+          id: "anonymous-reply",
+          type: "permission.replied",
+          properties: { sessionID: "native-session-1", reply: "once" },
+        },
+        {
+          id: "more",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "t1",
+              messageID: "provider-assistant",
+              type: "text",
+              text: "Still working",
+            },
+          },
+        },
+      ],
+      hold,
+    );
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(toolRows(observations).every(({ state }) => state !== "approval-requested")).toBe(true);
+    expect(toolRows(observations).at(-1)).toMatchObject({
+      toolCallId: "call-write",
+      state: "input-available",
+    });
+    hold.resolve(undefined);
+    await handle.release("requested");
   });
 });

@@ -1,35 +1,127 @@
 import { existsSync, readFileSync, rmSync } from "node:fs";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { promisify } from "node:util";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { nodeHTTPRequestHandler } from "@trpc/server/adapters/node-http";
 import { createOpenCodeNativeAdapter, type OpenCodeNativeAdapter } from "@volli/opencode-adapter";
 import { createSessionRouter, RpcDiagnosticLog } from "@volli/session-rpc";
+import { createTicket } from "@volli/shared";
 
-import { LAB_SESSION_RPC_PATH } from "../../lab-session-rpc-path";
+import {
+  LAB_SESSION_PROJECT_ID,
+  LAB_SESSION_RPC_PATH,
+  LAB_SESSION_TICKET_ID,
+} from "../../lab-session-rpc-path";
 import { openVolliDb } from "../db";
 import { insertProject } from "../db/projects-repo";
+import { insertTicket } from "../db/tickets-repo";
 import { createDesktopSessionRuntime } from "../session-runtime";
+import { createRuntimeCatalog } from "../runtime-catalog";
 
 export { LAB_SESSION_RPC_PATH } from "../../lab-session-rpc-path";
-export const LAB_PROJECT_ID = "lab-project";
 
 const requireFromHere = createRequire(import.meta.url);
+const execFileAsync = promisify(execFile);
+
+/**
+ * Builds the disposable repository every native Lab Session is allowed to
+ * touch. The browser never supplies this path: the Lab owns the parent and the
+ * server derives the workspace beneath it, so an agent cannot be pointed at a
+ * developer checkout through a renderer payload.
+ */
+export async function createLabTaskWorkspace(parentDirectory: string): Promise<string> {
+  const workspace = join(parentDirectory, "workspace");
+  await mkdir(join(workspace, "src"), { recursive: true, mode: 0o700 });
+  await mkdir(join(workspace, "test"), { recursive: true, mode: 0o700 });
+  await Promise.all([
+    writeFile(
+      join(workspace, "TASK.md"),
+      [
+        "# Lab task",
+        "",
+        "Implement the greeting so `greeting(name)` returns `Hello, <name>!`.",
+        "Run `npm test` to prove the result. Keep the public function name unchanged.",
+        "",
+      ].join("\n"),
+      { mode: 0o600 },
+    ),
+    writeFile(
+      join(workspace, "package.json"),
+      `${JSON.stringify({ name: "volli-agent-lab", private: true, type: "module", scripts: { test: "node --test test/*.test.ts" } }, null, 2)}\n`,
+      { mode: 0o600 },
+    ),
+    // The approval gate is the one interaction the Lab could not reach. Left to
+    // the developer's own OpenCode config it never fired, so the card with Allow
+    // / Deny / Steer on it — the whole trust boundary of a chat-first Session —
+    // was only ever exercised against fixtures. Asking on `bash` puts a real
+    // permission in a real transcript on the way to running the task's own
+    // tests. Scoped to the disposable workspace, so it changes nothing else, and
+    // `edit` stays silent: a prompt per file would drown the thing being tested.
+    writeFile(
+      join(workspace, "opencode.json"),
+      `${JSON.stringify({ $schema: "https://opencode.ai/config.json", permission: { bash: "ask" } }, null, 2)}\n`,
+      { mode: 0o600 },
+    ),
+    writeFile(
+      join(workspace, "src/greeting.ts"),
+      [
+        "export function greeting(_name: string): string {",
+        '  return "Hello, world!";',
+        "}",
+        "",
+      ].join("\n"),
+      { mode: 0o600 },
+    ),
+    writeFile(
+      join(workspace, "test/greeting.test.ts"),
+      [
+        'import assert from "node:assert/strict";',
+        'import test from "node:test";',
+        'import { greeting } from "../src/greeting.ts";',
+        "",
+        'test("greets a developer by name", () => {',
+        '  assert.equal(greeting("Ada"), "Hello, Ada!");',
+        "});",
+        "",
+      ].join("\n"),
+      { mode: 0o600 },
+    ),
+  ]);
+  await execFileAsync("git", ["init", "--initial-branch=main"], { cwd: workspace });
+  await execFileAsync("git", ["add", "TASK.md", "package.json", "opencode.json", "src", "test"], {
+    cwd: workspace,
+  });
+  await execFileAsync(
+    "git",
+    [
+      "-c",
+      "user.name=Volli Lab",
+      "-c",
+      "user.email=lab@volli.local",
+      "commit",
+      "-m",
+      "Seed disposable agent task",
+    ],
+    { cwd: workspace },
+  );
+  return workspace;
+}
 
 interface LabResources {
   readonly directory: string;
   readonly db: ReturnType<typeof openVolliDb>;
   readonly adapter: OpenCodeNativeAdapter;
   readonly runtime: ReturnType<typeof createDesktopSessionRuntime>;
+  readonly runtimeCatalog: ReturnType<typeof createRuntimeCatalog>;
   readonly router: ReturnType<typeof createSessionRouter>;
   readonly diagnostics: RpcDiagnosticLog;
 }
 
 export interface LabSessionRpcServerOptions {
-  /** The tracked repository directory. This is never accepted from browser input. */
-  repoRoot: string;
   createAdapter?: () => OpenCodeNativeAdapter;
   now?: () => number;
   /** Injectable only so shutdown semantics can be verified without ending Node. */
@@ -52,7 +144,6 @@ const processExitLifecycle: LabProcessExitLifecycle = {
  * owns a disposable DB/artifact directory for exactly one Vite server.
  */
 export class LabSessionRpcServer {
-  readonly #repoRoot: string;
   readonly #createAdapter: () => OpenCodeNativeAdapter;
   readonly #now: () => number;
   readonly #exitLifecycle: LabProcessExitLifecycle;
@@ -66,8 +157,7 @@ export class LabSessionRpcServer {
   #emergencyClosed = false;
   #closed = false;
 
-  constructor(options: LabSessionRpcServerOptions) {
-    this.#repoRoot = resolve(options.repoRoot);
+  constructor(options: LabSessionRpcServerOptions = {}) {
     this.#createAdapter = options.createAdapter ?? (() => createOpenCodeNativeAdapter());
     this.#now = options.now ?? Date.now;
     this.#exitLifecycle = options.exitLifecycle ?? processExitLifecycle;
@@ -100,6 +190,7 @@ export class LabSessionRpcServer {
         path,
         createContext: () => ({
           runtime: resources.runtime,
+          runtimeCatalog: resources.runtimeCatalog,
           diagnostics: resources.diagnostics,
           transport: "lab-http" as const,
         }),
@@ -198,15 +289,16 @@ export class LabSessionRpcServer {
     this.#directory = directory;
     let db: ReturnType<typeof openVolliDb> | null = null;
     try {
+      const workspace = await createLabTaskWorkspace(directory);
       db = openVolliDb(join(directory, "volli.db"), {
         nativeBinding: nodeAbiBindingPath() ?? undefined,
       });
       this.#db = db;
       const now = this.#now();
       insertProject(db, {
-        id: LAB_PROJECT_ID,
+        id: LAB_SESSION_PROJECT_ID,
         name: "Volli Code Lab",
-        path: this.#repoRoot,
+        path: workspace,
         ticketPrefix: "LAB",
         baseBranch: null,
         setupCommand: null,
@@ -215,6 +307,23 @@ export class LabSessionRpcServer {
         createdAt: now,
         updatedAt: now,
       });
+      insertTicket(
+        db,
+        createTicket({
+          id: LAB_SESSION_TICKET_ID,
+          projectId: LAB_SESSION_PROJECT_ID,
+          ticketNumber: 14,
+          title: "Teach the lab greeting to use a developer's name",
+          body: "Update greeting(name) so the failing test passes, then run the test suite.",
+          status: "doing",
+          order: 0,
+          now,
+          usesWorktree: true,
+          worktreePath: workspace,
+          branch: "main",
+          baseBranch: "main",
+        }),
+      );
       const adapter = this.#createAdapter();
       this.#adapter = adapter;
       const transcriptDirectory = join(directory, "artifacts");
@@ -226,11 +335,24 @@ export class LabSessionRpcServer {
         now: this.#now,
       });
       this.#runtime = runtime;
+      const runtimeCatalog = createRuntimeCatalog({
+        db,
+        directory: workspace,
+        adapters: [
+          {
+            id: adapter.manifest.id,
+            profileId: "native",
+            discover: (context, signal) => adapter.probe(context, signal),
+          },
+        ],
+        now: this.#now,
+      });
       return {
         directory,
         db,
         adapter,
         runtime,
+        runtimeCatalog,
         router: createSessionRouter(),
         diagnostics: new RpcDiagnosticLog(),
       };

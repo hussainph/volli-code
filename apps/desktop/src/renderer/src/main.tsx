@@ -1,5 +1,6 @@
 import "@fontsource-variable/geist-mono/wght.css";
 import "@fontsource-variable/mona-sans/wght.css";
+import "@fontsource-variable/mona-sans/wght-italic.css";
 import "./globals.css";
 import "./typeset.css";
 

@@ -53,6 +53,23 @@ function moveTabFocus(from: HTMLElement, to: "prev" | "next" | "first" | "last")
 
 export type TicketTabKind = "body" | "session" | "file" | "diff";
 
+/**
+ * A session tab's liveness. It rides the tab because the tab already names the
+ * Session — a chat plane with its own status header would be a third chrome
+ * band saying a word the tab has said already.
+ */
+export type TicketTabStatus = "idle" | "starting" | "ready" | "working" | "error";
+
+const TAB_STATUS_CLASS: Record<TicketTabStatus, string> = {
+  // The halo only rides `working`, so a live turn is legible from the strip
+  // without the resting states competing for the same attention.
+  working: "bg-primary shadow-[0_0_0_3px_color-mix(in_oklab,var(--primary)_18%,transparent)]",
+  ready: "bg-primary",
+  error: "bg-destructive",
+  starting: "bg-muted-foreground",
+  idle: "bg-muted-foreground",
+};
+
 /** Whether a ticket-strip tab of this kind shows a close affordance. */
 export function isClosableTicketTab(kind: TicketTabKind): boolean {
   return kind === "session" || kind === "file" || kind === "diff";
@@ -72,6 +89,8 @@ export interface TicketTabDescriptor {
   previousPath?: string | null;
   /** A `"file"` tab whose file resolved from the ticket's worktree copy shows a subtle badge (decision #6). */
   badge?: "worktree";
+  /** Session tabs only: a leading liveness dot. Absent renders no dot. */
+  status?: TicketTabStatus;
   /**
    * A `"file"` tab in the replaceable preview slot (decision #56). Diff tabs
    * are always persistent and never set this. Preview labels render italic.
@@ -194,6 +213,12 @@ function TicketTab({
           : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
       )}
     >
+      {isSession && tab.status !== undefined ? (
+        <span
+          aria-hidden
+          className={cn("mr-1.5 size-2 shrink-0 rounded-full", TAB_STATUS_CLASS[tab.status])}
+        />
+      ) : null}
       {tab.badge === "worktree" ? (
         // A quiet dot marking a file resolved from the ticket's worktree copy
         // rather than the main checkout (decision #6).

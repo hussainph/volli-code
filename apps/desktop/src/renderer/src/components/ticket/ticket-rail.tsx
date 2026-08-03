@@ -19,15 +19,18 @@ import * as React from "react";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
 import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
+import { PulseIcon } from "@phosphor-icons/react/dist/csr/Pulse";
 import { SlidersHorizontalIcon } from "@phosphor-icons/react/dist/csr/SlidersHorizontal";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import type { Ticket } from "@volli/shared";
 
 import { TicketProperties } from "@renderer/components/ticket/ticket-properties";
 import { TicketSessionsPanel } from "@renderer/components/ticket/ticket-sessions-panel";
+import type { TicketTabKind } from "@renderer/components/ticket/ticket-tabs";
 import {
-  TICKET_RAIL_MODES,
   TICKET_RAIL_MODE_LABELS,
+  availableRailModes,
+  resolveRailMode,
   selectRailMode,
   type TicketRailMode,
 } from "@renderer/components/ticket/ticket-rail-model";
@@ -40,14 +43,18 @@ const MODE_ICONS: Record<TicketRailMode, PhosphorIcon> = {
   files: FoldersIcon,
   changes: GitDiffIcon,
   properties: SlidersHorizontalIcon,
+  session: PulseIcon,
 };
 
 /** Compact vertical icon strip — presentational; mode state lives in the UI store. */
 export function TicketRailModeStrip({
   mode,
+  modes,
   onSelectMode,
 }: {
   mode: TicketRailMode;
+  /** Which modes this surface offers — see `availableRailModes`. */
+  modes: readonly TicketRailMode[];
   onSelectMode(mode: TicketRailMode): void;
 }) {
   return (
@@ -55,7 +62,7 @@ export function TicketRailModeStrip({
       aria-label="Ticket rail modes"
       className="flex shrink-0 flex-col items-center gap-0.5 border-l border-sidebar-border py-2"
     >
-      {TICKET_RAIL_MODES.map((key) => {
+      {modes.map((key) => {
         const Icon = MODE_ICONS[key];
         const label = TICKET_RAIL_MODE_LABELS[key];
         const active = mode === key;
@@ -103,8 +110,10 @@ export function TicketRail({
   onNewSession,
   onActivateSession,
   activeTabId,
+  activeTabKind,
   filesContent,
   changesContent,
+  sessionContent,
 }: {
   projectId: string;
   ticket: Ticket;
@@ -118,6 +127,8 @@ export function TicketRail({
    * `onSelectMode`), not only in tests.
    */
   activeTabId: string;
+  /** Kind of that tab. Gates the conditional `session` mode; absent hides it. */
+  activeTabKind?: TicketTabKind;
   /**
    * Optional Files navigator. When omitted, a quiet placeholder renders so the
    * shell stays usable until the Files agent lands.
@@ -125,9 +136,16 @@ export function TicketRail({
   filesContent?: React.ReactNode;
   /** Optional Changes navigator — same seam as `filesContent`. */
   changesContent?: React.ReactNode;
+  /** The live Session's rail (Plan / Subagents / Background processes). */
+  sessionContent?: React.ReactNode;
 }) {
-  const mode = useUiStore((state) => state.railMode);
+  const storedMode = useUiStore((state) => state.railMode);
   const setRailMode = useUiStore((state) => state.setRailMode);
+  const chrome = { mode: storedMode, activeTabId, activeTabKind };
+  // Resolved, not written back: a stored `session` mode survives a trip to the
+  // doc tab and comes back with it, rather than being erased on arrival.
+  const mode = resolveRailMode(chrome);
+  const modes = availableRailModes(chrome);
 
   // Decision #46: switching navigator must not open, close, or retarget a
   // main-view tab. The chrome transition is computed by the pure contract and
@@ -136,10 +154,9 @@ export function TicketRail({
   // code the app runs, rather than a parallel description of it.
   const onSelectMode = React.useCallback(
     (next: TicketRailMode) => {
-      const chrome = selectRailMode({ mode, activeTabId }, next);
-      setRailMode(chrome.mode);
+      setRailMode(selectRailMode({ mode, activeTabId, activeTabKind }, next).mode);
     },
-    [mode, activeTabId, setRailMode],
+    [mode, activeTabId, activeTabKind, setRailMode],
   );
 
   return (
@@ -155,6 +172,7 @@ export function TicketRail({
         ) : null}
         {mode === "files" ? (filesContent ?? <RailModePlaceholder label="Files" />) : null}
         {mode === "changes" ? (changesContent ?? <RailModePlaceholder label="Changes" />) : null}
+        {mode === "session" ? (sessionContent ?? <RailModePlaceholder label="Session" />) : null}
         {mode === "properties" ? (
           <div
             data-testid="ticket-rail-properties"
@@ -164,7 +182,7 @@ export function TicketRail({
           </div>
         ) : null}
       </div>
-      <TicketRailModeStrip mode={mode} onSelectMode={onSelectMode} />
+      <TicketRailModeStrip mode={mode} modes={modes} onSelectMode={onSelectMode} />
     </div>
   );
 }

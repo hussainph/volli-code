@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vite-plus/test";
 import type {
+  RuntimeCatalog,
   SessionRuntime,
   SessionRuntimeCommandRequest,
   SessionRuntimeSnapshot,
   SessionStreamFrame,
 } from "@volli/session-engine";
 import { AsyncQueue, createSessionRouter, RpcDiagnosticLog, sanitizeDiagnosticText } from "./index";
+
+type CapabilitySnapshot = Extract<
+  SessionStreamFrame["event"]["payload"],
+  { kind: "capabilities.updated" }
+>["snapshot"];
 
 function frame(sequence: number): SessionStreamFrame {
   return {
@@ -57,6 +63,40 @@ function snapshot(): SessionRuntimeSnapshot {
     throughSequence: 4,
     frames: [frame(4)],
     transcript: [],
+  };
+}
+
+function capabilitySnapshot(): CapabilitySnapshot {
+  return {
+    id: "capabilities-1",
+    adapterId: "opencode",
+    attachmentId: "attachment-1",
+    profileId: "native",
+    revision: 1,
+    observedAt: 10,
+    expiresAt: 70,
+    features: [{ id: "message.submit", state: "available", evidence: "verified", detail: null }],
+    catalog: [
+      {
+        kind: "model",
+        id: "provider/model-with-exhaustive-detail",
+        label: "Exhaustive model inventory",
+        state: "available",
+        evidence: "reported",
+        detail: { payload: "must stay behind the server boundary" },
+      },
+    ],
+  };
+}
+
+function capabilityFrame(sequence: number): SessionStreamFrame {
+  const base = frame(sequence);
+  return {
+    ...base,
+    event: {
+      ...base.event,
+      payload: { kind: "capabilities.updated", snapshot: capabilitySnapshot() },
+    },
   };
 }
 
@@ -258,6 +298,135 @@ describe("AsyncQueue", () => {
 });
 
 describe("Session tRPC router", () => {
+  it("keeps exhaustive capability catalogs out of renderer snapshots and streams", async () => {
+    const fixture = runtimeFixture();
+    const base = snapshot();
+    const runtime: SessionRuntime = {
+      ...fixture.runtime,
+      snapshot: async () => ({
+        ...base,
+        projection: { ...base.projection, capabilities: [capabilitySnapshot()] },
+        frames: [capabilityFrame(4)],
+      }),
+      refreshCapabilities: async () => capabilitySnapshot(),
+    };
+    const caller = createSessionRouter().createCaller({
+      runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    const resolved = await caller.session.snapshot({ sessionId: "session-1" });
+    expect(resolved.projection.capabilities[0]?.catalog).toEqual([]);
+    expect(
+      resolved.frames[0]?.event.payload.kind === "capabilities.updated"
+        ? resolved.frames[0].event.payload.snapshot.catalog
+        : null,
+    ).toEqual([]);
+
+    const refreshed = await caller.session.refreshCapabilities({
+      sessionId: "session-1",
+      attachmentId: "attachment-1",
+    });
+    expect(refreshed.catalog).toEqual([]);
+
+    const stream = await caller.session.subscribe({ sessionId: "session-1" });
+    const iterator = stream[Symbol.asyncIterator]();
+    const pending = iterator.next();
+    await Promise.resolve();
+    fixture.emit(capabilityFrame(5));
+    const tracked = trackedValue((await pending).value);
+    const streamed = tracked.data as SessionStreamFrame;
+    expect(
+      streamed.event.payload.kind === "capabilities.updated"
+        ? streamed.event.payload.snapshot.catalog
+        : null,
+    ).toEqual([]);
+    await iterator.return?.();
+  });
+
+  it("exposes bounded Runtime Catalog browsing and shortlist resolution to Lab clients", async () => {
+    const fixture = runtimeFixture();
+    const calls: string[] = [];
+    const runtimeCatalog: RuntimeCatalog = {
+      inspect: async (input) => {
+        calls.push(`inspect:${input.providerId ?? "overview"}`);
+        return {
+          adapterId: input.adapterId,
+          status: "available",
+          reason: null,
+          observedAt: 10,
+          runtimeVersion: "1.0.0",
+          providers: [],
+          models: [],
+          modelTotal: 0,
+          preferences: {
+            version: 1,
+            enabledModels: [],
+            defaults: { providerId: "", modelId: "", variant: "", agent: "" },
+          },
+        };
+      },
+      save: async (input) => {
+        calls.push(`save:${input.preferences.enabledModels.length}`);
+        return input.preferences;
+      },
+      resolve: async (input) => {
+        calls.push(`resolve:${input.adapterId}`);
+        return {
+          adapterId: input.adapterId,
+          observedAt: 10,
+          catalog: { providers: [], models: [], agents: [] },
+          selection: { providerId: "", modelId: "", variant: "", agent: "" },
+        };
+      },
+    };
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      runtimeCatalog,
+      diagnostics: new RpcDiagnosticLog(),
+      transport: "lab-http",
+    });
+
+    await caller.runtimeCatalog.inspect({ adapterId: "opencode", providerId: "openai" });
+    await caller.runtimeCatalog.save({
+      adapterId: "opencode",
+      preferences: {
+        version: 1,
+        enabledModels: [{ providerId: "openai", modelId: "codex" }],
+        defaults: { providerId: "openai", modelId: "codex", variant: "high", agent: "build" },
+      },
+    });
+    await caller.runtimeCatalog.resolve({ adapterId: "opencode" });
+
+    await expect(
+      caller.runtimeCatalog.save({
+        adapterId: "opencode",
+        preferences: {
+          version: 1,
+          enabledModels: Array.from({ length: 51 }, (_, index) => ({
+            providerId: "provider",
+            modelId: `model-${index}`,
+          })),
+          defaults: { providerId: "", modelId: "", variant: "", agent: "" },
+        },
+      }),
+    ).rejects.toThrow();
+
+    expect(calls).toEqual(["inspect:openai", "save:1", "resolve:opencode"]);
+  });
+
+  it("rejects Runtime Catalog procedures on a transport that carries no catalog", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await expect(caller.runtimeCatalog.resolve({ adapterId: "opencode" })).rejects.toThrow(
+      "Runtime Catalog is unavailable on this transport",
+    );
+  });
+
   it("passes a structurally valid create command to the runtime without a session identifier", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({

@@ -15,8 +15,11 @@
  */
 import type {
   AppStateSetResult,
+  HarnessPendingResult,
+  HarnessRegisteredResult,
   Result,
   RetentionStateResult,
+  RetentionTtlResult,
   SessionsResult,
   TicketLatestSignalsResult,
   TicketRetentionState,
@@ -38,6 +41,7 @@ import { labels, project, projects, sessions, signals, tickets } from "./fixture
  * retention badge, so the affordance is visible without every card shouting.
  */
 const ARCHIVE_READY_TICKET_ID = "tkt-11";
+let retentionTtlDays = 14;
 
 function retentionState(ticketId: string): TicketRetentionState {
   const archiveReady = ticketId === ARCHIVE_READY_TICKET_ID;
@@ -97,6 +101,12 @@ export const appApi: ApiOverrides = {
     watchDir: (): Promise<Result> => Promise.resolve({ ok: true }),
     unwatchDir: (): Promise<Result> => Promise.resolve({ ok: true }),
   },
+  harness: {
+    pending: (): Promise<HarnessPendingResult> =>
+      Promise.resolve({ ok: true, pending: [], broken: [] }),
+    registered: (): Promise<HarnessRegisteredResult> =>
+      Promise.resolve({ ok: true, harnesses: [], channels: [] }),
+  },
   sessions: {
     list: (): Promise<SessionsResult> => Promise.resolve({ ok: true, sessions }),
   },
@@ -106,6 +116,12 @@ export const appApi: ApiOverrides = {
   retention: {
     state: (ticketId: string): Promise<RetentionStateResult> =>
       Promise.resolve({ ok: true, state: retentionState(ticketId) }),
+    getTtlDays: (): Promise<RetentionTtlResult> =>
+      Promise.resolve({ ok: true, days: retentionTtlDays }),
+    setTtlDays: (days: number): Promise<RetentionTtlResult> => {
+      retentionTtlDays = Math.max(1, Math.round(days));
+      return Promise.resolve({ ok: true, days: retentionTtlDays });
+    },
   },
 };
 

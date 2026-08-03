@@ -1,0 +1,7 @@
+# The lockfile is a resolver output, not source. Keeping it tracked is what
+# makes `pnpm install` reproduce the same tree in CI that it does here, so it
+# stays in git — but nothing good comes of reading or line-merging 12k lines of
+# it. `linguist-generated` collapses it in review; `merge=binary` turns a
+# conflict into "take one side, re-run install" instead of a hand merge that can
+# silently produce a tree neither branch ever resolved.
+pnpm-lock.yaml linguist-generated=true merge=binary

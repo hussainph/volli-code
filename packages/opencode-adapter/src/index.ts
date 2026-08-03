@@ -18,7 +18,12 @@ import type {
   Reconciliation,
   ReleaseReason,
 } from "@volli/session-engine";
+import { ACTIVITY_METADATA_KEY } from "@volli/shared";
 import type {
+  ActivityDescriptor,
+  ActivityKind,
+  ActivityOutcome,
+  ActivitySubject,
   SessionCapabilityCatalogItem,
   SessionInteraction,
   SessionNativeDetail,
@@ -31,6 +36,11 @@ type OpenCodeStatusObservation = Extract<
   HarnessObservation,
   { kind: "turn.started" | "turn.completed" | "attention.raised" }
 >;
+/** The attentions an adapter may raise — narrower than `SessionAttentionKind`. */
+type OpenCodeAttentionKind = Extract<
+  HarnessObservation,
+  { kind: "attention.raised" }
+>["attention"]["kind"];
 
 const DIRECTORY_QUERY = "directory";
 const ADAPTER_ID = "opencode";
@@ -38,6 +48,19 @@ const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_DEFERRED_EVENTS = 1_000;
 const MAX_REMEMBERED_EVENT_IDS = 10_000;
 const MAX_SSE_BUFFER_LENGTH = 1_048_576;
+const STREAM_SNAPSHOT_DELAY_MS = 32;
+/**
+ * The only events a subagent's Session may contribute to this one. Its
+ * transcript belongs to the `task` row; a prompt it is blocked on belongs to
+ * whoever can answer it.
+ */
+const INTERACTION_EVENT_TYPES = new Set([
+  "permission.asked",
+  "permission.replied",
+  "question.asked",
+  "question.replied",
+  "question.rejected",
+]);
 
 export interface OpenCodeChild {
   readonly exited: Promise<number | null>;
@@ -435,8 +458,37 @@ interface BindingOptions {
 
 interface BufferedOpenCodeMessage {
   role: ReturnType<typeof messageRole> | null;
+  metadata: OpenCodeMessageMetadata | null;
   readonly partOrder: string[];
   readonly parts: Map<string, unknown>;
+}
+
+/**
+ * The tool call an open permission gates. OpenCode asks for permission on a
+ * channel of its own, but names the call it is blocking on — so the prompt can
+ * be raised on that tool row instead of only beside the transcript.
+ */
+interface OpenCodeApprovalTarget {
+  readonly messageId: string;
+  readonly callId: string;
+}
+
+/**
+ * What OpenCode reports about an assistant turn itself, rather than its parts.
+ * Every field is nullable: absent is not zero, and a turn header must be able to
+ * render with nothing but the model id.
+ */
+interface OpenCodeMessageMetadata {
+  readonly providerId: string | null;
+  readonly modelId: string | null;
+  readonly cost: number | null;
+  readonly tokens: {
+    readonly input: number | null;
+    readonly output: number | null;
+    readonly reasoning: number | null;
+    readonly cacheRead: number | null;
+    readonly cacheWrite: number | null;
+  } | null;
 }
 
 interface PendingOpenCodeReconciliation {
@@ -462,11 +514,17 @@ class OpenCodeBinding implements BindingHandle {
   readonly #seen = new Set<string>();
   readonly #streamEventsSeen = new Set<string>();
   readonly #messages = new Map<string, BufferedOpenCodeMessage>();
+  readonly #streamSnapshotTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  readonly #streamSnapshotTriggers = new Map<string, string>();
   readonly #deferredEvents: OpenCodeSseEvent[] = [];
   readonly #questions = new Map<string, readonly OpenCodeQuestion[]>();
+  /** Open tool-gating permissions, by OpenCode's permission id. */
+  readonly #pendingApprovals = new Map<string, OpenCodeApprovalTarget>();
+  /** Subagent Sessions this one spawned, by the `task` row each belongs to. */
+  readonly #subagents = new Map<string, OpenCodeApprovalTarget>();
   readonly #streamAbort = new AbortController();
   #sink: ObservationSink | null = null;
-  #inFlightEmit: Promise<void> | null = null;
+  #emissionQueue: Promise<void> = Promise.resolve();
   #released = false;
   #cursor: SessionNativeDetail | null = null;
   #importNativeHistory: boolean;
@@ -602,12 +660,28 @@ class OpenCodeBinding implements BindingHandle {
   }
 
   async #readReconciliation(cursor: SessionNativeDetail | null): Promise<Reconciliation> {
-    const [messages, status, permissionResponse, questionResponse] = await Promise.all([
-      this.#request(`/session/${encodeURIComponent(this.#nativeSessionId)}/message`, "GET"),
-      this.#request("/session/status", "GET"),
-      this.#request("/permission", "GET").catch(() => ({ status: 404, body: [] })),
-      this.#request("/question", "GET").catch(() => ({ status: 404, body: [] })),
-    ]);
+    const [messages, status, permissionResponse, questionResponse, todoResponse] =
+      await Promise.all([
+        this.#request(`/session/${encodeURIComponent(this.#nativeSessionId)}/message`, "GET"),
+        this.#request("/session/status", "GET"),
+        // A build without these endpoints answers 404, and a 404 resolves
+        // like any other status, so tolerating an absent endpoint needs no
+        // `catch` — a `catch` here can only ever swallow a transport failure.
+        // For permissions and questions that is the one lie reconciliation
+        // must not tell. Reconciling is the act that recovers a Session
+        // blocked on a permission raised while we were disconnected, so
+        // answering "nothing is pending" because the read failed strands the
+        // Session in the state it was called to clear. A rejection fails the
+        // whole read, exactly as it already does for messages and status, and
+        // the caller retries.
+        this.#request("/permission", "GET"),
+        this.#request("/question", "GET"),
+        // Todos are the exception, and only because they carry no blocking
+        // state: a missing todo list costs a panel, not a way forward.
+        this.#request(`/session/${encodeURIComponent(this.#nativeSessionId)}/todo`, "GET").catch(
+          () => ({ status: 0, body: [] }),
+        ),
+      ]);
     const token = `reconcile:${this.#nativeSessionId}:${++this.#reconciliationSequence}`;
     const observations: HarnessObservation[] = [];
     const seenIds = new Set<string>();
@@ -618,6 +692,29 @@ class OpenCodeBinding implements BindingHandle {
       return true;
     };
     let completesNativeHistoryImport = false;
+    // Which Sessions are this one's subagents is a fact carried by the `task`
+    // parts of its own history, so it has to be recovered before the sweeps
+    // below can tell a subagent's open permission from a stranger's. Without
+    // it, reconciling is the one action that looks like it should free a
+    // Session blocked on a subagent and reliably does not.
+    if (isSuccessfulMessageResponse(messages)) {
+      for (const message of messageResponses(messages.body)) {
+        this.#registerSubagentsInMessage(message);
+      }
+    }
+    // Project permissions before messages — they are what tells a hydrated tool
+    // row it is gated — but keep them behind messages in the emitted batch, so
+    // the order a resuming consumer sees is the order it always saw.
+    const permissionObservations = arrayBody(permissionResponse.body)
+      .filter((candidate) => this.#ownsInteraction(candidate))
+      .flatMap((permission) => {
+        const observation = this.#interactionObservation(
+          "permission.asked",
+          permission,
+          `permission:${objectString(permission, "id") ?? "unknown"}`,
+        );
+        return observation ? [observation] : [];
+      });
     if (isSuccessfulMessageResponse(messages)) {
       const importNativeHistory = this.#importNativeHistory;
       completesNativeHistoryImport = importNativeHistory;
@@ -632,18 +729,9 @@ class OpenCodeBinding implements BindingHandle {
         }
       }
     }
-    for (const permission of arrayBody(permissionResponse.body).filter((candidate) =>
-      hasSessionId(candidate, this.#nativeSessionId),
-    )) {
-      const observation = this.#interactionObservation(
-        "permission.asked",
-        permission,
-        `permission:${objectString(permission, "id") ?? "unknown"}`,
-      );
-      if (observation) push(observation);
-    }
+    for (const observation of permissionObservations) push(observation);
     for (const question of arrayBody(questionResponse.body).filter((candidate) =>
-      hasSessionId(candidate, this.#nativeSessionId),
+      this.#ownsInteraction(candidate),
     )) {
       const observation = this.#interactionObservation(
         "question.asked",
@@ -651,6 +739,17 @@ class OpenCodeBinding implements BindingHandle {
         `question:${objectString(question, "id") ?? "unknown"}`,
       );
       if (observation) push(observation);
+    }
+    if (todoResponse.status >= 200 && todoResponse.status < 300) {
+      const todoObservation = this.#todoObservation(
+        `reconcile:todo:${token}`,
+        {
+          sessionID: this.#nativeSessionId,
+          todos: arrayBody(todoResponse.body),
+        },
+        { allowEmpty: false },
+      );
+      if (todoObservation) push(todoObservation);
     }
     const statusObservation = this.#statusObservation(`reconcile:status:${token}`, status.body);
     let statusSignature: string | null = null;
@@ -694,18 +793,20 @@ class OpenCodeBinding implements BindingHandle {
       return;
     }
     this.#released = true;
+    this.#clearScheduledStreamSnapshots();
     this.#streamAbort.abort();
     await this.#drainInFlightEmit();
     this.#sink = null;
     this.#messages.clear();
+    this.#pendingApprovals.clear();
+    this.#subagents.clear();
     this.#deferredEvents.length = 0;
     this.#pendingReconciliation = null;
     this.#onRelease();
   }
 
   async #drainInFlightEmit(): Promise<void> {
-    const emission = this.#inFlightEmit;
-    if (emission) await Promise.allSettled([emission]);
+    await Promise.allSettled([this.#emissionQueue]);
   }
 
   async #pump(initialStream: AsyncIterable<OpenCodeSseEvent>): Promise<void> {
@@ -734,8 +835,7 @@ class OpenCodeBinding implements BindingHandle {
     try {
       for await (const event of stream) {
         if (this.#released) return disconnected;
-        const sessionId = eventSessionId(event.properties);
-        if (sessionId !== this.#nativeSessionId || this.#streamEventsSeen.has(event.id)) continue;
+        if (!this.#ownsStreamEvent(event) || this.#streamEventsSeen.has(event.id)) continue;
         await this.#handleEvent(event);
         this.#rememberStreamEvent(event.id);
       }
@@ -743,6 +843,61 @@ class OpenCodeBinding implements BindingHandle {
       disconnected = error instanceof Error ? error.message : "OpenCode event stream disconnected";
     }
     return disconnected;
+  }
+
+  /**
+   * OpenCode tags snapshots with their Session, but its high-frequency text
+   * deltas can be scoped only by message and part. Accept that compact shape
+   * only after a trusted, Session-tagged message or part established ownership.
+   *
+   * A subagent runs in a Session of its own, and everything it says is already
+   * represented here by the `task` row that is waiting for it — merging its
+   * transcript would interleave a second agent's prose into this one's. Its
+   * *interactions* are the exception, and not a cosmetic one: a permission
+   * raised inside a subagent blocks this turn, and a dropped one is a Session
+   * that stays busy forever with no way back out. See {@link #ownsInteraction},
+   * which the reconcile sweep applies to the same effect.
+   */
+  #ownsStreamEvent(event: OpenCodeSseEvent): boolean {
+    const sessionId = eventSessionId(event.properties);
+    if (sessionId !== null) {
+      if (sessionId === this.#nativeSessionId) return true;
+      return this.#subagents.has(sessionId) && INTERACTION_EVENT_TYPES.has(event.type);
+    }
+    if (event.type !== "message.part.delta" && event.type !== "message.part.removed") return false;
+    const messageId = objectString(event.properties, "messageID");
+    return messageId !== null && this.#messages.has(messageId);
+  }
+
+  /** This Session or one of its subagents — the rule the stream filter applies. */
+  #ownsInteraction(raw: unknown): boolean {
+    const sessionId = objectString(raw, "sessionID");
+    if (sessionId === null) return false;
+    return sessionId === this.#nativeSessionId || this.#subagents.has(sessionId);
+  }
+
+  /**
+   * The `task` call a subagent Session belongs to.
+   *
+   * OpenCode states both ids on the task part itself, which is the only place
+   * they are related: a permission raised inside the subagent names a call in
+   * the child's transcript, and nothing this Session holds. Registering the
+   * pair as the part streams is what later lets that permission be raised on
+   * the row a person is already watching spin.
+   */
+  #registerSubagent(part: unknown, messageId: string | null): void {
+    if (objectString(part, "tool") !== "task") return;
+    const childSessionId = objectString(nested(nested(part, "state"), "metadata"), "sessionId");
+    const callId = objectString(part, "callID");
+    if (!childSessionId || !messageId || !callId) return;
+    this.#subagents.set(childSessionId, { messageId, callId });
+  }
+
+  #registerSubagentsInMessage(raw: unknown): void {
+    const info = nested(raw, "info") ?? raw;
+    const messageId = objectString(info, "id");
+    if (!isRecord(raw) || !Array.isArray(raw.parts)) return;
+    for (const part of raw.parts) this.#registerSubagent(part, messageId);
   }
 
   #subscribe(): Promise<AsyncIterable<OpenCodeSseEvent>> {
@@ -793,20 +948,23 @@ class OpenCodeBinding implements BindingHandle {
   }
 
   async #emit(observation: HarnessObservation): Promise<boolean> {
+    const emission = this.#emissionQueue.then(() => this.#emitNow(observation));
+    this.#emissionQueue = emission.then(
+      () => undefined,
+      () => undefined,
+    );
+    return emission;
+  }
+
+  async #emitNow(observation: HarnessObservation): Promise<boolean> {
     if (this.#seen.has(observation.id)) return true;
     const sink = this.#sink;
     if (this.#released || !sink) return false;
-    const emission = sink.emit(observation);
-    this.#inFlightEmit = emission;
-    try {
-      await emission;
-      if (this.#released || this.#sink !== sink) return false;
-      this.#remember(observation);
-      this.#cursor = observation.cursor ?? { eventId: observation.id };
-      return true;
-    } finally {
-      this.#inFlightEmit = null;
-    }
+    await sink.emit(observation);
+    if (this.#released || this.#sink !== sink) return false;
+    this.#remember(observation);
+    this.#cursor = observation.cursor ?? { eventId: observation.id };
+    return true;
   }
 
   #remember(observation: HarnessObservation): void {
@@ -861,22 +1019,33 @@ class OpenCodeBinding implements BindingHandle {
       return;
     }
     switch (event.type) {
-      case "message.updated":
-        this.#bufferMessage(event.properties);
+      case "message.updated": {
+        const messageId = this.#bufferMessage(event.properties);
+        this.#scheduleStreamSnapshot(messageId, event.id);
         return;
-      case "message.part.updated":
-        this.#bufferPart(event.properties);
+      }
+      case "message.part.updated": {
+        const messageId = this.#bufferPart(event.properties);
+        this.#scheduleStreamSnapshot(messageId, event.id);
         return;
-      case "message.part.delta":
-        this.#applyPartDelta(event.properties);
+      }
+      case "message.part.delta": {
+        const messageId = this.#applyPartDelta(event.properties);
+        this.#scheduleStreamSnapshot(messageId, event.id);
         return;
-      case "message.part.removed":
-        this.#removePart(event.properties);
+      }
+      case "message.part.removed": {
+        const messageId = this.#removePart(event.properties);
+        this.#scheduleStreamSnapshot(messageId, event.id);
         return;
+      }
       case "message.removed": {
         const messageId =
           objectString(event.properties, "messageID") ?? objectString(event.properties, "id");
-        if (messageId) this.#messages.delete(messageId);
+        if (messageId) {
+          this.#clearScheduledStreamSnapshot(messageId);
+          this.#messages.delete(messageId);
+        }
         return;
       }
       case "session.status":
@@ -905,12 +1074,33 @@ class OpenCodeBinding implements BindingHandle {
       case "question.asked": {
         const observation = this.#interactionObservation(event.type, event.properties, event.id);
         if (observation) await this.#emit(observation);
+        // Nothing further arrives on the gated call until a human answers, so
+        // repaint now or the prompt would not reach its tool row until the
+        // reply that already dismissed it. Resolved the same way the gate
+        // itself is: a subagent's permission names a message this Session does
+        // not hold, and repainting *that* one repaints nothing.
+        this.#scheduleStreamSnapshot(
+          this.#approvalTarget(event.properties)?.messageId ?? null,
+          event.id,
+        );
         return;
       }
-      case "permission.replied":
+      case "permission.replied": {
+        const observation = this.#resolvedInteractionObservation(event);
+        if (observation) await this.#emit(observation);
+        this.#clearApproval(event);
+        return;
+      }
       case "question.replied":
       case "question.rejected": {
         const observation = this.#resolvedInteractionObservation(event);
+        if (observation) await this.#emit(observation);
+        return;
+      }
+      case "todo.updated": {
+        const observation = this.#todoObservation(event.id, event.properties, {
+          allowEmpty: true,
+        });
         if (observation) await this.#emit(observation);
         return;
       }
@@ -919,70 +1109,161 @@ class OpenCodeBinding implements BindingHandle {
     }
   }
 
-  #bufferMessage(raw: unknown): void {
+  #bufferMessage(raw: unknown): string | null {
     const info = nested(raw, "info") ?? raw;
     const messageId = objectString(info, "id");
-    if (!messageId) return;
+    if (!messageId) return null;
     const message = this.#message(messageId);
     const role = explicitMessageRole(info);
     if (role) message.role = role;
-    if (!isRecord(raw) || !Array.isArray(raw.parts)) return;
+    // Usage arrives on a later message.updated than the first one, so keep the
+    // last non-empty reading rather than letting a partial snapshot erase it.
+    message.metadata = openCodeMessageMetadata(info) ?? message.metadata;
+    if (!isRecord(raw) || !Array.isArray(raw.parts)) return messageId;
     message.parts.clear();
     message.partOrder.length = 0;
     raw.parts.forEach((part, index) => {
       const partId = objectString(part, "id") ?? `snapshot:${index}`;
       message.partOrder.push(partId);
       message.parts.set(partId, part);
+      this.#registerSubagent(part, messageId);
     });
+    return messageId;
   }
 
-  #bufferPart(raw: unknown): void {
+  #bufferPart(raw: unknown): string | null {
     const part = nested(raw, "part");
-    if (!part) return;
+    if (!part) return null;
     const messageId = objectString(raw, "messageID") ?? objectString(part, "messageID");
     const partId = objectString(part, "id");
-    if (!messageId || !partId) return;
+    if (!messageId || !partId) return null;
     const message = this.#message(messageId);
     if (!message.parts.has(partId)) message.partOrder.push(partId);
-    message.parts.set(partId, mergeOpenCodePart(message.parts.get(partId), part));
+    const merged = mergeOpenCodePart(message.parts.get(partId), part);
+    message.parts.set(partId, merged);
+    this.#registerSubagent(merged, messageId);
+    return messageId;
   }
 
-  #applyPartDelta(raw: unknown): void {
+  #applyPartDelta(raw: unknown): string | null {
     const messageId = objectString(raw, "messageID");
     const partId = objectString(raw, "partID");
     const field = objectString(raw, "field");
     const delta = objectString(raw, "delta");
-    if (!messageId || !partId || field !== "text" || delta === null) return;
+    if (!messageId || !partId || field !== "text" || delta === null) return null;
     const message = this.#messages.get(messageId);
-    const part = message?.parts.get(partId);
-    if (!message || !isRecord(part)) return;
+    if (!message) return null;
+    const part = message.parts.get(partId);
+    if (!isRecord(part)) {
+      // Delta can race ahead of message.part.updated. Treat as text so the
+      // first tokens paint within one coalescing interval; if the typed
+      // snapshot later says reasoning, mergeOpenCodePart preserves the
+      // accumulated text onto the new type.
+      message.partOrder.push(partId);
+      message.parts.set(partId, {
+        id: partId,
+        messageID: messageId,
+        type: "text",
+        text: delta,
+      });
+      return messageId;
+    }
     message.parts.set(partId, {
       ...part,
       [field]: `${objectString(part, field) ?? ""}${delta}`,
     });
+    return messageId;
   }
 
-  #removePart(raw: unknown): void {
+  #removePart(raw: unknown): string | null {
     const messageId = objectString(raw, "messageID");
     const partId = objectString(raw, "partID");
-    if (!messageId || !partId) return;
+    if (!messageId || !partId) return null;
     const message = this.#messages.get(messageId);
-    if (!message) return;
+    if (!message) return null;
     message.parts.delete(partId);
     const orderIndex = message.partOrder.indexOf(partId);
     if (orderIndex >= 0) message.partOrder.splice(orderIndex, 1);
+    return messageId;
   }
 
   #message(messageId: string): BufferedOpenCodeMessage {
     let message = this.#messages.get(messageId);
     if (!message) {
-      message = { role: null, partOrder: [], parts: new Map() };
+      message = { role: null, metadata: null, partOrder: [], parts: new Map() };
       this.#messages.set(messageId, message);
     }
     return message;
   }
 
+  #scheduleStreamSnapshot(messageId: string | null, triggerId: string): void {
+    if (!messageId || this.#released || !this.#messages.has(messageId)) return;
+    this.#streamSnapshotTriggers.set(messageId, triggerId);
+    if (this.#streamSnapshotTimers.has(messageId)) return;
+    const timer = setTimeout(() => {
+      this.#streamSnapshotTimers.delete(messageId);
+      void this.#emitStreamSnapshot(messageId).catch(() => undefined);
+    }, STREAM_SNAPSHOT_DELAY_MS);
+    this.#streamSnapshotTimers.set(messageId, timer);
+  }
+
+  async #emitStreamSnapshot(messageId: string): Promise<void> {
+    const buffered = this.#messages.get(messageId);
+    const triggerId = this.#streamSnapshotTriggers.get(messageId);
+    if (!buffered?.role || buffered.role === "user" || !triggerId) return;
+    const turnBusy = this.#turnStatus !== "idle";
+    const approvals = this.#approvalsForMessage(messageId);
+    const parts = buffered.partOrder.flatMap((partId) =>
+      openCodePart(buffered.parts.get(partId), { reasoningStreaming: turnBusy, approvals }),
+    );
+    if (parts.length === 0) return;
+    // Fallback for the window before `time.end` lands: a thought is live only
+    // while it is the message's *final* part. Once text or a tool call follows
+    // it the model has moved on, even though the turn is still busy — and a
+    // reasoning part left "streaming" makes the elapsed counter tick forever.
+    if (turnBusy) {
+      const lastIndex = parts.length - 1;
+      for (let index = 0; index < parts.length; index += 1) {
+        const part = parts[index];
+        if (part?.type !== "reasoning" || index === lastIndex) continue;
+        parts[index] = { ...part, state: "done" };
+      }
+    }
+    const message: UIMessage = {
+      id: messageId,
+      role: buffered.role,
+      parts,
+      ...(buffered.metadata ? { metadata: buffered.metadata } : {}),
+    };
+    await this.#emit({
+      id: transcriptObservationId(message),
+      kind: "transcript.message",
+      occurredAt: this.#now(),
+      cursor: { eventId: triggerId },
+      threadId: `thread:${this.#spec.sessionId}:root`,
+      branchId: `branch:${this.#spec.sessionId}:main`,
+      attemptId: `attempt:${messageId}`,
+      turnId: null,
+      message,
+    });
+  }
+
+  #clearScheduledStreamSnapshot(messageId: string): void {
+    const timer = this.#streamSnapshotTimers.get(messageId);
+    if (timer) clearTimeout(timer);
+    this.#streamSnapshotTimers.delete(messageId);
+    this.#streamSnapshotTriggers.delete(messageId);
+  }
+
+  #clearScheduledStreamSnapshots(): void {
+    for (const timer of this.#streamSnapshotTimers.values()) clearTimeout(timer);
+    this.#streamSnapshotTimers.clear();
+    this.#streamSnapshotTriggers.clear();
+  }
+
   async #flushMessages(triggerId: string): Promise<void> {
+    this.#clearScheduledStreamSnapshots();
+    await this.#drainInFlightEmit();
     for (const [messageId, buffered] of this.#messages) {
       if (!buffered.role) {
         this.#messages.delete(messageId);
@@ -992,14 +1273,22 @@ class OpenCodeBinding implements BindingHandle {
         this.#messages.delete(messageId);
         continue;
       }
+      // Same gate as the streaming path: one message must not project two ways
+      // depending on which path emitted it.
+      const approvals = this.#approvalsForMessage(messageId);
       const parts = buffered.partOrder.flatMap((partId) =>
-        openCodePart(buffered.parts.get(partId)),
+        openCodePart(buffered.parts.get(partId), { reasoningStreaming: false, approvals }),
       );
       if (parts.length === 0) {
         this.#messages.delete(messageId);
         continue;
       }
-      const message: UIMessage = { id: messageId, role: buffered.role, parts };
+      const message: UIMessage = {
+        id: messageId,
+        role: buffered.role,
+        parts,
+        ...(buffered.metadata ? { metadata: buffered.metadata } : {}),
+      };
       await this.#emit({
         id: transcriptObservationId(message),
         kind: "transcript.message",
@@ -1025,12 +1314,84 @@ class OpenCodeBinding implements BindingHandle {
     role: ReturnType<typeof messageRole>,
     raw: unknown,
   ): Extract<HarnessObservation, { kind: "transcript.message" }> {
-    const message: UIMessage = { id: messageId, role, parts: messageParts(raw) };
+    const metadata = openCodeMessageMetadata(nested(raw, "info") ?? raw);
+    const message: UIMessage = {
+      id: messageId,
+      role,
+      parts: messageParts(raw, this.#approvalsForMessage(messageId)),
+      ...(metadata ? { metadata } : {}),
+    };
     return {
       id: transcriptObservationId(message),
       kind: "transcript.message",
       occurredAt: this.#now(),
       cursor: { eventId: id },
+      threadId: `thread:${this.#spec.sessionId}:root`,
+      branchId: `branch:${this.#spec.sessionId}:main`,
+      attemptId: `attempt:${messageId}`,
+      turnId: null,
+      message,
+    };
+  }
+
+  /**
+   * Project OpenCode's first-party todo list into a stable synthetic transcript
+   * message. The chat UI hides todowrite parts and reads this via
+   * projectSessionTodos — same shape whether the source was todowrite tool
+   * metadata or a todo.updated SSE / GET /todo reconcile.
+   */
+  #todoObservation(
+    eventId: string,
+    raw: unknown,
+    options: { allowEmpty: boolean },
+  ): Extract<HarnessObservation, { kind: "transcript.message" }> | null {
+    /* v8 ignore next -- unreachable: #ownsStreamEvent already requires a Session-tagged record, and reconcile builds one. */
+    if (!isRecord(raw)) return null;
+    const sessionId = objectString(raw, "sessionID") ?? objectString(raw, "sessionId");
+    if (sessionId !== null && sessionId !== this.#nativeSessionId) return null;
+    const todos = (Array.isArray(raw.todos) ? raw.todos : arrayBody(raw.todos)).filter(
+      (item): item is Record<string, unknown> => isRecord(item) && typeof item.content === "string",
+    );
+    if (todos.length === 0 && !options.allowEmpty) return null;
+    const serializableTodos = todos.map((todo) => {
+      const serialized: Record<string, unknown> = {};
+      if (typeof todo.id === "string") serialized.id = todo.id;
+      serialized.content = todo.content;
+      if (typeof todo.status === "string") serialized.status = todo.status;
+      if (typeof todo.priority === "string") serialized.priority = todo.priority;
+      return serialized;
+    });
+    const messageId = `opencode:todos:${this.#nativeSessionId}`;
+    const message: UIMessage = {
+      id: messageId,
+      role: "assistant",
+      parts: [
+        {
+          type: "dynamic-tool",
+          toolName: "todowrite",
+          toolCallId: `todos:${this.#nativeSessionId}`,
+          state: "output-available",
+          input: { todos: serializableTodos },
+          output: { todos: serializableTodos },
+          title: `${serializableTodos.length} todos`,
+          // Same descriptor a real todowrite part carries, so the renderer
+          // recognizes the projected list by kind and never by tool name.
+          toolMetadata: openCodeToolMetadata(
+            {
+              status: "completed",
+              input: { todos: serializableTodos },
+              metadata: { todos: serializableTodos },
+            },
+            "todowrite",
+          ),
+        },
+      ],
+    };
+    return {
+      id: transcriptObservationId(message),
+      kind: "transcript.message",
+      occurredAt: this.#now(),
+      cursor: { eventId },
       threadId: `thread:${this.#spec.sessionId}:root`,
       branchId: `branch:${this.#spec.sessionId}:main`,
       attemptId: `attempt:${messageId}`,
@@ -1045,16 +1406,18 @@ class OpenCodeBinding implements BindingHandle {
     eventType = "session.status",
   ): OpenCodeStatusObservation | null {
     if (eventType === "session.error") {
-      const failure = safeOpenCodeError(raw);
+      const occurredAt = this.#now();
+      const failure = safeOpenCodeError(raw, occurredAt);
       return {
         id,
         kind: "attention.raised",
-        occurredAt: this.#now(),
+        occurredAt,
         attention: {
           id: `opencode:error:${id}`,
-          kind: "adapter_unrecoverable",
+          kind: failure.attention,
           detail: failure.detail,
           diagnostic: failure.diagnostic,
+          retryAt: failure.retryAt,
         },
       };
     }
@@ -1123,6 +1486,10 @@ class OpenCodeBinding implements BindingHandle {
       native: { id: nativeId, detail: kind === "question" ? questionDetail(questions(raw)) : null },
     };
     if (kind === "question") this.#questions.set(nativeId, questions(raw));
+    // Both the SSE event and the hydrate sweep land here, so one record keeps a
+    // permission opened before this binding attached gating its row too.
+    const target = kind === "permission" ? this.#approvalTarget(raw) : null;
+    if (target) this.#pendingApprovals.set(nativeId, target);
     return {
       id,
       kind: "interaction.opened",
@@ -1130,6 +1497,21 @@ class OpenCodeBinding implements BindingHandle {
       cursor: { eventId: id },
       interaction,
     };
+  }
+
+  /**
+   * The row a permission gates.
+   *
+   * A subagent's permission names a call inside its own Session, which this
+   * transcript does not contain — so there is no row for it to land on and it
+   * would render as a bare card beside work whose connection to it is left for
+   * the reader to guess. The `task` call is the thing actually blocked, and it
+   * is already on screen with a spinner, so the prompt is raised there.
+   */
+  #approvalTarget(raw: unknown): OpenCodeApprovalTarget | null {
+    /* v8 ignore next 2 -- both callers establish a non-null sessionID first; the fallback key matches nothing. */
+    const subagent = this.#subagents.get(objectString(raw, "sessionID") ?? "");
+    return subagent ?? approvalTarget(raw);
   }
 
   #resolvedInteractionObservation(event: OpenCodeSseEvent): HarnessObservation | null {
@@ -1173,6 +1555,34 @@ class OpenCodeBinding implements BindingHandle {
         response: null,
       },
     };
+  }
+
+  /**
+   * An answered permission stops gating its call, whoever answered it. Drop the
+   * gate and repaint: allowed, the row goes back to running; rejected, OpenCode
+   * fails the call itself and the row settles into that error. The adapter
+   * never states a verdict OpenCode has not reported.
+   */
+  #clearApproval(event: OpenCodeSseEvent): void {
+    const permissionId = objectString(event.properties, "requestID");
+    if (!permissionId) return;
+    const target = this.#pendingApprovals.get(permissionId);
+    if (!target) return;
+    this.#pendingApprovals.delete(permissionId);
+    this.#scheduleStreamSnapshot(target.messageId, event.id);
+  }
+
+  /**
+   * OpenCode keys permissions by their own id; a message projects by call id. A
+   * session blocks on its first open permission, so this map holds ones — a
+   * scan beats keeping a second index true to the first.
+   */
+  #approvalsForMessage(messageId: string): ReadonlyMap<string, string> {
+    const byCallId = new Map<string, string>();
+    for (const [permissionId, target] of this.#pendingApprovals) {
+      if (target.messageId === messageId) byCallId.set(target.callId, permissionId);
+    }
+    return byCallId;
   }
 
   async #resolveInteraction(
@@ -1272,6 +1682,30 @@ function messageRole(raw: unknown): "system" | "user" | "assistant" {
 function explicitMessageRole(raw: unknown): "system" | "user" | "assistant" | null {
   const role = objectString(raw, "role");
   return role === "system" || role === "user" || role === "assistant" ? role : null;
+}
+
+/**
+ * OpenCode carries usage on the AssistantMessage itself. Returns null when the
+ * snapshot reports none of it — a user message, or an assistant message whose
+ * usage has not landed yet — so an empty object never reaches the transcript.
+ */
+function openCodeMessageMetadata(info: unknown): OpenCodeMessageMetadata | null {
+  const providerId = objectString(info, "providerID");
+  const modelId = objectString(info, "modelID");
+  const cost = objectFiniteNumber(info, "cost");
+  const usage = nested(info, "tokens");
+  const cache = nested(usage, "cache");
+  const tokens = usage
+    ? {
+        input: objectFiniteNumber(usage, "input"),
+        output: objectFiniteNumber(usage, "output"),
+        reasoning: objectFiniteNumber(usage, "reasoning"),
+        cacheRead: objectFiniteNumber(cache, "read"),
+        cacheWrite: objectFiniteNumber(cache, "write"),
+      }
+    : null;
+  if (providerId === null && modelId === null && cost === null && tokens === null) return null;
+  return { providerId, modelId, cost, tokens };
 }
 
 interface OpenCodeQuestion {
@@ -1409,10 +1843,6 @@ function requestId(raw: unknown): string | null {
   return objectString(raw, "requestID") ?? objectString(raw, "id");
 }
 
-function hasSessionId(raw: unknown, sessionId: string): boolean {
-  return objectString(raw, "sessionID") === sessionId;
-}
-
 function messageResponses(body: unknown): readonly unknown[] {
   if (isRecord(body) && isRecord(body.info) && Array.isArray(body.parts)) return [body];
   return arrayBody(body);
@@ -1452,12 +1882,19 @@ function safeOpenCodeRetry(raw: unknown): {
   };
 }
 
-function safeOpenCodeError(raw: unknown): {
+function safeOpenCodeError(
+  raw: unknown,
+  now: number,
+): {
+  attention: OpenCodeAttentionKind;
+  retryAt: number | null;
   detail: string | null;
   diagnostic: SessionNativeDetail | null;
 } {
   const error = nested(raw, "error");
-  if (!error) return { detail: null, diagnostic: null };
+  if (!error) {
+    return { attention: "adapter_unrecoverable", retryAt: null, detail: null, diagnostic: null };
+  }
   const data = nested(error, "data");
   const diagnostic: Record<string, SessionNativeDetail> = {};
   const name = safeOpenCodeErrorName(objectString(error, "name"));
@@ -1467,7 +1904,10 @@ function safeOpenCodeError(raw: unknown): {
   if (statusCode !== null) diagnostic.statusCode = statusCode;
   if (isRetryable !== null) diagnostic.isRetryable = isRetryable;
   const hasDiagnostic = Object.keys(diagnostic).length > 0;
+  const attention = openCodeAttentionKind(name, statusCode);
   return {
+    attention,
+    retryAt: attention === "rate_limited" ? retryAfter(data, now) : null,
     detail: name
       ? `OpenCode ${name}${statusCode === null ? "" : ` (status ${statusCode})`}`
       : statusCode === null
@@ -1475,6 +1915,84 @@ function safeOpenCodeError(raw: unknown): {
         : `OpenCode session error (status ${statusCode})`,
     diagnostic: hasDiagnostic ? diagnostic : null,
   };
+}
+
+/**
+ * Which attention an OpenCode failure is.
+ *
+ * `session.error` carries a discriminated union and every member used to arrive
+ * as `adapter_unrecoverable`, which left an expired token and a context
+ * overflow offering the same recovery — none. The name is the discriminant
+ * OpenCode states, and it is the only thing read here.
+ *
+ * 429 is the one exception, and it is one because the union has no rate-limit
+ * member at all: the status is the sole signal, and its HTTP meaning is not
+ * open to interpretation. Auth is not an exception, which is the whole point —
+ * OpenCode already names auth failures `ProviderAuthError`, so reading
+ * `auth_required` out of a 401 on a generic `APIError` would second-guess a
+ * classification it declined to make. A 403 is worse: entitlement, region and
+ * policy blocks all arrive as one, and telling someone to re-authenticate when
+ * re-authenticating cannot help is a worse answer than admitting we do not know.
+ *
+ * `quota_exhausted` stays unraised for the same reason — no member states it,
+ * and a 429 cannot say whether a limit is per-minute or spent for the month.
+ * `configuration_invalid` is a launch fact the probe establishes, not a turn's
+ * outcome.
+ */
+function openCodeAttentionKind(
+  name: string | null,
+  statusCode: number | null,
+): OpenCodeAttentionKind {
+  switch (name) {
+    case "ProviderAuthError":
+      return "auth_required";
+    case "ContextOverflowError":
+      return "context_limit_reached";
+    case "MessageAbortedError":
+      return "partial_turn_interrupted";
+    case "APIError":
+      return statusCode === 429 ? "rate_limited" : "adapter_unrecoverable";
+    default:
+      return "adapter_unrecoverable";
+  }
+}
+
+/** RFC 9110 delta-seconds is `1*DIGIT` — far narrower than what `Number` accepts. */
+const DELTA_SECONDS = /^\d+$/;
+
+/** The last instant a `Date` can hold; past it a timestamp is an Invalid Date. */
+const MAX_TIMESTAMP = 8_640_000_000_000_000;
+
+/**
+ * When a rate limit lifts, if the provider said so.
+ *
+ * `responseHeaders` is a bag that carries `authorization` among other things,
+ * so exactly one header is read and it leaves as a number — the set itself is
+ * never passed anywhere that could stamp it into a diagnostic.
+ *
+ * Both RFC 9110 forms are accepted, and both are read strictly, because the
+ * lenient reading of either is worse than silence. `Number` would take `0x1F`
+ * and `1e3` as delta-seconds and turn a malformed header into a confident
+ * wrong answer, so only digits count. `Date.parse` falls back to local-time
+ * guesses for strings that are not HTTP-dates at all — making the result
+ * differ per machine — so the GMT the three HTTP-date forms all carry is
+ * required. A time already past states no wait, and a time beyond `Date`'s
+ * reach cannot be rendered; both read as absent. A wrong "try again at…" is
+ * worse than none, which leaves the UI offering a plain Retry.
+ */
+function retryAfter(data: unknown, now: number): number | null {
+  const headers = nested(data, "responseHeaders");
+  if (!headers) return null;
+  const header = Object.entries(headers).find(([key]) => key.toLowerCase() === "retry-after")?.[1];
+  if (typeof header !== "string") return null;
+  const value = header.trim();
+  if (DELTA_SECONDS.test(value)) {
+    const at = now + Number(value) * 1_000;
+    return at <= MAX_TIMESTAMP ? at : null;
+  }
+  if (!value.toUpperCase().endsWith("GMT")) return null;
+  const at = Date.parse(value);
+  return Number.isFinite(at) && at > now ? at : null;
 }
 
 function safeOpenCodeErrorName(name: string | null): string | null {
@@ -1503,9 +2021,9 @@ const SAFE_OPEN_CODE_ERROR_NAMES = new Set([
 ]);
 
 /** Maps the legacy OpenCode Part union to durable AI SDK UI parts. */
-function messageParts(raw: unknown): UIMessage["parts"] {
+function messageParts(raw: unknown, approvals: ReadonlyMap<string, string>): UIMessage["parts"] {
   if (!isRecord(raw) || !Array.isArray(raw.parts)) return [];
-  return raw.parts.flatMap((part) => openCodePart(part));
+  return raw.parts.flatMap((part) => openCodePart(part, { approvals }));
 }
 
 function transcriptObservationId(message: UIMessage): string {
@@ -1517,15 +2035,47 @@ function transcriptObservationId(message: UIMessage): string {
   return `message:${message.id}:${digest}`;
 }
 
-function openCodePart(part: unknown): UIMessage["parts"] {
+/** Reads the call a `permission.asked` payload gates, when it gates one at all. */
+function approvalTarget(raw: unknown): OpenCodeApprovalTarget | null {
+  const tool = nested(raw, "tool");
+  const messageId = objectString(tool, "messageID");
+  const callId = objectString(tool, "callID");
+  return messageId && callId ? { messageId, callId } : null;
+}
+
+function openCodePart(
+  part: unknown,
+  options?: { reasoningStreaming?: boolean; approvals?: ReadonlyMap<string, string> },
+): UIMessage["parts"] {
   const type = objectString(part, "type");
   if (type === "text") {
     const text = objectString(part, "text");
-    return text === null ? [] : [{ type: "text", text }];
+    // Same habit as reasoning below: OpenCode opens a text part before it has
+    // words, and a step that ends without prose leaves that empty part behind
+    // between two tool calls. It draws nothing, but downstream it is still a
+    // block — one that separates activity that belongs together and collects a
+    // margin on either side of itself.
+    if (text === null || text.trim() === "") return [];
+    return [{ type: "text", text }];
   }
   if (type === "reasoning") {
     const text = objectString(part, "text");
-    return text === null ? [] : [{ type: "reasoning", text }];
+    // OpenCode opens every reasoning part with `text: ""` and serves the same
+    // empty string to a mid-stream re-hydrate, because deltas never reach its
+    // database. Both project to nothing worth drawing.
+    if (text === null || text.trim() === "") return [];
+    // `finishReasoning` stamps `time.end` the moment a thought settles, which is
+    // its own event — independent of the turn ending or of anything following
+    // the part. Trust it over the turn's busy flag, or the renderer's elapsed
+    // counter keeps ticking against a thought that finished long ago.
+    const settled = Number.isFinite(nested(part, "time")?.end);
+    return [
+      {
+        type: "reasoning",
+        text,
+        state: options?.reasoningStreaming && !settled ? "streaming" : "done",
+      },
+    ];
   }
   if (type !== "tool") return [];
   const toolName = objectString(part, "tool");
@@ -1533,22 +2083,46 @@ function openCodePart(part: unknown): UIMessage["parts"] {
   const state = nested(part, "state");
   if (!toolName || !toolCallId || !state) return [];
   const title = objectString(state, "title");
-  const toolMetadata = openCodeToolMetadata(state);
   const base = {
     type: "dynamic-tool" as const,
     toolName,
     toolCallId,
     ...(title ? { title } : {}),
-    ...(toolMetadata ? { toolMetadata } : {}),
+    toolMetadata: openCodeToolMetadata(state, toolName),
   };
-  switch (objectString(state, "status")) {
+  const status = objectString(state, "status");
+  // A permission only gates a call still in flight. Once OpenCode reports the
+  // call settled that verdict is the newer fact, so the row recovers on its own
+  // even if the reply lifting the gate never reached this binding.
+  const approvalId =
+    status === "pending" || status === "running" ? options?.approvals?.get(toolCallId) : undefined;
+  if (approvalId !== undefined) {
+    return [
+      {
+        ...base,
+        state: "approval-requested",
+        input: state.input ?? null,
+        approval: { id: approvalId },
+      },
+    ];
+  }
+  switch (status) {
     case "pending":
-    case "running":
       return [
         {
           ...base,
           state: "input-streaming",
           ...(Object.hasOwn(state, "input") ? { input: state.input } : {}),
+        },
+      ];
+    // OpenCode has committed the arguments and is executing. That is
+    // `input-available` — the state a spinner belongs to.
+    case "running":
+      return [
+        {
+          ...base,
+          state: "input-available",
+          input: state.input ?? null,
         },
       ];
     case "completed":
@@ -1576,33 +2150,227 @@ function openCodePart(part: unknown): UIMessage["parts"] {
 
 function mergeOpenCodePart(previous: unknown, next: Record<string, unknown>): unknown {
   if (
-    !isRecord(previous) ||
-    objectString(previous, "type") !== "tool" ||
-    objectString(next, "type") !== "tool"
+    isRecord(previous) &&
+    objectString(previous, "type") === "tool" &&
+    objectString(next, "type") === "tool"
   ) {
-    return next;
+    const previousState = nested(previous, "state");
+    const nextState = nested(next, "state");
+    if (!previousState || !nextState) return next;
+    return {
+      ...previous,
+      ...next,
+      state: { ...previousState, ...nextState },
+    };
   }
-  const previousState = nested(previous, "state");
-  const nextState = nested(next, "state");
-  if (!previousState || !nextState) return next;
-  return {
-    ...previous,
-    ...next,
-    state: { ...previousState, ...nextState },
-  };
+  // Deltas only ever append, so a buffer already holding text outranks any
+  // snapshot carrying a prefix of it — whether the snapshot omits the field
+  // (reasoning opens with type only, then deltas) or spells it as the empty
+  // string OpenCode opens with and re-serves on a mid-stream re-hydrate. A
+  // snapshot that diverges is genuinely newer and replaces the buffer.
+  if (isRecord(previous)) {
+    const previousText = objectString(previous, "text");
+    const nextText = objectString(next, "text");
+    if (previousText && (nextText === null || previousText.startsWith(nextText))) {
+      return { ...next, text: previousText };
+    }
+  }
+  return next;
 }
 
 /**
  * OpenCode's HTTP/SSE boundary is JSON, so its provider-native metadata is
  * already serializable. Keep it namespaced instead of flattening provider
- * fields into AI SDK's portable tool vocabulary.
+ * fields into AI SDK's portable tool vocabulary — and stamp the harness-neutral
+ * activity descriptor beside it, so the renderer switches on `kind` rather than
+ * on OpenCode's tool names.
  */
-function openCodeToolMetadata(state: Record<string, unknown>): ToolMetadata | undefined {
-  const metadata: Record<string, unknown> = {};
+function openCodeToolMetadata(state: Record<string, unknown>, toolName: string): ToolMetadata {
+  const opencode: Record<string, unknown> = {};
   for (const key of ["raw", "metadata", "time", "attachments"] as const) {
-    if (Object.hasOwn(state, key) && state[key] !== undefined) metadata[key] = state[key];
+    if (Object.hasOwn(state, key) && state[key] !== undefined) opencode[key] = state[key];
   }
-  return Object.keys(metadata).length > 0 ? ({ opencode: metadata } as ToolMetadata) : undefined;
+  return {
+    [ACTIVITY_METADATA_KEY]: openCodeActivity(state, toolName),
+    ...(Object.keys(opencode).length > 0 ? { opencode } : {}),
+  } as ToolMetadata;
+}
+
+/**
+ * OpenCode's tool vocabulary, mapped onto the shared activity kinds. Everything
+ * absent — including MCP tools, which are named `<server>_<tool>` — is `"other"`,
+ * a first-class row rather than a degraded one, so the lookup can never fail.
+ */
+export const OPENCODE_ACTIVITY: Readonly<Record<string, ActivityKind>> = {
+  bash: "run-command",
+  read: "read-file",
+  edit: "edit-file",
+  apply_patch: "edit-file",
+  write: "write-file",
+  grep: "search",
+  glob: "search",
+  search: "search",
+  websearch: "search",
+  list: "list-directory",
+  webfetch: "fetch-url",
+  todowrite: "plan",
+  todoread: "plan",
+  todo_write: "plan",
+  task: "delegate",
+};
+
+export function openCodeActivityKind(toolName: string): ActivityKind {
+  return OPENCODE_ACTIVITY[toolName.toLowerCase()] ?? "other";
+}
+
+/**
+ * Keys that name what a call acted on, most specific first. The trailing sweep
+ * over any string scalar is what keeps `"other"` readable: an unmapped MCP tool
+ * still gets a subject rather than a blob.
+ */
+const ACTIVITY_SUBJECT_KEYS = [
+  "command",
+  "path",
+  "filePath",
+  "file_path",
+  "pattern",
+  "query",
+  "url",
+  "glob",
+] as const;
+
+/** Kinds whose subject is a workspace file the UI can open in a tab. */
+const ACTIVITY_PATH_KINDS = new Set<ActivityKind>(["read-file", "edit-file", "write-file"]);
+
+const MAX_INFERRED_LABEL_LENGTH = 200;
+
+function openCodeActivity(state: Record<string, unknown>, toolName: string): ActivityDescriptor {
+  const kind = openCodeActivityKind(toolName);
+  const input = recordAt(state, "input");
+  const metadata = recordAt(state, "metadata");
+  const time = recordAt(state, "time");
+  return {
+    kind,
+    nativeToolName: toolName,
+    subject: openCodeActivitySubject(kind, input, metadata),
+    outcome: openCodeActivityOutcome(state, input, metadata),
+    startedAt: objectFiniteNumber(time, "start"),
+    endedAt: objectFiniteNumber(time, "end"),
+  };
+}
+
+function openCodeActivitySubject(
+  kind: ActivityKind,
+  input: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+): ActivitySubject {
+  return {
+    label: activityLabel(input),
+    path: ACTIVITY_PATH_KINDS.has(kind) ? activityFilePath(input, metadata) : null,
+    lineRange: activityLineRange(metadata),
+  };
+}
+
+function activityLabel(input: Record<string, unknown>): string | null {
+  for (const key of ACTIVITY_SUBJECT_KEYS) {
+    const named = trimmedString(input[key]);
+    if (named) return named;
+  }
+  // Anything left is an unrecognized argument name. Take the first scalar that
+  // still reads as a phrase — never a file body, which would bloat the ledger.
+  for (const value of Object.values(input)) {
+    const candidate = trimmedString(value);
+    if (candidate && candidate.length <= MAX_INFERRED_LABEL_LENGTH && !candidate.includes("\n")) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+/**
+ * The absolute path OpenCode resolved, when it reported one; otherwise the path
+ * the model asked for. `read` reports it under `metadata.display`, `edit` under
+ * `metadata.filediff`, `write` under `metadata.filepath`.
+ */
+function activityFilePath(
+  input: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+): string | null {
+  return (
+    trimmedString(activityFileDisplay(metadata).path) ??
+    trimmedString(metadata.filepath) ??
+    trimmedString(recordAt(metadata, "filediff").file) ??
+    trimmedString(input.filePath) ??
+    trimmedString(input.path)
+  );
+}
+
+/** OpenCode's `read` reports its rendered slice under `metadata.display`. */
+function activityFileDisplay(metadata: Record<string, unknown>): Record<string, unknown> {
+  const display = recordAt(metadata, "display");
+  return display.type === "file" ? display : {};
+}
+
+function activityLineRange(
+  metadata: Record<string, unknown>,
+): { start: number; end: number } | null {
+  const display = activityFileDisplay(metadata);
+  // A whole-file read has no span worth showing — only a partial one does.
+  if (display.truncated !== true) return null;
+  const start = objectFiniteNumber(display, "lineStart");
+  const end = objectFiniteNumber(display, "lineEnd");
+  return start === null || end === null ? null : { start, end };
+}
+
+/**
+ * Measured results, and only measured ones: a pending or running call has none,
+ * and OpenCode reports no byte count or short summary for any tool, so those
+ * stay null rather than becoming a zero the UI would render as fact.
+ */
+function openCodeActivityOutcome(
+  state: Record<string, unknown>,
+  input: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+): ActivityOutcome | null {
+  const status = objectString(state, "status");
+  if (status !== "completed" && status !== "error") return null;
+  const filediff = recordAt(metadata, "filediff");
+  const display = recordAt(metadata, "display");
+  return {
+    exitCode: objectFiniteNumber(metadata, "exit"),
+    matchCount: objectFiniteNumber(metadata, "matches"),
+    fileCount: objectFiniteNumber(metadata, "count") ?? objectFiniteNumber(display, "totalEntries"),
+    lineCount: objectFiniteNumber(activityFileDisplay(metadata), "totalLines"),
+    bytes: null,
+    addedLines: objectFiniteNumber(filediff, "additions") ?? writtenLineCount(metadata, input),
+    removedLines: objectFiniteNumber(filediff, "deletions"),
+    diff: trimmedString(metadata.diff),
+    summary: null,
+  };
+}
+
+/**
+ * `write` reports no diff, but a file it created did not exist a moment ago —
+ * every line of the content it was handed is an addition. An overwrite is not
+ * countable this way, so it reports nothing.
+ */
+function writtenLineCount(
+  metadata: Record<string, unknown>,
+  input: Record<string, unknown>,
+): number | null {
+  if (metadata.exists !== false) return null;
+  return typeof input.content === "string" ? input.content.split("\n").length : null;
+}
+
+function recordAt(value: Record<string, unknown>, key: string): Record<string, unknown> {
+  const candidate = value[key];
+  return isRecord(candidate) ? candidate : {};
+}
+
+function trimmedString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 function isReconciliationAcknowledgement(

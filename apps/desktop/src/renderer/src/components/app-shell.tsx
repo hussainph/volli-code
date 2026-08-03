@@ -39,7 +39,7 @@ const COLLAPSED_NAV_WIDTH = 57;
  * content row, so SidebarProvider lays out as a column (h-svh, not the stock
  * min-h-svh row) with ChromeBar first.
  */
-export function AppShell() {
+export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}) {
   useProjectShortcuts();
   useNewTicketShortcut();
   useNavHistory();
@@ -193,7 +193,7 @@ export function AppShell() {
             terminalFocused ? "m-0 rounded-none border-0" : "border border-border",
           )}
         >
-          <MainContent />
+          <MainContent override={mainContent} />
         </SidebarInset>
       </div>
       <Toaster />

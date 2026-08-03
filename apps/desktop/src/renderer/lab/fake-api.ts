@@ -103,7 +103,11 @@ function isNamespace(value: unknown): boolean {
  * the shape-based defaults, so `{ tickets: { move } }` still leaves every
  * other `tickets` method stubbed.
  */
-function node(overrides: ApiOverrides, path: readonly string[]): unknown {
+function node(
+  overrides: ApiOverrides,
+  path: readonly string[],
+  cache: Map<string, unknown>,
+): unknown {
   const override = lookup(overrides, path);
   // A function override IS the method. Any other non-namespace value is a
   // VALUE member of the bridge and is returned verbatim — the only way to
@@ -111,10 +115,14 @@ function node(overrides: ApiOverrides, path: readonly string[]): unknown {
   // cannot tell a boolean from an undescended namespace.
   if (override !== undefined && !isNamespace(override)) return override;
 
-  return new Proxy(() => {}, {
+  const key = JSON.stringify(path);
+  const cached = cache.get(key);
+  if (cached !== undefined) return cached;
+
+  const proxy = new Proxy(() => {}, {
     get(_target, property) {
       if (typeof property !== "string" || NON_MEMBERS.has(property)) return undefined;
-      return node(overrides, [...path, property]);
+      return node(overrides, [...path, property], cache);
     },
     apply() {
       const method = path[path.length - 1] ?? "";
@@ -125,6 +133,8 @@ function node(overrides: ApiOverrides, path: readonly string[]): unknown {
       return Promise.resolve(UNSTUBBED_RESULT);
     },
   });
+  cache.set(key, proxy);
+  return proxy;
 }
 
 /**
@@ -139,5 +149,5 @@ export function installFakeApi(overrides: ApiOverrides = {}): void {
   // Cleared per install so switching scratches re-reports what the new one
   // leaves unstubbed, rather than staying quiet about a different surface.
   warned.clear();
-  window.api = node(overrides, []) as Api;
+  window.api = node(overrides, [], new Map()) as Api;
 }
