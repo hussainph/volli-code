@@ -69,6 +69,16 @@ export interface LabSessionController {
    * transport. A failure is the exception: it stops the typing, so it gets said.
    */
   error: string | null;
+  /**
+   * The debug pane's own transport, kept off `error`.
+   *
+   * Diagnostics ride the same tRPC edge the Session does, so a failure here is
+   * worth saying — but it stops nothing, and while it sat on `error` it
+   * outranked `attention.primary` and could hide an `auth_required` card behind
+   * a debug-pane hiccup. Its own field, read last, is what surfaces it without
+   * letting it mask a state the user has to recover from.
+   */
+  diagnosticsError: string | null;
   selection: RuntimeSelection;
   setSelection(next: RuntimeSelection): void;
   catalog: RuntimeCatalogChoices;
@@ -85,18 +95,26 @@ export interface LabSessionController {
    */
   attention: SessionAttentionProjection;
   liveAttachmentId: string | null;
-  start(): Promise<void>;
+  // Every command answers the same question: did it land? A caller that sends a
+  // second act on the back of the first — a redirection after the refusal it
+  // belongs to — cannot read that off `error`, which is state and not a result.
+  // So each of these resolves `false` for a command that failed *and* for one
+  // that was never sent, and the surface decides what to do with the words it
+  // was still holding.
+  start(): Promise<boolean>;
   submit(text: string, delivery: MessageDelivery): Promise<boolean>;
   resolveInteraction(
     interactionId: string,
     resolution: SessionInteractionResolution,
-  ): Promise<void>;
-  interrupt(): Promise<void>;
-  refreshCapabilities(): Promise<void>;
-  reconcile(): Promise<void>;
-  release(): Promise<void>;
+  ): Promise<boolean>;
+  /** Withdraws a decision nobody is going to make, so the card stops blocking. */
+  cancelInteraction(interactionId: string): Promise<boolean>;
+  interrupt(): Promise<boolean>;
+  refreshCapabilities(): Promise<boolean>;
+  reconcile(): Promise<boolean>;
+  release(): Promise<boolean>;
   /** The single action an error row offers; which one it is depends on what broke. */
-  recover(): Promise<void>;
+  recover(): Promise<boolean>;
 }
 
 /**
@@ -121,6 +139,7 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
   const [diagnostics, setDiagnostics] = React.useState<readonly RpcDiagnosticEntry[]>([]);
   const [lifecycle, setLifecycle] = React.useState<SessionLifecycle>("idle");
   const [sessionError, setError] = React.useState<string | null>(null);
+  const [diagnosticsError, setDiagnosticsError] = React.useState<string | null>(null);
   const [selection, setSelection] = React.useState<RuntimeSelection>(EMPTY_SELECTION);
   const [catalog, setCatalog] = React.useState<RuntimeCatalogChoices>(EMPTY_CATALOG);
   const [catalogState, setCatalogState] = React.useState<CatalogState>("loading");
@@ -131,17 +150,20 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
     let active = true;
     const mergeDiagnostics = (entries: readonly RpcDiagnosticEntry[]) => {
       if (!active) return;
+      setDiagnosticsError(null);
       setDiagnostics((current) => appendDiagnostics(current, entries));
     };
     // Diagnostics ride the same tRPC transport the Session does, so this
     // failing is evidence about the connection and not only about the debug
     // pane. It used to be `console.error` alone — the one path here that did
     // not say anything on screen, while the runtime catalog beside it already
-    // did — which left the surface silently detached from its own edge.
+    // did — which left the surface silently detached from its own edge. It is
+    // not `setError` either: a debug pane that fell over blocks nothing, and on
+    // that field it outranked the harness's own attention.
     const failDiagnostics = (error: unknown) => {
       if (!active) return;
       reportError("diagnostics", error);
-      setError(`Diagnostics unavailable: ${errorMessage(error)}`);
+      setDiagnosticsError(errorMessage(error));
     };
     void rpc.labDiagnostics.list
       .query({ limit: DIAGNOSTIC_LIMIT })
@@ -298,27 +320,38 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
     setLifecycle(working ? "working" : "ready");
   }, [lifecycle, sessionId, working]);
 
+  /**
+   * One command, and whether it landed.
+   *
+   * The boolean is the point. This used to catch and resolve, so a caller
+   * chaining a second act onto the first could not tell a delivered command
+   * from a failed one — or from one that was never sent, which is what the
+   * early return is. `error` says what broke; only the result says whether
+   * anything happened.
+   */
   const run = React.useCallback(
     async (
       label: string,
       action: (rpc: SessionRpcClient, activeSessionId: string) => Promise<unknown>,
-    ) => {
+    ): Promise<boolean> => {
       const rpc = client.current;
-      if (!rpc || !sessionId) return;
+      if (!rpc || !sessionId) return false;
       try {
         await action(rpc, sessionId);
         setError(null);
+        return true;
       } catch (failure) {
         setLifecycle("error");
         setError(`${label}: ${errorMessage(failure)}`);
+        return false;
       }
     },
     [sessionId],
   );
 
-  const start = React.useCallback(async () => {
+  const start = React.useCallback(async (): Promise<boolean> => {
     const rpc = client.current;
-    if (!rpc || lifecycle === "starting") return;
+    if (!rpc || lifecycle === "starting") return false;
     setLifecycle("starting");
     setError(null);
     setSessionId("");
@@ -348,9 +381,11 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
         },
       });
       setLifecycle("ready");
+      return true;
     } catch (failure) {
       setLifecycle("error");
       setError(`Could not start OpenCode: ${errorMessage(failure)}`);
+      return false;
     }
   }, [lifecycle, scenarioId]);
 
@@ -419,6 +454,22 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
     [run],
   );
 
+  /**
+   * The exit from a decision nobody is going to make.
+   *
+   * Interrupting stops the turn; it does not answer the question, and an
+   * interaction leaves the projection only when it is resolved or cancelled —
+   * so without this the card outlives the turn it belonged to and the composer
+   * it displaced never comes back.
+   */
+  const cancelInteraction = React.useCallback(
+    (interactionId: string) =>
+      run("Decision not cancelled", (rpc, activeSessionId) =>
+        rpc.session.cancelInteraction.mutate({ sessionId: activeSessionId, interactionId }),
+      ),
+    [run],
+  );
+
   const interrupt = React.useCallback(
     () =>
       run("Interrupt", (rpc, activeSessionId) =>
@@ -430,40 +481,44 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
       ),
     [liveAttachmentId, run],
   );
+  // No attachment is not a success. These three are addressed to one, so they
+  // report the same `false` a failed round trip does rather than resolving as
+  // though something had been asked of a harness that is not there.
   const refreshCapabilities = React.useCallback(
     () =>
-      run("Capabilities", async (rpc, activeSessionId) => {
-        if (!liveAttachmentId) return;
-        await rpc.session.refreshCapabilities.mutate({
-          sessionId: activeSessionId,
-          attachmentId: liveAttachmentId,
-        });
-      }),
+      liveAttachmentId
+        ? run("Capabilities", (rpc, activeSessionId) =>
+            rpc.session.refreshCapabilities.mutate({
+              sessionId: activeSessionId,
+              attachmentId: liveAttachmentId,
+            }),
+          )
+        : Promise.resolve(false),
     [liveAttachmentId, run],
   );
   const reconcile = React.useCallback(
     () =>
-      run("Reconcile", (rpc, activeSessionId) =>
-        liveAttachmentId
-          ? rpc.session.reconcile.mutate({
+      liveAttachmentId
+        ? run("Reconcile", (rpc, activeSessionId) =>
+            rpc.session.reconcile.mutate({
               sessionId: activeSessionId,
               attachmentId: liveAttachmentId,
-            })
-          : Promise.resolve(),
-      ),
+            }),
+          )
+        : Promise.resolve(false),
     [liveAttachmentId, run],
   );
   const release = React.useCallback(
     () =>
-      run("Release", (rpc, activeSessionId) =>
-        liveAttachmentId
-          ? rpc.session.command.mutate({
+      liveAttachmentId
+        ? run("Release", (rpc, activeSessionId) =>
+            rpc.session.command.mutate({
               commandId: nextId(),
               sessionId: activeSessionId,
               command: { kind: "adapter.release", attachmentId: liveAttachmentId },
-            })
-          : Promise.resolve(),
-      ),
+            }),
+          )
+        : Promise.resolve(false),
     [liveAttachmentId, run],
   );
 
@@ -506,6 +561,7 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
     diagnostics,
     lifecycle,
     error: sessionError,
+    diagnosticsError,
     selection,
     setSelection,
     catalog,
@@ -516,6 +572,7 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
     start,
     submit,
     resolveInteraction,
+    cancelInteraction,
     interrupt,
     refreshCapabilities,
     reconcile,

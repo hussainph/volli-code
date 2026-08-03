@@ -6,7 +6,11 @@ import {
   TerminalWindowIcon,
   WarningIcon,
 } from "@phosphor-icons/react";
-import type { SessionAttention, SessionInteraction } from "@volli/shared";
+import type {
+  SessionAttention,
+  SessionInteraction,
+  SessionInteractionResolution,
+} from "@volli/shared";
 import type { DynamicToolUIPart, UIMessage } from "ai";
 
 import {
@@ -48,7 +52,7 @@ import {
 } from "../chat/interaction";
 import { InteractionCard, InteractionReceiptLine } from "../chat/interaction-ui";
 import { LabScenarioPicker } from "../chat/scenario-picker";
-import { useLabSessionController } from "../chat/session-controller";
+import { useLabSessionController, type LabSessionController } from "../chat/session-controller";
 import {
   enqueueMessage,
   nextRelease,
@@ -285,7 +289,10 @@ function ChatPlane({
 }) {
   const [input, setInput] = React.useState("");
   const [queued, setQueued] = React.useState<readonly QueuedMessage[]>([]);
-  const [resolving, setResolving] = React.useState(false);
+  // Per interaction, not per surface: a harness can have several cards open at
+  // once, and one boolean disabled every other card's controls while one of
+  // them was in flight.
+  const [resolving, setResolving] = React.useState<ReadonlySet<string>>(EMPTY_RESOLVING);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
   const composerHeight = useMeasuredHeight<HTMLDivElement>();
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
@@ -303,18 +310,32 @@ function ChatPlane({
   const composable = selection.modelId.length > 0;
   const deliverable = liveAttachmentId !== null && composable;
 
-  const send = React.useCallback(
-    (text: string, intent: ComposerIntent) => {
-      if (intent === "queue" || !deliverable) {
+  /**
+   * The one road out of this surface for anything a person typed.
+   *
+   * Resolves true when the words are safe — delivered, or held in the queue
+   * because there was nowhere to send them yet. The composer used to own this
+   * fallback alone, so a redirection typed on a card went straight to `submit`
+   * and was dropped without a word whenever the executor was still coming up.
+   */
+  const deliver = React.useCallback(
+    async (text: string, intent: ComposerIntent): Promise<boolean> => {
+      if (messageRoute(intent, deliverable) === "hold") {
         setQueued((current) => enqueueMessage(current, { id: nextId(), text }));
-        setInput("");
-        return;
+        return true;
       }
-      void submit(text, intent === "steer" ? "steer" : "queue").then((sent) => {
-        if (sent) setInput("");
-      });
+      return submit(text, intent === "steer" ? "steer" : "queue");
     },
     [deliverable, submit],
+  );
+
+  const send = React.useCallback(
+    (text: string, intent: ComposerIntent) => {
+      void deliver(text, intent).then((kept) => {
+        if (kept) setInput("");
+      });
+    },
+    [deliver],
   );
 
   // A queue drains one message into an idle Session. The released id is latched
@@ -341,26 +362,17 @@ function ChatPlane({
   const gated = React.useMemo(() => gatedApprovalIds(session.messages), [session.messages]);
   const pending = footInteraction(interactions, gated);
 
-  /**
-   * A decision, and the redirection that could not ride it.
-   *
-   * Two acts, in this order and never merged. The resolution is what the
-   * harness's reply endpoint takes; a refusal is defined by being empty, so
-   * words the reader typed instead of choosing travel afterwards as an ordinary
-   * message. Queued rather than steered: it is the next thing said, not an
-   * interruption of a turn that is already stopping to be told.
-   */
   const answer = React.useCallback(
     (interactionId: string, submission: InteractionSubmission) => {
-      setResolving(true);
-      void resolveInteraction(interactionId, submission.resolution)
-        .then(() => {
-          if (submission.message) return submit(submission.message, "queue");
-          return undefined;
-        })
-        .finally(() => setResolving(false));
+      void answerInteraction(interactionId, submission, {
+        resolve: resolveInteraction,
+        // Sent, never steered: the redirection is the next thing said, not an
+        // interruption of a turn that is already stopping to be told.
+        deliver: (message) => void deliver(message, "send"),
+        resolving: (id, active) => setResolving((current) => resolvingWith(current, id, active)),
+      });
     },
-    [resolveInteraction, submit],
+    [deliver, resolveInteraction],
   );
 
   // Every interaction this Session has opened, so a resolution message in
@@ -378,12 +390,7 @@ function ChatPlane({
     resolving,
     onResolve: answer,
   };
-  // The precedence the blocker's own doc comment marks: an open interaction is
-  // not a failure, it is the one thing on screen you can act on, and its card
-  // carries the answer — wherever that card stands. Suppressed here rather than
-  // inside `sessionBlocker` because this is the one place holding both.
-  const blocker =
-    interactions.length > 0 ? null : sessionBlocker(session, () => setSettingsOpen(true));
+  const blocker = sessionBlocker(session, () => setSettingsOpen(true), interactions.length > 0);
 
   const planeStyle = { "--composer-height": `${composerHeight.height}px` } as React.CSSProperties;
 
@@ -466,6 +473,12 @@ function ChatPlane({
         className="pointer-events-none absolute inset-x-0 bottom-0 bg-background pb-5"
       >
         <ContentColumn>
+          {/* Above whatever the slot holds, card included. A card answers the
+              question it was asked; it does not answer a failure — and the one
+              failure a reader most needs to see here is the decision that never
+              reached the harness, which leaves the card looking answerable and
+              nothing else on screen. */}
+          {blocker ? <SessionBlocker blocker={blocker} /> : null}
           {/* One bordered thing in the slot, and only for an interaction no row
               can hold. While one stands here the turn cannot proceed and there
               is nothing to type or no plan progress to read — the composer and
@@ -479,15 +492,19 @@ function ChatPlane({
               // own draft rather than inheriting the answers to another one.
               key={pending.id}
               interaction={pending}
-              resolving={resolving}
+              resolving={resolving.has(pending.id)}
               autoFocus
               className="mb-2"
               onResolve={(submission) => answer(pending.id, submission)}
-              onStop={() => void session.interrupt()}
+              // Stop ends the turn; the question outlives it, because an
+              // interaction leaves the projection only when it is answered or
+              // withdrawn. Cancelling is what gives the composer back.
+              onStop={() =>
+                void session.interrupt().then(() => session.cancelInteraction(pending.id))
+              }
             />
           ) : (
             <>
-              {blocker ? <SessionBlocker blocker={blocker} /> : null}
               {todos && todos.length > 0 && !todosEveryDone(todos) ? (
                 <SessionTodoDock todos={todos} />
               ) : null}
@@ -512,6 +529,70 @@ function ChatPlane({
       </div>
     </div>
   );
+}
+
+/* -------------------------------------------------------------- answering */
+
+const EMPTY_RESOLVING: ReadonlySet<string> = new Set();
+
+/**
+ * A decision, and the redirection that could not ride it.
+ *
+ * Two acts, in this order and never merged. The resolution is what the
+ * harness's reply endpoint takes; a refusal is defined by being empty, so words
+ * the reader typed instead of choosing travel afterwards as an ordinary
+ * message.
+ *
+ * The second act waits on the first *landing*. It used to be chained off a
+ * promise that resolved whether the decision reached the harness, was refused
+ * by the transport, or was never sent at all — so a harness that never heard
+ * the "no" was told what to do instead of it.
+ */
+export async function answerInteraction(
+  interactionId: string,
+  submission: InteractionSubmission,
+  acts: {
+    resolve(interactionId: string, resolution: SessionInteractionResolution): Promise<boolean>;
+    deliver(message: string): void;
+    resolving(interactionId: string, active: boolean): void;
+  },
+): Promise<void> {
+  acts.resolving(interactionId, true);
+  try {
+    const resolved = await acts.resolve(interactionId, submission.resolution);
+    if (resolved && submission.message !== null) acts.deliver(submission.message);
+  } finally {
+    acts.resolving(interactionId, false);
+  }
+}
+
+/**
+ * Which cards have a decision in flight — by id, because several can be open at
+ * once and each one's controls answer for itself alone.
+ */
+export function resolvingWith(
+  current: ReadonlySet<string>,
+  interactionId: string,
+  active: boolean,
+): ReadonlySet<string> {
+  const next = new Set(current);
+  if (active) next.add(interactionId);
+  else next.delete(interactionId);
+  return next;
+}
+
+/**
+ * Where a message goes right now: to the harness, or into the local queue.
+ *
+ * One rule for every message this surface sends, wherever it was typed. The
+ * queue is not only the composer's affordance for holding a message behind a
+ * live turn — it is also what keeps words written before the executor is up,
+ * and a card's redirection is written exactly then as often as anything else.
+ */
+export type MessageRoute = "send" | "hold";
+
+export function messageRoute(intent: ComposerIntent, deliverable: boolean): MessageRoute {
+  return intent !== "queue" && deliverable ? "send" : "hold";
 }
 
 /* ---------------------------------------------------------------- blocked */
@@ -545,23 +626,32 @@ interface SessionBlockerState {
  * can write, not about what happened in the conversation — and a failure that
  * scrolls away with the history is a failure nobody can act on.
  *
- * Three sources, in the order they answer:
+ * Four sources, in the order they answer:
  *
  * 1. `session.error` — this surface's own transport. If the stream is gone the
  *    attention we hold is a memory, so it does not get to speak over it.
  * 2. `attention.primary` — the harness stating a state to recover from.
  * 3. `catalogState` — nothing configured yet, which auth would otherwise be
  *    mistaken for, since an unauthenticated provider lists no models either.
+ * 4. `diagnosticsError` — the debug pane's own transport, and last on purpose:
+ *    it stops nothing, so it may be said only when nothing that does is.
  *
- * A pending interaction outranks all three: being asked a question is not a
- * failure and its card carries the answer. That precedence is *not* here —
- * this returns a value, and the call site (`const blocker = sessionBlocker(…)`
- * above the composer) is where the interaction card suppresses it, because
- * that is the one place holding both.
+ * **An open card suppresses what it is the answer to, and nothing more.** Being
+ * asked a question is not a failure, so a card takes the place of `input_required`,
+ * `permission_required` and the "no models" row it does not need one for. It
+ * never takes the place of a failure: `session.error` is where a decision that
+ * did not reach the harness is reported, and a card that hid it would be a card
+ * still sitting there looking answerable while the only report of what went
+ * wrong stayed off screen. Which is why the row draws *above* whatever holds
+ * the slot rather than instead of it.
  */
-function sessionBlocker(
-  session: ReturnType<typeof useLabSessionController>,
+export function sessionBlocker(
+  session: Pick<
+    LabSessionController,
+    "attention" | "catalogState" | "diagnosticsError" | "error" | "recover"
+  >,
   openSettings: () => void,
+  asked: boolean,
 ): SessionBlockerState | null {
   const retry: SessionBlockerAction = { label: "Retry", act: () => void session.recover() };
   const settings: SessionBlockerAction = { label: "Settings", act: openSettings };
@@ -569,10 +659,14 @@ function sessionBlocker(
     return { message: session.error, detail: null, tone: "error", action: retry };
   }
   const attention = session.attention.primary;
-  if (attention) return attentionBlocker(attention, retry, settings);
+  if (attention) {
+    return asked && answeredByCard(attention.kind)
+      ? null
+      : attentionBlocker(attention, retry, settings);
+  }
   // Only a catalog that has actually answered can say a person configured
   // nothing; `loading` looks identical from here and is not a blocked state.
-  if (session.catalogState === "empty") {
+  if (session.catalogState === "empty" && !asked) {
     return {
       message: "No models configured",
       detail: null,
@@ -580,7 +674,22 @@ function sessionBlocker(
       action: settings,
     };
   }
+  if (session.diagnosticsError !== null) {
+    // No action: nothing on this surface re-opens the diagnostics stream, and a
+    // button that cannot help spends the reader's one attempt at recovery.
+    return {
+      message: "Diagnostics unavailable",
+      detail: session.diagnosticsError,
+      tone: "error",
+      action: null,
+    };
+  }
   return null;
+}
+
+/** The two attention kinds a card standing on screen already answers. */
+function answeredByCard(kind: SessionAttention["kind"]): boolean {
+  return kind === "input_required" || kind === "permission_required";
 }
 
 /**
@@ -759,7 +868,8 @@ interface TurnContext {
   interactions: ReadonlyMap<string, SessionInteraction>;
   /** The ones still open, so a gated row can draw the card it is waiting on. */
   open: readonly SessionInteraction[];
-  resolving: boolean;
+  /** The ids with a decision in flight — one card in flight is not all of them. */
+  resolving: ReadonlySet<string>;
   onResolve(interactionId: string, submission: InteractionSubmission): void;
 }
 
@@ -850,7 +960,7 @@ function GatedCall({ part, context }: { part: DynamicToolUIPart; context: TurnCo
         <InteractionCard
           key={interaction.id}
           interaction={interaction}
-          resolving={context.resolving}
+          resolving={context.resolving.has(interaction.id)}
           onResolve={(submission) => context.onResolve(interaction.id, submission)}
         />
       ) : null}
