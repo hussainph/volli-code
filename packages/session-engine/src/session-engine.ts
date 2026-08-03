@@ -748,7 +748,13 @@ function assertObservableFact(
   }
   const attachment = projection.attachments.find((candidate) => candidate.id === attachmentId);
   if (!attachment) throw new SessionEngineConflictError(`Attachment ${attachmentId} is unknown`);
-  if (attachment.status !== "open") {
+  // Every other observation asserts something a live binding did, and a closed
+  // binding does nothing — so requiring an open attachment is what keeps them
+  // honest. A cancellation asserts the opposite: that the ask ended with nobody
+  // deciding it. Closing the attachment does not clear the interactions it
+  // opened, so refusing this one is what strands them — the card stays in
+  // `active` with nothing left alive that could ever answer it.
+  if (attachment.status !== "open" && observation.kind !== "interaction.cancelled") {
     throw new SessionEngineConflictError(`Attachment ${attachmentId} is already closed`);
   }
   if (
@@ -780,7 +786,11 @@ function assertObservableFact(
       `Capability snapshot ${observation.snapshot.id} does not match attachment ${attachment.id}`,
     );
   }
-  if (observation.kind === "interaction.resolved") {
+  // Both verbs end an interaction, so both owe the same proof that it is theirs
+  // to end. Cancelling needs it more, not less: it is the one observation a
+  // closed attachment may still make, and without this an attachment could
+  // reach across and delete an interaction another one is still waiting on.
+  if (observation.kind === "interaction.resolved" || observation.kind === "interaction.cancelled") {
     const interaction = projection.interactions.active.find(
       (candidate) => candidate.id === observation.interactionId,
     );

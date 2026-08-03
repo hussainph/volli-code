@@ -716,6 +716,53 @@ describe("SessionRuntime native adapter contract", () => {
     ).rejects.toThrow("Session runtime is closed");
   });
 
+  it("still takes down a card whose attachment closed under it", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    await adapter.emit({
+      id: "question-2",
+      kind: "interaction.opened",
+      occurredAt: 300,
+      interaction: {
+        id: "question-2",
+        kind: "question",
+        title: "Which files should I read?",
+        detail: null,
+        options: [{ id: "prompt:0/option:0", label: "All of them", description: null }],
+        multiple: true,
+        native: { id: "native-question-2", detail: null },
+      },
+    });
+    await adapter.emit({
+      id: "closed-under-question",
+      kind: "attachment.closed",
+      occurredAt: 301,
+      outcome: "interrupted",
+    });
+    const before = await runtime.snapshot({ sessionId });
+    // Closing the binding does not answer what it asked, so the card outlives it.
+    expect(before.projection.liveExecutor).toBeNull();
+    expect(before.projection.interactions.active).toHaveLength(1);
+    const dispatchesBefore = adapter.dispatches;
+
+    await runtime.cancelInteraction({
+      sessionId,
+      interactionId: "question-2",
+      reason: "withdrawn",
+    });
+
+    const { projection, frames } = await runtime.snapshot({ sessionId });
+    expect(projection.interactions).toMatchObject({ active: [], resolved: [] });
+    expect(adapter.dispatches).toBe(dispatchesBefore);
+    expect(frames.map(({ event }) => event.payload).at(-1)).toEqual({
+      kind: "interaction.cancelled",
+      attachmentId,
+      interactionId: "question-2",
+      reason: "withdrawn",
+    });
+  });
+
   it("normalizes attention facts and advances capability revisions only after a healthy probe", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);

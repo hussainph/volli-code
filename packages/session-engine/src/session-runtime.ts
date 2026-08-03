@@ -816,6 +816,19 @@ class DefaultSessionRuntime implements SessionRuntime {
    * harness was never told an answer, so Volli must not claim it heard one.
    * That is also why this is not a Session command — a command earns a delivery
    * receipt, and there is no delivery here to receipt.
+   *
+   * Dispatching nothing is a finding, not a shortcut. Withdrawing an ask is not
+   * a verb every harness has — the one Volli speaks to natively offers only
+   * ways to answer, each of which carries a disposition, so the sole means of
+   * making it stop waiting is to tell it a decision. Reaching for one to clear
+   * the gate would print a choice nobody made, which is the exact failure
+   * `interaction.cancelled` exists to avoid. Whether a harness can be told to
+   * withdraw is therefore the adapter's question to answer, declared as a
+   * capability; a negative answer is a real one, and does not belong here.
+   *
+   * The attachment may be closed by now, and this is the one Session fact that
+   * still lands when it is. Nothing can be delivered to a closed binding — but
+   * nothing needs to be, because the point of the fact is that nothing was.
    */
   async #cancelInteraction(request: CancelInteractionRequest): Promise<void> {
     const projection = await this.#requireSession(request.sessionId);

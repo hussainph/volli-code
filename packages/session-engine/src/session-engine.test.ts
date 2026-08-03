@@ -840,6 +840,86 @@ describe("SessionEngine creation and explicit commands", () => {
     ).rejects.toThrow("is not open");
   });
 
+  it("lets a cancellation land after the attachment closed, and only on an interaction still open", async () => {
+    const { plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+    const opened = attachment(session.id);
+    await plane.observe({
+      id: "observation-cancel-attachment-opened",
+      sessionId: session.id,
+      occurredAt: 200,
+      provenance: adapterProvenance,
+      kind: "attachment.opened",
+      attachment: opened,
+    });
+    const interaction = {
+      id: "question-1",
+      attachmentId: opened.id,
+      kind: "question" as const,
+      title: "Which files should I read?",
+      detail: null,
+      options: [{ id: "prompt:0/option:0", label: "All of them", description: null }],
+      multiple: true,
+      native: { id: "native-question-1", detail: null },
+    };
+    await plane.observe({
+      id: "observation-cancel-interaction-opened",
+      sessionId: session.id,
+      occurredAt: 201,
+      provenance: adapterProvenance,
+      kind: "interaction.opened",
+      interaction,
+    });
+    await plane.observe({
+      id: "observation-cancel-attachment-closed",
+      sessionId: session.id,
+      occurredAt: 202,
+      provenance: adapterProvenance,
+      kind: "attachment.closed",
+      attachmentId: opened.id,
+      outcome: "interrupted",
+    });
+    // Closing the binding leaves the question standing, so a Session whose
+    // executor is gone still has a card up. This is the one observation that
+    // can take it down, and it is exactly then that it has to.
+    await expect(
+      plane.observe({
+        id: "observation-cancel-after-close",
+        sessionId: session.id,
+        occurredAt: 203,
+        provenance: userProvenance,
+        kind: "interaction.cancelled",
+        attachmentId: opened.id,
+        interactionId: interaction.id,
+        reason: "abandoned",
+      }),
+    ).resolves.toMatchObject({
+      attachmentId: opened.id,
+      payload: {
+        kind: "interaction.cancelled",
+        attachmentId: opened.id,
+        interactionId: interaction.id,
+        reason: "abandoned",
+      },
+    });
+    // Neither list: nothing was decided, so there is no resolution to read back.
+    await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+      interactions: { active: [], resolved: [] },
+    });
+    await expect(
+      plane.observe({
+        id: "observation-cancel-twice",
+        sessionId: session.id,
+        occurredAt: 204,
+        provenance: userProvenance,
+        kind: "interaction.cancelled",
+        attachmentId: opened.id,
+        interactionId: interaction.id,
+        reason: "abandoned",
+      }),
+    ).rejects.toThrow(`Interaction ${interaction.id} is not open on attachment ${opened.id}`);
+  });
+
   it("makes command replay idempotent without a receipt, while rejecting collisions and unknown Sessions", async () => {
     const { plane } = composition();
     const { session } = await plane.createSession(createRequest());

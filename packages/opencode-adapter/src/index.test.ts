@@ -1086,6 +1086,19 @@ describe("OpenCodeNativeAdapter", () => {
     );
     expect(JSON.stringify(probe.capabilities.catalog)).not.toContain("must-not-leak");
     expect(JSON.stringify(probe.capabilities.catalog)).not.toContain("/private/user/path");
+    // OpenCode takes a decision on an ask and nothing else, so a reader who
+    // walks away from one leaves it holding the ask. Volli will not invent a
+    // reply to release it; declaring that it cannot is the honest report.
+    expect(probe.capabilities.features).toEqual(
+      expect.arrayContaining([
+        {
+          id: "interaction.withdraw",
+          state: "unavailable",
+          evidence: "declared",
+          detail: "OpenCode can be told a decision on an ask, but never that there will not be one",
+        },
+      ]),
+    );
   });
 
   it("preserves finalized OpenCode reasoning and inspectable tool payloads", async () => {

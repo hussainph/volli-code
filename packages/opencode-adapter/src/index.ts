@@ -423,6 +423,20 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
         { id: "executor.interrupt", state: "available", evidence: "verified", detail: null },
         { id: "interaction.permission", state: "available", evidence: "declared", detail: null },
         { id: "interaction.question", state: "available", evidence: "declared", detail: null },
+        // Stated because it is knowable, not because it is missing. OpenCode
+        // holds an ask in a map keyed by request id and takes it out on reply
+        // or reject — both of which are decisions — or when the server itself
+        // goes away. `/session/{id}/abort` stops the turn and leaves the map
+        // alone, and no event announces an ask that ended any other way. So a
+        // reader who walks away from a question leaves OpenCode holding it, and
+        // the only wire verbs that would release it would name a choice they
+        // never made. Volli declines to invent one; this says so.
+        {
+          id: "interaction.withdraw",
+          state: "unavailable",
+          evidence: "declared",
+          detail: "OpenCode can be told a decision on an ask, but never that there will not be one",
+        },
         {
           id: "plugin.health",
           state: "unknown",
