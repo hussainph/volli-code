@@ -36,6 +36,11 @@ type OpenCodeStatusObservation = Extract<
   HarnessObservation,
   { kind: "turn.started" | "turn.completed" | "attention.raised" }
 >;
+/** The attentions an adapter may raise — narrower than `SessionAttentionKind`. */
+type OpenCodeAttentionKind = Extract<
+  HarnessObservation,
+  { kind: "attention.raised" }
+>["attention"]["kind"];
 
 const DIRECTORY_QUERY = "directory";
 const ADAPTER_ID = "opencode";
@@ -1396,7 +1401,7 @@ class OpenCodeBinding implements BindingHandle {
         occurredAt: this.#now(),
         attention: {
           id: `opencode:error:${id}`,
-          kind: "adapter_unrecoverable",
+          kind: failure.attention,
           detail: failure.detail,
           diagnostic: failure.diagnostic,
         },
@@ -1864,11 +1869,12 @@ function safeOpenCodeRetry(raw: unknown): {
 }
 
 function safeOpenCodeError(raw: unknown): {
+  attention: OpenCodeAttentionKind;
   detail: string | null;
   diagnostic: SessionNativeDetail | null;
 } {
   const error = nested(raw, "error");
-  if (!error) return { detail: null, diagnostic: null };
+  if (!error) return { attention: "adapter_unrecoverable", detail: null, diagnostic: null };
   const data = nested(error, "data");
   const diagnostic: Record<string, SessionNativeDetail> = {};
   const name = safeOpenCodeErrorName(objectString(error, "name"));
@@ -1879,6 +1885,7 @@ function safeOpenCodeError(raw: unknown): {
   if (isRetryable !== null) diagnostic.isRetryable = isRetryable;
   const hasDiagnostic = Object.keys(diagnostic).length > 0;
   return {
+    attention: openCodeAttentionKind(name, statusCode),
     detail: name
       ? `OpenCode ${name}${statusCode === null ? "" : ` (status ${statusCode})`}`
       : statusCode === null
@@ -1886,6 +1893,48 @@ function safeOpenCodeError(raw: unknown): {
         : `OpenCode session error (status ${statusCode})`,
     diagnostic: hasDiagnostic ? diagnostic : null,
   };
+}
+
+/**
+ * Which attention an OpenCode failure is.
+ *
+ * `session.error` carries a discriminated union and every member used to arrive
+ * as `adapter_unrecoverable`, which left an expired token and a context
+ * overflow offering the same recovery — none. The name is the discriminant
+ * OpenCode states; the status code only qualifies `APIError`, the one member
+ * that is a transport outcome rather than a named condition.
+ *
+ * The kinds this deliberately never raises matter as much as the ones it does.
+ * `quota_exhausted` is a `resetAt` OpenCode does not report and `rate_limited`
+ * without `Retry-After` is one without a `retryAt`, so both would put a "try
+ * again at…" on screen with no time in it. `configuration_invalid` is a launch
+ * fact, established by the probe, not by a turn that already ran.
+ */
+function openCodeAttentionKind(
+  name: string | null,
+  statusCode: number | null,
+): OpenCodeAttentionKind {
+  switch (name) {
+    case "ProviderAuthError":
+      return "auth_required";
+    case "ContextOverflowError":
+      return "context_limit_reached";
+    case "MessageAbortedError":
+      return "partial_turn_interrupted";
+    // A provider rejecting the credential itself says the same thing
+    // `ProviderAuthError` does, and it is the only status worth reading as more
+    // than a failed request: re-authenticating is a recovery, retrying is not.
+    case "APIError":
+      return apiErrorAttentionKind(statusCode);
+    default:
+      return "adapter_unrecoverable";
+  }
+}
+
+function apiErrorAttentionKind(statusCode: number | null): OpenCodeAttentionKind {
+  if (statusCode === 429) return "rate_limited";
+  if (statusCode === 401 || statusCode === 403) return "auth_required";
+  return "adapter_unrecoverable";
 }
 
 function safeOpenCodeErrorName(name: string | null): string | null {

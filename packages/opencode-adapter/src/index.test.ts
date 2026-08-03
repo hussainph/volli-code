@@ -2650,6 +2650,46 @@ describe("OpenCodeNativeAdapter", () => {
         properties: { sessionID: "native-session-1", error: { data: {} } },
       },
       {
+        id: "error-auth",
+        type: "session.error",
+        properties: {
+          sessionID: "native-session-1",
+          error: { name: "ProviderAuthError", data: { message: "must-not-leak" } },
+        },
+      },
+      {
+        id: "error-context",
+        type: "session.error",
+        properties: {
+          sessionID: "native-session-1",
+          error: { name: "ContextOverflowError" },
+        },
+      },
+      {
+        id: "error-rate-limited",
+        type: "session.error",
+        properties: {
+          sessionID: "native-session-1",
+          error: { name: "APIError", data: { statusCode: 429, isRetryable: true } },
+        },
+      },
+      {
+        id: "error-unauthorized",
+        type: "session.error",
+        properties: {
+          sessionID: "native-session-1",
+          error: { name: "APIError", data: { statusCode: 401 } },
+        },
+      },
+      {
+        id: "error-forbidden",
+        type: "session.error",
+        properties: {
+          sessionID: "native-session-1",
+          error: { name: "APIError", data: { statusCode: 403 } },
+        },
+      },
+      {
         id: "unknown-status",
         type: "session.status",
         properties: { sessionID: "native-session-1", status: { type: "gone" } },
@@ -2677,6 +2717,11 @@ describe("OpenCodeNativeAdapter", () => {
       "error-name-only",
       "error-status-only",
       "error-empty",
+      "error-auth",
+      "error-context",
+      "error-rate-limited",
+      "error-unauthorized",
+      "error-forbidden",
       "opencode:sse-disconnected:native-session-1",
     ]);
     expect(observations[2]).toMatchObject({
@@ -2697,19 +2742,39 @@ describe("OpenCodeNativeAdapter", () => {
     });
     expect(observations[4]).toMatchObject({
       attention: {
+        kind: "partial_turn_interrupted",
         detail: "OpenCode MessageAbortedError",
         diagnostic: { name: "MessageAbortedError" },
       },
     });
+    // An unrecognized name is redacted to null, so it classifies by the same
+    // rule an absent one does rather than by a string OpenCode may add later.
     expect(observations[5]).toMatchObject({
       attention: {
+        kind: "adapter_unrecoverable",
         detail: "OpenCode session error (status 503)",
         diagnostic: { statusCode: 503 },
       },
     });
     expect(observations[6]).toMatchObject({
-      attention: { detail: null, diagnostic: null },
+      attention: { kind: "adapter_unrecoverable", detail: null, diagnostic: null },
     });
+    // Each of these used to arrive as `adapter_unrecoverable`, which is why an
+    // expired token and a context overflow offered the same recovery: none.
+    expect(observations[7]).toMatchObject({
+      attention: { kind: "auth_required", detail: "OpenCode ProviderAuthError" },
+    });
+    expect(observations[8]).toMatchObject({
+      attention: { kind: "context_limit_reached", detail: "OpenCode ContextOverflowError" },
+    });
+    // The observation carries no `retryAt`: OpenCode reports no Retry-After, and
+    // a "try again at…" with no time in it is worse than a rate limit stated
+    // plainly. The engine defaults the absent field to null when it commits.
+    expect(observations[9]).toMatchObject({
+      attention: { kind: "rate_limited", detail: "OpenCode APIError (status 429)" },
+    });
+    expect(observations[10]).toMatchObject({ attention: { kind: "auth_required" } });
+    expect(observations[11]).toMatchObject({ attention: { kind: "auth_required" } });
   });
 
   it("does not repeat SSE observations and raises durable attention when the stream drops", async () => {

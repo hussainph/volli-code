@@ -4,7 +4,7 @@ What OpenCode can do that our Session UI cannot show or answer, and the order to
 
 Measured against a live `opencode serve` (1.17.18) `/doc`: 188 endpoints, 89 `Event` variants, 12 `Part` variants, read alongside `/agent`, `/skill` and `/experimental/capabilities`. Every claim below is cited to a file and line rather than to the spec alone — the gap is usually not that OpenCode reports something we cannot see, but that we already model it and render nothing.
 
-Status: audit complete, plan agreed, unimplemented. Companion to `chat-transcript-design.md`, which owns how the transcript *looks*; this owns what reaches it at all.
+Status: audit complete, plan agreed. P0 step 3 (error classification) has landed; everything else is unimplemented. Companion to `chat-transcript-design.md`, which owns how the transcript *looks*; this owns what reaches it at all.
 
 ## Where the UI is
 
@@ -67,27 +67,21 @@ Same deadlock, same fix: an interaction needs a home that does not depend on bei
 
 So an expired token, a rate limit or a context overflow produces a Session that stops with no explanation and no recovery action. That is exactly the case CLAUDE.md reserves for explicit user recovery.
 
-**And the classification is wrong upstream.** `session.error` maps every OpenCode error to `adapter_unrecoverable`:
+**And the classification was wrong upstream — fixed.** `session.error` mapped every OpenCode error to `adapter_unrecoverable`, while `safeOpenCodeError` already read the discriminating name and put it in `diagnostic.name` one line away. The information needed to say `auth_required` or `context_limit_reached` was extracted and then discarded, so rendering attention first would have shown a correct card carrying the wrong verdict and the wrong recovery action.
 
-```ts
-// index.ts:1399
-kind: "adapter_unrecoverable",
-```
-
-OpenCode's `EventSessionError.error` is a union of eight named members, and `safeOpenCodeError` already reads the name and puts it in `diagnostic.name` one line away (`index.ts:1874`, `SAFE_OPEN_CODE_ERROR_NAMES` at `1905`). The information needed to say `auth_required`, `context_limit_reached` or `partial_turn_interrupted` is extracted and then discarded. Rendering attention without fixing this would show a correct card carrying the wrong verdict and the wrong recovery action.
-
-Mapping, using names the adapter already recognizes:
+`openCodeAttentionKind` now classifies by the name OpenCode states:
 
 | OpenCode error | Attention kind |
 | --- | --- |
 | `ProviderAuthError` | `auth_required` |
 | `ContextOverflowError` | `context_limit_reached` |
 | `MessageAbortedError` | `partial_turn_interrupted` |
-| `MessageOutputLengthError`, `StructuredOutputError`, `ContentFilterError` | `adapter_unrecoverable` |
-| `APIError` with `isRetryable` | `rate_limited` when status 429, else `adapter_unrecoverable` |
-| `UnknownError` | `adapter_unrecoverable` |
+| `APIError` | `rate_limited` at 429; `auth_required` at 401/403; else `adapter_unrecoverable` |
+| `MessageOutputLengthError`, `StructuredOutputError`, `ContentFilterError`, `UnknownError` | `adapter_unrecoverable` |
 
-`quota_exhausted`, `configuration_invalid` and `input_required` stay unraised until a harness states them. Capability is negative-friendly; an unraised kind is honest.
+A name the redaction list does not recognize reads as absent, so a member OpenCode adds later classifies by the same rule an empty error does rather than by an unreviewed string.
+
+What it deliberately does not raise is load-bearing. `quota_exhausted` needs a `resetAt` OpenCode does not report, and a `rate_limited` without `Retry-After` is one without a `retryAt` — both would put a "try again at…" on screen with no time in it. `configuration_invalid` is a launch fact the probe establishes, not a turn's outcome. `input_required` and `permission_required` are not adapter-raisable at all. Capability is negative-friendly; an unraised kind is honest.
 
 ## Tier 1 — nine of twelve part types are dropped
 
@@ -149,8 +143,8 @@ Option polarity stays where `session-model.ts:295` already put it — matched ag
 
 1. `SessionInteractionPrompt` in `@volli/shared` with a total, back-compatible read. Adapter fills `prompts` from `QuestionInfo[]`, carrying per-question `multiple` and `custom`; permission fills one prompt.
 2. An interaction card in the transcript that does not require a tool row. Tool-correlated interactions keep rendering on their row; everything else renders at the foot of the transcript, above the composer, never behind a disclosure.
-3. Classify `session.error` into the right attention kind from the name the adapter already reads.
-4. `sessionBlocker` reads `projection.attention.primary` and offers one recovery action per kind: Settings for `auth_required`, Retry for `transport_retrying` and `rate_limited` (with `retryAt`), an honest message for `context_limit_reached` until compaction exists.
+3. ~~Classify `session.error` into the right attention kind from the name the adapter already reads.~~ **Landed.**
+4. `sessionBlocker` reads `projection.attention.primary` and offers one recovery action per kind: Settings for `auth_required`, Retry for `transport_retrying` and `rate_limited`, an honest message for `context_limit_reached` until compaction exists. Step 3 is what makes this possible — the kinds are now distinct, so the action can be.
 
 **P1 — the transcript stops lying by omission.** `file` parts both directions, with composer attachment. Turn header: agent, model, cost, tokens. Keep `agent` / `mode` / `variant` in `OpenCodeMessageMetadata`. Subagent transcripts behind the `delegate` row, plus `agentName` and `childCount` on the descriptor. `todo.updated` as a first-class observation instead of a fake `todowrite` part.
 
