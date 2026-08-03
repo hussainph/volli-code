@@ -1,5 +1,12 @@
 import * as React from "react";
-import { CheckCircleIcon, CodeIcon, TerminalWindowIcon, WarningIcon } from "@phosphor-icons/react";
+import {
+  CheckCircleIcon,
+  ClockIcon,
+  CodeIcon,
+  TerminalWindowIcon,
+  WarningIcon,
+} from "@phosphor-icons/react";
+import type { SessionAttention } from "@volli/shared";
 import type { UIMessage } from "ai";
 
 import {
@@ -456,11 +463,22 @@ function ChatPlane({
 
 /* ---------------------------------------------------------------- blocked */
 
+interface SessionBlockerAction {
+  label: string;
+  act(): void;
+}
+
 interface SessionBlockerState {
   message: string;
-  action: string;
-  tone: "error" | "unconfigured";
-  act(): void;
+  /** The harness's own wording. It hovers; it is never the headline. */
+  detail: string | null;
+  tone: "error" | "waiting" | "unconfigured";
+  /**
+   * Null where nothing on this surface can fix it. A button that cannot help
+   * is worse than no button: it spends the reader's one attempt at recovery
+   * and then leaves them where they started, doubting the message too.
+   */
+  action: SessionBlockerAction | null;
 }
 
 /**
@@ -473,30 +491,127 @@ interface SessionBlockerState {
  * the composer rather than in the transcript because it is about whether you
  * can write, not about what happened in the conversation — and a failure that
  * scrolls away with the history is a failure nobody can act on.
+ *
+ * Three sources, in the order they answer:
+ *
+ * 1. `session.error` — this surface's own transport. If the stream is gone the
+ *    attention we hold is a memory, so it does not get to speak over it.
+ * 2. `attention.primary` — the harness stating a state to recover from.
+ * 3. `catalogState` — nothing configured yet, which auth would otherwise be
+ *    mistaken for, since an unauthenticated provider lists no models either.
+ *
+ * A pending interaction outranks all three: being asked a question is not a
+ * failure and its card carries the answer. That precedence is *not* here —
+ * this returns a value, and the call site (`const blocker = sessionBlocker(…)`
+ * above the composer) is where the interaction card suppresses it, because
+ * that is the one place holding both.
  */
 function sessionBlocker(
   session: ReturnType<typeof useLabSessionController>,
   openSettings: () => void,
 ): SessionBlockerState | null {
+  const retry: SessionBlockerAction = { label: "Retry", act: () => void session.recover() };
+  const settings: SessionBlockerAction = { label: "Settings", act: openSettings };
   if (session.error !== null) {
-    return {
-      message: session.error,
-      action: "Retry",
-      tone: "error",
-      act: () => void session.recover(),
-    };
+    return { message: session.error, detail: null, tone: "error", action: retry };
   }
+  const attention = session.attention.primary;
+  if (attention) return attentionBlocker(attention, retry, settings);
   // Only a catalog that has actually answered can say a person configured
   // nothing; `loading` looks identical from here and is not a blocked state.
   if (session.catalogState === "empty") {
     return {
       message: "No models configured",
-      action: "Settings",
+      detail: null,
       tone: "unconfigured",
-      act: openSettings,
+      action: settings,
     };
   }
   return null;
+}
+
+/**
+ * One line and at most one action per attention kind.
+ *
+ * The switch is total over the union and has no `default`: a kind added later
+ * has to be answered here, not silently absorbed into whichever branch was
+ * cheapest to reach. `noImplicitReturns` turns the omission into a build error.
+ *
+ * Which kinds earn a button, and why the rest do not:
+ *
+ * - **Settings** — `auth_required` and `configuration_invalid`. Both are facts
+ *   about what is configured, and Settings is where that is changed.
+ * - **Retry** — `transport_retrying`, `adapter_disconnected` and
+ *   `rate_limited`. The first two are a connection to re-establish, which is
+ *   exactly what `recover` does. A rate limit gets one because the wait is the
+ *   whole fix; the provider's own time is shown when it sent one, and an absent
+ *   one stays absent rather than becoming a guess.
+ * - **Nothing** — `context_limit_reached` (compaction does not exist yet, so
+ *   the only true answer is a new Session and the reader can already start
+ *   one); `quota_exhausted` (a spent allowance is not retryable and no local
+ *   setting refills it); `partial_turn_interrupted` (a stopped turn left the
+ *   composer usable — resending is typing, not recovering);
+ *   `adapter_unrecoverable` (the kind is named for having no recovery, and
+ *   `recover` would reattach a stream that was never the problem);
+ *   `input_required` and `permission_required` (the answer lives on the
+ *   interaction card, which outranks this row entirely).
+ *
+ * `quota_exhausted`, `configuration_invalid`, `input_required` and
+ * `permission_required` are not raised by the OpenCode adapter today — the
+ * first two have no member of `session.error` stating them and the last two are
+ * not adapter-raisable at all. They are answered anyway, because what this
+ * reads is the union, not one adapter's current habits.
+ */
+function attentionBlocker(
+  attention: SessionAttention,
+  retry: SessionBlockerAction,
+  settings: SessionBlockerAction,
+): SessionBlockerState {
+  const detail = attention.detail;
+  switch (attention.kind) {
+    case "auth_required":
+      return { message: "Sign-in required", detail, tone: "error", action: settings };
+    case "configuration_invalid":
+      return { message: "Configuration invalid", detail, tone: "error", action: settings };
+    case "transport_retrying":
+      return { message: "Reconnecting", detail, tone: "waiting", action: retry };
+    case "adapter_disconnected":
+      return { message: "Disconnected", detail, tone: "error", action: retry };
+    case "rate_limited":
+      return {
+        message: `Rate limited${untilClause(attention.retryAt)}`,
+        detail,
+        tone: "waiting",
+        action: retry,
+      };
+    case "quota_exhausted":
+      return {
+        message: `Quota exhausted${untilClause(attention.resetAt)}`,
+        detail,
+        tone: "error",
+        action: null,
+      };
+    case "context_limit_reached":
+      return { message: "Context limit reached", detail, tone: "error", action: null };
+    case "partial_turn_interrupted":
+      return { message: "Turn interrupted", detail, tone: "waiting", action: null };
+    case "adapter_unrecoverable":
+      return { message: "Session stopped", detail, tone: "error", action: null };
+    case "input_required":
+      return { message: "Waiting for an answer", detail, tone: "waiting", action: null };
+    case "permission_required":
+      return { message: "Waiting for approval", detail, tone: "waiting", action: null };
+  }
+}
+
+/** A time the provider stated, or nothing at all. An absent one is not invented. */
+function untilClause(instant: number | null): string {
+  if (instant === null || !Number.isFinite(instant)) return "";
+  const at = new Date(instant).toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return ` until ${at}`;
 }
 
 function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
@@ -507,15 +622,26 @@ function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
         blocker.tone === "error" ? "border-destructive/40" : "border-border",
       )}
     >
+      {/* A wait is not a failure. Only a transport error could reach this row
+          before, so one triangle covered everything it said; a rate limit and a
+          reconnect wearing it would read as broken when the state is "not yet". */}
       {blocker.tone === "error" ? (
         <WarningIcon aria-hidden className="size-3.5 shrink-0 text-destructive" weight="fill" />
       ) : null}
-      <span className="min-w-0 flex-1 truncate text-muted-foreground" title={blocker.message}>
+      {blocker.tone === "waiting" ? (
+        <ClockIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" weight="fill" />
+      ) : null}
+      <span
+        className="min-w-0 flex-1 truncate text-muted-foreground"
+        title={blocker.detail === null ? blocker.message : `${blocker.message} — ${blocker.detail}`}
+      >
         {blocker.message}
       </span>
-      <Button size="xs" variant="ghost" className="shrink-0" onClick={blocker.act}>
-        {blocker.action}
-      </Button>
+      {blocker.action ? (
+        <Button size="xs" variant="ghost" className="shrink-0" onClick={blocker.action.act}>
+          {blocker.action.label}
+        </Button>
+      ) : null}
     </div>
   );
 }

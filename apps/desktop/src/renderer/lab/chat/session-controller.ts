@@ -2,6 +2,7 @@ import * as React from "react";
 import type {
   RuntimeCatalogChoices,
   RuntimeSelection,
+  SessionAttentionProjection,
   SessionEvent,
   SessionInteraction,
   SessionInteractionResolution,
@@ -26,6 +27,8 @@ const EMPTY_SELECTION: RuntimeSelection = {
   agent: "",
 };
 const EMPTY_CATALOG: RuntimeCatalogChoices = { providers: [], models: [], agents: [] };
+/** A Session with no projection yet is not a Session with something to recover from. */
+const EMPTY_ATTENTION: SessionAttentionProjection = { active: [], primary: null };
 
 export type SessionLifecycle = "idle" | "starting" | "ready" | "working" | "error";
 export type MessageDelivery = "queue" | "steer" | "replace";
@@ -71,6 +74,15 @@ export interface LabSessionController {
   catalogState: CatalogState;
   /** Open interactions, so a gated transcript row can find the one it belongs to. */
   interactions: readonly SessionInteraction[];
+  /**
+   * Structured attention, so a blocked composer can name what stopped it.
+   *
+   * `error` above is this surface's own transport failing. This is the harness
+   * stating a state the user has to recover from — an expired token, a rate
+   * limit, an overflowed context — and the two are different facts with
+   * different answers, so they arrive on different fields.
+   */
+  attention: SessionAttentionProjection;
   liveAttachmentId: string | null;
   start(): Promise<void>;
   submit(text: string, delivery: MessageDelivery): Promise<boolean>;
@@ -110,20 +122,23 @@ export function useLabSessionController(): LabSessionController {
       if (!active) return;
       setDiagnostics((current) => appendDiagnostics(current, entries));
     };
+    // Diagnostics ride the same tRPC transport the Session does, so this
+    // failing is evidence about the connection and not only about the debug
+    // pane. It used to be `console.error` alone — the one path here that did
+    // not say anything on screen, while the runtime catalog beside it already
+    // did — which left the surface silently detached from its own edge.
+    const failDiagnostics = (error: unknown) => {
+      if (!active) return;
+      reportError("diagnostics", error);
+      setError(`Diagnostics unavailable: ${errorMessage(error)}`);
+    };
     void rpc.labDiagnostics.list
       .query({ limit: DIAGNOSTIC_LIMIT })
       .then(mergeDiagnostics)
-      .catch((error: unknown) => {
-        if (active) reportError("diagnostics", error);
-      });
+      .catch(failDiagnostics);
     const subscription = rpc.labDiagnostics.subscribe.subscribe(
       {},
-      {
-        onData: (entry) => mergeDiagnostics([entry.data]),
-        onError: (error) => {
-          if (active) reportError("diagnostics", error);
-        },
-      },
+      { onData: (entry) => mergeDiagnostics([entry.data]), onError: failDiagnostics },
     );
     return () => {
       active = false;
@@ -466,6 +481,7 @@ export function useLabSessionController(): LabSessionController {
     catalog,
     catalogState,
     interactions: projection?.interactions.active ?? [],
+    attention: projection?.attention ?? EMPTY_ATTENTION,
     liveAttachmentId,
     start,
     submit,
