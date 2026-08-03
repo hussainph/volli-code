@@ -1945,15 +1945,28 @@ function openCodeAttentionKind(
   }
 }
 
+/** RFC 9110 delta-seconds is `1*DIGIT` — far narrower than what `Number` accepts. */
+const DELTA_SECONDS = /^\d+$/;
+
+/** The last instant a `Date` can hold; past it a timestamp is an Invalid Date. */
+const MAX_TIMESTAMP = 8_640_000_000_000_000;
+
 /**
  * When a rate limit lifts, if the provider said so.
  *
  * `responseHeaders` is a bag that carries `authorization` among other things,
  * so exactly one header is read and it leaves as a number — the set itself is
- * never passed anywhere that could stamp it into a diagnostic. Both RFC 9110
- * forms are accepted: delta-seconds, and an HTTP-date for providers that send
- * one. Anything else is absent rather than guessed, because a wrong time on a
- * "try again at…" is worse than no time at all.
+ * never passed anywhere that could stamp it into a diagnostic.
+ *
+ * Both RFC 9110 forms are accepted, and both are read strictly, because the
+ * lenient reading of either is worse than silence. `Number` would take `0x1F`
+ * and `1e3` as delta-seconds and turn a malformed header into a confident
+ * wrong answer, so only digits count. `Date.parse` falls back to local-time
+ * guesses for strings that are not HTTP-dates at all — making the result
+ * differ per machine — so the GMT the three HTTP-date forms all carry is
+ * required. A time already past states no wait, and a time beyond `Date`'s
+ * reach cannot be rendered; both read as absent. A wrong "try again at…" is
+ * worse than none, which leaves the UI offering a plain Retry.
  */
 function retryAfter(data: unknown, now: number): number | null {
   const headers = nested(data, "responseHeaders");
@@ -1961,11 +1974,13 @@ function retryAfter(data: unknown, now: number): number | null {
   const header = Object.entries(headers).find(([key]) => key.toLowerCase() === "retry-after")?.[1];
   if (typeof header !== "string") return null;
   const value = header.trim();
-  if (value.length === 0) return null;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds)) return seconds >= 0 ? now + seconds * 1_000 : null;
-  const date = Date.parse(value);
-  return Number.isFinite(date) ? date : null;
+  if (DELTA_SECONDS.test(value)) {
+    const at = now + Number(value) * 1_000;
+    return at <= MAX_TIMESTAMP ? at : null;
+  }
+  if (!value.toUpperCase().endsWith("GMT")) return null;
+  const at = Date.parse(value);
+  return Number.isFinite(at) && at > now ? at : null;
 }
 
 function safeOpenCodeErrorName(name: string | null): string | null {

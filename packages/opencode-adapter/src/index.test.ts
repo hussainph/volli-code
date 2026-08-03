@@ -2792,6 +2792,19 @@ describe("OpenCodeNativeAdapter", () => {
       rateLimited("unparseable", { "retry-after": "soon" }),
       rateLimited("wrong-type", { "retry-after": 30 }),
       rateLimited("other-headers", { "content-type": "application/json" }),
+      // delta-seconds is `1*DIGIT`. Every one of these is a number to
+      // `Number` and none of them is a Retry-After.
+      rateLimited("hex", { "retry-after": "0x1F" }),
+      rateLimited("exponent", { "retry-after": "1e3" }),
+      rateLimited("decimal", { "retry-after": "30.9" }),
+      rateLimited("signed", { "retry-after": "+30" }),
+      // Syntactically valid, but past the last instant a Date can hold.
+      rateLimited("overflow", { "retry-after": "99999999999999" }),
+      // A time already gone states no wait.
+      rateLimited("past-date", { "retry-after": "Thu, 01 Jan 1970 00:00:00 GMT" }),
+      // Not an HTTP-date; Date.parse would read it in local time, so the
+      // answer would differ per machine.
+      rateLimited("bare-date", { "retry-after": "12 Jan 2030" }),
     ]);
     const observations: HarnessObservation[] = [];
     await adapter.attach(spec(), {
@@ -2813,11 +2826,7 @@ describe("OpenCodeNativeAdapter", () => {
     expect(retryAt).toEqual([
       1234 + 30_000,
       Date.parse("Wed, 21 Oct 2026 07:28:00 GMT"),
-      null,
-      null,
-      null,
-      null,
-      null,
+      ...Array.from({ length: 12 }, () => null),
     ]);
     // Only the one header leaves the adapter, and it leaves as a number.
     expect(JSON.stringify(observations)).not.toContain("must-not-leak");
