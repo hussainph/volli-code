@@ -29,6 +29,7 @@ import {
   type ActivityOutcome,
   type RuntimeCatalogModel,
   type RuntimeSelection,
+  type SessionInteraction,
 } from "@volli/shared";
 import type { DynamicToolUIPart, ReasoningUIPart } from "ai";
 
@@ -36,14 +37,9 @@ import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Button } from "@renderer/components/ui/button";
 
 import { type SessionTodo } from "../chat/activity";
-import {
-  ActivityBundle,
-  AttentionCard,
-  AttentionReceipt,
-  SessionTodoDock,
-  ToolRow,
-} from "../chat/activity-ui";
+import { ActivityBundle, AttentionReceipt, SessionTodoDock, ToolRow } from "../chat/activity-ui";
 import { SessionComposer } from "../chat/composer-ui";
+import { InteractionCard, InteractionReceiptLine } from "../chat/interaction-ui";
 import { enqueueMessage, type ComposerAgent, type QueuedMessage } from "../chat/session-model";
 
 export const title = "Chat activity · fixtures";
@@ -342,6 +338,85 @@ const TODOS: SessionTodo[] = [
   { id: "t4", content: "Drop the wire inspector", status: "cancelled", priority: "low" },
 ];
 
+/**
+ * A permission: one prompt, three declared options, correlated to a call. The
+ * card draws every option the harness stated rather than three buttons of its
+ * own, so `always` — a standing grant — is here and reads secondary.
+ */
+const PERMISSION: SessionInteraction = {
+  id: "permission:perm-1",
+  attachmentId: "attach-1",
+  kind: "permission",
+  title: "Run a command outside the worktree",
+  detail: "rm -rf node_modules",
+  options: [
+    { id: "once", label: "Allow once", description: null },
+    { id: "always", label: "Allow always", description: null },
+    { id: "reject", label: "Reject", description: null },
+  ],
+  multiple: false,
+  prompts: [
+    {
+      id: "prompt:0",
+      label: "Run a command outside the worktree",
+      detail: "rm -rf node_modules",
+      options: [
+        { id: "once", label: "Allow once", description: null },
+        { id: "always", label: "Allow always", description: null },
+        { id: "reject", label: "Reject", description: null },
+      ],
+      multiple: false,
+      custom: false,
+    },
+  ],
+  native: { id: "perm-1", detail: null },
+};
+
+/**
+ * A question: two prompts with their own answer rules, and no tool call to hang
+ * either on. The second declares `multiple` and `custom`, so it takes
+ * checkboxes and a free-text answer of its own.
+ */
+const QUESTION: SessionInteraction = {
+  id: "question:q-1",
+  attachmentId: "attach-1",
+  kind: "question",
+  title: "Before I start the migration",
+  detail: null,
+  options: [
+    { id: "question:0:bWFpbg", label: "main", description: null },
+    { id: "question:0:cmVsZWFzZQ", label: "release", description: null },
+    { id: "question:1:dGVzdHM", label: "tests", description: "run the suite after each step" },
+    { id: "question:1:bG9ja2ZpbGU", label: "lockfile", description: null },
+  ],
+  multiple: true,
+  prompts: [
+    {
+      id: "prompt:0",
+      label: "Which branch should this land on?",
+      detail: null,
+      options: [
+        { id: "question:0:bWFpbg", label: "main", description: null },
+        { id: "question:0:cmVsZWFzZQ", label: "release", description: null },
+      ],
+      multiple: false,
+      custom: false,
+    },
+    {
+      id: "prompt:1",
+      label: "What should I update along the way?",
+      detail: null,
+      options: [
+        { id: "question:1:dGVzdHM", label: "tests", description: "run the suite after each step" },
+        { id: "question:1:bG9ja2ZpbGU", label: "lockfile", description: null },
+      ],
+      multiple: true,
+      custom: true,
+    },
+  ],
+  native: { id: "q-1", detail: null },
+};
+
 const MODELS: RuntimeCatalogModel[] = [
   {
     id: "anthropic/claude-sonnet-4-5",
@@ -564,26 +639,56 @@ export default function ChatActivityScratch() {
         />
       </Section>
 
-      <Section label="Attention">
-        <AttentionCard
-          part={tool(
-            descriptor("run-command", {
-              subject: { label: "rm -rf node_modules", path: null, lineRange: null },
-            }),
-            { state: "approval-requested" },
-          )}
-          onDecide={() => undefined}
-        />
-        <AttentionCard
-          part={tool(
-            descriptor("edit-file", {
-              subject: { label: "src/greeting.ts", path: "src/greeting.ts", lineRange: null },
-            }),
+      <Section label="Bundle · a row gated on a decision taken elsewhere">
+        <ActivityBundle
+          rows={[
             {
-              state: "output-error",
-              errorText: "EACCES: permission denied, open 'src/greeting.ts'",
+              kind: "tool" as const,
+              key: "b7-read",
+              part: tool(
+                descriptor("read-file", {
+                  subject: { label: "package.json", path: "package.json", lineRange: null },
+                }),
+              ),
             },
-          )}
+            {
+              kind: "tool" as const,
+              key: "b7-gated",
+              part: tool(
+                descriptor("run-command", {
+                  subject: { label: "rm -rf node_modules", path: null, lineRange: null },
+                }),
+                { state: "approval-requested" },
+              ),
+            },
+          ]}
+        />
+      </Section>
+
+      <Section label="Interaction · a permission, correlated to a call">
+        <InteractionCard interaction={PERMISSION} onResolve={() => undefined} />
+      </Section>
+
+      <Section label="Interaction · two questions, no call to hang them on">
+        <InteractionCard interaction={QUESTION} onResolve={() => undefined} />
+      </Section>
+
+      <Section label="Interaction · receipts">
+        <InteractionReceiptLine
+          interaction={PERMISSION}
+          resolution={{ optionIds: ["once"], response: null }}
+        />
+        <InteractionReceiptLine
+          interaction={PERMISSION}
+          resolution={{ optionIds: ["always"], response: null }}
+        />
+        <InteractionReceiptLine
+          interaction={PERMISSION}
+          resolution={{ optionIds: ["reject"], response: "read the lockfile instead" }}
+        />
+        <InteractionReceiptLine
+          interaction={QUESTION}
+          resolution={{ optionIds: ["question:0:bWFpbg"], response: null }}
         />
         <AttentionReceipt
           part={tool(
@@ -663,16 +768,11 @@ function ComposerStates() {
         ))}
       </div>
 
+      {/* The card replaces the composer rather than sitting above it: while an
+          interaction is pending the turn cannot proceed, so there is nothing to
+          type. Both are drawn here so the swap is reviewable. */}
       {state === "approval" ? (
-        <AttentionCard
-          part={tool(
-            descriptor("run-command", {
-              subject: { label: "rm -rf node_modules", path: null, lineRange: null },
-            }),
-            { state: "approval-requested" },
-          )}
-          onDecide={() => undefined}
-        />
+        <InteractionCard interaction={PERMISSION} onResolve={() => undefined} />
       ) : null}
 
       <SessionComposer

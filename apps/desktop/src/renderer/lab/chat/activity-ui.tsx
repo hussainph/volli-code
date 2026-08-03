@@ -5,8 +5,9 @@
  * counts, reasoning, an expanded payload — starts at the same x, and depth is
  * never spelled as indentation. Containment is said by the caret and by
  * adjacency; a row's disclosure opens *in line*, so opening something makes the
- * list longer rather than making it a tree. The only bordered shape is the
- * approval card, which is an object you act on rather than process you audit.
+ * list longer rather than making it a tree. Nothing here is bordered: an object
+ * you act on lives at the foot of the transcript, where the interaction card
+ * stands, and this file draws only process you audit.
  *
  * Every row is the same primitive — `‹glyph› ‹Verb› ‹object›` left, `‹meta›`
  * right — and all variance lives in the per-kind presenters in `activity.ts`.
@@ -14,7 +15,6 @@
  * artifact.
  */
 import {
-  ArrowBendUpLeftIcon,
   BrainIcon,
   CaretRightIcon,
   CheckCircleIcon,
@@ -49,7 +49,6 @@ import {
   bundleNeedsAttention,
   bundleSummary,
   describeActivity,
-  detailText,
   reasoningBody,
   reasoningStatus,
   splitPath,
@@ -61,6 +60,7 @@ import {
   type SummarySegment,
   type SummaryTone,
 } from "./activity";
+import { GatedMarker } from "./interaction-ui";
 
 /* ------------------------------------------------------------------- motion */
 
@@ -398,7 +398,12 @@ export function ToolRow({
         {row.object ? <RowObject row={row} onOpenFile={onOpenFile} /> : null}
         <RowDisclosure open={open} expandable={expandable} labelId={verbId} onToggle={toggle} />
         <RowActions row={row} />
-        {row.meta ? (
+        {/* A gated row has one thing to report and it is not a duration: the
+            call is waiting on a decision that is being taken elsewhere. The
+            marker says so and points at the card holding the question. */}
+        {row.status === "approval" ? (
+          <GatedMarker />
+        ) : row.meta ? (
           <span
             className={cn("shrink-0 font-mono tabular-nums", TONE_CLASS[row.metaTone])}
             // Numerals are tabular so live counters do not jitter.
@@ -716,87 +721,14 @@ function ReasoningRow({ part, streaming }: { part: ReasoningUIPart; streaming: b
 
 /* ---------------------------------------------------------------- attention */
 
-export type AttentionDecision = "allow" | "deny" | "steer";
-
 /**
- * Errors, denials and approval requests are always full-width and never fold —
- * a pending question gets a card with an action, a resolved one leaves a
- * one-line receipt so the transcript stays an honest record of what was
- * authorized.
+ * The scrollback receipt a harness's own denial verdict leaves on a row.
+ *
+ * Distinct from the receipt an *answer* leaves, which is written from the
+ * durable resolution at the point in the transcript where it was given. This
+ * one is the harness reporting that the call itself was refused, which a
+ * harness may say without any interaction of ours having been open.
  */
-export function AttentionBlock({
-  part,
-  onOpenFile,
-  onDecide,
-  deciding,
-}: {
-  part: DynamicToolUIPart;
-  onOpenFile?(path: string): void;
-  onDecide?(decision: AttentionDecision): void;
-  deciding?: boolean;
-}) {
-  if (part.state === "output-denied") return <AttentionReceipt part={part} />;
-  return (
-    <AttentionCard part={part} onOpenFile={onOpenFile} onDecide={onDecide} deciding={deciding} />
-  );
-}
-
-export function AttentionCard({
-  part,
-  onOpenFile,
-  onDecide,
-  deciding,
-}: {
-  part: DynamicToolUIPart;
-  onOpenFile?(path: string): void;
-  onDecide?(decision: AttentionDecision): void;
-  /** A decision is in flight. The harness's own verdict is what clears the card. */
-  deciding?: boolean;
-}) {
-  const row = describeActivity(part);
-  const pending = row.status === "approval";
-  const body = row.errorText ?? detailText(row.detail);
-
-  return (
-    <div
-      className={cn(
-        "not-prose w-full rounded-lg border bg-card p-3 shadow-[var(--shadow-raised)]",
-        pending ? "border-primary/40" : "border-destructive/40",
-      )}
-    >
-      <div className="flex min-w-0 items-center gap-1.5 text-xs">
-        <RowGlyph kind={row.kind} status={row.status} />
-        <span className="shrink-0 text-muted-foreground">{row.verb}</span>
-        {row.object ? <RowObject row={row} onOpenFile={onOpenFile} /> : null}
-      </div>
-      {body ? (
-        <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap font-mono text-xs leading-5 text-muted-foreground">
-          {body}
-        </pre>
-      ) : null}
-      {pending && onDecide ? (
-        // Disabled rather than swapped for a spinner: the round trip is one HTTP
-        // reply and the card is about to be replaced by the harness's own
-        // verdict, so a progress affordance would flash for less time than it
-        // takes to read. What matters is that a second click cannot land.
-        <div className="mt-3 flex flex-wrap items-center justify-end gap-1.5">
-          <Button size="sm" variant="ghost" disabled={deciding} onClick={() => onDecide("steer")}>
-            <ArrowBendUpLeftIcon className="size-3.5" />
-            No, and tell it what to do differently
-          </Button>
-          <Button size="sm" variant="ghost" disabled={deciding} onClick={() => onDecide("deny")}>
-            Deny
-          </Button>
-          <Button size="sm" disabled={deciding} onClick={() => onDecide("allow")}>
-            Allow
-          </Button>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-/** The scrollback receipt an approval leaves behind once it resolves. */
 export function AttentionReceipt({ part }: { part: DynamicToolUIPart }) {
   const row = describeActivity(part);
   const approved = row.status !== "denied";

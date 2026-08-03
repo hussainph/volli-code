@@ -211,13 +211,17 @@ describe("segmentMessageParts", () => {
     expect(bundleOf(segments)).toHaveLength(1);
   });
 
-  it("breaks an approval request out of the bundle", () => {
+  it("keeps an approval request in the bundle and opens it", () => {
     const segments = segmentMessageParts(
       [tool("read-file"), tool("run-command", { state: "approval-requested" })],
       "m3",
     );
-    // The one thing that blocks the reader must not sit behind a disclosure.
-    expect(segments.map((segment) => segment.kind)).toEqual(["bundle", "attention"]);
+    // It used to leave the bundle, because it blocked the reader and needed
+    // buttons. The buttons live in one card at the foot of the transcript now,
+    // so what is left on the row is a gated marker — and `needsAttention` is
+    // what puts it on screen without a second left edge.
+    expect(segments.map((segment) => segment.kind)).toEqual(["bundle"]);
+    expect(bundleNeedsAttention(bundleOf(segments))).toBe(true);
   });
 
   it("keeps failures and denials inside the bundle", () => {

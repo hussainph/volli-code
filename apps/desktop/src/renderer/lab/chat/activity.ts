@@ -59,24 +59,21 @@ export type BundleRow =
  * the summary that counts them, and the caret is the only thing that says one
  * contains the other.
  *
- * An approval request is the exception, and the only one. It blocks the reader,
- * so it leaves the bundle and stands on its own where nothing can fold over it.
- * Failures stay in the bundle — the summary confesses them in red, and the
- * bundle opens itself so the row is on screen anyway.
+ * Nothing leaves the bundle, including an approval request. It used to: it
+ * blocked the reader and needed buttons, so it stood on its own as a card in
+ * scrollback. The buttons moved — every interaction is answered in one place at
+ * the foot of the transcript now, correlated to a call or not — so what is left
+ * on the row is the fact that it is gated. `needsAttention` opens the bundle for
+ * it, the same way it does for a failure, so a waiting row is on screen without
+ * costing the transcript a second left edge.
  */
 export type ChatSegment =
   | { kind: "text"; part: Extract<MessagePart, { type: "text" }>; key: string }
-  | { kind: "bundle"; rows: BundleRow[]; key: string }
-  | { kind: "attention"; part: DynamicToolUIPart; key: string };
+  | { kind: "bundle"; rows: BundleRow[]; key: string };
 
 /** Outcomes a bundle must not swallow silently. */
 export function needsAttention(state: DynamicToolUIPart["state"]): boolean {
   return state === "output-error" || state === "output-denied" || state === "approval-requested";
-}
-
-/** The one state that leaves the bundle: it blocks, and it needs buttons. */
-export function isBlocking(state: DynamicToolUIPart["state"]): boolean {
-  return state === "approval-requested";
 }
 
 /**
@@ -195,11 +192,6 @@ function segmentParts(entries: readonly KeyedPart[]): ChatSegment[] {
     }
     if (part.type !== "dynamic-tool") return;
     if (isPlanActivity(part)) return;
-    if (isBlocking(part.state)) {
-      flush();
-      segments.push({ kind: "attention", part, key });
-      return;
-    }
     bundle ??= [];
     bundle.push({ kind: "tool", part, key });
   });

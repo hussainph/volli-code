@@ -82,6 +82,11 @@ describe("optionPolarity", () => {
     expect(optionPolarity({ id: "reject" })).toBe("reject");
   });
 
+  it("matches declared ids case-insensitively", () => {
+    expect(optionPolarity({ id: "Once" })).toBe("allow");
+    expect(optionPolarity({ id: "REJECT" })).toBe("reject");
+  });
+
   it("treats an id it does not recognize as an ordinary answer", () => {
     // Never as consent, and never as a refusal: the polarity vocabulary is
     // matched against declared ids, so an unknown one states nothing at all.

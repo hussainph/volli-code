@@ -2,11 +2,9 @@ import type { SessionCapabilitySnapshot } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  approvalOptionId,
   composerIntent,
   deriveRuntimeCatalog,
   enqueueMessage,
-  findInteractionByNativeId,
   isPrimaryAgent,
   nextRelease,
   offersAgentChoice,
@@ -235,49 +233,5 @@ describe("composer delivery", () => {
     expect(nextRelease(queue, { working: true, ready: true })).toBeNull();
     expect(nextRelease(queue, { working: false, ready: false })).toBeNull();
     expect(nextRelease([], { working: false, ready: true })).toBeNull();
-  });
-});
-
-describe("approvals", () => {
-  const openCode = [
-    { id: "once", label: "Allow once", description: null },
-    { id: "always", label: "Allow always", description: null },
-    { id: "reject", label: "Reject", description: null },
-  ];
-
-  it("finds a gate by the id the transcript row actually carries", () => {
-    const interactions = [
-      { id: "permission:p1", native: { id: "p1" } },
-      { id: "permission:p2", native: { id: "p2" } },
-    ];
-    expect(findInteractionByNativeId(interactions, "p2")?.id).toBe("permission:p2");
-    expect(findInteractionByNativeId(interactions, "p3")).toBeNull();
-    expect(findInteractionByNativeId([], "p1")).toBeNull();
-  });
-
-  it("maps a decision onto an option the harness declared", () => {
-    expect(approvalOptionId(openCode, "allow")).toBe("once");
-    expect(approvalOptionId(openCode, "deny")).toBe("reject");
-    // Steering denies. The correction that follows is an ordinary message —
-    // OpenCode has no reply that carries one, so the card must not imply it did.
-    expect(approvalOptionId(openCode, "steer")).toBe("reject");
-  });
-
-  it("never reads an unrecognized vocabulary as consent", () => {
-    const foreign = [
-      { id: "proceed", label: "Proceed", description: null },
-      { id: "halt", label: "Halt", description: null },
-    ];
-    // Nothing matches the allow vocabulary, so allow declines to guess: a wrong
-    // guess here authorizes a command nobody approved.
-    expect(approvalOptionId(foreign, "allow")).toBeNull();
-    // Deny falls back to the last option, because failing to deny is the worse
-    // outcome and a harness's rejection conventionally sorts last.
-    expect(approvalOptionId(foreign, "deny")).toBe("halt");
-    expect(approvalOptionId([], "deny")).toBeNull();
-  });
-
-  it("matches declared ids case-insensitively", () => {
-    expect(approvalOptionId([{ id: "Once" }], "allow")).toBe("Once");
   });
 });

@@ -38,15 +38,15 @@ import {
  */
 export type InteractionOptionPolarity = "allow" | "standing" | "reject" | "answer";
 
-const ALLOW_OPTION_IDS = ["once", "allow", "approve", "accept", "yes"];
-const STANDING_OPTION_IDS = ["always", "always_allow", "alwaysallow", "remember"];
-const REJECT_OPTION_IDS = ["reject", "deny", "decline", "no", "cancel"];
+const ALLOW_OPTION_IDS = new Set(["once", "allow", "approve", "accept", "yes"]);
+const STANDING_OPTION_IDS = new Set(["always", "always_allow", "alwaysallow", "remember"]);
+const REJECT_OPTION_IDS = new Set(["reject", "deny", "decline", "no", "cancel"]);
 
 export function optionPolarity(option: { id: string }): InteractionOptionPolarity {
   const id = option.id.toLowerCase();
-  if (STANDING_OPTION_IDS.includes(id)) return "standing";
-  if (ALLOW_OPTION_IDS.includes(id)) return "allow";
-  if (REJECT_OPTION_IDS.includes(id)) return "reject";
+  if (STANDING_OPTION_IDS.has(id)) return "standing";
+  if (ALLOW_OPTION_IDS.has(id)) return "allow";
+  if (REJECT_OPTION_IDS.has(id)) return "reject";
   return "answer";
 }
 
@@ -123,6 +123,19 @@ export function setPromptResponse(
  * the deadlock this whole surface exists to remove.
  */
 export type InteractionFieldRole = "answer" | "note" | "redirection";
+
+/**
+ * Whether this question has a box at all.
+ *
+ * A prompt the harness accepts free text for always does. So does one that can
+ * be refused, because a refusal with no direction leaves the agent to guess
+ * what to do instead — that is the steer the old card spelled as a third
+ * button. A plain multiple choice that can only be answered gets none, so a
+ * three-question survey is three lists rather than three boxes nobody fills.
+ */
+export function promptTakesText(prompt: SessionInteractionPrompt): boolean {
+  return prompt.custom || prompt.options.some((option) => optionPolarity(option) === "reject");
+}
 
 export function promptFieldRole(
   prompt: SessionInteractionPrompt,
@@ -257,12 +270,16 @@ export function describeInteractionResolution(
       answer.optionIds.includes(option.id),
     );
   });
-  const polarities = chosen.map((option) => optionPolarity(option));
-  const verdict = polarities.includes("reject")
+  const chose = (polarity: InteractionOptionPolarity) =>
+    chosen.some((option) => optionPolarity(option) === polarity);
+  // A refusal outranks everything else in the same resolution: what a reader
+  // said no to is the fact the transcript owes them, even where they answered
+  // three other questions in the same submit.
+  const verdict = chose("reject")
     ? "rejected"
-    : polarities.includes("standing")
+    : chose("standing")
       ? "standing"
-      : polarities.includes("allow")
+      : chose("allow")
         ? "allowed"
         : "answered";
   return {
