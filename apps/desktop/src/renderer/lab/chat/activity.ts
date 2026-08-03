@@ -638,7 +638,34 @@ export function activityContext(part: DynamicToolUIPart): ActivityContext {
   };
 }
 
+/**
+ * One description per part, for as long as that part exists.
+ *
+ * A presenter is not free: it runs the whole detail budget — `parseDiff`,
+ * `numberLines`, `parseMatches`, 400 lines of it — and the transcript repaints
+ * on every streamed token, so a settled row fifty calls back was re-parsing its
+ * own 300-line diff for a screen that had not changed. Identity is a sound key
+ * because transcript parts are immutable snapshots: a harness that changes a
+ * call commits a new part rather than editing the old one (`message-projection.ts`),
+ * so a part that has not changed cannot have a different description, and one
+ * that has is a different object and misses.
+ *
+ * This keeps the function pure in the sense that matters — same part in, same
+ * row out — and strengthens it to referential equality, which is what lets the
+ * UI memoize on the result. The row is shared, so callers read it, never write
+ * to it.
+ */
+const DESCRIPTIONS = new WeakMap<DynamicToolUIPart, ActivityRow>();
+
 export function describeActivity(part: DynamicToolUIPart): ActivityRow {
+  const cached = DESCRIPTIONS.get(part);
+  if (cached) return cached;
+  const row = buildActivityRow(part);
+  DESCRIPTIONS.set(part, row);
+  return row;
+}
+
+function buildActivityRow(part: DynamicToolUIPart): ActivityRow {
   const context = activityContext(part);
   const facts = ACTIVITY_PRESENTERS[context.descriptor.kind](context);
   return {
@@ -906,7 +933,28 @@ export function projectSessionTodos(messages: readonly UIMessage[]): SessionTodo
   return null;
 }
 
+/**
+ * Same table as {@link DESCRIPTIONS}, for the same reason.
+ *
+ * The dock re-projects the plan on every committed frame, and a harness that
+ * hands its todo list back as a JSON *string* — several do — makes that a
+ * `JSON.parse` of the whole plan per frame for a list that has not moved.
+ * Cached on the part, a plan is parsed once and re-parsed exactly when the
+ * harness commits a new snapshot of it.
+ */
+const TODOS = new WeakMap<DynamicToolUIPart, SessionTodo[] | null>();
+
 export function extractTodos(part: DynamicToolUIPart): SessionTodo[] | null {
+  // Never `undefined`, so `undefined` is unambiguously a miss and a cached
+  // "this part is not a todo list" costs nothing to answer twice.
+  const cached = TODOS.get(part);
+  if (cached !== undefined) return cached;
+  const todos = readTodos(part);
+  TODOS.set(part, todos);
+  return todos;
+}
+
+function readTodos(part: DynamicToolUIPart): SessionTodo[] | null {
   const fromInput = todosFromUnknown("input" in part ? part.input : undefined);
   if (fromInput) return fromInput;
   return todosFromUnknown("output" in part ? part.output : undefined);

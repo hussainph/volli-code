@@ -70,6 +70,8 @@ import {
  */
 const COLLAPSE = "duration-[400ms] ease-swift motion-reduce:transition-none";
 const COLLAPSE_FADE = "duration-[240ms] ease-swift motion-reduce:transition-none";
+/** The same 400ms, as a number. Tailwind only sees the literal, so both exist. */
+const COLLAPSE_MS = 400;
 
 /**
  * The one caret, and it always sits against the label it opens.
@@ -125,8 +127,46 @@ function Caret({
   );
 }
 
-/** Grid-rows collapse: no keyframes, so the duration and curve stay on-token. */
+/**
+ * A closed body is not in the DOM, and the animation is what decides when.
+ *
+ * The collapse animates a grid *track*, so what the track resolves `1fr` to is
+ * the children's own height — a body dropped on the click would take the height
+ * with it and leave an empty box sliding shut, and the 240ms fade would have
+ * nothing left to fade. So closing keeps the children exactly one collapse
+ * longer and then drops them.
+ *
+ * Opening is the mirror problem: mounted from an effect, the class flips a frame
+ * before the content exists and the track animates 0 → 0 and then jumps. The
+ * update is therefore taken during render, which is the one way React puts the
+ * children and the `1fr` in the same commit — the browser sees `0fr` with
+ * content on one side of the style change and `1fr` on the other, which is
+ * precisely what it needs to interpolate.
+ */
+function useCollapseMount(open: boolean): boolean {
+  const [mounted, setMounted] = React.useState(open);
+  if (open && !mounted) setMounted(true);
+
+  React.useEffect(() => {
+    if (open || !mounted) return;
+    const timer = window.setTimeout(() => setMounted(false), COLLAPSE_MS);
+    return () => window.clearTimeout(timer);
+  }, [open, mounted]);
+
+  return mounted;
+}
+
+/**
+ * Grid-rows collapse: no keyframes, so the duration and curve stay on-token.
+ *
+ * The wrapper is always mounted and the body is not. A transcript holding fifty
+ * closed tool rows was still emitting every one of their payloads — a 300-line
+ * diff is 300 `<div>`s that nobody can see — and rebuilding all of them on every
+ * streamed token. Nothing about the open state changes: what an open row shows,
+ * and how it gets there, is the same frame for frame.
+ */
 function Disclosure({ open, children }: React.PropsWithChildren<{ open: boolean }>) {
+  const mounted = useCollapseMount(open);
   return (
     <div
       className={cn(
@@ -143,7 +183,7 @@ function Disclosure({ open, children }: React.PropsWithChildren<{ open: boolean 
         )}
         aria-hidden={!open}
       >
-        {children}
+        {mounted ? children : null}
       </div>
     </div>
   );
@@ -373,7 +413,15 @@ function ObjectText({ value }: { value: string }) {
 
 /* ----------------------------------------------------------------- tool row */
 
-export function ToolRow({
+/**
+ * Memoized on the part, which is the one thing that says the row changed.
+ *
+ * The transcript re-segments from scratch on every render — `segmentTurn` hands
+ * back fresh arrays of fresh row wrappers — but the parts inside them are the
+ * same immutable objects, so this is where re-rendering actually stops. Every
+ * settled row above the live one skips entirely while a turn streams.
+ */
+export const ToolRow = React.memo(function ToolRow({
   part,
   onOpenFile,
   className,
@@ -413,7 +461,7 @@ export function ToolRow({
       ) : null}
     </div>
   );
-}
+});
 
 /**
  * The second click target. The object opens the real artifact; the row around it
@@ -604,67 +652,102 @@ const BUNDLE_CAP = "max-h-96";
  * upstream, because the one thing that blocks the reader must not be behind a
  * disclosure at all.
  */
-export function ActivityBundle({
-  rows,
-  onOpenFile,
-}: {
-  rows: readonly BundleRow[];
-  onOpenFile?(path: string): void;
-}) {
-  const [userOpen, setUserOpen] = React.useState<boolean | null>(null);
-  const summary = bundleSummary(rows);
-  const open = userOpen ?? bundleNeedsAttention(rows);
-  const { ref, clipped } = useClipped<HTMLDivElement>(rows.length);
+export const ActivityBundle = React.memo(
+  function ActivityBundle({
+    rows,
+    onOpenFile,
+  }: {
+    rows: readonly BundleRow[];
+    onOpenFile?(path: string): void;
+  }) {
+    const [userOpen, setUserOpen] = React.useState<boolean | null>(null);
+    const summary = React.useMemo(() => bundleSummary(rows), [rows]);
+    const open = userOpen ?? bundleNeedsAttention(rows);
+    const { ref, clipped } = useClipped<HTMLDivElement>(rows.length);
 
-  const list = (
-    <div className="space-y-0.5">
-      {rows.map((row) => (
-        <BundleRowView key={row.key} row={row} onOpenFile={onOpenFile} />
-      ))}
-    </div>
-  );
+    const list = (
+      <div className="space-y-0.5">
+        {rows.map((row) => (
+          <BundleRowView key={row.key} row={row} onOpenFile={onOpenFile} />
+        ))}
+      </div>
+    );
 
-  // Reasoning alone has nothing to count, so the row *is* the summary. A header
-  // above it would be the same sentence twice, on two different lines.
-  if (summary.length === 0) return <div className="not-prose">{list}</div>;
+    // Reasoning alone has nothing to count, so the row *is* the summary. A
+    // header above it would be the same sentence twice, on two different lines.
+    if (summary.length === 0) return <div className="not-prose">{list}</div>;
 
-  const toggle = () => {
-    if (hasTextSelection()) return;
-    setUserOpen(!open);
-  };
+    const toggle = () => {
+      if (hasTextSelection()) return;
+      setUserOpen(!open);
+    };
 
-  return (
-    <div className="not-prose">
-      <button
-        type="button"
-        onClick={toggle}
-        aria-expanded={open}
-        className={cn(ROW_CLASS, ROW_INTERACTIVE, ROW_FOCUSABLE)}
-      >
-        <BundleGlyph />
-        <Summary segments={summary} />
-        <Caret open={open} pinned />
-      </button>
-      <Disclosure open={open}>
-        <div className="relative">
-          <div ref={ref} className={cn(BUNDLE_CAP, "overflow-auto overscroll-contain")}>
-            {list}
+    return (
+      <div className="not-prose">
+        <button
+          type="button"
+          onClick={toggle}
+          aria-expanded={open}
+          className={cn(ROW_CLASS, ROW_INTERACTIVE, ROW_FOCUSABLE)}
+        >
+          <BundleGlyph />
+          <Summary segments={summary} />
+          <Caret open={open} pinned />
+        </button>
+        <Disclosure open={open}>
+          <div className="relative">
+            <div ref={ref} className={cn(BUNDLE_CAP, "overflow-auto overscroll-contain")}>
+              {list}
+            </div>
+            {clipped ? (
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-background to-transparent" />
+            ) : null}
           </div>
-          {clipped ? (
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-background to-transparent" />
-          ) : null}
-        </div>
-      </Disclosure>
-    </div>
-  );
+        </Disclosure>
+      </div>
+    );
+  },
+  (previous, next) =>
+    previous.onOpenFile === next.onOpenFile && sameBundleRows(previous.rows, next.rows),
+);
+
+/**
+ * Whether two segmentations describe the same bundle.
+ *
+ * A shallow prop compare cannot answer this: the caller re-segments the turn on
+ * every render, so `rows` is a new array of new wrappers each time and the
+ * default memo would never hit. What is stable is what the wrappers point at —
+ * the parts — and `streaming`, which is the projection's own verdict rather than
+ * anything the part carries. Compare those two and the whole bundle, summary
+ * included, stops re-rendering while some other turn streams.
+ */
+function sameBundleRows(previous: readonly BundleRow[], next: readonly BundleRow[]): boolean {
+  if (previous === next) return true;
+  if (previous.length !== next.length) return false;
+  return previous.every((row, index) => {
+    const other = next[index];
+    if (other === undefined || other.kind !== row.kind || other.key !== row.key) return false;
+    if (row.kind === "reasoning") {
+      return (
+        other.kind === "reasoning" && other.part === row.part && other.streaming === row.streaming
+      );
+    }
+    return other.part === row.part;
+  });
 }
 
-function BundleRowView({ row, onOpenFile }: { row: BundleRow; onOpenFile?(path: string): void }) {
+const BundleRowView = React.memo(function BundleRowView({
+  row,
+  onOpenFile,
+}: {
+  row: BundleRow;
+  onOpenFile?(path: string): void;
+}) {
   if (row.kind === "reasoning") {
     return <ReasoningRow part={row.part} streaming={row.streaming} />;
   }
   return <ToolRow part={row.part} onOpenFile={onOpenFile} />;
-}
+});
 
 /**
  * Reasoning as an ordinary row.
@@ -675,7 +758,13 @@ function BundleRowView({ row, onOpenFile }: { row: BundleRow; onOpenFile?(path: 
  * reasoning block is a second kind of line in the same column, and two kinds of
  * line cannot share one left edge for long.
  */
-function ReasoningRow({ part, streaming }: { part: ReasoningUIPart; streaming: boolean }) {
+const ReasoningRow = React.memo(function ReasoningRow({
+  part,
+  streaming,
+}: {
+  part: ReasoningUIPart;
+  streaming: boolean;
+}) {
   const elapsed = useElapsed(streaming);
   const status = reasoningStatus(part.text, { streaming, durationMs: elapsed });
   const body = reasoningBody(part.text);
@@ -711,7 +800,7 @@ function ReasoningRow({ part, streaming }: { part: ReasoningUIPart; streaming: b
       ) : null}
     </div>
   );
-}
+});
 
 /* ---------------------------------------------------------------- attention */
 
