@@ -6,6 +6,8 @@ Measured against a live `opencode serve` (1.17.18) `/doc`: 188 endpoints, 89 `Ev
 
 Status: audit complete, plan agreed. P0 step 3 (error classification) has landed; everything else is unimplemented. Companion to `chat-transcript-design.md`, which owns how the transcript *looks*; this owns what reaches it at all.
 
+Line citations are as of `bc4603d`. They drift; the surrounding quote is the durable part, so search for that when a number no longer lands.
+
 ## Where the UI is
 
 The chat surface lives only in `apps/desktop/src/renderer/lab/` — `renderer/src/components/sessions/` is still terminal-only. "Our UI" throughout means the `chat-session` scratch and the `lab/chat/` modules behind it.
@@ -17,8 +19,8 @@ The chat surface lives only in `apps/desktop/src/renderer/lab/` — `renderer/sr
 | Events | 14 | ~30 relevant of 89 |
 | Message parts | 3 | 12 |
 | Interaction kinds rendered | 1 (permission, tool-correlated only) | 2 |
-| Attention kinds rendered | 0 | 11 declared, 3 raised |
-| Capability catalog kinds rendered | 1 (model) | 6 fetched |
+| Attention kinds actionable | 0 | 11 declared, 3 raised |
+| Capability catalog kinds rendered | 2 (model, agent) | 6 fetched |
 
 The adapter is consistently ahead of the renderer. Three of the four Tier 0 deadlocks below are fixed entirely in the UI against data that already arrives.
 
@@ -34,23 +36,23 @@ Recorded so they are not re-filed:
 
 ### 1. Questions are invisible
 
-The adapter handles `question.asked` / `question.replied` / `question.rejected`, builds a `SessionInteraction` with flattened options, and can `POST /question/{id}/reply` (`index.ts:1056`, `1447`, `1585`). The renderer finds an interaction in exactly one place — through a tool row's approval gate, `chat-session.tsx:327` — and the adapter registers a row target for permissions only:
+The adapter handles `question.asked` / `question.replied` / `question.rejected`, builds a `SessionInteraction` with flattened options, and can `POST /question/{id}/reply` (`index.ts:1062`, `1454`, `1592`). The only place that can *answer* an interaction is a tool row's approval gate, `chat-session.tsx:327` — and the adapter registers a row target for permissions only:
 
 ```ts
-// index.ts:1472
+// index.ts:1479
 const target = kind === "permission" ? this.#approvalTarget(raw) : null;
 ```
 
-So a question reaches `projection.interactions.active` (`session-controller.ts:468`) and nothing renders it. The turn cannot proceed until it is answered and the UI offers no way to answer; the only exit is Stop, which discards the turn. This is the single worst gap in the product and the cheapest to close.
+So a question reaches `projection.interactions.active` (`session-controller.ts:468`) and no answerable UI renders it. The `session-tracer` scratch does list `projection.interactions.active` (`session-tracer.tsx:689`), but as a read-only debug dump with no reply affordance — it proves the data arrives, which is the point. The turn cannot proceed until it is answered and the UI offers no way to answer; the only exit is Stop, which discards the turn. This is the single worst gap in the product and the cheapest to close.
 
-The model is also lossy where it does arrive. `SessionInteraction.multiple` is hardcoded `true` for questions (`index.ts:1466`) while OpenCode declares `multiple` and `custom` *per question* (`QuestionInfo`), and `questionOptions` flattens every question's options into one list with index-encoded ids (`index.ts:1745`). A three-question request would render as one undifferentiated option pile with no free-text answer.
+The model is also lossy where it does arrive. `SessionInteraction.multiple` is hardcoded `true` for questions (`index.ts:1473`) while OpenCode declares `multiple` and `custom` *per question* (`QuestionInfo`), and `questionOptions` flattens every question's options into one list with index-encoded ids (`index.ts:1753`). A three-question request would render as one undifferentiated option pile with no free-text answer.
 
 ### 2. A permission with no tool call is equally invisible
 
 `PermissionRequest.tool` is optional, and `approvalTarget` returns null without it:
 
 ```ts
-// index.ts:1932
+// index.ts:2012
 const tool = nested(raw, "tool");
 const messageId = objectString(tool, "messageID");
 const callId = objectString(tool, "callID");
@@ -61,9 +63,9 @@ return messageId && callId ? { messageId, callId } : null;
 
 Same deadlock, same fix: an interaction needs a home that does not depend on being correlated to a call.
 
-### 3. Every attention state renders as nothing
+### 3. No attention state is actionable
 
-`projection.attention` carries `active` and `primary` (`session-ledger.ts:538`) and is plumbed to the renderer. `sessionBlocker` (`chat-session.tsx:477`) reads `session.error` — RPC and transport failures only — and `catalogState`. Nothing reads `attention`.
+`projection.attention` carries `active` and `primary` (`session-ledger.ts:538`) and is plumbed to the renderer. `sessionBlocker` (`chat-session.tsx:477`) reads `session.error` — RPC and transport failures only — and `catalogState`; it never reads `attention`. The one reader anywhere is `session-tracer.tsx:682`, a debug list with no recovery action attached.
 
 So an expired token, a rate limit or a context overflow produces a Session that stops with no explanation and no recovery action. That is exactly the case CLAUDE.md reserves for explicit user recovery.
 
@@ -89,11 +91,11 @@ What stays unraised is load-bearing. `quota_exhausted` has no member stating it,
 
 ## Tier 1 — nine of twelve part types are dropped
 
-`index.ts:1973` is `if (type !== "tool") return [];`. Everything past `text` and `reasoning` is discarded before the renderer exists:
+`index.ts:2053` is `if (type !== "tool") return [];`. `text`, `reasoning` and `tool` are handled; the other nine are discarded before the renderer exists:
 
 | Part | What is lost |
 | --- | --- |
-| `file` | Attachments and images, **both directions** — `#dispatchMessage` sends `parts: textParts(...)` (`index.ts:605`), so nothing can be attached either |
+| `file` | Attachments and images, **both directions** — `#dispatchMessage` sends `parts: textParts(...)` (`index.ts:610`), and `textParts` keeps only `type === "text"` (`index.ts:1629`), so nothing can be attached either |
 | `agent` | `@agent` mentions in a prompt |
 | `subtask` | Explicit subagent launch from the composer |
 | `patch`, `snapshot` | Checkpoints — the whole revert substrate |
@@ -101,18 +103,18 @@ What stays unraised is load-bearing. `quota_exhausted` has no member stating it,
 | `retry` | Attempt number and the error being retried |
 | `compaction` | Auto vs. manual, and overflow |
 
-`#bufferMessage` additionally drops `AssistantMessage.agent`, `mode`, `variant` and `finish` (`OpenCodeMessageMetadata`, `index.ts:476`), so a transcript cannot say which agent ran a past turn — which is what makes Plan mode invisible in scrollback.
+`#bufferMessage` additionally drops `AssistantMessage.agent`, `mode`, `variant` and `finish` (`OpenCodeMessageMetadata`, `index.ts:481`), so a transcript cannot say which agent ran a past turn — which is what makes Plan mode invisible in scrollback.
 
 ## Tier 2 — areas with no surface
 
-- **Subagents.** `#ownsStreamEvent` admits only `INTERACTION_EVENT_TYPES` from a child session (`index.ts:848`), so a child transcript is never imported. A `delegate` row is a spinner and a duration; what the subagent did is unreadable. `subject.agentName` and `outcome.childCount` do not exist in `ActivityDescriptor`.
-- **Plan mode.** The composer's Build/Plan segment is built and correctly filters on declared `mode` / `hidden` (`session-model.ts:165`). Missing: which agent ran a past turn, a plan→build handoff, and the todo list still arrives as a synthesized `todowrite` tool part rather than the native `todo.updated` event.
-- **Commands, skills, MCP, tools.** All four are fetched into the capability catalog (`index.ts:396–401`). Only models render (`runtime-catalog-settings.tsx`). No slash-command palette and no skill invocation — 94 skills unreachable on this machine. `mcp.browser.open.failed` is unhandled, so a failed MCP OAuth is a silent dead end.
+- **Subagents.** `#ownsStreamEvent` admits only `INTERACTION_EVENT_TYPES` from a child session (`index.ts:849`), so a child transcript is never imported. A `delegate` row is a spinner and a duration; what the subagent did is unreadable. `subject.agentName` and `outcome.childCount` do not exist in `ActivityDescriptor`.
+- **Plan mode.** The composer's Build/Plan segment is built and correctly filters on declared `mode` / `hidden` (`isPrimaryAgent`, `session-model.ts:168`). Missing: which agent ran a past turn, and a plan→build handoff. The todo list does arrive — the adapter consumes `todo.updated` (`index.ts:1088`) but *synthesizes* a `todowrite` tool part from it (`index.ts:1327–1373`) rather than carrying it as its own observation, so a todo list can only ever look like a tool call.
+- **Commands, skills, MCP, tools.** All are fetched into the capability catalog (`index.ts:400–406`). Agents and models render; commands, skills, MCP servers and tool ids do not. No slash-command palette and no skill invocation — 94 skills unreachable on this machine. `mcp.browser.open.failed` is unhandled, so a failed MCP OAuth is a silent dead end. (The app's own `runtime-catalog-settings.tsx` is models-only, but it sits outside the chat surface this audit scopes.)
 - **Revert and checkpoints.** `/session/{id}/revert`, `/unrevert`, `Session.revert`, `patch` and `snapshot` parts — nothing. The artifact card's Undo in `chat-transcript-design.md` rests on this.
 - **Compaction and context.** No `/summarize`, no manual compact, no context meter. `/session/{id}/context` is never called and `session.compacted` is ignored.
 - **Diffs.** `session.diff` and `file.edited` ignored; `/session/{id}/diff` never called.
 - **Session lifecycle.** No fork, share, rename, `session.deleteMessage` or `part.update` — the last being the substrate for the Conversation Branches CLAUDE.md commits to.
-- **Turn header.** No model, cost or token display, though the adapter captures usage (`index.ts:1669`).
+- **Turn header.** No model, cost or token display, though the adapter captures usage (`index.ts:1680`).
 - **Background processes.** `session.shell` and OpenCode's `/pty` unused. Named as a rail section in `chat-transcript-design.md`, unbuilt.
 
 ## What is already built
@@ -153,6 +155,14 @@ Option polarity stays where `session-model.ts:295` already put it — matched ag
 **P1 — the transcript stops lying by omission.** `file` parts both directions, with composer attachment. Turn header: agent, model, cost, tokens. Keep `agent` / `mode` / `variant` in `OpenCodeMessageMetadata`. Subagent transcripts behind the `delegate` row, plus `agentName` and `childCount` on the descriptor. `todo.updated` as a first-class observation instead of a fake `todowrite` part.
 
 **P2 — the rest of the surface.** Command and skill palette in the composer. Context meter and manual compact. Revert via `patch` / `snapshot`, which unlocks the artifact card's Undo. `session.diff` and `file.edited` into the artifact card. MCP auth recovery from `mcp.browser.open.failed`. Fork, rename, share. `part.update` for Conversation Branches.
+
+## Left standing, on purpose
+
+Found while reviewing this branch, judged out of scope for it and recorded so they are not rediscovered as news:
+
+- **A failed stream snapshot is unrecorded.** `#emitStreamSnapshot` is fired from a debounced timer under `.catch(() => undefined)`. The catch is deliberate and tested — a failing sink must not escape the timer as an unhandled rejection — but nothing anywhere records that the transcript stopped catching up. It needs a diagnostic, not a rethrow.
+- **`reportError` in `session-controller.ts` is `console.error` alone.** The diagnostics query and subscription fail invisibly. The runtime-catalog path beside it already calls `setError`, so this is the odd one out rather than the pattern. Lab-only today; it must not survive the move into the app, where CLAUDE.md's rule that every failed mutation surfaces applies.
+- **`ai-elements/code-block.tsx` has no consumer.** 522 vendored lines and a Shiki pipeline, staged for the app port along with the rest of `ai-elements/` and not yet wired to anything. Intentional staging, not drift — but nothing exercises it, so it will rot quietly until something imports it.
 
 ## Coverage
 
