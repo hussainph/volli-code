@@ -481,6 +481,7 @@ function ChatPlane({
               interaction={pending}
               resolving={resolving}
               autoFocus
+              className="mb-2"
               onResolve={(submission) => answer(pending.id, submission)}
               onStop={() => void session.interrupt()}
             />

@@ -128,7 +128,7 @@ export function InteractionCard({
   }, [autoFocus]);
 
   const submit = () => {
-    if (!submittable || !submission) return;
+    if (resolving || !submission) return;
     onResolve(submission);
   };
 
@@ -150,7 +150,7 @@ export function InteractionCard({
         if (event.key === "Escape") event.stopPropagation();
       }}
       className={cn(
-        "pointer-events-auto mb-2 rounded-xl border border-primary/40 bg-card shadow-[var(--shadow-raised)] outline-none",
+        "pointer-events-auto rounded-xl border border-primary/40 bg-card shadow-[var(--shadow-raised)] outline-none",
         className,
       )}
     >
@@ -179,7 +179,7 @@ export function InteractionCard({
             interaction={interaction}
             question={asked}
             draft={draft}
-            disabled={resolving === true}
+            disabled={resolving}
             onDraftChange={setDraft}
             onSubmit={submit}
           />
@@ -254,7 +254,7 @@ function InteractionQuestionFields({
   interaction: SessionInteraction;
   question: InteractionQuestion;
   draft: InteractionDraft;
-  disabled: boolean;
+  disabled?: boolean;
   onDraftChange(next: InteractionDraft): void;
   onSubmit(): void;
 }) {
