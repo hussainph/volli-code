@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  DEFAULT_INTERACTION_PROMPT_ID,
   isSessionAttentionKind,
   isSessionAttachmentContinuity,
   observationPayload,
@@ -10,10 +11,18 @@ import {
   sameSessionCommandRequest,
   sameSessionEventPayload,
   sameSessionEventProvenance,
+  readInteractionAnswers,
+  readInteractionPrompts,
   SESSION_ATTACHMENT_CONTINUITIES,
   SESSION_ATTENTION_KINDS,
 } from "./session-ledger";
-import type { Session, SessionEvent, SessionObservation } from "./session-ledger";
+import type {
+  Session,
+  SessionEvent,
+  SessionInteraction,
+  SessionInteractionPrompt,
+  SessionObservation,
+} from "./session-ledger";
 
 const session: Session = {
   id: "session-1",
@@ -61,6 +70,123 @@ describe("Session ledger vocabularies", () => {
       expect(isSessionAttentionKind(attention)).toBe(true);
     expect(isSessionAttentionKind("waiting")).toBe(false);
     expect(isSessionAttentionKind(undefined)).toBe(false);
+  });
+});
+
+describe("interaction prompts", () => {
+  const flatPermission: SessionInteraction = {
+    id: "permission-1",
+    attachmentId: "attachment-1",
+    kind: "permission",
+    title: "Allow file write?",
+    detail: "src/main.ts",
+    options: [
+      { id: "once", label: "Allow once", description: null },
+      { id: "reject", label: "Deny", description: null },
+    ],
+    multiple: false,
+    native: { id: "native-permission-1", detail: null },
+  };
+  const declaredPrompts: readonly SessionInteractionPrompt[] = [
+    {
+      id: "prompt:0",
+      label: "Which files should I read?",
+      detail: null,
+      options: [{ id: "prompt:0/option:0", label: "All of them", description: null }],
+      multiple: true,
+      custom: true,
+    },
+    {
+      id: "prompt:1",
+      label: "Run the tests after?",
+      detail: null,
+      options: [{ id: "prompt:1/option:0", label: "Yes", description: null }],
+      multiple: false,
+      custom: false,
+    },
+  ];
+
+  it("synthesizes one prompt from a record written before prompts existed", () => {
+    expect(readInteractionPrompts(flatPermission)).toEqual([
+      {
+        id: DEFAULT_INTERACTION_PROMPT_ID,
+        label: "Allow file write?",
+        detail: "src/main.ts",
+        options: flatPermission.options,
+        multiple: false,
+        custom: false,
+      },
+    ]);
+  });
+
+  it("reads an empty prompt list as no prompts at all", () => {
+    expect(readInteractionPrompts({ ...flatPermission, prompts: [] })).toEqual(
+      readInteractionPrompts(flatPermission),
+    );
+  });
+
+  it("returns declared prompts untouched", () => {
+    expect(readInteractionPrompts({ ...flatPermission, prompts: declaredPrompts })).toBe(
+      declaredPrompts,
+    );
+  });
+
+  it("gives a single declared prompt the same id a legacy record projects to", () => {
+    const prompts = readInteractionPrompts({
+      ...flatPermission,
+      prompts: declaredPrompts.slice(0, 1),
+    });
+    expect(prompts.map((prompt) => prompt.id)).toEqual([DEFAULT_INTERACTION_PROMPT_ID]);
+  });
+
+  it("maps a flat resolution onto the synthesized prompt", () => {
+    expect(readInteractionAnswers(flatPermission, { optionIds: ["once"], response: null })).toEqual(
+      [{ promptId: DEFAULT_INTERACTION_PROMPT_ID, optionIds: ["once"], response: null }],
+    );
+  });
+
+  it("maps a flat resolution onto the first declared prompt", () => {
+    expect(
+      readInteractionAnswers(
+        { ...flatPermission, prompts: declaredPrompts },
+        { optionIds: ["prompt:0/option:0"], response: "and src/preload too" },
+      ),
+    ).toEqual([
+      {
+        promptId: "prompt:0",
+        optionIds: ["prompt:0/option:0"],
+        response: "and src/preload too",
+      },
+    ]);
+  });
+
+  it("falls back to the default prompt id when the prompt list is empty", () => {
+    expect(
+      readInteractionAnswers({ ...flatPermission, prompts: [] }, { optionIds: [], response: null }),
+    ).toEqual([{ promptId: DEFAULT_INTERACTION_PROMPT_ID, optionIds: [], response: null }]);
+  });
+
+  it("reads an empty answer list as no answers at all", () => {
+    expect(
+      readInteractionAnswers(flatPermission, {
+        optionIds: ["reject"],
+        response: null,
+        answers: [],
+      }),
+    ).toEqual([{ promptId: DEFAULT_INTERACTION_PROMPT_ID, optionIds: ["reject"], response: null }]);
+  });
+
+  it("returns declared answers untouched", () => {
+    const answers = [
+      { promptId: "prompt:0", optionIds: ["prompt:0/option:0"], response: "plus the tests" },
+      { promptId: "prompt:1", optionIds: [], response: null },
+    ];
+    expect(
+      readInteractionAnswers(
+        { ...flatPermission, prompts: declaredPrompts },
+        { optionIds: [], response: null, answers },
+      ),
+    ).toBe(answers);
   });
 });
 

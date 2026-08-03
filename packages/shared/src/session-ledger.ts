@@ -86,6 +86,29 @@ export interface SessionInteractionOption {
   description: string | null;
 }
 
+/**
+ * One question inside an interaction. A permission is a single prompt; a
+ * harness that asks several things at once declares one prompt per question,
+ * each with its own options and its own answer rules.
+ */
+export interface SessionInteractionPrompt {
+  id: string;
+  label: string;
+  detail: string | null;
+  options: readonly SessionInteractionOption[];
+  multiple: boolean;
+  /** The harness accepts a free-text answer beside the declared options. */
+  custom: boolean;
+}
+
+/** One prompt's answer. */
+export interface SessionInteractionAnswer {
+  promptId: string;
+  optionIds: readonly string[];
+  /** Free text, when the prompt declares `custom`. */
+  response: string | null;
+}
+
 /** A provider-neutral user decision with an opaque native correlation reference. */
 export interface SessionInteraction {
   id: string;
@@ -95,12 +118,70 @@ export interface SessionInteraction {
   detail: string | null;
   options: readonly SessionInteractionOption[];
   multiple: boolean;
+  /**
+   * Per-question detail. Absent on records written before interactions carried
+   * more than one question; read it through `readInteractionPrompts`, never
+   * directly.
+   */
+  prompts?: readonly SessionInteractionPrompt[];
   native: SessionNativeReference;
 }
 
 export interface SessionInteractionResolution {
   optionIds: readonly string[];
   response: string | null;
+  /** Per-prompt answers. Read it through `readInteractionAnswers`, never directly. */
+  answers?: readonly SessionInteractionAnswer[];
+}
+
+/**
+ * The prompt id a single-prompt interaction carries. Prompts are `prompt:${index}`,
+ * so a harness that declares one question and a stored record that predates
+ * `prompts` project to the same id.
+ */
+export const DEFAULT_INTERACTION_PROMPT_ID = "prompt:0";
+
+/**
+ * The questions an interaction asks, whether or not it was written with
+ * `prompts`. A record without them is one prompt built from the flat fields;
+ * no consumer should branch on their absence itself.
+ */
+export function readInteractionPrompts(
+  interaction: SessionInteraction,
+): readonly SessionInteractionPrompt[] {
+  const { prompts } = interaction;
+  if (prompts && prompts.length > 0) return prompts;
+  return [
+    {
+      id: DEFAULT_INTERACTION_PROMPT_ID,
+      label: interaction.title,
+      detail: interaction.detail,
+      options: interaction.options,
+      multiple: interaction.multiple,
+      // Free text is a declared harness capability, never assumed of a record
+      // written before the interaction could carry one.
+      custom: false,
+    },
+  ];
+}
+
+/**
+ * The answers a resolution gave, whether or not it was written with `answers`.
+ * A flat resolution answers the interaction's first (or only) prompt.
+ */
+export function readInteractionAnswers(
+  interaction: SessionInteraction,
+  resolution: SessionInteractionResolution,
+): readonly SessionInteractionAnswer[] {
+  const { answers } = resolution;
+  if (answers && answers.length > 0) return answers;
+  return [
+    {
+      promptId: interaction.prompts?.[0]?.id ?? DEFAULT_INTERACTION_PROMPT_ID,
+      optionIds: resolution.optionIds,
+      response: resolution.response,
+    },
+  ];
 }
 
 /** An executor attached to a Session. Its end does not end the Session. */
