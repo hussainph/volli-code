@@ -36,7 +36,7 @@ import type { DynamicToolUIPart, ReasoningUIPart } from "ai";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Button } from "@renderer/components/ui/button";
 
-import { type SessionTodo } from "../chat/activity";
+import { type BundleRow, type SessionTodo } from "../chat/activity";
 import { ActivityBundle, AttentionReceipt, SessionTodoDock, ToolRow } from "../chat/activity-ui";
 import { SessionComposer } from "../chat/composer-ui";
 import { InteractionCard, InteractionReceiptLine } from "../chat/interaction-ui";
@@ -326,6 +326,128 @@ const SETTLED_RUN: DynamicToolUIPart[] = [
   ),
 ];
 
+/**
+ * The one-off rows, hoisted for the same reason every fixture above already is
+ * a module constant: `tool()` mints a fresh `toolCallId` per call, so building
+ * these inside the JSX handed each row a *different* call on every render of
+ * the gallery. A gallery whose rows cannot hold their own identity cannot show
+ * whether a row holds its open disclosure — or whether a memo on one works.
+ */
+const LONG_OUTPUT_ROW = tool(
+  descriptor("run-command", {
+    subject: { label: "pnpm run -r test", path: null, lineRange: null },
+  }),
+  {
+    output: Array.from(
+      { length: 60 },
+      (_, index) => `  ✓ src/renderer/lab/chat/activity.test.ts:${index + 1}  passed`,
+    ).join("\n"),
+  },
+);
+
+const PENDING_ROW = tool(
+  descriptor("run-command", {
+    subject: { label: "pnpm run -r typecheck", path: null, lineRange: null },
+  }),
+  { state: "input-streaming" },
+);
+
+const EDITING_ROW = tool(
+  descriptor("edit-file", {
+    subject: { label: "src/renderer/lab/chat/activity.ts", path: "x.ts", lineRange: null },
+  }),
+  { state: "input-available" },
+);
+
+const FAILED_RUN_ROW = tool(
+  descriptor("run-command", {
+    subject: { label: "pnpm run -r test", path: null, lineRange: null },
+    outcome: outcome({ exitCode: 1 }),
+  }),
+  { output: "1 failed | 183 passed" },
+);
+
+/** Two of them, because the gallery draws the gated row in two sections. */
+const gatedRow = () =>
+  tool(
+    descriptor("run-command", {
+      subject: { label: "rm -rf node_modules", path: null, lineRange: null },
+    }),
+    { state: "approval-requested" },
+  );
+const GATED_ROW = gatedRow();
+const GATED_CARD_ROW = gatedRow();
+
+const LIVE_TEST_ROW = tool(
+  descriptor("run-command", { subject: { label: "vp run -r test", path: null, lineRange: null } }),
+  { state: "input-available" },
+);
+
+const MISSING_FILE_ROW = tool(
+  descriptor("read-file", {
+    subject: { label: "packages/gone.ts", path: "packages/gone.ts", lineRange: null },
+  }),
+  { state: "output-error" },
+);
+
+const ALLOWED_ROW = tool(
+  descriptor("run-command", {
+    subject: { label: "rm -rf node_modules", path: null, lineRange: null },
+  }),
+  { state: "output-available" },
+);
+
+const DENIED_ROW = tool(
+  descriptor("run-command", {
+    subject: { label: "git push --force", path: null, lineRange: null },
+  }),
+  { state: "output-denied" },
+);
+
+function toolRows(parts: readonly DynamicToolUIPart[], prefix: string): BundleRow[] {
+  return parts.map((part, index) => ({ kind: "tool", key: `${prefix}-${index}`, part }));
+}
+
+const SETTLED_BUNDLE: BundleRow[] = [
+  {
+    kind: "reasoning",
+    key: "r1",
+    streaming: false,
+    part: reasoning("**Checking the reducer**\n\nThe queue drains one message at a time."),
+  },
+  ...toolRows(SETTLED_RUN, "b1"),
+];
+
+const THOUGHT_BUNDLE: BundleRow[] = [
+  {
+    kind: "reasoning",
+    key: "r2",
+    streaming: false,
+    part: reasoning("Plain thinking, no bold line."),
+  },
+];
+
+const LIVE_THOUGHT_BUNDLE: BundleRow[] = [
+  {
+    kind: "reasoning",
+    key: "r3",
+    streaming: true,
+    part: reasoning("**Tracing the seam**", "streaming"),
+  },
+];
+
+const LIVE_BUNDLE: BundleRow[] = [
+  ...toolRows(EXPLORE_RUN.slice(0, 3), "b4"),
+  { kind: "tool", key: "b4-live", part: LIVE_TEST_ROW },
+];
+
+const FAILED_BUNDLE: BundleRow[] = [
+  ...toolRows(EXPLORE_RUN.slice(0, 2), "b5"),
+  { kind: "tool", key: "b5-fail", part: MISSING_FILE_ROW },
+];
+
+const TALL_BUNDLE: BundleRow[] = toolRows([...CHECK_RUN, ...EXPLORE_RUN, ...SETTLED_RUN], "b6");
+
 const TODOS: SessionTodo[] = [
   { id: "t1", content: "Read the streaming seam", status: "completed", priority: "medium" },
   {
@@ -483,174 +605,45 @@ export default function ChatActivityScratch() {
           Everything else here fits well inside it, so without this row the
           gallery cannot show — or regress — the clipped state and its fade. */}
       <Section label="Row · output past the height cap">
-        <ToolRow
-          part={tool(
-            descriptor("run-command", {
-              subject: { label: "pnpm run -r test", path: null, lineRange: null },
-            }),
-            {
-              output: Array.from(
-                { length: 60 },
-                (_, index) => `  ✓ src/renderer/lab/chat/activity.test.ts:${index + 1}  passed`,
-              ).join("\n"),
-            },
-          )}
-          onOpenFile={() => undefined}
-        />
+        <ToolRow part={LONG_OUTPUT_ROW} onOpenFile={() => undefined} />
       </Section>
 
       <Section label="Rows · in flight">
-        <ToolRow
-          part={tool(
-            descriptor("run-command", {
-              subject: { label: "pnpm run -r typecheck", path: null, lineRange: null },
-            }),
-            { state: "input-streaming" },
-          )}
-        />
-        <ToolRow
-          part={tool(
-            descriptor("edit-file", {
-              subject: {
-                label: "src/renderer/lab/chat/activity.ts",
-                path: "x.ts",
-                lineRange: null,
-              },
-            }),
-            { state: "input-available" },
-          )}
-        />
-        <ToolRow
-          part={tool(
-            descriptor("run-command", {
-              subject: { label: "rm -rf node_modules", path: null, lineRange: null },
-            }),
-            { state: "approval-requested" },
-          )}
-        />
-        <ToolRow
-          part={tool(
-            descriptor("run-command", {
-              subject: { label: "pnpm run -r test", path: null, lineRange: null },
-              outcome: outcome({ exitCode: 1 }),
-            }),
-            { output: "1 failed | 183 passed" },
-          )}
-        />
+        <ToolRow part={PENDING_ROW} />
+        <ToolRow part={EDITING_ROW} />
+        <ToolRow part={GATED_ROW} />
+        <ToolRow part={FAILED_RUN_ROW} />
       </Section>
 
       <Section label="Bundle · everything between two things the agent said">
-        <ActivityBundle
-          rows={[
-            {
-              kind: "reasoning",
-              key: "r1",
-              streaming: false,
-              part: reasoning(
-                "**Checking the reducer**\n\nThe queue drains one message at a time.",
-              ),
-            },
-            ...SETTLED_RUN.map((part, index) => ({
-              kind: "tool" as const,
-              key: `b1-${index}`,
-              part,
-            })),
-          ]}
-        />
+        <ActivityBundle rows={SETTLED_BUNDLE} />
       </Section>
 
       <Section label="Bundle · reasoning alone is its own summary">
-        <ActivityBundle
-          rows={[
-            {
-              kind: "reasoning",
-              key: "r2",
-              streaming: false,
-              part: reasoning("Plain thinking, no bold line."),
-            },
-          ]}
-        />
+        <ActivityBundle rows={THOUGHT_BUNDLE} />
       </Section>
 
       <Section label="Bundle · thinking still being written">
-        <ActivityBundle
-          rows={[
-            {
-              kind: "reasoning",
-              key: "r3",
-              streaming: true,
-              part: reasoning("**Tracing the seam**", "streaming"),
-            },
-          ]}
-        />
+        <ActivityBundle rows={LIVE_THOUGHT_BUNDLE} />
       </Section>
 
       <Section label="Bundle · live, the one row carries the whole report">
-        <ActivityBundle
-          rows={[
-            ...EXPLORE_RUN.slice(0, 3).map((part, index) => ({
-              kind: "tool" as const,
-              key: `b4-${index}`,
-              part,
-            })),
-            {
-              kind: "tool" as const,
-              key: "b4-live",
-              part: tool(
-                descriptor("run-command", {
-                  subject: { label: "vp run -r test", path: null, lineRange: null },
-                }),
-                { state: "input-available" },
-              ),
-            },
-          ]}
-        />
+        <ActivityBundle rows={LIVE_BUNDLE} />
       </Section>
 
       <Section label="Bundle · a failure opens it without being asked">
-        <ActivityBundle
-          rows={[
-            ...EXPLORE_RUN.slice(0, 2).map((part, index) => ({
-              kind: "tool" as const,
-              key: `b5-${index}`,
-              part,
-            })),
-            {
-              kind: "tool" as const,
-              key: "b5-fail",
-              part: tool(
-                descriptor("read-file", {
-                  subject: { label: "packages/gone.ts", path: "packages/gone.ts", lineRange: null },
-                }),
-                { state: "output-error" },
-              ),
-            },
-          ]}
-        />
+        <ActivityBundle rows={FAILED_BUNDLE} />
       </Section>
 
       <Section label="Bundle · past the height cap, it scrolls inside itself">
-        <ActivityBundle
-          rows={[...CHECK_RUN, ...EXPLORE_RUN, ...SETTLED_RUN].map((part, index) => ({
-            kind: "tool" as const,
-            key: `b6-${index}`,
-            part,
-          }))}
-        />
+        <ActivityBundle rows={TALL_BUNDLE} />
       </Section>
 
       {/* A gated call leaves the bundle — it blocks the reader and it needs
           controls, so it must not sit behind a disclosure — and it takes its
           decision with it. Row above, card under it, at one left edge. */}
       <Section label="Interaction · on the row, where the call was gated">
-        <ToolRow
-          part={tool(
-            descriptor("run-command", {
-              subject: { label: "rm -rf node_modules", path: null, lineRange: null },
-            }),
-            { state: "approval-requested" },
-          )}
-        />
+        <ToolRow part={GATED_CARD_ROW} />
         <InteractionCard interaction={PERMISSION} onResolve={() => undefined} />
       </Section>
 
@@ -684,22 +677,8 @@ export default function ChatActivityScratch() {
           interaction={QUESTION}
           resolution={{ optionIds: [], response: null }}
         />
-        <AttentionReceipt
-          part={tool(
-            descriptor("run-command", {
-              subject: { label: "rm -rf node_modules", path: null, lineRange: null },
-            }),
-            { state: "output-available" },
-          )}
-        />
-        <AttentionReceipt
-          part={tool(
-            descriptor("run-command", {
-              subject: { label: "git push --force", path: null, lineRange: null },
-            }),
-            { state: "output-denied" },
-          )}
-        />
+        <AttentionReceipt part={ALLOWED_ROW} />
+        <AttentionReceipt part={DENIED_ROW} />
       </Section>
 
       <Section label="Plan dock">

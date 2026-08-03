@@ -6,11 +6,26 @@
  * flight disables, and where words go when there is nowhere to send them. Named
  * `.test.ts` rather than `.tsx` so the lab shell's `scratches/*.tsx` glob does
  * not pick it up as a scratch.
+ *
+ * The identity rules at the foot are the fifth, and the only one that is not
+ * about correctness: what a streamed token is allowed to re-render. They are
+ * pure on purpose — a memo is only ever as good as the equality under it, and
+ * that equality is testable without a renderer.
  */
 import type { SessionAttention, SessionInteractionResolution } from "@volli/shared";
+import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
-import { answerInteraction, messageRoute, resolvingWith, sessionBlocker } from "./chat-session";
+import { type SessionTodo } from "../chat/activity";
+import {
+  answerInteraction,
+  holdList,
+  messageRoute,
+  resolvingWith,
+  sameMessages,
+  sameTodos,
+  sessionBlocker,
+} from "./chat-session";
 
 type BlockerSession = Parameters<typeof sessionBlocker>[0];
 
@@ -206,5 +221,89 @@ describe("messageRoute", () => {
   it("sends when the Session can take it", () => {
     expect(messageRoute("send", true)).toBe("send");
     expect(messageRoute("steer", true)).toBe("send");
+  });
+});
+
+/* -------------------------------------------------------------- identity */
+
+function assistantMessage(id: string, text: string): UIMessage {
+  return { id, role: "assistant", parts: [{ type: "text", text }] };
+}
+
+function plan(step: SessionTodo["status"]): SessionTodo[] {
+  return [
+    { id: "t1", content: "Read the seam", status: "completed", priority: "medium" },
+    { id: "t2", content: "Hold the plan by value", status: step, priority: "high" },
+  ];
+}
+
+describe("holdList", () => {
+  /**
+   * The whole of the transcript's frame budget, stated as a count. Every turn
+   * arrives in a new array on every frame batch, so without this each of them
+   * is a new prop and each of them re-segments and repaints.
+   */
+  it("hands back every turn but the one the token landed in", () => {
+    const settled = [assistantMessage("m1", "one"), assistantMessage("m2", "two")];
+    const live = assistantMessage("m3", "thin");
+    const previous = [[settled[0]!], [settled[1]!], [live]];
+    // What the next batch projects: the same objects for everything settled, a
+    // fresh snapshot for the message still being written, and new arrays around
+    // all three because `groupTurns` rebuilds every one of them.
+    const next = [[settled[0]!], [settled[1]!], [assistantMessage("m3", "thinking")]];
+
+    const held = holdList(previous, next, sameMessages);
+
+    expect(held[0]).toBe(previous[0]);
+    expect(held[1]).toBe(previous[1]);
+    expect(held[2]).toBe(next[2]);
+    expect(held.filter((turn, index) => turn !== previous[index])).toHaveLength(1);
+  });
+
+  it("keeps the list itself when nothing in it moved", () => {
+    const previous = [[assistantMessage("m1", "one")]];
+
+    expect(holdList(previous, [[...previous[0]!]], sameMessages)).toBe(previous);
+  });
+
+  it("gives up the list the moment a turn is added", () => {
+    const previous = [[assistantMessage("m1", "one")]];
+    const next = [[...previous[0]!], [assistantMessage("m2", "two")]];
+
+    const held = holdList(previous, next, sameMessages);
+
+    expect(held).not.toBe(previous);
+    expect(held[0]).toBe(previous[0]);
+    expect(held[1]).toBe(next[1]);
+  });
+});
+
+describe("sameMessages", () => {
+  it("reads a re-emitted message as a change and a settled one as none", () => {
+    const settled = assistantMessage("m1", "one");
+    const streaming = assistantMessage("m2", "thin");
+
+    expect(sameMessages([settled, streaming], [settled, streaming])).toBe(true);
+    expect(sameMessages([settled, streaming], [settled, assistantMessage("m2", "thinking")])).toBe(
+      false,
+    );
+    expect(sameMessages([settled], [settled, streaming])).toBe(false);
+  });
+});
+
+describe("sameTodos", () => {
+  it("holds a plan that was re-projected unchanged", () => {
+    expect(sameTodos(plan("in_progress"), plan("in_progress"))).toBe(true);
+  });
+
+  it("gives way when a step moves on", () => {
+    expect(sameTodos(plan("in_progress"), plan("completed"))).toBe(false);
+    expect(sameTodos(plan("in_progress"), plan("in_progress").slice(1))).toBe(false);
+  });
+
+  it("tells a Session with no plan from one whose plan is empty", () => {
+    expect(sameTodos(null, null)).toBe(true);
+    expect(sameTodos(null, [])).toBe(false);
+    expect(sameTodos([], null)).toBe(false);
   });
 });

@@ -126,13 +126,20 @@ function TicketChatWorkspace({ scenarioId }: { scenarioId: string | null }) {
 
   // Live todos from the plan activity; clear leftovers when the Session goes
   // idle (OpenCode paradigm — unfinished plans do not reopen later).
+  //
+  // Held by value. The plan is re-projected from scratch on every frame batch
+  // and is almost always the same plan, but a fresh array of identical rows
+  // still fails React's bail-out — so a Session that never touched its plan
+  // re-rendered the tab strip, the rail and the whole chat plane on every token.
   React.useEffect(() => {
     if (session.lifecycle === "idle") {
       setTodos(null);
       return;
     }
     const projected = projectSessionTodos(session.messages);
-    if (projected !== null) setTodos(projected.length > 0 ? projected : null);
+    if (projected === null) return;
+    const next = projected.length > 0 ? projected : null;
+    setTodos((current) => (sameTodos(current, next) ? current : next));
   }, [session.lifecycle, session.messages]);
 
   const openFileTab = React.useCallback((path: string) => {
@@ -298,7 +305,13 @@ function ChatPlane({
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const working = session.lifecycle === "working";
 
-  const { submit, selection, liveAttachmentId, interactions, resolveInteraction } = session;
+  const { submit, selection, liveAttachmentId, resolveInteraction } = session;
+  // The projection is replaced wholesale on every refresh, so its open
+  // interactions arrive as new objects saying the same thing. An interaction is
+  // written once, at `interaction.opened`, and leaves the list only when it is
+  // resolved or cancelled — nothing updates one in place — so the id is the
+  // whole of its identity here.
+  const interactions = useStableList(session.interactions, sameInteractionId);
   /**
    * Two questions, and conflating them is what made the composer inert for the
    * whole attach. A model is what you need to *write* a message; a live executor
@@ -376,20 +389,42 @@ function ChatPlane({
   );
 
   // Every interaction this Session has opened, so a resolution message in
-  // scrollback can name what it answered.
-  const openedInteractions = React.useMemo(
-    () => indexOpenedInteractions(session.frames),
-    [session.frames],
+  // scrollback can name what it answered. The frame list grows on every batch,
+  // so the index is rebuilt each tick and held by content — its values are the
+  // durable frames' own objects, which makes that comparison exact.
+  const openedInteractions = useStable(
+    React.useMemo(() => indexOpenedInteractions(session.frames), [session.frames]),
+    sameInteractionIndex,
   );
 
-  const turnContext: TurnContext = {
-    working,
-    onOpenFile,
-    interactions: openedInteractions,
-    open: interactions,
-    resolving,
-    onResolve: answer,
-  };
+  /**
+   * One object, and it has to keep its identity between ticks.
+   *
+   * Every turn on screen takes this, so a fresh literal per render is a fresh
+   * prop for a thousand rows and defeats {@link ChatTurn}'s memo outright. Each
+   * member above is either state, a stable callback, or held by content — which
+   * is what leaves this recomputing only when something in it actually changed.
+   */
+  const turnContext = React.useMemo<TurnContext>(
+    () => ({
+      working,
+      onOpenFile,
+      interactions: openedInteractions,
+      open: interactions,
+      resolving,
+      onResolve: answer,
+    }),
+    [answer, interactions, onOpenFile, openedInteractions, resolving, working],
+  );
+
+  // Grouping is O(messages) and ran inline in the JSX below, so it re-ran on
+  // every render of this plane. Turns are then held per turn: one nothing
+  // happened in keeps the array it had, which is what lets its rows stand.
+  const turns = useStableList(
+    React.useMemo(() => groupTurns(session.messages), [session.messages]),
+    sameMessages,
+  );
+
   const blocker = sessionBlocker(session, () => setSettingsOpen(true), interactions.length > 0);
 
   const planeStyle = { "--composer-height": `${composerHeight.height}px` } as React.CSSProperties;
@@ -417,7 +452,7 @@ function ChatPlane({
               </ConversationEmptyState>
             ) : (
               <ContentColumn className={MESSAGE_GAP}>
-                {groupTurns(session.messages).map((turn) => (
+                {turns.map((turn) => (
                   <ChatTurn key={turn[0]?.id} messages={turn} context={turnContext} />
                 ))}
                 {working && isAwaitingFirstOutput(session.messages) ? (
@@ -837,6 +872,109 @@ function useMeasuredHeight<T extends HTMLElement>(): {
   return { ref, height };
 }
 
+/* --------------------------------------------------------------- identity */
+
+/**
+ * What survives a tick, and why any of this is needed.
+ *
+ * A frame batch replaces the projection and the frame list wholesale, so
+ * everything derived from them arrives with a new identity and, almost always,
+ * unchanged contents. That alone invalidates every memo beneath it — which is
+ * how one streamed token came to re-group, re-segment and repaint a transcript
+ * that had not changed. These hand back the previous value whenever the new one
+ * says the same thing, so a memo below can be trusted.
+ *
+ * Written during render on purpose, and safe: `same` is content equality, so
+ * the value kept by a render React later discards is never a different answer
+ * to the one the retained render would have given.
+ */
+function useStable<T>(value: T, same: (previous: T, next: T) => boolean): T {
+  const held = React.useRef(value);
+  if (held.current !== value && !same(held.current, value)) held.current = value;
+  return held.current;
+}
+
+/** The same, per element: a list whose live tail moved keeps the rest as it was. */
+function useStableList<T>(
+  items: readonly T[],
+  same: (previous: T, next: T) => boolean,
+): readonly T[] {
+  const held = React.useRef<readonly T[]>(items);
+  if (held.current !== items) held.current = holdList(held.current, items, same);
+  return held.current;
+}
+
+/**
+ * The list, with every element the previous one already had put back.
+ *
+ * Pure, and separate from the hook, because this is the whole of the decision:
+ * which rows a token is allowed to re-render. The outer array is kept too when
+ * nothing in it moved, so a consumer memoized on the list as a whole holds as
+ * well.
+ */
+export function holdList<T>(
+  previous: readonly T[],
+  items: readonly T[],
+  same: (previous: T, next: T) => boolean,
+): readonly T[] {
+  const merged = items.map((item, index) => {
+    const before = previous[index];
+    return before !== undefined && same(before, item) ? before : item;
+  });
+  const unchanged =
+    merged.length === previous.length && merged.every((item, index) => item === previous[index]);
+  return unchanged ? previous : merged;
+}
+
+/**
+ * Two turns are the same turn when they hold the same message objects.
+ *
+ * Identity rather than deep equality, and it is exact here: the transcript
+ * projects the frame's own message, so a message the harness re-emitted is a
+ * different object and one nothing happened to is the object it already was.
+ */
+export function sameMessages(left: readonly UIMessage[], right: readonly UIMessage[]): boolean {
+  return left.length === right.length && left.every((message, index) => message === right[index]);
+}
+
+/** An interaction is written once, when it opens; the id is the whole of it. */
+export function sameInteractionId(left: SessionInteraction, right: SessionInteraction): boolean {
+  return left.id === right.id;
+}
+
+/** The opened-interaction index, whose values are the durable frames' own objects. */
+export function sameInteractionIndex(
+  left: ReadonlyMap<string, SessionInteraction>,
+  right: ReadonlyMap<string, SessionInteraction>,
+): boolean {
+  if (left.size !== right.size) return false;
+  for (const [id, interaction] of right) if (left.get(id) !== interaction) return false;
+  return true;
+}
+
+/**
+ * The plan, by value — the one thing here identity cannot answer for, since it
+ * is re-derived from the messages rather than carried by them.
+ */
+export function sameTodos(
+  left: readonly SessionTodo[] | null,
+  right: readonly SessionTodo[] | null,
+): boolean {
+  if (left === right) return true;
+  if (left === null || right === null) return false;
+  if (left.length !== right.length) return false;
+  return left.every((todo, index) => {
+    const other = right[index];
+    return (
+      other !== undefined &&
+      todo.id === other.id &&
+      todo.content === other.content &&
+      todo.status === other.status &&
+      todo.priority === other.priority
+    );
+  });
+}
+
 /**
  * The gap between every top-level unit in a turn: prose to bundle, bundle to
  * prose, prose to prose. One constant, applied by the container, because the
@@ -873,31 +1011,60 @@ interface TurnContext {
   onResolve(interactionId: string, submission: InteractionSubmission): void;
 }
 
-function ChatTurn({ messages, context }: { messages: readonly UIMessage[]; context: TurnContext }) {
-  const first = messages[0];
-  if (!first) return null;
-  const role = first.role;
+/**
+ * Memoized on identity alone, which is exact rather than approximate here: a
+ * turn holding the same messages and the same context has nothing new to draw.
+ * Without it a single streamed token re-segmented every turn in the transcript
+ * and re-derived every row beneath them — the row presenters parse diffs, grep
+ * output and file contents on each render, so that is the whole frame budget at
+ * a few hundred rows.
+ */
+const ChatTurn = React.memo(function ChatTurn({
+  messages,
+  context,
+}: {
+  messages: readonly UIMessage[];
+  context: TurnContext;
+}) {
+  const first = messages[0] ?? null;
+  const role = first?.role ?? null;
 
   // A receipt lands where it happened. Answering an interaction commits a
   // durable message at that point in the conversation, so the transcript draws
   // it there — whether or not a tool row was ever correlated to the question.
   // An interaction the log has no record of opening draws nothing rather than
   // an id: an unnamed receipt is not a record of anything.
-  const answered = role === "user" ? readInteractionResolutionMessage(first) : null;
+  const answered = React.useMemo(
+    () => (first !== null && role === "user" ? readInteractionResolutionMessage(first) : null),
+    [first, role],
+  );
+  // Keyed on the messages rather than recomputed per render: the turn under the
+  // cursor is the only one whose parts move, and everything above it is settled.
+  const segments = React.useMemo(
+    () => (role === "assistant" ? segmentTurn(messages) : null),
+    [messages, role],
+  );
+  // A user message is prose only; the assistant path owns every other shape.
+  const prose = React.useMemo<readonly { key: string; text: string }[]>(
+    () =>
+      role === "assistant"
+        ? []
+        : messages.flatMap((message) =>
+            message.parts.flatMap((part, index) =>
+              part.type === "text" ? [{ key: `${message.id}:${index}`, text: part.text }] : [],
+            ),
+          ),
+    [messages, role],
+  );
+
+  if (first === null || role === null) return null;
+
   if (answered) {
     const interaction = context.interactions.get(answered.interactionId);
     return interaction ? (
       <InteractionReceiptLine interaction={interaction} resolution={answered.resolution} />
     ) : null;
   }
-
-  const segments = role === "assistant" ? segmentTurn(messages) : null;
-  // A user message is prose only; the assistant path owns every other shape.
-  const prose = messages.flatMap((message) =>
-    message.parts.flatMap((part, index) =>
-      part.type === "text" ? [{ key: `${message.id}:${index}`, text: part.text }] : [],
-    ),
-  );
 
   // Plan-only projections must not leave an empty bubble.
   if (segments && segments.length === 0) return null;
@@ -915,7 +1082,7 @@ function ChatTurn({ messages, context }: { messages: readonly UIMessage[]; conte
       </MessageContent>
     </Message>
   );
-}
+});
 
 function renderSegment(
   segment: ChatSegment,
