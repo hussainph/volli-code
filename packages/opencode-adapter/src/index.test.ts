@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { HarnessCommand, HarnessObservation, ObservationSink } from "@volli/session-engine";
 import {
   ACTIVITY_METADATA_KEY,
+  DEFAULT_INTERACTION_PROMPT_ID,
   readActivityDescriptor,
   type ActivityKind,
   type ActivityOutcome,
@@ -1961,7 +1962,14 @@ describe("OpenCodeNativeAdapter", () => {
         expect.objectContaining({
           kind: "interaction.resolved",
           interactionId: "question:question-1",
-          resolution: { optionIds: ["question:0:Ymx1ZQ", "question:1:bGFyZ2U"], response: null },
+          resolution: {
+            optionIds: ["question:0:Ymx1ZQ", "question:1:bGFyZ2U"],
+            response: null,
+            answers: [
+              { promptId: "prompt:0", optionIds: ["question:0:Ymx1ZQ"], response: null },
+              { promptId: "prompt:1", optionIds: ["question:1:bGFyZ2U"], response: null },
+            ],
+          },
         }),
         expect.objectContaining({
           kind: "interaction.resolved",
@@ -2046,7 +2054,11 @@ describe("OpenCodeNativeAdapter", () => {
         expect.objectContaining({
           kind: "interaction.resolved",
           interactionId: "question:question-object-options",
-          resolution: { optionIds: ["question:0:Ymx1ZQ"], response: null },
+          resolution: {
+            optionIds: ["question:0:Ymx1ZQ"],
+            response: null,
+            answers: [{ promptId: "prompt:0", optionIds: ["question:0:Ymx1ZQ"], response: null }],
+          },
         }),
       ]),
     );
@@ -2063,6 +2075,345 @@ describe("OpenCodeNativeAdapter", () => {
       path: "/question/question-object-options/reply?directory=%2Fworkspace%2Fone",
       body: { answers: [["red"]] },
     });
+  });
+
+  it("gives every question its own prompt, its own answer rules, and its own free text", async () => {
+    const { adapter, network } = composition([
+      {
+        id: "asked-prompts",
+        type: "question.asked",
+        properties: {
+          sessionID: "native-session-1",
+          id: "question-prompts",
+          questions: [
+            {
+              header: "Pick a color",
+              question: "Which colors should the banner use?",
+              options: [
+                { label: "red", description: "Warm" },
+                { label: "blue", description: null },
+              ],
+              multiple: true,
+            },
+            // Neither flag is stated: one answer, from the listed options only.
+            { header: "Pick a size", options: ["small"] },
+            { header: "Anything else", options: ["no"], custom: true },
+          ],
+        },
+      },
+    ]);
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const opened = observations.find(
+      (observation): observation is Extract<HarnessObservation, { kind: "interaction.opened" }> =>
+        observation.kind === "interaction.opened",
+    );
+    if (!opened) throw new Error("question did not open");
+
+    expect(opened.interaction.prompts).toEqual([
+      {
+        id: DEFAULT_INTERACTION_PROMPT_ID,
+        label: "Pick a color",
+        detail: "Which colors should the banner use?",
+        options: [
+          { id: "question:0:cmVk", label: "red", description: "Warm" },
+          { id: "question:0:Ymx1ZQ", label: "blue", description: null },
+        ],
+        multiple: true,
+        custom: false,
+      },
+      {
+        id: "prompt:1",
+        label: "Pick a size",
+        detail: null,
+        options: [{ id: "question:1:c21hbGw", label: "small", description: null }],
+        multiple: false,
+        custom: false,
+      },
+      {
+        id: "prompt:2",
+        label: "Anything else",
+        detail: null,
+        options: [{ id: "question:2:bm8", label: "no", description: null }],
+        multiple: false,
+        custom: true,
+      },
+    ]);
+    // The flat pair a reader written before prompts falls back to is unchanged.
+    expect(opened.interaction.multiple).toBe(true);
+    expect(opened.interaction.options.map((option) => option.id)).toEqual([
+      "question:0:cmVk",
+      "question:0:Ymx1ZQ",
+      "question:1:c21hbGw",
+      "question:2:bm8",
+    ]);
+
+    const interaction = { ...opened.interaction, attachmentId: "attachment-1" };
+    await handle.dispatch({
+      kind: "interaction.resolve",
+      commandId: "prompt-reply",
+      sessionId: "volli-session-1",
+      attachmentId: "attachment-1",
+      interaction,
+      resolution: {
+        optionIds: [],
+        response: null,
+        answers: [
+          {
+            promptId: DEFAULT_INTERACTION_PROMPT_ID,
+            optionIds: ["question:0:Ymx1ZQ", "question:0:cmVk"],
+            // Dropped: this question never declared that it takes free text.
+            response: "purple",
+          },
+          { promptId: "prompt:1", optionIds: ["question:1:c21hbGw"], response: null },
+          { promptId: "prompt:2", optionIds: [], response: "ship it" },
+        ],
+      },
+    });
+    expect(network.requests.at(-1)).toMatchObject({
+      path: "/question/question-prompts/reply?directory=%2Fworkspace%2Fone",
+      body: { answers: [["red", "blue"], ["small"], ["ship it"]] },
+    });
+
+    // Free text alone answers a question; it is not a refusal to answer it.
+    await handle.dispatch({
+      kind: "interaction.resolve",
+      commandId: "prompt-free-text-only",
+      sessionId: "volli-session-1",
+      attachmentId: "attachment-1",
+      interaction,
+      resolution: {
+        optionIds: [],
+        response: null,
+        answers: [{ promptId: "prompt:2", optionIds: [], response: "just this" }],
+      },
+    });
+    expect(network.requests.at(-1)).toMatchObject({
+      path: "/question/question-prompts/reply?directory=%2Fworkspace%2Fone",
+      body: { answers: [[], [], ["just this"]] },
+    });
+  });
+
+  it("gives a permission one prompt holding the three options it offers", async () => {
+    const { adapter } = composition([
+      {
+        id: "asked-permission-prompt",
+        type: "permission.asked",
+        properties: {
+          sessionID: "native-session-1",
+          id: "permission-prompt",
+          title: "Allow write",
+          description: "src/index.ts",
+        },
+      },
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const opened = observations.find(
+      (observation): observation is Extract<HarnessObservation, { kind: "interaction.opened" }> =>
+        observation.kind === "interaction.opened",
+    );
+    if (!opened) throw new Error("permission did not open");
+    expect(opened.interaction.prompts).toEqual([
+      {
+        id: DEFAULT_INTERACTION_PROMPT_ID,
+        label: "Allow write",
+        detail: "src/index.ts",
+        options: opened.interaction.options,
+        multiple: false,
+        custom: false,
+      },
+    ]);
+    expect(opened.interaction.options.map((option) => option.id)).toEqual([
+      "once",
+      "always",
+      "reject",
+    ]);
+  });
+
+  it("refuses a question out of band and never out of an option a harness declared", async () => {
+    const { adapter, network } = composition([
+      {
+        id: "asked-reject-valued",
+        type: "question.asked",
+        properties: {
+          sessionID: "native-session-1",
+          id: "question-reject-valued",
+          questions: [{ header: "Merge?", options: ["reject", "accept"] }],
+        },
+      },
+    ]);
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const opened = observations.find(
+      (observation): observation is Extract<HarnessObservation, { kind: "interaction.opened" }> =>
+        observation.kind === "interaction.opened",
+    );
+    if (!opened) throw new Error("question did not open");
+    const interaction = { ...opened.interaction, attachmentId: "attachment-1" };
+    const command = {
+      kind: "interaction.resolve",
+      commandId: "reject-out-of-band",
+      sessionId: "volli-session-1",
+      attachmentId: "attachment-1",
+      interaction,
+    } as const;
+
+    // Nothing chosen and nothing typed is the refusal — an act no harness value
+    // can impersonate.
+    await handle.dispatch({
+      ...command,
+      resolution: {
+        optionIds: [],
+        response: null,
+        answers: [{ promptId: DEFAULT_INTERACTION_PROMPT_ID, optionIds: [], response: null }],
+      },
+    });
+    expect(network.requests.at(-1)?.path).toContain("/question/question-reject-valued/reject?");
+
+    // Choosing the option whose value happens to be `reject` answers it.
+    await handle.dispatch({
+      ...command,
+      commandId: "answer-reject-valued",
+      resolution: {
+        optionIds: [],
+        response: null,
+        answers: [
+          {
+            promptId: DEFAULT_INTERACTION_PROMPT_ID,
+            optionIds: ["question:0:cmVqZWN0"],
+            response: null,
+          },
+        ],
+      },
+    });
+    expect(network.requests.at(-1)).toMatchObject({
+      path: "/question/question-reject-valued/reply?directory=%2Fworkspace%2Fone",
+      body: { answers: [["reject"]] },
+    });
+
+    // A record whose declared option id *is* the sentinel — a harness that used
+    // its own values as ids — still answers, because a declared id outranks it.
+    await handle.dispatch({
+      ...command,
+      commandId: "declared-reject-id",
+      interaction: {
+        ...interaction,
+        prompts: [
+          {
+            id: DEFAULT_INTERACTION_PROMPT_ID,
+            label: "Merge?",
+            detail: null,
+            options: [{ id: "reject", label: "reject", description: null }],
+            multiple: false,
+            custom: false,
+          },
+        ],
+      },
+      resolution: { optionIds: ["reject"], response: null },
+    });
+    expect(network.requests.at(-1)?.path).toContain("/question/question-reject-valued/reply?");
+  });
+
+  it("answers a stored interaction that predates prompts from its flat option ids", async () => {
+    const { adapter, network } = composition();
+    const handle = await adapter.attach(spec(), { emit: async () => undefined });
+    await handle.dispatch({
+      kind: "interaction.resolve",
+      commandId: "stored-flat-reply",
+      sessionId: "volli-session-1",
+      attachmentId: "attachment-1",
+      interaction: {
+        id: "question:stored",
+        attachmentId: "attachment-1",
+        kind: "question",
+        title: "Stored",
+        detail: null,
+        options: [],
+        multiple: true,
+        native: {
+          id: "stored",
+          detail: {
+            questions: [
+              { label: "First", options: ["yes"] },
+              { label: "Second", options: ["ok"] },
+            ],
+          },
+        },
+      },
+      // The flat form answers the first prompt, and the index-encoded ids still
+      // say which question each choice belonged to. Free text is dropped: a
+      // record written before prompts never declared that any question takes it.
+      resolution: { optionIds: ["question:1:b2s"], response: "typed" },
+    });
+    expect(network.requests.at(-1)).toMatchObject({
+      path: "/question/stored/reply?directory=%2Fworkspace%2Fone",
+      body: { answers: [[], ["ok"]] },
+    });
+  });
+
+  it("keeps a custom answer OpenCode reports on the prompt that accepted it", async () => {
+    const { adapter } = composition([
+      {
+        id: "asked-custom",
+        type: "question.asked",
+        properties: {
+          sessionID: "native-session-1",
+          id: "question-custom",
+          questions: [{ header: "Pick a color", options: ["blue"], custom: true }],
+        },
+      },
+      {
+        id: "replied-custom",
+        type: "question.replied",
+        properties: {
+          sessionID: "native-session-1",
+          requestID: "question-custom",
+          answers: [["blue", "teal"]],
+        },
+      },
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(observations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "interaction.resolved",
+          interactionId: "question:question-custom",
+          resolution: {
+            optionIds: ["question:0:Ymx1ZQ"],
+            response: null,
+            answers: [
+              {
+                promptId: DEFAULT_INTERACTION_PROMPT_ID,
+                optionIds: ["question:0:Ymx1ZQ"],
+                response: "teal",
+              },
+            ],
+          },
+        }),
+      ]),
+    );
   });
 
   it("supervises one shared child while retaining each binding directory", async () => {
@@ -3738,7 +4089,10 @@ describe("OpenCodeNativeAdapter", () => {
         properties: {
           sessionID: "native-session-1",
           requestID: "uncached",
-          questions: [{ label: "Q", options: ["yes"] }],
+          questions: [
+            { label: "Q", options: ["yes"] },
+            { label: "Q2", options: ["ok"] },
+          ],
           answers: [["yes", 7], "bad"],
         },
       },
@@ -3773,7 +4127,15 @@ describe("OpenCodeNativeAdapter", () => {
         expect.objectContaining({
           id: "question-answer-fallback",
           kind: "interaction.resolved",
-          resolution: { optionIds: ["question:0:eWVz"], response: null },
+          resolution: {
+            optionIds: ["question:0:eWVz"],
+            response: null,
+            answers: [
+              { promptId: "prompt:0", optionIds: ["question:0:eWVz"], response: null },
+              // The wire sent a string where this question's answers belong.
+              { promptId: "prompt:1", optionIds: [], response: null },
+            ],
+          },
         }),
       ]),
     );

@@ -18,7 +18,11 @@ import type {
   Reconciliation,
   ReleaseReason,
 } from "@volli/session-engine";
-import { ACTIVITY_METADATA_KEY } from "@volli/shared";
+import {
+  ACTIVITY_METADATA_KEY,
+  readInteractionAnswers,
+  readInteractionPrompts,
+} from "@volli/shared";
 import type {
   ActivityDescriptor,
   ActivityKind,
@@ -26,6 +30,9 @@ import type {
   ActivitySubject,
   SessionCapabilityCatalogItem,
   SessionInteraction,
+  SessionInteractionAnswer,
+  SessionInteractionOption,
+  SessionInteractionPrompt,
   SessionNativeDetail,
   SessionNativeReference,
 } from "@volli/shared";
@@ -1467,25 +1474,29 @@ class OpenCodeBinding implements BindingHandle {
     const nativeId = requestId(raw);
     if (!nativeId) return null;
     const kind = type.startsWith("permission") ? "permission" : "question";
+    const asked = kind === "question" ? questions(raw) : [];
+    const title =
+      objectString(raw, "title") ??
+      (kind === "permission" ? "Permission required" : "Question required");
+    const detail = objectString(raw, "description") ?? objectString(raw, "pattern");
+    const options = kind === "permission" ? PERMISSION_OPTIONS : questionOptions(asked);
     const interaction: Omit<SessionInteraction, "attachmentId"> = {
       id: `${kind}:${nativeId}`,
       kind,
-      title:
-        objectString(raw, "title") ??
-        (kind === "permission" ? "Permission required" : "Question required"),
-      detail: objectString(raw, "description") ?? objectString(raw, "pattern"),
-      options:
-        kind === "permission"
-          ? [
-              { id: "once", label: "Allow once", description: null },
-              { id: "always", label: "Allow always", description: null },
-              { id: "reject", label: "Reject", description: null },
-            ]
-          : questionOptions(raw),
+      title,
+      detail,
+      options,
       multiple: kind === "question",
-      native: { id: nativeId, detail: kind === "question" ? questionDetail(questions(raw)) : null },
+      // A permission asks one thing; a QuestionRequest asks as many as it lists,
+      // each with its own answer rules. The flat `options` stay the union of
+      // them, because that is what a reader written before prompts falls back to.
+      prompts:
+        kind === "permission"
+          ? [{ id: promptId(0), label: title, detail, options, multiple: false, custom: false }]
+          : questionPrompts(asked),
+      native: { id: nativeId, detail: kind === "question" ? questionDetail(asked) : null },
     };
-    if (kind === "question") this.#questions.set(nativeId, questions(raw));
+    if (kind === "question") this.#questions.set(nativeId, asked);
     // Both the SSE event and the hydrate sweep land here, so one record keeps a
     // permission opened before this binding attached gating its row too.
     const target = kind === "permission" ? this.#approvalTarget(raw) : null;
@@ -1541,6 +1552,10 @@ class OpenCodeBinding implements BindingHandle {
         resolution: { optionIds: ["reject"], response: null },
       };
     }
+    const answers = questionReplyAnswers(
+      this.#questions.get(nativeId) ?? questions(event.properties),
+      event.properties,
+    );
     return {
       id: event.id,
       kind: "interaction.resolved",
@@ -1548,11 +1563,12 @@ class OpenCodeBinding implements BindingHandle {
       cursor: { eventId: event.id },
       interactionId: `question:${nativeId}`,
       resolution: {
-        optionIds: questionAnswerOptionIds(
-          this.#questions.get(nativeId) ?? questions(event.properties),
-          event.properties,
-        ),
+        // The flat pair keeps saying what it always said; `answers` is what
+        // says which question each choice belonged to, and carries the free
+        // text a declared option cannot represent.
+        optionIds: answers.flatMap((answer) => answer.optionIds),
         response: null,
+        answers,
       },
     };
   }
@@ -1590,21 +1606,28 @@ class OpenCodeBinding implements BindingHandle {
   ): Promise<OpenCodeHttpResponse> {
     const nativeId = command.interaction.native.id;
     if (!nativeId) throw new Error("OpenCode interaction has no native id");
+    const prompts = readInteractionPrompts(command.interaction);
+    const answers = readInteractionAnswers(command.interaction, command.resolution);
     if (command.interaction.kind === "permission") {
-      const option = command.resolution.optionIds[0] ?? "reject";
+      // A permission is one prompt of ours, so whichever prompt an answer names,
+      // the first id it selected is the reply. The three ids are ours as well,
+      // so `reject` here is our own vocabulary and cannot collide with OpenCode's.
+      const option = answers.flatMap((answer) => [...answer.optionIds])[0] ?? "reject";
       const reply = option === "once" || option === "always" ? option : "reject";
+      const message = answers.find((answer) => answer.response !== null)?.response ?? null;
       return this.#request(`/permission/${encodeURIComponent(nativeId)}/reply`, "POST", {
         reply,
-        ...(command.resolution.response ? { message: command.resolution.response } : {}),
+        ...(message ? { message } : {}),
       });
     }
-    if (command.resolution.optionIds[0] === "reject") {
+    if (declinesQuestion(prompts, answers)) {
       return this.#request(`/question/${encodeURIComponent(nativeId)}/reject`, "POST");
     }
     return this.#request(`/question/${encodeURIComponent(nativeId)}/reply`, "POST", {
       answers: questionAnswers(
         this.#questions.get(nativeId) ?? questions(command.interaction.native.detail),
-        command.resolution.optionIds,
+        prompts,
+        answers,
       ),
     });
   }
@@ -1711,6 +1734,12 @@ function openCodeMessageMetadata(info: unknown): OpenCodeMessageMetadata | null 
 interface OpenCodeQuestion {
   readonly options: readonly OpenCodeQuestionOption[];
   readonly label: string;
+  /** The whole question, when the short header is not already it. */
+  readonly detail: string | null;
+  /** `QuestionInfo.multiple`: more than one option may be chosen. */
+  readonly multiple: boolean;
+  /** `QuestionInfo.custom`: an answer outside the declared options is accepted. */
+  readonly custom: boolean;
 }
 
 interface OpenCodeQuestionOption {
@@ -1725,6 +1754,10 @@ interface OpenCodeQuestionOption {
  * A provider QuestionRequest is one interaction containing `questions[]`.
  * UI option ids encode the question index and raw option value, so a selected
  * flat set round-trips exactly to OpenCode's `answers: string[][]` payload.
+ *
+ * `multiple` and `custom` are optional on `QuestionInfo`, and a server that
+ * states neither is asking for one answer out of the options it listed. Both
+ * therefore default to false: an unstated permission to do more is not one.
  */
 function questions(raw: unknown): readonly OpenCodeQuestion[] {
   const values = isRecord(raw) && Array.isArray(raw.questions) ? raw.questions : [];
@@ -1733,14 +1766,18 @@ function questions(raw: unknown): readonly OpenCodeQuestion[] {
       isRecord(question) && Array.isArray(question.options)
         ? question.options.flatMap(questionOption)
         : [];
+    const prose = objectString(question, "question");
+    const label =
+      objectString(question, "header") ??
+      prose ??
+      objectString(question, "label") ??
+      `Question ${index + 1}`;
     return {
       options,
-      label: isRecord(question)
-        ? (objectString(question, "header") ??
-          objectString(question, "question") ??
-          objectString(question, "label") ??
-          `Question ${index + 1}`)
-        : `Question ${index + 1}`,
+      label,
+      detail: prose === label ? null : prose,
+      multiple: objectBoolean(question, "multiple") ?? false,
+      custom: objectBoolean(question, "custom") ?? false,
     };
   });
 }
@@ -1763,9 +1800,9 @@ function questionOption(raw: unknown): readonly OpenCodeQuestionOption[] {
 }
 
 function questionOptions(
-  raw: unknown,
-): readonly { id: string; label: string; description: string | null }[] {
-  return questions(raw).flatMap((question, questionIndex) =>
+  questionRequests: readonly OpenCodeQuestion[],
+): readonly SessionInteractionOption[] {
+  return questionRequests.flatMap((question, questionIndex) =>
     question.options.map((option) => ({
       id: questionOptionId(questionIndex, option.value),
       label:
@@ -1777,37 +1814,96 @@ function questionOptions(
   );
 }
 
+/** The three ids a permission offers. They are ours, not OpenCode's. */
+const PERMISSION_OPTIONS: readonly SessionInteractionOption[] = [
+  { id: "once", label: "Allow once", description: null },
+  { id: "always", label: "Allow always", description: null },
+  { id: "reject", label: "Reject", description: null },
+];
+
+/** Prompts are `prompt:${index}`; index 0 is `DEFAULT_INTERACTION_PROMPT_ID`. */
+function promptId(index: number): string {
+  return `prompt:${index}`;
+}
+
+/**
+ * One prompt per QuestionInfo, each carrying that question's own answer rules.
+ * Inside its own prompt an option needs no question prefix — the flat list
+ * keeps carrying one because it has nothing else to tell two questions apart.
+ */
+function questionPrompts(
+  questionRequests: readonly OpenCodeQuestion[],
+): readonly SessionInteractionPrompt[] {
+  return questionRequests.map((question, questionIndex) => ({
+    id: promptId(questionIndex),
+    label: question.label,
+    detail: question.detail,
+    options: question.options.map((option) => ({
+      id: questionOptionId(questionIndex, option.value),
+      label: option.label,
+      description: option.description,
+    })),
+    multiple: question.multiple,
+    custom: question.custom,
+  }));
+}
+
 function questionOptionId(questionIndex: number, value: string): string {
   return `question:${questionIndex}:${Buffer.from(value).toString("base64url")}`;
 }
 
-function parseQuestionOptionId(id: string): { questionIndex: number; value: string } | null {
-  const match = /^question:(\d+):([A-Za-z0-9_-]+)$/.exec(id);
-  if (!match) return null;
-  const value = Buffer.from(match[2], "base64url").toString("utf8");
-  return questionOptionId(Number(match[1]), value) === id
-    ? { questionIndex: Number(match[1]), value }
-    : null;
+/** The id a caller written before rejection left the option list still sends. */
+const LEGACY_REJECT_OPTION_ID = "reject";
+
+/**
+ * Whether this resolution refuses the question rather than answering it.
+ *
+ * Rejecting is its own endpoint and its own act, so the signal for it must be
+ * one OpenCode cannot also declare: no option chosen anywhere and nothing
+ * typed. `reject` stays honoured as the id earlier callers sent, but only
+ * while no prompt declares an option by that id — a harness's own value always
+ * outranks our sentinel, which is what kept a question offering "reject" as an
+ * answer from being rejected instead of answered.
+ */
+function declinesQuestion(
+  prompts: readonly SessionInteractionPrompt[],
+  answers: readonly SessionInteractionAnswer[],
+): boolean {
+  const answered = answers.some(
+    (answer) => answer.optionIds.length > 0 || (answer.response ?? "") !== "",
+  );
+  if (!answered) return true;
+  const declared = prompts.some((prompt) =>
+    prompt.options.some((option) => option.id === LEGACY_REJECT_OPTION_ID),
+  );
+  return !declared && answers.some((answer) => answer.optionIds.includes(LEGACY_REJECT_OPTION_ID));
 }
 
+/**
+ * `POST /question/{id}/reply` takes `answers: string[][]` — one array of
+ * chosen labels per question, in question order, and no other slot. So a free
+ * text answer travels as an ordinary entry in its question's array, which is
+ * only honest for a question that declared `custom`; anywhere else it would
+ * claim a choice OpenCode never offered.
+ */
 function questionAnswers(
   questionRequests: readonly OpenCodeQuestion[],
-  optionIds: readonly string[],
+  prompts: readonly SessionInteractionPrompt[],
+  answers: readonly SessionInteractionAnswer[],
 ): string[][] {
-  const answers = questionRequests.map(() => [] as string[]);
-  for (const optionId of optionIds) {
-    const decoded = parseQuestionOptionId(optionId);
-    if (
-      decoded &&
-      answers[decoded.questionIndex] &&
-      questionRequests[decoded.questionIndex]?.options.some(
-        (option) => option.value === decoded.value,
-      )
-    ) {
-      answers[decoded.questionIndex].push(decoded.value);
-    }
-  }
-  return answers;
+  const selected = new Set(answers.flatMap((answer) => [...answer.optionIds]));
+  return questionRequests.map((question, questionIndex) => {
+    // Membership is checked against the ids this question declared, so a
+    // forged or stale id selects nothing and answers stay in declared order.
+    const values = question.options
+      .filter((option) => selected.has(questionOptionId(questionIndex, option.value)))
+      .map((option) => option.value);
+    const response = answers.find(
+      (answer) => answer.promptId === promptId(questionIndex),
+    )?.response;
+    if (prompts[questionIndex]?.custom === true && response) return [...values, response];
+    return values;
+  });
 }
 
 function questionDetail(questionRequests: readonly OpenCodeQuestion[]): SessionNativeDetail {
@@ -1821,22 +1917,34 @@ function questionDetail(questionRequests: readonly OpenCodeQuestion[]): SessionN
   };
 }
 
-function questionAnswerOptionIds(
+/**
+ * What a QuestionReplied event says each question was answered with. A value
+ * no option declared is a custom answer — OpenCode's own reply shape has no
+ * other place to put one — so it is kept as that prompt's free text instead of
+ * being dropped as unrecognized.
+ */
+function questionReplyAnswers(
   questionRequests: readonly OpenCodeQuestion[],
   raw: unknown,
-): readonly string[] {
-  const answers = isRecord(raw) && Array.isArray(raw.answers) ? raw.answers : [];
-  return answers.flatMap((answer, questionIndex) =>
-    Array.isArray(answer)
-      ? answer
-          .filter(
-            (value): value is string =>
-              typeof value === "string" &&
-              questionRequests[questionIndex]?.options.some((option) => option.value === value),
-          )
-          .map((value) => questionOptionId(questionIndex, value))
-      : [],
-  );
+): readonly SessionInteractionAnswer[] {
+  const replied = isRecord(raw) && Array.isArray(raw.answers) ? raw.answers : [];
+  return questionRequests.map((question, questionIndex) => {
+    const answer = replied[questionIndex];
+    const values = (Array.isArray(answer) ? answer : []).filter(
+      (value): value is string => typeof value === "string",
+    );
+    const declared = values.filter((value) =>
+      question.options.some((option) => option.value === value),
+    );
+    const custom = values.filter(
+      (value) => !question.options.some((option) => option.value === value),
+    );
+    return {
+      promptId: promptId(questionIndex),
+      optionIds: declared.map((value) => questionOptionId(questionIndex, value)),
+      response: custom.length > 0 ? custom.join("\n") : null,
+    };
+  });
 }
 
 function requestId(raw: unknown): string | null {
