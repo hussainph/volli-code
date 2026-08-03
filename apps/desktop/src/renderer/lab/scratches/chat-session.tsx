@@ -6,11 +6,7 @@ import {
   TerminalWindowIcon,
   WarningIcon,
 } from "@phosphor-icons/react";
-import type {
-  SessionAttention,
-  SessionInteraction,
-  SessionInteractionResolution,
-} from "@volli/shared";
+import type { SessionAttention, SessionInteraction } from "@volli/shared";
 import type { DynamicToolUIPart, UIMessage } from "ai";
 
 import {
@@ -48,6 +44,7 @@ import {
   indexOpenedInteractions,
   interactionForApproval,
   readInteractionResolutionMessage,
+  type InteractionSubmission,
 } from "../chat/interaction";
 import { InteractionCard, InteractionReceiptLine } from "../chat/interaction-ui";
 import { LabScenarioPicker } from "../chat/scenario-picker";
@@ -344,12 +341,26 @@ function ChatPlane({
   const gated = React.useMemo(() => gatedApprovalIds(session.messages), [session.messages]);
   const pending = footInteraction(interactions, gated);
 
+  /**
+   * A decision, and the redirection that could not ride it.
+   *
+   * Two acts, in this order and never merged. The resolution is what the
+   * harness's reply endpoint takes; a refusal is defined by being empty, so
+   * words the reader typed instead of choosing travel afterwards as an ordinary
+   * message. Queued rather than steered: it is the next thing said, not an
+   * interruption of a turn that is already stopping to be told.
+   */
   const answer = React.useCallback(
-    (interactionId: string, resolution: SessionInteractionResolution) => {
+    (interactionId: string, submission: InteractionSubmission) => {
       setResolving(true);
-      void resolveInteraction(interactionId, resolution).finally(() => setResolving(false));
+      void resolveInteraction(interactionId, submission.resolution)
+        .then(() => {
+          if (submission.message) return submit(submission.message, "queue");
+          return undefined;
+        })
+        .finally(() => setResolving(false));
     },
-    [resolveInteraction],
+    [resolveInteraction, submit],
   );
 
   // Every interaction this Session has opened, so a resolution message in
@@ -470,7 +481,7 @@ function ChatPlane({
               interaction={pending}
               resolving={resolving}
               autoFocus
-              onResolve={(resolution) => answer(pending.id, resolution)}
+              onResolve={(submission) => answer(pending.id, submission)}
               onStop={() => void session.interrupt()}
             />
           ) : (
@@ -748,7 +759,7 @@ interface TurnContext {
   /** The ones still open, so a gated row can draw the card it is waiting on. */
   open: readonly SessionInteraction[];
   resolving: boolean;
-  onResolve(interactionId: string, resolution: SessionInteractionResolution): void;
+  onResolve(interactionId: string, submission: InteractionSubmission): void;
 }
 
 function ChatTurn({ messages, context }: { messages: readonly UIMessage[]; context: TurnContext }) {
@@ -839,7 +850,7 @@ function GatedCall({ part, context }: { part: DynamicToolUIPart; context: TurnCo
           key={interaction.id}
           interaction={interaction}
           resolving={context.resolving}
-          onResolve={(resolution) => context.onResolve(interaction.id, resolution)}
+          onResolve={(submission) => context.onResolve(interaction.id, submission)}
         />
       ) : null}
     </div>

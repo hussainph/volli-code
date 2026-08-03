@@ -115,46 +115,80 @@ export function setPromptResponse(
  *
  * One box, not two: a second always-on field would read as a composer inside a
  * card, which is exactly what suppressing the composer was for. Its role
- * follows the current choice — a note beside a declared answer, the redirection
- * beside a refusal, the answer itself where the harness declared `custom` and
- * nothing is selected.
+ * follows what the harness accepts and what has been chosen — the answer itself
+ * where `custom` was declared, a note beside a declared verdict, the redirection
+ * everywhere else.
  *
- * The role changes what the field is *for*; it never gates {@link canSubmitInteraction}.
- * Requiring words before a refusal can land would leave "no" unsayable, which is
- * the deadlock this whole surface exists to remove.
+ * The role changes what the field is *for*; it never gates
+ * {@link canSubmitInteraction}. Requiring words before a refusal can land would
+ * leave "no" unsayable, which is the deadlock this whole surface exists to
+ * remove.
  */
 export type InteractionFieldRole = "answer" | "note" | "redirection";
 
 /**
- * Whether this question has a box at all — and it only does where the words
- * actually reach the harness.
+ * How this question's words reach the harness — which is the whole of the
+ * "none of these work" decision, and it is the harness's to make, not ours.
  *
- * Two shapes qualify. A prompt declaring `custom` accepts free text as an
- * answer, and the OpenCode adapter carries it as an entry in that question's
- * own answer array. A prompt declaring a refusal among its options is a
- * permission, whose reply carries a `message` beside the verdict, so the
- * redirection travels with the no.
+ * Every question gets a box. What differs is where the words go:
  *
- * Nothing else gets one. A question refused out of band (see
- * {@link needsOwnRefusal}) sends `/question/{id}/reject`, which has no body —
- * a box there would take a sentence nobody would ever read. The correction to
- * a refused question is an ordinary message, and the composer comes back the
- * moment the card resolves.
+ * - `answer` — the prompt declared `custom`, so OpenCode takes free text as an
+ *   ordinary entry in *that question's own* answer array. The words are a real
+ *   answer on the wire and travel with the rest of the submission.
+ * - `note` — the prompt declares a refusal among its options, which makes it a
+ *   permission; `POST /permission/{id}/reply` carries a `message` beside the
+ *   verdict, so the words ride the decision itself.
+ * - `message` — nothing on the wire takes them. `answers` is an array of
+ *   *selected labels* and has no custom field, so words here would claim a
+ *   choice OpenCode never offered and the adapter would drop them. They travel
+ *   instead as what they are: the ask is refused, and the words are sent as the
+ *   next message, so the agent acts on them immediately.
+ *
+ * The last one is why the affordance can be offered unconditionally. It used to
+ * be gated on `custom || declares a refusal`, so a question that declared
+ * neither had no way to redirect at all — the reader could only pick something
+ * they had already decided was wrong.
  */
-export function promptTakesText(prompt: SessionInteractionPrompt): boolean {
-  return prompt.custom || prompt.options.some((option) => optionPolarity(option) === "reject");
+export type InteractionTextCarrier = "answer" | "note" | "message";
+
+export function promptTextCarrier(prompt: SessionInteractionPrompt): InteractionTextCarrier {
+  if (prompt.custom) return "answer";
+  if (prompt.options.some((option) => optionPolarity(option) === "reject")) return "note";
+  return "message";
 }
 
 export function promptFieldRole(
   prompt: SessionInteractionPrompt,
   draft: InteractionDraft,
 ): InteractionFieldRole {
+  const carrier = promptTextCarrier(prompt);
+  if (carrier === "answer") return "answer";
+  // Words that only a following message can carry are the redirection by
+  // definition: there is no declared answer they could be a note on.
+  if (carrier === "message") return "redirection";
   const { optionIds } = promptDraft(draft, prompt.id);
-  if (optionIds.length === 0) return prompt.custom ? "answer" : "note";
   const rejected = prompt.options.some(
     (option) => optionIds.includes(option.id) && optionPolarity(option) === "reject",
   );
   return rejected ? "redirection" : "note";
+}
+
+/**
+ * Whether a redirection has superseded this question's options.
+ *
+ * Saying "none of these work" and choosing one of them are contradictory, and
+ * the contradiction resolves toward the words: {@link interactionSubmission}
+ * refuses, and a refusal is the empty resolution. The card dims the options
+ * rather than leaving them live and silently discarding them at submit.
+ */
+export function promptRedirected(
+  prompt: SessionInteractionPrompt,
+  draft: InteractionDraft,
+): boolean {
+  return (
+    promptTextCarrier(prompt) === "message" &&
+    promptDraft(draft, prompt.id).response.trim().length > 0
+  );
 }
 
 /* ----------------------------------------------------------------- submit */
@@ -209,6 +243,77 @@ export function needsOwnRefusal(interaction: SessionInteraction): boolean {
  */
 export function refusalResolution(interaction: SessionInteraction): SessionInteractionResolution {
   return interactionResolution(interaction, emptyInteractionDraft(interaction));
+}
+
+/* ------------------------------------------------------------ what is sent */
+
+/**
+ * One press of the card's primary control, as two separate acts.
+ *
+ * They are separate on purpose. `message` is never folded into `resolution`:
+ * the resolution is what the harness's own reply endpoint takes, and a
+ * redirection that could not travel on it is an ordinary message sent after it
+ * — not a field smuggled into a refusal that is defined by being empty.
+ */
+export interface InteractionSubmission {
+  resolution: SessionInteractionResolution;
+  /** Null when the words travelled on the resolution, or when there were none. */
+  message: string | null;
+}
+
+/**
+ * The words no reply endpoint can carry, in prompt order.
+ *
+ * Joined rather than labelled, the same way {@link interactionResolution} joins
+ * responses: a card must not put words in the reader's message that the reader
+ * did not type.
+ */
+export function redirectMessage(
+  interaction: SessionInteraction,
+  draft: InteractionDraft,
+): string | null {
+  const said = readInteractionPrompts(interaction).flatMap((prompt) => {
+    if (promptTextCarrier(prompt) !== "message") return [];
+    const text = promptDraft(draft, prompt.id).response.trim();
+    return text.length > 0 ? [text] : [];
+  });
+  return said.length > 0 ? said.join("\n\n") : null;
+}
+
+/**
+ * Refusing, with whatever redirection was typed beside it.
+ *
+ * The resolution is still {@link refusalResolution} and nothing else, so the
+ * property that matters holds: a no selects nothing and says nothing, and no
+ * harness value can impersonate it. The words leave separately.
+ */
+export function refusalSubmission(
+  interaction: SessionInteraction,
+  draft: InteractionDraft,
+): InteractionSubmission {
+  return {
+    resolution: refusalResolution(interaction),
+    message: redirectMessage(interaction, draft),
+  };
+}
+
+/**
+ * What the primary control sends, or null while it has nothing to send.
+ *
+ * A redirection outranks the answers beside it, which is the same precedence a
+ * refusal already has when read back: what the reader said no to is the fact the
+ * transcript owes them. So typed words that only a message can carry refuse the
+ * ask and travel after it, and the selections they contradict go with the
+ * refusal rather than beside it.
+ */
+export function interactionSubmission(
+  interaction: SessionInteraction,
+  draft: InteractionDraft,
+): InteractionSubmission | null {
+  const redirect = redirectMessage(interaction, draft);
+  if (redirect !== null) return { resolution: refusalResolution(interaction), message: redirect };
+  if (!canSubmitInteraction(interaction, draft)) return null;
+  return { resolution: interactionResolution(interaction, draft), message: null };
 }
 
 export function interactionAnswers(

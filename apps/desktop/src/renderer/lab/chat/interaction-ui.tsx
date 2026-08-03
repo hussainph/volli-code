@@ -31,6 +31,10 @@
  * and none of them can mean "no", so a refusal there is a control of the card's
  * and travels as the empty resolution.
  *
+ * Every question has a box, and saying "none of these work" is never gated on a
+ * harness capability — only *how the words travel* is, and that is
+ * `promptTextCarrier`'s decision, not this file's.
+ *
  * Decision logic lives in `interaction.ts`. Everything here is presentation
  * plus the two things only a mounted card can own: where focus is, and that
  * there is no gesture which throws a pending decision away.
@@ -44,24 +48,24 @@ import { Textarea } from "@renderer/components/ui/textarea";
 import { cn } from "@renderer/lib/utils";
 
 import {
-  canSubmitInteraction,
   describeInteractionResolution,
   emptyInteractionDraft,
   interactionCarousel,
   interactionQuestions,
-  interactionResolution,
+  interactionSubmission,
   needsOwnRefusal,
   optionPolarity,
   promptDraft,
   promptFieldRole,
-  promptTakesText,
-  refusalResolution,
+  promptRedirected,
+  refusalSubmission,
   selectOption,
   setPromptResponse,
   type InteractionCarousel,
   type InteractionDraft,
   type InteractionFieldRole,
   type InteractionQuestion,
+  type InteractionSubmission,
 } from "./interaction";
 
 /* ------------------------------------------------------------------- card */
@@ -74,7 +78,7 @@ const FIELD_PLACEHOLDER: Record<InteractionFieldRole, string> = {
 
 export interface InteractionCardProps {
   interaction: SessionInteraction;
-  onResolve(resolution: SessionInteractionResolution): void;
+  onResolve(submission: InteractionSubmission): void;
   /**
    * The turn's only other exit, at the mount where the composer is not on
    * screen to offer it. A card on a row leaves it off: the composer is still
@@ -112,7 +116,8 @@ export function InteractionCard({
   const carousel = interactionCarousel(interaction, draft, step);
   const asked = questions[carousel?.index ?? 0];
   const refusable = needsOwnRefusal(interaction);
-  const submittable = canSubmitInteraction(interaction, draft) && !resolving;
+  const submission = interactionSubmission(interaction, draft);
+  const submittable = submission !== null && !resolving;
   const own = React.useRef<HTMLFormElement>(null);
 
   // The composer this replaced held the focus. Taking it here keeps the
@@ -123,8 +128,8 @@ export function InteractionCard({
   }, [autoFocus]);
 
   const submit = () => {
-    if (!submittable) return;
-    onResolve(interactionResolution(interaction, draft));
+    if (!submittable || !submission) return;
+    onResolve(submission);
   };
 
   return (
@@ -206,7 +211,7 @@ export function InteractionCard({
             variant="ghost"
             className="ml-auto"
             disabled={resolving}
-            onClick={() => onResolve(refusalResolution(interaction))}
+            onClick={() => onResolve(refusalSubmission(interaction, draft))}
           >
             Reject
           </Button>
@@ -254,6 +259,10 @@ function InteractionQuestionFields({
   onSubmit(): void;
 }) {
   const { prompt, label } = question;
+  // Words that only a following message can carry contradict every option
+  // beside them, and the contradiction resolves toward the words. Dimming the
+  // list says so, instead of leaving it live and discarding it at submit.
+  const superseded = promptRedirected(prompt, draft);
   return (
     <fieldset className="min-w-0">
       {label ? <legend className="mb-1 text-sm leading-5 text-foreground">{label}</legend> : null}
@@ -273,13 +282,14 @@ function InteractionQuestionFields({
               className={cn(
                 "flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-muted/40 has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-ring",
                 polarity === "standing" ? "text-xs" : "text-sm",
+                superseded && "opacity-50",
               )}
             >
               <input
                 type={prompt.multiple ? "checkbox" : "radio"}
                 name={`${interaction.id}:${prompt.id}`}
                 checked={checked}
-                disabled={disabled}
+                disabled={disabled || superseded}
                 onChange={() => onDraftChange(selectOption(draft, prompt, option.id))}
                 className={cn(
                   "size-3.5 shrink-0 accent-primary outline-none",
@@ -303,23 +313,27 @@ function InteractionQuestionFields({
           );
         })}
       </div>
-      {promptTakesText(prompt) ? (
-        <Textarea
-          value={promptDraft(draft, prompt.id).response}
-          disabled={disabled}
-          placeholder={FIELD_PLACEHOLDER[promptFieldRole(prompt, draft)]}
-          onChange={(event) =>
-            onDraftChange(setPromptResponse(draft, prompt.id, event.currentTarget.value))
+      {/* Always here. Where the words reach the harness is the harness's
+          business — `promptTextCarrier` decides whether they are this
+          question's own answer, a note on the verdict, or a refusal and a
+          following message — but that a reader can say "none of these work" is
+          not conditional on a capability. The placeholder is the only label it
+          needs: the control talks. */}
+      <Textarea
+        value={promptDraft(draft, prompt.id).response}
+        disabled={disabled}
+        placeholder={FIELD_PLACEHOLDER[promptFieldRole(prompt, draft)]}
+        onChange={(event) =>
+          onDraftChange(setPromptResponse(draft, prompt.id, event.currentTarget.value))
+        }
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+            event.preventDefault();
+            onSubmit();
           }
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-              event.preventDefault();
-              onSubmit();
-            }
-          }}
-          className="mt-1.5 min-h-9 resize-none rounded-md text-sm shadow-none"
-        />
-      ) : null}
+        }}
+        className="mt-1.5 min-h-9 resize-none rounded-md text-sm shadow-none"
+      />
     </fieldset>
   );
 }

@@ -16,10 +16,14 @@ import {
   isPromptAnswered,
   needsOwnRefusal,
   optionPolarity,
-  promptTakesText,
   promptDraft,
   promptFieldRole,
+  promptRedirected,
+  promptTextCarrier,
+  redirectMessage,
   refusalResolution,
+  refusalSubmission,
+  interactionSubmission,
   selectOption,
   setPromptResponse,
 } from "./interaction";
@@ -153,9 +157,13 @@ describe("draft", () => {
 });
 
 describe("the field's role", () => {
-  it("is a note beside a declared answer", () => {
-    const single = prompt();
-    expect(promptFieldRole(single, selectOption({}, single, "question:0:bWFpbg"))).toBe("note");
+  it("is a note beside a declared verdict", () => {
+    const [permissionPrompt] = permission().prompts ?? [];
+    if (!permissionPrompt) throw new Error("fixture has no prompt");
+    expect(promptFieldRole(permissionPrompt, selectOption({}, permissionPrompt, "once"))).toBe(
+      "note",
+    );
+    expect(promptFieldRole(permissionPrompt, {})).toBe("note");
   });
 
   it("becomes the redirection beside a refusal", () => {
@@ -164,14 +172,121 @@ describe("the field's role", () => {
     expect(promptFieldRole(permissionPrompt, selectOption({}, permissionPrompt, "reject"))).toBe(
       "redirection",
     );
-    expect(promptFieldRole(permissionPrompt, selectOption({}, permissionPrompt, "once"))).toBe(
-      "note",
-    );
   });
 
-  it("is the answer itself where the harness accepts one and nothing is chosen", () => {
-    expect(promptFieldRole(prompt({ custom: true }), {})).toBe("answer");
-    expect(promptFieldRole(prompt({ custom: false }), {})).toBe("note");
+  it("is the answer itself where the harness accepts one", () => {
+    const custom = prompt({ custom: true });
+    expect(promptFieldRole(custom, {})).toBe("answer");
+    expect(promptFieldRole(custom, selectOption({}, custom, "question:0:bWFpbg"))).toBe("answer");
+  });
+
+  it("is the redirection wherever nothing on the wire takes the words", () => {
+    // The whole point of offering it unconditionally: a question declaring
+    // neither `custom` nor a refusal had no way to redirect at all, so the only
+    // move left was picking something already decided to be wrong.
+    const plain = prompt({ custom: false });
+    expect(promptFieldRole(plain, {})).toBe("redirection");
+    expect(promptFieldRole(plain, selectOption({}, plain, "question:0:bWFpbg"))).toBe(
+      "redirection",
+    );
+  });
+});
+
+describe("none of these work", () => {
+  it("carries the words the way the harness accepts them, and no other way", () => {
+    const [permissionPrompt] = permission().prompts ?? [];
+    if (!permissionPrompt) throw new Error("fixture has no prompt");
+    // `custom` is the only shape whose free text is a real answer on the wire.
+    expect(promptTextCarrier(prompt({ custom: true }))).toBe("answer");
+    // A permission's reply carries a `message` beside the verdict.
+    expect(promptTextCarrier(permissionPrompt)).toBe("note");
+    // Everything else: `answers` is selected labels only, so words there would
+    // claim a choice OpenCode never offered.
+    expect(promptTextCarrier(prompt({ custom: false }))).toBe("message");
+  });
+
+  it("refuses and redirects where nothing else can carry the words", () => {
+    const plain = prompt();
+    const interaction = question([plain]);
+    // The selection the words contradict goes with the refusal rather than
+    // beside it — the refusal is still exactly the empty resolution.
+    const draft = setPromptResponse(
+      selectOption({}, plain, "question:0:bWFpbg"),
+      "prompt:0",
+      "  read the lockfile first  ",
+    );
+    expect(interactionSubmission(interaction, draft)).toEqual({
+      resolution: {
+        optionIds: [],
+        response: null,
+        answers: [{ promptId: "prompt:0", optionIds: [], response: null }],
+      },
+      message: "read the lockfile first",
+    });
+    expect(promptRedirected(plain, draft)).toBe(true);
+  });
+
+  it("keeps a native answer on the resolution, with nothing to send after it", () => {
+    const custom = prompt({ custom: true });
+    const interaction = question([custom]);
+    const draft = setPromptResponse({}, "prompt:0", "the release branch");
+    expect(redirectMessage(interaction, draft)).toBeNull();
+    expect(interactionSubmission(interaction, draft)).toEqual({
+      resolution: {
+        optionIds: [],
+        response: "the release branch",
+        answers: [{ promptId: "prompt:0", optionIds: [], response: "the release branch" }],
+      },
+      message: null,
+    });
+  });
+
+  it("rides a permission's own reply rather than a following message", () => {
+    const interaction = permission();
+    const [only] = interaction.prompts ?? [];
+    if (!only) throw new Error("fixture has no prompt");
+    const draft = setPromptResponse(
+      selectOption({}, only, "reject"),
+      "prompt:0",
+      "read it instead",
+    );
+    expect(interactionSubmission(interaction, draft)).toEqual({
+      resolution: {
+        optionIds: ["reject"],
+        response: "read it instead",
+        answers: [{ promptId: "prompt:0", optionIds: ["reject"], response: "read it instead" }],
+      },
+      message: null,
+    });
+  });
+
+  it("gathers a redirection typed on any question of a multi-question request", () => {
+    const first = prompt({ id: "prompt:0" });
+    const second = prompt({ id: "prompt:1", custom: true });
+    const interaction = question([first, second]);
+    let draft = setPromptResponse({}, "prompt:0", "neither, look at the CI log");
+    draft = setPromptResponse(draft, "prompt:1", "and update the docs");
+    // Only the question whose words no reply can carry becomes the message; the
+    // one declaring `custom` keeps its own answer, and is dropped by the refusal
+    // like every other selection.
+    expect(redirectMessage(interaction, draft)).toBe("neither, look at the CI log");
+    expect(promptRedirected(second, draft)).toBe(false);
+  });
+
+  it("says nothing when there is nothing to send", () => {
+    const interaction = question([prompt()]);
+    expect(interactionSubmission(interaction, {})).toBeNull();
+    expect(redirectMessage(interaction, setPromptResponse({}, "prompt:0", "   "))).toBeNull();
+  });
+
+  it("lets an explicit refusal carry the same words", () => {
+    const interaction = question([prompt()]);
+    const draft = setPromptResponse({}, "prompt:0", "ask me again after the tests");
+    expect(refusalSubmission(interaction, draft)).toEqual({
+      resolution: refusalResolution(interaction),
+      message: "ask me again after the tests",
+    });
+    expect(refusalSubmission(interaction, {}).message).toBeNull();
   });
 });
 
@@ -207,19 +322,6 @@ describe("refusal", () => {
     expect(
       describeInteractionResolution(interaction, refusalResolution(interaction)),
     ).toMatchObject({ verdict: "rejected", lead: "You rejected", trailer: null });
-  });
-});
-
-describe("where a box is offered", () => {
-  it("follows the harness, not the shape of the question", () => {
-    // A prompt declaring `custom` is answered in words, and a permission's
-    // refusal carries a `message`. A question refused out of band sends a body
-    // -less reject, so a box there would take a sentence nobody would read.
-    const [permissionPrompt] = permission().prompts ?? [];
-    if (!permissionPrompt) throw new Error("fixture has no prompt");
-    expect(promptTakesText(permissionPrompt)).toBe(true);
-    expect(promptTakesText(prompt({ custom: true }))).toBe(true);
-    expect(promptTakesText(prompt({ custom: false }))).toBe(false);
   });
 });
 
