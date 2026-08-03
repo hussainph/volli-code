@@ -6,7 +6,9 @@ import {
   ACTIVITY_PRESENTERS,
   activityContext,
   activityStatus,
+  approvalId,
   bundleNeedsAttention,
+  gatedApprovalIds,
   bundleSummary,
   compactSignature,
   describeActivity,
@@ -211,17 +213,24 @@ describe("segmentMessageParts", () => {
     expect(bundleOf(segments)).toHaveLength(1);
   });
 
-  it("keeps an approval request in the bundle and opens it", () => {
+  it("breaks a gated call out of the bundle", () => {
     const segments = segmentMessageParts(
       [tool("read-file"), tool("run-command", { state: "approval-requested" })],
       "m3",
     );
-    // It used to leave the bundle, because it blocked the reader and needed
-    // buttons. The buttons live in one card at the foot of the transcript now,
-    // so what is left on the row is a gated marker — and `needsAttention` is
-    // what puts it on screen without a second left edge.
-    expect(segments.map((segment) => segment.kind)).toEqual(["bundle"]);
-    expect(bundleNeedsAttention(bundleOf(segments))).toBe(true);
+    // The one thing that leaves. It blocks the reader and it needs controls, so
+    // it must not sit behind a disclosure — and its decision draws under it,
+    // beside the command it is about.
+    expect(segments.map((segment) => segment.kind)).toEqual(["bundle", "attention"]);
+    expect(bundleOf(segments)).toHaveLength(1);
+  });
+
+  it("closes the bundle around it rather than reordering the turn", () => {
+    const segments = segmentMessageParts(
+      [tool("read-file"), tool("run-command", { state: "approval-requested" }), tool("search")],
+      "m3b",
+    );
+    expect(segments.map((segment) => segment.kind)).toEqual(["bundle", "attention", "bundle"]);
   });
 
   it("keeps failures and denials inside the bundle", () => {
@@ -489,6 +498,25 @@ describe("bundle state", () => {
   it("needs attention only for an outcome the summary would otherwise bury", () => {
     const clean = bundleOf(segmentMessageParts([tool("read-file")], "b4"));
     expect(bundleNeedsAttention(clean)).toBe(false);
+  });
+});
+
+describe("the decision a call is gated on", () => {
+  it("reads the harness's own id off the gated state and nowhere else", () => {
+    expect(approvalId(tool("run-command", { state: "approval-requested" }))).toBe("approval-1");
+    expect(approvalId(tool("run-command", { state: "output-denied" }))).toBe(null);
+    expect(approvalId(tool("run-command"))).toBe(null);
+  });
+
+  it("collects every gate the transcript is already showing", () => {
+    // What the foot slot subtracts. An interaction drawn on its row and again
+    // under the composer is one question asked twice.
+    const messages = [
+      message("m1", [tool("read-file"), tool("run-command", { state: "approval-requested" })]),
+      message("m2", [{ type: "text", text: "waiting" }]),
+    ];
+    expect([...gatedApprovalIds(messages)]).toEqual(["approval-1"]);
+    expect(gatedApprovalIds([message("m3", [tool("read-file")])]).size).toBe(0);
   });
 });
 

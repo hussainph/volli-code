@@ -117,8 +117,16 @@ function activity(
 const GATED_CALL_ID = "call-rm";
 const GATED_COMMAND = "rm -rf node_modules";
 
-/** The call a permission is correlated to, still waiting on the reader. */
-function gatedCall(approvalId: string): DynamicToolUIPart {
+/**
+ * The call a permission is correlated to, still waiting on the reader.
+ *
+ * `approval.id` is the *permission's own native id*, not an id of the call's —
+ * that is how OpenCode reports it and how the adapter stamps it, and it is the
+ * only thing pairing a gated row with the question that gates it. A fixture
+ * that made one up would draw the card at the foot of the transcript and leave
+ * the row waiting on a decision it could not name.
+ */
+function gatedCall(permissionId: string): DynamicToolUIPart {
   return {
     type: "dynamic-tool",
     toolName: "bash",
@@ -126,7 +134,7 @@ function gatedCall(approvalId: string): DynamicToolUIPart {
     toolMetadata: activity("run-command", "bash", GATED_COMMAND),
     state: "approval-requested",
     input: { command: GATED_COMMAND },
-    approval: { id: approvalId },
+    approval: { id: permissionId },
   };
 }
 
@@ -135,7 +143,7 @@ function gatedCall(approvalId: string): DynamicToolUIPart {
  * message*, which is how a native adapter reports a settled row and what the
  * transcript projection is built to fold together.
  */
-function settledCall(approved: boolean): DynamicToolUIPart {
+function settledCall(permissionId: string, approved: boolean): DynamicToolUIPart {
   const base = {
     type: "dynamic-tool" as const,
     toolName: "bash",
@@ -145,7 +153,7 @@ function settledCall(approved: boolean): DynamicToolUIPart {
   };
   return approved
     ? { ...base, state: "output-available", output: "removed 1284 directories" }
-    : { ...base, state: "output-denied", approval: { id: "approval-1", approved: false } };
+    : { ...base, state: "output-denied", approval: { id: permissionId, approved: false } };
 }
 
 /** A plan the rail shows and the composer's dock would show — until a card takes the slot. */
@@ -238,8 +246,10 @@ export const LAB_SCENARIOS: readonly LabScenario[] = [
       plan("lab-plan"),
       assistant("lab-msg-1", [
         { type: "text", text: "The tree is stale, so I want to clear it before reinstalling." },
-        gatedCall("approval-1"),
+        gatedCall("perm-1"),
       ]),
+      // Correlated, so the card draws on the row — the composer and the plan
+      // dock stay where they are, because the card is not in their slot.
       opened(permission("perm-1", "Run a command outside the worktree", GATED_COMMAND)),
     ],
     // The gate lifts on the row it gated, which only a newer snapshot of the
@@ -248,7 +258,10 @@ export const LAB_SCENARIOS: readonly LabScenario[] = [
     afterResolve: (context) => [
       assistant("lab-msg-1", [
         { type: "text", text: "The tree is stale, so I want to clear it before reinstalling." },
-        settledCall(context.optionIds.some((id) => id === "once" || id === "always")),
+        settledCall(
+          "perm-1",
+          context.optionIds.some((id) => id === "once" || id === "always"),
+        ),
       ]),
       turnCompleted(),
     ],
@@ -505,11 +518,12 @@ export const LAB_SCENARIOS: readonly LabScenario[] = [
       plan("lab-plan"),
       assistant("lab-msg-1", [
         { type: "text", text: "The tree is stale, so I want to clear it before reinstalling." },
-        gatedCall("approval-1"),
+        gatedCall("perm-3"),
       ]),
-      // Both live at once: the card takes the foot surface, and the blocked row,
-      // the plan dock and the composer all give way to it. The plan stays in the
-      // rail, which is where it also lives.
+      // Both live at once, and the interaction wins: the rate-limit row stands
+      // down for it. The card draws on the gated row rather than at the foot,
+      // so the composer and the plan dock are still there — being asked a
+      // question blocks the turn, not the reader's place in the conversation.
       {
         kind: "attention.raised",
         attention: {
@@ -525,7 +539,10 @@ export const LAB_SCENARIOS: readonly LabScenario[] = [
     afterResolve: (context) => [
       assistant("lab-msg-1", [
         { type: "text", text: "The tree is stale, so I want to clear it before reinstalling." },
-        settledCall(context.optionIds.some((id) => id === "once" || id === "always")),
+        settledCall(
+          "perm-3",
+          context.optionIds.some((id) => id === "once" || id === "always"),
+        ),
       ]),
     ],
   },

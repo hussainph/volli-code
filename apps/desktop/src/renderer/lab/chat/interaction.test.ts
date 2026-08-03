@@ -7,7 +7,9 @@ import {
   readInteractionResolutionMessage,
   describeInteractionResolution,
   emptyInteractionDraft,
+  footInteraction,
   interactionAnswers,
+  interactionForApproval,
   interactionQuestions,
   interactionResolution,
   isPromptAnswered,
@@ -360,6 +362,33 @@ describe("interactionQuestions", () => {
       "Which branch?",
       "Which remote?",
     ]);
+  });
+});
+
+describe("where a card draws", () => {
+  it("pairs a gated call with its question on the harness's own id", () => {
+    const gated = permission();
+    const other = permission({ id: "permission:p2", native: { id: "perm-2", detail: null } });
+    expect(interactionForApproval([other, gated], "perm-1")).toBe(gated);
+    expect(interactionForApproval([other, gated], "perm-9")).toBe(null);
+    // A row with no gate names no interaction — never the only open one by
+    // adjacency, which would put a subagent's question on a parent's call.
+    expect(interactionForApproval([gated], null)).toBe(null);
+  });
+
+  it("leaves the foot the oldest interaction no row is showing", () => {
+    const gated = permission();
+    const asked = question([prompt()]);
+    expect(footInteraction([gated, asked], new Set(["perm-1"]))).toBe(asked);
+    expect(footInteraction([gated, asked], new Set())).toBe(gated);
+    expect(footInteraction([gated], new Set(["perm-1"]))).toBe(null);
+  });
+
+  it("keeps an interaction with no native id at the foot", () => {
+    // Nothing can correlate to it, so it belongs there by construction rather
+    // than by having survived a filter.
+    const loose = permission({ native: { id: null, detail: null } });
+    expect(footInteraction([loose], new Set(["perm-1"]))).toBe(loose);
   });
 });
 

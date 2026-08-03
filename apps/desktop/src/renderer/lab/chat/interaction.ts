@@ -268,6 +268,47 @@ export function interactionQuestions(
   }));
 }
 
+/* -------------------------------------------------------------- where it draws */
+
+/**
+ * The open interaction a gated call is waiting on.
+ *
+ * Matched on the id the harness put on both sides: OpenCode keys a permission
+ * by its own request id, the adapter stamps that id onto the gated part's
+ * `approval` and mints the interaction as `permission:<id>` with the same value
+ * in `native.id`. So the correlation is the harness's own, never a guess from
+ * adjacency or from there happening to be exactly one of each.
+ */
+export function interactionForApproval(
+  interactions: readonly SessionInteraction[],
+  approvalId: string | null,
+): SessionInteraction | null {
+  if (approvalId === null) return null;
+  return interactions.find((interaction) => interaction.native.id === approvalId) ?? null;
+}
+
+/**
+ * The interaction the foot of the transcript owns: the oldest one no row is
+ * already showing.
+ *
+ * A harness can have several open at once — a subagent's permission while the
+ * parent turn waits on its own — and two blocking cards in the composer's slot
+ * are two things each claiming to be the one thing to do next. An interaction
+ * with no native id can never correlate to a call, so it belongs here by
+ * construction rather than by exclusion.
+ */
+export function footInteraction(
+  interactions: readonly SessionInteraction[],
+  gatedApprovalIds: ReadonlySet<string>,
+): SessionInteraction | null {
+  return (
+    interactions.find(
+      (interaction) =>
+        interaction.native.id === null || !gatedApprovalIds.has(interaction.native.id),
+    ) ?? null
+  );
+}
+
 /* ---------------------------------------------------------------- receipt */
 
 /**

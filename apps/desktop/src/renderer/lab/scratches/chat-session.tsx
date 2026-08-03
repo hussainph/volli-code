@@ -11,7 +11,7 @@ import type {
   SessionInteraction,
   SessionInteractionResolution,
 } from "@volli/shared";
-import type { UIMessage } from "ai";
+import type { DynamicToolUIPart, UIMessage } from "ai";
 
 import {
   Conversation,
@@ -32,6 +32,8 @@ import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
 
 import {
+  approvalId,
+  gatedApprovalIds,
   groupTurns,
   isAwaitingFirstOutput,
   projectSessionTodos,
@@ -39,14 +41,15 @@ import {
   type ChatSegment,
   type SessionTodo,
 } from "../chat/activity";
-import { ActivityBundle, SessionTodoDock, SessionTodoList } from "../chat/activity-ui";
+import { ActivityBundle, SessionTodoDock, SessionTodoList, ToolRow } from "../chat/activity-ui";
 import { SessionComposer } from "../chat/composer-ui";
-import { indexOpenedInteractions, readInteractionResolutionMessage } from "../chat/interaction";
 import {
-  InteractionCard,
-  InteractionFocusProvider,
-  InteractionReceiptLine,
-} from "../chat/interaction-ui";
+  footInteraction,
+  indexOpenedInteractions,
+  interactionForApproval,
+  readInteractionResolutionMessage,
+} from "../chat/interaction";
+import { InteractionCard, InteractionReceiptLine } from "../chat/interaction-ui";
 import { LabScenarioPicker } from "../chat/scenario-picker";
 import { useLabSessionController } from "../chat/session-controller";
 import {
@@ -289,7 +292,6 @@ function ChatPlane({
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
   const composerHeight = useMeasuredHeight<HTMLDivElement>();
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
-  const interactionRef = React.useRef<HTMLFormElement>(null);
   const working = session.lifecycle === "working";
 
   const { submit, selection, liveAttachmentId, interactions, resolveInteraction } = session;
@@ -330,14 +332,17 @@ function ChatPlane({
   }, [deliverable, queued, submit, working]);
 
   /**
-   * One question at a time, oldest first.
+   * Which decisions the transcript is already showing, and which one is left
+   * for the foot.
    *
-   * A harness can have several interactions open at once — a permission raised
-   * by a subagent while the parent turn waits on its own. Answering the oldest
-   * is what usually clears the rest, and two blocking cards stacked in the
-   * composer's slot is two things claiming to be the one thing to do next.
+   * A gated call carries its own card on its own row, where the command and its
+   * detail are. What has no row to stand on — a question, a permission the
+   * harness raised without a call — lands in the composer's slot, oldest first:
+   * a harness can have several open at once, and two blocking cards stacked
+   * there are two things each claiming to be the one thing to do next.
    */
-  const pending = interactions[0] ?? null;
+  const gated = React.useMemo(() => gatedApprovalIds(session.messages), [session.messages]);
+  const pending = footInteraction(interactions, gated);
 
   const answer = React.useCallback(
     (interactionId: string, resolution: SessionInteractionResolution) => {
@@ -347,8 +352,6 @@ function ChatPlane({
     [resolveInteraction],
   );
 
-  const focusInteraction = React.useCallback(() => interactionRef.current?.focus(), []);
-
   // Every interaction this Session has opened, so a resolution message in
   // scrollback can name what it answered.
   const openedInteractions = React.useMemo(
@@ -356,49 +359,56 @@ function ChatPlane({
     [session.frames],
   );
 
-  const turnContext: TurnContext = { working, onOpenFile, interactions: openedInteractions };
-  // The precedence the blocker's own doc comment marks: a pending interaction
-  // is not a failure, it is the one thing on screen you can act on, and its
-  // card carries the answer. Suppressed here rather than inside `sessionBlocker`
-  // because this is the one place holding both.
-  const blocker = pending ? null : sessionBlocker(session, () => setSettingsOpen(true));
+  const turnContext: TurnContext = {
+    working,
+    onOpenFile,
+    interactions: openedInteractions,
+    open: interactions,
+    resolving,
+    onResolve: answer,
+  };
+  // The precedence the blocker's own doc comment marks: an open interaction is
+  // not a failure, it is the one thing on screen you can act on, and its card
+  // carries the answer — wherever that card stands. Suppressed here rather than
+  // inside `sessionBlocker` because this is the one place holding both.
+  const blocker =
+    interactions.length > 0 ? null : sessionBlocker(session, () => setSettingsOpen(true));
 
   const planeStyle = { "--composer-height": `${composerHeight.height}px` } as React.CSSProperties;
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col" style={planeStyle}>
       <FileMentionProvider onOpenFile={onOpenFile}>
-        <InteractionFocusProvider focus={pending ? focusInteraction : null}>
-          <Conversation className="min-h-0 bg-background">
-            {/* Only the part of this that clears the h-16 gradient reads as empty,
+        <Conversation className="min-h-0 bg-background">
+          {/* Only the part of this that clears the h-16 gradient reads as empty,
               so the honest figure is 4rem of fade plus 8rem of clean background
               — and the composer growing as you type eats into it from below.
               At +2rem the last line sat inside the gradient; at +5rem it had
               16px of real air, which is nothing. */}
-            <ConversationContent className="gap-6 px-0 pt-8 pb-[calc(var(--composer-height)+12rem)]">
-              {session.messages.length === 0 ? (
-                // A mark, and nothing else. Everything that used to stand here was
-                // the Session's plumbing wearing a button: a Start control for the
-                // thing opening the tab already means, and a models prompt fired
-                // by a catalog that had simply not answered yet. What genuinely
-                // blocks typing now sits on the composer, where the typing is.
-                <ConversationEmptyState className="min-h-80">
-                  <div className="flex size-10 items-center justify-center rounded-xl border border-border bg-card shadow-[var(--shadow-raised)]">
-                    <CodeIcon className="size-5 text-muted-foreground" />
-                  </div>
-                </ConversationEmptyState>
-              ) : (
-                <ContentColumn className={MESSAGE_GAP}>
-                  {groupTurns(session.messages).map((turn) => (
-                    <ChatTurn key={turn[0]?.id} messages={turn} context={turnContext} />
-                  ))}
-                  {working && isAwaitingFirstOutput(session.messages) ? (
-                    <ReasoningLine verb="Working" meta={null} streaming />
-                  ) : null}
-                </ContentColumn>
-              )}
-            </ConversationContent>
-            {/* A short fade over the transcript, keyed to the measured composer
+          <ConversationContent className="gap-6 px-0 pt-8 pb-[calc(var(--composer-height)+12rem)]">
+            {session.messages.length === 0 ? (
+              // A mark, and nothing else. Everything that used to stand here was
+              // the Session's plumbing wearing a button: a Start control for the
+              // thing opening the tab already means, and a models prompt fired
+              // by a catalog that had simply not answered yet. What genuinely
+              // blocks typing now sits on the composer, where the typing is.
+              <ConversationEmptyState className="min-h-80">
+                <div className="flex size-10 items-center justify-center rounded-xl border border-border bg-card shadow-[var(--shadow-raised)]">
+                  <CodeIcon className="size-5 text-muted-foreground" />
+                </div>
+              </ConversationEmptyState>
+            ) : (
+              <ContentColumn className={MESSAGE_GAP}>
+                {groupTurns(session.messages).map((turn) => (
+                  <ChatTurn key={turn[0]?.id} messages={turn} context={turnContext} />
+                ))}
+                {working && isAwaitingFirstOutput(session.messages) ? (
+                  <ReasoningLine verb="Working" meta={null} streaming />
+                ) : null}
+              </ContentColumn>
+            )}
+          </ConversationContent>
+          {/* A short fade over the transcript, keyed to the measured composer
               rather than a magic offset that breaks the moment the plan dock
               expands. The old full-height scrim repainted the card rung over
               itself and read as a grey wash.
@@ -418,9 +428,9 @@ function ChatPlane({
               10px above the composer was still ~84% opaque — a legible ghost,
               then hard-cut by the card. Anything within 2rem of the cut is now
               already background, and there is nothing left to slice. */}
-            <div className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16 bg-[linear-gradient(to_top,var(--background)_0,var(--background)_2rem,transparent_100%)]" />
+          <div className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16 bg-[linear-gradient(to_top,var(--background)_0,var(--background)_2rem,transparent_100%)]" />
 
-            {/* Glass, not a plug. This button only exists while the reader is
+          {/* Glass, not a plug. This button only exists while the reader is
               scrolled up, so there is always live text behind it; an opaque
               circle punches a hole in that text.
 
@@ -428,11 +438,10 @@ function ChatPlane({
               the plane once the composer's padding is added, so the scroller is
               legitimately not at its bottom and the button appeared over a
               conversation with nothing in it to jump to. */}
-            {session.messages.length > 0 ? (
-              <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-[var(--shadow-raised)] backdrop-blur-md dark:bg-background/70 dark:hover:bg-muted/70" />
-            ) : null}
-          </Conversation>
-        </InteractionFocusProvider>
+          {session.messages.length > 0 ? (
+            <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-[var(--shadow-raised)] backdrop-blur-md dark:bg-background/70 dark:hover:bg-muted/70" />
+          ) : null}
+        </Conversation>
       </FileMentionProvider>
 
       {/* Opaque, because this is the composer's footprint and the transcript
@@ -446,19 +455,21 @@ function ChatPlane({
         className="pointer-events-none absolute inset-x-0 bottom-0 bg-background pb-5"
       >
         <ContentColumn>
-          {/* One bordered thing in the slot. While an interaction is pending the
-              turn cannot proceed, so there is nothing to type and no plan
-              progress to read here — the composer and the dock stand down, and
-              the plan stays where it also lives, in the rail. Stacking the card
-              under the dock would put two cards on one rung. */}
+          {/* One bordered thing in the slot, and only for an interaction no row
+              can hold. While one stands here the turn cannot proceed and there
+              is nothing to type or no plan progress to read — the composer and
+              the dock stand down, and the plan stays where it also lives, in
+              the rail. Stacking the card under the dock would put two cards on
+              one rung. A card on a *row* displaces none of this: it is not in
+              this slot, so the composer stays exactly where it was. */}
           {pending ? (
             <InteractionCard
               // Keyed so a second question opening behind the first mounts its
               // own draft rather than inheriting the answers to another one.
               key={pending.id}
-              ref={interactionRef}
               interaction={pending}
               resolving={resolving}
+              autoFocus
               onResolve={(resolution) => answer(pending.id, resolution)}
               onStop={() => void session.interrupt()}
             />
@@ -734,6 +745,10 @@ interface TurnContext {
   onOpenFile(path: string): void;
   /** Every interaction opened this Session, for the receipts they left behind. */
   interactions: ReadonlyMap<string, SessionInteraction>;
+  /** The ones still open, so a gated row can draw the card it is waiting on. */
+  open: readonly SessionInteraction[];
+  resolving: boolean;
+  onResolve(interactionId: string, resolution: SessionInteractionResolution): void;
 }
 
 function ChatTurn({ messages, context }: { messages: readonly UIMessage[]; context: TurnContext }) {
@@ -794,9 +809,41 @@ function renderSegment(
       );
     case "bundle":
       return <ActivityBundle rows={segment.rows} onOpenFile={context.onOpenFile} />;
+    case "attention":
+      return <GatedCall part={segment.part} context={context} />;
     default:
       return null;
   }
+}
+
+/**
+ * A call and the decision it is waiting on, in the one place both belong.
+ *
+ * The row is the ordinary row — same glyph, same verb, same mono object, same
+ * disclosure onto the input it is about to run — so the command and its detail
+ * stay readable while the question sits under them. The card is the real
+ * interaction, not a summary of it: every option the harness declared, the same
+ * text field, the same submit rules as the one at the foot.
+ *
+ * No card when nothing correlates. The row keeps its own gated glyph and the
+ * interaction is drawn at the foot instead, which is what `footInteraction`
+ * decides — a gate we cannot pair with a question must not invent one.
+ */
+function GatedCall({ part, context }: { part: DynamicToolUIPart; context: TurnContext }) {
+  const interaction = interactionForApproval(context.open, approvalId(part));
+  return (
+    <div className="space-y-1.5">
+      <ToolRow part={part} onOpenFile={context.onOpenFile} />
+      {interaction ? (
+        <InteractionCard
+          key={interaction.id}
+          interaction={interaction}
+          resolving={context.resolving}
+          onResolve={(resolution) => context.onResolve(interaction.id, resolution)}
+        />
+      ) : null}
+    </div>
+  );
 }
 
 function todosEveryDone(todos: readonly SessionTodo[]): boolean {

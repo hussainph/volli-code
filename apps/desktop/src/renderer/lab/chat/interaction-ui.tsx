@@ -1,17 +1,25 @@
 /**
- * The interaction card, and the marker a gated tool row wears while it waits.
+ * The interaction card.
  *
- * One home for every interaction. A permission correlated to a tool call and a
+ * One component, two mount points. A permission correlated to a tool call and a
  * question that was never correlated to anything are the same shape here: the
  * harness declares prompts, the card draws them, and the reader answers once.
+ * Where it *stands* is the only difference, and it is the caller's to decide:
+ *
+ *  - **On the row**, under the call it gates, in the transcript. A decision
+ *    belongs where it happened, beside the command and its detail. The composer
+ *    stays: the turn is blocked, but the reader's place in the conversation is
+ *    not, and the card is not standing in the composer's slot.
+ *  - **At the foot**, in the composer's slot, for an interaction no row can
+ *    hold — a question, or a permission the harness raised with no call. There
+ *    is nothing to type while it waits, so the composer and the plan dock stand
+ *    down and the card takes the whole surface. Stop rides along, because that
+ *    is the exit the composer took with it.
+ *
  * The old approval card took a `DynamicToolUIPart` and drew three hardcoded
  * buttons, so an option a harness declared could never reach the screen and an
- * interaction with no call could not be answered at all.
- *
- * It stands in the composer's slot rather than in scrollback. While a turn is
- * waiting on an answer there is nothing to type — a composer under a blocking
- * question is an invitation to write into a void — so the card takes the whole
- * foot surface, and the plan dock and the blocked row stand down for it.
+ * interaction with no call could not be answered at all. This one is the real
+ * interaction in both places, which is why it must not be forked into two.
  *
  * A refusal is not always one of the options. A permission declares `reject`,
  * an id we mint; a question's option ids are the harness's own encoded values
@@ -48,55 +56,6 @@ import {
   type InteractionFieldRole,
 } from "./interaction";
 
-/* ------------------------------------------------------------------ focus */
-
-/**
- * How a gated row points at the card holding its question.
- *
- * Null when nothing is pending, which is also what the fixture gallery
- * provides: the marker degrades to a plain word rather than a button that
- * would lead nowhere.
- */
-const InteractionFocusContext = React.createContext<(() => void) | null>(null);
-
-export function InteractionFocusProvider({
-  focus,
-  children,
-}: React.PropsWithChildren<{ focus: (() => void) | null }>) {
-  return (
-    <InteractionFocusContext.Provider value={focus}>{children}</InteractionFocusContext.Provider>
-  );
-}
-
-export function useInteractionFocus(): (() => void) | null {
-  return React.useContext(InteractionFocusContext);
-}
-
-/**
- * The one thing a row waiting on a decision says.
- *
- * Machine register, in the meta column where every other row puts its receipt,
- * and in the attention tone — a gate is not a duration. Its glyph is already
- * distinct upstream: approval never shares one with running.
- */
-export function GatedMarker() {
-  const focus = useInteractionFocus();
-  const label = "waiting on you";
-  if (!focus) return <span className="shrink-0 font-mono text-xs text-primary">{label}</span>;
-  return (
-    <button
-      type="button"
-      onClick={(event) => {
-        event.stopPropagation();
-        focus();
-      }}
-      className="shrink-0 rounded font-mono text-xs text-primary underline decoration-transparent decoration-dotted underline-offset-[3px] transition-colors hover:decoration-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-    >
-      {label}
-    </button>
-  );
-}
-
 /* ------------------------------------------------------------------- card */
 
 const FIELD_PLACEHOLDER: Record<InteractionFieldRole, string> = {
@@ -108,10 +67,22 @@ const FIELD_PLACEHOLDER: Record<InteractionFieldRole, string> = {
 export interface InteractionCardProps {
   interaction: SessionInteraction;
   onResolve(resolution: SessionInteractionResolution): void;
-  /** The turn's only other exit. It leaves with the composer, so it lands here. */
+  /**
+   * The turn's only other exit, at the mount where the composer is not on
+   * screen to offer it. A card on a row leaves it off: the composer is still
+   * there with its own, and two Stops in view are two different-looking ways to
+   * do one thing.
+   */
   onStop?(): void;
   /** A decision is in flight; the harness's own verdict is what clears the card. */
   resolving?: boolean;
+  /**
+   * Whether the card takes the keyboard as it mounts. True where it replaced
+   * the composer, which held the focus; false on a row, where the composer
+   * still has it and a card appearing mid-turn would swallow a keystroke the
+   * reader was aiming somewhere else.
+   */
+  autoFocus?: boolean;
   ref?: React.Ref<HTMLFormElement>;
   className?: string;
 }
@@ -121,6 +92,7 @@ export function InteractionCard({
   onResolve,
   onStop,
   resolving,
+  autoFocus,
   ref,
   className,
 }: InteractionCardProps) {
@@ -135,7 +107,9 @@ export function InteractionCard({
   // The composer this replaced held the focus. Taking it here keeps the
   // keyboard on the one thing that can move the turn forward instead of
   // dropping it on the document body when the composer unmounts.
-  React.useEffect(() => own.current?.focus(), []);
+  React.useEffect(() => {
+    if (autoFocus) own.current?.focus();
+  }, [autoFocus]);
 
   const submit = () => {
     if (!submittable) return;

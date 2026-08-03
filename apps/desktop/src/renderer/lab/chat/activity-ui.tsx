@@ -5,9 +5,9 @@
  * counts, reasoning, an expanded payload — starts at the same x, and depth is
  * never spelled as indentation. Containment is said by the caret and by
  * adjacency; a row's disclosure opens *in line*, so opening something makes the
- * list longer rather than making it a tree. Nothing here is bordered: an object
- * you act on lives at the foot of the transcript, where the interaction card
- * stands, and this file draws only process you audit.
+ * list longer rather than making it a tree. Nothing here is bordered: this file
+ * draws only process you audit, and the one object you act on — the card under
+ * a gated call — is the interaction itself, mounted by the caller.
  *
  * Every row is the same primitive — `‹glyph› ‹Verb› ‹object›` left, `‹meta›`
  * right — and all variance lives in the per-kind presenters in `activity.ts`.
@@ -60,7 +60,6 @@ import {
   type SummarySegment,
   type SummaryTone,
 } from "./activity";
-import { GatedMarker } from "./interaction-ui";
 
 /* ------------------------------------------------------------------- motion */
 
@@ -398,12 +397,7 @@ export function ToolRow({
         {row.object ? <RowObject row={row} onOpenFile={onOpenFile} /> : null}
         <RowDisclosure open={open} expandable={expandable} labelId={verbId} onToggle={toggle} />
         <RowActions row={row} />
-        {/* A gated row has one thing to report and it is not a duration: the
-            call is waiting on a decision that is being taken elsewhere. The
-            marker says so and points at the card holding the question. */}
-        {row.status === "approval" ? (
-          <GatedMarker />
-        ) : row.meta ? (
+        {row.meta ? (
           <span
             className={cn("shrink-0 font-mono tabular-nums", TONE_CLASS[row.metaTone])}
             // Numerals are tabular so live counters do not jitter.

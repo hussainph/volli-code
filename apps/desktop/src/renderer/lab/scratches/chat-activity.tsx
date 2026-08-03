@@ -639,38 +639,27 @@ export default function ChatActivityScratch() {
         />
       </Section>
 
-      <Section label="Bundle · a row gated on a decision taken elsewhere">
-        <ActivityBundle
-          rows={[
-            {
-              kind: "tool" as const,
-              key: "b7-read",
-              part: tool(
-                descriptor("read-file", {
-                  subject: { label: "package.json", path: "package.json", lineRange: null },
-                }),
-              ),
-            },
-            {
-              kind: "tool" as const,
-              key: "b7-gated",
-              part: tool(
-                descriptor("run-command", {
-                  subject: { label: "rm -rf node_modules", path: null, lineRange: null },
-                }),
-                { state: "approval-requested" },
-              ),
-            },
-          ]}
+      {/* A gated call leaves the bundle — it blocks the reader and it needs
+          controls, so it must not sit behind a disclosure — and it takes its
+          decision with it. Row above, card under it, at one left edge. */}
+      <Section label="Interaction · on the row, where the call was gated">
+        <ToolRow
+          part={tool(
+            descriptor("run-command", {
+              subject: { label: "rm -rf node_modules", path: null, lineRange: null },
+            }),
+            { state: "approval-requested" },
+          )}
         />
-      </Section>
-
-      <Section label="Interaction · a permission, correlated to a call">
         <InteractionCard interaction={PERMISSION} onResolve={() => undefined} />
       </Section>
 
-      <Section label="Interaction · two questions, no call to hang them on">
-        <InteractionCard interaction={QUESTION} onResolve={() => undefined} />
+      <Section label="Interaction · at the foot, with no call to hang it on">
+        <InteractionCard
+          interaction={QUESTION}
+          onResolve={() => undefined}
+          onStop={() => undefined}
+        />
       </Section>
 
       <Section label="Interaction · receipts">

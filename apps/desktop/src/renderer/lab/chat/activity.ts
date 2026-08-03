@@ -59,21 +59,56 @@ export type BundleRow =
  * the summary that counts them, and the caret is the only thing that says one
  * contains the other.
  *
- * Nothing leaves the bundle, including an approval request. It used to: it
- * blocked the reader and needed buttons, so it stood on its own as a card in
- * scrollback. The buttons moved — every interaction is answered in one place at
- * the foot of the transcript now, correlated to a call or not — so what is left
- * on the row is the fact that it is gated. `needsAttention` opens the bundle for
- * it, the same way it does for a failure, so a waiting row is on screen without
- * costing the transcript a second left edge.
+ * One thing leaves the bundle, and only one: a call gated on a decision. It
+ * blocks the reader and it needs controls, so it must not sit behind a
+ * disclosure at all — and the decision belongs *where it happened*, beside the
+ * command it is about, rather than as a card at the foot of the transcript with
+ * the row it gates left saying only that it is waiting. Failures and denials
+ * stay inside; the summary confesses them in red and `needsAttention` opens the
+ * bundle, which costs the transcript no second left edge.
  */
 export type ChatSegment =
   | { kind: "text"; part: Extract<MessagePart, { type: "text" }>; key: string }
-  | { kind: "bundle"; rows: BundleRow[]; key: string };
+  | { kind: "bundle"; rows: BundleRow[]; key: string }
+  | { kind: "attention"; part: DynamicToolUIPart; key: string };
 
 /** Outcomes a bundle must not swallow silently. */
 export function needsAttention(state: DynamicToolUIPart["state"]): boolean {
   return state === "output-error" || state === "output-denied" || state === "approval-requested";
+}
+
+/** The one state that leaves the bundle: it blocks, and it needs controls. */
+export function isBlocking(state: DynamicToolUIPart["state"]): boolean {
+  return state === "approval-requested";
+}
+
+/**
+ * The harness's own id for the decision a call is waiting on, which is the same
+ * id the interaction carries in `native.id`. Null on every other state, so a row
+ * can be asked without narrowing it first.
+ */
+export function approvalId(part: DynamicToolUIPart): string | null {
+  return part.state === "approval-requested" ? part.approval.id : null;
+}
+
+/**
+ * Every decision a transcript row is already showing.
+ *
+ * The foot slot takes what is left. Without this an interaction correlated to a
+ * visible call would be drawn twice — once on its row and once under the
+ * composer — and answering one copy would leave the other on screen until the
+ * projection caught up.
+ */
+export function gatedApprovalIds(messages: readonly UIMessage[]): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type !== "dynamic-tool") continue;
+      const id = approvalId(part);
+      if (id !== null) ids.add(id);
+    }
+  }
+  return ids;
 }
 
 /**
@@ -192,6 +227,11 @@ function segmentParts(entries: readonly KeyedPart[]): ChatSegment[] {
     }
     if (part.type !== "dynamic-tool") return;
     if (isPlanActivity(part)) return;
+    if (isBlocking(part.state)) {
+      flush();
+      segments.push({ kind: "attention", part, key });
+      return;
+    }
     bundle ??= [];
     bundle.push({ kind: "tool", part, key });
   });
