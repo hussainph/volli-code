@@ -190,9 +190,18 @@ export function InteractionCard({
                 const polarity = optionPolarity(option);
                 const checked = promptDraft(draft, prompt.id).optionIds.includes(option.id);
                 return (
+                  // A standing grant is not a louder yes: it consents to every
+                  // future call of its kind, so it must never carry the same
+                  // weight as the one-time one beside it. Muting the label
+                  // alone left the two rows the same size and the same shape,
+                  // which is what "identical weight" looked like on screen; the
+                  // secondary tier is a step down the type scale as well.
                   <label
                     key={option.id}
-                    className="flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-sm transition-colors hover:bg-muted/40 has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-ring"
+                    className={cn(
+                      "flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-muted/40 has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-ring",
+                      polarity === "standing" ? "text-xs" : "text-sm",
+                    )}
                   >
                     <input
                       type={prompt.multiple ? "checkbox" : "radio"}
@@ -200,11 +209,11 @@ export function InteractionCard({
                       checked={checked}
                       disabled={resolving}
                       onChange={() => setDraft(selectOption(draft, prompt, option.id))}
-                      className="size-3.5 shrink-0 accent-primary outline-none"
+                      className={cn(
+                        "size-3.5 shrink-0 accent-primary outline-none",
+                        polarity === "standing" && "opacity-70",
+                      )}
                     />
-                    {/* A standing grant is not a louder yes: it consents to
-                        every future call of its kind, so it never carries the
-                        same weight as the one-time one beside it. */}
                     <span
                       className={cn(
                         "min-w-0 truncate",
@@ -244,16 +253,15 @@ export function InteractionCard({
       </div>
 
       <div className="mt-2.5 flex items-center gap-1 border-t border-border/70 px-3 py-2">
+        {/* Worded, not a bare glyph. Stop is the composer's control, and it
+            reads there because it stands beside Send in a row of controls; a
+            naked square in the bottom-left corner of a *blocking* card reads as
+            a checkbox you have to tick before the card will let you submit,
+            which is the worst thing this footer could say. */}
         {onStop ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Stop"
-            disabled={resolving}
-            onClick={onStop}
-          >
+          <Button type="button" variant="ghost" size="sm" disabled={resolving} onClick={onStop}>
             <SquareIcon className="size-3.5" weight="fill" />
+            Stop
           </Button>
         ) : null}
         {/* A refusal the harness did not declare an option for. It is a control
