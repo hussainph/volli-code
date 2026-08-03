@@ -3306,8 +3306,11 @@ describe("OpenCodeNativeAdapter", () => {
         };
       if (input.path.startsWith("/session/status"))
         return { status: 200, body: { type: "unknown" } };
+      // How a build that lacks the endpoint actually answers — a status, not
+      // a rejection. A rejection is a transport failure and means something
+      // else entirely.
       if (input.path.startsWith("/permission") || input.path.startsWith("/question"))
-        throw new Error("not supported");
+        return { status: 404, body: { error: "not supported" } };
       return originalRequest(input);
     };
     const handle = await adapter.attach(spec(), { emit: async () => undefined });
@@ -4467,6 +4470,21 @@ describe("OpenCodeNativeAdapter", () => {
     // Acknowledge the pending reconciliation, or the next call replays it.
     const failed = await handle.reconcile(reconciled.cursor);
     expect(failed.observations.some(({ kind }) => kind === "transcript.message")).toBe(false);
+  });
+
+  it("fails reconciliation rather than reporting a failed permission read as nothing pending", async () => {
+    const { adapter, network } = composition();
+    network.subscribe = async () => (async function* () {})();
+    const originalRequest = network.request.bind(network);
+    network.request = async (input) => {
+      if (input.path.startsWith("/permission")) throw new Error("connection reset");
+      return originalRequest(input);
+    };
+    const handle = await adapter.attach(spec(), { emit: async () => undefined });
+
+    // Silently reconciling to "no permissions" is what would strand a Session
+    // blocked on one raised while the stream was down.
+    await expect(handle.reconcile(null)).rejects.toThrow("connection reset");
   });
 
   it("ignores stream events that never established session ownership", async () => {

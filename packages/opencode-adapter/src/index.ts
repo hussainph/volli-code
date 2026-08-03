@@ -664,10 +664,22 @@ class OpenCodeBinding implements BindingHandle {
       await Promise.all([
         this.#request(`/session/${encodeURIComponent(this.#nativeSessionId)}/message`, "GET"),
         this.#request("/session/status", "GET"),
-        this.#request("/permission", "GET").catch(() => ({ status: 404, body: [] })),
-        this.#request("/question", "GET").catch(() => ({ status: 404, body: [] })),
+        // A build without these endpoints answers 404, and a 404 resolves
+        // like any other status, so tolerating an absent endpoint needs no
+        // `catch` — a `catch` here can only ever swallow a transport failure.
+        // For permissions and questions that is the one lie reconciliation
+        // must not tell. Reconciling is the act that recovers a Session
+        // blocked on a permission raised while we were disconnected, so
+        // answering "nothing is pending" because the read failed strands the
+        // Session in the state it was called to clear. A rejection fails the
+        // whole read, exactly as it already does for messages and status, and
+        // the caller retries.
+        this.#request("/permission", "GET"),
+        this.#request("/question", "GET"),
+        // Todos are the exception, and only because they carry no blocking
+        // state: a missing todo list costs a panel, not a way forward.
         this.#request(`/session/${encodeURIComponent(this.#nativeSessionId)}/todo`, "GET").catch(
-          () => ({ status: 404, body: [] }),
+          () => ({ status: 0, body: [] }),
         ),
       ]);
     const token = `reconcile:${this.#nativeSessionId}:${++this.#reconciliationSequence}`;
