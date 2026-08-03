@@ -74,6 +74,8 @@ export const ConversationScrollButton = ({
   return (
     !isAtBottom && (
       <Button
+        // Icon-only, so it needs a name of its own — there is no text to borrow.
+        aria-label="Scroll to latest"
         className={cn(
           "absolute bottom-4 left-[50%] translate-x-[-50%] rounded-full dark:bg-background dark:hover:bg-muted",
           className,
@@ -84,7 +86,7 @@ export const ConversationScrollButton = ({
         variant="outline"
         {...props}
       >
-        <ArrowDownIcon className="size-4" />
+        <ArrowDownIcon aria-hidden className="size-4" />
       </Button>
     )
   );

@@ -684,7 +684,13 @@ function ComposerStates() {
         onSelectionChange={setSelection}
         working={working}
         ready
-        queued={state === "queued" || state === "approval" ? queued : []}
+        // Whatever is actually in the queue, in every state that can hold one.
+        // Gating this on the two toggles that *start* with a queued message made
+        // the fixture lie about its own behavior: queueing from Working cleared
+        // the draft and showed nothing, which is the one bug this gallery exists
+        // to catch. Idle is the only state with no queue, because there is no
+        // turn to queue behind.
+        queued={state === "idle" ? [] : queued}
         onQueuedChange={setQueued}
         onSubmit={(text, intent) => {
           setValue("");
