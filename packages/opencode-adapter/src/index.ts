@@ -1394,16 +1394,18 @@ class OpenCodeBinding implements BindingHandle {
     eventType = "session.status",
   ): OpenCodeStatusObservation | null {
     if (eventType === "session.error") {
-      const failure = safeOpenCodeError(raw);
+      const occurredAt = this.#now();
+      const failure = safeOpenCodeError(raw, occurredAt);
       return {
         id,
         kind: "attention.raised",
-        occurredAt: this.#now(),
+        occurredAt,
         attention: {
           id: `opencode:error:${id}`,
           kind: failure.attention,
           detail: failure.detail,
           diagnostic: failure.diagnostic,
+          retryAt: failure.retryAt,
         },
       };
     }
@@ -1868,13 +1870,19 @@ function safeOpenCodeRetry(raw: unknown): {
   };
 }
 
-function safeOpenCodeError(raw: unknown): {
+function safeOpenCodeError(
+  raw: unknown,
+  now: number,
+): {
   attention: OpenCodeAttentionKind;
+  retryAt: number | null;
   detail: string | null;
   diagnostic: SessionNativeDetail | null;
 } {
   const error = nested(raw, "error");
-  if (!error) return { attention: "adapter_unrecoverable", detail: null, diagnostic: null };
+  if (!error) {
+    return { attention: "adapter_unrecoverable", retryAt: null, detail: null, diagnostic: null };
+  }
   const data = nested(error, "data");
   const diagnostic: Record<string, SessionNativeDetail> = {};
   const name = safeOpenCodeErrorName(objectString(error, "name"));
@@ -1884,8 +1892,10 @@ function safeOpenCodeError(raw: unknown): {
   if (statusCode !== null) diagnostic.statusCode = statusCode;
   if (isRetryable !== null) diagnostic.isRetryable = isRetryable;
   const hasDiagnostic = Object.keys(diagnostic).length > 0;
+  const attention = openCodeAttentionKind(name, statusCode);
   return {
-    attention: openCodeAttentionKind(name, statusCode),
+    attention,
+    retryAt: attention === "rate_limited" ? retryAfter(data, now) : null,
     detail: name
       ? `OpenCode ${name}${statusCode === null ? "" : ` (status ${statusCode})`}`
       : statusCode === null
@@ -1901,14 +1911,21 @@ function safeOpenCodeError(raw: unknown): {
  * `session.error` carries a discriminated union and every member used to arrive
  * as `adapter_unrecoverable`, which left an expired token and a context
  * overflow offering the same recovery — none. The name is the discriminant
- * OpenCode states; the status code only qualifies `APIError`, the one member
- * that is a transport outcome rather than a named condition.
+ * OpenCode states, and it is the only thing read here.
  *
- * The kinds this deliberately never raises matter as much as the ones it does.
- * `quota_exhausted` is a `resetAt` OpenCode does not report and `rate_limited`
- * without `Retry-After` is one without a `retryAt`, so both would put a "try
- * again at…" on screen with no time in it. `configuration_invalid` is a launch
- * fact, established by the probe, not by a turn that already ran.
+ * 429 is the one exception, and it is one because the union has no rate-limit
+ * member at all: the status is the sole signal, and its HTTP meaning is not
+ * open to interpretation. Auth is not an exception, which is the whole point —
+ * OpenCode already names auth failures `ProviderAuthError`, so reading
+ * `auth_required` out of a 401 on a generic `APIError` would second-guess a
+ * classification it declined to make. A 403 is worse: entitlement, region and
+ * policy blocks all arrive as one, and telling someone to re-authenticate when
+ * re-authenticating cannot help is a worse answer than admitting we do not know.
+ *
+ * `quota_exhausted` stays unraised for the same reason — no member states it,
+ * and a 429 cannot say whether a limit is per-minute or spent for the month.
+ * `configuration_invalid` is a launch fact the probe establishes, not a turn's
+ * outcome.
  */
 function openCodeAttentionKind(
   name: string | null,
@@ -1921,20 +1938,34 @@ function openCodeAttentionKind(
       return "context_limit_reached";
     case "MessageAbortedError":
       return "partial_turn_interrupted";
-    // A provider rejecting the credential itself says the same thing
-    // `ProviderAuthError` does, and it is the only status worth reading as more
-    // than a failed request: re-authenticating is a recovery, retrying is not.
     case "APIError":
-      return apiErrorAttentionKind(statusCode);
+      return statusCode === 429 ? "rate_limited" : "adapter_unrecoverable";
     default:
       return "adapter_unrecoverable";
   }
 }
 
-function apiErrorAttentionKind(statusCode: number | null): OpenCodeAttentionKind {
-  if (statusCode === 429) return "rate_limited";
-  if (statusCode === 401 || statusCode === 403) return "auth_required";
-  return "adapter_unrecoverable";
+/**
+ * When a rate limit lifts, if the provider said so.
+ *
+ * `responseHeaders` is a bag that carries `authorization` among other things,
+ * so exactly one header is read and it leaves as a number — the set itself is
+ * never passed anywhere that could stamp it into a diagnostic. Both RFC 9110
+ * forms are accepted: delta-seconds, and an HTTP-date for providers that send
+ * one. Anything else is absent rather than guessed, because a wrong time on a
+ * "try again at…" is worse than no time at all.
+ */
+function retryAfter(data: unknown, now: number): number | null {
+  const headers = nested(data, "responseHeaders");
+  if (!headers) return null;
+  const header = Object.entries(headers).find(([key]) => key.toLowerCase() === "retry-after")?.[1];
+  if (typeof header !== "string") return null;
+  const value = header.trim();
+  if (value.length === 0) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return seconds >= 0 ? now + seconds * 1_000 : null;
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? date : null;
 }
 
 function safeOpenCodeErrorName(name: string | null): string | null {

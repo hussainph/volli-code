@@ -370,6 +370,18 @@ function messageCommand(): Extract<HarnessCommand, { kind: "message.submit" }> {
   };
 }
 
+/** A 429 `session.error` carrying whatever header bag the provider sent. */
+function rateLimited(id: string, responseHeaders: unknown): OpenCodeSseEvent {
+  return {
+    id,
+    type: "session.error",
+    properties: {
+      sessionID: "native-session-1",
+      error: { name: "APIError", data: { statusCode: 429, responseHeaders } },
+    },
+  };
+}
+
 function composition(events: readonly OpenCodeSseEvent[] = []) {
   const process = new FakeProcess();
   const network = new FakeNetwork();
@@ -2682,14 +2694,6 @@ describe("OpenCodeNativeAdapter", () => {
         },
       },
       {
-        id: "error-forbidden",
-        type: "session.error",
-        properties: {
-          sessionID: "native-session-1",
-          error: { name: "APIError", data: { statusCode: 403 } },
-        },
-      },
-      {
         id: "unknown-status",
         type: "session.status",
         properties: { sessionID: "native-session-1", status: { type: "gone" } },
@@ -2721,7 +2725,6 @@ describe("OpenCodeNativeAdapter", () => {
       "error-context",
       "error-rate-limited",
       "error-unauthorized",
-      "error-forbidden",
       "opencode:sse-disconnected:native-session-1",
     ]);
     expect(observations[2]).toMatchObject({
@@ -2767,14 +2770,57 @@ describe("OpenCodeNativeAdapter", () => {
     expect(observations[8]).toMatchObject({
       attention: { kind: "context_limit_reached", detail: "OpenCode ContextOverflowError" },
     });
-    // The observation carries no `retryAt`: OpenCode reports no Retry-After, and
-    // a "try again at…" with no time in it is worse than a rate limit stated
-    // plainly. The engine defaults the absent field to null when it commits.
+    // 429 is read from the status because the error union has no rate-limit
+    // member; with no Retry-After header there is no time to state.
     expect(observations[9]).toMatchObject({
-      attention: { kind: "rate_limited", detail: "OpenCode APIError (status 429)" },
+      attention: { kind: "rate_limited", detail: "OpenCode APIError (status 429)", retryAt: null },
     });
-    expect(observations[10]).toMatchObject({ attention: { kind: "auth_required" } });
-    expect(observations[11]).toMatchObject({ attention: { kind: "auth_required" } });
+    // A 401 is *not* auth_required. OpenCode names auth failures itself, so
+    // reading one out of a status would second-guess the classification it
+    // declined to make — and a 403 covers entitlement and policy blocks that
+    // re-authenticating cannot fix.
+    expect(observations[10]).toMatchObject({ attention: { kind: "adapter_unrecoverable" } });
+  });
+
+  it("states when a rate limit lifts only when the provider sent a Retry-After it can read", async () => {
+    const { adapter } = composition([
+      // Case-insensitive: providers send both spellings. Clock is 1234.
+      rateLimited("seconds", { "Retry-After": "30", authorization: "must-not-leak" }),
+      rateLimited("date", { "retry-after": "Wed, 21 Oct 2026 07:28:00 GMT" }),
+      rateLimited("negative", { "retry-after": "-5" }),
+      rateLimited("blank", { "retry-after": "   " }),
+      rateLimited("unparseable", { "retry-after": "soon" }),
+      rateLimited("wrong-type", { "retry-after": 30 }),
+      rateLimited("other-headers", { "content-type": "application/json" }),
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const retryAt = observations
+      .filter(
+        (observation) =>
+          observation.kind === "attention.raised" &&
+          observation.attention.id.startsWith("opencode:error:"),
+      )
+      .map((observation) =>
+        observation.kind === "attention.raised" ? observation.attention.retryAt : undefined,
+      );
+    expect(retryAt).toEqual([
+      1234 + 30_000,
+      Date.parse("Wed, 21 Oct 2026 07:28:00 GMT"),
+      null,
+      null,
+      null,
+      null,
+      null,
+    ]);
+    // Only the one header leaves the adapter, and it leaves as a number.
+    expect(JSON.stringify(observations)).not.toContain("must-not-leak");
   });
 
   it("does not repeat SSE observations and raises durable attention when the stream drops", async () => {

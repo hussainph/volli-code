@@ -76,12 +76,16 @@ So an expired token, a rate limit or a context overflow produces a Session that 
 | `ProviderAuthError` | `auth_required` |
 | `ContextOverflowError` | `context_limit_reached` |
 | `MessageAbortedError` | `partial_turn_interrupted` |
-| `APIError` | `rate_limited` at 429; `auth_required` at 401/403; else `adapter_unrecoverable` |
+| `APIError` | `rate_limited` at 429; else `adapter_unrecoverable` |
 | `MessageOutputLengthError`, `StructuredOutputError`, `ContentFilterError`, `UnknownError` | `adapter_unrecoverable` |
 
 A name the redaction list does not recognize reads as absent, so a member OpenCode adds later classifies by the same rule an empty error does rather than by an unreviewed string.
 
-What it deliberately does not raise is load-bearing. `quota_exhausted` needs a `resetAt` OpenCode does not report, and a `rate_limited` without `Retry-After` is one without a `retryAt` — both would put a "try again at…" on screen with no time in it. `configuration_invalid` is a launch fact the probe establishes, not a turn's outcome. `input_required` and `permission_required` are not adapter-raisable at all. Capability is negative-friendly; an unraised kind is honest.
+**Only the name is read, and 429 is the single exception.** It is one because the union has no rate-limit member at all, so the status is the sole signal and its HTTP meaning is not open to interpretation. Auth is deliberately *not* an exception: OpenCode already names auth failures `ProviderAuthError`, so reading `auth_required` out of a 401 on a generic `APIError` would second-guess a classification it declined to make — and a 403 is worse, since entitlement, region and policy blocks all arrive as one and re-authenticating fixes none of them.
+
+`retryAt` is read from the `Retry-After` header on a 429, in both RFC 9110 forms. `responseHeaders` carries `authorization` among other things, so exactly one header is extracted and it leaves as a number; the bag itself never reaches a diagnostic. An unreadable or absent header means no time rather than a guessed one.
+
+What stays unraised is load-bearing. `quota_exhausted` has no member stating it, and a 429 cannot say whether a limit is per-minute or spent for the month. `configuration_invalid` is a launch fact the probe establishes, not a turn's outcome. `input_required` and `permission_required` are not adapter-raisable at all. Capability is negative-friendly; an unraised kind is honest.
 
 ## Tier 1 — nine of twelve part types are dropped
 
@@ -144,7 +148,7 @@ Option polarity stays where `session-model.ts:295` already put it — matched ag
 1. `SessionInteractionPrompt` in `@volli/shared` with a total, back-compatible read. Adapter fills `prompts` from `QuestionInfo[]`, carrying per-question `multiple` and `custom`; permission fills one prompt.
 2. An interaction card in the transcript that does not require a tool row. Tool-correlated interactions keep rendering on their row; everything else renders at the foot of the transcript, above the composer, never behind a disclosure.
 3. ~~Classify `session.error` into the right attention kind from the name the adapter already reads.~~ **Landed.**
-4. `sessionBlocker` reads `projection.attention.primary` and offers one recovery action per kind: Settings for `auth_required`, Retry for `transport_retrying` and `rate_limited`, an honest message for `context_limit_reached` until compaction exists. Step 3 is what makes this possible — the kinds are now distinct, so the action can be.
+4. `sessionBlocker` reads `projection.attention.primary` and offers one recovery action per kind: Settings for `auth_required`, Retry for `transport_retrying` and `rate_limited` (showing `retryAt` when the provider sent one), an honest message for `context_limit_reached` until compaction exists. Step 3 is what makes this possible — the kinds are now distinct, so the action can be.
 
 **P1 — the transcript stops lying by omission.** `file` parts both directions, with composer attachment. Turn header: agent, model, cost, tokens. Keep `agent` / `mode` / `variant` in `OpenCodeMessageMetadata`. Subagent transcripts behind the `delegate` row, plus `agentName` and `childCount` on the descriptor. `todo.updated` as a first-class observation instead of a fake `todowrite` part.
 
