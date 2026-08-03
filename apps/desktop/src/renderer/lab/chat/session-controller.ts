@@ -381,8 +381,25 @@ export function useLabSessionController(): LabSessionController {
           command: {
             kind: "interaction.resolve",
             interactionId,
-            // The wire schema owns its own array; the projection's is readonly.
-            resolution: { optionIds: [...resolution.optionIds], response: resolution.response },
+            // The wire schema owns its own arrays; the projection's are readonly.
+            // `answers` is spread rather than assigned: it is optional, and a key
+            // that arrives explicitly `undefined` is a key that is present and
+            // unserialisable once Electron's structured clone has kept what JSON
+            // would have dropped. Absent and explicitly absent say the same
+            // thing; only one of them may leave the renderer.
+            resolution: {
+              optionIds: [...resolution.optionIds],
+              response: resolution.response,
+              ...(resolution.answers
+                ? {
+                    answers: resolution.answers.map((answer) => ({
+                      promptId: answer.promptId,
+                      optionIds: [...answer.optionIds],
+                      response: answer.response,
+                    })),
+                  }
+                : {}),
+            },
           },
         }),
       ),
