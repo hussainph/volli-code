@@ -6,7 +6,11 @@ import {
   TerminalWindowIcon,
   WarningIcon,
 } from "@phosphor-icons/react";
-import type { SessionAttention, SessionInteractionResolution } from "@volli/shared";
+import type {
+  SessionAttention,
+  SessionInteraction,
+  SessionInteractionResolution,
+} from "@volli/shared";
 import type { UIMessage } from "ai";
 
 import {
@@ -37,7 +41,12 @@ import {
 } from "../chat/activity";
 import { ActivityBundle, SessionTodoDock, SessionTodoList } from "../chat/activity-ui";
 import { SessionComposer } from "../chat/composer-ui";
-import { InteractionCard, InteractionFocusProvider } from "../chat/interaction-ui";
+import { indexOpenedInteractions, readInteractionResolutionMessage } from "../chat/interaction";
+import {
+  InteractionCard,
+  InteractionFocusProvider,
+  InteractionReceiptLine,
+} from "../chat/interaction-ui";
 import { useLabSessionController } from "../chat/session-controller";
 import {
   enqueueMessage,
@@ -334,7 +343,14 @@ function ChatPlane({
 
   const focusInteraction = React.useCallback(() => interactionRef.current?.focus(), []);
 
-  const turnContext: TurnContext = { working, onOpenFile };
+  // Every interaction this Session has opened, so a resolution message in
+  // scrollback can name what it answered.
+  const openedInteractions = React.useMemo(
+    () => indexOpenedInteractions(session.frames),
+    [session.frames],
+  );
+
+  const turnContext: TurnContext = { working, onOpenFile, interactions: openedInteractions };
   // The precedence the blocker's own doc comment marks: a pending interaction
   // is not a failure, it is the one thing on screen you can act on, and its
   // card carries the answer. Suppressed here rather than inside `sessionBlocker`
@@ -710,12 +726,28 @@ const MESSAGE_GAP = "flex flex-col gap-3";
 interface TurnContext {
   working: boolean;
   onOpenFile(path: string): void;
+  /** Every interaction opened this Session, for the receipts they left behind. */
+  interactions: ReadonlyMap<string, SessionInteraction>;
 }
 
 function ChatTurn({ messages, context }: { messages: readonly UIMessage[]; context: TurnContext }) {
   const first = messages[0];
   if (!first) return null;
   const role = first.role;
+
+  // A receipt lands where it happened. Answering an interaction commits a
+  // durable message at that point in the conversation, so the transcript draws
+  // it there — whether or not a tool row was ever correlated to the question.
+  // An interaction the log has no record of opening draws nothing rather than
+  // an id: an unnamed receipt is not a record of anything.
+  const answered = role === "user" ? readInteractionResolutionMessage(first) : null;
+  if (answered) {
+    const interaction = context.interactions.get(answered.interactionId);
+    return interaction ? (
+      <InteractionReceiptLine interaction={interaction} resolution={answered.resolution} />
+    ) : null;
+  }
+
   const segments = role === "assistant" ? segmentTurn(messages) : null;
   // A user message is prose only; the assistant path owns every other shape.
   const prose = messages.flatMap((message) =>

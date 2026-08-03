@@ -3,6 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   canSubmitInteraction,
+  indexOpenedInteractions,
+  readInteractionResolutionMessage,
   describeInteractionResolution,
   emptyInteractionDraft,
   interactionAnswers,
@@ -307,5 +309,61 @@ describe("interactionQuestions", () => {
       "Which branch?",
       "Which remote?",
     ]);
+  });
+});
+
+describe("the durable answer in scrollback", () => {
+  it("indexes every interaction the log recorded opening", () => {
+    const interaction = permission();
+    const index = indexOpenedInteractions([
+      { event: { payload: { kind: "turn.started", attachmentId: "a", turnId: "t" } } },
+      { event: { payload: { kind: "interaction.opened", interaction } } },
+    ]);
+    expect(index.get("permission:p1")).toBe(interaction);
+    expect(index.size).toBe(1);
+  });
+
+  it("reads the resolution a user message carries", () => {
+    expect(
+      readInteractionResolutionMessage({
+        metadata: { kind: "interaction-resolution", interactionId: "permission:p1" },
+        parts: [
+          {
+            type: "data-interaction-resolution",
+            data: { optionIds: ["reject"], response: "read it instead" },
+          },
+        ],
+      }),
+    ).toEqual({
+      interactionId: "permission:p1",
+      resolution: { optionIds: ["reject"], response: "read it instead" },
+    });
+  });
+
+  it("reads an ordinary message as not one", () => {
+    // This crosses the RPC edge as JSON, so a shape we do not recognize reads
+    // as "not a resolution" rather than throwing inside a render.
+    expect(readInteractionResolutionMessage({ parts: [{ type: "text" }] })).toBeNull();
+    expect(
+      readInteractionResolutionMessage({
+        metadata: { interactionId: "permission:p1" },
+        parts: [{ type: "data-interaction-resolution" }],
+      }),
+    ).toBeNull();
+    expect(
+      readInteractionResolutionMessage({
+        metadata: {},
+        parts: [{ type: "data-interaction-resolution", data: { optionIds: ["once"] } }],
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps a resolution with no text as one with no text", () => {
+    expect(
+      readInteractionResolutionMessage({
+        metadata: { interactionId: "question:q1" },
+        parts: [{ type: "data-interaction-resolution", data: { optionIds: [], response: null } }],
+      }),
+    ).toEqual({ interactionId: "question:q1", resolution: { optionIds: [], response: null } });
   });
 });

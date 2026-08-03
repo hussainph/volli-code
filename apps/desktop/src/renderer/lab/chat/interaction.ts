@@ -21,6 +21,7 @@
 import {
   readInteractionAnswers,
   readInteractionPrompts,
+  type SessionEventPayload,
   type SessionInteraction,
   type SessionInteractionAnswer,
   type SessionInteractionPrompt,
@@ -299,4 +300,79 @@ function receiptTrailer(
   if (verdict === "rejected") return null;
   const labels = chosen.map((option) => option.label).filter((label) => label.length > 0);
   return labels.length > 0 ? labels.join(", ") : null;
+}
+
+/**
+ * Every interaction this Session has ever opened, by id.
+ *
+ * A resolution says which option ids were sent and nothing about what they were
+ * called, so a receipt needs the interaction back. `projection.interactions`
+ * holds only the open ones — the durable log is where an answered one still
+ * exists, and reading it is what lets the receipt quote the harness's own words
+ * instead of printing an opaque id.
+ */
+export function indexOpenedInteractions(
+  frames: readonly { event: { payload: SessionEventPayload } }[],
+): ReadonlyMap<string, SessionInteraction> {
+  const byId = new Map<string, SessionInteraction>();
+  for (const frame of frames) {
+    const { payload } = frame.event;
+    if (payload.kind === "interaction.opened")
+      byId.set(payload.interaction.id, payload.interaction);
+  }
+  return byId;
+}
+
+/** A durable answer, at the transcript position where it was given. */
+export interface InteractionResolutionMessage {
+  interactionId: string;
+  resolution: SessionInteractionResolution;
+}
+
+/**
+ * Whether a transcript message is an answer rather than a line of conversation.
+ *
+ * Resolving an interaction commits a `user` message whose only part is the
+ * resolution, stamped with the interaction it answers. That message is the
+ * receipt substrate: it is durable, and it already sits at the point in the
+ * conversation where the decision was taken, which is where a receipt belongs.
+ *
+ * Read structurally and defensively — this crosses the RPC edge as JSON, and a
+ * shape we do not recognize reads as "not a resolution" rather than throwing
+ * inside a render.
+ */
+export function readInteractionResolutionMessage(message: {
+  metadata?: unknown;
+  parts: readonly { type: string }[];
+}): InteractionResolutionMessage | null {
+  const interactionId = stringField(message.metadata, "interactionId");
+  if (interactionId === null) return null;
+  for (const part of message.parts) {
+    if (part.type !== "data-interaction-resolution") continue;
+    const data = objectField(part, "data");
+    const optionIds = data?.optionIds;
+    if (!Array.isArray(optionIds)) continue;
+    return {
+      interactionId,
+      resolution: {
+        optionIds: optionIds.filter((id): id is string => typeof id === "string"),
+        response: typeof data?.response === "string" ? data.response : null,
+      },
+    };
+  }
+  return null;
+}
+
+function objectField(value: unknown, key: string): Record<string, unknown> | null {
+  const nested = isRecord(value) ? value[key] : undefined;
+  return isRecord(nested) ? nested : null;
+}
+
+function stringField(value: unknown, key: string): string | null {
+  const field = isRecord(value) ? value[key] : undefined;
+  return typeof field === "string" && field.length > 0 ? field : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
