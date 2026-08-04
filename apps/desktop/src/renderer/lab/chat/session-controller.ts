@@ -183,9 +183,13 @@ export interface LabSessionStartResult {
 /**
  * Starts a Lab Session through the same RPC boundary the controller uses.
  *
- * An attachment rejection is a completed RPC round-trip, not an exception.
- * Keep that distinction at the start boundary so callers never render Ready
- * for a durable Session which has no executor.
+ * The Session is durable the moment `session.create` resolves, and the attach
+ * that follows can fail two different ways: a refusal, which is a completed
+ * round-trip carrying a rejected receipt, and a transport failure, which is an
+ * exception. Neither un-creates the Session, so both leave here as the same
+ * result and both carry the id — a thrown attach used to take it with it, which
+ * left a Session in the ledger that no surface could name. Only the `create`
+ * itself throws out of this function: there is no id yet to lose.
  */
 export async function startLabSession(
   rpc: Pick<SessionRpcClient, "session">,
@@ -200,26 +204,27 @@ export async function startLabSession(
       title: "LAB-14 · OpenCode chat prototype",
     },
   });
-  const attached = await rpc.session.command.mutate({
-    commandId: nextId(),
-    sessionId: created.sessionId,
-    command: {
-      kind: "adapter.attach",
-      adapterId: scenarioId ? LAB_SCENARIO_ADAPTER_ID : "opencode",
-      // A scenario is a harness profile of the scripted adapter, so the
-      // pick rides the attach the runtime already validates.
-      profileId: scenarioId ?? "native",
-      continuity: "fresh",
-    },
-  });
-  const refusal = rejectedReceipt(attached);
-  return refusal === null
-    ? { sessionId: created.sessionId, lifecycle: "ready", error: null }
-    : {
-        sessionId: created.sessionId,
-        lifecycle: "error",
-        error: `Could not start OpenCode: ${refusal}`,
-      };
+  const sessionId = created.sessionId;
+  try {
+    const attached = await rpc.session.command.mutate({
+      commandId: nextId(),
+      sessionId,
+      command: {
+        kind: "adapter.attach",
+        adapterId: scenarioId ? LAB_SCENARIO_ADAPTER_ID : "opencode",
+        // A scenario is a harness profile of the scripted adapter, so the
+        // pick rides the attach the runtime already validates.
+        profileId: scenarioId ?? "native",
+        continuity: "fresh",
+      },
+    });
+    const refusal = rejectedReceipt(attached);
+    return refusal === null
+      ? { sessionId, lifecycle: "ready", error: null }
+      : { sessionId, lifecycle: "error", error: startFailure(refusal) };
+  } catch (failure) {
+    return { sessionId, lifecycle: "error", error: startFailure(errorMessage(failure)) };
+  }
 }
 
 /**
@@ -497,7 +502,7 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
       return started.lifecycle === "ready";
     } catch (failure) {
       setLifecycle("error");
-      setError(`Could not start OpenCode: ${errorMessage(failure)}`);
+      setError(startFailure(errorMessage(failure)));
       return false;
     }
   }, [lifecycle, scenarioId]);
@@ -798,6 +803,17 @@ function nextId(): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The one sentence a failed start says, wherever in the start it failed.
+ *
+ * A refusal, a dropped attach and a `session.create` that never answered are
+ * three different faults with one recovery, and the surface renders one error
+ * row for all of them. Written once so they cannot drift into three phrasings.
+ */
+function startFailure(detail: string): string {
+  return `Could not start OpenCode: ${detail}`;
 }
 
 /**

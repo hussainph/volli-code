@@ -193,4 +193,42 @@ describe("startLabSession", () => {
     });
     expect(mutations).toHaveLength(2);
   });
+
+  it("keeps the durable Session when the attachment throws instead of answering", async () => {
+    // The other half of the same guarantee. A refusal is a completed round
+    // trip; this is the transport failing mid-attach, and the Session is
+    // already in the ledger either way — losing the id here would strand it.
+    let mutations = 0;
+    const rpc = {
+      session: {
+        command: {
+          mutate: async () => {
+            mutations += 1;
+            if (mutations === 1) return { sessionId: "durable-session" };
+            throw new Error("socket hang up");
+          },
+        },
+      },
+    } as unknown as Parameters<typeof startLabSession>[0];
+
+    await expect(startLabSession(rpc, null)).resolves.toEqual({
+      sessionId: "durable-session",
+      lifecycle: "error",
+      error: "Could not start OpenCode: socket hang up",
+    });
+  });
+
+  it("has no Session to keep when the create itself never answered", async () => {
+    const rpc = {
+      session: {
+        command: {
+          mutate: async () => {
+            throw new Error("socket hang up");
+          },
+        },
+      },
+    } as unknown as Parameters<typeof startLabSession>[0];
+
+    await expect(startLabSession(rpc, null)).rejects.toThrow("socket hang up");
+  });
 });
