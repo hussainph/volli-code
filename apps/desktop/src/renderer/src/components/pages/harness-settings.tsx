@@ -17,10 +17,11 @@ import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 
 /**
- * The only harness whose binary Volli will store an override for. Main reads
- * exactly this key (`opencode-binary.ts` is the sole caller of the stored
- * override), so offering the control anywhere else would persist a value that
- * no launch ever reads — a setting that appears to work and does nothing.
+ * The only harness whose binary Volli will store an override for. Exactly one
+ * launch path reads the stored value — `main/index.ts`, which feeds it to
+ * `resolveOpenCodeBinary` — so offering the control anywhere else would
+ * persist a value no launch ever reads: a setting that appears to work and
+ * does nothing.
  */
 const OVERRIDABLE_BINARY_HARNESS_ID = "opencode";
 
@@ -166,11 +167,16 @@ function BinaryRow({ harnessId }: { harnessId: string }) {
   const [failure, setFailure] = React.useState<HarnessCommandFailureReason | null>(null);
   const [loaded, setLoaded] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  const [unreadable, setUnreadable] = React.useState(false);
+  const [attempt, setAttempt] = React.useState(0);
 
   // A failed read leaves the field DISABLED rather than empty and editable.
   // Empty means automatic on this surface, so showing it when the stored value
   // is simply unknown would state the opposite of what may be persisted, and
-  // saving over it would overwrite an override nobody was shown.
+  // saving over it would overwrite an override nobody was shown. The
+  // "Automatic" placeholder is withheld for exactly the same reason — it is
+  // the same claim in lighter type — and Retry stands in for Save so the
+  // state is recoverable without leaving the pane.
   React.useEffect(() => {
     const api = preloadApi();
     if (api === undefined) return;
@@ -180,21 +186,24 @@ function BinaryRow({ harnessId }: { harnessId: string }) {
       .then((result) => {
         if (cancelled) return;
         if (!result.ok) {
+          setUnreadable(true);
           toastError(`Couldn't read the harness binary: ${result.error}`);
           return;
         }
         setStored(result.command);
         setDraft(result.command ?? "");
+        setUnreadable(false);
         setLoaded(true);
       })
       .catch((error: unknown) => {
         if (cancelled) return;
+        setUnreadable(true);
         toastError(`Couldn't read the harness binary: ${errorMessage(error)}`);
       });
     return () => {
       cancelled = true;
     };
-  }, [harnessId]);
+  }, [harnessId, attempt]);
 
   const candidate = draft.trim();
   const dirty = candidate !== (stored ?? "");
@@ -230,7 +239,7 @@ function BinaryRow({ harnessId }: { harnessId: string }) {
           <Input
             id="harness-binary"
             value={draft}
-            placeholder="Automatic"
+            placeholder={loaded ? "Automatic" : ""}
             spellCheck={false}
             autoComplete="off"
             disabled={!loaded || saving}
@@ -238,19 +247,31 @@ function BinaryRow({ harnessId }: { harnessId: string }) {
             onChange={(event) => {
               setDraft(event.currentTarget.value);
               setFailure(null);
+              // The realpath belongs to the value that was SAVED. Left up under
+              // edited text it asserts a resolution for a path that is not in
+              // the field and was never stored.
+              setResolvedPath(null);
             }}
             onKeyDown={(event) => {
               if (event.key === "Enter") void save();
             }}
             // Mono only once there is a path in it: "Automatic" is a word, and
             // typesetting it as code claims it is a value someone could type.
-            className={cn("h-8 flex-1 text-xs", draft !== "" && "font-mono")}
+            // `md:text-xs` because the base `Input` carries `md:text-sm`, which
+            // an unprefixed `text-xs` does not merge with and never outranks.
+            className={cn("h-8 flex-1 text-xs md:text-xs", draft !== "" && "font-mono")}
           />
-          <Button disabled={!loaded || saving || !dirty} onClick={() => void save()}>
-            {saving ? "Saving…" : "Save"}
-          </Button>
+          {unreadable ? (
+            <Button onClick={() => setAttempt((count) => count + 1)}>Retry</Button>
+          ) : (
+            <Button disabled={!loaded || saving || !dirty} onClick={() => void save()}>
+              {saving ? "Saving…" : "Save"}
+            </Button>
+          )}
         </div>
-        {failure !== null ? (
+        {unreadable ? (
+          <p className="text-xs text-destructive">Couldn&apos;t read the stored binary.</p>
+        ) : failure !== null ? (
           <p className="text-xs text-destructive">{harnessCommandFailureLine(failure)}</p>
         ) : resolvedPath !== null ? (
           <p className="truncate font-mono text-xs text-muted-foreground" title={resolvedPath}>
