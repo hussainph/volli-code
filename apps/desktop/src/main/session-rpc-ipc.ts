@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { ipcMain } from "electron";
 import type { WebContents } from "electron";
 import { createSessionRouter, RpcDiagnosticLog, sanitizeDiagnosticText } from "@volli/session-rpc";
-import type { SessionRuntime } from "@volli/session-engine";
+import type { RuntimeCatalog, SessionRuntime } from "@volli/session-engine";
 
 /** The single request/reply channel for the native Session tRPC edge. */
 export const SESSION_RPC_IPC_CHANNEL = "volli:session-rpc";
@@ -46,6 +46,9 @@ export const SESSION_RPC_IPC_PROCEDURES = [
   "session.cancelInteraction",
   "session.refreshCapabilities",
   "session.reconcile",
+  "runtimeCatalog.inspect",
+  "runtimeCatalog.save",
+  "runtimeCatalog.resolve",
 ] as const satisfies readonly SessionRouterProcedure[];
 
 export type SessionRpcIpcProcedure = (typeof SESSION_RPC_IPC_PROCEDURES)[number];
@@ -73,24 +76,6 @@ type DeliberatelyMainOnlyProcedure = PublishedProcedure<
 >;
 
 /**
- * Routes production needs and does not have yet.
- *
- * These are not withheld. The chat surface cannot pick a model without them,
- * and `RuntimeCatalogSettings` already renders nothing in the shipped app for
- * exactly this reason — so this bucket is a known defect written where the
- * check can see it, not a decision. It is named rather than omitted because
- * omission is what hid the gap in the first place.
- *
- * Routing them is Workstream 1 of `docs/plans/session-ui-migration-readiness.md`
- * (blocker A1). Doing that empties this type, and emptying it is the point:
- * once the last member moves to the allow-list, delete the bucket rather than
- * leave a name for a problem that no longer exists.
- */
-type UnroutedProcedure = PublishedProcedure<
-  "runtimeCatalog.inspect" | "runtimeCatalog.save" | "runtimeCatalog.resolve"
->;
-
-/**
  * Adding a procedure to the router — in any namespace — without accounting for
  * it above fails here.
  *
@@ -104,10 +89,7 @@ type UnroutedProcedure = PublishedProcedure<
  */
 type AssertNever<T extends never> = T;
 export type SessionRpcIpcCoverage = AssertNever<
-  Exclude<
-    SessionRouterProcedure,
-    SessionRpcIpcProcedure | DeliberatelyMainOnlyProcedure | UnroutedProcedure
-  >
+  Exclude<SessionRouterProcedure, SessionRpcIpcProcedure | DeliberatelyMainOnlyProcedure>
 >;
 
 export type SessionRpcIpcRequest = {
@@ -141,6 +123,7 @@ export type SessionRpcIpcResponse =
 
 export interface RegisterSessionRpcIpcOptions {
   runtime: SessionRuntime;
+  resolveRuntimeCatalog?: (projectId?: string) => RuntimeCatalog | Promise<RuntimeCatalog>;
   diagnostics?: RpcDiagnosticLog;
 }
 
@@ -186,6 +169,7 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
         }
         const caller = router.createCaller({
           runtime: options.runtime,
+          resolveRuntimeCatalog: options.resolveRuntimeCatalog,
           diagnostics,
           transport: "electron-ipc",
         });
@@ -209,7 +193,12 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
   ): Promise<SessionRpcIpcResponse> {
     const abort = new AbortController();
     const caller = router.createCaller(
-      { runtime: options.runtime, diagnostics, transport: "electron-ipc" },
+      {
+        runtime: options.runtime,
+        resolveRuntimeCatalog: options.resolveRuntimeCatalog,
+        diagnostics,
+        transport: "electron-ipc",
+      },
       { signal: abort.signal },
     );
     const stream = await caller.session.subscribe(input as never);
@@ -311,6 +300,12 @@ async function callProcedure(
       return caller.session.refreshCapabilities(request.input as never);
     case "session.reconcile":
       return caller.session.reconcile(request.input as never);
+    case "runtimeCatalog.inspect":
+      return caller.runtimeCatalog.inspect(request.input as never);
+    case "runtimeCatalog.save":
+      return caller.runtimeCatalog.save(request.input as never);
+    case "runtimeCatalog.resolve":
+      return caller.runtimeCatalog.resolve(request.input as never);
     default: {
       const exhaustive: never = request;
       return exhaustive;
