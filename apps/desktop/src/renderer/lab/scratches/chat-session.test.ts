@@ -25,6 +25,7 @@ import {
   sameMessages,
   sameTodos,
   sessionBlocker,
+  withdrawInteraction,
 } from "./chat-session";
 
 type BlockerSession = Parameters<typeof sessionBlocker>[0];
@@ -35,6 +36,7 @@ function labSession(overrides: Partial<BlockerSession> = {}): BlockerSession {
   return {
     error: null,
     diagnosticsError: null,
+    catalogError: null,
     attention: { active: [], primary: null },
     catalogState: "ready",
     recover: () => Promise.resolve(true),
@@ -117,6 +119,32 @@ describe("sessionBlocker", () => {
     expect(blocker?.message).toBe("Sign-in required");
   });
 
+  it("never lets a catalog failure stand in for the Session's own", () => {
+    const blocker = sessionBlocker(
+      labSession({ error: "Lost the Session stream: socket hang up", catalogError: "ECONNRESET" }),
+      NO_OP,
+      false,
+    );
+
+    expect(blocker?.message).toBe("Lost the Session stream: socket hang up");
+    expect(blocker?.action?.label).toBe("Retry");
+  });
+
+  it("says a catalog refresh failed, and offers the place that re-asks it", () => {
+    const blocker = sessionBlocker(
+      labSession({ catalogError: "ECONNRESET", catalogState: "error" }),
+      NO_OP,
+      false,
+    );
+
+    expect(blocker).toEqual({
+      message: "Models unavailable",
+      detail: "ECONNRESET",
+      tone: "error",
+      action: { label: "Settings", act: NO_OP },
+    });
+  });
+
   it("still says a diagnostics failure when nothing else is blocking", () => {
     const blocker = sessionBlocker(labSession({ diagnosticsError: "stream closed" }), NO_OP, false);
 
@@ -188,6 +216,52 @@ describe("answerInteraction", () => {
     );
 
     expect(seen).toEqual([["question:7", REFUSAL]]);
+  });
+});
+
+describe("withdrawInteraction", () => {
+  /** The card's controls are disabled by this latch, and Stop was outside it. */
+  it("holds the card's own in-flight latch for the whole round trip", async () => {
+    const flags: [string, boolean][] = [];
+    const acts: string[] = [];
+
+    await withdrawInteraction("permission:1", {
+      interrupt: () => {
+        acts.push("interrupt");
+        return Promise.resolve(true);
+      },
+      cancel: (interactionId) => {
+        // Marked before either act, so a second click lands on a disabled Stop
+        // rather than on a second withdrawal of the same interaction.
+        expect(flags).toEqual([["permission:1", true]]);
+        acts.push(`cancel:${interactionId}`);
+        return Promise.resolve(true);
+      },
+      resolving: (id, active) => flags.push([id, active]),
+    });
+
+    expect(acts).toEqual(["interrupt", "cancel:permission:1"]);
+    expect(flags).toEqual([
+      ["permission:1", true],
+      ["permission:1", false],
+    ]);
+  });
+
+  it("gives the card back however the round trip ends", async () => {
+    const flags: [string, boolean][] = [];
+
+    await expect(
+      withdrawInteraction("permission:1", {
+        interrupt: () => Promise.reject(new Error("socket hang up")),
+        cancel: () => Promise.resolve(true),
+        resolving: (id, active) => flags.push([id, active]),
+      }),
+    ).rejects.toThrow("socket hang up");
+
+    expect(flags).toEqual([
+      ["permission:1", true],
+      ["permission:1", false],
+    ]);
   });
 });
 

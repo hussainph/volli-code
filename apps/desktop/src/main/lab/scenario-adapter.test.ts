@@ -151,6 +151,25 @@ describe("lab scenarios", () => {
     expect(toolParts(after.messages).map((part) => part.state)).toContain("output-available");
   });
 
+  it("refuses a message rather than accepting one it will never answer", async () => {
+    const played = await play("permission-toolless");
+
+    const result = await played.host.command({
+      commandId: "submit-into-a-script",
+      sessionId: played.sessionId,
+      command: {
+        kind: "message.submit",
+        message: { id: "user-1", role: "user", parts: [{ type: "text", text: "carry on" }] },
+        delivery: "queue",
+      },
+    });
+
+    // A durable refusal, not a throw and not a silent `accepted`: the surface
+    // reads this receipt to decide whether the words it was holding are gone.
+    expect(result.receipt?.status).toBe("rejected");
+    expect(result.receipt).toMatchObject({ code: "unsupported_command" });
+  });
+
   it("opens a permission with no call to correlate to", async () => {
     const played = await play("permission-toolless");
     expect(onlyInteraction(played.projection).kind).toBe("permission");

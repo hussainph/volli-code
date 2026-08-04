@@ -137,6 +137,20 @@ class LabScenarioBinding implements BindingHandle {
   }
 
   async dispatch(command: HarnessCommand): Promise<DeliveryReceipt> {
+    // A script has no model behind it and nothing to say back, so a message has
+    // nowhere to go. `rejected` is the receipt contract's answer for a command
+    // this harness cannot serve: `accepted` for a command that was dispatched
+    // nowhere told the surface the words had landed, which cleared the composer
+    // over a message that no longer existed anywhere.
+    if (command.kind === "message.submit") {
+      return {
+        commandId: command.commandId,
+        status: "rejected",
+        code: "unsupported_command",
+        detail: `Lab scenario ${this.#options.scenario.id} plays a script and takes no messages`,
+        native: this.native,
+      };
+    }
     const accepted: DeliveryReceipt = {
       commandId: command.commandId,
       status: "accepted",
@@ -149,7 +163,6 @@ class LabScenarioBinding implements BindingHandle {
       this.#play([{ kind: "turn.completed", turnId: LAB_SCENARIO_TURN_ID }]);
       return accepted;
     }
-    if (command.kind !== "interaction.resolve") return accepted;
 
     // The verdict is the harness's to state, and stating it is what clears the
     // card. Queued rather than awaited: the runtime is still inside this

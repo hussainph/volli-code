@@ -17,6 +17,7 @@ import { useUiStore } from "@renderer/stores/ui";
 import { LAB_SCENARIO_ADAPTER_ID } from "../../../lab-scenarios";
 import { LAB_SESSION_PROJECT_ID, LAB_SESSION_TICKET_ID } from "../../../lab-session-rpc-path";
 import { createSessionRpcClient, type SessionRpcClient } from "../session-rpc-client";
+import { indexOpenedInteractions } from "./interaction";
 import { projectTranscriptMessages } from "./message-projection";
 import { resolveRuntimeSelection } from "./session-model";
 
@@ -59,15 +60,35 @@ export interface LabSessionFrame {
  * is subscribed to, so this is folded forward as they arrive rather than
  * re-derived from the whole transcript on every render: `turnActive` used to be
  * a scan of all frames in the render body, and the ordered list used to be a
- * copy-and-sort of a Map per animation frame. Both are now linear in the batch.
+ * copy-and-sort of a Map per animation frame. All of it is now linear in the
+ * batch.
+ *
+ * `messages` and `openedInteractions` joined it for the same reason and after
+ * the same measurement mistake. Both were memoized on the frame list, and that
+ * list is rebuilt on every batch — so the memo missed every time, and each miss
+ * re-read *every frame the Session has ever committed*. Frames outgrow messages
+ * badly: a streamed reply commits a transcript snapshot per chunk, several per
+ * animation frame, and every one of them made both scans longer for the rest of
+ * the Session. Folded, a batch costs the batch.
  */
 interface LabTranscriptState {
   frames: readonly LabSessionFrame[];
   throughSequence: number;
   turnActive: boolean;
+  /** Latest shape per message id, in the order the ids first spoke. */
+  messages: readonly UIMessage[];
+  /** Every interaction this Session has opened, for the receipts they leave. */
+  openedInteractions: ReadonlyMap<string, SessionInteraction>;
 }
 
-const EMPTY_TRANSCRIPT: LabTranscriptState = { frames: [], throughSequence: 0, turnActive: false };
+const EMPTY_INTERACTION_INDEX: ReadonlyMap<string, SessionInteraction> = new Map();
+const EMPTY_TRANSCRIPT: LabTranscriptState = {
+  frames: [],
+  throughSequence: 0,
+  turnActive: false,
+  messages: [],
+  openedInteractions: EMPTY_INTERACTION_INDEX,
+};
 
 export interface LabSessionController {
   sessionId: string;
@@ -100,8 +121,26 @@ export interface LabSessionController {
   setSelection(next: RuntimeSelection): void;
   catalog: RuntimeCatalogChoices;
   catalogState: CatalogState;
+  /**
+   * Why the model list could not be refreshed, kept off `error` for the reason
+   * `diagnosticsError` is.
+   *
+   * A catalog that failed to answer is a fact about what a person can pick, not
+   * about the Session's transport — and while it shared `error` with the
+   * Session's own failures the two overwrote each other in whichever order they
+   * happened to arrive, so a lost stream could be replaced by a stale model list
+   * and the Retry beside it pointed at the wrong thing. The last known catalog
+   * stays on screen either way.
+   */
+  catalogError: string | null;
   /** Open interactions, so a gated transcript row can find the one it belongs to. */
   interactions: readonly SessionInteraction[];
+  /**
+   * Every interaction this Session has opened, so a resolution message in
+   * scrollback can name what it answered. Folded across the stream rather than
+   * re-read from it — see {@link appendFrames}.
+   */
+  openedInteractions: ReadonlyMap<string, SessionInteraction>;
   /**
    * Structured attention, so a blocked composer can name what stopped it.
    *
@@ -155,6 +194,7 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
   const [lifecycle, setLifecycle] = React.useState<SessionLifecycle>("idle");
   const [sessionError, setError] = React.useState<string | null>(null);
   const [diagnosticsError, setDiagnosticsError] = React.useState<string | null>(null);
+  const [catalogError, setCatalogError] = React.useState<string | null>(null);
   const [selection, setSelection] = React.useState<RuntimeSelection>(EMPTY_SELECTION);
   const [catalog, setCatalog] = React.useState<RuntimeCatalogChoices>(EMPTY_CATALOG);
   const [catalogState, setCatalogState] = React.useState<CatalogState>("loading");
@@ -289,7 +329,7 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
   }, [sessionId]);
 
   const frames = transcript.frames;
-  const messages = React.useMemo(() => projectTranscriptMessages(frames), [frames]);
+  const messages = transcript.messages;
   const liveAttachmentId = projection?.liveExecutor?.id ?? null;
   const working = liveAttachmentId !== null && transcript.turnActive;
 
@@ -311,6 +351,7 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
       .then((resolved) => {
         if (!active) return;
         setCatalog(resolved.catalog);
+        setCatalogError(null);
         setCatalogState(resolved.catalog.models.length > 0 ? "ready" : "empty");
         setSelection((current) =>
           resolveRuntimeSelection(resolved.catalog, current.modelId ? current : resolved.selection),
@@ -324,7 +365,7 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
         // use while the failure is on screen.
         reportError("runtime catalog", unresolved);
         setCatalogState("error");
-        setError(`Models unavailable: ${errorMessage(unresolved)}`);
+        setCatalogError(errorMessage(unresolved));
       });
     return () => {
       active = false;
@@ -337,6 +378,22 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
   }, [lifecycle, sessionId, working]);
 
   /**
+   * The latch a failed command set, released by the next one that lands.
+   *
+   * `error` is a lifecycle here, not only a string: while it stands, the effect
+   * above stops deriving the Session's state from its stream. So a failure that
+   * cleared only the *message* left `working` false for the rest of the
+   * Session — the live turn never animated again and the composer's queue
+   * drained into a turn this surface read as idle. Only the error state is
+   * touched: what replaces it is the stream's answer, which the effect settles
+   * on the very next render.
+   */
+  const clearFailure = React.useCallback(() => {
+    setError(null);
+    setLifecycle((current) => (current === "error" ? "ready" : current));
+  }, []);
+
+  /**
    * One command, and whether it landed.
    *
    * The boolean is the point. This used to catch and resolve, so a caller
@@ -344,6 +401,11 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
    * from a failed one — or from one that was never sent, which is what the
    * early return is. `error` says what broke; only the result says whether
    * anything happened.
+   *
+   * A resolved round trip is not the same as a delivered command: a harness
+   * that will not serve one answers with a rejected receipt rather than by
+   * throwing, and that receipt is the failure. Reading it is what keeps a
+   * refusal from being reported as success.
    */
   const run = React.useCallback(
     async (
@@ -353,8 +415,13 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
       const rpc = client.current;
       if (!rpc || !sessionId) return false;
       try {
-        await action(rpc, sessionId);
-        setError(null);
+        const refusal = rejectedReceipt(await action(rpc, sessionId));
+        if (refusal !== null) {
+          setLifecycle("error");
+          setError(`${label}: ${refusal}`);
+          return false;
+        }
+        clearFailure();
         return true;
       } catch (failure) {
         setLifecycle("error");
@@ -362,7 +429,7 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
         return false;
       }
     },
-    [sessionId],
+    [clearFailure, sessionId],
   );
 
   const start = React.useCallback(async (): Promise<boolean> => {
@@ -412,7 +479,7 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
         return false;
       }
       try {
-        await rpc.session.command.mutate({
+        const delivered = await rpc.session.command.mutate({
           commandId: nextId(),
           sessionId,
           command: {
@@ -424,8 +491,16 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
             agent: selection.agent || null,
           },
         });
+        // A harness that cannot take a message says so in its receipt, and the
+        // words are still in the composer until this returns true.
+        const refusal = rejectedReceipt(delivered);
+        if (refusal !== null) {
+          setLifecycle("error");
+          setError(`Message not delivered: ${refusal}`);
+          return false;
+        }
+        clearFailure();
         setLifecycle("working");
-        setError(null);
         return true;
       } catch (failure) {
         setLifecycle("error");
@@ -433,7 +508,7 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
         return false;
       }
     },
-    [liveAttachmentId, selection, sessionId],
+    [clearFailure, liveAttachmentId, selection, sessionId],
   );
 
   const resolveInteraction = React.useCallback(
@@ -582,7 +657,9 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
     setSelection,
     catalog,
     catalogState,
+    catalogError,
     interactions: projection?.interactions.active ?? [],
+    openedInteractions: transcript.openedInteractions,
     attention: projection?.attention ?? EMPTY_ATTENTION,
     liveAttachmentId,
     start,
@@ -598,14 +675,18 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
 }
 
 /**
- * Adds one batch of frames and carries the turn state across it.
+ * Adds one batch of frames and carries everything derived from them across it.
  *
  * Frames arrive in strict sequence order — the subscription drains its cursor
  * one step at a time, and the snapshot that seeds it is ordered too — so this
  * appends rather than merges, and drops anything at or below the cursor so a
  * replayed frame cannot double-count a turn boundary.
+ *
+ * Exported for its tests: this is where the transcript's whole per-frame budget
+ * now lives, and a fold is only worth having if it says exactly what the scan
+ * it replaced said.
  */
-function appendFrames(
+export function appendFrames(
   state: LabTranscriptState,
   batch: readonly LabSessionFrame[],
 ): LabTranscriptState {
@@ -617,7 +698,44 @@ function appendFrames(
     if (frame.event.payload.kind === "turn.started") turnActive = true;
     else if (frame.event.payload.kind === "turn.completed") turnActive = false;
   }
-  return { frames: [...state.frames, ...fresh], throughSequence: last.sequence, turnActive };
+  // Both of these keep their previous identity when the batch had nothing for
+  // them, which is the other half of the point: a batch of pure tool traffic
+  // must not hand the plane a new message list to re-group and re-segment.
+  const opened = indexOpenedInteractions(fresh);
+  return {
+    frames: [...state.frames, ...fresh],
+    throughSequence: last.sequence,
+    turnActive,
+    messages: mergeTranscriptMessages(state.messages, projectTranscriptMessages(fresh)),
+    openedInteractions:
+      opened.size === 0
+        ? state.openedInteractions
+        : new Map([...state.openedInteractions, ...opened]),
+  };
+}
+
+/**
+ * One batch of projected messages, folded into the ones already on screen.
+ *
+ * The rule is {@link projectTranscriptMessages}'s own, held across batches
+ * rather than re-derived from the start: transcript events are immutable
+ * snapshots, so a message id keeps the position it first spoke at and shows its
+ * latest shape. Searching from the tail because that is where a streaming
+ * snapshot always lands — a re-emitted message from further back costs the walk
+ * it would have cost anyway.
+ */
+export function mergeTranscriptMessages(
+  current: readonly UIMessage[],
+  projected: readonly UIMessage[],
+): readonly UIMessage[] {
+  if (projected.length === 0) return current;
+  const merged = [...current];
+  for (const message of projected) {
+    const at = merged.findLastIndex((held) => held.id === message.id);
+    if (at < 0) merged.push(message);
+    else merged[at] = message;
+  }
+  return merged;
 }
 
 /**
@@ -650,6 +768,23 @@ function nextId(): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The refusal a resolved mutation can still be carrying.
+ *
+ * A command that reaches a harness earns a delivery receipt, and `rejected` is
+ * one of its arms: the round trip succeeded and the harness said no. Read
+ * structurally because this crosses the RPC edge as JSON and because only some
+ * of the commands sent here carry a receipt at all — a shape without one is not
+ * a refusal. Null means nothing refused it.
+ */
+function rejectedReceipt(result: unknown): string | null {
+  if (!isRecord(result) || !isRecord(result.receipt)) return null;
+  const receipt = result.receipt;
+  if (receipt.status !== "rejected") return null;
+  if (typeof receipt.detail === "string" && receipt.detail.length > 0) return receipt.detail;
+  return typeof receipt.code === "string" ? receipt.code : "rejected";
 }
 
 function reportError(scope: string, error: unknown): void {
