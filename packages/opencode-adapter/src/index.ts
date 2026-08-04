@@ -80,7 +80,6 @@ export interface OpenCodeChild {
 }
 
 export interface OpenCodeProcessPort {
-  resolveBinary(path: string): Promise<string>;
   version(path: string, signal: AbortSignal): Promise<string>;
   sha256(path: string): Promise<string>;
   spawn(input: {
@@ -122,9 +121,18 @@ export interface OpenCodeNetworkPort {
 }
 
 export interface OpenCodeAdapterOptions {
-  binaryPath?: string;
-  /** Resolves the command at first use; desktop supplies the user's login-shell PATH. */
-  resolveBinary?: (path: string) => Promise<string>;
+  /**
+   * What to run, in the form `spawn` itself takes: a bare name a shell would
+   * look up, or a path to the executable. Both are the same value to
+   * {@link resolveCommand}, which is the only thing that reads it.
+   */
+  command?: string;
+  /**
+   * Resolves {@link command} to one canonical absolute path, at first use and
+   * not before. Desktop supplies a resolver that reads the user's login-shell
+   * PATH; the default reads this process's own.
+   */
+  resolveCommand?: (command: string) => Promise<string>;
   process?: OpenCodeProcessPort;
   network?: OpenCodeNetworkPort;
   now?: () => number;
@@ -163,8 +171,8 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
 
   readonly #process: OpenCodeProcessPort;
   readonly #network: OpenCodeNetworkPort;
-  readonly #binaryPath: string;
-  readonly #resolveBinary: ((path: string) => Promise<string>) | null;
+  readonly #command: string;
+  readonly #resolveCommand: (command: string) => Promise<string>;
   readonly #now: () => number;
   readonly #sleep: (milliseconds: number) => Promise<void>;
   readonly #healthRetryAttempts: number;
@@ -180,8 +188,8 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
   constructor(options: OpenCodeAdapterOptions = {}) {
     this.#process = options.process ?? createNodeProcessPort();
     this.#network = options.network ?? createFetchNetworkPort();
-    this.#binaryPath = options.binaryPath ?? "opencode";
-    this.#resolveBinary = options.resolveBinary ?? null;
+    this.#command = options.command ?? "opencode";
+    this.#resolveCommand = options.resolveCommand ?? defaultResolveCommand;
     this.#now = options.now ?? Date.now;
     this.#sleep = options.sleep ?? defaultSleep;
     // A cold OpenCode process routinely needs longer than a few hundred
@@ -364,8 +372,7 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
   }
 
   async #resolveAndFingerprint(): Promise<VerifiedOpenCodeBinary> {
-    const path = await (this.#resolveBinary?.(this.#binaryPath) ??
-      this.#process.resolveBinary(this.#binaryPath));
+    const path = await this.#resolveCommand(this.#command);
     return { path, fingerprint: await this.#process.sha256(path) };
   }
 
@@ -2845,7 +2852,6 @@ function compactDetail(
 /* v8 ignore start -- Node and fetch ports are platform glue; adapter behavior is covered through injected ports. */
 function createNodeProcessPort(): OpenCodeProcessPort {
   return {
-    resolveBinary: resolveExecutable,
     version: async (path, signal) => {
       const child = spawn(path, ["--version"], { stdio: ["ignore", "pipe", "ignore"] });
       const output: Buffer[] = [];
@@ -2893,11 +2899,15 @@ function createNodeProcessPort(): OpenCodeProcessPort {
   };
 }
 
-async function resolveExecutable(path: string): Promise<string> {
-  if (isAbsolute(path) || path.includes("/")) return realpath(path);
+/**
+ * A path is taken at its word; only a bare name is looked up. Joining a path
+ * onto each PATH entry would answer with a file nobody named.
+ */
+async function defaultResolveCommand(command: string): Promise<string> {
+  if (isAbsolute(command) || command.includes("/")) return realpath(command);
   const directories = process.env.PATH?.split(delimiter).filter(Boolean) ?? [];
   for (const directory of directories) {
-    const candidate = join(directory, path);
+    const candidate = join(directory, command);
     try {
       await access(candidate, constants.X_OK);
       return realpath(candidate);
@@ -2905,7 +2915,7 @@ async function resolveExecutable(path: string): Promise<string> {
       // Continue until the first executable in PATH, exactly as shell lookup does.
     }
   }
-  throw new Error(`OpenCode executable ${path} was not found on PATH`);
+  throw new Error(`OpenCode executable ${command} was not found on PATH`);
 }
 
 function createFetchNetworkPort(): OpenCodeNetworkPort {

@@ -13,8 +13,10 @@ import {
   openCodeActivityKind,
   parseOpenCodeSse,
   OPENCODE_ACTIVITY,
+  type OpenCodeAdapterOptions,
   type OpenCodeChild,
   type OpenCodeHttpResponse,
+  type OpenCodeNativeAdapter,
   type OpenCodeNetworkPort,
   type OpenCodeProcessPort,
   type OpenCodeSseEvent,
@@ -266,8 +268,13 @@ class FakeProcess implements OpenCodeProcessPort {
   readonly exited = new Deferred<number | null>();
   spawnFailure: Error | null = null;
   fingerprint = "sha256:trusted";
-  async resolveBinary(path: string): Promise<string> {
-    return path === "opencode" ? "/trusted/opencode" : path;
+  /**
+   * Not a port method — command resolution is the adapter's own seam. Kept on
+   * the fake so {@link createAdapter} can route a test's adapter to it, and so a
+   * test can still swap it on an adapter that is already running.
+   */
+  async resolveCommand(command: string): Promise<string> {
+    return command === "opencode" ? "/trusted/opencode" : command;
   }
   async version(): Promise<string> {
     return "1.17.18";
@@ -294,6 +301,21 @@ class FakeProcess implements OpenCodeProcessPort {
   randomSecret(): string {
     return "never-persist-this";
   }
+}
+
+/**
+ * An adapter that never touches the machine's PATH. The resolver is read
+ * through the fake at call time rather than captured, so a test that swaps
+ * `process.resolveCommand` mid-run still changes what the adapter resolves.
+ */
+function createAdapter(options: OpenCodeAdapterOptions = {}): OpenCodeNativeAdapter {
+  const fake = options.process;
+  return createOpenCodeNativeAdapter({
+    ...(fake instanceof FakeProcess
+      ? { resolveCommand: (command: string) => fake.resolveCommand(command) }
+      : {}),
+    ...options,
+  });
 }
 
 class FakeNetwork implements OpenCodeNetworkPort {
@@ -405,7 +427,7 @@ function composition(events: readonly OpenCodeSseEvent[] = []) {
   const process = new FakeProcess();
   const network = new FakeNetwork();
   network.events = events;
-  const adapter = createOpenCodeNativeAdapter({
+  const adapter = createAdapter({
     process,
     network,
     now: () => 1234,
@@ -415,10 +437,10 @@ function composition(events: readonly OpenCodeSseEvent[] = []) {
 
 describe("OpenCodeNativeAdapter", () => {
   it("rejects an invalid deferred-event safety bound", () => {
-    expect(() => createOpenCodeNativeAdapter({ maxDeferredEvents: 0 })).toThrow(
+    expect(() => createAdapter({ maxDeferredEvents: 0 })).toThrow(
       "maxDeferredEvents must be a positive integer",
     );
-    expect(() => createOpenCodeNativeAdapter({ maxDeferredEvents: 1.5 })).toThrow(
+    expect(() => createAdapter({ maxDeferredEvents: 1.5 })).toThrow(
       "maxDeferredEvents must be a positive integer",
     );
   });
@@ -426,14 +448,14 @@ describe("OpenCodeNativeAdapter", () => {
   it("uses the caller's binary resolver only when the native server starts", async () => {
     const process = new FakeProcess();
     const resolved: string[] = [];
-    const resolveBinary = async (command: string) => {
+    const resolveCommand = async (command: string) => {
       resolved.push(command);
       return "/login-shell/bin/opencode";
     };
-    const adapter = createOpenCodeNativeAdapter({
+    const adapter = createAdapter({
       process,
       network: new FakeNetwork(),
-      resolveBinary,
+      resolveCommand,
     });
 
     expect(resolved).toEqual([]);
@@ -627,7 +649,7 @@ describe("OpenCodeNativeAdapter", () => {
         yield { id: "idle", type: "session.idle", properties: { sessionID: "native-session-1" } };
       })();
     };
-    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const adapter = createAdapter({ process: new FakeProcess(), network });
     const observations: HarnessObservation[] = [];
     const handle = await adapter.attach(spec(), {
       emit: async (observation) => {
@@ -700,7 +722,7 @@ describe("OpenCodeNativeAdapter", () => {
         await hold.promise;
       })();
     };
-    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const adapter = createAdapter({ process: new FakeProcess(), network });
     const observations: HarnessObservation[] = [];
     const handle = await adapter.attach(spec(), {
       emit: async (observation) => {
@@ -1494,7 +1516,7 @@ describe("OpenCodeNativeAdapter", () => {
     network.healthStatuses = [503, 503, 200];
     network.holdEventStream = true;
     const delays: number[] = [];
-    const retrying = createOpenCodeNativeAdapter({
+    const retrying = createAdapter({
       process: new FakeProcess(),
       network,
       sleep: async (milliseconds) => {
@@ -1525,7 +1547,7 @@ describe("OpenCodeNativeAdapter", () => {
       return request(input);
     };
     const delays: number[] = [];
-    const adapter = createOpenCodeNativeAdapter({
+    const adapter = createAdapter({
       process,
       network,
       sleep: async (milliseconds) => {
@@ -1567,9 +1589,9 @@ describe("OpenCodeNativeAdapter", () => {
   it("does not retain a failed startup when close wins its race", async () => {
     const process = new FakeProcess();
     const resolvedPath = new Deferred<string>();
-    process.resolveBinary = async () => resolvedPath.promise;
+    process.resolveCommand = async () => resolvedPath.promise;
     process.spawnFailure = new Error("port already in use");
-    const adapter = createOpenCodeNativeAdapter({ process, network: new FakeNetwork() });
+    const adapter = createAdapter({ process, network: new FakeNetwork() });
 
     const attaching = adapter.attach(spec(), { emit: async () => undefined });
     const closing = adapter.close();
@@ -1587,7 +1609,7 @@ describe("OpenCodeNativeAdapter", () => {
     const network = new FakeNetwork();
     network.holdEventStream = true;
     const delays: number[] = [];
-    const adapter = createOpenCodeNativeAdapter({
+    const adapter = createAdapter({
       process,
       network,
       sleep: async (milliseconds) => {
@@ -1845,7 +1867,7 @@ describe("OpenCodeNativeAdapter", () => {
       info: { id: "provider-user-pending", role: "user" },
       parts: [{ type: "text", text: "Durable native prompt" }],
     };
-    const adapter = createOpenCodeNativeAdapter({
+    const adapter = createAdapter({
       process: new FakeProcess(),
       network,
       now: () => now,
@@ -1942,7 +1964,7 @@ describe("OpenCodeNativeAdapter", () => {
       input.path.startsWith("/session/status")
         ? { status: 200, body: { "native-session-1": { type: "busy" } } }
         : originalRequest(input);
-    const adapter = createOpenCodeNativeAdapter({
+    const adapter = createAdapter({
       process: new FakeProcess(),
       network,
       now: () => 1234,
@@ -1992,7 +2014,7 @@ describe("OpenCodeNativeAdapter", () => {
         };
         await streamEndGate.promise;
       })();
-    const adapter = createOpenCodeNativeAdapter({
+    const adapter = createAdapter({
       process: new FakeProcess(),
       network,
       now: () => 1234,
@@ -2347,7 +2369,7 @@ describe("OpenCodeNativeAdapter", () => {
         },
       },
     ];
-    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const adapter = createAdapter({ process: new FakeProcess(), network });
     const handle = await adapter.attach(spec(), { emit: async () => undefined });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -2393,7 +2415,7 @@ describe("OpenCodeNativeAdapter", () => {
           // the empty open set it would drop every ask this binding holds.
           { status: 200, body: { "question-abandoned": { id: "question-abandoned" } } }
         : originalRequest(input);
-    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const adapter = createAdapter({ process: new FakeProcess(), network });
     const handle = await adapter.attach(spec(), { emit: async () => undefined });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -2661,7 +2683,7 @@ describe("OpenCodeNativeAdapter", () => {
       ),
     ).toMatchObject({ status: "unavailable", reason: "Unknown OpenCode profile terminal" });
 
-    process.resolveBinary = async () => {
+    process.resolveCommand = async () => {
       throw "not an Error";
     };
     expect(
@@ -2675,7 +2697,7 @@ describe("OpenCodeNativeAdapter", () => {
   it("covers health retry failures and resume validation", async () => {
     const healthFailure = composition();
     healthFailure.network.healthStatuses = [503, 503];
-    const retrying = createOpenCodeNativeAdapter({
+    const retrying = createAdapter({
       process: healthFailure.process,
       network: healthFailure.network,
       sleep: async () => undefined,
@@ -2689,7 +2711,7 @@ describe("OpenCodeNativeAdapter", () => {
     nonErrorHealth.network.request = async () => {
       throw "health unavailable";
     };
-    const failedHealth = createOpenCodeNativeAdapter({
+    const failedHealth = createAdapter({
       process: nonErrorHealth.process,
       network: nonErrorHealth.network,
       healthRetryAttempts: 1,
@@ -2702,7 +2724,7 @@ describe("OpenCodeNativeAdapter", () => {
     transportFailure.network.request = async () => {
       throw new Error("offline");
     };
-    const unavailableAdapter = createOpenCodeNativeAdapter({
+    const unavailableAdapter = createAdapter({
       process: transportFailure.process,
       network: transportFailure.network,
       healthRetryAttempts: 1,
@@ -2891,7 +2913,7 @@ describe("OpenCodeNativeAdapter", () => {
         await hold.promise;
       })();
     };
-    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const adapter = createAdapter({ process: new FakeProcess(), network });
     const observations: HarnessObservation[] = [];
     const handle = await adapter.attach(spec(), {
       emit: async (observation) => {
@@ -2977,7 +2999,7 @@ describe("OpenCodeNativeAdapter", () => {
         await hold.promise;
       })();
     };
-    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const adapter = createAdapter({ process: new FakeProcess(), network });
     const observations: HarnessObservation[] = [];
     const handle = await adapter.attach(spec(), {
       emit: async (observation) => {
@@ -3062,7 +3084,7 @@ describe("OpenCodeNativeAdapter", () => {
         await hold.promise;
       })();
     };
-    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const adapter = createAdapter({ process: new FakeProcess(), network });
     const observations: HarnessObservation[] = [];
     const handle = await adapter.attach(spec(), {
       emit: async (observation) => {
@@ -3409,7 +3431,7 @@ describe("OpenCodeNativeAdapter", () => {
         yield { id: "repeat", type: "session.idle", properties: { sessionID: "native-session-1" } };
         throw new Error("stream closed");
       })();
-    const adapter = createOpenCodeNativeAdapter({
+    const adapter = createAdapter({
       process,
       network,
       now: () => 1234,
@@ -3456,7 +3478,7 @@ describe("OpenCodeNativeAdapter", () => {
         }
       })();
     };
-    const adapter = createOpenCodeNativeAdapter({
+    const adapter = createAdapter({
       process,
       network,
       now: () => 1234,
@@ -3497,7 +3519,7 @@ describe("OpenCodeNativeAdapter", () => {
 
   it("contains a rejected reconnect delay after recording disconnected attention", async () => {
     const network = new FakeNetwork();
-    const adapter = createOpenCodeNativeAdapter({
+    const adapter = createAdapter({
       process: new FakeProcess(),
       network,
       now: () => 1234,
@@ -3530,7 +3552,7 @@ describe("OpenCodeNativeAdapter", () => {
       throw "third connection failed";
     };
     let delays = 0;
-    const adapter = createOpenCodeNativeAdapter({
+    const adapter = createAdapter({
       process: new FakeProcess(),
       network,
       now: () => 1234,
@@ -3548,7 +3570,7 @@ describe("OpenCodeNativeAdapter", () => {
   it("does not reconnect when release wins during the retry delay", async () => {
     const network = new FakeNetwork();
     const retryDelay = new Deferred<void>();
-    const adapter = createOpenCodeNativeAdapter({
+    const adapter = createAdapter({
       process: new FakeProcess(),
       network,
       now: () => 1234,
@@ -3585,7 +3607,7 @@ describe("OpenCodeNativeAdapter", () => {
     const request = network.request.bind(network);
     network.request = async (input) =>
       input.path.includes("/message") ? messageResponse.promise : request(input);
-    const adapter = createOpenCodeNativeAdapter({
+    const adapter = createAdapter({
       process: new FakeProcess(),
       network,
       now: () => 1234,
@@ -3624,7 +3646,7 @@ describe("OpenCodeNativeAdapter", () => {
         drained.resolve();
         await waitForever();
       })();
-    const adapter = createOpenCodeNativeAdapter({
+    const adapter = createAdapter({
       process: new FakeProcess(),
       network,
       now: () => 1234,
@@ -3645,7 +3667,7 @@ describe("OpenCodeNativeAdapter", () => {
           properties: { sessionID: "native-session-1" },
         };
       })();
-    const adapter = createOpenCodeNativeAdapter({
+    const adapter = createAdapter({
       process: new FakeProcess(),
       network,
       now: () => 1234,
@@ -3681,7 +3703,7 @@ describe("OpenCodeNativeAdapter", () => {
         yield* [];
         throw new Error("late close");
       })();
-    const releasedAdapter = createOpenCodeNativeAdapter({
+    const releasedAdapter = createAdapter({
       process: new FakeProcess(),
       network: releasedNetwork,
       now: () => 1234,
@@ -3703,7 +3725,7 @@ describe("OpenCodeNativeAdapter", () => {
         yield* [];
         throw "stream failed";
       })();
-    const stringAdapter = createOpenCodeNativeAdapter({
+    const stringAdapter = createAdapter({
       process: new FakeProcess(),
       network: stringFailure,
       now: () => 1234,
@@ -3739,7 +3761,7 @@ describe("OpenCodeNativeAdapter", () => {
         },
       },
     ];
-    const adapter = createOpenCodeNativeAdapter({
+    const adapter = createAdapter({
       process: new FakeProcess(),
       network,
       now: () => 1234,
@@ -3810,7 +3832,7 @@ describe("OpenCodeNativeAdapter", () => {
   });
 
   it("uses defaults without starting a process and treats close as terminal", async () => {
-    expect(createOpenCodeNativeAdapter().manifest.id).toBe("opencode");
+    expect(createAdapter().manifest.id).toBe("opencode");
 
     const { adapter, process } = composition();
     await adapter.close();
@@ -4146,7 +4168,7 @@ describe("OpenCodeNativeAdapter", () => {
       return spawned.promise;
     };
     const network = new FakeNetwork();
-    const adapter = createOpenCodeNativeAdapter({
+    const adapter = createAdapter({
       process,
       network,
       sleep: async () => undefined,
@@ -4174,7 +4196,7 @@ describe("OpenCodeNativeAdapter", () => {
     const allocationStarted = new Deferred<void>();
     const exited = new Deferred<number | null>();
     let stops = 0;
-    process.resolveBinary = async () => resolvedPath.promise;
+    process.resolveCommand = async () => resolvedPath.promise;
     process.allocatePort = async () => {
       allocationStarted.resolve();
       return allocatedPort.promise;
@@ -4188,7 +4210,7 @@ describe("OpenCodeNativeAdapter", () => {
         },
       };
     };
-    const adapter = createOpenCodeNativeAdapter({
+    const adapter = createAdapter({
       process,
       network: new FakeNetwork(),
       sleep: async () => undefined,
@@ -4912,7 +4934,7 @@ describe("OpenCodeNativeAdapter", () => {
         await hold.promise;
       })();
     };
-    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const adapter = createAdapter({ process: new FakeProcess(), network });
     const observations: HarnessObservation[] = [];
     const handle = await adapter.attach(spec(), {
       emit: async (observation) => {
@@ -5097,7 +5119,7 @@ describe("OpenCodeNativeAdapter", () => {
         await hold.promise;
       })();
     };
-    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const adapter = createAdapter({ process: new FakeProcess(), network });
     const handle = await adapter.attach(spec(), {
       emit: async () => {
         throw new Error("sink unavailable");
@@ -5136,7 +5158,7 @@ describe("OpenCodeNativeAdapter", () => {
         await hold.promise;
       })();
     };
-    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const adapter = createAdapter({ process: new FakeProcess(), network });
     const observations: HarnessObservation[] = [];
     const handle = await adapter.attach(spec(), {
       emit: async (observation) => {
@@ -5163,7 +5185,7 @@ describe("OpenCodeNativeAdapter", () => {
   it("raises an open permission on the tool row it gates, mid-turn", async () => {
     const hold = new Deferred<void>();
     const network = gatedTurn([askedFor("call-write")], hold);
-    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const adapter = createAdapter({ process: new FakeProcess(), network });
     const observations: HarnessObservation[] = [];
     const handle = await adapter.attach(spec(), {
       emit: async (observation) => {
@@ -5193,7 +5215,7 @@ describe("OpenCodeNativeAdapter", () => {
   it("raises a subagent's permission on the task row that is waiting for it", async () => {
     const hold = new Deferred<void>();
     const network = delegatedTurn([subagentAskedFor("child-session-1")], hold);
-    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const adapter = createAdapter({ process: new FakeProcess(), network });
     const observations: HarnessObservation[] = [];
     const handle = await adapter.attach(spec(), {
       emit: async (observation) => {
@@ -5234,7 +5256,7 @@ describe("OpenCodeNativeAdapter", () => {
       ],
       hold,
     );
-    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const adapter = createAdapter({ process: new FakeProcess(), network });
     const observations: HarnessObservation[] = [];
     const handle = await adapter.attach(spec(), {
       emit: async (observation) => {
@@ -5257,7 +5279,7 @@ describe("OpenCodeNativeAdapter", () => {
   it("ignores a permission raised by a Session it never delegated to", async () => {
     const hold = new Deferred<void>();
     const network = delegatedTurn([subagentAskedFor("someone-elses-session")], hold);
-    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const adapter = createAdapter({ process: new FakeProcess(), network });
     const observations: HarnessObservation[] = [];
     const handle = await adapter.attach(spec(), {
       emit: async (observation) => {
@@ -5320,7 +5342,7 @@ describe("OpenCodeNativeAdapter", () => {
           }
         : response;
     };
-    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const adapter = createAdapter({ process: new FakeProcess(), network });
     const handle = await adapter.attach(spec(), { emit: async () => undefined });
 
     // Reconciling is the one action that looks like it should free a Session
@@ -5349,7 +5371,7 @@ describe("OpenCodeNativeAdapter", () => {
   it("gates a call whose input OpenCode has not reported", async () => {
     const hold = new Deferred<void>();
     const network = gatedTurn([askedFor("call-write")], hold, { status: "running" });
-    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const adapter = createAdapter({ process: new FakeProcess(), network });
     const observations: HarnessObservation[] = [];
     const handle = await adapter.attach(spec(), {
       emit: async (observation) => {
@@ -5383,7 +5405,7 @@ describe("OpenCodeNativeAdapter", () => {
       ],
       hold,
     );
-    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const adapter = createAdapter({ process: new FakeProcess(), network });
     const observations: HarnessObservation[] = [];
     const handle = await adapter.attach(spec(), {
       emit: async (observation) => {
@@ -5432,7 +5454,7 @@ describe("OpenCodeNativeAdapter", () => {
       ],
       hold,
     );
-    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const adapter = createAdapter({ process: new FakeProcess(), network });
     const observations: HarnessObservation[] = [];
     const handle = await adapter.attach(spec(), {
       emit: async (observation) => {
@@ -5474,7 +5496,7 @@ describe("OpenCodeNativeAdapter", () => {
       ],
       hold,
     );
-    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const adapter = createAdapter({ process: new FakeProcess(), network });
     const observations: HarnessObservation[] = [];
     const handle = await adapter.attach(spec(), {
       emit: async (observation) => {
@@ -5583,7 +5605,7 @@ describe("OpenCodeNativeAdapter", () => {
             ],
           }
         : originalRequest(input);
-    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const adapter = createAdapter({ process: new FakeProcess(), network });
     const observations: HarnessObservation[] = [];
     const handle = await adapter.attach(spec(), {
       emit: async (observation) => {
@@ -5639,7 +5661,7 @@ describe("OpenCodeNativeAdapter", () => {
             },
           }
         : originalRequest(input);
-    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const adapter = createAdapter({ process: new FakeProcess(), network });
     const observations: HarnessObservation[] = [];
     const handle = await adapter.attach(spec(), {
       emit: async (observation) => {
@@ -5694,7 +5716,7 @@ describe("OpenCodeNativeAdapter", () => {
       ],
       hold,
     );
-    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const adapter = createAdapter({ process: new FakeProcess(), network });
     const observations: HarnessObservation[] = [];
     const handle = await adapter.attach(spec(), {
       emit: async (observation) => {

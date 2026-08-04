@@ -400,7 +400,7 @@ app.whenReady().then(async () => {
         // inherit the user's toolchain PATH, and doing this at boot could make
         // every launch wait on an interactive shell for an adapter it never
         // uses.
-        resolveBinary: resolveOpenCodeBinary,
+        resolveCommand: resolveOpenCodeBinary,
       })
     : null;
   const sessionRuntime =

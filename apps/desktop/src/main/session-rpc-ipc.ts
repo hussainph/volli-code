@@ -51,11 +51,26 @@ export const SESSION_RPC_IPC_PROCEDURES = [
 export type SessionRpcIpcProcedure = (typeof SESSION_RPC_IPC_PROCEDURES)[number];
 
 /**
+ * Pins an exemption to a procedure the router actually publishes.
+ *
+ * The allow-list above is pinned by `satisfies`; the two exemptions below were
+ * free string unions, which is the same hole one step further in. A procedure
+ * that is renamed or deleted leaves its exemption behind, the subtraction still
+ * cancels, and the check reports success while excusing a procedure that does
+ * not exist — so the next procedure to inherit that name is exempt on arrival,
+ * silently. Naming an exemption is only a decision written down if the name has
+ * to be real.
+ */
+type PublishedProcedure<Procedure extends SessionRouterProcedure> = Procedure;
+
+/**
  * Development-only, and staying that way. The lab bridge serves these over
  * HTTP; a production client has no debug pane to feed and no business reading
  * a diagnostic log over the same channel it runs Sessions on.
  */
-type DeliberatelyMainOnlyProcedure = "labDiagnostics.list" | "labDiagnostics.subscribe";
+type DeliberatelyMainOnlyProcedure = PublishedProcedure<
+  "labDiagnostics.list" | "labDiagnostics.subscribe"
+>;
 
 /**
  * Routes production needs and does not have yet.
@@ -71,10 +86,9 @@ type DeliberatelyMainOnlyProcedure = "labDiagnostics.list" | "labDiagnostics.sub
  * once the last member moves to the allow-list, delete the bucket rather than
  * leave a name for a problem that no longer exists.
  */
-type UnroutedProcedure =
-  | "runtimeCatalog.inspect"
-  | "runtimeCatalog.save"
-  | "runtimeCatalog.resolve";
+type UnroutedProcedure = PublishedProcedure<
+  "runtimeCatalog.inspect" | "runtimeCatalog.save" | "runtimeCatalog.resolve"
+>;
 
 /**
  * Adding a procedure to the router — in any namespace — without accounting for
@@ -220,7 +234,7 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
       while (!subscription.abort.signal.aborted && !subscription.owner.isDestroyed()) {
         const next = await subscription.iterator.next();
         if (next.done) {
-          sendTerminalEvent(subscriptionId, subscription, { kind: "done", subscriptionId });
+          sendTerminalEvent(subscription, { kind: "done", subscriptionId });
           break;
         }
         const [eventId, data] = next.value;
@@ -240,7 +254,7 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
         transport: "electron-ipc",
         ...terminalError,
       });
-      sendTerminalEvent(subscriptionId, subscription, {
+      sendTerminalEvent(subscription, {
         kind: "error",
         subscriptionId,
         error: terminalError,
@@ -251,7 +265,6 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
   }
 
   function sendTerminalEvent(
-    subscriptionId: string,
     subscription: ActiveSubscription,
     event: Exclude<SessionRpcIpcEvent, { kind: "data" }>,
   ): void {
@@ -259,7 +272,7 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
     // iterator then normally resolves `done`; that is local teardown, not a
     // connection state the renderer needs to recover from.
     if (
-      active.get(subscriptionId) !== subscription ||
+      active.get(event.subscriptionId) !== subscription ||
       subscription.abort.signal.aborted ||
       subscription.owner.isDestroyed()
     ) {
