@@ -25,6 +25,10 @@ import type {
   FileWriteResult,
   GhosttyAppearancePayload,
   GhosttyConfigResult,
+  HarnessCommandGetInput,
+  HarnessCommandGetResult,
+  HarnessCommandSetInput,
+  HarnessCommandSetResult,
   HarnessPendingResult,
   HarnessRegisteredResult,
   HarnessTrustSetInput,
@@ -46,6 +50,9 @@ import type {
   RevealResult,
   SessionRenameInput,
   SessionRenameResult,
+  SessionRpcIpcEvent,
+  SessionRpcIpcRequest,
+  SessionRpcIpcResponse,
   HarnessEventNotice,
   SessionHarnessNotice,
   SessionsInterruptedEvent,
@@ -361,6 +368,34 @@ const api = {
         ipcRenderer.removeListener("volli:session-harness" satisfies VolliIpcEvent, listener);
     },
   },
+  /**
+   * The native Session tRPC edge. Three calls, deliberately shapeless: the
+   * router declares what a procedure takes and returns, so this door only has
+   * to carry a request there and frames back. The renderer speaks it through
+   * its terminating tRPC link, never directly.
+   */
+  sessionRpc: {
+    /** Runs one routed procedure; `session.subscribe` acknowledges with the id its frames will carry. */
+    request: (request: SessionRpcIpcRequest): Promise<SessionRpcIpcResponse> =>
+      invoke("volli:session-rpc", request),
+    /**
+     * Subscribes to the frames of EVERY live subscription; returns the
+     * unsubscribe function. One listener rather than one per subscription
+     * because the id main acknowledged with is what tells them apart, and it
+     * can arrive after the first frame does.
+     */
+    onEvent: (callback: (event: SessionRpcIpcEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: SessionRpcIpcEvent) =>
+        callback(payload);
+      ipcRenderer.on("volli:session-rpc-event" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:session-rpc-event" satisfies VolliIpcEvent, listener);
+    },
+    /** Ends one subscription: fire-and-forget, since the frames stopping is the answer. */
+    cancel: (subscriptionId: string): void => {
+      send("volli:session-rpc-cancel", subscriptionId);
+    },
+  },
   labels: {
     setColor: (input: LabelSetColorInput): Promise<LabelResult> =>
       invoke("volli:label-set-color", input),
@@ -389,6 +424,17 @@ const api = {
      * has a shelf life.
      */
     registered: (): Promise<HarnessRegisteredResult> => invoke("volli:harness-registered"),
+    /** The stored raw binary override for one harness, or `null` when unset. */
+    commandGet: (input: HarnessCommandGetInput): Promise<HarnessCommandGetResult> =>
+      invoke("volli:harness-command-get", input),
+    /**
+     * Validates and persists a per-harness binary override; `command: null`
+     * clears it. What is stored is what the user typed, never the realpath —
+     * resolution runs live at attach time, so a later PATH or filesystem change
+     * is honored without them retyping anything.
+     */
+    commandSet: (input: HarnessCommandSetInput): Promise<HarnessCommandSetResult> =>
+      invoke("volli:harness-command-set", input),
   },
   files: {
     /** The whole-project file index the `@` picker ranks over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */

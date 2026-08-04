@@ -106,6 +106,7 @@ export default defineConfig(({ mode }) => ({
         "src/lib/relative-time.ts",
         "src/lib/debounce.ts",
         "src/lib/escape-guard.ts",
+        "src/lib/session-rpc-ipc-link.ts",
         "src/editor/autosave-plan.ts",
         "src/editor/document-decorations.ts",
         "src/editor/document-identity.ts",
