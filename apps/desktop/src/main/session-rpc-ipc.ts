@@ -186,6 +186,7 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
 
   async function pumpSubscription(subscriptionId: string): Promise<void> {
     const subscription = active.get(subscriptionId);
+    /* v8 ignore next -- the only call site registers the entry two lines above it, synchronously. */
     if (!subscription) return;
     try {
       while (!subscription.abort.signal.aborted && !subscription.owner.isDestroyed()) {
@@ -274,6 +275,7 @@ async function callProcedure(
       return caller.runtimeCatalog.save(request.input as never);
     case "runtimeCatalog.resolve":
       return caller.runtimeCatalog.resolve(request.input as never);
+    /* v8 ignore next 4 -- unreachable behind `isRequest`; it exists so a listed procedure this switch forgot fails to compile. */
     default: {
       const exhaustive: never = request;
       return exhaustive;

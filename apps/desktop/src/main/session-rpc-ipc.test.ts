@@ -62,6 +62,8 @@ interface FakeSender {
   isDestroyed(): boolean;
   once(event: string, listener: () => void): void;
   removeListener(event: string, listener: () => void): void;
+  /** Fires whatever `once("destroyed", …)` registered — the WebContents teardown path. */
+  destroy(): void;
 }
 
 function runtimeFixture(): {
@@ -72,6 +74,8 @@ function runtimeFixture(): {
     subscribe: number[];
     cancelled: { sessionId: string; interactionId: string; reason: string }[];
   };
+  /** Whether the runtime subscription is still open — false once the bridge unsubscribed it. */
+  isListening(): boolean;
   emit(nextFrame: SessionStreamFrame): void;
 } {
   const calls = {
@@ -113,6 +117,7 @@ function runtimeFixture(): {
       close: async () => undefined,
     },
     calls,
+    isListening: () => listener !== null,
     emit: (nextFrame) => {
       if (listener === null) throw new Error("Subscription is not listening");
       listener(nextFrame);
@@ -190,12 +195,20 @@ function runtimeCatalogFixture(): {
 }
 
 function sender(id = 1): FakeSender {
+  const destroyedListeners: (() => void)[] = [];
+  let destroyed = false;
   return {
     id,
     send: vi.fn(),
-    isDestroyed: () => false,
-    once: vi.fn(),
+    isDestroyed: () => destroyed,
+    once: vi.fn((event: string, listener: () => void) => {
+      if (event === "destroyed") destroyedListeners.push(listener);
+    }),
     removeListener: vi.fn(),
+    destroy: () => {
+      destroyed = true;
+      for (const listener of destroyedListeners.splice(0)) listener();
+    },
   };
 }
 
@@ -206,6 +219,12 @@ function invoke(owner: FakeSender, request: unknown): Promise<SessionRpcIpcRespo
     { sender: owner },
     request,
   ) as Promise<SessionRpcIpcResponse>;
+}
+
+function cancel(event: { sender: FakeSender }, subscriptionId: unknown): void {
+  const listener = listeners.get(SESSION_RPC_CANCEL_CHANNEL);
+  if (!listener) throw new Error("Session RPC cancellation handler is not registered");
+  (listener as (...args: unknown[]) => unknown)(event, subscriptionId);
 }
 
 beforeEach(() => {
@@ -256,6 +275,33 @@ describe("registerSessionRpcIpcHandlers", () => {
       }),
     ).resolves.toEqual({ ok: true, data: undefined });
 
+    await expect(
+      invoke(sender(), {
+        procedure: "session.command",
+        input: {
+          commandId: "command-1",
+          command: {
+            kind: "session.create",
+            projectId: "project-1",
+            ticketId: null,
+            title: null,
+          },
+        },
+      }),
+    ).resolves.toEqual({ ok: true, data: {} });
+    await expect(
+      invoke(sender(), {
+        procedure: "session.refreshCapabilities",
+        input: { sessionId: "session-1", attachmentId: "attachment-1" },
+      }),
+    ).resolves.toEqual({ ok: true, data: { catalog: [] } });
+    await expect(
+      invoke(sender(), {
+        procedure: "session.reconcile",
+        input: { sessionId: "session-1", attachmentId: "attachment-1" },
+      }),
+    ).resolves.toEqual({ ok: true, data: undefined });
+
     expect(fixture.calls.projection).toEqual(["session-1"]);
     // The reason is the router's to state, not the renderer's: this transport
     // is the user seam, and abandonment is all it can honestly report.
@@ -278,6 +324,25 @@ describe("registerSessionRpcIpcHandlers", () => {
     await expect(
       invoke(sender(), { procedure: "session.snapshot", input: { sessionId: "" } }),
     ).resolves.toMatchObject({ ok: false, error: { code: "BAD_REQUEST" } });
+
+    await registration.close();
+  });
+
+  // The renderer's link only ever sends the envelope, but this handler is on a
+  // channel any renderer code could reach; anything that is not one is refused
+  // before it can be read for a procedure name.
+  it("rejects a request that is not an envelope at all", async () => {
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+    const invalid = {
+      ok: false,
+      error: { code: "BAD_REQUEST", message: "Invalid Session RPC request" },
+    };
+
+    await expect(invoke(sender(), "session.snapshot")).resolves.toEqual(invalid);
+    await expect(invoke(sender(), ["session.snapshot", {}])).resolves.toEqual(invalid);
+    await expect(invoke(sender(), { procedure: "session.snapshot" })).resolves.toEqual(invalid);
+    await expect(invoke(sender(), { procedure: 7, input: {} })).resolves.toEqual(invalid);
 
     await registration.close();
   });
@@ -305,17 +370,94 @@ describe("registerSessionRpcIpcHandlers", () => {
       ),
     );
 
-    const cancel = listeners.get(SESSION_RPC_CANCEL_CHANNEL);
-    if (!cancel) throw new Error("Session RPC cancellation handler is not registered");
-    (cancel as (...args: unknown[]) => unknown)({ sender: sender(2) }, response.subscriptionId);
+    cancel({ sender: sender(2) }, response.subscriptionId);
     expect(owner.removeListener).not.toHaveBeenCalled();
-    (cancel as (...args: unknown[]) => unknown)({ sender: owner }, response.subscriptionId);
+    cancel({ sender: owner }, response.subscriptionId);
     await vi.waitFor(() =>
       expect(owner.removeListener).toHaveBeenCalledWith("destroyed", expect.any(Function)),
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(owner.send).toHaveBeenCalledTimes(1);
     await registration.close();
+  });
+
+  it("ignores a cancellation that does not name a subscription", async () => {
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+    const owner = sender();
+    const response = await invoke(owner, {
+      procedure: "session.subscribe",
+      input: { sessionId: "session-1", afterSequence: 0 },
+    });
+    if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
+
+    cancel({ sender: owner }, 42);
+    fixture.emit(frame(3));
+    await vi.waitFor(() => expect(owner.send).toHaveBeenCalledTimes(1));
+
+    await registration.close();
+  });
+
+  it("drops a subscription whose renderer announces it was destroyed", async () => {
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+    const owner = sender();
+    const response = await invoke(owner, {
+      procedure: "session.subscribe",
+      input: { sessionId: "session-1", afterSequence: 0 },
+    });
+    if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
+    await vi.waitFor(() => expect(fixture.calls.subscribe).toEqual([0]));
+
+    owner.destroy();
+    await vi.waitFor(() => expect(fixture.isListening()).toBe(false));
+
+    expect(owner.removeListener).toHaveBeenCalledWith("destroyed", expect.any(Function));
+    expect(owner.send).not.toHaveBeenCalled();
+    await registration.close();
+  });
+
+  // The teardown announcement is an event, so it can still be queued when a
+  // frame lands — and `webContents.send` on a destroyed WebContents throws
+  // rather than being ignored. The check at the top of the pump loop is already
+  // stale by the time the frame it is waiting for arrives.
+  it("stops streaming to a renderer that went away before it said so", async () => {
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+    const owner = sender();
+    const response = await invoke(owner, {
+      procedure: "session.subscribe",
+      input: { sessionId: "session-1", afterSequence: 0 },
+    });
+    if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
+    await vi.waitFor(() => expect(fixture.calls.subscribe).toEqual([0]));
+
+    owner.isDestroyed = () => true;
+    fixture.emit(frame(3));
+    await vi.waitFor(() =>
+      expect(owner.removeListener).toHaveBeenCalledWith("destroyed", expect.any(Function)),
+    );
+
+    expect(owner.send).not.toHaveBeenCalled();
+    await registration.close();
+  });
+
+  it("tears down every live subscription when the bridge closes", async () => {
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+    const owner = sender();
+    const response = await invoke(owner, {
+      procedure: "session.subscribe",
+      input: { sessionId: "session-1", afterSequence: 0 },
+    });
+    if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
+    await vi.waitFor(() => expect(fixture.calls.subscribe).toEqual([0]));
+
+    await registration.close();
+
+    expect(owner.removeListener).toHaveBeenCalledWith("destroyed", expect.any(Function));
+    expect(fixture.isListening()).toBe(false);
+    expect(owner.send).not.toHaveBeenCalled();
   });
 
   it("does not retain a subscription whose renderer is already destroyed", async () => {
@@ -377,6 +519,34 @@ describe("registerSessionRpcIpcHandlers", () => {
         error: {
           code: "INTERNAL_SERVER_ERROR",
           message: "native stream closed unexpectedly",
+        },
+      }),
+    );
+    await registration.close();
+  });
+
+  // A rejection that is not an Error has no message to sanitize and no code to
+  // read, so the frame says only what is true rather than stringifying whatever
+  // was thrown into the renderer.
+  it("reports a subscription failure that threw something other than an Error", async () => {
+    terminalStream.current = failingStream("native stream vanished");
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+    const owner = sender();
+
+    const response = await invoke(owner, {
+      procedure: "session.subscribe",
+      input: { sessionId: "session-1", afterSequence: 0 },
+    });
+    if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
+
+    await vi.waitFor(() =>
+      expect(owner.send).toHaveBeenCalledWith(SESSION_RPC_EVENT_CHANNEL, {
+        kind: "error",
+        subscriptionId: response.subscriptionId,
+        error: {
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Session subscription failed",
         },
       }),
     );
@@ -503,7 +673,7 @@ function emptyStream(): AsyncIterable<readonly [string, unknown]> {
   };
 }
 
-function failingStream(error: Error): AsyncIterable<readonly [string, unknown]> {
+function failingStream(error: unknown): AsyncIterable<readonly [string, unknown]> {
   return {
     [Symbol.asyncIterator](): AsyncIterator<readonly [string, unknown]> {
       return { next: async () => Promise.reject(error) };
