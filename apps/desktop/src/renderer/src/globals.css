@@ -16,6 +16,11 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* Chat primitives live beside the renderer root, so Tailwind's automatic scan
+ * cannot see them from this stylesheet. Keep their shipped utilities explicit. */
+@source "../../components/ai-elements";
+@source "../../../node_modules/streamdown/dist/*.js";
+
 @custom-variant dark (&:is(.dark *));
 
 /* GENERATED THEME TOKENS — BEGIN */

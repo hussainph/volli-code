@@ -17,7 +17,6 @@
 import { cn } from "@renderer/lib/utils";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
-import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import * as React from "react";
 import { Streamdown, type Components } from "streamdown";
@@ -148,7 +147,7 @@ export const reasoningMarkdownComponents: Components = {
   ),
 };
 
-const streamdownPlugins = { cjk, code, math, mermaid };
+const streamdownPlugins = { cjk, code, mermaid };
 // Streamdown defers streaming paints via useTransition unless an animation
 // plugin is present; without this the body stays blank until the transition
 // commits — the blank-then-warp UX.

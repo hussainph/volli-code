@@ -495,6 +495,28 @@ function RowObject({ row, onOpenFile }: { row: ActivityRow; onOpenFile?(path: st
 /** How long the copy button holds its verdict before going back to offering. */
 const COPY_FEEDBACK_MS = 1200;
 
+type ClipboardWriter = Pick<Clipboard, "writeText">;
+
+/**
+ * The browser boundary for copying an activity object.
+ *
+ * Clipboard access can reject for ordinary runtime conditions (permission,
+ * focus, or insecure context). Return the result the control must show rather
+ * than leaving its caller to guess whether a rejected promise was success.
+ */
+export async function copyActivityObject(
+  value: string,
+  clipboard: ClipboardWriter | undefined = navigator.clipboard,
+): Promise<"copied" | "failed"> {
+  try {
+    if (!clipboard) return "failed";
+    await clipboard.writeText(value);
+    return "copied";
+  } catch {
+    return "failed";
+  }
+}
+
 /** Revealed on hover or keyboard focus, never occupying resting space. */
 function RowActions({ row }: { row: ActivityRow }) {
   // The clipboard write can be refused — denied permission, an insecure
@@ -524,10 +546,7 @@ function RowActions({ row }: { row: ActivityRow }) {
         }
         onClick={(event) => {
           event.stopPropagation();
-          void navigator.clipboard.writeText(row.object ?? "").then(
-            () => setCopyState("copied"),
-            () => setCopyState("failed"),
-          );
+          void copyActivityObject(row.object ?? "").then(setCopyState);
         }}
       >
         <CopyStateIcon className={cn("size-3", copyState === "failed" && "text-destructive")} />
