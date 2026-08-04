@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import type { NativeProbeResult } from "@volli/session-engine";
 
-import { insertProject } from "./db/projects-repo";
+import { deleteProject, insertProject } from "./db/projects-repo";
 import { openTestDb, testProject, type TestDb } from "./db/test-helpers";
 import { createRuntimeCatalogHub } from "./runtime-catalog-hub";
 
@@ -80,6 +80,27 @@ describe("createRuntimeCatalogHub", () => {
     insertProject(db, testProject({ id: "project-1", path: "/home/volli" }));
 
     expect(hub("project-1")).toBe(hub());
+  });
+
+  // Nothing moves a project's `path` in place (the column is UNIQUE and no
+  // repo function updates it), so a rename or re-add is a delete plus an
+  // insert. The hub re-reads the row on every call instead of remembering
+  // which directory an id once meant, which is what makes the unbounded cache
+  // safe: the entry under the OLD directory becomes unreachable garbage rather
+  // than a catalog still answering for the id that moved away from it.
+  it("follows a re-added project to its new path, never serving the cached old directory", async () => {
+    const { db, hub, directories } = setup();
+    insertProject(db, testProject({ id: "project-1", path: "/repo/before" }));
+    const before = hub("project-1");
+    await before.inspect({ adapterId: "opencode" });
+
+    deleteProject(db, "project-1");
+    insertProject(db, testProject({ id: "project-1", path: "/repo/after" }));
+    const after = hub("project-1");
+    await after.inspect({ adapterId: "opencode" });
+
+    expect(after).not.toBe(before);
+    expect(directories).toEqual(["/repo/before", "/repo/after"]);
   });
 
   it("gives a project its own catalog instance, distinct from the fallback", () => {

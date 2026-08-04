@@ -465,6 +465,33 @@ describe("registerSessionRpcIpcHandlers", () => {
     });
     await registration.close();
   });
+
+  // The bridge flattens every failure into `{ code, message }`, and a caller
+  // that cannot tell "this project does not exist" from "the catalog broke"
+  // has to guess which one it is showing. The router raises the resolver's
+  // rejection as a TRPCError, so the code has to survive the flattening — not
+  // collapse into the INTERNAL_SERVER_ERROR fallback the sanitizer applies to
+  // anything it cannot read a code off.
+  it("carries a NOT_FOUND for an unknown project id across the bridge, code intact", async () => {
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: fixture.runtime,
+      resolveRuntimeCatalog: (projectId) => {
+        throw new Error(`Unknown project ${projectId ?? "none"}`);
+      },
+    });
+
+    await expect(
+      invoke(sender(), {
+        procedure: "runtimeCatalog.inspect",
+        input: { projectId: "ghost-project", adapterId: "opencode" },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "NOT_FOUND", message: "Unknown project ghost-project" },
+    });
+    await registration.close();
+  });
 });
 
 function emptyStream(): AsyncIterable<readonly [string, unknown]> {
