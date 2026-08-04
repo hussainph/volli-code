@@ -1,6 +1,17 @@
 import * as React from "react";
-import { CheckCircleIcon, CodeIcon, TerminalWindowIcon, WarningIcon } from "@phosphor-icons/react";
-import type { UIMessage } from "ai";
+import {
+  CheckCircleIcon,
+  ClockIcon,
+  CodeIcon,
+  TerminalWindowIcon,
+  WarningIcon,
+} from "@phosphor-icons/react";
+import type {
+  SessionAttention,
+  SessionInteraction,
+  SessionInteractionResolution,
+} from "@volli/shared";
+import type { DynamicToolUIPart, UIMessage } from "ai";
 
 import {
   Conversation,
@@ -9,7 +20,7 @@ import {
   ConversationScrollButton,
 } from "@ai-elements/conversation";
 import { FileMentionProvider } from "@ai-elements/chat-markdown";
-import { Message, MessageContent, MessageResponse } from "@ai-elements/message";
+import { Message, MessageContent } from "@ai-elements/message";
 import { ReasoningLine } from "@ai-elements/reasoning";
 import { AppShell } from "@renderer/components/app-shell";
 import { ContentColumn } from "@renderer/components/layout/content-column";
@@ -21,6 +32,8 @@ import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
 
 import {
+  approvalId,
+  gatedApprovalIds,
   groupTurns,
   isAwaitingFirstOutput,
   projectSessionTodos,
@@ -28,20 +41,21 @@ import {
   type ChatSegment,
   type SessionTodo,
 } from "../chat/activity";
-import {
-  ActivityBundle,
-  AttentionBlock,
-  SessionTodoDock,
-  SessionTodoList,
-} from "../chat/activity-ui";
+import { ActivityBundle, SessionTodoDock, SessionTodoList, ToolRow } from "../chat/activity-ui";
 import { SessionComposer } from "../chat/composer-ui";
-import { useLabSessionController } from "../chat/session-controller";
+import { GuardedResponse } from "../chat/markdown-boundary";
 import {
-  approvalOptionId,
+  footInteraction,
+  interactionForApproval,
+  readInteractionResolutionMessage,
+  type InteractionSubmission,
+} from "../chat/interaction";
+import { InteractionCard, InteractionReceiptLine } from "../chat/interaction-ui";
+import { LabScenarioPicker } from "../chat/scenario-picker";
+import { useLabSessionController, type LabSessionController } from "../chat/session-controller";
+import {
   enqueueMessage,
-  findInteractionByNativeId,
   nextRelease,
-  type ApprovalDecision,
   type ComposerIntent,
   type QueuedMessage,
 } from "../chat/session-model";
@@ -67,19 +81,24 @@ export default function ChatSessionScratch() {
 /** Keep the prototype Session alive while Settings takes over the canvas. */
 function LabMainContent() {
   const settingsOpen = useUiStore((state) => state.settingsOpen);
+  const [scenario, setScenario] = React.useState<string | null>(null);
 
   return (
     <>
       <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden", settingsOpen && "hidden")}>
-        <TicketChatWorkspace />
+        {/* Keyed on the pick so a scenario gets a Session of its own rather
+            than a second attachment on the last one's history. Remounting is
+            also what re-arms the controller's start-once latch. */}
+        <TicketChatWorkspace key={scenario ?? "live"} scenarioId={scenario} />
       </div>
       {settingsOpen ? <SettingsPage initialCategoryKey="harness" /> : null}
+      <LabScenarioPicker value={scenario} onChange={setScenario} />
     </>
   );
 }
 
-function TicketChatWorkspace() {
-  const session = useLabSessionController();
+function TicketChatWorkspace({ scenarioId }: { scenarioId: string | null }) {
+  const session = useLabSessionController(scenarioId);
   const [activeTabId, setActiveTabId] = React.useState(SESSION_TAB_ID);
   const [fileTabs, setFileTabs] = React.useState<TicketTabDescriptor[]>([]);
   const [todos, setTodos] = React.useState<SessionTodo[] | null>(null);
@@ -107,13 +126,20 @@ function TicketChatWorkspace() {
 
   // Live todos from the plan activity; clear leftovers when the Session goes
   // idle (OpenCode paradigm — unfinished plans do not reopen later).
+  //
+  // Held by value. The plan is re-projected from scratch on every frame batch
+  // and is almost always the same plan, but a fresh array of identical rows
+  // still fails React's bail-out — so a Session that never touched its plan
+  // re-rendered the tab strip, the rail and the whole chat plane on every token.
   React.useEffect(() => {
     if (session.lifecycle === "idle") {
       setTodos(null);
       return;
     }
     const projected = projectSessionTodos(session.messages);
-    if (projected !== null) setTodos(projected.length > 0 ? projected : null);
+    if (projected === null) return;
+    const next = projected.length > 0 ? projected : null;
+    setTodos((current) => (sameTodos(current, next) ? current : next));
   }, [session.lifecycle, session.messages]);
 
   const openFileTab = React.useCallback((path: string) => {
@@ -270,13 +296,23 @@ function ChatPlane({
 }) {
   const [input, setInput] = React.useState("");
   const [queued, setQueued] = React.useState<readonly QueuedMessage[]>([]);
-  const [deciding, setDeciding] = React.useState<ReadonlySet<string>>(() => new Set());
+  // Per interaction, not per surface: a harness can have several cards open at
+  // once, and one boolean disabled every other card's controls while one of
+  // them was in flight.
+  const [resolving, setResolving] = React.useState<ReadonlySet<string>>(EMPTY_RESOLVING);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
   const composerHeight = useMeasuredHeight<HTMLDivElement>();
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const working = session.lifecycle === "working";
 
-  const { submit, selection, liveAttachmentId, interactions, resolveInteraction } = session;
+  const { cancelInteraction, interrupt, liveAttachmentId, resolveInteraction, selection, submit } =
+    session;
+  // The projection is replaced wholesale on every refresh, so its open
+  // interactions arrive as new objects saying the same thing. An interaction is
+  // written once, at `interaction.opened`, and leaves the list only when it is
+  // resolved or cancelled — nothing updates one in place — so the id is the
+  // whole of its identity here.
+  const interactions = useStableList(session.interactions, sameInteractionId);
   /**
    * Two questions, and conflating them is what made the composer inert for the
    * whole attach. A model is what you need to *write* a message; a live executor
@@ -288,18 +324,32 @@ function ChatPlane({
   const composable = selection.modelId.length > 0;
   const deliverable = liveAttachmentId !== null && composable;
 
-  const send = React.useCallback(
-    (text: string, intent: ComposerIntent) => {
-      if (intent === "queue" || !deliverable) {
+  /**
+   * The one road out of this surface for anything a person typed.
+   *
+   * Resolves true when the words are safe — delivered, or held in the queue
+   * because there was nowhere to send them yet. The composer used to own this
+   * fallback alone, so a redirection typed on a card went straight to `submit`
+   * and was dropped without a word whenever the executor was still coming up.
+   */
+  const deliver = React.useCallback(
+    async (text: string, intent: ComposerIntent): Promise<boolean> => {
+      if (messageRoute(intent, deliverable) === "hold") {
         setQueued((current) => enqueueMessage(current, { id: nextId(), text }));
-        setInput("");
-        return;
+        return true;
       }
-      void submit(text, intent === "steer" ? "steer" : "queue").then((sent) => {
-        if (sent) setInput("");
-      });
+      return submit(text, intent === "steer" ? "steer" : "queue");
     },
     [deliverable, submit],
+  );
+
+  const send = React.useCallback(
+    (text: string, intent: ComposerIntent) => {
+      void deliver(text, intent).then((kept) => {
+        if (kept) setInput("");
+      });
+    },
+    [deliver],
   );
 
   // A queue drains one message into an idle Session. The released id is latched
@@ -314,39 +364,97 @@ function ChatPlane({
   }, [deliverable, queued, submit, working]);
 
   /**
-   * A decision on a gated row.
+   * Which decisions the transcript is already showing, and which one is left
+   * for the foot.
    *
-   * The row knows the harness's own permission id; the command needs the
-   * Session's interaction id, and the projection is what relates them. Pending
-   * is tracked against the harness id because that is the identity the row has —
-   * anything else would need this same lookup a second time just to ask whether
-   * the button it is about to draw is still live.
+   * A gated call carries its own card on its own row, where the command and its
+   * detail are. What has no row to stand on — a question, a permission the
+   * harness raised without a call — lands in the composer's slot, oldest first:
+   * a harness can have several open at once, and two blocking cards stacked
+   * there are two things each claiming to be the one thing to do next.
+   *
+   * Asked only while something is waiting to be asked. `gatedApprovalIds` walks
+   * every part of every message, and the list it walks is replaced on every
+   * batch a streamed reply commits — so a memo on it misses every time and the
+   * scan was being paid on every frame of every turn. What it answers is only
+   * ever read when an interaction is open, which is a blocked state, and a
+   * blocked Session is not streaming anything for the scan to compete with.
    */
-  const decide = React.useCallback(
-    (nativeId: string, decision: ApprovalDecision) => {
-      const interaction = findInteractionByNativeId(interactions, nativeId);
-      const optionId = interaction ? approvalOptionId(interaction.options, decision) : null;
-      if (!interaction || !optionId) return;
-      setDeciding((current) => new Set(current).add(nativeId));
-      void resolveInteraction(interaction.id, { optionIds: [optionId], response: null }).finally(
-        () =>
-          setDeciding((current) => {
-            const next = new Set(current);
-            next.delete(nativeId);
-            return next;
-          }),
-      );
-      // Steering is a rejection plus a correction, and the correction is an
-      // ordinary message — OpenCode has no reply that carries one. So focus is
-      // the entire affordance: the card resolves and the cursor is already
-      // sitting where the next sentence goes.
-      if (decision === "steer") textareaRef.current?.focus();
-    },
-    [interactions, resolveInteraction],
+  const pending =
+    interactions.length > 0
+      ? footInteraction(interactions, gatedApprovalIds(session.messages))
+      : null;
+
+  // The landing travels back to the card. A decision the harness never heard
+  // has to say so where it was taken — the card is the only thing on screen at
+  // that moment, and it is the thing that looks answerable until it is told.
+  const answer = React.useCallback(
+    (interactionId: string, submission: InteractionSubmission): Promise<boolean> =>
+      answerInteraction(interactionId, submission, {
+        resolve: resolveInteraction,
+        // Sent, never steered: the redirection is the next thing said, not an
+        // interruption of a turn that is already stopping to be told.
+        deliver: (message) => void deliver(message, "send"),
+        resolving: (id, active) => setResolving((current) => resolvingWith(current, id, active)),
+      }),
+    [deliver, resolveInteraction],
   );
 
-  const turnContext: TurnContext = { working, onOpenFile, onDecide: decide, deciding };
-  const blocker = sessionBlocker(session, () => setSettingsOpen(true));
+  const withdraw = React.useCallback(
+    (interactionId: string) => {
+      void withdrawInteraction(interactionId, {
+        interrupt,
+        cancel: cancelInteraction,
+        resolving: (id, active) => setResolving((current) => resolvingWith(current, id, active)),
+      });
+    },
+    [cancelInteraction, interrupt],
+  );
+
+  // Every interaction this Session has opened, so a resolution message in
+  // scrollback can name what it answered. Taken from the controller, which folds
+  // it forward as frames arrive: this used to re-read the whole frame list on
+  // every batch and then compare the result back to the last one to undo the
+  // identity it had just churned.
+  const openedInteractions = session.openedInteractions;
+
+  /**
+   * One object, and it has to keep its identity between ticks.
+   *
+   * Every turn on screen takes this, so a fresh literal per render is a fresh
+   * prop for a thousand rows and defeats {@link ChatTurn}'s memo outright. Each
+   * member above is either state, a stable callback, or held by content — which
+   * is what leaves this recomputing only when something in it actually changed.
+   *
+   * `working` is deliberately not a member. It flips at the start and end of
+   * every turn, so carrying it here changed this object twice a turn and
+   * re-rendered the whole transcript both times — and the cost was not the
+   * re-render but `isAnimating` changing under every settled turn, which makes
+   * Streamdown re-parse markdown that has not moved in an hour. Measured at
+   * 3000 turns it was the largest number anywhere: 2,150 ms, against 83 ms with
+   * the animation flag pinned. Only the live turn can animate, so only the live
+   * turn is told about it.
+   */
+  const turnContext = React.useMemo<TurnContext>(
+    () => ({
+      onOpenFile,
+      interactions: openedInteractions,
+      open: interactions,
+      resolving,
+      onResolve: answer,
+    }),
+    [answer, interactions, onOpenFile, openedInteractions, resolving],
+  );
+
+  // Grouping is O(messages) and ran inline in the JSX below, so it re-ran on
+  // every render of this plane. Turns are then held per turn: one nothing
+  // happened in keeps the array it had, which is what lets its rows stand.
+  const turns = useStableList(
+    React.useMemo(() => groupTurns(session.messages), [session.messages]),
+    sameMessages,
+  );
+
+  const blocker = sessionBlocker(session, () => setSettingsOpen(true), interactions.length > 0);
 
   const planeStyle = { "--composer-height": `${composerHeight.height}px` } as React.CSSProperties;
 
@@ -373,8 +481,13 @@ function ChatPlane({
               </ConversationEmptyState>
             ) : (
               <ContentColumn className={MESSAGE_GAP}>
-                {groupTurns(session.messages).map((turn) => (
-                  <ChatTurn key={turn[0]?.id} messages={turn} context={turnContext} />
+                {turns.map((turn, index) => (
+                  <ChatTurn
+                    key={turn[0]?.id}
+                    messages={turn}
+                    context={turnContext}
+                    live={working && index === turns.length - 1}
+                  />
                 ))}
                 {working && isAwaitingFirstOutput(session.messages) ? (
                   <ReasoningLine verb="Working" meta={null} streaming />
@@ -429,38 +542,175 @@ function ChatPlane({
         className="pointer-events-none absolute inset-x-0 bottom-0 bg-background pb-5"
       >
         <ContentColumn>
+          {/* Above whatever the slot holds, card included. A card answers the
+              question it was asked; it does not answer a failure — and the one
+              failure a reader most needs to see here is the decision that never
+              reached the harness, which leaves the card looking answerable and
+              nothing else on screen. */}
           {blocker ? <SessionBlocker blocker={blocker} /> : null}
-          {todos && todos.length > 0 && !todosEveryDone(todos) ? (
-            <SessionTodoDock todos={todos} />
-          ) : null}
-          <SessionComposer
-            value={input}
-            onValueChange={setInput}
-            textareaRef={textareaRef}
-            models={session.catalog.models}
-            agents={session.catalog.agents}
-            selection={selection}
-            onSelectionChange={session.setSelection}
-            working={working}
-            ready={composable}
-            queued={queued}
-            onQueuedChange={setQueued}
-            onSubmit={send}
-            onStop={() => void session.interrupt()}
-          />
+          {/* One bordered thing in the slot, and only for an interaction no row
+              can hold. While one stands here the turn cannot proceed and there
+              is nothing to type or no plan progress to read — the composer and
+              the dock stand down, and the plan stays where it also lives, in
+              the rail. Stacking the card under the dock would put two cards on
+              one rung. A card on a *row* displaces none of this: it is not in
+              this slot, so the composer stays exactly where it was. */}
+          {pending ? (
+            <InteractionCard
+              // Keyed so a second question opening behind the first mounts its
+              // own draft rather than inheriting the answers to another one.
+              key={pending.id}
+              interaction={pending}
+              resolving={resolving.has(pending.id)}
+              autoFocus
+              className="mb-2"
+              onResolve={(submission) => answer(pending.id, submission)}
+              // Stop ends the turn; the question outlives it, because an
+              // interaction leaves the projection only when it is answered or
+              // withdrawn. Cancelling is what gives the composer back.
+              onStop={() => withdraw(pending.id)}
+            />
+          ) : (
+            <>
+              {todos && todos.length > 0 && !todosEveryDone(todos) ? (
+                <SessionTodoDock todos={todos} />
+              ) : null}
+              <SessionComposer
+                value={input}
+                onValueChange={setInput}
+                textareaRef={textareaRef}
+                models={session.catalog.models}
+                agents={session.catalog.agents}
+                selection={selection}
+                onSelectionChange={session.setSelection}
+                working={working}
+                ready={composable}
+                queued={queued}
+                onQueuedChange={setQueued}
+                onSubmit={send}
+                onStop={() => void session.interrupt()}
+              />
+            </>
+          )}
         </ContentColumn>
       </div>
     </div>
   );
 }
 
+/* -------------------------------------------------------------- answering */
+
+const EMPTY_RESOLVING: ReadonlySet<string> = new Set();
+
+/**
+ * A decision, and the redirection that could not ride it.
+ *
+ * Two acts, in this order and never merged. The resolution is what the
+ * harness's reply endpoint takes; a refusal is defined by being empty, so words
+ * the reader typed instead of choosing travel afterwards as an ordinary
+ * message.
+ *
+ * The second act waits on the first *landing*. It used to be chained off a
+ * promise that resolved whether the decision reached the harness, was refused
+ * by the transport, or was never sent at all — so a harness that never heard
+ * the "no" was told what to do instead of it.
+ */
+export async function answerInteraction(
+  interactionId: string,
+  submission: InteractionSubmission,
+  acts: {
+    resolve(interactionId: string, resolution: SessionInteractionResolution): Promise<boolean>;
+    deliver(message: string): void;
+    resolving(interactionId: string, active: boolean): void;
+  },
+): Promise<boolean> {
+  acts.resolving(interactionId, true);
+  try {
+    const resolved = await acts.resolve(interactionId, submission.resolution);
+    if (resolved && submission.message !== null) acts.deliver(submission.message);
+    return resolved;
+  } finally {
+    acts.resolving(interactionId, false);
+  }
+}
+
+/**
+ * The other way a card ends: nobody is going to decide it.
+ *
+ * Two acts again, and the second waits on the first only for order — stopping
+ * the turn does not answer the question, and the interaction leaves the
+ * projection only when it is resolved or cancelled.
+ *
+ * It marks the same in-flight latch a decision does, which is the whole fix: the
+ * card's controls are disabled by that latch, and Stop was outside it, so the
+ * button stayed live for the length of an interrupt round trip and a second
+ * click sent a second withdrawal for an interaction the first had already taken
+ * away.
+ */
+export async function withdrawInteraction(
+  interactionId: string,
+  acts: {
+    interrupt(): Promise<boolean>;
+    cancel(interactionId: string): Promise<boolean>;
+    resolving(interactionId: string, active: boolean): void;
+  },
+): Promise<void> {
+  acts.resolving(interactionId, true);
+  try {
+    await acts.interrupt();
+    await acts.cancel(interactionId);
+  } finally {
+    acts.resolving(interactionId, false);
+  }
+}
+
+/**
+ * Which cards have a decision in flight — by id, because several can be open at
+ * once and each one's controls answer for itself alone.
+ */
+export function resolvingWith(
+  current: ReadonlySet<string>,
+  interactionId: string,
+  active: boolean,
+): ReadonlySet<string> {
+  const next = new Set(current);
+  if (active) next.add(interactionId);
+  else next.delete(interactionId);
+  return next;
+}
+
+/**
+ * Where a message goes right now: to the harness, or into the local queue.
+ *
+ * One rule for every message this surface sends, wherever it was typed. The
+ * queue is not only the composer's affordance for holding a message behind a
+ * live turn — it is also what keeps words written before the executor is up,
+ * and a card's redirection is written exactly then as often as anything else.
+ */
+export type MessageRoute = "send" | "hold";
+
+export function messageRoute(intent: ComposerIntent, deliverable: boolean): MessageRoute {
+  return intent !== "queue" && deliverable ? "send" : "hold";
+}
+
 /* ---------------------------------------------------------------- blocked */
+
+interface SessionBlockerAction {
+  label: string;
+  act(): void;
+}
 
 interface SessionBlockerState {
   message: string;
-  action: string;
-  tone: "error" | "unconfigured";
-  act(): void;
+  /** The harness's own wording. It hovers; it is never the headline. */
+  detail: string | null;
+  tone: "error" | "waiting" | "unconfigured";
+  /**
+   * Null where nothing on this surface can fix it. A button that cannot help
+   * is worse than no button: it spends the reader's one attempt at recovery
+   * and then leaves them where they started, doubting the message too.
+   */
+  action: SessionBlockerAction | null;
 }
 
 /**
@@ -473,30 +723,168 @@ interface SessionBlockerState {
  * the composer rather than in the transcript because it is about whether you
  * can write, not about what happened in the conversation — and a failure that
  * scrolls away with the history is a failure nobody can act on.
+ *
+ * Four sources, in the order they answer:
+ *
+ * 1. `session.error` — this surface's own transport. If the stream is gone the
+ *    attention we hold is a memory, so it does not get to speak over it.
+ * 2. `attention.primary` — the harness stating a state to recover from.
+ * 3. `catalogState` / `catalogError` — nothing configured yet, which auth would
+ *    otherwise be mistaken for since an unauthenticated provider lists no models
+ *    either, and the refresh that could not answer at all.
+ * 4. `diagnosticsError` — the debug pane's own transport, and last on purpose:
+ *    it stops nothing, so it may be said only when nothing that does is.
+ *
+ * **An open card suppresses what it is the answer to, and nothing more.** Being
+ * asked a question is not a failure, so a card takes the place of `input_required`,
+ * `permission_required` and the "no models" row it does not need one for. It
+ * never takes the place of a failure: `session.error` is where a decision that
+ * did not reach the harness is reported, and a card that hid it would be a card
+ * still sitting there looking answerable while the only report of what went
+ * wrong stayed off screen. Which is why the row draws *above* whatever holds
+ * the slot rather than instead of it.
  */
-function sessionBlocker(
-  session: ReturnType<typeof useLabSessionController>,
+export function sessionBlocker(
+  session: Pick<
+    LabSessionController,
+    "attention" | "catalogError" | "catalogState" | "diagnosticsError" | "error" | "recover"
+  >,
   openSettings: () => void,
+  asked: boolean,
 ): SessionBlockerState | null {
+  const retry: SessionBlockerAction = { label: "Retry", act: () => void session.recover() };
+  const settings: SessionBlockerAction = { label: "Settings", act: openSettings };
   if (session.error !== null) {
-    return {
-      message: session.error,
-      action: "Retry",
-      tone: "error",
-      act: () => void session.recover(),
-    };
+    return { message: session.error, detail: null, tone: "error", action: retry };
+  }
+  const attention = session.attention.primary;
+  if (attention) {
+    return asked && answeredByCard(attention.kind)
+      ? null
+      : attentionBlocker(attention, retry, settings);
   }
   // Only a catalog that has actually answered can say a person configured
   // nothing; `loading` looks identical from here and is not a blocked state.
-  if (session.catalogState === "empty") {
+  if (session.catalogState === "empty" && !asked) {
     return {
       message: "No models configured",
-      action: "Settings",
+      detail: null,
       tone: "unconfigured",
-      act: openSettings,
+      action: settings,
+    };
+  }
+  // The model list failing to refresh, which is a different fact from there
+  // being none — and from the Session's own transport, which is where it used to
+  // be reported and where the two silently overwrote each other. Settings is the
+  // action because closing it is what re-asks the catalog.
+  if (session.catalogError !== null && !asked) {
+    return {
+      message: "Models unavailable",
+      detail: session.catalogError,
+      tone: "error",
+      action: settings,
+    };
+  }
+  if (session.diagnosticsError !== null) {
+    // No action: nothing on this surface re-opens the diagnostics stream, and a
+    // button that cannot help spends the reader's one attempt at recovery.
+    return {
+      message: "Diagnostics unavailable",
+      detail: session.diagnosticsError,
+      tone: "error",
+      action: null,
     };
   }
   return null;
+}
+
+/** The two attention kinds a card standing on screen already answers. */
+function answeredByCard(kind: SessionAttention["kind"]): boolean {
+  return kind === "input_required" || kind === "permission_required";
+}
+
+/**
+ * One line and at most one action per attention kind.
+ *
+ * The switch is total over the union and has no `default`: a kind added later
+ * has to be answered here, not silently absorbed into whichever branch was
+ * cheapest to reach. `noImplicitReturns` turns the omission into a build error.
+ *
+ * Which kinds earn a button, and why the rest do not:
+ *
+ * - **Settings** — `auth_required` and `configuration_invalid`. Both are facts
+ *   about what is configured, and Settings is where that is changed.
+ * - **Retry** — `transport_retrying`, `adapter_disconnected` and
+ *   `rate_limited`. The first two are a connection to re-establish, which is
+ *   exactly what `recover` does. A rate limit gets one because the wait is the
+ *   whole fix; the provider's own time is shown when it sent one, and an absent
+ *   one stays absent rather than becoming a guess.
+ * - **Nothing** — `context_limit_reached` (compaction does not exist yet, so
+ *   the only true answer is a new Session and the reader can already start
+ *   one); `quota_exhausted` (a spent allowance is not retryable and no local
+ *   setting refills it); `partial_turn_interrupted` (a stopped turn left the
+ *   composer usable — resending is typing, not recovering);
+ *   `adapter_unrecoverable` (the kind is named for having no recovery, and
+ *   `recover` would reattach a stream that was never the problem);
+ *   `input_required` and `permission_required` (the answer lives on the
+ *   interaction card, which outranks this row entirely).
+ *
+ * `quota_exhausted`, `configuration_invalid`, `input_required` and
+ * `permission_required` are not raised by the OpenCode adapter today — the
+ * first two have no member of `session.error` stating them and the last two are
+ * not adapter-raisable at all. They are answered anyway, because what this
+ * reads is the union, not one adapter's current habits.
+ */
+function attentionBlocker(
+  attention: SessionAttention,
+  retry: SessionBlockerAction,
+  settings: SessionBlockerAction,
+): SessionBlockerState {
+  const detail = attention.detail;
+  switch (attention.kind) {
+    case "auth_required":
+      return { message: "Sign-in required", detail, tone: "error", action: settings };
+    case "configuration_invalid":
+      return { message: "Configuration invalid", detail, tone: "error", action: settings };
+    case "transport_retrying":
+      return { message: "Reconnecting", detail, tone: "waiting", action: retry };
+    case "adapter_disconnected":
+      return { message: "Disconnected", detail, tone: "error", action: retry };
+    case "rate_limited":
+      return {
+        message: `Rate limited${untilClause(attention.retryAt)}`,
+        detail,
+        tone: "waiting",
+        action: retry,
+      };
+    case "quota_exhausted":
+      return {
+        message: `Quota exhausted${untilClause(attention.resetAt)}`,
+        detail,
+        tone: "error",
+        action: null,
+      };
+    case "context_limit_reached":
+      return { message: "Context limit reached", detail, tone: "error", action: null };
+    case "partial_turn_interrupted":
+      return { message: "Turn interrupted", detail, tone: "waiting", action: null };
+    case "adapter_unrecoverable":
+      return { message: "Session stopped", detail, tone: "error", action: null };
+    case "input_required":
+      return { message: "Waiting for an answer", detail, tone: "waiting", action: null };
+    case "permission_required":
+      return { message: "Waiting for approval", detail, tone: "waiting", action: null };
+  }
+}
+
+/** A time the provider stated, or nothing at all. An absent one is not invented. */
+function untilClause(instant: number | null): string {
+  if (instant === null || !Number.isFinite(instant)) return "";
+  const at = new Date(instant).toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return ` until ${at}`;
 }
 
 function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
@@ -507,15 +895,26 @@ function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
         blocker.tone === "error" ? "border-destructive/40" : "border-border",
       )}
     >
+      {/* A wait is not a failure. Only a transport error could reach this row
+          before, so one triangle covered everything it said; a rate limit and a
+          reconnect wearing it would read as broken when the state is "not yet". */}
       {blocker.tone === "error" ? (
         <WarningIcon aria-hidden className="size-3.5 shrink-0 text-destructive" weight="fill" />
       ) : null}
-      <span className="min-w-0 flex-1 truncate text-muted-foreground" title={blocker.message}>
+      {blocker.tone === "waiting" ? (
+        <ClockIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" weight="fill" />
+      ) : null}
+      <span
+        className="min-w-0 flex-1 truncate text-muted-foreground"
+        title={blocker.detail === null ? blocker.message : `${blocker.message} — ${blocker.detail}`}
+      >
         {blocker.message}
       </span>
-      <Button size="xs" variant="ghost" className="shrink-0" onClick={blocker.act}>
-        {blocker.action}
-      </Button>
+      {blocker.action ? (
+        <Button size="xs" variant="ghost" className="shrink-0" onClick={blocker.action.act}>
+          {blocker.action.label}
+        </Button>
+      ) : null}
     </div>
   );
 }
@@ -549,6 +948,94 @@ function useMeasuredHeight<T extends HTMLElement>(): {
   return { ref, height };
 }
 
+/* --------------------------------------------------------------- identity */
+
+/**
+ * What survives a tick, and why any of this is needed.
+ *
+ * A frame batch replaces the projection and the frame list wholesale, so
+ * everything derived from them arrives with a new identity and, almost always,
+ * unchanged contents. That alone invalidates every memo beneath it — which is
+ * how one streamed token came to re-group, re-segment and repaint a transcript
+ * that had not changed. This hands back the previous value whenever the new one
+ * says the same thing, so a memo below can be trusted.
+ *
+ * Written during render on purpose, and safe: `same` is content equality, so
+ * the value kept by a render React later discards is never a different answer
+ * to the one the retained render would have given.
+ *
+ * Per element: a list whose live tail moved keeps the rest as it was.
+ */
+function useStableList<T>(
+  items: readonly T[],
+  same: (previous: T, next: T) => boolean,
+): readonly T[] {
+  const held = React.useRef<readonly T[]>(items);
+  if (held.current !== items) held.current = holdList(held.current, items, same);
+  return held.current;
+}
+
+/**
+ * The list, with every element the previous one already had put back.
+ *
+ * Pure, and separate from the hook, because this is the whole of the decision:
+ * which rows a token is allowed to re-render. The outer array is kept too when
+ * nothing in it moved, so a consumer memoized on the list as a whole holds as
+ * well.
+ */
+export function holdList<T>(
+  previous: readonly T[],
+  items: readonly T[],
+  same: (previous: T, next: T) => boolean,
+): readonly T[] {
+  const merged = items.map((item, index) => {
+    const before = previous[index];
+    return before !== undefined && same(before, item) ? before : item;
+  });
+  const unchanged =
+    merged.length === previous.length && merged.every((item, index) => item === previous[index]);
+  return unchanged ? previous : merged;
+}
+
+/**
+ * Two turns are the same turn when they hold the same message objects.
+ *
+ * Identity rather than deep equality, and it is exact here: the transcript
+ * projects the frame's own message, so a message the harness re-emitted is a
+ * different object and one nothing happened to is the object it already was.
+ */
+export function sameMessages(left: readonly UIMessage[], right: readonly UIMessage[]): boolean {
+  return left.length === right.length && left.every((message, index) => message === right[index]);
+}
+
+/** An interaction is written once, when it opens; the id is the whole of it. */
+export function sameInteractionId(left: SessionInteraction, right: SessionInteraction): boolean {
+  return left.id === right.id;
+}
+
+/**
+ * The plan, by value — the one thing here identity cannot answer for, since it
+ * is re-derived from the messages rather than carried by them.
+ */
+export function sameTodos(
+  left: readonly SessionTodo[] | null,
+  right: readonly SessionTodo[] | null,
+): boolean {
+  if (left === right) return true;
+  if (left === null || right === null) return false;
+  if (left.length !== right.length) return false;
+  return left.every((todo, index) => {
+    const other = right[index];
+    return (
+      other !== undefined &&
+      todo.id === other.id &&
+      todo.content === other.content &&
+      todo.status === other.status &&
+      todo.priority === other.priority
+    );
+  });
+}
+
 /**
  * The gap between every top-level unit in a turn: prose to bundle, bundle to
  * prose, prose to prose. One constant, applied by the container, because the
@@ -573,25 +1060,74 @@ const MESSAGE_GAP = "flex flex-col gap-3";
  * stacked four `Ran 2 commands` headers where one belonged and left a step that
  * only thought as a bare reasoning row between them.
  */
-interface TurnContext {
-  working: boolean;
+export interface TurnContext {
   onOpenFile(path: string): void;
-  onDecide(nativeId: string, decision: ApprovalDecision): void;
-  /** Harness permission ids with a decision in flight. */
-  deciding: ReadonlySet<string>;
+  /** Every interaction opened this Session, for the receipts they left behind. */
+  interactions: ReadonlyMap<string, SessionInteraction>;
+  /** The ones still open, so a gated row can draw the card it is waiting on. */
+  open: readonly SessionInteraction[];
+  /** The ids with a decision in flight — one card in flight is not all of them. */
+  resolving: ReadonlySet<string>;
+  onResolve(interactionId: string, submission: InteractionSubmission): Promise<boolean>;
 }
 
-function ChatTurn({ messages, context }: { messages: readonly UIMessage[]; context: TurnContext }) {
-  const first = messages[0];
-  if (!first) return null;
-  const role = first.role;
-  const segments = role === "assistant" ? segmentTurn(messages) : null;
-  // A user message is prose only; the assistant path owns every other shape.
-  const prose = messages.flatMap((message) =>
-    message.parts.flatMap((part, index) =>
-      part.type === "text" ? [{ key: `${message.id}:${index}`, text: part.text }] : [],
-    ),
+/**
+ * Memoized on identity alone, which is exact rather than approximate here: a
+ * turn holding the same messages and the same context has nothing new to draw.
+ * Without it a single streamed token re-segmented every turn in the transcript
+ * and re-derived every row beneath them — the row presenters parse diffs, grep
+ * output and file contents on each render, so that is the whole frame budget at
+ * a few hundred rows.
+ */
+export const ChatTurn = React.memo(function ChatTurn({
+  messages,
+  context,
+  live,
+}: {
+  messages: readonly UIMessage[];
+  context: TurnContext;
+  /** This turn is the one the harness is still writing into. Only it animates. */
+  live: boolean;
+}) {
+  const first = messages[0] ?? null;
+  const role = first?.role ?? null;
+
+  // A receipt lands where it happened. Answering an interaction commits a
+  // durable message at that point in the conversation, so the transcript draws
+  // it there — whether or not a tool row was ever correlated to the question.
+  // An interaction the log has no record of opening draws nothing rather than
+  // an id: an unnamed receipt is not a record of anything.
+  const answered = React.useMemo(
+    () => (first !== null && role === "user" ? readInteractionResolutionMessage(first) : null),
+    [first, role],
   );
+  // Keyed on the messages rather than recomputed per render: the turn under the
+  // cursor is the only one whose parts move, and everything above it is settled.
+  const segments = React.useMemo(
+    () => (role === "assistant" ? segmentTurn(messages) : null),
+    [messages, role],
+  );
+  // A user message is prose only; the assistant path owns every other shape.
+  const prose = React.useMemo<readonly { key: string; text: string }[]>(
+    () =>
+      role === "assistant"
+        ? []
+        : messages.flatMap((message) =>
+            message.parts.flatMap((part, index) =>
+              part.type === "text" ? [{ key: `${message.id}:${index}`, text: part.text }] : [],
+            ),
+          ),
+    [messages, role],
+  );
+
+  if (first === null || role === null) return null;
+
+  if (answered) {
+    const interaction = context.interactions.get(answered.interactionId);
+    return interaction ? (
+      <InteractionReceiptLine interaction={interaction} resolution={answered.resolution} />
+    ) : null;
+  }
 
   // Plan-only projections must not leave an empty bubble.
   if (segments && segments.length === 0) return null;
@@ -602,53 +1138,68 @@ function ChatTurn({ messages, context }: { messages: readonly UIMessage[]; conte
         <div className={SEGMENT_GAP}>
           {segments
             ? segments.map((segment) => (
-                <div key={segment.key}>{renderSegment(segment, role, context)}</div>
+                <div key={segment.key}>{renderSegment(segment, role, context, live)}</div>
               ))
-            : prose.map((entry) => <MessageResponse key={entry.key}>{entry.text}</MessageResponse>)}
+            : prose.map((entry) => <GuardedResponse key={entry.key}>{entry.text}</GuardedResponse>)}
         </div>
       </MessageContent>
     </Message>
   );
-}
+});
 
 function renderSegment(
   segment: ChatSegment,
   role: UIMessage["role"],
   context: TurnContext,
+  live: boolean,
 ): React.ReactNode {
   switch (segment.kind) {
     case "text":
       return (
-        <MessageResponse isAnimating={context.working && role === "assistant"}>
+        <GuardedResponse isAnimating={live && role === "assistant"}>
           {segment.part.text}
-        </MessageResponse>
+        </GuardedResponse>
       );
     case "bundle":
       return <ActivityBundle rows={segment.rows} onOpenFile={context.onOpenFile} />;
-    case "attention": {
-      // Only a gate still open has a decision to take. A card left by a failed
-      // or already-denied call is a receipt, and handing it buttons would offer
-      // an authorization for something that has already happened.
-      const nativeId =
-        segment.part.state === "approval-requested" ? segment.part.approval.id : null;
-      return (
-        <AttentionBlock
-          part={segment.part}
-          onOpenFile={context.onOpenFile}
-          onDecide={
-            nativeId === null
-              ? undefined
-              : (decision) => {
-                  context.onDecide(nativeId, decision);
-                }
-          }
-          deciding={nativeId !== null && context.deciding.has(nativeId)}
-        />
-      );
-    }
+    case "attention":
+      return <GatedCall part={segment.part} context={context} />;
     default:
       return null;
   }
+}
+
+/**
+ * A call and the decision it is waiting on, in the one place both belong.
+ *
+ * The row is the ordinary row — same glyph, same verb, same mono object, same
+ * disclosure onto the input it is about to run — so the command and its detail
+ * stay readable while the question sits under them. The card is the real
+ * interaction, not a summary of it: every option the harness declared, the same
+ * text field, the same submit rules as the one at the foot.
+ *
+ * No card when nothing correlates. The row keeps its own gated glyph and the
+ * interaction is drawn at the foot instead, which is what `footInteraction`
+ * decides — a gate we cannot pair with a question must not invent one.
+ *
+ * Row rhythm, not segment rhythm: the card belongs to the row above it, and the
+ * transcript has two spacing values and no third one to reach for.
+ */
+function GatedCall({ part, context }: { part: DynamicToolUIPart; context: TurnContext }) {
+  const interaction = interactionForApproval(context.open, approvalId(part));
+  return (
+    <div className="space-y-0.5">
+      <ToolRow part={part} onOpenFile={context.onOpenFile} />
+      {interaction ? (
+        <InteractionCard
+          key={interaction.id}
+          interaction={interaction}
+          resolving={context.resolving.has(interaction.id)}
+          onResolve={(submission) => context.onResolve(interaction.id, submission)}
+        />
+      ) : null}
+    </div>
+  );
 }
 
 function todosEveryDone(todos: readonly SessionTodo[]): boolean {

@@ -15,11 +15,18 @@ import type {
   SessionEvent,
   SessionEventPayload,
   SessionEventProvenance,
+  SessionInteractionAnswer,
+  SessionInteractionOption,
+  SessionInteractionPrompt,
   SessionLedger,
   SessionLedgerTransaction,
   SessionNativeDetail,
 } from "@volli/shared";
-import { isSessionAttachmentContinuity, sameCommandReceipt } from "@volli/shared";
+import {
+  isSessionAttachmentContinuity,
+  sameCommandReceipt,
+  SESSION_INTERACTION_CANCEL_REASONS,
+} from "@volli/shared";
 
 type SqlRow = Record<string, unknown>;
 
@@ -633,6 +640,16 @@ function decodePayload(value: unknown, context: string): SessionEventPayload {
         interactionId: readString(record.interactionId, `${context}.interactionId`),
         resolution: decodeInteractionResolution(record.resolution, `${context}.resolution`),
       };
+    // No resolution is read back, because none was written: the reason is the
+    // whole fact. Decoding one here would be inventing the decision the event
+    // exists to say nobody made.
+    case "interaction.cancelled":
+      return {
+        kind,
+        attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
+        interactionId: readString(record.interactionId, `${context}.interactionId`),
+        reason: enumValue(record.reason, SESSION_INTERACTION_CANCEL_REASONS, `${context}.reason`),
+      };
     case "command.receipt.recorded":
       return { kind, receipt: decodeReceipt(record.receipt, `${context}.receipt`) };
     case "adapter.observed":
@@ -933,42 +950,94 @@ function decodeCapabilitySnapshot(
   };
 }
 
+function decodeInteractionOptions(
+  value: unknown,
+  context: string,
+): readonly SessionInteractionOption[] {
+  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
+  return value.map((item, index) => {
+    const option = asRecord(item, `${context}[${index}]`);
+    // Both absences, because both occur. `SessionInteractionOption.description`
+    // is `string | null` and every adapter writes the explicit `null` — while
+    // events persisted before that contract simply omit the key. Reading only
+    // `undefined` as absent threw on the null, which killed the whole
+    // `interaction.opened` event at the persistence boundary: no durable
+    // interaction, an always-empty `projection.interactions`, and an approval
+    // nothing could ever resolve. The throw surfaced nowhere, so the gate
+    // still drew its buttons from the adapter's in-memory state and simply
+    // did not respond.
+    const description = readAbsentableString(
+      option.description,
+      `${context}[${index}].description`,
+    );
+    return {
+      id: readString(option.id, `${context}[${index}].id`),
+      label: readString(option.label, `${context}[${index}].label`),
+      description,
+    };
+  });
+}
+
+function decodeInteractionPrompts(
+  value: unknown,
+  context: string,
+): readonly SessionInteractionPrompt[] {
+  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
+  return value.map((item, index) => {
+    const prompt = asRecord(item, `${context}[${index}]`);
+    return {
+      id: readString(prompt.id, `${context}[${index}].id`),
+      label: readString(prompt.label, `${context}[${index}].label`),
+      detail: readNullableString(prompt.detail, `${context}[${index}].detail`),
+      options: decodeInteractionOptions(prompt.options, `${context}[${index}].options`),
+      multiple: readBoolean(prompt.multiple, `${context}[${index}].multiple`),
+      custom: readBoolean(prompt.custom, `${context}[${index}].custom`),
+    };
+  });
+}
+
+function decodeInteractionAnswers(
+  value: unknown,
+  context: string,
+): readonly SessionInteractionAnswer[] {
+  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
+  return value.map((item, index) => {
+    const answer = asRecord(item, `${context}[${index}]`);
+    if (!Array.isArray(answer.optionIds)) {
+      throw new Error(`${context}[${index}].optionIds must be an array`);
+    }
+    return {
+      promptId: readString(answer.promptId, `${context}[${index}].promptId`),
+      optionIds: answer.optionIds.map((optionId, position) =>
+        readString(optionId, `${context}[${index}].optionIds[${position}]`),
+      ),
+      response: readNullableString(answer.response, `${context}[${index}].response`),
+    };
+  });
+}
+
 function decodeInteraction(
   value: unknown,
   context: string,
 ): Extract<SessionEventPayload, { kind: "interaction.opened" }>["interaction"] {
   const row = asRecord(value, context);
-  if (!Array.isArray(row.options)) throw new Error(`${context}.options must be an array`);
-  return {
+  const interaction = {
     id: readString(row.id, `${context}.id`),
     attachmentId: readString(row.attachmentId, `${context}.attachmentId`),
     kind: enumValue(row.kind, ["permission", "question"], `${context}.kind`),
     title: readString(row.title, `${context}.title`),
     detail: readNullableString(row.detail, `${context}.detail`),
-    options: row.options.map((item, index) => {
-      const option = asRecord(item, `${context}.options[${index}]`);
-      // Both absences, because both occur. `SessionInteractionOption.description`
-      // is `string | null` and every adapter writes the explicit `null` — while
-      // events persisted before that contract simply omit the key. Reading only
-      // `undefined` as absent threw on the null, which killed the whole
-      // `interaction.opened` event at the persistence boundary: no durable
-      // interaction, an always-empty `projection.interactions`, and an approval
-      // nothing could ever resolve. The throw surfaced nowhere, so the gate
-      // still drew its buttons from the adapter's in-memory state and simply
-      // did not respond.
-      const description = readAbsentableString(
-        option.description,
-        `${context}.options[${index}].description`,
-      );
-      return {
-        id: readString(option.id, `${context}.options[${index}].id`),
-        label: readString(option.label, `${context}.options[${index}].label`),
-        description,
-      };
-    }),
+    options: decodeInteractionOptions(row.options, `${context}.options`),
     multiple: readBoolean(row.multiple, `${context}.multiple`),
     native: decodeNative(row.native, `${context}.native`),
   };
+  // `prompts` is optional in both directions. A record written before an
+  // interaction could carry per-question detail must decode back without the
+  // key — not with an empty array, and not with one synthesised from the flat
+  // fields. Synthesis belongs to `readInteractionPrompts` at the read seam;
+  // doing it here would persist a derived value on the next write.
+  if (row.prompts === undefined) return interaction;
+  return { ...interaction, prompts: decodeInteractionPrompts(row.prompts, `${context}.prompts`) };
 }
 
 function decodeInteractionResolution(
@@ -977,12 +1046,17 @@ function decodeInteractionResolution(
 ): Extract<SessionEventPayload, { kind: "interaction.resolved" }>["resolution"] {
   const row = asRecord(value, context);
   if (!Array.isArray(row.optionIds)) throw new Error(`${context}.optionIds must be an array`);
-  return {
+  const resolution = {
     optionIds: row.optionIds.map((item, index) =>
       readString(item, `${context}.optionIds[${index}]`),
     ),
     response: readNullableString(row.response, `${context}.response`),
   };
+  // Absent stays absent, for the same reason `prompts` does: a flat resolution
+  // answers the interaction's first prompt, and `readInteractionAnswers` is
+  // what says so.
+  if (row.answers === undefined) return resolution;
+  return { ...resolution, answers: decodeInteractionAnswers(row.answers, `${context}.answers`) };
 }
 
 function decodeProvenance(value: unknown, context: string): SessionEventProvenance {

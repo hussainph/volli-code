@@ -39,12 +39,14 @@ describe("projectTranscriptMessages", () => {
     ]);
   });
 
-  it("keeps an approval's durable receipt out of the conversation", () => {
+  it("keeps an answer's durable receipt at the point it was given", () => {
     expect(
       projectTranscriptMessages([
         frame(2, { id: "user-1", role: "user", parts: [{ type: "text", text: "Investigate." }] }),
-        // What the Session commits when a person answers a permission. Worth
-        // keeping; not a thing anyone said.
+        // What the Session commits when a person answers a permission. Not a
+        // thing anyone said, so the transcript draws it as a one-line receipt
+        // rather than as an empty user bubble — but it keeps its position,
+        // because where a decision was taken is half of what it records.
         frame(3, {
           id: "command-1",
           role: "user",
@@ -57,7 +59,7 @@ describe("projectTranscriptMessages", () => {
           parts: [{ type: "text", text: "Done." }],
         }),
       ]).map(({ id }) => id),
-    ).toEqual(["user-1", "assistant-1"]);
+    ).toEqual(["user-1", "command-1", "assistant-1"]);
   });
 
   it("keeps an assistant turn that only ran tools", () => {

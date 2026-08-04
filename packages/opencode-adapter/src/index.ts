@@ -18,7 +18,14 @@ import type {
   Reconciliation,
   ReleaseReason,
 } from "@volli/session-engine";
-import { ACTIVITY_METADATA_KEY } from "@volli/shared";
+import {
+  ACTIVITY_METADATA_KEY,
+  SESSION_PERMISSION_OPTIONS,
+  SESSION_REFUSAL_OPTION_IDS,
+  promptId,
+  readInteractionAnswers,
+  readInteractionPrompts,
+} from "@volli/shared";
 import type {
   ActivityDescriptor,
   ActivityKind,
@@ -26,6 +33,9 @@ import type {
   ActivitySubject,
   SessionCapabilityCatalogItem,
   SessionInteraction,
+  SessionInteractionAnswer,
+  SessionInteractionOption,
+  SessionInteractionPrompt,
   SessionNativeDetail,
   SessionNativeReference,
 } from "@volli/shared";
@@ -49,6 +59,8 @@ const MAX_DEFERRED_EVENTS = 1_000;
 const MAX_REMEMBERED_EVENT_IDS = 10_000;
 const MAX_SSE_BUFFER_LENGTH = 1_048_576;
 const STREAM_SNAPSHOT_DELAY_MS = 32;
+/** What a message with nothing gated projects against, shared so it is one map. */
+const NO_APPROVALS: ReadonlyMap<string, string> = new Map();
 /**
  * The only events a subagent's Session may contribute to this one. Its
  * transcript belongs to the `task` row; a prompt it is blocked on belongs to
@@ -411,6 +423,27 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
         { id: "executor.interrupt", state: "available", evidence: "verified", detail: null },
         { id: "interaction.permission", state: "available", evidence: "declared", detail: null },
         { id: "interaction.question", state: "available", evidence: "declared", detail: null },
+        // Stated because it is knowable, not because it is missing. OpenCode
+        // holds an ask in a map keyed by request id, and every wire verb that
+        // takes it out — reply, reject — names a decision. There is no verb for
+        // "there will not be one", so answering a walked-away ask to clear it
+        // would print a choice nobody made. Volli declines to invent one.
+        //
+        // An ask can still end undecided, just never because we asked it to:
+        // `Question.ask` and `Permission.ask` both wrap their wait in Effect's
+        // `ensuring(await(deferred), sync(() => pending.delete(id)))`, and
+        // `ensuring` runs its finalizer on any exit including interruption. So
+        // `POST /session/{id}/abort` — `SessionPrompt.cancel` to
+        // `SessionRunState.cancel` to a fiber interrupt — does drop pending
+        // asks, silently: the finalizer publishes no `replied` and no
+        // `rejected`. That is a state Volli learns by sweeping, never by being
+        // told, and it is not a withdraw verb: the capability stays negative.
+        {
+          id: "interaction.withdraw",
+          state: "unavailable",
+          evidence: "declared",
+          detail: "OpenCode can be told a decision on an ask, but never that there will not be one",
+        },
         {
           id: "plugin.health",
           state: "unknown",
@@ -520,6 +553,8 @@ class OpenCodeBinding implements BindingHandle {
   readonly #questions = new Map<string, readonly OpenCodeQuestion[]>();
   /** Open tool-gating permissions, by OpenCode's permission id. */
   readonly #pendingApprovals = new Map<string, OpenCodeApprovalTarget>();
+  /** The same permissions inverted for projection. Null until the next read. */
+  #approvalIndex: ReadonlyMap<string, ReadonlyMap<string, string>> | null = null;
   /** Subagent Sessions this one spawned, by the `task` row each belongs to. */
   readonly #subagents = new Map<string, OpenCodeApprovalTarget>();
   readonly #streamAbort = new AbortController();
@@ -702,6 +737,62 @@ class OpenCodeBinding implements BindingHandle {
         this.#registerSubagentsInMessage(message);
       }
     }
+    // A gate is otherwise only ever forgotten by the reply that closes it, and a
+    // reply that landed while this binding was disconnected never arrives — so a
+    // permission answered elsewhere would keep its row gated, and its entry
+    // kept, for the rest of the binding's life. The sweep is the authoritative
+    // open set, so a sweep that answered is also what says which gates are gone.
+    //
+    // Only a body actually read as a list says that, and the status alone does
+    // not establish one: a build without the endpoint answers 404, and a build
+    // that answers 2xx in some shape this cannot read — an object keyed by
+    // permission id, an envelope under another name — is just as silent about
+    // which permissions are open. Pruning on either would ungate every gated
+    // row at once, which is the one thing reconciling must not do, so an
+    // unreadable answer prunes nothing, exactly as a failed read does.
+    const openPermissions =
+      Math.floor(permissionResponse.status / 100) === 2 ? listBody(permissionResponse.body) : null;
+    if (openPermissions) {
+      const open = new Set(
+        openPermissions.flatMap((candidate) => {
+          const id = requestId(candidate);
+          return id ? [id] : [];
+        }),
+      );
+      for (const permissionId of this.#pendingApprovals.keys()) {
+        if (!open.has(permissionId)) this.#pendingApprovals.delete(permissionId);
+      }
+      this.#approvalIndex = null;
+    }
+    // The same sweep, for the same reason, on the ask that has no gate.
+    //
+    // A question's prompts are dropped by the reply that reads them, which
+    // covers every ask that ends in a decision. An ask killed by an abort ends
+    // in none: `Question.ask` deletes its entry in an `ensuring` finalizer that
+    // runs on interruption and publishes nothing, so no `replied` and no
+    // `rejected` ever arrive and that entry is held for the rest of the
+    // binding's life. `GET /question` is the only thing that ever says so —
+    // it lists pending requests across all sessions, so anything held here and
+    // absent there is gone whoever ended it. An unreadable answer prunes
+    // nothing, exactly as above: `[]` would mean "all of them are gone".
+    //
+    // Unlike a permission, nothing is re-projected: a dropped ask ended
+    // undecided, and the adapter has no way to say that which is not a verdict
+    // OpenCode never reported. The Session keeps the open card until a user
+    // cancels it, and this only stops the prompts behind it from accumulating.
+    const openQuestions =
+      Math.floor(questionResponse.status / 100) === 2 ? listBody(questionResponse.body) : null;
+    if (openQuestions) {
+      const open = new Set(
+        openQuestions.flatMap((candidate) => {
+          const id = requestId(candidate);
+          return id ? [id] : [];
+        }),
+      );
+      for (const questionId of this.#questions.keys()) {
+        if (!open.has(questionId)) this.#questions.delete(questionId);
+      }
+    }
     // Project permissions before messages — they are what tells a hydrated tool
     // row it is gated — but keep them behind messages in the emitted batch, so
     // the order a resuming consumer sees is the order it always saw.
@@ -799,6 +890,7 @@ class OpenCodeBinding implements BindingHandle {
     this.#sink = null;
     this.#messages.clear();
     this.#pendingApprovals.clear();
+    this.#approvalIndex = null;
     this.#subagents.clear();
     this.#deferredEvents.length = 0;
     this.#pendingReconciliation = null;
@@ -1467,29 +1559,36 @@ class OpenCodeBinding implements BindingHandle {
     const nativeId = requestId(raw);
     if (!nativeId) return null;
     const kind = type.startsWith("permission") ? "permission" : "question";
+    const asked = kind === "question" ? questions(raw) : [];
+    const title =
+      objectString(raw, "title") ??
+      (kind === "permission" ? "Permission required" : "Question required");
+    const detail = objectString(raw, "description") ?? objectString(raw, "pattern");
+    const options = kind === "permission" ? SESSION_PERMISSION_OPTIONS : questionOptions(asked);
     const interaction: Omit<SessionInteraction, "attachmentId"> = {
       id: `${kind}:${nativeId}`,
       kind,
-      title:
-        objectString(raw, "title") ??
-        (kind === "permission" ? "Permission required" : "Question required"),
-      detail: objectString(raw, "description") ?? objectString(raw, "pattern"),
-      options:
-        kind === "permission"
-          ? [
-              { id: "once", label: "Allow once", description: null },
-              { id: "always", label: "Allow always", description: null },
-              { id: "reject", label: "Reject", description: null },
-            ]
-          : questionOptions(raw),
+      title,
+      detail,
+      options,
       multiple: kind === "question",
-      native: { id: nativeId, detail: kind === "question" ? questionDetail(questions(raw)) : null },
+      // A permission asks one thing; a QuestionRequest asks as many as it lists,
+      // each with its own answer rules. The flat `options` stay the union of
+      // them, because that is what a reader written before prompts falls back to.
+      prompts:
+        kind === "permission"
+          ? [{ id: promptId(0), label: title, detail, options, multiple: false, custom: false }]
+          : questionPrompts(asked),
+      native: { id: nativeId, detail: kind === "question" ? questionDetail(asked) : null },
     };
-    if (kind === "question") this.#questions.set(nativeId, questions(raw));
+    if (kind === "question") this.#questions.set(nativeId, asked);
     // Both the SSE event and the hydrate sweep land here, so one record keeps a
     // permission opened before this binding attached gating its row too.
     const target = kind === "permission" ? this.#approvalTarget(raw) : null;
-    if (target) this.#pendingApprovals.set(nativeId, target);
+    if (target) {
+      this.#pendingApprovals.set(nativeId, target);
+      this.#approvalIndex = null;
+    }
     return {
       id,
       kind: "interaction.opened",
@@ -1531,6 +1630,13 @@ class OpenCodeBinding implements BindingHandle {
         },
       };
     }
+    // The prompts a question asked are kept only so its answer can be read back
+    // against them, and this is where that happens for the last time. Nothing
+    // else drops an entry, and a Session that runs for hours asks a lot of
+    // questions — every neighbouring cache here is bounded, by a cap or by the
+    // fact that closes it, and this one was bounded by neither.
+    const asked = this.#questions.get(nativeId);
+    this.#questions.delete(nativeId);
     if (event.type === "question.rejected") {
       return {
         id: event.id,
@@ -1541,6 +1647,7 @@ class OpenCodeBinding implements BindingHandle {
         resolution: { optionIds: ["reject"], response: null },
       };
     }
+    const answers = questionReplyAnswers(asked ?? questions(event.properties), event.properties);
     return {
       id: event.id,
       kind: "interaction.resolved",
@@ -1548,11 +1655,12 @@ class OpenCodeBinding implements BindingHandle {
       cursor: { eventId: event.id },
       interactionId: `question:${nativeId}`,
       resolution: {
-        optionIds: questionAnswerOptionIds(
-          this.#questions.get(nativeId) ?? questions(event.properties),
-          event.properties,
-        ),
+        // The flat pair keeps saying what it always said; `answers` is what
+        // says which question each choice belonged to, and carries the free
+        // text a declared option cannot represent.
+        optionIds: answers.flatMap((answer) => answer.optionIds),
         response: null,
+        answers,
       },
     };
   }
@@ -1569,20 +1677,32 @@ class OpenCodeBinding implements BindingHandle {
     const target = this.#pendingApprovals.get(permissionId);
     if (!target) return;
     this.#pendingApprovals.delete(permissionId);
+    this.#approvalIndex = null;
     this.#scheduleStreamSnapshot(target.messageId, event.id);
   }
 
   /**
-   * OpenCode keys permissions by their own id; a message projects by call id. A
-   * session blocks on its first open permission, so this map holds ones — a
-   * scan beats keeping a second index true to the first.
+   * OpenCode keys permissions by their own id; a message projects by call id.
+   *
+   * Inverted once per change to the permission set rather than per read: a
+   * streaming message asks this on every snapshot, and answering by scanning
+   * would put the whole open set — and a fresh Map — in a loop that runs dozens
+   * of times a second. Every mutation below drops the index; nothing else may
+   * touch `#pendingApprovals` without doing the same. The shared empty map is
+   * what most messages get back, and its stable identity is what lets a
+   * projection be reused across snapshots.
    */
   #approvalsForMessage(messageId: string): ReadonlyMap<string, string> {
-    const byCallId = new Map<string, string>();
-    for (const [permissionId, target] of this.#pendingApprovals) {
-      if (target.messageId === messageId) byCallId.set(target.callId, permissionId);
+    if (!this.#approvalIndex) {
+      const index = new Map<string, Map<string, string>>();
+      for (const [permissionId, target] of this.#pendingApprovals) {
+        const byCallId = index.get(target.messageId);
+        if (byCallId) byCallId.set(target.callId, permissionId);
+        else index.set(target.messageId, new Map([[target.callId, permissionId]]));
+      }
+      this.#approvalIndex = index;
     }
-    return byCallId;
+    return this.#approvalIndex.get(messageId) ?? NO_APPROVALS;
   }
 
   async #resolveInteraction(
@@ -1590,21 +1710,28 @@ class OpenCodeBinding implements BindingHandle {
   ): Promise<OpenCodeHttpResponse> {
     const nativeId = command.interaction.native.id;
     if (!nativeId) throw new Error("OpenCode interaction has no native id");
+    const prompts = readInteractionPrompts(command.interaction);
+    const answers = readInteractionAnswers(command.interaction, command.resolution);
     if (command.interaction.kind === "permission") {
-      const option = command.resolution.optionIds[0] ?? "reject";
+      // A permission is one prompt of ours, so whichever prompt an answer names,
+      // the first id it selected is the reply. The three ids are ours as well,
+      // so `reject` here is our own vocabulary and cannot collide with OpenCode's.
+      const option = answers.flatMap((answer) => [...answer.optionIds])[0] ?? "reject";
       const reply = option === "once" || option === "always" ? option : "reject";
+      const message = answers.find((answer) => answer.response !== null)?.response ?? null;
       return this.#request(`/permission/${encodeURIComponent(nativeId)}/reply`, "POST", {
         reply,
-        ...(command.resolution.response ? { message: command.resolution.response } : {}),
+        ...(message ? { message } : {}),
       });
     }
-    if (command.resolution.optionIds[0] === "reject") {
+    if (declinesQuestion(prompts, answers)) {
       return this.#request(`/question/${encodeURIComponent(nativeId)}/reject`, "POST");
     }
     return this.#request(`/question/${encodeURIComponent(nativeId)}/reply`, "POST", {
       answers: questionAnswers(
         this.#questions.get(nativeId) ?? questions(command.interaction.native.detail),
-        command.resolution.optionIds,
+        prompts,
+        answers,
       ),
     });
   }
@@ -1669,10 +1796,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function arrayBody(value: unknown): readonly unknown[] {
+/**
+ * A body read as a list of entries, or null when it is not one.
+ *
+ * The distinction matters to exactly one caller. Projecting asks "what is in
+ * this body", and an unrecognized shape holds nothing to project, so `[]` is
+ * the honest answer there. Pruning asks the opposite question — "which of the
+ * things I hold are *not* in this body" — and for that `[]` means "none of
+ * them", which is the strongest possible claim to make about a body nobody
+ * could read.
+ */
+function listBody(value: unknown): readonly unknown[] | null {
   if (Array.isArray(value)) return value;
   if (isRecord(value) && Array.isArray(value.items)) return value.items;
-  return [];
+  return null;
+}
+
+function arrayBody(value: unknown): readonly unknown[] {
+  return listBody(value) ?? [];
 }
 
 function messageRole(raw: unknown): "system" | "user" | "assistant" {
@@ -1711,6 +1852,12 @@ function openCodeMessageMetadata(info: unknown): OpenCodeMessageMetadata | null 
 interface OpenCodeQuestion {
   readonly options: readonly OpenCodeQuestionOption[];
   readonly label: string;
+  /** The whole question, when the short header is not already it. */
+  readonly detail: string | null;
+  /** `QuestionInfo.multiple`: more than one option may be chosen. */
+  readonly multiple: boolean;
+  /** `QuestionInfo.custom`: an answer outside the declared options is accepted. */
+  readonly custom: boolean;
 }
 
 interface OpenCodeQuestionOption {
@@ -1725,6 +1872,23 @@ interface OpenCodeQuestionOption {
  * A provider QuestionRequest is one interaction containing `questions[]`.
  * UI option ids encode the question index and raw option value, so a selected
  * flat set round-trips exactly to OpenCode's `answers: string[][]` payload.
+ *
+ * `multiple` and `custom` are both optional on `QuestionInfo`, and they default
+ * in opposite directions, because OpenCode says so and they are not ours to
+ * reason about symmetrically.
+ *
+ * `custom` defaults to TRUE. Its schema annotation is literally "Allow typing a
+ * custom answer (default: true)", the tool description tells the model that
+ * "when `custom` is enabled (default), a 'Type your own answer' option is added
+ * automatically", and OpenCode's own built-in questions write `custom: false`
+ * explicitly when they want it off. Reading omission as false hides the free
+ * text box and makes `questionAnswers` drop an answer the harness would have
+ * accepted — a typed reply that silently becomes no reply at all.
+ *
+ * `multiple` defaults to false. It carries no documented default, its
+ * annotation says only "Allow selecting multiple choices", and OpenCode's own
+ * client reads an omitted value as false. There the unstated permission to do
+ * more really is not one.
  */
 function questions(raw: unknown): readonly OpenCodeQuestion[] {
   const values = isRecord(raw) && Array.isArray(raw.questions) ? raw.questions : [];
@@ -1733,14 +1897,18 @@ function questions(raw: unknown): readonly OpenCodeQuestion[] {
       isRecord(question) && Array.isArray(question.options)
         ? question.options.flatMap(questionOption)
         : [];
+    const prose = objectString(question, "question");
+    const label =
+      objectString(question, "header") ??
+      prose ??
+      objectString(question, "label") ??
+      `Question ${index + 1}`;
     return {
       options,
-      label: isRecord(question)
-        ? (objectString(question, "header") ??
-          objectString(question, "question") ??
-          objectString(question, "label") ??
-          `Question ${index + 1}`)
-        : `Question ${index + 1}`,
+      label,
+      detail: prose === label ? null : prose,
+      multiple: objectBoolean(question, "multiple") ?? false,
+      custom: objectBoolean(question, "custom") ?? true,
     };
   });
 }
@@ -1763,9 +1931,9 @@ function questionOption(raw: unknown): readonly OpenCodeQuestionOption[] {
 }
 
 function questionOptions(
-  raw: unknown,
-): readonly { id: string; label: string; description: string | null }[] {
-  return questions(raw).flatMap((question, questionIndex) =>
+  questionRequests: readonly OpenCodeQuestion[],
+): readonly SessionInteractionOption[] {
+  return questionRequests.flatMap((question, questionIndex) =>
     question.options.map((option) => ({
       id: questionOptionId(questionIndex, option.value),
       label:
@@ -1777,37 +1945,90 @@ function questionOptions(
   );
 }
 
+/**
+ * One prompt per QuestionInfo, each carrying that question's own answer rules.
+ * Inside its own prompt an option needs no question prefix — the flat list
+ * keeps carrying one because it has nothing else to tell two questions apart.
+ */
+function questionPrompts(
+  questionRequests: readonly OpenCodeQuestion[],
+): readonly SessionInteractionPrompt[] {
+  return questionRequests.map((question, questionIndex) => ({
+    id: promptId(questionIndex),
+    label: question.label,
+    detail: question.detail,
+    options: question.options.map((option) => ({
+      id: questionOptionId(questionIndex, option.value),
+      label: option.label,
+      description: option.description,
+    })),
+    multiple: question.multiple,
+    custom: question.custom,
+  }));
+}
+
 function questionOptionId(questionIndex: number, value: string): string {
   return `question:${questionIndex}:${Buffer.from(value).toString("base64url")}`;
 }
 
-function parseQuestionOptionId(id: string): { questionIndex: number; value: string } | null {
-  const match = /^question:(\d+):([A-Za-z0-9_-]+)$/.exec(id);
-  if (!match) return null;
-  const value = Buffer.from(match[2], "base64url").toString("utf8");
-  return questionOptionId(Number(match[1]), value) === id
-    ? { questionIndex: Number(match[1]), value }
-    : null;
+/**
+ * A refusal id a caller written before rejection left the option list still
+ * sends. The vocabulary is shared with the surface that offers the choice, so
+ * neither half can recognize a refusal the other does not.
+ */
+function isRefusalOptionId(id: string): boolean {
+  return SESSION_REFUSAL_OPTION_IDS.includes(id.toLowerCase());
 }
 
+/**
+ * Whether this resolution refuses the question rather than answering it.
+ *
+ * Rejecting is its own endpoint and its own act, so the signal for it must be
+ * one OpenCode cannot also declare: no option chosen anywhere and nothing
+ * typed. A refusal id stays honoured as the id earlier callers sent, but only
+ * while no prompt declares an option by that id — a harness's own value always
+ * outranks our sentinel, which is what kept a question offering "reject" as an
+ * answer from being rejected instead of answered.
+ */
+function declinesQuestion(
+  prompts: readonly SessionInteractionPrompt[],
+  answers: readonly SessionInteractionAnswer[],
+): boolean {
+  const answered = answers.some(
+    (answer) => answer.optionIds.length > 0 || (answer.response ?? "") !== "",
+  );
+  if (!answered) return true;
+  const declared = prompts.some((prompt) =>
+    prompt.options.some((option) => isRefusalOptionId(option.id)),
+  );
+  return !declared && answers.some((answer) => answer.optionIds.some(isRefusalOptionId));
+}
+
+/**
+ * `POST /question/{id}/reply` takes `answers: string[][]` — one array of
+ * chosen labels per question, in question order, and no other slot. So a free
+ * text answer travels as an ordinary entry in its question's array, which is
+ * only honest for a question that declared `custom`; anywhere else it would
+ * claim a choice OpenCode never offered.
+ */
 function questionAnswers(
   questionRequests: readonly OpenCodeQuestion[],
-  optionIds: readonly string[],
+  prompts: readonly SessionInteractionPrompt[],
+  answers: readonly SessionInteractionAnswer[],
 ): string[][] {
-  const answers = questionRequests.map(() => [] as string[]);
-  for (const optionId of optionIds) {
-    const decoded = parseQuestionOptionId(optionId);
-    if (
-      decoded &&
-      answers[decoded.questionIndex] &&
-      questionRequests[decoded.questionIndex]?.options.some(
-        (option) => option.value === decoded.value,
-      )
-    ) {
-      answers[decoded.questionIndex].push(decoded.value);
-    }
-  }
-  return answers;
+  const selected = new Set(answers.flatMap((answer) => [...answer.optionIds]));
+  return questionRequests.map((question, questionIndex) => {
+    // Membership is checked against the ids this question declared, so a
+    // forged or stale id selects nothing and answers stay in declared order.
+    const values = question.options
+      .filter((option) => selected.has(questionOptionId(questionIndex, option.value)))
+      .map((option) => option.value);
+    const response = answers.find(
+      (answer) => answer.promptId === promptId(questionIndex),
+    )?.response;
+    if (prompts[questionIndex]?.custom === true && response) return [...values, response];
+    return values;
+  });
 }
 
 function questionDetail(questionRequests: readonly OpenCodeQuestion[]): SessionNativeDetail {
@@ -1821,22 +2042,34 @@ function questionDetail(questionRequests: readonly OpenCodeQuestion[]): SessionN
   };
 }
 
-function questionAnswerOptionIds(
+/**
+ * What a QuestionReplied event says each question was answered with. A value
+ * no option declared is a custom answer — OpenCode's own reply shape has no
+ * other place to put one — so it is kept as that prompt's free text instead of
+ * being dropped as unrecognized.
+ */
+function questionReplyAnswers(
   questionRequests: readonly OpenCodeQuestion[],
   raw: unknown,
-): readonly string[] {
-  const answers = isRecord(raw) && Array.isArray(raw.answers) ? raw.answers : [];
-  return answers.flatMap((answer, questionIndex) =>
-    Array.isArray(answer)
-      ? answer
-          .filter(
-            (value): value is string =>
-              typeof value === "string" &&
-              questionRequests[questionIndex]?.options.some((option) => option.value === value),
-          )
-          .map((value) => questionOptionId(questionIndex, value))
-      : [],
-  );
+): readonly SessionInteractionAnswer[] {
+  const replied = isRecord(raw) && Array.isArray(raw.answers) ? raw.answers : [];
+  return questionRequests.map((question, questionIndex) => {
+    const answer = replied[questionIndex];
+    const values = (Array.isArray(answer) ? answer : []).filter(
+      (value): value is string => typeof value === "string",
+    );
+    const declared = values.filter((value) =>
+      question.options.some((option) => option.value === value),
+    );
+    const custom = values.filter(
+      (value) => !question.options.some((option) => option.value === value),
+    );
+    return {
+      promptId: promptId(questionIndex),
+      optionIds: declared.map((value) => questionOptionId(questionIndex, value)),
+      response: custom.length > 0 ? custom.join("\n") : null,
+    };
+  });
 }
 
 function requestId(raw: unknown): string | null {
@@ -2026,13 +2259,38 @@ function messageParts(raw: unknown, approvals: ReadonlyMap<string, string>): UIM
   return raw.parts.flatMap((part) => openCodePart(part, { approvals }));
 }
 
+/**
+ * The durable identity of a projected message.
+ *
+ * It is content-addressed on purpose: the Session engine keeps it as the event
+ * id and rejects a second event that reuses it carrying different evidence, and
+ * it is what lets the streamed, the flushed and the reconciled projection of one
+ * message be recognized as the same fact rather than recorded three times. So it
+ * stays a hash of everything the message says.
+ *
+ * What it must not be is that hash recomputed from nothing every
+ * `STREAM_SNAPSHOT_DELAY_MS`: a streaming reply would re-serialize everything it
+ * has already serialized dozens of times a second, which is quadratic in its own
+ * length. Each part version is hashed once instead — `openCodePart` holds a
+ * projection alive for as long as the part it came from is unchanged, so the
+ * digest below is keyed on the projected object — and a snapshot then costs one
+ * hash over one short digest per part.
+ */
 function transcriptObservationId(message: UIMessage): string {
-  const digest = createHash("sha256")
-    .update("volli:opencode:transcript:v1\0")
-    .update(JSON.stringify(message))
-    .digest("hex")
-    .slice(0, 24);
-  return `message:${message.id}:${digest}`;
+  const hash = createHash("sha256").update("volli:opencode:transcript:v1\0").update(message.role);
+  if (message.metadata !== undefined) hash.update(`\0${JSON.stringify(message.metadata)}`);
+  for (const part of message.parts) hash.update(`\0${partDigest(part)}`);
+  return `message:${message.id}:${hash.digest("hex").slice(0, 24)}`;
+}
+
+const partDigests = new WeakMap<UIMessage["parts"][number], string>();
+
+function partDigest(part: UIMessage["parts"][number]): string {
+  const cached = partDigests.get(part);
+  if (cached !== undefined) return cached;
+  const digest = createHash("sha256").update(JSON.stringify(part)).digest("hex").slice(0, 24);
+  partDigests.set(part, digest);
+  return digest;
 }
 
 /** Reads the call a `permission.asked` payload gates, when it gates one at all. */
@@ -2043,9 +2301,48 @@ function approvalTarget(raw: unknown): OpenCodeApprovalTarget | null {
   return messageId && callId ? { messageId, callId } : null;
 }
 
+interface ProjectedOpenCodePart {
+  readonly reasoningStreaming: boolean | undefined;
+  readonly approvals: ReadonlyMap<string, string> | undefined;
+  readonly parts: UIMessage["parts"];
+}
+
+/**
+ * Projected parts, remembered against the part they were projected from.
+ *
+ * A streaming message is projected in full on every snapshot, and the buffer
+ * replaces a part object whenever anything about it changes — a delta and a
+ * merge both write a new one — so the source object *is* the version, and a
+ * projection keyed on it stays true until it is replaced. The two facts that do
+ * not come from the part itself are keyed beside it, because a permission
+ * opening or a turn ending re-projects the very same part into a different row.
+ */
+const projectedParts = new WeakMap<Record<string, unknown>, ProjectedOpenCodePart>();
+
 function openCodePart(
   part: unknown,
   options?: { reasoningStreaming?: boolean; approvals?: ReadonlyMap<string, string> },
+): UIMessage["parts"] {
+  if (!isRecord(part)) return [];
+  const reasoningStreaming = options?.reasoningStreaming;
+  const approvals = options?.approvals;
+  const cached = projectedParts.get(part);
+  if (
+    cached &&
+    cached.reasoningStreaming === reasoningStreaming &&
+    cached.approvals === approvals
+  ) {
+    return cached.parts;
+  }
+  const parts = projectOpenCodePart(part, reasoningStreaming, approvals);
+  projectedParts.set(part, { reasoningStreaming, approvals, parts });
+  return parts;
+}
+
+function projectOpenCodePart(
+  part: Record<string, unknown>,
+  reasoningStreaming: boolean | undefined,
+  approvals: ReadonlyMap<string, string> | undefined,
 ): UIMessage["parts"] {
   const type = objectString(part, "type");
   if (type === "text") {
@@ -2073,7 +2370,7 @@ function openCodePart(
       {
         type: "reasoning",
         text,
-        state: options?.reasoningStreaming && !settled ? "streaming" : "done",
+        state: reasoningStreaming && !settled ? "streaming" : "done",
       },
     ];
   }
@@ -2095,7 +2392,7 @@ function openCodePart(
   // call settled that verdict is the newer fact, so the row recovers on its own
   // even if the reply lifting the gate never reached this binding.
   const approvalId =
-    status === "pending" || status === "running" ? options?.approvals?.get(toolCallId) : undefined;
+    status === "pending" || status === "running" ? approvals?.get(toolCallId) : undefined;
   if (approvalId !== undefined) {
     return [
       {

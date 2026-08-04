@@ -5,8 +5,9 @@
  * counts, reasoning, an expanded payload — starts at the same x, and depth is
  * never spelled as indentation. Containment is said by the caret and by
  * adjacency; a row's disclosure opens *in line*, so opening something makes the
- * list longer rather than making it a tree. The only bordered shape is the
- * approval card, which is an object you act on rather than process you audit.
+ * list longer rather than making it a tree. Nothing here is bordered: this file
+ * draws only process you audit, and the one object you act on — the card under
+ * a gated call — is the interaction itself, mounted by the caller.
  *
  * Every row is the same primitive — `‹glyph› ‹Verb› ‹object›` left, `‹meta›`
  * right — and all variance lives in the per-kind presenters in `activity.ts`.
@@ -14,7 +15,6 @@
  * artifact.
  */
 import {
-  ArrowBendUpLeftIcon,
   BrainIcon,
   CaretRightIcon,
   CheckCircleIcon,
@@ -49,7 +49,6 @@ import {
   bundleNeedsAttention,
   bundleSummary,
   describeActivity,
-  detailText,
   reasoningBody,
   reasoningStatus,
   splitPath,
@@ -71,6 +70,8 @@ import {
  */
 const COLLAPSE = "duration-[400ms] ease-swift motion-reduce:transition-none";
 const COLLAPSE_FADE = "duration-[240ms] ease-swift motion-reduce:transition-none";
+/** The same 400ms, as a number. Tailwind only sees the literal, so both exist. */
+const COLLAPSE_MS = 400;
 
 /**
  * The one caret, and it always sits against the label it opens.
@@ -126,8 +127,46 @@ function Caret({
   );
 }
 
-/** Grid-rows collapse: no keyframes, so the duration and curve stay on-token. */
+/**
+ * A closed body is not in the DOM, and the animation is what decides when.
+ *
+ * The collapse animates a grid *track*, so what the track resolves `1fr` to is
+ * the children's own height — a body dropped on the click would take the height
+ * with it and leave an empty box sliding shut, and the 240ms fade would have
+ * nothing left to fade. So closing keeps the children exactly one collapse
+ * longer and then drops them.
+ *
+ * Opening is the mirror problem: mounted from an effect, the class flips a frame
+ * before the content exists and the track animates 0 → 0 and then jumps. The
+ * update is therefore taken during render, which is the one way React puts the
+ * children and the `1fr` in the same commit — the browser sees `0fr` with
+ * content on one side of the style change and `1fr` on the other, which is
+ * precisely what it needs to interpolate.
+ */
+function useCollapseMount(open: boolean): boolean {
+  const [mounted, setMounted] = React.useState(open);
+  if (open && !mounted) setMounted(true);
+
+  React.useEffect(() => {
+    if (open || !mounted) return;
+    const timer = window.setTimeout(() => setMounted(false), COLLAPSE_MS);
+    return () => window.clearTimeout(timer);
+  }, [open, mounted]);
+
+  return mounted;
+}
+
+/**
+ * Grid-rows collapse: no keyframes, so the duration and curve stay on-token.
+ *
+ * The wrapper is always mounted and the body is not. A transcript holding fifty
+ * closed tool rows was still emitting every one of their payloads — a 300-line
+ * diff is 300 `<div>`s that nobody can see — and rebuilding all of them on every
+ * streamed token. Nothing about the open state changes: what an open row shows,
+ * and how it gets there, is the same frame for frame.
+ */
 function Disclosure({ open, children }: React.PropsWithChildren<{ open: boolean }>) {
+  const mounted = useCollapseMount(open);
   return (
     <div
       className={cn(
@@ -144,7 +183,7 @@ function Disclosure({ open, children }: React.PropsWithChildren<{ open: boolean 
         )}
         aria-hidden={!open}
       >
-        {children}
+        {mounted ? children : null}
       </div>
     </div>
   );
@@ -374,7 +413,15 @@ function ObjectText({ value }: { value: string }) {
 
 /* ----------------------------------------------------------------- tool row */
 
-export function ToolRow({
+/**
+ * Memoized on the part, which is the one thing that says the row changed.
+ *
+ * The transcript re-segments from scratch on every render — `segmentTurn` hands
+ * back fresh arrays of fresh row wrappers — but the parts inside them are the
+ * same immutable objects, so this is where re-rendering actually stops. Every
+ * settled row above the live one skips entirely while a turn streams.
+ */
+export const ToolRow = React.memo(function ToolRow({
   part,
   onOpenFile,
   className,
@@ -414,7 +461,7 @@ export function ToolRow({
       ) : null}
     </div>
   );
-}
+});
 
 /**
  * The second click target. The object opens the real artifact; the row around it
@@ -483,6 +530,18 @@ const DETAIL_FRAME =
  * a margin. A left border plus padding reads as a second column, and a
  * transcript that indents its payloads ends up with as many left edges as it has
  * kinds of disclosure.
+ *
+ * It also keeps the row rhythm rather than inventing a gap: the transcript has
+ * two spacing values, 12px between segments and 2px between rows, and a payload
+ * belongs to the row that opened it.
+ *
+ * The clip fade ramps to the frame's own fill, which is a mix and not a rung:
+ * the frame is `--muted` at 25% over the transcript's `--background`, so it sits
+ * *between* the two named surfaces. A scrim off either one lands a band across
+ * the bottom of every clipped payload — measured at 2.5/255 dark and 5/255 light
+ * from `--card`, and the same distance the other way from `--background`. Mixing
+ * it the way the frame mixes it is the only value that leaves no edge, which is
+ * why {@link DETAIL_FRAME}'s fill and this ramp must be changed together.
  */
 function DetailFrame({
   revision,
@@ -491,12 +550,12 @@ function DetailFrame({
 }: React.PropsWithChildren<{ revision: number; className?: string }>) {
   const { ref, clipped } = useClipped<HTMLDivElement>(revision);
   return (
-    <div className="relative my-1">
+    <div className="relative my-0.5">
       <div ref={ref} className={cn(DETAIL_FRAME, className)}>
         {children}
       </div>
       {clipped ? (
-        <div className="pointer-events-none absolute inset-x-px bottom-px h-8 rounded-b-md bg-gradient-to-t from-card to-transparent" />
+        <div className="pointer-events-none absolute inset-x-px bottom-px h-8 rounded-b-md bg-[linear-gradient(to_top,color-mix(in_oklab,var(--muted)_25%,var(--background))_0,transparent_100%)]" />
       ) : null}
     </div>
   );
@@ -605,67 +664,102 @@ const BUNDLE_CAP = "max-h-96";
  * upstream, because the one thing that blocks the reader must not be behind a
  * disclosure at all.
  */
-export function ActivityBundle({
-  rows,
-  onOpenFile,
-}: {
-  rows: readonly BundleRow[];
-  onOpenFile?(path: string): void;
-}) {
-  const [userOpen, setUserOpen] = React.useState<boolean | null>(null);
-  const summary = bundleSummary(rows);
-  const open = userOpen ?? bundleNeedsAttention(rows);
-  const { ref, clipped } = useClipped<HTMLDivElement>(rows.length);
+export const ActivityBundle = React.memo(
+  function ActivityBundle({
+    rows,
+    onOpenFile,
+  }: {
+    rows: readonly BundleRow[];
+    onOpenFile?(path: string): void;
+  }) {
+    const [userOpen, setUserOpen] = React.useState<boolean | null>(null);
+    const summary = React.useMemo(() => bundleSummary(rows), [rows]);
+    const open = userOpen ?? bundleNeedsAttention(rows);
+    const { ref, clipped } = useClipped<HTMLDivElement>(rows.length);
 
-  const list = (
-    <div className="space-y-0.5">
-      {rows.map((row) => (
-        <BundleRowView key={row.key} row={row} onOpenFile={onOpenFile} />
-      ))}
-    </div>
-  );
+    const list = (
+      <div className="space-y-0.5">
+        {rows.map((row) => (
+          <BundleRowView key={row.key} row={row} onOpenFile={onOpenFile} />
+        ))}
+      </div>
+    );
 
-  // Reasoning alone has nothing to count, so the row *is* the summary. A header
-  // above it would be the same sentence twice, on two different lines.
-  if (summary.length === 0) return <div className="not-prose">{list}</div>;
+    // Reasoning alone has nothing to count, so the row *is* the summary. A
+    // header above it would be the same sentence twice, on two different lines.
+    if (summary.length === 0) return <div className="not-prose">{list}</div>;
 
-  const toggle = () => {
-    if (hasTextSelection()) return;
-    setUserOpen(!open);
-  };
+    const toggle = () => {
+      if (hasTextSelection()) return;
+      setUserOpen(!open);
+    };
 
-  return (
-    <div className="not-prose">
-      <button
-        type="button"
-        onClick={toggle}
-        aria-expanded={open}
-        className={cn(ROW_CLASS, ROW_INTERACTIVE, ROW_FOCUSABLE)}
-      >
-        <BundleGlyph />
-        <Summary segments={summary} />
-        <Caret open={open} pinned />
-      </button>
-      <Disclosure open={open}>
-        <div className="relative">
-          <div ref={ref} className={cn(BUNDLE_CAP, "overflow-auto overscroll-contain")}>
-            {list}
+    return (
+      <div className="not-prose">
+        <button
+          type="button"
+          onClick={toggle}
+          aria-expanded={open}
+          className={cn(ROW_CLASS, ROW_INTERACTIVE, ROW_FOCUSABLE)}
+        >
+          <BundleGlyph />
+          <Summary segments={summary} />
+          <Caret open={open} pinned />
+        </button>
+        <Disclosure open={open}>
+          <div className="relative">
+            <div ref={ref} className={cn(BUNDLE_CAP, "overflow-auto overscroll-contain")}>
+              {list}
+            </div>
+            {clipped ? (
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-background to-transparent" />
+            ) : null}
           </div>
-          {clipped ? (
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-background to-transparent" />
-          ) : null}
-        </div>
-      </Disclosure>
-    </div>
-  );
+        </Disclosure>
+      </div>
+    );
+  },
+  (previous, next) =>
+    previous.onOpenFile === next.onOpenFile && sameBundleRows(previous.rows, next.rows),
+);
+
+/**
+ * Whether two segmentations describe the same bundle.
+ *
+ * A shallow prop compare cannot answer this: the caller re-segments the turn on
+ * every render, so `rows` is a new array of new wrappers each time and the
+ * default memo would never hit. What is stable is what the wrappers point at —
+ * the parts — and `streaming`, which is the projection's own verdict rather than
+ * anything the part carries. Compare those two and the whole bundle, summary
+ * included, stops re-rendering while some other turn streams.
+ */
+function sameBundleRows(previous: readonly BundleRow[], next: readonly BundleRow[]): boolean {
+  if (previous === next) return true;
+  if (previous.length !== next.length) return false;
+  return previous.every((row, index) => {
+    const other = next[index];
+    if (other === undefined || other.kind !== row.kind || other.key !== row.key) return false;
+    if (row.kind === "reasoning") {
+      return (
+        other.kind === "reasoning" && other.part === row.part && other.streaming === row.streaming
+      );
+    }
+    return other.part === row.part;
+  });
 }
 
-function BundleRowView({ row, onOpenFile }: { row: BundleRow; onOpenFile?(path: string): void }) {
+const BundleRowView = React.memo(function BundleRowView({
+  row,
+  onOpenFile,
+}: {
+  row: BundleRow;
+  onOpenFile?(path: string): void;
+}) {
   if (row.kind === "reasoning") {
     return <ReasoningRow part={row.part} streaming={row.streaming} />;
   }
   return <ToolRow part={row.part} onOpenFile={onOpenFile} />;
-}
+});
 
 /**
  * Reasoning as an ordinary row.
@@ -676,7 +770,13 @@ function BundleRowView({ row, onOpenFile }: { row: BundleRow; onOpenFile?(path: 
  * reasoning block is a second kind of line in the same column, and two kinds of
  * line cannot share one left edge for long.
  */
-function ReasoningRow({ part, streaming }: { part: ReasoningUIPart; streaming: boolean }) {
+const ReasoningRow = React.memo(function ReasoningRow({
+  part,
+  streaming,
+}: {
+  part: ReasoningUIPart;
+  streaming: boolean;
+}) {
   const elapsed = useElapsed(streaming);
   const status = reasoningStatus(part.text, { streaming, durationMs: elapsed });
   const body = reasoningBody(part.text);
@@ -705,98 +805,25 @@ function ReasoningRow({ part, streaming }: { part: ReasoningUIPart; streaming: b
       </div>
       {body !== null ? (
         <Disclosure open={open}>
-          <ReasoningBody className="my-1 rounded-md border border-border/60 bg-muted/25 p-2 text-xs leading-5">
+          <ReasoningBody className="my-0.5 rounded-md border border-border/60 bg-muted/25 p-2 text-xs leading-5">
             {body}
           </ReasoningBody>
         </Disclosure>
       ) : null}
     </div>
   );
-}
+});
 
 /* ---------------------------------------------------------------- attention */
 
-export type AttentionDecision = "allow" | "deny" | "steer";
-
 /**
- * Errors, denials and approval requests are always full-width and never fold —
- * a pending question gets a card with an action, a resolved one leaves a
- * one-line receipt so the transcript stays an honest record of what was
- * authorized.
+ * The scrollback receipt a harness's own denial verdict leaves on a row.
+ *
+ * Distinct from the receipt an *answer* leaves, which is written from the
+ * durable resolution at the point in the transcript where it was given. This
+ * one is the harness reporting that the call itself was refused, which a
+ * harness may say without any interaction of ours having been open.
  */
-export function AttentionBlock({
-  part,
-  onOpenFile,
-  onDecide,
-  deciding,
-}: {
-  part: DynamicToolUIPart;
-  onOpenFile?(path: string): void;
-  onDecide?(decision: AttentionDecision): void;
-  deciding?: boolean;
-}) {
-  if (part.state === "output-denied") return <AttentionReceipt part={part} />;
-  return (
-    <AttentionCard part={part} onOpenFile={onOpenFile} onDecide={onDecide} deciding={deciding} />
-  );
-}
-
-export function AttentionCard({
-  part,
-  onOpenFile,
-  onDecide,
-  deciding,
-}: {
-  part: DynamicToolUIPart;
-  onOpenFile?(path: string): void;
-  onDecide?(decision: AttentionDecision): void;
-  /** A decision is in flight. The harness's own verdict is what clears the card. */
-  deciding?: boolean;
-}) {
-  const row = describeActivity(part);
-  const pending = row.status === "approval";
-  const body = row.errorText ?? detailText(row.detail);
-
-  return (
-    <div
-      className={cn(
-        "not-prose w-full rounded-lg border bg-card p-3 shadow-[var(--shadow-raised)]",
-        pending ? "border-primary/40" : "border-destructive/40",
-      )}
-    >
-      <div className="flex min-w-0 items-center gap-1.5 text-xs">
-        <RowGlyph kind={row.kind} status={row.status} />
-        <span className="shrink-0 text-muted-foreground">{row.verb}</span>
-        {row.object ? <RowObject row={row} onOpenFile={onOpenFile} /> : null}
-      </div>
-      {body ? (
-        <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap font-mono text-xs leading-5 text-muted-foreground">
-          {body}
-        </pre>
-      ) : null}
-      {pending && onDecide ? (
-        // Disabled rather than swapped for a spinner: the round trip is one HTTP
-        // reply and the card is about to be replaced by the harness's own
-        // verdict, so a progress affordance would flash for less time than it
-        // takes to read. What matters is that a second click cannot land.
-        <div className="mt-3 flex flex-wrap items-center justify-end gap-1.5">
-          <Button size="sm" variant="ghost" disabled={deciding} onClick={() => onDecide("steer")}>
-            <ArrowBendUpLeftIcon className="size-3.5" />
-            No, and tell it what to do differently
-          </Button>
-          <Button size="sm" variant="ghost" disabled={deciding} onClick={() => onDecide("deny")}>
-            Deny
-          </Button>
-          <Button size="sm" disabled={deciding} onClick={() => onDecide("allow")}>
-            Allow
-          </Button>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-/** The scrollback receipt an approval leaves behind once it resolves. */
 export function AttentionReceipt({ part }: { part: DynamicToolUIPart }) {
   const row = describeActivity(part);
   const approved = row.status !== "denied";

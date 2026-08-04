@@ -550,7 +550,15 @@ describe("SessionRuntime durable boundary invariants", () => {
     expect(failures).toEqual([expect.objectContaining({ message: "client frame failed" })]);
   });
 
-  it("reads long event histories through bounded engine pages", async () => {
+  // 500 sequential `observe` calls, and each one lists and folds the whole log
+  // it is appending to (`SessionEngine.observe`), so the setup alone is
+  // quadratic in the history it builds. That is a real cost in the engine, not
+  // in this case — the case just happens to be the one that pays enough of it
+  // to notice. It lands near the 5s default without coverage and past it with
+  // `test:coverage` on a loaded machine, which is the run CI makes, so the
+  // budget is stated rather than left to chance. Fixing `observe` to fold
+  // incrementally is what makes this number shrink again.
+  it("reads long event histories through bounded engine pages", { timeout: 20_000 }, async () => {
     const { runtime, adapter } = composition();
     const created = await create(runtime);
     await attach(runtime, created.sessionId);

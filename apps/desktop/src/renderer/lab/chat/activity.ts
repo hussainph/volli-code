@@ -59,10 +59,13 @@ export type BundleRow =
  * the summary that counts them, and the caret is the only thing that says one
  * contains the other.
  *
- * An approval request is the exception, and the only one. It blocks the reader,
- * so it leaves the bundle and stands on its own where nothing can fold over it.
- * Failures stay in the bundle — the summary confesses them in red, and the
- * bundle opens itself so the row is on screen anyway.
+ * One thing leaves the bundle, and only one: a call gated on a decision. It
+ * blocks the reader and it needs controls, so it must not sit behind a
+ * disclosure at all — and the decision belongs *where it happened*, beside the
+ * command it is about, rather than as a card at the foot of the transcript with
+ * the row it gates left saying only that it is waiting. Failures and denials
+ * stay inside; the summary confesses them in red and `needsAttention` opens the
+ * bundle, which costs the transcript no second left edge.
  */
 export type ChatSegment =
   | { kind: "text"; part: Extract<MessagePart, { type: "text" }>; key: string }
@@ -74,9 +77,38 @@ export function needsAttention(state: DynamicToolUIPart["state"]): boolean {
   return state === "output-error" || state === "output-denied" || state === "approval-requested";
 }
 
-/** The one state that leaves the bundle: it blocks, and it needs buttons. */
+/** The one state that leaves the bundle: it blocks, and it needs controls. */
 export function isBlocking(state: DynamicToolUIPart["state"]): boolean {
   return state === "approval-requested";
+}
+
+/**
+ * The harness's own id for the decision a call is waiting on, which is the same
+ * id the interaction carries in `native.id`. Null on every other state, so a row
+ * can be asked without narrowing it first.
+ */
+export function approvalId(part: DynamicToolUIPart): string | null {
+  return part.state === "approval-requested" ? part.approval.id : null;
+}
+
+/**
+ * Every decision a transcript row is already showing.
+ *
+ * The foot slot takes what is left. Without this an interaction correlated to a
+ * visible call would be drawn twice — once on its row and once under the
+ * composer — and answering one copy would leave the other on screen until the
+ * projection caught up.
+ */
+export function gatedApprovalIds(messages: readonly UIMessage[]): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type !== "dynamic-tool") continue;
+      const id = approvalId(part);
+      if (id !== null) ids.add(id);
+    }
+  }
+  return ids;
 }
 
 /**
@@ -606,7 +638,34 @@ export function activityContext(part: DynamicToolUIPart): ActivityContext {
   };
 }
 
+/**
+ * One description per part, for as long as that part exists.
+ *
+ * A presenter is not free: it runs the whole detail budget — `parseDiff`,
+ * `numberLines`, `parseMatches`, 400 lines of it — and the transcript repaints
+ * on every streamed token, so a settled row fifty calls back was re-parsing its
+ * own 300-line diff for a screen that had not changed. Identity is a sound key
+ * because transcript parts are immutable snapshots: a harness that changes a
+ * call commits a new part rather than editing the old one (`message-projection.ts`),
+ * so a part that has not changed cannot have a different description, and one
+ * that has is a different object and misses.
+ *
+ * This keeps the function pure in the sense that matters — same part in, same
+ * row out — and strengthens it to referential equality, which is what lets the
+ * UI memoize on the result. The row is shared, so callers read it, never write
+ * to it.
+ */
+const DESCRIPTIONS = new WeakMap<DynamicToolUIPart, ActivityRow>();
+
 export function describeActivity(part: DynamicToolUIPart): ActivityRow {
+  const cached = DESCRIPTIONS.get(part);
+  if (cached) return cached;
+  const row = buildActivityRow(part);
+  DESCRIPTIONS.set(part, row);
+  return row;
+}
+
+function buildActivityRow(part: DynamicToolUIPart): ActivityRow {
   const context = activityContext(part);
   const facts = ACTIVITY_PRESENTERS[context.descriptor.kind](context);
   return {
@@ -874,7 +933,28 @@ export function projectSessionTodos(messages: readonly UIMessage[]): SessionTodo
   return null;
 }
 
+/**
+ * Same table as {@link DESCRIPTIONS}, for the same reason.
+ *
+ * The dock re-projects the plan on every committed frame, and a harness that
+ * hands its todo list back as a JSON *string* — several do — makes that a
+ * `JSON.parse` of the whole plan per frame for a list that has not moved.
+ * Cached on the part, a plan is parsed once and re-parsed exactly when the
+ * harness commits a new snapshot of it.
+ */
+const TODOS = new WeakMap<DynamicToolUIPart, SessionTodo[] | null>();
+
 export function extractTodos(part: DynamicToolUIPart): SessionTodo[] | null {
+  // Never `undefined`, so `undefined` is unambiguously a miss and a cached
+  // "this part is not a todo list" costs nothing to answer twice.
+  const cached = TODOS.get(part);
+  if (cached !== undefined) return cached;
+  const todos = readTodos(part);
+  TODOS.set(part, todos);
+  return todos;
+}
+
+function readTodos(part: DynamicToolUIPart): SessionTodo[] | null {
   const fromInput = todosFromUnknown("input" in part ? part.input : undefined);
   if (fromInput) return fromInput;
   return todosFromUnknown("output" in part ? part.output : undefined);

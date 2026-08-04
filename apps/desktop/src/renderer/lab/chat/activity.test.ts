@@ -6,11 +6,14 @@ import {
   ACTIVITY_PRESENTERS,
   activityContext,
   activityStatus,
+  approvalId,
   bundleNeedsAttention,
+  gatedApprovalIds,
   bundleSummary,
   compactSignature,
   describeActivity,
   diffStat,
+  extractTodos,
   groupTurns,
   formatBytes,
   formatDuration,
@@ -135,6 +138,22 @@ function named(kind: ActivityKind, label: string): DynamicToolUIPart {
   return tool(kind, { descriptor: { subject: { label, path: label, lineRange: null } } });
 }
 
+/** The same part, counting how many times anything reads its payload at all. */
+function countingOutput(part: DynamicToolUIPart): { part: DynamicToolUIPart; reads(): number } {
+  const value = "output" in part ? part.output : undefined;
+  let reads = 0;
+  const spied = { ...part } as DynamicToolUIPart;
+  Object.defineProperty(spied, "output", {
+    enumerable: true,
+    configurable: true,
+    get: () => {
+      reads += 1;
+      return value;
+    },
+  });
+  return { part: spied, reads: () => reads };
+}
+
 function bundleOf(segments: readonly ChatSegment[]): BundleRow[] {
   const bundle = segments.find((segment) => segment.kind === "bundle");
   if (bundle?.kind !== "bundle") throw new Error("expected a bundle");
@@ -211,13 +230,24 @@ describe("segmentMessageParts", () => {
     expect(bundleOf(segments)).toHaveLength(1);
   });
 
-  it("breaks an approval request out of the bundle", () => {
+  it("breaks a gated call out of the bundle", () => {
     const segments = segmentMessageParts(
       [tool("read-file"), tool("run-command", { state: "approval-requested" })],
       "m3",
     );
-    // The one thing that blocks the reader must not sit behind a disclosure.
+    // The one thing that leaves. It blocks the reader and it needs controls, so
+    // it must not sit behind a disclosure — and its decision draws under it,
+    // beside the command it is about.
     expect(segments.map((segment) => segment.kind)).toEqual(["bundle", "attention"]);
+    expect(bundleOf(segments)).toHaveLength(1);
+  });
+
+  it("closes the bundle around it rather than reordering the turn", () => {
+    const segments = segmentMessageParts(
+      [tool("read-file"), tool("run-command", { state: "approval-requested" }), tool("search")],
+      "m3b",
+    );
+    expect(segments.map((segment) => segment.kind)).toEqual(["bundle", "attention", "bundle"]);
   });
 
   it("keeps failures and denials inside the bundle", () => {
@@ -488,6 +518,25 @@ describe("bundle state", () => {
   });
 });
 
+describe("the decision a call is gated on", () => {
+  it("reads the harness's own id off the gated state and nowhere else", () => {
+    expect(approvalId(tool("run-command", { state: "approval-requested" }))).toBe("approval-1");
+    expect(approvalId(tool("run-command", { state: "output-denied" }))).toBe(null);
+    expect(approvalId(tool("run-command"))).toBe(null);
+  });
+
+  it("collects every gate the transcript is already showing", () => {
+    // What the foot slot subtracts. An interaction drawn on its row and again
+    // under the composer is one question asked twice.
+    const messages = [
+      message("m1", [tool("read-file"), tool("run-command", { state: "approval-requested" })]),
+      message("m2", [{ type: "text", text: "waiting" }]),
+    ];
+    expect([...gatedApprovalIds(messages)]).toEqual(["approval-1"]);
+    expect(gatedApprovalIds([message("m3", [tool("read-file")])]).size).toBe(0);
+  });
+});
+
 describe("activityStatus", () => {
   it("separates approval from running", () => {
     expect(activityStatus(tool("run-command", { state: "input-available" }))).toBe("running");
@@ -675,6 +724,58 @@ describe("presenters", () => {
       const row = describeActivity(tool(kind, { output: { unknown: { shape: 1 } } }));
       expect(row.detail?.view === "signature").toBe(false);
     }
+  });
+});
+
+/**
+ * The transcript repaints on every streamed token, and both of these run the
+ * whole detail budget — or a `JSON.parse` of a plan — when they run at all.
+ * Identity is the contract the UI memoizes on, so it is asserted rather than
+ * inferred: a stable part must come back as the *same* row, not an equal one.
+ */
+describe("memoization", () => {
+  it("describes a part once, however often the transcript asks", () => {
+    const output = Array.from({ length: 900 }, (_, index) => `line ${index}`).join("\n");
+    const { part, reads } = countingOutput(tool("run-command", { output }));
+
+    const first = describeActivity(part);
+    expect(describeActivity(part)).toBe(first);
+    expect(describeActivity(part)).toBe(first);
+    expect(reads()).toBe(1);
+    // Still the clamped window it always was — this changes when work happens,
+    // never what the work produced.
+    expect(first.detail).toEqual({
+      view: "output",
+      text: `${output.split("\n").slice(0, 400).join("\n")}\n…`,
+    });
+  });
+
+  it("re-describes the next snapshot of the same call", () => {
+    // A harness that changes a call commits a new part rather than editing the
+    // old one, so a new object is the only signal a row moved — and it must not
+    // be answered from the previous snapshot's cache.
+    const running = tool("run-command", { state: "input-available" });
+    const settled = tool("run-command", { output: "done" });
+    expect(describeActivity(running).status).toBe("running");
+    expect(describeActivity(settled).status).toBe("done");
+    expect(describeActivity(settled)).not.toBe(describeActivity(running));
+  });
+
+  it("parses a plan's todos once per snapshot", () => {
+    const { part, reads } = countingOutput(
+      tool("plan", {
+        output: JSON.stringify([{ content: "Ship it", status: "pending", priority: "high" }]),
+      }),
+    );
+    const messages: UIMessage[] = [{ id: "a1", role: "assistant", parts: [part] }];
+
+    const first = projectSessionTodos(messages);
+    expect(first).toEqual([
+      expect.objectContaining({ content: "Ship it", status: "pending", priority: "high" }),
+    ]);
+    expect(projectSessionTodos(messages)).toBe(first);
+    expect(extractTodos(part)).toBe(first);
+    expect(reads()).toBe(1);
   });
 });
 

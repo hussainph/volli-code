@@ -169,14 +169,17 @@ function composition(
     artifacts?: TranscriptArtifactStore;
     locations?: Parameters<typeof createSessionRuntime>[0]["locations"];
     runtimeIdPrefix?: string;
+    /** One clock for engine and runtime, as the composition root supplies. */
+    clock?: { now: () => number };
   } = {},
 ): { runtime: SessionRuntime; engine: SessionEngine; adapter: FakeAdapter } {
   let now = 100;
+  const clock = options.clock ?? { now: () => now++ };
   const engine =
     options.engine ??
     createSessionEngine({
       ledger: createInMemorySessionLedger(),
-      clock: { now: () => now++ },
+      clock,
       ids: ids(),
     });
   const adapter = options.adapter ?? new FakeAdapter();
@@ -192,7 +195,7 @@ function composition(
         ({
           resolve: async () => ({ directory: "/projects/fake", venue }),
         } satisfies Parameters<typeof createSessionRuntime>[0]["locations"]),
-      clock: { now: () => now++ },
+      clock,
       ids: runtimeIds(options.runtimeIdPrefix),
     }),
   };
@@ -652,6 +655,128 @@ describe("SessionRuntime native adapter contract", () => {
         },
       }),
     ).rejects.toBeInstanceOf(SessionRuntimeNotFoundError);
+  });
+
+  it("cancels a pending interaction as a fact, without answering it or telling the harness", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    await adapter.emit({
+      id: "question-1",
+      kind: "interaction.opened",
+      occurredAt: 300,
+      interaction: {
+        id: "question-1",
+        kind: "question",
+        title: "Which files should I read?",
+        detail: null,
+        options: [{ id: "prompt:0/option:0", label: "All of them", description: null }],
+        multiple: true,
+        native: { id: "native-question-1", detail: null },
+      },
+    });
+    const dispatchesBefore = adapter.dispatches;
+
+    await runtime.cancelInteraction({
+      sessionId,
+      interactionId: "question-1",
+      reason: "abandoned",
+    });
+
+    const { projection, frames } = await runtime.snapshot({ sessionId });
+    expect(projection.interactions).toMatchObject({ active: [], resolved: [] });
+    // No delivery, so no receipt: the harness was never told an answer and
+    // Volli does not pretend otherwise.
+    expect(adapter.dispatches).toBe(dispatchesBefore);
+    expect(frames.map(({ event }) => event.payload).at(-1)).toEqual({
+      kind: "interaction.cancelled",
+      attachmentId,
+      interactionId: "question-1",
+      reason: "abandoned",
+    });
+    expect(frames.at(-1)?.event.provenance.source).toEqual({
+      kind: "user",
+      id: "session-client",
+      detail: null,
+    });
+    expect(projection.receipts.some(({ commandId }) => commandId.includes("question-1"))).toBe(
+      false,
+    );
+
+    // Two Stop clicks, or a click racing the harness's own answer: the second
+    // cancel finds nothing open and says so by doing nothing. It carries no
+    // idempotency key, so the state it asked for is the only thing to answer
+    // against — and that state already holds.
+    const throughSequence = frames.at(-1)!.sequence;
+    await expect(
+      runtime.cancelInteraction({
+        sessionId,
+        interactionId: "question-1",
+        reason: "withdrawn",
+      }),
+    ).resolves.toBeUndefined();
+    const repeated = await runtime.snapshot({ sessionId });
+    expect(repeated.throughSequence).toBe(throughSequence);
+    expect(repeated.projection.interactions).toEqual({ active: [], resolved: [] });
+    // An unknown Session is still a fault: nothing was ever asked there.
+    await expect(
+      runtime.cancelInteraction({
+        sessionId: "session-missing",
+        interactionId: "question-1",
+        reason: "withdrawn",
+      }),
+    ).rejects.toBeInstanceOf(SessionRuntimeNotFoundError);
+    await runtime.close();
+    await expect(
+      runtime.cancelInteraction({ sessionId, interactionId: "question-1", reason: "superseded" }),
+    ).rejects.toThrow("Session runtime is closed");
+  });
+
+  it("still takes down a card whose attachment closed under it", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    await adapter.emit({
+      id: "question-2",
+      kind: "interaction.opened",
+      occurredAt: 300,
+      interaction: {
+        id: "question-2",
+        kind: "question",
+        title: "Which files should I read?",
+        detail: null,
+        options: [{ id: "prompt:0/option:0", label: "All of them", description: null }],
+        multiple: true,
+        native: { id: "native-question-2", detail: null },
+      },
+    });
+    await adapter.emit({
+      id: "closed-under-question",
+      kind: "attachment.closed",
+      occurredAt: 301,
+      outcome: "interrupted",
+    });
+    const before = await runtime.snapshot({ sessionId });
+    // Closing the binding does not answer what it asked, so the card outlives it.
+    expect(before.projection.liveExecutor).toBeNull();
+    expect(before.projection.interactions.active).toHaveLength(1);
+    const dispatchesBefore = adapter.dispatches;
+
+    await runtime.cancelInteraction({
+      sessionId,
+      interactionId: "question-2",
+      reason: "withdrawn",
+    });
+
+    const { projection, frames } = await runtime.snapshot({ sessionId });
+    expect(projection.interactions).toMatchObject({ active: [], resolved: [] });
+    expect(adapter.dispatches).toBe(dispatchesBefore);
+    expect(frames.map(({ event }) => event.payload).at(-1)).toEqual({
+      kind: "interaction.cancelled",
+      attachmentId,
+      interactionId: "question-2",
+      reason: "withdrawn",
+    });
   });
 
   it("normalizes attention facts and advances capability revisions only after a healthy probe", async () => {
@@ -1137,8 +1262,11 @@ describe("SessionRuntime native adapter contract", () => {
     await expect(
       runtime.subscribe({ sessionId, afterSequence: 0 }, () => undefined),
     ).rejects.toThrow("replay failed");
+    // Asked of the runtime whose ledger answers: reading a Session's history
+    // is a cursored read now, so the replay-hostile engine above fails it
+    // before any binding is looked up.
     await expect(
-      runtime.refreshCapabilities({ sessionId, attachmentId: "missing-binding" }),
+      base.runtime.refreshCapabilities({ sessionId, attachmentId: "missing-binding" }),
     ).rejects.toBeInstanceOf(SessionRuntimeNotFoundError);
 
     const corrupt = composition();
@@ -1517,5 +1645,175 @@ describe("SessionRuntime native adapter contract", () => {
     await expect(recovering.command(request)).resolves.toMatchObject({
       receipt: { status: "accepted", commandId: "stream-gap-message" },
     });
+  });
+
+  it("answers Session state without the transcript replay a snapshot carries", async () => {
+    const { runtime } = composition();
+    const sessionId = await createAndAttach(runtime);
+
+    const snapshot = await runtime.snapshot({ sessionId });
+    const projection = await runtime.projection({ sessionId });
+
+    expect(Object.keys(projection).toSorted()).toEqual(["projection", "throughSequence"]);
+    expect(projection.throughSequence).toBe(snapshot.throughSequence);
+    expect(projection.projection).toEqual(snapshot.projection);
+    expect(snapshot.frames.length).toBeGreaterThan(0);
+  });
+
+  it("folds a Session's history once and re-reads only what the ledger appended", async () => {
+    const base = composition();
+    const reads: string[] = [];
+    const projectedReads: string[] = [];
+    const cursors: (number | undefined)[] = [];
+    const counting: SessionEngine = {
+      ...base.engine,
+      getBaseSession: async (query) => {
+        reads.push(query.sessionId);
+        return base.engine.getBaseSession(query);
+      },
+      // The engine's own fold. A cache miss needs the row the fold starts from
+      // and nothing else, so reaching for this here would fold the same log
+      // twice for one read.
+      getSession: async (query) => {
+        projectedReads.push(query.sessionId);
+        return base.engine.getSession(query);
+      },
+      listEvents: async (query) => {
+        cursors.push(query.afterSequence);
+        return base.engine.listEvents(query);
+      },
+    };
+    const { runtime } = composition({ engine: counting, adapter: base.adapter });
+    const sessionId = await createAndAttach(runtime);
+
+    // The attach already folded this Session once; nothing reads it whole again.
+    const folded = await runtime.projection({ sessionId });
+    const cached = await runtime.projection({ sessionId });
+
+    expect(reads).toEqual([sessionId]);
+    expect(projectedReads).toEqual([]);
+    expect(cached.projection).toBe(folded.projection);
+    expect(cursors.at(-1)).toBe(folded.throughSequence);
+
+    await base.adapter.emit({
+      id: "cached-attention",
+      kind: "attention.raised",
+      occurredAt: 500,
+      attention: { id: "attention-cached", kind: "auth_required", detail: null, diagnostic: null },
+    });
+    const appended = await runtime.projection({ sessionId });
+
+    expect(appended.projection).not.toBe(folded.projection);
+    expect(appended.projection.attention.primary?.id).toBe("attention-cached");
+    expect(appended.throughSequence).toBeGreaterThan(folded.throughSequence);
+    expect(reads).toEqual([sessionId]);
+  });
+
+  it("re-folds a history that only the clock made stale", async () => {
+    let now = 1_000;
+    const { runtime } = composition({ clock: { now: () => now } });
+    const sessionId = await createAndAttach(runtime);
+
+    const observed = await runtime.projection({ sessionId });
+    expect(observed.projection.capabilities.map(({ expiresAt }) => expiresAt)).toEqual([61_000]);
+
+    // Nothing was appended: the snapshot simply expired. A cache watching only
+    // the ledger would still be offering a capability the harness lost.
+    now = 61_000;
+    const expired = await runtime.projection({ sessionId });
+
+    expect(expired.projection.capabilities).toEqual([]);
+    expect(expired.throughSequence).toBe(observed.throughSequence);
+  });
+
+  it("takes its deadline from the capability snapshot that expires first", async () => {
+    let now = 1_000;
+    const { runtime, engine } = composition({ clock: { now: () => now } });
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.projection({ sessionId })).projection.liveExecutor!.id;
+    // Scope is adapter/profile/attachment, so these are four live snapshots
+    // beside the attach's own — one of them with no expiry at all.
+    for (const [profileId, expiresAt] of [
+      ["soon", 30_000],
+      ["late", 90_000],
+      ["eternal", null],
+    ] as const) {
+      await engine.observe({
+        id: `deadline-${profileId}`,
+        sessionId,
+        attachmentId,
+        occurredAt: now,
+        provenance: { source: { kind: "adapter", id: "fake", detail: null }, venue },
+        kind: "capabilities.updated",
+        snapshot: {
+          id: `deadline-capabilities-${profileId}`,
+          adapterId: "fake",
+          attachmentId,
+          profileId,
+          revision: 1,
+          observedAt: now,
+          expiresAt,
+          features: [],
+          catalog: [],
+        },
+      });
+    }
+
+    const observed = await runtime.projection({ sessionId });
+    expect(observed.projection.capabilities.map(({ profileId }) => profileId)).toEqual([
+      "native",
+      "soon",
+      "late",
+      "eternal",
+    ]);
+
+    // The earliest expiry is the deadline: at it, the fold has to run again
+    // even though the other three are still good and nothing was appended.
+    now = 30_000;
+    expect(
+      (await runtime.projection({ sessionId })).projection.capabilities.map(
+        ({ profileId }) => profileId,
+      ),
+    ).toEqual(["native", "late", "eternal"]);
+
+    now = 90_000;
+    expect(
+      (await runtime.projection({ sessionId })).projection.capabilities.map(
+        ({ profileId }) => profileId,
+      ),
+    ).toEqual(["eternal"]);
+  });
+
+  it("bounds how many folded histories it keeps", async () => {
+    const base = composition();
+    const reads: string[] = [];
+    const counting: SessionEngine = {
+      ...base.engine,
+      getBaseSession: async (query) => {
+        reads.push(query.sessionId);
+        return base.engine.getBaseSession(query);
+      },
+    };
+    const { runtime } = composition({ engine: counting, adapter: base.adapter });
+    const sessions: string[] = [];
+    let oldest = "";
+    let newest = "";
+    // One past the limit, so the first Session read is the one evicted.
+    for (let index = 0; index <= 8; index += 1) {
+      const created = await runtime.command({
+        commandId: `bounded-create-${index}`,
+        command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+      });
+      if (index === 0) oldest = created.sessionId;
+      newest = created.sessionId;
+      sessions.push(created.sessionId);
+      await runtime.projection({ sessionId: created.sessionId });
+    }
+    expect(reads).toEqual(sessions);
+
+    await runtime.projection({ sessionId: newest });
+    await runtime.projection({ sessionId: oldest });
+
+    expect(reads).toEqual([...sessions, oldest]);
   });
 });

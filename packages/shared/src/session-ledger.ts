@@ -86,6 +86,57 @@ export interface SessionInteractionOption {
   description: string | null;
 }
 
+/**
+ * What a permission offers. These three ids are Volli's own vocabulary, not any
+ * harness's — an adapter maps its provider's reply onto them — so they are
+ * defined once here and every producer, adapter or fixture, mints them from
+ * this list rather than restating it.
+ */
+export const SESSION_PERMISSION_OPTIONS: readonly SessionInteractionOption[] = [
+  { id: "once", label: "Allow once", description: null },
+  { id: "always", label: "Allow always", description: null },
+  { id: "reject", label: "Reject", description: null },
+];
+
+/**
+ * The option ids that mean "no".
+ *
+ * Refusing is its own act, and both halves of the seam have to agree on which
+ * ids carry it: a surface that offers refusal and an adapter that recognizes it
+ * are the same decision read twice. Compared lowercased, and only ever against
+ * an id no harness declared — a provider's own value outranks this vocabulary.
+ */
+export const SESSION_REFUSAL_OPTION_IDS: readonly string[] = [
+  "reject",
+  "deny",
+  "decline",
+  "no",
+  "cancel",
+];
+
+/**
+ * One question inside an interaction. A permission is a single prompt; a
+ * harness that asks several things at once declares one prompt per question,
+ * each with its own options and its own answer rules.
+ */
+export interface SessionInteractionPrompt {
+  id: string;
+  label: string;
+  detail: string | null;
+  options: readonly SessionInteractionOption[];
+  multiple: boolean;
+  /** The harness accepts a free-text answer beside the declared options. */
+  custom: boolean;
+}
+
+/** One prompt's answer. */
+export interface SessionInteractionAnswer {
+  promptId: string;
+  optionIds: readonly string[];
+  /** Free text, when the prompt declares `custom`. */
+  response: string | null;
+}
+
 /** A provider-neutral user decision with an opaque native correlation reference. */
 export interface SessionInteraction {
   id: string;
@@ -95,12 +146,96 @@ export interface SessionInteraction {
   detail: string | null;
   options: readonly SessionInteractionOption[];
   multiple: boolean;
+  /**
+   * Per-question detail. Absent on records written before interactions carried
+   * more than one question; read it through `readInteractionPrompts`, never
+   * directly.
+   */
+  prompts?: readonly SessionInteractionPrompt[];
   native: SessionNativeReference;
 }
 
 export interface SessionInteractionResolution {
   optionIds: readonly string[];
   response: string | null;
+  /** Per-prompt answers. Read it through `readInteractionAnswers`, never directly. */
+  answers?: readonly SessionInteractionAnswer[];
+}
+
+export const SESSION_INTERACTION_CANCEL_REASONS = ["abandoned", "superseded", "withdrawn"] as const;
+
+/**
+ * Why an interaction stopped waiting without a decision: the user left it
+ * unanswered, a newer interaction replaced it, or the harness stopped asking.
+ * None of them is an answer — a cancelled interaction never carries a
+ * resolution, so nothing downstream can read one as a refusal.
+ */
+export type SessionInteractionCancelReason = (typeof SESSION_INTERACTION_CANCEL_REASONS)[number];
+
+/**
+ * The id of the prompt at `index`. Every producer of a synthesized prompt id —
+ * adapters, fixtures, and the fallback below — goes through this one definition
+ * so a harness that declares one question and a stored record that predates
+ * `prompts` cannot drift apart.
+ */
+export function promptId(index: number): string {
+  return `prompt:${index}`;
+}
+
+/** The prompt id a single-prompt interaction carries. */
+export const DEFAULT_INTERACTION_PROMPT_ID = promptId(0);
+
+/**
+ * The questions an interaction asks, whether or not it was written with
+ * `prompts`. A record without them is one prompt built from the flat fields;
+ * no consumer should branch on their absence itself.
+ *
+ * A declared empty list is returned as it stands. Absent means "written before
+ * an interaction could carry questions"; empty means "this interaction asks
+ * none", and collapsing the second into the first would answer a question the
+ * record never asked.
+ */
+export function readInteractionPrompts(
+  interaction: SessionInteraction,
+): readonly SessionInteractionPrompt[] {
+  const { prompts } = interaction;
+  if (prompts !== undefined) return prompts;
+  return [
+    {
+      id: DEFAULT_INTERACTION_PROMPT_ID,
+      label: interaction.title,
+      detail: interaction.detail,
+      options: interaction.options,
+      multiple: interaction.multiple,
+      // Free text is a declared harness capability, never assumed of a record
+      // written before the interaction could carry one.
+      custom: false,
+    },
+  ];
+}
+
+/**
+ * The answers a resolution gave, whether or not it was written with `answers`.
+ * A flat resolution answers the interaction's first (or only) prompt.
+ *
+ * A declared empty list is returned as it stands, for the reason
+ * `readInteractionPrompts` keeps one: an adapter that answers no prompts writes
+ * `answers: []`, and synthesizing a single option-less answer for it reads
+ * downstream as a refusal the user never gave.
+ */
+export function readInteractionAnswers(
+  interaction: SessionInteraction,
+  resolution: SessionInteractionResolution,
+): readonly SessionInteractionAnswer[] {
+  const { answers } = resolution;
+  if (answers !== undefined) return answers;
+  return [
+    {
+      promptId: interaction.prompts?.[0]?.id ?? DEFAULT_INTERACTION_PROMPT_ID,
+      optionIds: resolution.optionIds,
+      response: resolution.response,
+    },
+  ];
 }
 
 /** An executor attached to a Session. Its end does not end the Session. */
@@ -213,6 +348,17 @@ export type SessionEventPayload =
       interactionId: string;
       resolution: SessionInteractionResolution;
     }
+  /**
+   * The interaction stopped waiting and nobody decided it. It is a distinct
+   * fact from `interaction.resolved` precisely because history is immutable:
+   * an empty resolution would print a refusal the user never made.
+   */
+  | {
+      kind: "interaction.cancelled";
+      attachmentId: string;
+      interactionId: string;
+      reason: SessionInteractionCancelReason;
+    }
   | { kind: "command.receipt.recorded"; receipt: CommandReceipt }
   | {
       kind: "adapter.observed";
@@ -313,6 +459,12 @@ export type SessionObservation =
       resolution: SessionInteractionResolution;
     })
   | (SessionObservationBase & {
+      kind: "interaction.cancelled";
+      attachmentId: string;
+      interactionId: string;
+      reason: SessionInteractionCancelReason;
+    })
+  | (SessionObservationBase & {
       kind: "adapter.observed";
       attachmentId: string | null;
       name: string;
@@ -378,6 +530,13 @@ export function observationPayload(observation: SessionObservation): SessionEven
         attachmentId: observation.attachmentId,
         interactionId: observation.interactionId,
         resolution: observation.resolution,
+      };
+    case "interaction.cancelled":
+      return {
+        kind: observation.kind,
+        attachmentId: observation.attachmentId,
+        interactionId: observation.interactionId,
+        reason: observation.reason,
       };
     case "command.receipt":
       throw new Error("Command receipt observations require Session Engine stamping");
@@ -689,14 +848,39 @@ export function projectSession(
         }
         break;
       }
+      // A cancelled interaction stops waiting and joins neither list: it has no
+      // resolution to project, and `resolved` is where the UI reads the answer
+      // back out. The durable `interaction.cancelled` event is what history
+      // keeps, and it says the interaction ended undecided.
+      case "interaction.cancelled":
+        interactions.delete(event.payload.interactionId);
+        break;
       case "command.receipt.recorded":
         receipts.push(event.payload.receipt);
         if (event.payload.receipt.status === "rejected") {
           pendingExecutorStarts.delete(event.payload.receipt.commandId);
         }
         break;
-      default:
+      // Facts this projection deliberately holds no state for. They are listed
+      // rather than swept up by a `default`, so that adding a payload kind is a
+      // compile error here and someone has to decide whether Session state
+      // moves. `session.created` is the Session row itself, already the seed of
+      // this fold; runs, turns and transcript references are the transcript's
+      // shape, read from the event stream directly; `adapter.observed` is
+      // adapter evidence that no projected field is derived from.
+      case "session.created":
+      case "run.started":
+      case "run.completed":
+      case "turn.started":
+      case "turn.completed":
+      case "transcript.referenced":
+      case "adapter.observed":
         break;
+      /* v8 ignore next 4 -- unreachable while the union is exhausted above; it exists to stop being so at compile time. */
+      default: {
+        const unhandled: never = event.payload;
+        return unhandled;
+      }
     }
   }
 
@@ -767,8 +951,19 @@ function sameSessionCommandIntent(
   return left.kind === right.kind && stableSessionValue(left) === stableSessionValue(right);
 }
 
-/** A storage transaction for the event ledger, intentionally free of SQL-shaped operations. */
+/**
+ * A storage transaction for the event ledger, intentionally free of SQL-shaped
+ * operations.
+ *
+ * Sessions, events, commands and receipts are all insert-only here, and that is
+ * a contract rather than an omission: there is no verb that updates or removes
+ * any of them. Everything about a Session that changes changes by an event, and
+ * `projectSession` is what applies them — which is what lets a reader hold a
+ * base Session row, or a fold of a prefix of the log, and know it stays true.
+ * Adding a verb that rewrites a row breaks every such reader.
+ */
 export interface SessionLedgerTransaction {
+  /** The stored row as inserted. Only its events change what a Session shows. */
   getSession(sessionId: string): Session | null;
   /** Returns immutable base Sessions ordered by creation time descending, then id descending. */
   listSessions(query: ListSessionsQuery): readonly Session[];

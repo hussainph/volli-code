@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import type {
+  CancelInteractionRequest,
   RuntimeCatalog,
   SessionRuntime,
   SessionRuntimeCommandRequest,
@@ -110,12 +111,21 @@ function trackedValue(value: unknown): { id: string; data: unknown } {
 
 function runtimeFixture(): {
   runtime: SessionRuntime;
-  calls: { command: SessionRuntimeCommandRequest[]; subscribeAfter: number[] };
+  calls: {
+    command: SessionRuntimeCommandRequest[];
+    subscribeAfter: number[];
+    cancelled: CancelInteractionRequest[];
+  };
   emit: (next: SessionStreamFrame) => void;
 } {
-  const calls: { command: SessionRuntimeCommandRequest[]; subscribeAfter: number[] } = {
+  const calls: {
+    command: SessionRuntimeCommandRequest[];
+    subscribeAfter: number[];
+    cancelled: CancelInteractionRequest[];
+  } = {
     command: [],
     subscribeAfter: [],
+    cancelled: [],
   };
   let listener: ((next: SessionStreamFrame) => void) | null = null;
   const runtime: SessionRuntime = {
@@ -136,12 +146,19 @@ function runtimeFixture(): {
       };
     },
     snapshot: async () => snapshot(),
+    projection: async () => {
+      const { projection, throughSequence } = snapshot();
+      return { projection, throughSequence };
+    },
     subscribe: async (input, next) => {
       calls.subscribeAfter.push(input.afterSequence);
       listener = (value) => void next(value);
       return () => {
         listener = null;
       };
+    },
+    cancelInteraction: async (request) => {
+      calls.cancelled.push(request);
     },
     refreshCapabilities: async () => ({
       id: "capability-1",
@@ -344,6 +361,31 @@ describe("Session tRPC router", () => {
     await iterator.return?.();
   });
 
+  it("answers a projection read with Session state alone and no transcript replay", async () => {
+    const fixture = runtimeFixture();
+    const base = snapshot();
+    const runtime: SessionRuntime = {
+      ...fixture.runtime,
+      projection: async () => ({
+        projection: { ...base.projection, capabilities: [capabilitySnapshot()] },
+        throughSequence: 9,
+      }),
+    };
+    const diagnostics = new RpcDiagnosticLog();
+    const caller = createSessionRouter().createCaller({ runtime, diagnostics });
+
+    const resolved = await caller.session.projection({ sessionId: "session-1" });
+
+    expect(Object.keys(resolved).toSorted()).toEqual(["projection", "throughSequence"]);
+    expect(resolved.throughSequence).toBe(9);
+    // The one thing this edge still owes the renderer: no exhaustive inventory.
+    expect(resolved.projection.capabilities[0]?.catalog).toEqual([]);
+    expect(diagnostics.list().map((entry) => `${entry.procedure}:${entry.phase}`)).toEqual([
+      "session.projection:start",
+      "session.projection:success",
+    ]);
+  });
+
   it("exposes bounded Runtime Catalog browsing and shortlist resolution to Lab clients", async () => {
     const fixture = runtimeFixture();
     const calls: string[] = [];
@@ -447,6 +489,70 @@ describe("Session tRPC router", () => {
     ]);
   });
 
+  it("carries per-prompt answers through a resolve command and leaves absent ones absent", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await caller.session.command({
+      commandId: "resolve-answered",
+      sessionId: "session-1",
+      command: {
+        kind: "interaction.resolve",
+        interactionId: "question:1",
+        resolution: {
+          optionIds: ["prompt:0:yes", "prompt:1:no"],
+          response: null,
+          answers: [
+            { promptId: "prompt:0", optionIds: ["prompt:0:yes"], response: null },
+            { promptId: "prompt:1", optionIds: ["prompt:1:no"], response: "because" },
+          ],
+        },
+      },
+    });
+    await caller.session.command({
+      commandId: "resolve-flat",
+      sessionId: "session-1",
+      command: {
+        kind: "interaction.resolve",
+        interactionId: "permission:1",
+        resolution: { optionIds: ["once"], response: null },
+      },
+    });
+    // The shape Electron's structured clone delivers when a client spreads an
+    // answer it did not compute: the key survives the wire, so the edge is what
+    // has to drop it before the ledger tries to encode it.
+    await caller.session.command({
+      commandId: "resolve-undefined",
+      sessionId: "session-1",
+      command: {
+        kind: "interaction.resolve",
+        interactionId: "permission:2",
+        resolution: { optionIds: ["reject"], response: null, answers: undefined },
+      },
+    });
+
+    const resolutions = fixture.calls.command.map((request) =>
+      request.command.kind === "interaction.resolve" ? request.command.resolution : null,
+    );
+    expect(resolutions[0]).toEqual({
+      optionIds: ["prompt:0:yes", "prompt:1:no"],
+      response: null,
+      answers: [
+        { promptId: "prompt:0", optionIds: ["prompt:0:yes"], response: null },
+        { promptId: "prompt:1", optionIds: ["prompt:1:no"], response: "because" },
+      ],
+    });
+    expect(resolutions[1]).toEqual({ optionIds: ["once"], response: null });
+    expect(resolutions[1] && "answers" in resolutions[1]).toBe(false);
+    // Not merely `answers === undefined`: the ledger encodes an intent behind a
+    // strict JSON assertion that rejects an undefined value on a present key.
+    expect(resolutions[2] && "answers" in resolutions[2]).toBe(false);
+    expect(resolutions[2]).toEqual({ optionIds: ["reject"], response: null });
+  });
+
   it("calls the durable runtime without retaining client prompt payloads in diagnostics", async () => {
     const fixture = runtimeFixture();
     const diagnostics = new RpcDiagnosticLog();
@@ -474,10 +580,19 @@ describe("Session tRPC router", () => {
       attachmentId: "attachment-1",
     });
     await caller.session.reconcile({ sessionId: "session-1", attachmentId: "attachment-1" });
+    await caller.session.cancelInteraction({
+      sessionId: "session-1",
+      interactionId: "question-1",
+    });
     await caller.labDiagnostics.list();
 
     expect(fixture.calls.command).toEqual([
       expect.objectContaining({ commandId: "command-1", sessionId: "session-1" }),
+    ]);
+    // The transport carries no reason of its own: what it knows is that a user
+    // left the interaction undecided.
+    expect(fixture.calls.cancelled).toEqual([
+      { sessionId: "session-1", interactionId: "question-1", reason: "abandoned" },
     ]);
     expect(diagnostics.list().map((entry) => entry.procedure)).toEqual([
       "session.snapshot",
@@ -488,6 +603,8 @@ describe("Session tRPC router", () => {
       "session.refreshCapabilities",
       "session.reconcile",
       "session.reconcile",
+      "session.cancelInteraction",
+      "session.cancelInteraction",
       "labDiagnostics.list",
       "labDiagnostics.list",
     ]);

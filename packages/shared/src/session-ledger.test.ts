@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  DEFAULT_INTERACTION_PROMPT_ID,
   isSessionAttentionKind,
   isSessionAttachmentContinuity,
   observationPayload,
@@ -10,10 +11,20 @@ import {
   sameSessionCommandRequest,
   sameSessionEventPayload,
   sameSessionEventProvenance,
+  promptId,
+  readInteractionAnswers,
+  readInteractionPrompts,
   SESSION_ATTACHMENT_CONTINUITIES,
   SESSION_ATTENTION_KINDS,
+  SESSION_INTERACTION_CANCEL_REASONS,
 } from "./session-ledger";
-import type { Session, SessionEvent, SessionObservation } from "./session-ledger";
+import type {
+  Session,
+  SessionEvent,
+  SessionInteraction,
+  SessionInteractionPrompt,
+  SessionObservation,
+} from "./session-ledger";
 
 const session: Session = {
   id: "session-1",
@@ -61,6 +72,134 @@ describe("Session ledger vocabularies", () => {
       expect(isSessionAttentionKind(attention)).toBe(true);
     expect(isSessionAttentionKind("waiting")).toBe(false);
     expect(isSessionAttentionKind(undefined)).toBe(false);
+  });
+});
+
+describe("interaction prompts", () => {
+  const flatPermission: SessionInteraction = {
+    id: "permission-1",
+    attachmentId: "attachment-1",
+    kind: "permission",
+    title: "Allow file write?",
+    detail: "src/main.ts",
+    options: [
+      { id: "once", label: "Allow once", description: null },
+      { id: "reject", label: "Deny", description: null },
+    ],
+    multiple: false,
+    native: { id: "native-permission-1", detail: null },
+  };
+  const declaredPrompts: readonly SessionInteractionPrompt[] = [
+    {
+      id: "prompt:0",
+      label: "Which files should I read?",
+      detail: null,
+      options: [{ id: "prompt:0/option:0", label: "All of them", description: null }],
+      multiple: true,
+      custom: true,
+    },
+    {
+      id: "prompt:1",
+      label: "Run the tests after?",
+      detail: null,
+      options: [{ id: "prompt:1/option:0", label: "Yes", description: null }],
+      multiple: false,
+      custom: false,
+    },
+  ];
+
+  it("synthesizes one prompt from a record written before prompts existed", () => {
+    expect(readInteractionPrompts(flatPermission)).toEqual([
+      {
+        id: DEFAULT_INTERACTION_PROMPT_ID,
+        label: "Allow file write?",
+        detail: "src/main.ts",
+        options: flatPermission.options,
+        multiple: false,
+        custom: false,
+      },
+    ]);
+  });
+
+  it("keeps a declared empty prompt list distinct from an absent one", () => {
+    expect(readInteractionPrompts({ ...flatPermission, prompts: [] })).toEqual([]);
+    expect(readInteractionPrompts(flatPermission)).toHaveLength(1);
+  });
+
+  it("names every synthesized prompt through one definition", () => {
+    expect(promptId(0)).toBe(DEFAULT_INTERACTION_PROMPT_ID);
+    expect(promptId(2)).toBe("prompt:2");
+  });
+
+  it("returns declared prompts untouched", () => {
+    expect(readInteractionPrompts({ ...flatPermission, prompts: declaredPrompts })).toBe(
+      declaredPrompts,
+    );
+  });
+
+  it("gives a single declared prompt the same id a legacy record projects to", () => {
+    const prompts = readInteractionPrompts({
+      ...flatPermission,
+      prompts: declaredPrompts.slice(0, 1),
+    });
+    expect(prompts.map((prompt) => prompt.id)).toEqual([DEFAULT_INTERACTION_PROMPT_ID]);
+  });
+
+  it("maps a flat resolution onto the synthesized prompt", () => {
+    expect(readInteractionAnswers(flatPermission, { optionIds: ["once"], response: null })).toEqual(
+      [{ promptId: DEFAULT_INTERACTION_PROMPT_ID, optionIds: ["once"], response: null }],
+    );
+  });
+
+  it("maps a flat resolution onto the first declared prompt", () => {
+    expect(
+      readInteractionAnswers(
+        { ...flatPermission, prompts: declaredPrompts },
+        { optionIds: ["prompt:0/option:0"], response: "and src/preload too" },
+      ),
+    ).toEqual([
+      {
+        promptId: "prompt:0",
+        optionIds: ["prompt:0/option:0"],
+        response: "and src/preload too",
+      },
+    ]);
+  });
+
+  it("falls back to the default prompt id when the prompt list is empty", () => {
+    expect(
+      readInteractionAnswers({ ...flatPermission, prompts: [] }, { optionIds: [], response: null }),
+    ).toEqual([{ promptId: DEFAULT_INTERACTION_PROMPT_ID, optionIds: [], response: null }]);
+  });
+
+  // A resolution that answered nothing is not a resolution that was never
+  // written with `answers`. Synthesizing one here hands the reader an answer
+  // with no options selected, which every downstream reader takes for a refusal
+  // the user never made.
+  it("keeps a declared empty answer list distinct from an absent one", () => {
+    expect(
+      readInteractionAnswers(flatPermission, {
+        optionIds: [],
+        response: null,
+        answers: [],
+      }),
+    ).toEqual([]);
+    expect(readInteractionAnswers(flatPermission, { optionIds: [], response: null })).toEqual([
+      { promptId: DEFAULT_INTERACTION_PROMPT_ID, optionIds: [], response: null },
+    ]);
+  });
+
+  it("returns declared answers untouched", () => {
+    const answers = [
+      { promptId: "prompt:0", optionIds: ["prompt:0/option:0"], response: "plus the tests" },
+      { promptId: "prompt:1", optionIds: [], response: null },
+    ];
+    expect(
+      readInteractionAnswers(
+        { ...flatPermission, prompts: declaredPrompts },
+        { optionIds: [], response: null, answers },
+      ),
+    ).toBe(answers);
   });
 });
 
@@ -272,8 +411,24 @@ describe("observationPayload", () => {
         interactionId: "permission-1",
         resolution: { optionIds: ["once"], response: null },
       },
+      {
+        id: "14-interaction-cancelled",
+        sessionId: session.id,
+        occurredAt: 14,
+        provenance,
+        kind: "interaction.cancelled",
+        attachmentId: attachment.id,
+        interactionId: "question-1",
+        reason: "abandoned",
+      },
     ];
 
+    expect(observationPayload(observations.at(-1)!)).toEqual({
+      kind: "interaction.cancelled",
+      attachmentId: attachment.id,
+      interactionId: "question-1",
+      reason: "abandoned",
+    });
     expect(observations.map(observationPayload).map(({ kind }) => kind)).toEqual([
       "attachment.opened",
       "attachment.native_referenced",
@@ -290,6 +445,7 @@ describe("observationPayload", () => {
       "capabilities.updated",
       "interaction.opened",
       "interaction.resolved",
+      "interaction.cancelled",
     ]);
     expect(
       observationPayload({
@@ -396,6 +552,45 @@ describe("observationPayload", () => {
     ]);
   });
 
+  it("drops a cancelled interaction without recording a decision for it", () => {
+    const interaction = {
+      id: "question-1",
+      attachmentId: "attachment-1",
+      kind: "question" as const,
+      title: "Which files?",
+      detail: null,
+      options: [{ id: "all", label: "All of them", description: null }],
+      multiple: false,
+      native: { id: "native-question-1", detail: null },
+    };
+    const remaining = { ...interaction, id: "question-2" };
+
+    const projection = projectSession(session, [
+      event(1, { kind: "interaction.opened", interaction }),
+      event(2, { kind: "interaction.opened", interaction: remaining }),
+      event(3, {
+        kind: "interaction.cancelled",
+        attachmentId: interaction.attachmentId,
+        interactionId: interaction.id,
+        reason: "abandoned",
+      }),
+      // A cancellation for something no longer open is inert, exactly as a
+      // resolution for one is.
+      event(4, {
+        kind: "interaction.cancelled",
+        attachmentId: interaction.attachmentId,
+        interactionId: "missing",
+        reason: "withdrawn",
+      }),
+    ]);
+
+    expect(projection.interactions).toEqual({ active: [remaining], resolved: [] });
+  });
+
+  it("keeps every cancel reason in the vocabulary", () => {
+    expect(SESSION_INTERACTION_CANCEL_REASONS).toEqual(["abandoned", "superseded", "withdrawn"]);
+  });
+
   it("does not project an expired capability snapshot", () => {
     const expired = {
       id: "capabilities-expired",
@@ -458,7 +653,7 @@ describe("projectSession", () => {
     });
   });
 
-  it("keeps the Session open when runs, turns, and an executor end", () => {
+  it("keeps the Session open when its own creation, runs, turns, and an executor end", () => {
     const attachment = {
       id: "attachment-1",
       sessionId: session.id,
@@ -467,20 +662,26 @@ describe("projectSession", () => {
       continuity: "native_resume" as const,
       native: null,
     };
-    const projection = projectSession(session, [
+    const projection = projectSession({ ...session, title: "Seeded" }, [
       event(0, { kind: "attachment.closed", attachmentId: "unknown", outcome: "failed" }),
-      event(1, { kind: "attachment.opened", attachment }),
-      event(2, { kind: "run.started", attachmentId: attachment.id, runId: "run-1" }),
-      event(3, { kind: "turn.started", attachmentId: attachment.id, turnId: "turn-1" }),
-      event(4, { kind: "turn.completed", attachmentId: attachment.id, turnId: "turn-1" }),
-      event(5, { kind: "run.completed", attachmentId: attachment.id, runId: "run-1" }),
-      event(6, { kind: "attachment.closed", attachmentId: attachment.id, outcome: "completed" }),
+      // The Session's own creation fact, folded over the row it created. It is
+      // the seed of this fold, not an update to it — a projection that took its
+      // `session` from here would let a stale copy of the row win over the one
+      // the caller read.
+      event(1, { kind: "session.created", session: { ...session, title: "Superseded" } }),
+      event(2, { kind: "attachment.opened", attachment }),
+      event(3, { kind: "run.started", attachmentId: attachment.id, runId: "run-1" }),
+      event(4, { kind: "turn.started", attachmentId: attachment.id, turnId: "turn-1" }),
+      event(5, { kind: "turn.completed", attachmentId: attachment.id, turnId: "turn-1" }),
+      event(6, { kind: "run.completed", attachmentId: attachment.id, runId: "run-1" }),
+      event(7, { kind: "attachment.closed", attachmentId: attachment.id, outcome: "completed" }),
     ]);
 
+    expect(projection.session.title).toBe("Seeded");
     expect(projection.status).toBe("open");
     expect(projection.liveExecutor).toBeNull();
     expect(projection.attachments).toMatchObject([
-      { id: attachment.id, status: "closed", closedAt: 60, outcome: "completed" },
+      { id: attachment.id, status: "closed", closedAt: 70, outcome: "completed" },
     ]);
   });
 

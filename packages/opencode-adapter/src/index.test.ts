@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { HarnessCommand, HarnessObservation, ObservationSink } from "@volli/session-engine";
 import {
   ACTIVITY_METADATA_KEY,
+  DEFAULT_INTERACTION_PROMPT_ID,
   readActivityDescriptor,
   type ActivityKind,
   type ActivityOutcome,
@@ -187,6 +188,24 @@ const subagentAskedFor = (sessionID: string) => ({
     tool: { messageID: "child-message-1", callID: "child-call-1" },
   },
 });
+
+/**
+ * A stored question record whose own detail declares an option the live ask
+ * never did, so which of the two a reply is built from is visible on the wire.
+ */
+const sweptQuestion = {
+  id: "question:question-abandoned",
+  attachmentId: "attachment-1",
+  kind: "question" as const,
+  title: "Pick",
+  detail: null,
+  options: [{ id: "question:0:c3dlcHQ", label: "swept", description: null }],
+  multiple: false,
+  native: {
+    id: "question-abandoned",
+    detail: { questions: [{ label: "Pick", options: [{ value: "swept", label: "swept" }] }] },
+  },
+};
 
 const askedFor = (callID: string, messageID = "provider-assistant") => ({
   id: "asked",
@@ -616,6 +635,80 @@ describe("OpenCodeNativeAdapter", () => {
     await handle.release("requested");
   });
 
+  it("carries a settled part's projection from one stream snapshot into the next", async () => {
+    const hold = new Deferred<void>();
+    const network = new FakeNetwork();
+    network.subscribe = async (input) => {
+      network.subscriptions.push(input);
+      return (async function* () {
+        yield {
+          id: "assistant",
+          type: "message.updated",
+          properties: {
+            info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+          },
+        };
+        yield {
+          id: "first",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "p1",
+              messageID: "provider-assistant",
+              type: "text",
+              text: "The tree is stale.",
+            },
+          },
+        };
+        // Past the coalescing window, so the part below lands in a snapshot of
+        // its own rather than the same one as the part above.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        yield {
+          id: "second",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "p2",
+              messageID: "provider-assistant",
+              type: "text",
+              text: "Reinstalling now.",
+            },
+          },
+        };
+        await hold.promise;
+      })();
+    };
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    const snapshots = observations.flatMap((observation) =>
+      observation.kind === "transcript.message" ? [observation] : [],
+    );
+    expect(snapshots.map(({ message }) => message.parts)).toEqual([
+      [{ type: "text", text: "The tree is stale." }],
+      [
+        { type: "text", text: "The tree is stale." },
+        { type: "text", text: "Reinstalling now." },
+      ],
+    ]);
+    // A part nothing has touched since the last snapshot is the same projection,
+    // not an equal one — which is what keeps a long reply from being serialized
+    // again in full, and hashed again in full, every 32 milliseconds.
+    expect(snapshots[1]?.message.parts[0]).toBe(snapshots[0]?.message.parts[0]);
+    // And the identity still moves with the content it stands for.
+    expect(snapshots[0]?.id).not.toBe(snapshots[1]?.id);
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
   it("emits one turn fact per native status transition", async () => {
     const { adapter } = composition([
       {
@@ -1011,6 +1104,19 @@ describe("OpenCodeNativeAdapter", () => {
     );
     expect(JSON.stringify(probe.capabilities.catalog)).not.toContain("must-not-leak");
     expect(JSON.stringify(probe.capabilities.catalog)).not.toContain("/private/user/path");
+    // OpenCode takes a decision on an ask and nothing else, so a reader who
+    // walks away from one leaves it holding the ask. Volli will not invent a
+    // reply to release it; declaring that it cannot is the honest report.
+    expect(probe.capabilities.features).toEqual(
+      expect.arrayContaining([
+        {
+          id: "interaction.withdraw",
+          state: "unavailable",
+          evidence: "declared",
+          detail: "OpenCode can be told a decision on an ask, but never that there will not be one",
+        },
+      ]),
+    );
   });
 
   it("preserves finalized OpenCode reasoning and inspectable tool payloads", async () => {
@@ -1566,7 +1672,9 @@ describe("OpenCodeNativeAdapter", () => {
     const { adapter, network } = composition();
     network.messageResponse = {
       info: { id: "history-1", role: "assistant" },
-      parts: [{ type: "text", text: "Recovered" }],
+      // A provider payload is JSON, so a part can be anything at all. One that
+      // is not even a record projects to nothing rather than to a broken row.
+      parts: [null, { type: "text", text: "Recovered" }],
     };
     const originalRequest = network.request.bind(network);
     network.request = async (input) => {
@@ -1961,7 +2069,14 @@ describe("OpenCodeNativeAdapter", () => {
         expect.objectContaining({
           kind: "interaction.resolved",
           interactionId: "question:question-1",
-          resolution: { optionIds: ["question:0:Ymx1ZQ", "question:1:bGFyZ2U"], response: null },
+          resolution: {
+            optionIds: ["question:0:Ymx1ZQ", "question:1:bGFyZ2U"],
+            response: null,
+            answers: [
+              { promptId: "prompt:0", optionIds: ["question:0:Ymx1ZQ"], response: null },
+              { promptId: "prompt:1", optionIds: ["question:1:bGFyZ2U"], response: null },
+            ],
+          },
         }),
         expect.objectContaining({
           kind: "interaction.resolved",
@@ -2046,7 +2161,11 @@ describe("OpenCodeNativeAdapter", () => {
         expect.objectContaining({
           kind: "interaction.resolved",
           interactionId: "question:question-object-options",
-          resolution: { optionIds: ["question:0:Ymx1ZQ"], response: null },
+          resolution: {
+            optionIds: ["question:0:Ymx1ZQ"],
+            response: null,
+            answers: [{ promptId: "prompt:0", optionIds: ["question:0:Ymx1ZQ"], response: null }],
+          },
         }),
       ]),
     );
@@ -2063,6 +2182,435 @@ describe("OpenCodeNativeAdapter", () => {
       path: "/question/question-object-options/reply?directory=%2Fworkspace%2Fone",
       body: { answers: [["red"]] },
     });
+  });
+
+  it("gives every question its own prompt, its own answer rules, and its own free text", async () => {
+    const { adapter, network } = composition([
+      {
+        id: "asked-prompts",
+        type: "question.asked",
+        properties: {
+          sessionID: "native-session-1",
+          id: "question-prompts",
+          questions: [
+            {
+              header: "Pick a color",
+              question: "Which colors should the banner use?",
+              options: [
+                { label: "red", description: "Warm" },
+                { label: "blue", description: null },
+              ],
+              multiple: true,
+              // Stated off, the way OpenCode's own built-in questions state it.
+              custom: false,
+            },
+            // Neither flag is stated. They default in opposite directions:
+            // one answer only, but free text is accepted.
+            { header: "Pick a size", options: ["small"] },
+            { header: "Anything else", options: ["no"], custom: true },
+          ],
+        },
+      },
+    ]);
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const opened = observations.find(
+      (observation): observation is Extract<HarnessObservation, { kind: "interaction.opened" }> =>
+        observation.kind === "interaction.opened",
+    );
+    if (!opened) throw new Error("question did not open");
+
+    expect(opened.interaction.prompts).toEqual([
+      {
+        id: DEFAULT_INTERACTION_PROMPT_ID,
+        label: "Pick a color",
+        detail: "Which colors should the banner use?",
+        options: [
+          { id: "question:0:cmVk", label: "red", description: "Warm" },
+          { id: "question:0:Ymx1ZQ", label: "blue", description: null },
+        ],
+        multiple: true,
+        custom: false,
+      },
+      {
+        id: "prompt:1",
+        label: "Pick a size",
+        detail: null,
+        options: [{ id: "question:1:c21hbGw", label: "small", description: null }],
+        multiple: false,
+        custom: true,
+      },
+      {
+        id: "prompt:2",
+        label: "Anything else",
+        detail: null,
+        options: [{ id: "question:2:bm8", label: "no", description: null }],
+        multiple: false,
+        custom: true,
+      },
+    ]);
+    // The flat pair a reader written before prompts falls back to is unchanged.
+    expect(opened.interaction.multiple).toBe(true);
+    expect(opened.interaction.options.map((option) => option.id)).toEqual([
+      "question:0:cmVk",
+      "question:0:Ymx1ZQ",
+      "question:1:c21hbGw",
+      "question:2:bm8",
+    ]);
+
+    const interaction = { ...opened.interaction, attachmentId: "attachment-1" };
+    await handle.dispatch({
+      kind: "interaction.resolve",
+      commandId: "prompt-reply",
+      sessionId: "volli-session-1",
+      attachmentId: "attachment-1",
+      interaction,
+      resolution: {
+        optionIds: [],
+        response: null,
+        answers: [
+          {
+            promptId: DEFAULT_INTERACTION_PROMPT_ID,
+            optionIds: ["question:0:Ymx1ZQ", "question:0:cmVk"],
+            // Dropped: this question declared that it does not take free text.
+            response: "purple",
+          },
+          // Kept: `custom` was omitted, and omitted means accepted.
+          { promptId: "prompt:1", optionIds: ["question:1:c21hbGw"], response: "medium" },
+          { promptId: "prompt:2", optionIds: [], response: "ship it" },
+        ],
+      },
+    });
+    expect(network.requests.at(-1)).toMatchObject({
+      path: "/question/question-prompts/reply?directory=%2Fworkspace%2Fone",
+      body: { answers: [["red", "blue"], ["small", "medium"], ["ship it"]] },
+    });
+
+    // Free text alone answers a question; it is not a refusal to answer it.
+    await handle.dispatch({
+      kind: "interaction.resolve",
+      commandId: "prompt-free-text-only",
+      sessionId: "volli-session-1",
+      attachmentId: "attachment-1",
+      interaction,
+      resolution: {
+        optionIds: [],
+        response: null,
+        answers: [{ promptId: "prompt:2", optionIds: [], response: "just this" }],
+      },
+    });
+    expect(network.requests.at(-1)).toMatchObject({
+      path: "/question/question-prompts/reply?directory=%2Fworkspace%2Fone",
+      body: { answers: [[], [], ["just this"]] },
+    });
+  });
+
+  // A question's prompts are otherwise dropped by the reply that reads them,
+  // and an ask killed by an abort never produces one: `Question.ask` deletes
+  // its pending entry inside an `ensuring` finalizer that runs on interruption
+  // and publishes nothing at all.
+  it("forgets the prompts of a question the sweep no longer lists", async () => {
+    const network = new FakeNetwork();
+    network.events = [
+      {
+        id: "asked-abandoned",
+        type: "question.asked",
+        properties: {
+          sessionID: "native-session-1",
+          id: "question-abandoned",
+          questions: [{ header: "Pick", options: [{ label: "cached", description: null }] }],
+        },
+      },
+    ];
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const handle = await adapter.attach(spec(), { emit: async () => undefined });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The default sweep is a readable, empty list: nothing is pending, so the
+    // ask this binding is still holding prompts for is gone.
+    await handle.reconcile(null);
+    await handle.dispatch({
+      kind: "interaction.resolve",
+      commandId: "swept-reply",
+      sessionId: "volli-session-1",
+      attachmentId: "attachment-1",
+      interaction: sweptQuestion,
+      resolution: { optionIds: ["question:0:c3dlcHQ"], response: null },
+    });
+
+    // The reply is built from the record's own detail, because the cache the
+    // adapter would otherwise have preferred is gone. Held, it would have
+    // filtered this id against the stale `cached` option and answered nothing.
+    expect(network.requests.at(-1)).toMatchObject({
+      path: "/question/question-abandoned/reply?directory=%2Fworkspace%2Fone",
+      body: { answers: [["swept"]] },
+    });
+    await handle.release("requested");
+  });
+
+  it("keeps a question's prompts when it cannot read the sweep that would drop them", async () => {
+    const network = new FakeNetwork();
+    network.events = [
+      {
+        id: "asked-held",
+        type: "question.asked",
+        properties: {
+          sessionID: "native-session-1",
+          id: "question-abandoned",
+          questions: [{ header: "Pick", options: [{ label: "cached", description: null }] }],
+        },
+      },
+    ];
+    const originalRequest = network.request.bind(network);
+    network.request = async (input) =>
+      input.path.startsWith("/question") && input.method === "GET"
+        ? // 200, every field present, in a shape with no rule for it. Read as
+          // the empty open set it would drop every ask this binding holds.
+          { status: 200, body: { "question-abandoned": { id: "question-abandoned" } } }
+        : originalRequest(input);
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const handle = await adapter.attach(spec(), { emit: async () => undefined });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await handle.reconcile(null);
+    await handle.dispatch({
+      kind: "interaction.resolve",
+      commandId: "held-reply",
+      sessionId: "volli-session-1",
+      attachmentId: "attachment-1",
+      interaction: sweptQuestion,
+      resolution: { optionIds: ["question:0:c3dlcHQ"], response: null },
+    });
+
+    // Still answered against the prompts OpenCode actually asked, which declare
+    // `cached` and not `swept` — so the forged id selects nothing.
+    expect(network.requests.at(-1)).toMatchObject({
+      path: "/question/question-abandoned/reply?directory=%2Fworkspace%2Fone",
+      body: { answers: [[]] },
+    });
+    await handle.release("requested");
+  });
+
+  it("gives a permission one prompt holding the three options it offers", async () => {
+    const { adapter } = composition([
+      {
+        id: "asked-permission-prompt",
+        type: "permission.asked",
+        properties: {
+          sessionID: "native-session-1",
+          id: "permission-prompt",
+          title: "Allow write",
+          description: "src/index.ts",
+        },
+      },
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const opened = observations.find(
+      (observation): observation is Extract<HarnessObservation, { kind: "interaction.opened" }> =>
+        observation.kind === "interaction.opened",
+    );
+    if (!opened) throw new Error("permission did not open");
+    expect(opened.interaction.prompts).toEqual([
+      {
+        id: DEFAULT_INTERACTION_PROMPT_ID,
+        label: "Allow write",
+        detail: "src/index.ts",
+        options: opened.interaction.options,
+        multiple: false,
+        custom: false,
+      },
+    ]);
+    expect(opened.interaction.options.map((option) => option.id)).toEqual([
+      "once",
+      "always",
+      "reject",
+    ]);
+  });
+
+  it("refuses a question out of band and never out of an option a harness declared", async () => {
+    const { adapter, network } = composition([
+      {
+        id: "asked-reject-valued",
+        type: "question.asked",
+        properties: {
+          sessionID: "native-session-1",
+          id: "question-reject-valued",
+          questions: [{ header: "Merge?", options: ["reject", "accept"] }],
+        },
+      },
+    ]);
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const opened = observations.find(
+      (observation): observation is Extract<HarnessObservation, { kind: "interaction.opened" }> =>
+        observation.kind === "interaction.opened",
+    );
+    if (!opened) throw new Error("question did not open");
+    const interaction = { ...opened.interaction, attachmentId: "attachment-1" };
+    const command = {
+      kind: "interaction.resolve",
+      commandId: "reject-out-of-band",
+      sessionId: "volli-session-1",
+      attachmentId: "attachment-1",
+      interaction,
+    } as const;
+
+    // Nothing chosen and nothing typed is the refusal — an act no harness value
+    // can impersonate.
+    await handle.dispatch({
+      ...command,
+      resolution: {
+        optionIds: [],
+        response: null,
+        answers: [{ promptId: DEFAULT_INTERACTION_PROMPT_ID, optionIds: [], response: null }],
+      },
+    });
+    expect(network.requests.at(-1)?.path).toContain("/question/question-reject-valued/reject?");
+
+    // Choosing the option whose value happens to be `reject` answers it.
+    await handle.dispatch({
+      ...command,
+      commandId: "answer-reject-valued",
+      resolution: {
+        optionIds: [],
+        response: null,
+        answers: [
+          {
+            promptId: DEFAULT_INTERACTION_PROMPT_ID,
+            optionIds: ["question:0:cmVqZWN0"],
+            response: null,
+          },
+        ],
+      },
+    });
+    expect(network.requests.at(-1)).toMatchObject({
+      path: "/question/question-reject-valued/reply?directory=%2Fworkspace%2Fone",
+      body: { answers: [["reject"]] },
+    });
+
+    // A record whose declared option id *is* the sentinel — a harness that used
+    // its own values as ids — still answers, because a declared id outranks it.
+    await handle.dispatch({
+      ...command,
+      commandId: "declared-reject-id",
+      interaction: {
+        ...interaction,
+        prompts: [
+          {
+            id: DEFAULT_INTERACTION_PROMPT_ID,
+            label: "Merge?",
+            detail: null,
+            options: [{ id: "reject", label: "reject", description: null }],
+            multiple: false,
+            custom: false,
+          },
+        ],
+      },
+      resolution: { optionIds: ["reject"], response: null },
+    });
+    expect(network.requests.at(-1)?.path).toContain("/question/question-reject-valued/reply?");
+  });
+
+  it("answers a stored interaction that predates prompts from its flat option ids", async () => {
+    const { adapter, network } = composition();
+    const handle = await adapter.attach(spec(), { emit: async () => undefined });
+    await handle.dispatch({
+      kind: "interaction.resolve",
+      commandId: "stored-flat-reply",
+      sessionId: "volli-session-1",
+      attachmentId: "attachment-1",
+      interaction: {
+        id: "question:stored",
+        attachmentId: "attachment-1",
+        kind: "question",
+        title: "Stored",
+        detail: null,
+        options: [],
+        multiple: true,
+        native: {
+          id: "stored",
+          detail: {
+            questions: [
+              { label: "First", options: ["yes"] },
+              { label: "Second", options: ["ok"] },
+            ],
+          },
+        },
+      },
+      // The flat form answers the first prompt, and the index-encoded ids still
+      // say which question each choice belonged to. Free text is dropped: a
+      // record written before prompts never declared that any question takes it.
+      resolution: { optionIds: ["question:1:b2s"], response: "typed" },
+    });
+    expect(network.requests.at(-1)).toMatchObject({
+      path: "/question/stored/reply?directory=%2Fworkspace%2Fone",
+      body: { answers: [[], ["ok"]] },
+    });
+  });
+
+  it("keeps a custom answer OpenCode reports on the prompt that accepted it", async () => {
+    const { adapter } = composition([
+      {
+        id: "asked-custom",
+        type: "question.asked",
+        properties: {
+          sessionID: "native-session-1",
+          id: "question-custom",
+          questions: [{ header: "Pick a color", options: ["blue"], custom: true }],
+        },
+      },
+      {
+        id: "replied-custom",
+        type: "question.replied",
+        properties: {
+          sessionID: "native-session-1",
+          requestID: "question-custom",
+          answers: [["blue", "teal"]],
+        },
+      },
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(observations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "interaction.resolved",
+          interactionId: "question:question-custom",
+          resolution: {
+            optionIds: ["question:0:Ymx1ZQ"],
+            response: null,
+            answers: [
+              {
+                promptId: DEFAULT_INTERACTION_PROMPT_ID,
+                optionIds: ["question:0:Ymx1ZQ"],
+                response: "teal",
+              },
+            ],
+          },
+        }),
+      ]),
+    );
   });
 
   it("supervises one shared child while retaining each binding directory", async () => {
@@ -3738,7 +4286,10 @@ describe("OpenCodeNativeAdapter", () => {
         properties: {
           sessionID: "native-session-1",
           requestID: "uncached",
-          questions: [{ label: "Q", options: ["yes"] }],
+          questions: [
+            { label: "Q", options: ["yes"] },
+            { label: "Q2", options: ["ok"] },
+          ],
           answers: [["yes", 7], "bad"],
         },
       },
@@ -3773,7 +4324,15 @@ describe("OpenCodeNativeAdapter", () => {
         expect.objectContaining({
           id: "question-answer-fallback",
           kind: "interaction.resolved",
-          resolution: { optionIds: ["question:0:eWVz"], response: null },
+          resolution: {
+            optionIds: ["question:0:eWVz"],
+            response: null,
+            answers: [
+              { promptId: "prompt:0", optionIds: ["question:0:eWVz"], response: null },
+              // The wire sent a string where this question's answers belong.
+              { promptId: "prompt:1", optionIds: [], response: null },
+            ],
+          },
         }),
       ]),
     );
@@ -4950,6 +5509,141 @@ describe("OpenCodeNativeAdapter", () => {
     expect(observations.findIndex(({ kind }) => kind === "transcript.message")).toBeLessThan(
       observations.findIndex(({ kind }) => kind === "interaction.opened"),
     );
+  });
+
+  it("forgets the gate a permission sweep no longer reports, and keeps the one it does", async () => {
+    const hold = new Deferred<void>();
+    const network = gatedTurn(
+      [
+        {
+          id: "second-call",
+          type: "message.part.updated",
+          properties: {
+            sessionID: "native-session-1",
+            part: {
+              id: "p2",
+              messageID: "provider-assistant",
+              ...toolPart("read", "call-read", { status: "running", input: { path: "src/b.ts" } }),
+            },
+          },
+        },
+        askedFor("call-write"),
+        {
+          id: "asked-second",
+          type: "permission.asked",
+          properties: {
+            sessionID: "native-session-1",
+            id: "per_2",
+            title: "Allow read",
+            tool: { messageID: "provider-assistant", callID: "call-read" },
+          },
+        },
+      ],
+      hold,
+    );
+    network.messageResponse = {
+      info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+      parts: [
+        toolPart("write", "call-write", { status: "running", input: { path: "src/a.ts" } }),
+        toolPart("read", "call-read", { status: "running", input: { path: "src/b.ts" } }),
+      ],
+    };
+    const originalRequest = network.request.bind(network);
+    network.request = async (input) =>
+      input.path.startsWith("/permission")
+        ? {
+            status: 200,
+            body: [
+              {
+                sessionID: "native-session-1",
+                id: "per_2",
+                title: "Allow read",
+                tool: { messageID: "provider-assistant", callID: "call-read" },
+              },
+            ],
+          }
+        : originalRequest(input);
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Two gates on one message: each row waits on the permission that names it,
+    // and neither wears the other's id.
+    expect(toolRows(observations).slice(-2)).toMatchObject([
+      { toolCallId: "call-write", state: "approval-requested", approval: { id: "per_1" } },
+      { toolCallId: "call-read", state: "approval-requested", approval: { id: "per_2" } },
+    ]);
+
+    const rows = toolRows((await handle.reconcile(null)).observations);
+
+    // A permission is otherwise only ever forgotten by the reply that closes it,
+    // and a reply that landed while this binding was away never arrives. The
+    // sweep is the open set, so a gate it does not list is gone — while one it
+    // still lists is still gating.
+    expect(rows).toMatchObject([
+      { toolCallId: "call-write", state: "input-available" },
+      { toolCallId: "call-read", state: "approval-requested", approval: { id: "per_2" } },
+    ]);
+    expect(rows[0]).not.toHaveProperty("approval");
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("keeps every gate when a permission sweep answers 2xx in a shape it cannot read", async () => {
+    const hold = new Deferred<void>();
+    const network = gatedTurn([askedFor("call-write")], hold);
+    network.messageResponse = {
+      info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+      parts: [toolPart("write", "call-write", { status: "running", input: { path: "src/a.ts" } })],
+    };
+    const originalRequest = network.request.bind(network);
+    network.request = async (input) =>
+      input.path.startsWith("/permission")
+        ? {
+            // A 200 carrying the open set keyed by permission id rather than as
+            // a list: every field the adapter reads is present, in a shape it
+            // has no rule for.
+            status: 200,
+            body: {
+              per_1: {
+                sessionID: "native-session-1",
+                id: "per_1",
+                title: "Allow write",
+                tool: { messageID: "provider-assistant", callID: "call-write" },
+              },
+            },
+          }
+        : originalRequest(input);
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(toolRows(observations).at(-1)).toMatchObject({
+      toolCallId: "call-write",
+      state: "approval-requested",
+      approval: { id: "per_1" },
+    });
+
+    const rows = toolRows((await handle.reconcile(null)).observations);
+
+    // Pruning asks which held gates the sweep did *not* list, so a body nobody
+    // could read as a list answers "none of them" — and forgetting every gate
+    // at once silently ungates every gated row. Only a status says the endpoint
+    // answered; the body is what says what it answered with.
+    expect(rows).toMatchObject([
+      { toolCallId: "call-write", state: "approval-requested", approval: { id: "per_1" } },
+    ]);
+    hold.resolve(undefined);
+    await handle.release("requested");
   });
 
   it("gates only the call a permission names, not every call in flight", async () => {

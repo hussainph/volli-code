@@ -38,6 +38,7 @@ import "@renderer/typeset.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
+import { HighlighterWarmup } from "./chat/markdown-boundary";
 import { installFakeApi } from "./fake-api";
 import { LabShell } from "./shell";
 
@@ -53,8 +54,15 @@ installFakeApi();
 // with the picker and the canvas scratch that owned them; a dev-tool preference
 // that outlived its editor would just be a way to make the lab lie.
 
+// Fetch the syntax highlighter now, with everything else. It is the one module
+// this page loads LAZILY — Streamdown reaches for it the first time a fenced
+// block renders — and the dev server answers an optimized-dep request with 504
+// once its `?v=` hash has moved on, which it does on every re-optimization. A
+// module fetched at boot is never asked for again; a module fetched an hour
+// later is asking a server that has changed its mind. See markdown-boundary.tsx.
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
+    <HighlighterWarmup />
     <LabShell />
   </StrictMode>,
 );

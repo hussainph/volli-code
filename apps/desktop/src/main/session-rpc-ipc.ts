@@ -11,6 +11,12 @@ export const SESSION_RPC_EVENT_CHANNEL = "volli:session-rpc-event";
 /** Ends one subscription previously started through {@link SESSION_RPC_IPC_CHANNEL}. */
 export const SESSION_RPC_CANCEL_CHANNEL = "volli:session-rpc-cancel";
 
+/** Every procedure the shared router publishes under `session.`. */
+type SessionRouterProcedure = `session.${keyof ReturnType<
+  typeof createSessionRouter
+>["_def"]["procedures"]["session"] &
+  string}`;
+
 /**
  * Procedures intentionally exposed over Electron IPC. Lab diagnostics stay on
  * the development-only HTTP surface; production clients only receive Session
@@ -18,13 +24,33 @@ export const SESSION_RPC_CANCEL_CHANNEL = "volli:session-rpc-cancel";
  */
 export const SESSION_RPC_IPC_PROCEDURES = [
   "session.snapshot",
+  "session.projection",
   "session.subscribe",
   "session.command",
+  "session.cancelInteraction",
   "session.refreshCapabilities",
   "session.reconcile",
-] as const;
+] as const satisfies readonly SessionRouterProcedure[];
 
 export type SessionRpcIpcProcedure = (typeof SESSION_RPC_IPC_PROCEDURES)[number];
+
+/**
+ * Adding a `session.*` procedure to the router without listing it above fails
+ * here.
+ *
+ * The allow-list is what `isRequest` accepts, so an unlisted procedure exists
+ * in the router and is rejected `BAD_REQUEST` on the only transport production
+ * has — a failure that looks like a caller bug and is reported as one.
+ * `callProcedure`'s `never` catches the opposite direction (a listed procedure
+ * the switch forgot), and neither direction was checked before. A procedure
+ * that genuinely should not cross IPC is declared below rather than omitted, so
+ * the decision is written down where the check can see it.
+ */
+type DeliberatelyMainOnlyProcedure = never;
+type AssertNever<T extends never> = T;
+export type SessionRpcIpcCoverage = AssertNever<
+  Exclude<SessionRouterProcedure, SessionRpcIpcProcedure | DeliberatelyMainOnlyProcedure>
+>;
 
 export type SessionRpcIpcRequest = {
   [Procedure in SessionRpcIpcProcedure]: {
@@ -175,8 +201,12 @@ async function callProcedure(
   switch (request.procedure) {
     case "session.snapshot":
       return caller.session.snapshot(request.input as never);
+    case "session.projection":
+      return caller.session.projection(request.input as never);
     case "session.command":
       return caller.session.command(request.input as never);
+    case "session.cancelInteraction":
+      return caller.session.cancelInteraction(request.input as never);
     case "session.refreshCapabilities":
       return caller.session.refreshCapabilities(request.input as never);
     case "session.reconcile":

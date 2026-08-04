@@ -21,6 +21,7 @@ import { insertProject } from "../db/projects-repo";
 import { insertTicket } from "../db/tickets-repo";
 import { createDesktopSessionRuntime } from "../session-runtime";
 import { createRuntimeCatalog } from "../runtime-catalog";
+import { createLabScenarioAdapter } from "./scenario-adapter";
 
 export { LAB_SESSION_RPC_PATH } from "../../lab-session-rpc-path";
 
@@ -328,10 +329,13 @@ export class LabSessionRpcServer {
       this.#adapter = adapter;
       const transcriptDirectory = join(directory, "artifacts");
       await mkdir(transcriptDirectory, { recursive: true, mode: 0o700 });
+      // The scripted harness sits beside the real one rather than replacing it:
+      // a scenario is picked per Session, so both must be attachable from the
+      // same running lab. It spawns nothing and reads nothing.
       const runtime = createDesktopSessionRuntime({
         db,
         transcriptDirectory,
-        adapters: [adapter],
+        adapters: [adapter, createLabScenarioAdapter({ now: this.#now })],
         now: this.#now,
       });
       this.#runtime = runtime;
