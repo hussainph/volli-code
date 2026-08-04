@@ -123,6 +123,8 @@ export interface OpenCodeNetworkPort {
 
 export interface OpenCodeAdapterOptions {
   binaryPath?: string;
+  /** Resolves the command at first use; desktop supplies the user's login-shell PATH. */
+  resolveBinary?: (path: string) => Promise<string>;
   process?: OpenCodeProcessPort;
   network?: OpenCodeNetworkPort;
   now?: () => number;
@@ -162,6 +164,7 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
   readonly #process: OpenCodeProcessPort;
   readonly #network: OpenCodeNetworkPort;
   readonly #binaryPath: string;
+  readonly #resolveBinary: ((path: string) => Promise<string>) | null;
   readonly #now: () => number;
   readonly #sleep: (milliseconds: number) => Promise<void>;
   readonly #healthRetryAttempts: number;
@@ -178,6 +181,7 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
     this.#process = options.process ?? createNodeProcessPort();
     this.#network = options.network ?? createFetchNetworkPort();
     this.#binaryPath = options.binaryPath ?? "opencode";
+    this.#resolveBinary = options.resolveBinary ?? null;
     this.#now = options.now ?? Date.now;
     this.#sleep = options.sleep ?? defaultSleep;
     // A cold OpenCode process routinely needs longer than a few hundred
@@ -360,7 +364,8 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
   }
 
   async #resolveAndFingerprint(): Promise<VerifiedOpenCodeBinary> {
-    const path = await this.#process.resolveBinary(this.#binaryPath);
+    const path = await (this.#resolveBinary?.(this.#binaryPath) ??
+      this.#process.resolveBinary(this.#binaryPath));
     return { path, fingerprint: await this.#process.sha256(path) };
   }
 

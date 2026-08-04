@@ -423,6 +423,26 @@ describe("OpenCodeNativeAdapter", () => {
     );
   });
 
+  it("uses the caller's binary resolver only when the native server starts", async () => {
+    const process = new FakeProcess();
+    const resolved: string[] = [];
+    const resolveBinary = async (command: string) => {
+      resolved.push(command);
+      return "/login-shell/bin/opencode";
+    };
+    const adapter = createOpenCodeNativeAdapter({
+      process,
+      network: new FakeNetwork(),
+      resolveBinary,
+    });
+
+    expect(resolved).toEqual([]);
+    await adapter.attach(spec(), { emit: async () => undefined });
+
+    expect(resolved).toEqual(["opencode"]);
+    expect(process.spawns[0]?.path).toBe("/login-shell/bin/opencode");
+  });
+
   it("routes every binding call through its immutable directory and keeps Basic credentials private", async () => {
     const { adapter, network, process } = composition();
     const probe = await adapter.probe(

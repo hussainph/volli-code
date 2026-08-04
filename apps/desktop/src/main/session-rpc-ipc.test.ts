@@ -5,6 +5,9 @@ const { handlers, listeners } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
   listeners: new Map<string, (...args: never[]) => unknown>(),
 }));
+const { terminalStream } = vi.hoisted(() => ({
+  terminalStream: { current: null as AsyncIterable<readonly [string, unknown]> | null },
+}));
 
 vi.mock("electron", () => ({
   ipcMain: {
@@ -16,6 +19,20 @@ vi.mock("electron", () => ({
     },
   },
 }));
+
+vi.mock("@volli/session-rpc", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@volli/session-rpc")>();
+  return {
+    ...actual,
+    createSessionRouter: () => {
+      const stream = terminalStream.current;
+      if (stream === null) return actual.createSessionRouter();
+      return {
+        createCaller: () => ({ session: { subscribe: async () => stream } }),
+      } as unknown as ReturnType<typeof actual.createSessionRouter>;
+    },
+  };
+});
 
 import {
   registerSessionRpcIpcHandlers,
@@ -137,6 +154,7 @@ function invoke(owner: FakeSender, request: unknown): Promise<SessionRpcIpcRespo
 beforeEach(() => {
   handlers.clear();
   listeners.clear();
+  terminalStream.current = null;
 });
 
 describe("registerSessionRpcIpcHandlers", () => {
@@ -222,7 +240,11 @@ describe("registerSessionRpcIpcHandlers", () => {
     await vi.waitFor(() =>
       expect(owner.send).toHaveBeenCalledWith(
         SESSION_RPC_EVENT_CHANNEL,
-        expect.objectContaining({ subscriptionId: response.subscriptionId, eventId: "3" }),
+        expect.objectContaining({
+          kind: "data",
+          subscriptionId: response.subscriptionId,
+          eventId: "3",
+        }),
       ),
     );
 
@@ -234,6 +256,8 @@ describe("registerSessionRpcIpcHandlers", () => {
     await vi.waitFor(() =>
       expect(owner.removeListener).toHaveBeenCalledWith("destroyed", expect.any(Function)),
     );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(owner.send).toHaveBeenCalledTimes(1);
     await registration.close();
   });
 
@@ -255,4 +279,66 @@ describe("registerSessionRpcIpcHandlers", () => {
     expect(owner.once).not.toHaveBeenCalled();
     await registration.close();
   });
+
+  it("tells its owner when a subscription completes", async () => {
+    terminalStream.current = emptyStream();
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+    const owner = sender();
+
+    const response = await invoke(owner, {
+      procedure: "session.subscribe",
+      input: { sessionId: "session-1", afterSequence: 0 },
+    });
+    if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
+
+    await vi.waitFor(() =>
+      expect(owner.send).toHaveBeenCalledWith(SESSION_RPC_EVENT_CHANNEL, {
+        kind: "done",
+        subscriptionId: response.subscriptionId,
+      }),
+    );
+    await registration.close();
+  });
+
+  it("tells its owner when a subscription fails", async () => {
+    terminalStream.current = failingStream(new Error("native stream closed unexpectedly"));
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+    const owner = sender();
+
+    const response = await invoke(owner, {
+      procedure: "session.subscribe",
+      input: { sessionId: "session-1", afterSequence: 0 },
+    });
+    if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
+
+    await vi.waitFor(() =>
+      expect(owner.send).toHaveBeenCalledWith(SESSION_RPC_EVENT_CHANNEL, {
+        kind: "error",
+        subscriptionId: response.subscriptionId,
+        error: {
+          code: "INTERNAL_SERVER_ERROR",
+          message: "native stream closed unexpectedly",
+        },
+      }),
+    );
+    await registration.close();
+  });
 });
+
+function emptyStream(): AsyncIterable<readonly [string, unknown]> {
+  return {
+    [Symbol.asyncIterator](): AsyncIterator<readonly [string, unknown]> {
+      return { next: async () => ({ done: true, value: undefined }) };
+    },
+  };
+}
+
+function failingStream(error: Error): AsyncIterable<readonly [string, unknown]> {
+  return {
+    [Symbol.asyncIterator](): AsyncIterator<readonly [string, unknown]> {
+      return { next: async () => Promise.reject(error) };
+    },
+  };
+}

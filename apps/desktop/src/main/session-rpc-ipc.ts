@@ -103,11 +103,22 @@ export type SessionRpcIpcRequest = {
   };
 }[SessionRpcIpcProcedure];
 
-export interface SessionRpcIpcEvent {
-  subscriptionId: string;
-  eventId: string;
-  data: unknown;
-}
+export type SessionRpcIpcEvent =
+  | {
+      kind: "data";
+      subscriptionId: string;
+      eventId: string;
+      data: unknown;
+    }
+  | {
+      kind: "done";
+      subscriptionId: string;
+    }
+  | {
+      kind: "error";
+      subscriptionId: string;
+      error: { code: string; message: string };
+    };
 
 export type SessionRpcIpcResponse =
   | { ok: true; data: unknown }
@@ -208,25 +219,57 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
     try {
       while (!subscription.abort.signal.aborted && !subscription.owner.isDestroyed()) {
         const next = await subscription.iterator.next();
-        if (next.done) break;
+        if (next.done) {
+          sendTerminalEvent(subscriptionId, subscription, { kind: "done", subscriptionId });
+          break;
+        }
         const [eventId, data] = next.value;
         if (subscription.owner.isDestroyed()) break;
         subscription.owner.send(SESSION_RPC_EVENT_CHANNEL, {
+          kind: "data",
           subscriptionId,
           eventId,
           data,
         } satisfies SessionRpcIpcEvent);
       }
     } catch (error) {
+      const terminalError = subscriptionError(error);
       diagnostics.record({
         procedure: "session.subscribe",
         phase: "error",
         transport: "electron-ipc",
-        code: "INTERNAL_SERVER_ERROR",
-        message: error instanceof Error ? error.message : "Session subscription failed",
+        ...terminalError,
+      });
+      sendTerminalEvent(subscriptionId, subscription, {
+        kind: "error",
+        subscriptionId,
+        error: terminalError,
       });
     } finally {
       await stop(subscriptionId);
+    }
+  }
+
+  function sendTerminalEvent(
+    subscriptionId: string,
+    subscription: ActiveSubscription,
+    event: Exclude<SessionRpcIpcEvent, { kind: "data" }>,
+  ): void {
+    // Cancellation removes the active entry before it aborts the iterator. The
+    // iterator then normally resolves `done`; that is local teardown, not a
+    // connection state the renderer needs to recover from.
+    if (
+      active.get(subscriptionId) !== subscription ||
+      subscription.abort.signal.aborted ||
+      subscription.owner.isDestroyed()
+    ) {
+      return;
+    }
+    try {
+      subscription.owner.send(SESSION_RPC_EVENT_CHANNEL, event);
+    } catch {
+      // The renderer is already unable to receive its terminal state. The
+      // original subscription error remains in the main-process diagnostics.
     }
   }
 
@@ -275,11 +318,17 @@ function invalidRequest(): SessionRpcIpcResponse {
 }
 
 function failure(error: unknown): SessionRpcIpcResponse {
-  const code =
-    isRecord(error) && typeof error.code === "string" ? error.code : "INTERNAL_SERVER_ERROR";
-  const message =
-    error instanceof Error ? sanitizeDiagnosticText(error.message) : "Session RPC request failed";
-  return { ok: false, error: { code, message } };
+  return { ok: false, error: subscriptionError(error, "Session RPC request failed") };
+}
+
+function subscriptionError(
+  error: unknown,
+  fallback = "Session subscription failed",
+): { code: string; message: string } {
+  return {
+    code: isRecord(error) && typeof error.code === "string" ? error.code : "INTERNAL_SERVER_ERROR",
+    message: error instanceof Error ? sanitizeDiagnosticText(error.message) : fallback,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
