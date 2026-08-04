@@ -653,7 +653,7 @@ describe("projectSession", () => {
     });
   });
 
-  it("keeps the Session open when runs, turns, and an executor end", () => {
+  it("keeps the Session open when its own creation, runs, turns, and an executor end", () => {
     const attachment = {
       id: "attachment-1",
       sessionId: session.id,
@@ -662,20 +662,26 @@ describe("projectSession", () => {
       continuity: "native_resume" as const,
       native: null,
     };
-    const projection = projectSession(session, [
+    const projection = projectSession({ ...session, title: "Seeded" }, [
       event(0, { kind: "attachment.closed", attachmentId: "unknown", outcome: "failed" }),
-      event(1, { kind: "attachment.opened", attachment }),
-      event(2, { kind: "run.started", attachmentId: attachment.id, runId: "run-1" }),
-      event(3, { kind: "turn.started", attachmentId: attachment.id, turnId: "turn-1" }),
-      event(4, { kind: "turn.completed", attachmentId: attachment.id, turnId: "turn-1" }),
-      event(5, { kind: "run.completed", attachmentId: attachment.id, runId: "run-1" }),
-      event(6, { kind: "attachment.closed", attachmentId: attachment.id, outcome: "completed" }),
+      // The Session's own creation fact, folded over the row it created. It is
+      // the seed of this fold, not an update to it — a projection that took its
+      // `session` from here would let a stale copy of the row win over the one
+      // the caller read.
+      event(1, { kind: "session.created", session: { ...session, title: "Superseded" } }),
+      event(2, { kind: "attachment.opened", attachment }),
+      event(3, { kind: "run.started", attachmentId: attachment.id, runId: "run-1" }),
+      event(4, { kind: "turn.started", attachmentId: attachment.id, turnId: "turn-1" }),
+      event(5, { kind: "turn.completed", attachmentId: attachment.id, turnId: "turn-1" }),
+      event(6, { kind: "run.completed", attachmentId: attachment.id, runId: "run-1" }),
+      event(7, { kind: "attachment.closed", attachmentId: attachment.id, outcome: "completed" }),
     ]);
 
+    expect(projection.session.title).toBe("Seeded");
     expect(projection.status).toBe("open");
     expect(projection.liveExecutor).toBeNull();
     expect(projection.attachments).toMatchObject([
-      { id: attachment.id, status: "closed", closedAt: 60, outcome: "completed" },
+      { id: attachment.id, status: "closed", closedAt: 70, outcome: "completed" },
     ]);
   });
 

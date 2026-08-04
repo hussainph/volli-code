@@ -703,9 +703,25 @@ describe("SessionRuntime native adapter contract", () => {
       false,
     );
 
+    // Two Stop clicks, or a click racing the harness's own answer: the second
+    // cancel finds nothing open and says so by doing nothing. It carries no
+    // idempotency key, so the state it asked for is the only thing to answer
+    // against — and that state already holds.
+    const throughSequence = frames.at(-1)!.sequence;
     await expect(
       runtime.cancelInteraction({
         sessionId,
+        interactionId: "question-1",
+        reason: "withdrawn",
+      }),
+    ).resolves.toBeUndefined();
+    const repeated = await runtime.snapshot({ sessionId });
+    expect(repeated.throughSequence).toBe(throughSequence);
+    expect(repeated.projection.interactions).toEqual({ active: [], resolved: [] });
+    // An unknown Session is still a fault: nothing was ever asked there.
+    await expect(
+      runtime.cancelInteraction({
+        sessionId: "session-missing",
         interactionId: "question-1",
         reason: "withdrawn",
       }),
@@ -1647,11 +1663,19 @@ describe("SessionRuntime native adapter contract", () => {
   it("folds a Session's history once and re-reads only what the ledger appended", async () => {
     const base = composition();
     const reads: string[] = [];
+    const projectedReads: string[] = [];
     const cursors: (number | undefined)[] = [];
     const counting: SessionEngine = {
       ...base.engine,
-      getSession: async (query) => {
+      getBaseSession: async (query) => {
         reads.push(query.sessionId);
+        return base.engine.getBaseSession(query);
+      },
+      // The engine's own fold. A cache miss needs the row the fold starts from
+      // and nothing else, so reaching for this here would fold the same log
+      // twice for one read.
+      getSession: async (query) => {
+        projectedReads.push(query.sessionId);
         return base.engine.getSession(query);
       },
       listEvents: async (query) => {
@@ -1667,6 +1691,7 @@ describe("SessionRuntime native adapter contract", () => {
     const cached = await runtime.projection({ sessionId });
 
     expect(reads).toEqual([sessionId]);
+    expect(projectedReads).toEqual([]);
     expect(cached.projection).toBe(folded.projection);
     expect(cursors.at(-1)).toBe(folded.throughSequence);
 
@@ -1764,9 +1789,9 @@ describe("SessionRuntime native adapter contract", () => {
     const reads: string[] = [];
     const counting: SessionEngine = {
       ...base.engine,
-      getSession: async (query) => {
+      getBaseSession: async (query) => {
         reads.push(query.sessionId);
-        return base.engine.getSession(query);
+        return base.engine.getBaseSession(query);
       },
     };
     const { runtime } = composition({ engine: counting, adapter: base.adapter });

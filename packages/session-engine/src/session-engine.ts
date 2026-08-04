@@ -72,6 +72,15 @@ export interface SessionEngine {
   observe(observation: SessionObservation): Promise<SessionEvent>;
   submit(request: SubmitSessionCommandRequest): Promise<SubmitSessionCommandResult>;
   getSession(query: GetSessionQuery): Promise<SessionProjection | null>;
+  /**
+   * The stored Session row alone, without folding its history.
+   *
+   * `getSession` answers with a projection, which costs a read and a fold of
+   * every event the Session has. A caller that is about to fold the history
+   * itself needs neither — only the immutable row the fold starts from — and
+   * asking `getSession` for it makes that caller fold the same log twice.
+   */
+  getBaseSession(query: GetSessionQuery): Promise<Session | null>;
   listSessions(query: ListSessionsQuery): Promise<readonly SessionProjection[]>;
   countSessions(query: ListSessionsQuery): Promise<number>;
   listLatestTicketSignals(
@@ -382,6 +391,10 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
             )
           : null;
       });
+    },
+
+    async getBaseSession(query) {
+      return ports.ledger.transaction((transaction) => transaction.getSession(query.sessionId));
     },
 
     async listSessions(query) {

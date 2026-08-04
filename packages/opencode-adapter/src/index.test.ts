@@ -189,6 +189,24 @@ const subagentAskedFor = (sessionID: string) => ({
   },
 });
 
+/**
+ * A stored question record whose own detail declares an option the live ask
+ * never did, so which of the two a reply is built from is visible on the wire.
+ */
+const sweptQuestion = {
+  id: "question:question-abandoned",
+  attachmentId: "attachment-1",
+  kind: "question" as const,
+  title: "Pick",
+  detail: null,
+  options: [{ id: "question:0:c3dlcHQ", label: "swept", description: null }],
+  multiple: false,
+  native: {
+    id: "question-abandoned",
+    detail: { questions: [{ label: "Pick", options: [{ value: "swept", label: "swept" }] }] },
+  },
+};
+
 const askedFor = (callID: string, messageID = "provider-assistant") => ({
   id: "asked",
   type: "permission.asked",
@@ -2183,8 +2201,11 @@ describe("OpenCodeNativeAdapter", () => {
                 { label: "blue", description: null },
               ],
               multiple: true,
+              // Stated off, the way OpenCode's own built-in questions state it.
+              custom: false,
             },
-            // Neither flag is stated: one answer, from the listed options only.
+            // Neither flag is stated. They default in opposite directions:
+            // one answer only, but free text is accepted.
             { header: "Pick a size", options: ["small"] },
             { header: "Anything else", options: ["no"], custom: true },
           ],
@@ -2222,7 +2243,7 @@ describe("OpenCodeNativeAdapter", () => {
         detail: null,
         options: [{ id: "question:1:c21hbGw", label: "small", description: null }],
         multiple: false,
-        custom: false,
+        custom: true,
       },
       {
         id: "prompt:2",
@@ -2256,17 +2277,18 @@ describe("OpenCodeNativeAdapter", () => {
           {
             promptId: DEFAULT_INTERACTION_PROMPT_ID,
             optionIds: ["question:0:Ymx1ZQ", "question:0:cmVk"],
-            // Dropped: this question never declared that it takes free text.
+            // Dropped: this question declared that it does not take free text.
             response: "purple",
           },
-          { promptId: "prompt:1", optionIds: ["question:1:c21hbGw"], response: null },
+          // Kept: `custom` was omitted, and omitted means accepted.
+          { promptId: "prompt:1", optionIds: ["question:1:c21hbGw"], response: "medium" },
           { promptId: "prompt:2", optionIds: [], response: "ship it" },
         ],
       },
     });
     expect(network.requests.at(-1)).toMatchObject({
       path: "/question/question-prompts/reply?directory=%2Fworkspace%2Fone",
-      body: { answers: [["red", "blue"], ["small"], ["ship it"]] },
+      body: { answers: [["red", "blue"], ["small", "medium"], ["ship it"]] },
     });
 
     // Free text alone answers a question; it is not a refusal to answer it.
@@ -2286,6 +2308,92 @@ describe("OpenCodeNativeAdapter", () => {
       path: "/question/question-prompts/reply?directory=%2Fworkspace%2Fone",
       body: { answers: [[], [], ["just this"]] },
     });
+  });
+
+  // A question's prompts are otherwise dropped by the reply that reads them,
+  // and an ask killed by an abort never produces one: `Question.ask` deletes
+  // its pending entry inside an `ensuring` finalizer that runs on interruption
+  // and publishes nothing at all.
+  it("forgets the prompts of a question the sweep no longer lists", async () => {
+    const network = new FakeNetwork();
+    network.events = [
+      {
+        id: "asked-abandoned",
+        type: "question.asked",
+        properties: {
+          sessionID: "native-session-1",
+          id: "question-abandoned",
+          questions: [{ header: "Pick", options: [{ label: "cached", description: null }] }],
+        },
+      },
+    ];
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const handle = await adapter.attach(spec(), { emit: async () => undefined });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The default sweep is a readable, empty list: nothing is pending, so the
+    // ask this binding is still holding prompts for is gone.
+    await handle.reconcile(null);
+    await handle.dispatch({
+      kind: "interaction.resolve",
+      commandId: "swept-reply",
+      sessionId: "volli-session-1",
+      attachmentId: "attachment-1",
+      interaction: sweptQuestion,
+      resolution: { optionIds: ["question:0:c3dlcHQ"], response: null },
+    });
+
+    // The reply is built from the record's own detail, because the cache the
+    // adapter would otherwise have preferred is gone. Held, it would have
+    // filtered this id against the stale `cached` option and answered nothing.
+    expect(network.requests.at(-1)).toMatchObject({
+      path: "/question/question-abandoned/reply?directory=%2Fworkspace%2Fone",
+      body: { answers: [["swept"]] },
+    });
+    await handle.release("requested");
+  });
+
+  it("keeps a question's prompts when it cannot read the sweep that would drop them", async () => {
+    const network = new FakeNetwork();
+    network.events = [
+      {
+        id: "asked-held",
+        type: "question.asked",
+        properties: {
+          sessionID: "native-session-1",
+          id: "question-abandoned",
+          questions: [{ header: "Pick", options: [{ label: "cached", description: null }] }],
+        },
+      },
+    ];
+    const originalRequest = network.request.bind(network);
+    network.request = async (input) =>
+      input.path.startsWith("/question") && input.method === "GET"
+        ? // 200, every field present, in a shape with no rule for it. Read as
+          // the empty open set it would drop every ask this binding holds.
+          { status: 200, body: { "question-abandoned": { id: "question-abandoned" } } }
+        : originalRequest(input);
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const handle = await adapter.attach(spec(), { emit: async () => undefined });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await handle.reconcile(null);
+    await handle.dispatch({
+      kind: "interaction.resolve",
+      commandId: "held-reply",
+      sessionId: "volli-session-1",
+      attachmentId: "attachment-1",
+      interaction: sweptQuestion,
+      resolution: { optionIds: ["question:0:c3dlcHQ"], response: null },
+    });
+
+    // Still answered against the prompts OpenCode actually asked, which declare
+    // `cached` and not `swept` — so the forged id selects nothing.
+    expect(network.requests.at(-1)).toMatchObject({
+      path: "/question/question-abandoned/reply?directory=%2Fworkspace%2Fone",
+      body: { answers: [[]] },
+    });
+    await handle.release("requested");
   });
 
   it("gives a permission one prompt holding the three options it offers", async () => {
@@ -5482,6 +5590,58 @@ describe("OpenCodeNativeAdapter", () => {
       { toolCallId: "call-read", state: "approval-requested", approval: { id: "per_2" } },
     ]);
     expect(rows[0]).not.toHaveProperty("approval");
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("keeps every gate when a permission sweep answers 2xx in a shape it cannot read", async () => {
+    const hold = new Deferred<void>();
+    const network = gatedTurn([askedFor("call-write")], hold);
+    network.messageResponse = {
+      info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+      parts: [toolPart("write", "call-write", { status: "running", input: { path: "src/a.ts" } })],
+    };
+    const originalRequest = network.request.bind(network);
+    network.request = async (input) =>
+      input.path.startsWith("/permission")
+        ? {
+            // A 200 carrying the open set keyed by permission id rather than as
+            // a list: every field the adapter reads is present, in a shape it
+            // has no rule for.
+            status: 200,
+            body: {
+              per_1: {
+                sessionID: "native-session-1",
+                id: "per_1",
+                title: "Allow write",
+                tool: { messageID: "provider-assistant", callID: "call-write" },
+              },
+            },
+          }
+        : originalRequest(input);
+    const adapter = createOpenCodeNativeAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(toolRows(observations).at(-1)).toMatchObject({
+      toolCallId: "call-write",
+      state: "approval-requested",
+      approval: { id: "per_1" },
+    });
+
+    const rows = toolRows((await handle.reconcile(null)).observations);
+
+    // Pruning asks which held gates the sweep did *not* list, so a body nobody
+    // could read as a list answers "none of them" — and forgetting every gate
+    // at once silently ungates every gated row. Only a status says the endpoint
+    // answered; the body is what says what it answered with.
+    expect(rows).toMatchObject([
+      { toolCallId: "call-write", state: "approval-requested", approval: { id: "per_1" } },
+    ]);
     hold.resolve(undefined);
     await handle.release("requested");
   });

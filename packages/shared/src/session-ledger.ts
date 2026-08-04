@@ -861,8 +861,26 @@ export function projectSession(
           pendingExecutorStarts.delete(event.payload.receipt.commandId);
         }
         break;
-      default:
+      // Facts this projection deliberately holds no state for. They are listed
+      // rather than swept up by a `default`, so that adding a payload kind is a
+      // compile error here and someone has to decide whether Session state
+      // moves. `session.created` is the Session row itself, already the seed of
+      // this fold; runs, turns and transcript references are the transcript's
+      // shape, read from the event stream directly; `adapter.observed` is
+      // adapter evidence that no projected field is derived from.
+      case "session.created":
+      case "run.started":
+      case "run.completed":
+      case "turn.started":
+      case "turn.completed":
+      case "transcript.referenced":
+      case "adapter.observed":
         break;
+      /* v8 ignore next 4 -- unreachable while the union is exhausted above; it exists to stop being so at compile time. */
+      default: {
+        const unhandled: never = event.payload;
+        return unhandled;
+      }
     }
   }
 
@@ -933,8 +951,19 @@ function sameSessionCommandIntent(
   return left.kind === right.kind && stableSessionValue(left) === stableSessionValue(right);
 }
 
-/** A storage transaction for the event ledger, intentionally free of SQL-shaped operations. */
+/**
+ * A storage transaction for the event ledger, intentionally free of SQL-shaped
+ * operations.
+ *
+ * Sessions, events, commands and receipts are all insert-only here, and that is
+ * a contract rather than an omission: there is no verb that updates or removes
+ * any of them. Everything about a Session that changes changes by an event, and
+ * `projectSession` is what applies them — which is what lets a reader hold a
+ * base Session row, or a fold of a prefix of the log, and know it stays true.
+ * Adding a verb that rewrites a row breaks every such reader.
+ */
 export interface SessionLedgerTransaction {
+  /** The stored row as inserted. Only its events change what a Session shows. */
   getSession(sessionId: string): Session | null;
   /** Returns immutable base Sessions ordered by creation time descending, then id descending. */
   listSessions(query: ListSessionsQuery): readonly Session[];

@@ -829,15 +829,22 @@ class DefaultSessionRuntime implements SessionRuntime {
    * The attachment may be closed by now, and this is the one Session fact that
    * still lands when it is. Nothing can be delivered to a closed binding — but
    * nothing needs to be, because the point of the fact is that nothing was.
+   *
+   * Cancelling an interaction that is no longer open is a no-op, not a fault.
+   * Unlike a command this carries no idempotency key, so a repeat is
+   * indistinguishable from a first attempt and there is no receipt to replay —
+   * which leaves the state it asked for as the only thing to answer against.
+   * Two Stop clicks, or a click racing the harness's own answer, both arrive
+   * here with the ask already gone, and both got what they wanted: the
+   * interaction has stopped waiting. Failing the second would put a Session in
+   * `lifecycle:"error"` over an outcome that already holds.
    */
   async #cancelInteraction(request: CancelInteractionRequest): Promise<void> {
     const projection = await this.#requireSession(request.sessionId);
     const interaction = projection.interactions.active.find(
       ({ id }) => id === request.interactionId,
     );
-    if (!interaction) {
-      throw new SessionRuntimeNotFoundError(`Interaction ${request.interactionId} is not open`);
-    }
+    if (!interaction) return;
     const location = await this.ports.locations.resolve(projection.session);
     const event = await this.ports.engine.observe({
       id: this.#id("event"),
@@ -1601,13 +1608,26 @@ class DefaultSessionRuntime implements SessionRuntime {
    * top, so `projection` is never a partial fold and `projectSession` is never
    * asked to resume from one.
    *
-   * That makes the invalidation rule the ledger's own contract: a Session's
-   * events are append-only and sequence-ordered (`SessionLedgerTransaction`
-   * offers `appendEvent` and no way to rewrite or remove one), so nothing below
+   * That makes the invalidation rule the ledger's own contract, and the fold
+   * has exactly two durable inputs, each covered by one clause of it:
+   *
+   * The events are append-only and sequence-ordered — `SessionLedgerTransaction`
+   * offers `appendEvent` and no way to rewrite or remove one — so nothing below
    * the cursor can change under a live entry, and everything above it is read
-   * every time — including facts appended by another writer. History rewritten
-   * out of band, beneath that contract, would not be seen; `close()` drops
-   * every entry, and a runtime that outlives such a rewrite must be rebuilt.
+   * every time, including facts appended by another writer.
+   *
+   * The base Session the fold starts from is insert-only: the same interface
+   * offers `insertSession` and no verb that updates or removes a row, so the
+   * copy an entry holds cannot go stale and a Session that was found once
+   * cannot later be missing. That is why the cached path re-reads events and
+   * not the row, and it is the whole of the invariant — every field of a
+   * Session that does change (its title) changes by an event, and this fold is
+   * what applies them. Weakening `SessionLedgerTransaction` to allow a Session
+   * row to be written twice would have to re-verify here.
+   *
+   * History rewritten out of band, beneath that contract, would not be seen;
+   * `close()` drops every entry, and a runtime that outlives such a rewrite
+   * must be rebuilt.
    *
    * Two concurrent reads may both fold and the slower one may install the older
    * result. That entry is still exactly the fold of the events it holds — only
@@ -1617,10 +1637,13 @@ class DefaultSessionRuntime implements SessionRuntime {
     const now = this.ports.clock.now();
     const cached = this.#histories.get(sessionId);
     if (!cached) {
-      const known = await this.ports.engine.getSession({ sessionId });
+      // The base row, not `getSession`'s projection: that would fold the whole
+      // log to produce a value whose only used field is the row, and then be
+      // thrown away for the fold below.
+      const known = await this.ports.engine.getBaseSession({ sessionId });
       if (!known) throw new SessionRuntimeNotFoundError(`Session ${sessionId} was not found`);
       const events = await this.#listEventsPaged({ sessionId });
-      return this.#keepHistory(sessionId, foldHistory(known.session, events, now));
+      return this.#keepHistory(sessionId, foldHistory(known, events, now));
     }
     const appended = await this.#listEventsPaged({
       sessionId,

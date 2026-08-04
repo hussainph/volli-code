@@ -35,10 +35,20 @@ interface FakeSender {
 
 function runtimeFixture(): {
   runtime: SessionRuntime;
-  calls: { snapshot: string[]; subscribe: number[] };
+  calls: {
+    snapshot: string[];
+    projection: string[];
+    subscribe: number[];
+    cancelled: { sessionId: string; interactionId: string; reason: string }[];
+  };
   emit(nextFrame: SessionStreamFrame): void;
 } {
-  const calls = { snapshot: [] as string[], subscribe: [] as number[] };
+  const calls = {
+    snapshot: [] as string[],
+    projection: [] as string[],
+    subscribe: [] as number[],
+    cancelled: [] as { sessionId: string; interactionId: string; reason: string }[],
+  };
   let listener: ((frame: SessionStreamFrame) => void) | null = null;
   return {
     runtime: {
@@ -52,7 +62,10 @@ function runtimeFixture(): {
           transcript: [],
         } as never;
       },
-      projection: async () => ({ projection: { capabilities: [] }, throughSequence: 0 }) as never,
+      projection: async ({ sessionId }) => {
+        calls.projection.push(sessionId);
+        return { projection: { capabilities: [] }, throughSequence: 4 } as never;
+      },
       subscribe: async ({ afterSequence }, next) => {
         calls.subscribe.push(afterSequence);
         listener = (nextFrame) => void next(nextFrame);
@@ -60,7 +73,10 @@ function runtimeFixture(): {
           listener = null;
         };
       },
-      cancelInteraction: async () => undefined,
+      cancelInteraction: async (request) => {
+        calls.cancelled.push(request);
+        return undefined;
+      },
       refreshCapabilities: async () => ({}) as never,
       reconcile: async () => undefined,
       close: async () => undefined,
@@ -142,6 +158,35 @@ describe("registerSessionRpcIpcHandlers", () => {
         }),
       ]),
     );
+    await registration.close();
+  });
+
+  // Electron IPC is the only transport production has, so a router procedure the
+  // allow-list omits is dead there — and reads to the renderer as a caller bug
+  // (`BAD_REQUEST`) rather than as a missing route.
+  it("reaches every Session procedure the router publishes", async () => {
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+
+    await expect(
+      invoke(sender(), { procedure: "session.projection", input: { sessionId: "session-1" } }),
+    ).resolves.toEqual({
+      ok: true,
+      data: { projection: { capabilities: [] }, throughSequence: 4 },
+    });
+    await expect(
+      invoke(sender(), {
+        procedure: "session.cancelInteraction",
+        input: { sessionId: "session-1", interactionId: "question-1" },
+      }),
+    ).resolves.toEqual({ ok: true, data: undefined });
+
+    expect(fixture.calls.projection).toEqual(["session-1"]);
+    // The reason is the router's to state, not the renderer's: this transport
+    // is the user seam, and abandonment is all it can honestly report.
+    expect(fixture.calls.cancelled).toEqual([
+      { sessionId: "session-1", interactionId: "question-1", reason: "abandoned" },
+    ]);
     await registration.close();
   });
 

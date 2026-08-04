@@ -424,13 +424,20 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
         { id: "interaction.permission", state: "available", evidence: "declared", detail: null },
         { id: "interaction.question", state: "available", evidence: "declared", detail: null },
         // Stated because it is knowable, not because it is missing. OpenCode
-        // holds an ask in a map keyed by request id and takes it out on reply
-        // or reject — both of which are decisions — or when the server itself
-        // goes away. `/session/{id}/abort` stops the turn and leaves the map
-        // alone, and no event announces an ask that ended any other way. So a
-        // reader who walks away from a question leaves OpenCode holding it, and
-        // the only wire verbs that would release it would name a choice they
-        // never made. Volli declines to invent one; this says so.
+        // holds an ask in a map keyed by request id, and every wire verb that
+        // takes it out — reply, reject — names a decision. There is no verb for
+        // "there will not be one", so answering a walked-away ask to clear it
+        // would print a choice nobody made. Volli declines to invent one.
+        //
+        // An ask can still end undecided, just never because we asked it to:
+        // `Question.ask` and `Permission.ask` both wrap their wait in Effect's
+        // `ensuring(await(deferred), sync(() => pending.delete(id)))`, and
+        // `ensuring` runs its finalizer on any exit including interruption. So
+        // `POST /session/{id}/abort` — `SessionPrompt.cancel` to
+        // `SessionRunState.cancel` to a fiber interrupt — does drop pending
+        // asks, silently: the finalizer publishes no `replied` and no
+        // `rejected`. That is a state Volli learns by sweeping, never by being
+        // told, and it is not a withdraw verb: the capability stays negative.
         {
           id: "interaction.withdraw",
           state: "unavailable",
@@ -735,11 +742,19 @@ class OpenCodeBinding implements BindingHandle {
     // permission answered elsewhere would keep its row gated, and its entry
     // kept, for the rest of the binding's life. The sweep is the authoritative
     // open set, so a sweep that answered is also what says which gates are gone.
-    // A build without the endpoint answers 404 and states nothing; forgetting
-    // every gate on that answer is the one thing reconciling must not do.
-    if (Math.floor(permissionResponse.status / 100) === 2) {
+    //
+    // Only a body actually read as a list says that, and the status alone does
+    // not establish one: a build without the endpoint answers 404, and a build
+    // that answers 2xx in some shape this cannot read — an object keyed by
+    // permission id, an envelope under another name — is just as silent about
+    // which permissions are open. Pruning on either would ungate every gated
+    // row at once, which is the one thing reconciling must not do, so an
+    // unreadable answer prunes nothing, exactly as a failed read does.
+    const openPermissions =
+      Math.floor(permissionResponse.status / 100) === 2 ? listBody(permissionResponse.body) : null;
+    if (openPermissions) {
       const open = new Set(
-        arrayBody(permissionResponse.body).flatMap((candidate) => {
+        openPermissions.flatMap((candidate) => {
           const id = requestId(candidate);
           return id ? [id] : [];
         }),
@@ -748,6 +763,35 @@ class OpenCodeBinding implements BindingHandle {
         if (!open.has(permissionId)) this.#pendingApprovals.delete(permissionId);
       }
       this.#approvalIndex = null;
+    }
+    // The same sweep, for the same reason, on the ask that has no gate.
+    //
+    // A question's prompts are dropped by the reply that reads them, which
+    // covers every ask that ends in a decision. An ask killed by an abort ends
+    // in none: `Question.ask` deletes its entry in an `ensuring` finalizer that
+    // runs on interruption and publishes nothing, so no `replied` and no
+    // `rejected` ever arrive and that entry is held for the rest of the
+    // binding's life. `GET /question` is the only thing that ever says so —
+    // it lists pending requests across all sessions, so anything held here and
+    // absent there is gone whoever ended it. An unreadable answer prunes
+    // nothing, exactly as above: `[]` would mean "all of them are gone".
+    //
+    // Unlike a permission, nothing is re-projected: a dropped ask ended
+    // undecided, and the adapter has no way to say that which is not a verdict
+    // OpenCode never reported. The Session keeps the open card until a user
+    // cancels it, and this only stops the prompts behind it from accumulating.
+    const openQuestions =
+      Math.floor(questionResponse.status / 100) === 2 ? listBody(questionResponse.body) : null;
+    if (openQuestions) {
+      const open = new Set(
+        openQuestions.flatMap((candidate) => {
+          const id = requestId(candidate);
+          return id ? [id] : [];
+        }),
+      );
+      for (const questionId of this.#questions.keys()) {
+        if (!open.has(questionId)) this.#questions.delete(questionId);
+      }
     }
     // Project permissions before messages — they are what tells a hydrated tool
     // row it is gated — but keep them behind messages in the emitted batch, so
@@ -1586,6 +1630,13 @@ class OpenCodeBinding implements BindingHandle {
         },
       };
     }
+    // The prompts a question asked are kept only so its answer can be read back
+    // against them, and this is where that happens for the last time. Nothing
+    // else drops an entry, and a Session that runs for hours asks a lot of
+    // questions — every neighbouring cache here is bounded, by a cap or by the
+    // fact that closes it, and this one was bounded by neither.
+    const asked = this.#questions.get(nativeId);
+    this.#questions.delete(nativeId);
     if (event.type === "question.rejected") {
       return {
         id: event.id,
@@ -1596,10 +1647,7 @@ class OpenCodeBinding implements BindingHandle {
         resolution: { optionIds: ["reject"], response: null },
       };
     }
-    const answers = questionReplyAnswers(
-      this.#questions.get(nativeId) ?? questions(event.properties),
-      event.properties,
-    );
+    const answers = questionReplyAnswers(asked ?? questions(event.properties), event.properties);
     return {
       id: event.id,
       kind: "interaction.resolved",
@@ -1748,10 +1796,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function arrayBody(value: unknown): readonly unknown[] {
+/**
+ * A body read as a list of entries, or null when it is not one.
+ *
+ * The distinction matters to exactly one caller. Projecting asks "what is in
+ * this body", and an unrecognized shape holds nothing to project, so `[]` is
+ * the honest answer there. Pruning asks the opposite question — "which of the
+ * things I hold are *not* in this body" — and for that `[]` means "none of
+ * them", which is the strongest possible claim to make about a body nobody
+ * could read.
+ */
+function listBody(value: unknown): readonly unknown[] | null {
   if (Array.isArray(value)) return value;
   if (isRecord(value) && Array.isArray(value.items)) return value.items;
-  return [];
+  return null;
+}
+
+function arrayBody(value: unknown): readonly unknown[] {
+  return listBody(value) ?? [];
 }
 
 function messageRole(raw: unknown): "system" | "user" | "assistant" {
@@ -1811,9 +1873,22 @@ interface OpenCodeQuestionOption {
  * UI option ids encode the question index and raw option value, so a selected
  * flat set round-trips exactly to OpenCode's `answers: string[][]` payload.
  *
- * `multiple` and `custom` are optional on `QuestionInfo`, and a server that
- * states neither is asking for one answer out of the options it listed. Both
- * therefore default to false: an unstated permission to do more is not one.
+ * `multiple` and `custom` are both optional on `QuestionInfo`, and they default
+ * in opposite directions, because OpenCode says so and they are not ours to
+ * reason about symmetrically.
+ *
+ * `custom` defaults to TRUE. Its schema annotation is literally "Allow typing a
+ * custom answer (default: true)", the tool description tells the model that
+ * "when `custom` is enabled (default), a 'Type your own answer' option is added
+ * automatically", and OpenCode's own built-in questions write `custom: false`
+ * explicitly when they want it off. Reading omission as false hides the free
+ * text box and makes `questionAnswers` drop an answer the harness would have
+ * accepted — a typed reply that silently becomes no reply at all.
+ *
+ * `multiple` defaults to false. It carries no documented default, its
+ * annotation says only "Allow selecting multiple choices", and OpenCode's own
+ * client reads an omitted value as false. There the unstated permission to do
+ * more really is not one.
  */
 function questions(raw: unknown): readonly OpenCodeQuestion[] {
   const values = isRecord(raw) && Array.isArray(raw.questions) ? raw.questions : [];
@@ -1833,7 +1908,7 @@ function questions(raw: unknown): readonly OpenCodeQuestion[] {
       label,
       detail: prose === label ? null : prose,
       multiple: objectBoolean(question, "multiple") ?? false,
-      custom: objectBoolean(question, "custom") ?? false,
+      custom: objectBoolean(question, "custom") ?? true,
     };
   });
 }
