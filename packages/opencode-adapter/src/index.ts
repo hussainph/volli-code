@@ -133,6 +133,13 @@ export interface OpenCodeAdapterOptions {
    * PATH; the default reads this process's own.
    */
   resolveCommand?: (command: string) => Promise<string>;
+  /**
+   * Environment for the `opencode serve` child, resolved fresh at each server
+   * start — never cached across spawns — so a live host hook (e.g. desktop's
+   * login-shell PATH) stays live across restarts. The adapter's own
+   * `OPENCODE_SERVER_*` vars always win on key collision.
+   */
+  resolveEnv?: () => Promise<Record<string, string>> | Record<string, string>;
   process?: OpenCodeProcessPort;
   network?: OpenCodeNetworkPort;
   now?: () => number;
@@ -173,6 +180,7 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
   readonly #network: OpenCodeNetworkPort;
   readonly #command: string;
   readonly #resolveCommand: (command: string) => Promise<string>;
+  readonly #resolveEnv: () => Promise<Record<string, string>> | Record<string, string>;
   readonly #now: () => number;
   readonly #sleep: (milliseconds: number) => Promise<void>;
   readonly #healthRetryAttempts: number;
@@ -190,6 +198,7 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
     this.#network = options.network ?? createFetchNetworkPort();
     this.#command = options.command ?? "opencode";
     this.#resolveCommand = options.resolveCommand ?? defaultResolveCommand;
+    this.#resolveEnv = options.resolveEnv ?? (() => ({}));
     this.#now = options.now ?? Date.now;
     this.#sleep = options.sleep ?? defaultSleep;
     // A cold OpenCode process routinely needs longer than a few hundred
@@ -336,6 +345,7 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
 
   async #startServer(): Promise<ServerLease> {
     const binary = await this.#verifiedBinaryForLaunch();
+    const hostEnv = await this.#resolveEnv();
     const port = await this.#process.allocatePort();
     const password = this.#process.randomSecret();
     const child = await this.#process.spawn({
@@ -343,6 +353,7 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
       // `--no-mdns` and omitted `--cors` keep discovery and browser origins disabled.
       args: ["serve", "--hostname", "127.0.0.1", "--port", String(port), "--no-mdns"],
       env: {
+        ...hostEnv,
         OPENCODE_SERVER_PASSWORD: password,
         // The client authenticates with this explicit principal; do not inherit
         // an ambient OPENCODE_SERVER_USERNAME from the parent process.

@@ -465,6 +465,79 @@ describe("OpenCodeNativeAdapter", () => {
     expect(process.spawns[0]?.path).toBe("/login-shell/bin/opencode");
   });
 
+  it("spawns the server with an unchanged environment when no host hook is supplied", async () => {
+    const { adapter, process } = composition();
+
+    await adapter.attach(spec(), { emit: async () => undefined });
+
+    expect(process.spawns[0]?.env).toEqual({
+      OPENCODE_SERVER_PASSWORD: "never-persist-this",
+      OPENCODE_SERVER_USERNAME: "opencode",
+    });
+  });
+
+  it("merges the host's resolved environment beneath its own OPENCODE_SERVER_* vars", async () => {
+    const process = new FakeProcess();
+    const calls: number[] = [];
+    const adapter = createAdapter({
+      process,
+      network: new FakeNetwork(),
+      resolveEnv: () => {
+        calls.push(1);
+        return {
+          PATH: "/login-shell/bin",
+          OPENCODE_SERVER_USERNAME: "hijacked",
+        };
+      },
+    });
+
+    await adapter.attach(spec(), { emit: async () => undefined });
+
+    expect(calls).toHaveLength(1);
+    expect(process.spawns[0]?.env).toEqual({
+      PATH: "/login-shell/bin",
+      OPENCODE_SERVER_PASSWORD: "never-persist-this",
+      OPENCODE_SERVER_USERNAME: "opencode",
+    });
+  });
+
+  it("fails the server start when the host's environment hook rejects", async () => {
+    const process = new FakeProcess();
+    const adapter = createAdapter({
+      process,
+      network: new FakeNetwork(),
+      resolveEnv: () => Promise.reject(new Error("login shell timed out")),
+    });
+
+    await expect(adapter.attach(spec(), { emit: async () => undefined })).rejects.toThrow(
+      "login shell timed out",
+    );
+    expect(process.spawns).toHaveLength(0);
+  });
+
+  it("re-invokes the host's environment hook on every server respawn", async () => {
+    const process = new FakeProcess();
+    let calls = 0;
+    const adapter = createAdapter({
+      process,
+      network: new FakeNetwork(),
+      resolveEnv: () => {
+        calls += 1;
+        return { LIVE_HOOK_CALLS: String(calls) };
+      },
+    });
+
+    await adapter.attach(spec(), { emit: async () => undefined });
+    process.exited.resolve(0);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await adapter.attach(spec(), { emit: async () => undefined });
+
+    expect(calls).toBe(2);
+    expect(process.spawns).toHaveLength(2);
+    expect(process.spawns[0]?.env).toMatchObject({ LIVE_HOOK_CALLS: "1" });
+    expect(process.spawns[1]?.env).toMatchObject({ LIVE_HOOK_CALLS: "2" });
+  });
+
   it("routes every binding call through its immutable directory and keeps Basic credentials private", async () => {
     const { adapter, network, process } = composition();
     const probe = await adapter.probe(
