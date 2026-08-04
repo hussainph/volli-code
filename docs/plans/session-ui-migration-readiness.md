@@ -46,7 +46,7 @@ Ranked by whether the surface can function at all, then by whether the failure i
 
 **This bug already ships.** `RuntimeCatalogSettings` renders nothing in the live app today for the same reason (`runtime-catalog-settings.tsx:36`, mounted at `settings-page.tsx:192`). It is a present-tense defect, not only a migration blocker.
 
-**A2. The coverage assertion structurally cannot catch A1.** `SessionRouterProcedure` (`main/session-rpc-ipc.ts:15-18`) is typed `` session.${...} `` only, so `runtimeCatalog.*` and `labDiagnostics.*` are invisible to `SessionRpcIpcCoverage` at `:51-53`. The guard that exists to make an unlisted procedure a compile error has a blind spot exactly where the blocker lives. Widen it before adding routes, or the next router will go missing the same way.
+**A2. ~~The coverage assertion structurally cannot catch A1.~~ Landed.** `SessionRouterProcedure` was typed `` session.${...} `` only, so `runtimeCatalog.*` and `labDiagnostics.*` were invisible to `SessionRpcIpcCoverage` — the guard that makes an unlisted procedure a compile error had a blind spot exactly where the blocker lives. It now maps every namespace the router publishes, and each one is spoken for: routed, `DeliberatelyMainOnlyProcedure` (labDiagnostics, which stays on the dev HTTP bridge), or `UnroutedProcedure`. `runtimeCatalog.*` sits in the last bucket, so A1 is now a named compile-time fact rather than an absence. Routing it empties that type; delete the bucket when it does.
 
 **A3. No preload bridge and no IPC transport link.** The controller is written against `httpSubscriptionLink` (`lab/session-rpc-client.ts:31`). It needs an equivalent link over `SESSION_RPC_IPC_CHANNEL`.
 
@@ -80,7 +80,7 @@ Both of these pass every gate we have. That is what makes them the dangerous one
 
 **D2. De-labbing the controller is smaller than it looks.** Three lab imports (`session-controller.ts:17-19`), a hardcoded `"LAB-14 · OpenCode chat prototype"` title (`:448-451`), a scenario branch (`:459`), and the `labDiagnostics` effect (`:223-230`). Hardcoded identity has exactly **one** renderer consumer (`:448-449`) — it is two props, not a rewrite.
 
-**D3. One true silent swallow.** `activity-ui.tsx:507` — `void navigator.clipboard.writeText(...)`. A denied clipboard permission fails with zero feedback. Lab-exempt today; not after.
+**D3. ~~One true silent swallow.~~ Landed.** `activity-ui.tsx` ran a bare `void navigator.clipboard.writeText(...)`, and that call rejects on denied permission, an insecure context, or an unfocused document — so failure looked exactly like success. The button now carries its own verdict for `COPY_FEEDBACK_MS` and returns to offering. A control that owes an answer, not a toast.
 
 **D4. Bundle weight, A/B measured.** Chunks 156 → 557; raw 22.18 → 37.04 MiB; **gzip 4.70 → 7.70 MiB (+64%)**; eager boot chunk **+192 KiB gzip**. Dominant terms: **mermaid** (89 lazy chunks, 3.29 MiB, via `@streamdown/mermaid`) and a **second full Shiki grammar and theme set** — 82 chunk names now exist in two copies, including grammars the app deliberately curated *out* at `renderer/src/editor/shiki-langs.ts:13`. Streamdown's plugins are opt-in.
 
@@ -126,10 +126,12 @@ Struck from `opencode-surface-audit.md` as part of this audit, having been verif
 
 Still true and left standing: `ai-elements/code-block.tsx` has no consumer, and `#emitStreamSnapshot` records nothing when it fails.
 
-Stale claims in source comments, recorded rather than edited (this branch is audit-only):
+- **`packages/shared/src/session.ts` claimed `SessionRecord` backs "the `sessions` table, migration 003".** False since 018, which reduced the row to identity alone. The docblock now says what fills the rest of the fields — `terminalSessionRecord` — and records the B4 trap at the place someone would read it before adding a field.
 
-- `lab/lab.css:5-12` asserts the lab tree is unscanned by the production Tailwind build. The built stylesheet contradicts it — lab-only utilities (`max-h-[32vh]`, `w-[34rem]`, `caret-foreground`) are all present in shipped CSS, because the scan base is the Vite root.
-- `packages/shared/src/session.ts:1-9` still claims `SessionRecord` backs "the `sessions` table, migration 003". False since migration 018. `createSessionRecord` (`:151`) has zero production callers.
+Two claims that did **not** survive checking, recorded so they are not re-filed as fixes:
+
+- **`lab/lab.css:5-12` is not stale.** It asserts the shipped stylesheet never grows a utility only a scratch asked for, and the audit initially read that as contradicted by the build. Re-measured against `dist/assets/index-DjqajpAI.css`, the evidence is mixed rather than contrary: `max-h-[32vh]`, `w-[34rem]` and `max-w-[22rem]` are all **absent**, while `caret-foreground` and `opacity-35` are present. Two lab-only arbitrary values missing and two named utilities present does not establish a bleed, and it is not enough to rewrite a comment over. C1 does not depend on this either way — the ai-elements gap is consistent across five utilities. If it matters later, settle it by scan base rather than by sampling class names.
+- **`createSessionRecord` does not have zero callers.** `apps/desktop/src/main/db/test-helpers.ts:127` builds the shared `SessionRecord` fixture through it, and that helper is used across the db tests. It has no *production* caller, which is a different and much less actionable statement — removing it is a test-fixture refactor, not a dead-code deletion.
 
 ## Decisions
 
