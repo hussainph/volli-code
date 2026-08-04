@@ -477,7 +477,13 @@ export function registerDataIpcHandlers(
         projectId: input.projectId,
         scope: "all",
       });
-      return { ok: true, sessions: sessions.map(terminalSessionRecord) };
+      return {
+        ok: true,
+        // This is the legacy terminal-record endpoint, so a structured-only
+        // Session drops out here (`terminalSessionRecord` returns null for it)
+        // until the renderer can consume a discriminated Session listing.
+        sessions: sessions.flatMap((session) => terminalSessionRecord(session) ?? []),
+      };
     },
 
     "volli:session-list-for-ticket": async (input: TicketIdInput): Promise<SessionsResult> => {
@@ -488,7 +494,10 @@ export function registerDataIpcHandlers(
         scope: "ticket",
         ticketId: input.ticketId,
       });
-      return { ok: true, sessions: sessions.map(terminalSessionRecord) };
+      return {
+        ok: true,
+        sessions: sessions.flatMap((session) => terminalSessionRecord(session) ?? []),
+      };
     },
 
     "volli:session-rename": async (input: SessionRenameInput): Promise<SessionRenameResult> => {

@@ -73,6 +73,7 @@ import type { RefusedWrapper } from "./harness-runtime";
 import { ensureShellInit } from "./shell-init";
 import { startAgentSocket, type AgentSocketServer } from "./agent-socket";
 import { loginShellPath } from "./login-path";
+import { resolveOpenCodeBinary } from "./opencode-binary";
 import {
   detectHarnesses,
   installHarnessSkills,
@@ -393,7 +394,15 @@ app.whenReady().then(async () => {
   // Native Session RPC shares the same durable Session Engine as terminal and
   // planner paths. The OpenCode process stays dormant until a caller explicitly
   // attaches its native profile; registering the transport never launches it.
-  const nativeAdapter = dbHandle.ok ? createOpenCodeNativeAdapter() : null;
+  const nativeAdapter = dbHandle.ok
+    ? createOpenCodeNativeAdapter({
+        // Resolve only when a native Session attaches. Finder launches do not
+        // inherit the user's toolchain PATH, and doing this at boot could make
+        // every launch wait on an interactive shell for an adapter it never
+        // uses.
+        resolveCommand: resolveOpenCodeBinary,
+      })
+    : null;
   const sessionRuntime =
     dbHandle.ok && sessionEngine !== null && nativeAdapter !== null
       ? createDesktopSessionRuntime({

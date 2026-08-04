@@ -750,11 +750,12 @@ export class PtyManager {
         void this.closeTerminalAttachment(sessionEngine, sessionId, session, exitCode);
       });
       const projection = await sessionEngine.getSession({ sessionId });
-      if (projection === null) {
+      const record = projection === null ? null : terminalSessionRecord(projection);
+      if (record === null) {
         pty.kill();
         return { ok: false, error: "Session was not found after terminal attachment opened" };
       }
-      return { ok: true, sessionId, session: terminalSessionRecord(projection) };
+      return { ok: true, sessionId, session: record };
     } catch (error) {
       await recordAttachmentFailure(error, scope.cwd);
       return { ok: false, error: errorMessage(error) };

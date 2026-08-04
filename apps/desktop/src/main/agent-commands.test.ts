@@ -1246,6 +1246,64 @@ describe("agent command service", () => {
     expect(sessions).toMatchObject({ ok: true, data: { sessions: [{ harness: "claude-code" }] } });
   });
 
+  // The renderer's listings learned this in PR 169; the CLI socket reads the
+  // same projections through its own snapshot and did not.
+  it("omits a structured-only Session from the CLI session snapshot", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+    insertSession(
+      ctx.db,
+      testSession("project-one", null, { id: sessionId, title: "Terminal", createdAt: 900 }),
+    );
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 900 });
+    const structured = await sessionEngine.createSession({
+      commandId: "structured-create",
+      projectId: "project-one",
+      ticketId: null,
+      title: "Structured OpenCode Session",
+      provenance: {
+        source: { kind: "user", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 1_000,
+      sessionEngine,
+    });
+
+    const sessions = await service.execute({
+      v: 1,
+      cmd: "session.list",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+    // `identify` and `session peek` address that same snapshot, so a Session
+    // absent from it must be unaddressable rather than half-resolved.
+    const identify = await service.execute({
+      v: 1,
+      cmd: "identify",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: { session: structured.session.id } },
+    });
+
+    expect(sessions).toMatchObject({
+      ok: true,
+      data: { sessions: [{ id: "abcdef12", title: "Terminal" }] },
+    });
+    expect(identify).toMatchObject({ ok: false, error: { code: "SESSION_NOT_FOUND" } });
+  });
+
   it("refuses session.list when an explicit --project contradicts the --ticket", async () => {
     ctx = openTestDb();
     insertProject(

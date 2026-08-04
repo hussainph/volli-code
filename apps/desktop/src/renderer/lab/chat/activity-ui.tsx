@@ -492,22 +492,64 @@ function RowObject({ row, onOpenFile }: { row: ActivityRow; onOpenFile?(path: st
   );
 }
 
+/** How long the copy button holds its verdict before going back to offering. */
+const COPY_FEEDBACK_MS = 1200;
+
+type ClipboardWriter = Pick<Clipboard, "writeText">;
+
+/**
+ * The browser boundary for copying an activity object.
+ *
+ * Clipboard access can reject for ordinary runtime conditions (permission,
+ * focus, or insecure context). Return the result the control must show rather
+ * than leaving its caller to guess whether a rejected promise was success.
+ */
+export async function copyActivityObject(
+  value: string,
+  clipboard: ClipboardWriter | undefined = navigator.clipboard,
+): Promise<"copied" | "failed"> {
+  try {
+    if (!clipboard) return "failed";
+    await clipboard.writeText(value);
+    return "copied";
+  } catch {
+    return "failed";
+  }
+}
+
 /** Revealed on hover or keyboard focus, never occupying resting space. */
 function RowActions({ row }: { row: ActivityRow }) {
+  // The clipboard write can be refused — denied permission, an insecure
+  // context, a document that does not have focus — and it refuses by rejecting,
+  // so a bare `void` leaves a button that did nothing looking exactly like a
+  // button that worked. This is not a mutation worth a toast; it is a control
+  // that owes an answer, so it gives one on itself and then forgets it. The
+  // row keeps focus after the click, which is what holds the answer on screen
+  // once the pointer has moved on.
+  const [copyState, setCopyState] = React.useState<"idle" | "copied" | "failed">("idle");
+  React.useEffect(() => {
+    if (copyState === "idle") return;
+    const timer = window.setTimeout(() => setCopyState("idle"), COPY_FEEDBACK_MS);
+    return () => window.clearTimeout(timer);
+  }, [copyState]);
   if (!row.object) return <span className="ml-auto" />;
+  const CopyStateIcon =
+    copyState === "copied" ? CheckCircleIcon : copyState === "failed" ? XCircleIcon : CopyIcon;
   return (
     <span className="ml-auto flex shrink-0 items-center opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100">
       <Button
         type="button"
         variant="ghost"
         size="icon-xs"
-        aria-label="Copy"
+        aria-label={
+          copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy"
+        }
         onClick={(event) => {
           event.stopPropagation();
-          void navigator.clipboard.writeText(row.object ?? "");
+          void copyActivityObject(row.object ?? "").then(setCopyState);
         }}
       >
-        <CopyIcon className="size-3" />
+        <CopyStateIcon className={cn("size-3", copyState === "failed" && "text-destructive")} />
       </Button>
     </span>
   );

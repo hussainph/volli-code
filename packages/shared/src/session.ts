@@ -1,12 +1,31 @@
 /**
- * A durable session record (`sessions` table, migration 003): the trace and
- * resume seed for a terminal session, distinct from its live in-memory PTY
- * state (`TerminalEngine`/renderer `stores/sessions.ts`). `ticketId: null`
- * means a project-scoped scratch session (CONTEXT.md's "Scratch session") —
- * main checkout, no worktree, no board involvement, still recorded here.
+ * The terminal-shaped view of a Session: the trace and resume seed for a
+ * terminal, distinct from its live in-memory PTY state
+ * (`TerminalEngine`/renderer `stores/sessions.ts`). `ticketId: null` means a
+ * project-scoped scratch session (CONTEXT.md's "Scratch session") — main
+ * checkout, no worktree, no board involvement, still recorded.
  * `harnessSessionId` is reserved for the harness's own resume UUID
  * (claude/codex `--resume` seed) — filled in later by hooks/the volli CLI,
  * starts `null`.
+ *
+ * This stopped being a table row at migration 018. Versions 003–017 stored a
+ * Session *as* a terminal, so this shape and the `sessions` row were the same
+ * thing; 018 reduced the row to identity alone (id, project, ticket, title,
+ * createdAt) and made a terminal one attachment among possible others. What
+ * fills the rest of these fields now is `terminalSessionRecord`, which calls
+ * itself a temporary IPC/UI compatibility projection and means it.
+ *
+ * The consequence is load-bearing and easy to miss: every field below is a
+ * terminal harness/process fact, so a Session with no terminal attachment — a
+ * structured (chat) Session — has no honest record here at all. It used to get
+ * a fabricated one, defaulting `harnessId` to `"claude-code"`, `launchKind` to
+ * `"unknown"` and `endedAt` to `null`, and so read out of every listing as a
+ * never-ending claude-code terminal (see
+ * `docs/plans/session-ui-migration-readiness.md`, blocker B4). The projection
+ * now returns `null` in that case, which is why callers of it deal in
+ * `SessionRecord | null` and terminal listings are shorter than Session
+ * listings. Do not add a field to this interface expecting the ledger to carry
+ * it; add it to the attachment the projection reads.
  */
 
 import { declaresInputNeeded, expectsHarnessEvents } from "./harness/types";

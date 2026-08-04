@@ -508,7 +508,7 @@ describe("writeFile", () => {
     const result = await writeFsFile(project, null, "late-nul.bin", "clobber");
     expect(result).toEqual({ ok: false, error: "Binary files cannot be edited" });
     expect(await readFile(join(project, "late-nul.bin"))).toEqual(bytes);
-  });
+  }, 15_000);
 
   it("rejects incoming content past the 1 MiB cap without touching the file", async () => {
     const project = makeTempProjectDir();

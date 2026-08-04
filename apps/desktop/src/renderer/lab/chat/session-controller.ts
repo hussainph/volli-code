@@ -173,6 +173,77 @@ export interface LabSessionController {
   recover(): Promise<boolean>;
 }
 
+/** The observable result of creating one durable Session and attaching its first executor. */
+export interface LabSessionStartResult {
+  sessionId: string;
+  lifecycle: "ready" | "error";
+  error: string | null;
+}
+
+/**
+ * Starts a Lab Session through the same RPC boundary the controller uses.
+ *
+ * The Session is durable the moment `session.create` resolves, and the attach
+ * that follows can fail two different ways: a refusal, which is a completed
+ * round-trip carrying a rejected receipt, and a transport failure, which is an
+ * exception. Neither un-creates the Session, so both leave here as the same
+ * result and both carry the id — a thrown attach used to take it with it, which
+ * left a Session in the ledger that no surface could name. Only the `create`
+ * itself throws out of this function: there is no id yet to lose.
+ */
+export async function startLabSession(
+  rpc: Pick<SessionRpcClient, "session">,
+  scenarioId: string | null,
+): Promise<LabSessionStartResult> {
+  const created = await rpc.session.command.mutate({
+    commandId: nextId(),
+    command: {
+      kind: "session.create",
+      projectId: LAB_SESSION_PROJECT_ID,
+      ticketId: LAB_SESSION_TICKET_ID,
+      title: "LAB-14 · OpenCode chat prototype",
+    },
+  });
+  return attachLabExecutor(rpc, created.sessionId, scenarioId);
+}
+
+/**
+ * One attachment attempt on a durable Session that already exists.
+ *
+ * Split out of {@link startLabSession} because a failed attach does not
+ * un-create the Session, so trying again must not create one either: the retry
+ * addresses the id it was given and records another attempt on that Session's
+ * own history. The engine referees the case this surface cannot see — a
+ * Session that already has a live executor answers with a refusal, never a
+ * second binding.
+ */
+export async function attachLabExecutor(
+  rpc: Pick<SessionRpcClient, "session">,
+  sessionId: string,
+  scenarioId: string | null,
+): Promise<LabSessionStartResult> {
+  try {
+    const attached = await rpc.session.command.mutate({
+      commandId: nextId(),
+      sessionId,
+      command: {
+        kind: "adapter.attach",
+        adapterId: scenarioId ? LAB_SCENARIO_ADAPTER_ID : "opencode",
+        // A scenario is a harness profile of the scripted adapter, so the
+        // pick rides the attach the runtime already validates.
+        profileId: scenarioId ?? "native",
+        continuity: "fresh",
+      },
+    });
+    const refusal = rejectedReceipt(attached);
+    return refusal === null
+      ? { sessionId, lifecycle: "ready", error: null }
+      : { sessionId, lifecycle: "error", error: startFailure(refusal) };
+  } catch (failure) {
+    return { sessionId, lifecycle: "error", error: startFailure(errorMessage(failure)) };
+  }
+}
+
 /**
  * Drives one lab Session.
  *
@@ -198,6 +269,10 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
   const [selection, setSelection] = React.useState<RuntimeSelection>(EMPTY_SELECTION);
   const [catalog, setCatalog] = React.useState<RuntimeCatalogChoices>(EMPTY_CATALOG);
   const [catalogState, setCatalogState] = React.useState<CatalogState>("loading");
+  // Bumped to run the connect effect again for the same Session id. A retry on
+  // a Session whose snapshot failed has nothing else to change: the id is
+  // right, the stream is what never opened.
+  const [connectEpoch, setConnectEpoch] = React.useState(0);
 
   React.useEffect(() => {
     const rpc = createSessionRpcClient();
@@ -326,7 +401,7 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
       pendingFrames.clear();
       subscription?.unsubscribe();
     };
-  }, [sessionId]);
+  }, [connectEpoch, sessionId]);
 
   const frames = transcript.frames;
   const messages = transcript.messages;
@@ -441,33 +516,14 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
     setProjection(null);
     setTranscript(EMPTY_TRANSCRIPT);
     try {
-      const created = await rpc.session.command.mutate({
-        commandId: nextId(),
-        command: {
-          kind: "session.create",
-          projectId: LAB_SESSION_PROJECT_ID,
-          ticketId: LAB_SESSION_TICKET_ID,
-          title: "LAB-14 · OpenCode chat prototype",
-        },
-      });
-      setSessionId(created.sessionId);
-      await rpc.session.command.mutate({
-        commandId: nextId(),
-        sessionId: created.sessionId,
-        command: {
-          kind: "adapter.attach",
-          adapterId: scenarioId ? LAB_SCENARIO_ADAPTER_ID : "opencode",
-          // A scenario is a harness profile of the scripted adapter, so the
-          // pick rides the attach the runtime already validates.
-          profileId: scenarioId ?? "native",
-          continuity: "fresh",
-        },
-      });
-      setLifecycle("ready");
-      return true;
+      const started = await startLabSession(rpc, scenarioId);
+      setSessionId(started.sessionId);
+      setLifecycle(started.lifecycle);
+      setError(started.error);
+      return started.lifecycle === "ready";
     } catch (failure) {
       setLifecycle("error");
-      setError(`Could not start OpenCode: ${errorMessage(failure)}`);
+      setError(startFailure(errorMessage(failure)));
       return false;
     }
   }, [lifecycle, scenarioId]);
@@ -614,18 +670,44 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
   );
 
   /**
+   * Another attachment attempt on the Session this surface already has.
+   *
+   * `start()` is not a retry: it mints a durable Session, so reaching for it
+   * after a failed attach filed a new ledger row per press of Retry and walked
+   * away from the history the first Session already holds. The id is fine —
+   * only the executor is missing — so the retry addresses the id, and reopens
+   * the stream alongside: a snapshot that failed to load left this surface
+   * blind to the very projection that says whether an executor is live, and
+   * the engine's refusal of a second binding is only useful next to a
+   * projection that can name the first.
+   */
+  const retryAttach = React.useCallback(async (): Promise<boolean> => {
+    const rpc = client.current;
+    if (!rpc || !sessionId || lifecycle === "starting") return false;
+    setLifecycle("starting");
+    setError(null);
+    setConnectEpoch((epoch) => epoch + 1);
+    const attached = await attachLabExecutor(rpc, sessionId, scenarioId);
+    setLifecycle(attached.lifecycle);
+    setError(attached.error);
+    return attached.lifecycle === "ready";
+  }, [lifecycle, scenarioId, sessionId]);
+
+  /**
    * One button, and which one is not the user's problem to work out.
    *
-   * A dropped stream and a Session that never started need opposite answers:
-   * reconciling a Session that does not exist does nothing, and starting a new
-   * one to recover a live stream throws away the transcript. The controller is
-   * the only place that knows which happened, so it decides here rather than
-   * offering two buttons and making the reader diagnose their own transport.
+   * A dropped stream, a failed attach and a Session that never got created
+   * need three different answers: reconciling recovers a live attachment,
+   * re-attaching serves a durable Session that has none, and starting over is
+   * only for the case where there is no Session to serve — anywhere else it
+   * duplicates one. The controller is the only place that knows which
+   * happened, so it decides here rather than offering three buttons and
+   * making the reader diagnose their own transport.
    */
-  const recover = React.useCallback(
-    () => (liveAttachmentId ? reconcile() : start()),
-    [liveAttachmentId, reconcile, start],
-  );
+  const recover = React.useCallback(() => {
+    if (liveAttachmentId) return reconcile();
+    return sessionId ? retryAttach() : start();
+  }, [liveAttachmentId, reconcile, retryAttach, sessionId, start]);
 
   // Opening a Session starts it. There was a button here, and it asked a person
   // who had just opened a chat to confirm that they wanted a chat — the answer
@@ -768,6 +850,17 @@ function nextId(): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The one sentence a failed start says, wherever in the start it failed.
+ *
+ * A refusal, a dropped attach and a `session.create` that never answered are
+ * three different faults with one recovery, and the surface renders one error
+ * row for all of them. Written once so they cannot drift into three phrasings.
+ */
+function startFailure(detail: string): string {
+  return `Could not start OpenCode: ${detail}`;
 }
 
 /**

@@ -837,6 +837,44 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
     expect(result.ok && result.sessions.map((s) => s.id)).toEqual(["scoped"]);
   });
 
+  it("omits a structured-only Session instead of fabricating a terminal record", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    insertSession(ctx.db, testSession(projectId, ticket.id, { id: "terminal-session" }));
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const structured = await sessionEngine.createSession({
+      commandId: "structured-create",
+      projectId,
+      ticketId: ticket.id,
+      title: "Structured OpenCode Session",
+      provenance: {
+        source: { kind: "user", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
+
+    const projectSessions = await invoke<Promise<SessionsResult>>("volli:session-list", {
+      projectId,
+    });
+    const ticketSessions = await invoke<Promise<SessionsResult>>("volli:session-list-for-ticket", {
+      ticketId: ticket.id,
+    });
+
+    expect(projectSessions.ok && projectSessions.sessions.map((session) => session.id)).toEqual([
+      "terminal-session",
+    ]);
+    expect(ticketSessions.ok && ticketSessions.sessions.map((session) => session.id)).toEqual([
+      "terminal-session",
+    ]);
+    expect(
+      projectSessions.ok &&
+        projectSessions.sessions.some((session) => session.id === structured.session.id),
+    ).toBe(false);
+  });
+
   it("rejects invalid input", () => {
     expect(invoke<SessionsResult>("volli:session-list", 42)).toEqual({
       ok: false,

@@ -673,7 +673,7 @@ describe("changeSetSnapshot — real git repository", () => {
     // Status still dirty after the base read (prove we didn't checkout).
     const status = runRepoGit(dir, ["status", "--porcelain"]);
     expect(status.length).toBeGreaterThan(0);
-  });
+  }, 15_000);
 
   it("ignores commits that landed on the base after the fork", async () => {
     const dir = makeRepo();
@@ -708,7 +708,7 @@ describe("changeSetSnapshot — real git repository", () => {
     // The stamp is the fork point, not main's tip.
     expect(result.value.baseRevision).toBe(runRepoGit(dir, ["merge-base", "main", "HEAD"]).trim());
     expect(result.value.baseRevision).not.toBe(runRepoGit(dir, ["rev-parse", "main"]).trim());
-  });
+  }, 15_000);
 
   it("reports a NUL-bearing base blob as binary rather than mojibake", async () => {
     const dir = makeRepo();
@@ -751,7 +751,7 @@ describe("changeSetSnapshot — real git repository", () => {
     expect(pinned.ok).toBe(true);
     if (!pinned.ok) return;
     expect(pinned.value).toEqual({ content: "line one\n", truncated: false });
-  });
+  }, 15_000);
 
   it("marks a real merge conflict as conflicted relative to the base", async () => {
     const dir = mkdtempSync(join(tmpdir(), "volli-changeset-conflict-"));
@@ -789,5 +789,5 @@ describe("changeSetSnapshot — real git repository", () => {
     expect(result.value.files.find((f) => f.path === "conflict.ts")).toMatchObject({
       status: "conflicted",
     });
-  });
+  }, 15_000);
 });

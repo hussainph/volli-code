@@ -915,7 +915,9 @@ export function createAgentCommandService(
                   sessionEngine.listSessions({ projectId: project.id, scope: "all" }),
                 ),
               )
-            ).flatMap((projections) => projections.map(terminalSessionRecord));
+            ).flatMap((projections) =>
+              projections.flatMap((projection) => terminalSessionRecord(projection) ?? []),
+            );
       if (request.cmd === "identify") {
         const sessionId = request.ctx.env.session;
         if (sessionId) {

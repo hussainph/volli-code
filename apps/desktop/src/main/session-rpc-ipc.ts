@@ -11,11 +11,27 @@ export const SESSION_RPC_EVENT_CHANNEL = "volli:session-rpc-event";
 /** Ends one subscription previously started through {@link SESSION_RPC_IPC_CHANNEL}. */
 export const SESSION_RPC_CANCEL_CHANNEL = "volli:session-rpc-cancel";
 
-/** Every procedure the shared router publishes under `session.`. */
-type SessionRouterProcedure = `session.${keyof ReturnType<
-  typeof createSessionRouter
->["_def"]["procedures"]["session"] &
-  string}`;
+/**
+ * Every procedure the shared router publishes, across every namespace.
+ *
+ * This read `session.${...}` alone, and that was the hole. The check below
+ * subtracts the allow-list from this union, so a namespace the union cannot
+ * name is a namespace the check cannot miss: `runtimeCatalog.*` and
+ * `labDiagnostics.*` were never absent from the guard, they were invisible to
+ * it. Which is how the app came to have no production route to the runtime
+ * catalog at all — no model list, so no model id, so no message can be sent —
+ * with a compile-time assertion sitting directly above the gap reporting
+ * success. A guard scoped to one namespace only guards one namespace, and it
+ * still reads like it guards the router.
+ *
+ * Widened, every namespace has to be spoken for below: routed, deliberately
+ * withheld, or declared missing.
+ */
+type RouterProcedures = ReturnType<typeof createSessionRouter>["_def"]["procedures"];
+type SessionRouterProcedure = {
+  [Namespace in keyof RouterProcedures &
+    string]: `${Namespace}.${keyof RouterProcedures[Namespace] & string}`;
+}[keyof RouterProcedures & string];
 
 /**
  * Procedures intentionally exposed over Electron IPC. Lab diagnostics stay on
@@ -35,21 +51,63 @@ export const SESSION_RPC_IPC_PROCEDURES = [
 export type SessionRpcIpcProcedure = (typeof SESSION_RPC_IPC_PROCEDURES)[number];
 
 /**
- * Adding a `session.*` procedure to the router without listing it above fails
- * here.
+ * Pins an exemption to a procedure the router actually publishes.
+ *
+ * The allow-list above is pinned by `satisfies`; the two exemptions below were
+ * free string unions, which is the same hole one step further in. A procedure
+ * that is renamed or deleted leaves its exemption behind, the subtraction still
+ * cancels, and the check reports success while excusing a procedure that does
+ * not exist — so the next procedure to inherit that name is exempt on arrival,
+ * silently. Naming an exemption is only a decision written down if the name has
+ * to be real.
+ */
+type PublishedProcedure<Procedure extends SessionRouterProcedure> = Procedure;
+
+/**
+ * Development-only, and staying that way. The lab bridge serves these over
+ * HTTP; a production client has no debug pane to feed and no business reading
+ * a diagnostic log over the same channel it runs Sessions on.
+ */
+type DeliberatelyMainOnlyProcedure = PublishedProcedure<
+  "labDiagnostics.list" | "labDiagnostics.subscribe"
+>;
+
+/**
+ * Routes production needs and does not have yet.
+ *
+ * These are not withheld. The chat surface cannot pick a model without them,
+ * and `RuntimeCatalogSettings` already renders nothing in the shipped app for
+ * exactly this reason — so this bucket is a known defect written where the
+ * check can see it, not a decision. It is named rather than omitted because
+ * omission is what hid the gap in the first place.
+ *
+ * Routing them is Workstream 1 of `docs/plans/session-ui-migration-readiness.md`
+ * (blocker A1). Doing that empties this type, and emptying it is the point:
+ * once the last member moves to the allow-list, delete the bucket rather than
+ * leave a name for a problem that no longer exists.
+ */
+type UnroutedProcedure = PublishedProcedure<
+  "runtimeCatalog.inspect" | "runtimeCatalog.save" | "runtimeCatalog.resolve"
+>;
+
+/**
+ * Adding a procedure to the router — in any namespace — without accounting for
+ * it above fails here.
  *
  * The allow-list is what `isRequest` accepts, so an unlisted procedure exists
  * in the router and is rejected `BAD_REQUEST` on the only transport production
  * has — a failure that looks like a caller bug and is reported as one.
  * `callProcedure`'s `never` catches the opposite direction (a listed procedure
  * the switch forgot), and neither direction was checked before. A procedure
- * that genuinely should not cross IPC is declared below rather than omitted, so
- * the decision is written down where the check can see it.
+ * that should not cross IPC, or does not yet, is declared above rather than
+ * omitted, so the decision is written down where the check can see it.
  */
-type DeliberatelyMainOnlyProcedure = never;
 type AssertNever<T extends never> = T;
 export type SessionRpcIpcCoverage = AssertNever<
-  Exclude<SessionRouterProcedure, SessionRpcIpcProcedure | DeliberatelyMainOnlyProcedure>
+  Exclude<
+    SessionRouterProcedure,
+    SessionRpcIpcProcedure | DeliberatelyMainOnlyProcedure | UnroutedProcedure
+  >
 >;
 
 export type SessionRpcIpcRequest = {
@@ -59,11 +117,22 @@ export type SessionRpcIpcRequest = {
   };
 }[SessionRpcIpcProcedure];
 
-export interface SessionRpcIpcEvent {
-  subscriptionId: string;
-  eventId: string;
-  data: unknown;
-}
+export type SessionRpcIpcEvent =
+  | {
+      kind: "data";
+      subscriptionId: string;
+      eventId: string;
+      data: unknown;
+    }
+  | {
+      kind: "done";
+      subscriptionId: string;
+    }
+  | {
+      kind: "error";
+      subscriptionId: string;
+      error: { code: string; message: string };
+    };
 
 export type SessionRpcIpcResponse =
   | { ok: true; data: unknown }
@@ -164,25 +233,56 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
     try {
       while (!subscription.abort.signal.aborted && !subscription.owner.isDestroyed()) {
         const next = await subscription.iterator.next();
-        if (next.done) break;
+        if (next.done) {
+          sendTerminalEvent(subscription, { kind: "done", subscriptionId });
+          break;
+        }
         const [eventId, data] = next.value;
         if (subscription.owner.isDestroyed()) break;
         subscription.owner.send(SESSION_RPC_EVENT_CHANNEL, {
+          kind: "data",
           subscriptionId,
           eventId,
           data,
         } satisfies SessionRpcIpcEvent);
       }
     } catch (error) {
+      const terminalError = subscriptionError(error);
       diagnostics.record({
         procedure: "session.subscribe",
         phase: "error",
         transport: "electron-ipc",
-        code: "INTERNAL_SERVER_ERROR",
-        message: error instanceof Error ? error.message : "Session subscription failed",
+        ...terminalError,
+      });
+      sendTerminalEvent(subscription, {
+        kind: "error",
+        subscriptionId,
+        error: terminalError,
       });
     } finally {
       await stop(subscriptionId);
+    }
+  }
+
+  function sendTerminalEvent(
+    subscription: ActiveSubscription,
+    event: Exclude<SessionRpcIpcEvent, { kind: "data" }>,
+  ): void {
+    // Cancellation removes the active entry before it aborts the iterator. The
+    // iterator then normally resolves `done`; that is local teardown, not a
+    // connection state the renderer needs to recover from.
+    if (
+      active.get(event.subscriptionId) !== subscription ||
+      subscription.abort.signal.aborted ||
+      subscription.owner.isDestroyed()
+    ) {
+      return;
+    }
+    try {
+      subscription.owner.send(SESSION_RPC_EVENT_CHANNEL, event);
+    } catch {
+      // The renderer is already unable to receive its terminal state. The
+      // original subscription error remains in the main-process diagnostics.
     }
   }
 
@@ -231,11 +331,17 @@ function invalidRequest(): SessionRpcIpcResponse {
 }
 
 function failure(error: unknown): SessionRpcIpcResponse {
-  const code =
-    isRecord(error) && typeof error.code === "string" ? error.code : "INTERNAL_SERVER_ERROR";
-  const message =
-    error instanceof Error ? sanitizeDiagnosticText(error.message) : "Session RPC request failed";
-  return { ok: false, error: { code, message } };
+  return { ok: false, error: subscriptionError(error, "Session RPC request failed") };
+}
+
+function subscriptionError(
+  error: unknown,
+  fallback = "Session subscription failed",
+): { code: string; message: string } {
+  return {
+    code: isRecord(error) && typeof error.code === "string" ? error.code : "INTERNAL_SERVER_ERROR",
+    message: error instanceof Error ? sanitizeDiagnosticText(error.message) : fallback,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

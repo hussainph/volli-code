@@ -11,7 +11,6 @@ import {
 import { cn } from "@renderer/lib/utils";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
-import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import type { UIMessage } from "ai";
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
@@ -275,9 +274,11 @@ export const MessageBranchPage = ({ className, ...props }: MessageBranchPageProp
   );
 };
 
-export type MessageResponseProps = ComponentProps<typeof Streamdown>;
+// `plugins` is not a prop here: the fixed set below is the decision to ship
+// code and Mermaid without math, and a caller-supplied map would override it.
+export type MessageResponseProps = Omit<ComponentProps<typeof Streamdown>, "plugins">;
 
-const streamdownPlugins = { cjk, code, math, mermaid };
+const streamdownPlugins = { cjk, code, mermaid };
 // Streamdown uses a React transition for streaming updates unless an animation
 // plugin is present. Keep updates synchronous, while avoiding a second visual
 // typewriter delay on top of the provider's token stream.
@@ -291,11 +292,11 @@ export const MessageResponse = memo(
     ...props
   }: MessageResponseProps) => (
     <Streamdown
+      {...props}
       className={cn("size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", className)}
       animated={animated}
       plugins={streamdownPlugins}
       components={{ ...chatMarkdownComponents, ...components }}
-      {...props}
     />
   ),
   (prevProps, nextProps) =>

@@ -1,6 +1,7 @@
 import type { Canvas, Project, Ticket } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
+import { flushPendingAppState } from "@renderer/lib/app-state-storage";
 import { useBoardStore } from "./board";
 import {
   PROJECTS_UI_APP_STATE_KEY,
@@ -44,6 +45,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  flushPendingAppState();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });

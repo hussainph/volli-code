@@ -64,10 +64,23 @@ export function readTerminalAttachmentDetail(
 /**
  * Temporary IPC/UI compatibility projection. The ledger is its only input;
  * this deliberately does not read a second terminal-owned database record.
+ *
+ * `null` when the Session has no terminal attachment, because then no honest
+ * `SessionRecord` exists: that DTO is terminal harness/process facts, and a
+ * structured (chat) Session has none. Fabricating one handed every caller a
+ * never-ending `claude-code` terminal with an empty cwd — see
+ * `@volli/shared`'s `SessionRecord`. The rule lives here, with the attachments
+ * it is about, rather than as a predicate each listing has to remember: the
+ * renderer's two listings remembered it and the CLI socket's did not.
  */
-export function terminalSessionRecord(projection: SessionProjection): SessionRecord {
+export function terminalSessionRecord(projection: SessionProjection): SessionRecord | null {
   const attachment = latestTerminalAttachment(projection.attachments);
-  const detail = attachment ? readTerminalAttachmentDetail(attachment.native) : null;
+  if (attachment === null) return null;
+  // A terminal attachment whose native detail is unreadable (absent, or written
+  // by a shape this build no longer parses) is still honestly a terminal. The
+  // defaults below cover only that narrower case, which is what `unknown`
+  // launch/placement metadata has always meant.
+  const detail = readTerminalAttachmentDetail(attachment.native);
   return {
     id: projection.session.id,
     projectId: projection.session.projectId,
@@ -80,7 +93,7 @@ export function terminalSessionRecord(projection: SessionProjection): SessionRec
     title: projection.session.title ?? "Session",
     cwd: detail?.cwd ?? "",
     createdAt: projection.session.createdAt,
-    endedAt: attachment?.status === "open" ? null : (attachment?.closedAt ?? null),
+    endedAt: attachment.status === "open" ? null : attachment.closedAt,
     exitCode: detail?.exitCode ?? null,
   };
 }

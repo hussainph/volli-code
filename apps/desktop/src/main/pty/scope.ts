@@ -127,6 +127,9 @@ export async function resolveScope(
       const priorProjection = await sessionEngine.getSession({ sessionId: resume.sessionId });
       if (priorProjection === null) return { ok: false, error: "Cannot resume an unknown session" };
       const prior = terminalSessionRecord(priorProjection);
+      // A structured-only Session has no terminal record to resume from. It
+      // used to reach the same refusal through a fabricated `launchKind`.
+      if (prior === null) return { ok: false, error: "Only an agent session can be resumed" };
       if (prior.ticketId !== request.ticket.ticketId) {
         return { ok: false, error: "Cannot resume a session that belongs to another ticket" };
       }
