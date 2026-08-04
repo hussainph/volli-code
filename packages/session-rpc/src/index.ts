@@ -300,7 +300,7 @@ export function createSessionRouter() {
       inspect: instrumentedProcedure
         .input(
           z.object({
-            projectId: z.string().optional(),
+            projectId: nonEmptyString.optional(),
             adapterId: nonEmptyString,
             providerId: nonEmptyString.optional(),
             query: z.string().max(200).optional(),
@@ -317,7 +317,7 @@ export function createSessionRouter() {
       save: instrumentedProcedure
         .input(
           z.object({
-            projectId: z.string().optional(),
+            projectId: nonEmptyString.optional(),
             adapterId: nonEmptyString,
             preferences: runtimePreferencesSchema,
           }),
