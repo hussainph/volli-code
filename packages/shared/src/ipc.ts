@@ -15,6 +15,7 @@ import type { Label } from "./label";
 import type { LegacyProject } from "./legacy-import";
 import type { Project } from "./project-identity";
 import type { HarnessEventOrder, SessionRecord } from "./session";
+import type { SessionRpcIpcRequest, SessionRpcIpcResponse } from "./session-rpc-wire";
 import type {
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
@@ -763,7 +764,19 @@ export interface VolliSystemIpcContract {
 }
 
 /**
- * The 2 send-based channels (`ipcRenderer.send`, not `invoke`) — declared
+ * The native Session tRPC edge (`src/main/session-rpc-ipc.ts`): ONE invoke
+ * channel carrying every routed procedure, because the router — not this
+ * contract — is where a Session procedure's input and output are declared.
+ * The wire shapes live in `session-rpc-wire.ts`; the renderer's terminating
+ * tRPC link is the only thing that should ever speak them directly.
+ */
+export interface VolliSessionRpcIpcContract {
+  /** Runs one routed procedure; `session.subscribe` acknowledges with a subscription id instead. */
+  "volli:session-rpc": { args: [request: SessionRpcIpcRequest]; result: SessionRpcIpcResponse };
+}
+
+/**
+ * The 3 send-based channels (`ipcRenderer.send`, not `invoke`) — declared
  * separately from {@link VolliInvokeContract} because they have no result to
  * await.
  */
@@ -775,6 +788,10 @@ export interface VolliSendContract {
   // ⇄ session nav, needs no reply, and round-tripping an invoke per flip would
   // add latency to navigation for nothing.
   "volli:terminal-set-visible": { args: [sessionId: string, visible: boolean] };
+  // Send-based (ipcRenderer.send, not invoke): main answers a cancellation by
+  // stopping the frames, which the renderer is already listening for — an ack
+  // would only be a second way to learn the same thing, later.
+  "volli:session-rpc-cancel": { args: [subscriptionId: string] };
 }
 
 /** Every invoke channel with a contract entry — the full catalog. */
@@ -784,6 +801,7 @@ export interface VolliInvokeContract
     VolliFileIpcContract,
     VolliHarnessIpcContract,
     VolliThemeIpcContract,
+    VolliSessionRpcIpcContract,
     VolliSystemIpcContract {}
 
 export type IpcArgs<C extends keyof VolliInvokeContract> = VolliInvokeContract[C]["args"];
@@ -848,7 +866,11 @@ export type VolliIpcEvent =
   // A different harness is now running in one session's terminal, announced by
   // its own launch wrapper. The other involuntary channel, and the one that
   // reaches the tiers hooks cannot — see {@link SessionHarnessNotice}.
-  | "volli:session-harness";
+  | "volli:session-harness"
+  // Ordered frames for one live Session RPC subscription — see
+  // {@link SessionRpcIpcEvent}. Every subscription shares this channel and is
+  // told apart by the id main acknowledged the request with.
+  | "volli:session-rpc-event";
 
 /** Direction of a `volli:ui-zoom-command` event: step in/out one rung, or reset. */
 export type UiZoomCommand = "in" | "out" | "reset";

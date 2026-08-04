@@ -3,13 +3,18 @@ import { ipcMain } from "electron";
 import type { WebContents } from "electron";
 import { createSessionRouter, RpcDiagnosticLog, sanitizeDiagnosticText } from "@volli/session-rpc";
 import type { RuntimeCatalog, SessionRuntime } from "@volli/session-engine";
-
-/** The single request/reply channel for the native Session tRPC edge. */
-export const SESSION_RPC_IPC_CHANNEL = "volli:session-rpc";
-/** Main-to-renderer frames for a Session RPC subscription. */
-export const SESSION_RPC_EVENT_CHANNEL = "volli:session-rpc-event";
-/** Ends one subscription previously started through {@link SESSION_RPC_IPC_CHANNEL}. */
-export const SESSION_RPC_CANCEL_CHANNEL = "volli:session-rpc-cancel";
+import {
+  SESSION_RPC_CANCEL_CHANNEL,
+  SESSION_RPC_EVENT_CHANNEL,
+  SESSION_RPC_IPC_CHANNEL,
+  SESSION_RPC_IPC_PROCEDURES,
+} from "@volli/shared";
+import type {
+  SessionRpcIpcEvent,
+  SessionRpcIpcProcedure,
+  SessionRpcIpcRequest,
+  SessionRpcIpcResponse,
+} from "@volli/shared";
 
 /**
  * Every procedure the shared router publishes, across every namespace.
@@ -34,24 +39,16 @@ type SessionRouterProcedure = {
 }[keyof RouterProcedures & string];
 
 /**
- * Procedures intentionally exposed over Electron IPC. Lab diagnostics stay on
- * the development-only HTTP surface; production clients only receive Session
- * data and stream frames.
+ * Pins the shared allow-list to procedures the router actually publishes.
+ *
+ * The list itself is a plain literal in `@volli/shared` because the renderer's
+ * tRPC link needs the same names and cannot reach into `src/main`; that package
+ * cannot import the router (a dependency cycle), so this is the one place the
+ * two can be compared. Everything below — and the coverage check — reads the
+ * shared array through this binding, so an entry the router does not publish
+ * fails here rather than at the first call.
  */
-export const SESSION_RPC_IPC_PROCEDURES = [
-  "session.snapshot",
-  "session.projection",
-  "session.subscribe",
-  "session.command",
-  "session.cancelInteraction",
-  "session.refreshCapabilities",
-  "session.reconcile",
-  "runtimeCatalog.inspect",
-  "runtimeCatalog.save",
-  "runtimeCatalog.resolve",
-] as const satisfies readonly SessionRouterProcedure[];
-
-export type SessionRpcIpcProcedure = (typeof SESSION_RPC_IPC_PROCEDURES)[number];
+const ROUTED_PROCEDURES = SESSION_RPC_IPC_PROCEDURES satisfies readonly SessionRouterProcedure[];
 
 /**
  * Pins an exemption to a procedure the router actually publishes.
@@ -91,35 +88,6 @@ type AssertNever<T extends never> = T;
 export type SessionRpcIpcCoverage = AssertNever<
   Exclude<SessionRouterProcedure, SessionRpcIpcProcedure | DeliberatelyMainOnlyProcedure>
 >;
-
-export type SessionRpcIpcRequest = {
-  [Procedure in SessionRpcIpcProcedure]: {
-    procedure: Procedure;
-    input: unknown;
-  };
-}[SessionRpcIpcProcedure];
-
-export type SessionRpcIpcEvent =
-  | {
-      kind: "data";
-      subscriptionId: string;
-      eventId: string;
-      data: unknown;
-    }
-  | {
-      kind: "done";
-      subscriptionId: string;
-    }
-  | {
-      kind: "error";
-      subscriptionId: string;
-      error: { code: string; message: string };
-    };
-
-export type SessionRpcIpcResponse =
-  | { ok: true; data: unknown }
-  | { ok: true; subscriptionId: string }
-  | { ok: false; error: { code: string; message: string } };
 
 export interface RegisterSessionRpcIpcOptions {
   runtime: SessionRuntime;
@@ -317,7 +285,7 @@ function isRequest(value: unknown): value is SessionRpcIpcRequest {
   if (!isRecord(value) || !("procedure" in value) || !("input" in value)) return false;
   return (
     typeof value.procedure === "string" &&
-    (SESSION_RPC_IPC_PROCEDURES as readonly string[]).includes(value.procedure)
+    (ROUTED_PROCEDURES as readonly string[]).includes(value.procedure)
   );
 }
 

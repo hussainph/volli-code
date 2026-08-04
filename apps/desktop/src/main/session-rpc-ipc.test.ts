@@ -48,12 +48,13 @@ vi.mock("@volli/session-rpc", async (importOriginal) => {
 });
 
 import {
-  registerSessionRpcIpcHandlers,
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
   SESSION_RPC_IPC_CHANNEL,
   type SessionRpcIpcResponse,
-} from "./session-rpc-ipc";
+} from "@volli/shared";
+
+import { registerSessionRpcIpcHandlers } from "./session-rpc-ipc";
 
 interface FakeSender {
   readonly id: number;
