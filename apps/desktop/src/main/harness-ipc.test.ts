@@ -101,6 +101,7 @@ function setup(
     regenerateRuntime?: () => Promise<void>;
     launchableHarnesses?: readonly HarnessAdapter[];
     now?: number;
+    invalidateNativeBinary?: (harnessId: string) => void;
   } = {},
 ): void {
   regenerateRuntime = vi.fn(options.regenerateRuntime ?? (() => Promise.resolve()));
@@ -114,6 +115,9 @@ function setup(
       regenerateRuntime,
       launchableHarnesses: () => options.launchableHarnesses ?? [],
       now: () => options.now ?? 1000,
+      ...(options.invalidateNativeBinary
+        ? { invalidateNativeBinary: options.invalidateNativeBinary }
+        : {}),
     },
   );
 }
@@ -658,6 +662,38 @@ describe("volli:harness-command-get / volli:harness-command-set", () => {
     await setCommand("opencode", process.execPath);
 
     expect(getCommand("claude-code")).toEqual({ ok: true, command: null });
+  });
+
+  it("invalidates a live native adapter's cached binary after storing a new override", async () => {
+    const invalidated: string[] = [];
+    setup({ invalidateNativeBinary: (harnessId) => invalidated.push(harnessId) });
+
+    await setCommand("opencode", process.execPath);
+
+    expect(invalidated).toEqual(["opencode"]);
+  });
+
+  it("invalidates a live native adapter's cached binary after clearing an override", async () => {
+    const invalidated: string[] = [];
+    setup({ invalidateNativeBinary: (harnessId) => invalidated.push(harnessId) });
+    await setCommand("opencode", process.execPath);
+    invalidated.length = 0;
+
+    await setCommand("opencode", null);
+
+    expect(invalidated).toEqual(["opencode"]);
+  });
+
+  it("does not invalidate anything when a candidate fails validation", async () => {
+    setup({
+      invalidateNativeBinary: () => {
+        throw new Error("must not be called");
+      },
+    });
+    const notExecutable = join(root, "not-executable");
+    await writeFile(notExecutable, "#!/bin/sh\n");
+
+    await expect(setCommand("opencode", notExecutable)).resolves.toMatchObject({ ok: false });
   });
 });
 

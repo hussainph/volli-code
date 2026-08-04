@@ -2,9 +2,6 @@ import { constants } from "node:fs";
 import { access, realpath } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 
-import { errorMessage } from "@volli/shared";
-import type { HarnessCommandFailureReason } from "@volli/shared";
-
 import { resolveOnPath } from "./agent-tools";
 import { loginShellPath } from "./login-path";
 
@@ -24,7 +21,8 @@ export async function isExecutable(path: string): Promise<boolean> {
   }
 }
 
-const processDeps: OpenCodeBinaryResolverDeps = {
+/** The default, non-test dependencies — the real filesystem and the user's login shell. */
+export const processDeps: OpenCodeBinaryResolverDeps = {
   loginShellPath,
   resolveOnPath,
   isExecutable,
@@ -40,10 +38,10 @@ function isPath(command: string): boolean {
  * One candidate located on disk, or why the search for one refused to
  * produce one — the shared outcome of both search strategies below, so a
  * caller can turn it into a thrown `Error` (`resolveOpenCodeBinary`) or a
- * typed result ({@link validateHarnessBinary}) without either strategy
- * needing to know which.
+ * typed result (`validateHarnessBinary` in `harness-binary.ts`) without
+ * either strategy needing to know which.
  */
-type BinaryLocation =
+export type BinaryLocation =
   | { ok: true; path: string }
   | { ok: false; reason: "not-executable" }
   | { ok: false; reason: "path-unreadable" | "not-on-path" };
@@ -71,8 +69,12 @@ async function resolvedOnLoginShellPath(
     : { ok: true, path: binaryPath };
 }
 
-/** The one search a candidate binary goes through, however it will be reported. */
-async function locateBinary(
+/**
+ * The one search a candidate binary goes through, however it will be
+ * reported — shared by `resolveOpenCodeBinary` below and
+ * `validateHarnessBinary` in `harness-binary.ts`.
+ */
+export async function locateBinary(
   command: string,
   deps: OpenCodeBinaryResolverDeps,
 ): Promise<BinaryLocation> {
@@ -109,42 +111,4 @@ export async function resolveOpenCodeBinary(
   // a symlink here would reintroduce a swap window between fingerprinting and
   // launch.
   return deps.realpath(located.path);
-}
-
-/** Outcome of {@link validateHarnessBinary}. */
-export type HarnessBinaryValidation =
-  | { ok: true; resolvedPath: string }
-  | { ok: false; reason: HarnessCommandFailureReason; error: string };
-
-/**
- * Validates an arbitrary harness binary override candidate the same way
- * {@link resolveOpenCodeBinary} treats OpenCode's — the same search
- * ({@link locateBinary}), reused rather than re-walked, reported as a typed
- * result instead of a throw so a settings write can surface exactly why a
- * candidate was refused. The winning candidate is canonicalized with
- * `realpath` before being accepted, same as the launch path: a symlink swap
- * between validation and use must not slip through here either.
- */
-export async function validateHarnessBinary(
-  command: string,
-  deps: OpenCodeBinaryResolverDeps = processDeps,
-): Promise<HarnessBinaryValidation> {
-  const located = await locateBinary(command, deps);
-  if (!located.ok) {
-    return located.reason === "not-executable"
-      ? { ok: false, reason: "not-executable", error: `${command} is not an executable file` }
-      : {
-          ok: false,
-          reason: "not-found",
-          error:
-            located.reason === "path-unreadable"
-              ? `Could not read the login-shell PATH to find ${command}`
-              : `${command} was not found on the login-shell PATH`,
-        };
-  }
-  try {
-    return { ok: true, resolvedPath: await deps.realpath(located.path) };
-  } catch (error) {
-    return { ok: false, reason: "not-resolvable", error: errorMessage(error) };
-  }
 }

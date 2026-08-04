@@ -277,6 +277,20 @@ export class OpenCodeNativeAdapter implements NativeHarnessAdapter {
     return this.#closing;
   }
 
+  /**
+   * Drops the cached verified binary, so the NEXT resolution re-runs
+   * {@link #resolveCommand} and re-fingerprints instead of reusing what an
+   * earlier probe verified. Call this after a stored override changes —
+   * otherwise the change applies only on the next relaunch.
+   *
+   * Leaves an already-running server alone: a live lease keeps the binary it
+   * was spawned with until it exits on its own, same as a mid-launch
+   * fingerprint mismatch already does in {@link #verifiedBinaryForLaunch}.
+   */
+  invalidateBinary(): void {
+    this.#verifiedBinary = null;
+  }
+
   async #closeServerLeases(
     server: ServerLease | null,
     starting: Promise<ServerLease> | null,

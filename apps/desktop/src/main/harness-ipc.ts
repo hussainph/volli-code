@@ -67,11 +67,11 @@ import {
   recordHarnessTrust,
   restoreRegisteredHarness,
 } from "./db/harness-registry-repo";
+import { validateHarnessBinary } from "./harness-binary";
 import { decideRegisteredHarnesses, scanHarnessManifests } from "./harness-registry";
 import type { DecidedHarnessManifest } from "./harness-registry";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
-import { validateHarnessBinary } from "./opencode-binary";
 
 export interface HarnessIpcDeps {
   /** `~/.agents/harnesses` — walked fresh per call, never remembered between them. */
@@ -108,6 +108,14 @@ export interface HarnessIpcDeps {
    */
   launchableHarnesses(): readonly HarnessAdapter[];
   now(): number;
+  /**
+   * Drops a live native adapter's cached verified binary for `harnessId`, so
+   * its NEXT resolution honors the override this call just stored or
+   * cleared instead of what an earlier probe verified. Optional: a db-failed
+   * boot never constructs a native adapter, and most harnesses resolve fresh
+   * on every launch and cache nothing this needs to drop.
+   */
+  invalidateNativeBinary?(harnessId: string): void;
 }
 
 /**
@@ -291,6 +299,10 @@ export function registerHarnessIpcHandlers(handle: DbHandle, deps: HarnessIpcDep
     ): Promise<HarnessCommandSetResult> => {
       if (input.command === null) {
         clearStoredHarnessCommand(db, input.harnessId);
+        // The stored override just changed, so a native adapter's cached
+        // verified binary is stale — drop it, or the clear would only take
+        // effect on the next relaunch.
+        deps.invalidateNativeBinary?.(input.harnessId);
         return { ok: true, resolvedPath: null };
       }
       const validation = await validateHarnessBinary(input.command);
@@ -299,6 +311,7 @@ export function registerHarnessIpcHandlers(handle: DbHandle, deps: HarnessIpcDep
       // it attaches, so a PATH or filesystem change after this write is
       // honored automatically rather than frozen at the moment of validation.
       setStoredHarnessCommand(db, input.harnessId, input.command, deps.now());
+      deps.invalidateNativeBinary?.(input.harnessId);
       return { ok: true, resolvedPath: validation.resolvedPath };
     },
   };

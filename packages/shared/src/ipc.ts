@@ -480,13 +480,19 @@ export interface HarnessCommandSetInput {
 export type HarnessCommandGetResult = Result<{ command: string | null }>;
 
 /**
- * Why `volli:harness-command-set` refused a candidate. `not-found` covers a
- * bare name absent from the login-shell PATH, including a PATH main could not
- * read at all; `not-executable` is an explicit path that exists but cannot be
- * run; `not-resolvable` is a candidate that located fine but could not be
- * canonicalized (e.g. a broken symlink).
+ * Why `volli:harness-command-set` refused a candidate. `path-unavailable` is
+ * a bare name whose login-shell PATH itself could not be read — a transient
+ * host failure that says nothing about the name, so the honest recovery is
+ * retry, not retype. `not-found` is a bare name genuinely absent from a PATH
+ * that WAS read — a typo. `not-executable` is an explicit path that exists
+ * but cannot be run; `not-resolvable` is a candidate that located fine but
+ * could not be canonicalized (e.g. a broken symlink).
  */
-export type HarnessCommandFailureReason = "not-found" | "not-executable" | "not-resolvable";
+export type HarnessCommandFailureReason =
+  | "not-found"
+  | "not-executable"
+  | "not-resolvable"
+  | "path-unavailable";
 
 /**
  * Ack for `volli:harness-command-set`. Success carries the canonical realpath

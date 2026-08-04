@@ -603,6 +603,47 @@ describe("OpenCodeNativeAdapter", () => {
     );
   });
 
+  it("re-resolves the binary after invalidateBinary instead of reusing what an earlier probe verified", async () => {
+    const process = new FakeProcess();
+    let resolveCalls = 0;
+    process.resolveCommand = async () => {
+      resolveCalls += 1;
+      return resolveCalls === 1 ? "/first/opencode" : "/second/opencode";
+    };
+    const adapter = createAdapter({ process, network: new FakeNetwork() });
+
+    await adapter.probe(
+      { profileId: "native", directory: "/workspace/one" },
+      new AbortController().signal,
+    );
+    expect(resolveCalls).toBe(1);
+    expect(process.spawns[0]?.path).toBe("/first/opencode");
+
+    adapter.invalidateBinary();
+    process.exited.resolve(0);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await adapter.attach(spec(), { emit: async () => undefined });
+
+    expect(resolveCalls).toBe(2);
+    expect(process.spawns[1]?.path).toBe("/second/opencode");
+  });
+
+  it("leaves an already-spawned server's lease running when the binary is invalidated", async () => {
+    const { adapter, process } = composition();
+    const handle = await adapter.attach(spec(), { emit: async () => undefined });
+    expect(process.spawns).toHaveLength(1);
+
+    adapter.invalidateBinary();
+    const delivered = await handle.dispatch(messageCommand());
+    const second = await adapter.attach(spec("/workspace/two"), { emit: async () => undefined });
+
+    expect(delivered.status).toBe("accepted");
+    // Still the one lease: invalidation drops the cache, not the running child.
+    expect(process.spawns).toHaveLength(1);
+    expect(second.native).toBeDefined();
+  });
+
   it("reports an already-aborted health probe without launching a usable binding", async () => {
     const { adapter } = composition();
     const abort = new AbortController();

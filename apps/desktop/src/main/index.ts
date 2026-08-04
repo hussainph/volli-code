@@ -403,10 +403,10 @@ app.whenReady().then(async () => {
         // every launch wait on an interactive shell for an adapter it never
         // uses. A stored per-harness override wins, read at resolution time
         // rather than captured here — but the adapter caches the binary it
-        // verified (`#verifiedBinary`) for the rest of the launch, so this
-        // runs once per process and a Settings change lands on the NEXT
-        // relaunch, not the next attach. Applying an override live would need
-        // an adapter seam to drop that cached binary; there is none yet.
+        // verified (`#verifiedBinary`) for the rest of the launch, so a
+        // Settings change drops that cache immediately via
+        // `invalidateBinary()` (wired below, into `volli:harness-command-set`)
+        // rather than waiting for the next relaunch.
         resolveCommand: (command) =>
           resolveOpenCodeBinary(storedHarnessCommand(dbHandle.db, "opencode") ?? command),
         // The server child inherits the user's login-shell PATH, not
@@ -800,6 +800,15 @@ app.whenReady().then(async () => {
     // offer a harness the launch would then refuse.
     launchableHarnesses: () => agentRuntime.adapters ?? [],
     now: Date.now,
+    // Only the native OpenCode adapter caches a verified binary across a
+    // launch's lifetime; every other harness resolves fresh on each attach
+    // and has nothing to drop. `nativeAdapter` is null on the db-failed boot
+    // path, where this is never called anyway (no db, no stored overrides).
+    invalidateNativeBinary: (harnessId) => {
+      if (nativeAdapter !== null && harnessId === nativeAdapter.manifest.id) {
+        nativeAdapter.invalidateBinary();
+      }
+    },
   });
 
   // Renders hand-edited managed files that were preserved (never overwritten)

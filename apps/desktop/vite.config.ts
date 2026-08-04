@@ -141,6 +141,7 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/park.ts",
         "**/src/main/fs-deps.ts",
         "**/src/main/ghostty-config.ts",
+        "**/src/main/harness-binary.ts",
         "**/src/main/harness-ipc.ts",
         "**/src/main/opencode-binary.ts",
         "**/src/main/window-theme.ts",
