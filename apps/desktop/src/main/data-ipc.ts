@@ -92,11 +92,7 @@ import {
   updateProjectBaseBranch,
   updateProjectSetupCommand,
 } from "./db/projects-repo";
-import {
-  createDesktopSessionEngine,
-  latestTerminalAttachment,
-  terminalSessionRecord,
-} from "./session-control";
+import { createDesktopSessionEngine, terminalSessionRecord } from "./session-control";
 import {
   getTicketRow,
   listAllTickets,
@@ -483,13 +479,10 @@ export function registerDataIpcHandlers(
       });
       return {
         ok: true,
-        // This is the legacy terminal-record endpoint. A structured-only
-        // Session has no honest `SessionRecord` representation (that DTO
-        // requires terminal harness/process facts), so omit it until the
-        // renderer can consume a discriminated Session listing.
-        sessions: sessions
-          .filter((session) => latestTerminalAttachment(session.attachments) !== null)
-          .map(terminalSessionRecord),
+        // This is the legacy terminal-record endpoint, so a structured-only
+        // Session drops out here (`terminalSessionRecord` returns null for it)
+        // until the renderer can consume a discriminated Session listing.
+        sessions: sessions.flatMap((session) => terminalSessionRecord(session) ?? []),
       };
     },
 
@@ -503,9 +496,7 @@ export function registerDataIpcHandlers(
       });
       return {
         ok: true,
-        sessions: sessions
-          .filter((session) => latestTerminalAttachment(session.attachments) !== null)
-          .map(terminalSessionRecord),
+        sessions: sessions.flatMap((session) => terminalSessionRecord(session) ?? []),
       };
     },
 

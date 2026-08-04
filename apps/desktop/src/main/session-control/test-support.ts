@@ -174,27 +174,9 @@ export function getSession(db: Database.Database, sessionId: string): SessionRec
         ORDER BY created_sequence DESC, id DESC LIMIT 1`,
     )
     .get(sessionId) as AttachmentRow | undefined;
-  if (!attachment) {
-    return terminalSessionRecord({
-      session: {
-        id: session.id,
-        projectId: session.project_id,
-        ticketId: session.ticket_id,
-        title: session.title,
-        createdAt: session.created_at,
-      },
-      status: "open",
-      commands: [],
-      receipts: [],
-      pendingExecutorStart: null,
-      attachments: [],
-      liveExecutor: null,
-      attention: { active: [], primary: null },
-      capabilities: [],
-      interactions: { active: [], resolved: [] },
-      signal: null,
-    });
-  }
+  // No terminal attachment means no honest `SessionRecord`, which is exactly
+  // what `terminalSessionRecord` now returns null for.
+  if (!attachment) return undefined;
   const closed = db
     .prepare(
       `SELECT occurred_at, payload FROM session_events
@@ -207,7 +189,7 @@ export function getSession(db: Database.Database, sessionId: string): SessionRec
     ? (JSON.parse(closed.payload) as { outcome: "completed" | "failed" | "interrupted" })
     : null;
   const native = latestNativeReference(db, sessionId, attachment);
-  return terminalSessionRecord({
+  const record = terminalSessionRecord({
     session: {
       id: session.id,
       projectId: session.project_id,
@@ -241,6 +223,7 @@ export function getSession(db: Database.Database, sessionId: string): SessionRec
     interactions: { active: [], resolved: [] },
     signal: null,
   });
+  return record ?? undefined;
 }
 
 export function listSessions(db: Database.Database, projectId: string): SessionRecord[] {
