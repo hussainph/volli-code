@@ -154,8 +154,13 @@ export type InteractionFieldRole = "answer" | "note" | "redirection";
 export type InteractionTextCarrier = "answer" | "note" | "message";
 
 export function promptTextCarrier(prompt: SessionInteractionPrompt): InteractionTextCarrier {
-  if (prompt.custom) return "answer";
+  // A declared refusal is read *before* `custom`, because a prompt carrying both
+  // is still a permission and `POST /permission/{id}/reply` has no free-text
+  // answer slot: it takes a verdict and a `message` beside it. Reading that
+  // prompt as `answer` promised the words a place in an answer array the
+  // endpoint never sends, and the note went with them.
   if (prompt.options.some((option) => optionPolarity(option) === "reject")) return "note";
+  if (prompt.custom) return "answer";
   return "message";
 }
 
@@ -198,21 +203,42 @@ export function promptFieldOpen(
 }
 
 /**
- * Whether a redirection has superseded this question's options.
+ * Whether a redirection has superseded the options on this card.
  *
  * Saying "none of these work" and choosing one of them are contradictory, and
  * the contradiction resolves toward the words: {@link interactionSubmission}
- * refuses, and a refusal is the empty resolution. The card dims the options
- * rather than leaving them live and silently discarding them at submit.
+ * refuses, and a refusal is the empty resolution. The card dims what the refusal
+ * discards rather than leaving it live and silently throwing it away at submit.
+ *
+ * **Card-wide, because the refusal is.** OpenCode takes one `answers` array per
+ * request, so there is no partial resolution to send: words typed on the second
+ * question of three discard the first and third as surely as their own. Asked
+ * per prompt, this dimmed only the question in view, so a reader answered Q1 and
+ * Q3, typed into Q2, and submitted an all-empty resolution while two ticked
+ * answers still stood lit beside it.
  */
-export function promptRedirected(
+export function interactionRedirected(
+  interaction: SessionInteraction,
+  draft: InteractionDraft,
+): boolean {
+  return redirectMessage(interaction, draft) !== null;
+}
+
+/**
+ * Whether this question's own words are discarded too.
+ *
+ * A redirection is made of the responses only a message can carry, so those
+ * travel; an answer or a note beside them goes with the refusal like every
+ * selection on the card. Separate from {@link interactionRedirected} because the
+ * box the redirection is being typed into must stay live — clearing it is how a
+ * reader takes the card back.
+ */
+export function promptResponseSuperseded(
+  interaction: SessionInteraction,
   prompt: SessionInteractionPrompt,
   draft: InteractionDraft,
 ): boolean {
-  return (
-    promptTextCarrier(prompt) === "message" &&
-    promptDraft(draft, prompt.id).response.trim().length > 0
-  );
+  return interactionRedirected(interaction, draft) && promptTextCarrier(prompt) !== "message";
 }
 
 /* ----------------------------------------------------------------- submit */
@@ -234,12 +260,20 @@ export function isPromptAnswered(
  * Submit is atomic: OpenCode takes one `answers` array per request, so a
  * half-filled card has nothing to send and the button stays inert until every
  * question has been given something.
+ *
+ * No questions is not "all of them answered". `every` says yes to the empty
+ * list, and empty is reachable — a record whose questions never arrived declares
+ * `prompts: []`, which `readInteractionPrompts` returns verbatim — so the button
+ * went live on a card with nothing on it and sent an empty resolution, which is
+ * the shape a refusal is defined by. The exit from a card with nothing to answer
+ * is the refusal itself, said deliberately.
  */
 export function canSubmitInteraction(
   interaction: SessionInteraction,
   draft: InteractionDraft,
 ): boolean {
-  return readInteractionPrompts(interaction).every((prompt) => isPromptAnswered(prompt, draft));
+  const prompts = readInteractionPrompts(interaction);
+  return prompts.length > 0 && prompts.every((prompt) => isPromptAnswered(prompt, draft));
 }
 
 /**
@@ -252,10 +286,16 @@ export function canSubmitInteraction(
  * refusal there is carried out of band, as a resolution that selects nothing
  * and says nothing, which no harness value can impersonate. The card offers it
  * as its own control rather than as a row in a list of answers.
+ *
+ * Stated as "no question declared one" rather than "every question lacks one",
+ * so the answer for a card with no questions at all is reached rather than
+ * inherited from `every`'s empty case: nothing declared a refusal, so the card
+ * has to mint it — and on a card that can submit nothing, that control is the
+ * only exit there is.
  */
 export function needsOwnRefusal(interaction: SessionInteraction): boolean {
-  return readInteractionPrompts(interaction).every(
-    (prompt) => !prompt.options.some((option) => optionPolarity(option) === "reject"),
+  return !readInteractionPrompts(interaction).some((prompt) =>
+    prompt.options.some((option) => optionPolarity(option) === "reject"),
   );
 }
 
@@ -587,23 +627,42 @@ export function describeInteractionResolution(
   // other question's. The interaction's flat options are the fallback, and only
   // for a resolution stored before `answers` existed — its ids belong to no
   // prompt this record can name.
-  const chosen = answers.flatMap((answer) => {
-    const declared = prompts.find((candidate) => candidate.id === answer.promptId)?.options ?? [];
-    return answer.optionIds.flatMap((id) => {
-      const option =
-        declared.find((candidate) => candidate.id === id) ??
-        interaction.options.find((candidate) => candidate.id === id);
-      return option ? [option] : [];
-    });
-  });
+  const chosen =
+    answers.length > 0
+      ? answers.flatMap((answer) => {
+          const declared =
+            prompts.find((candidate) => candidate.id === answer.promptId)?.options ?? [];
+          return answer.optionIds.flatMap((id) => {
+            const option =
+              declared.find((candidate) => candidate.id === id) ??
+              interaction.options.find((candidate) => candidate.id === id);
+            return option ? [option] : [];
+          });
+        })
+      : // No answers to read against at all — a record whose questions never
+        // arrived, or one an adapter answered none of. The flat ids are what is
+        // left of the decision, and naming them from the interaction's own
+        // options is the fallback each answer already has.
+        resolution.optionIds.flatMap((id) => {
+          const option = interaction.options.find((candidate) => candidate.id === id);
+          return option ? [option] : [];
+        });
   const chose = (polarity: InteractionOptionPolarity) =>
     chosen.some((option) => optionPolarity(option) === polarity);
   // The out-of-band refusal, read back the same way the adapter routes it: a
   // resolution that selected nothing and said nothing is a no, not an empty
   // answer, and the transcript has to record which of those happened.
-  const declined = answers.every(
-    (answer) => answer.optionIds.length === 0 && (answer.response ?? "") === "",
-  );
+  //
+  // Read off the resolution first, which is total, and only then per answer.
+  // `answers.every` alone says yes to the empty list, and empty is reachable and
+  // stored intact: an adapter that answered no prompts writes `answers: []`, and
+  // a record whose questions never arrived projects none to synthesize one
+  // against. A decision that plainly selected something then read back as "You
+  // rejected" — the one reading a transcript must never invent.
+  const declined =
+    resolution.optionIds.length === 0 &&
+    (resolution.response ?? "") === "" &&
+    answers.every((answer) => answer.optionIds.length === 0 && (answer.response ?? "") === "");
   // A refusal outranks everything else in the same resolution: what a reader
   // said no to is the fact the transcript owes them, even where they answered
   // three other questions in the same submit.

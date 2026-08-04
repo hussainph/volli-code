@@ -12,6 +12,7 @@ import {
   interactionCarousel,
   interactionForApproval,
   interactionQuestions,
+  interactionRedirected,
   interactionResolution,
   interactionSubmitLabel,
   isPromptAnswered,
@@ -21,7 +22,7 @@ import {
   promptDraft,
   promptFieldOpen,
   promptFieldRole,
-  promptRedirected,
+  promptResponseSuperseded,
   promptTextCarrier,
   redirectMessage,
   refusalResolution,
@@ -257,6 +258,22 @@ describe("what the primary control says", () => {
 });
 
 describe("none of these work", () => {
+  it("reads a declared refusal before custom, so a permission keeps its note", () => {
+    // A prompt carrying both is still a permission, and
+    // `POST /permission/{id}/reply` has no free-text answer slot — it takes a
+    // verdict and a `message`. Read as `answer`, the words were promised a place
+    // in an answer array the endpoint never sends.
+    const [permissionPrompt] = permission().prompts ?? [];
+    if (!permissionPrompt) throw new Error("fixture has no prompt");
+    const both = { ...permissionPrompt, custom: true };
+    expect(promptTextCarrier(both)).toBe("note");
+    expect(promptFieldRole(both, {})).toBe("note");
+    expect(promptFieldRole(both, selectOption({}, both, "reject"))).toBe("redirection");
+    // And the box still waits behind its own control until the refusal that
+    // makes the words matter is chosen.
+    expect(promptFieldOpen(both, {})).toBe(false);
+  });
+
   it("carries the words the way the harness accepts them, and no other way", () => {
     const [permissionPrompt] = permission().prompts ?? [];
     if (!permissionPrompt) throw new Error("fixture has no prompt");
@@ -287,7 +304,7 @@ describe("none of these work", () => {
       },
       message: "read the lockfile first",
     });
-    expect(promptRedirected(plain, draft)).toBe(true);
+    expect(interactionRedirected(interaction, draft)).toBe(true);
   });
 
   it("keeps a native answer on the resolution, with nothing to send after it", () => {
@@ -334,7 +351,36 @@ describe("none of these work", () => {
     // one declaring `custom` keeps its own answer, and is dropped by the refusal
     // like every other selection.
     expect(redirectMessage(interaction, draft)).toBe("neither, look at the CI log");
-    expect(promptRedirected(second, draft)).toBe(false);
+    // Dropped, and shown as dropped: the box it was typed into is not what the
+    // redirection is made of.
+    expect(promptResponseSuperseded(interaction, second, draft)).toBe(true);
+    expect(promptResponseSuperseded(interaction, first, draft)).toBe(false);
+  });
+
+  it("supersedes every question on the card, not only the one typed into", () => {
+    // The refusal is one empty resolution for the whole request — OpenCode takes
+    // one `answers` array per request, so there is no partial one to send.
+    // Asked per prompt, this dimmed the question in view alone, so answers to
+    // the other two stood ticked and live while submit threw them away.
+    const first = prompt({ id: "prompt:0" });
+    const second = prompt({ id: "prompt:1" });
+    const third = prompt({ id: "prompt:2" });
+    const interaction = question([first, second, third]);
+    let draft = selectOption(emptyInteractionDraft(interaction), first, "question:0:bWFpbg");
+    draft = selectOption(draft, third, "question:0:ZGV2");
+    expect(interactionRedirected(interaction, draft)).toBe(false);
+
+    draft = setPromptResponse(draft, "prompt:1", "neither — check the CI log");
+    for (const asked of [first, second, third]) {
+      expect(interactionRedirected(interaction, draft)).toBe(true);
+      // The box the words are in stays live wherever nothing else can carry
+      // them; clearing it is how a reader takes the card back.
+      expect(promptResponseSuperseded(interaction, asked, draft)).toBe(false);
+    }
+    expect(interactionSubmission(interaction, draft)).toEqual({
+      resolution: refusalResolution(interaction),
+      message: "neither — check the CI log",
+    });
   });
 
   it("says nothing when there is nothing to send", () => {
@@ -386,6 +432,68 @@ describe("refusal", () => {
     expect(
       describeInteractionResolution(interaction, refusalResolution(interaction)),
     ).toMatchObject({ verdict: "rejected", lead: "You rejected", trailer: null });
+  });
+});
+
+describe("an interaction that declares no questions", () => {
+  // Reachable, not theoretical: the adapter falls back to reading the questions
+  // off the event, which yields none when its map missed after a binding restart
+  // and the payload carried no `questions` array. `prompts: []` is stored
+  // verbatim — absent and empty are deliberately distinct — so every predicate
+  // here meets the empty list on a record read back from SQLite.
+
+  it("has nothing to submit rather than everything answered", () => {
+    // `every` says yes to the empty list, so the button went live on a card with
+    // no questions on it and sent the empty resolution — which is the shape a
+    // refusal is defined by, said by nobody.
+    const nothing = question([]);
+    expect(canSubmitInteraction(nothing, {})).toBe(false);
+    expect(canSubmitInteraction(nothing, setPromptResponse({}, "prompt:0", "main"))).toBe(false);
+    expect(interactionSubmission(nothing, {})).toBeNull();
+  });
+
+  it("keeps the refusal that is its only exit", () => {
+    // Nothing declared a refusal, so the card mints one — and on a card that can
+    // submit nothing, that control is the whole way out.
+    expect(needsOwnRefusal(question([]))).toBe(true);
+    expect(refusalResolution(question([]))).toEqual({
+      optionIds: [],
+      response: null,
+      answers: [],
+    });
+  });
+
+  it("reads a decision it cannot itemize as answered, never as refused", () => {
+    // The bug this whole block exists for: `answers.every` is vacuously true on
+    // the empty array, so a permission the reader allowed printed "You rejected".
+    const opaque = permission({ prompts: [] });
+    expect(
+      describeInteractionResolution(opaque, { optionIds: ["once"], response: null, answers: [] }),
+    ).toEqual({
+      verdict: "allowed",
+      lead: "You allowed",
+      subject: "rm -rf node_modules",
+      trailer: "once",
+    });
+    // Words with no selection are still an answer, whatever we can name of it.
+    expect(
+      describeInteractionResolution(question([]), {
+        optionIds: [],
+        response: "the release branch",
+        answers: [],
+      }),
+    ).toMatchObject({ verdict: "answered", lead: "You answered", trailer: null });
+  });
+
+  it("still reads a refusal of one as a refusal", () => {
+    // Nothing selected and nothing said anywhere — the reading no harness value
+    // can impersonate, and the only decision such a card can send.
+    const nothing = question([]);
+    expect(describeInteractionResolution(nothing, refusalResolution(nothing))).toMatchObject({
+      verdict: "rejected",
+      lead: "You rejected",
+      trailer: null,
+    });
   });
 });
 

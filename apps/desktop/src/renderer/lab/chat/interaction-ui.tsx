@@ -37,12 +37,19 @@
  * (`promptTextCarrier`, `promptFieldOpen`), not this file's.
  *
  * Decision logic lives in `interaction.ts`. Everything here is presentation
- * plus the three things only a mounted card can own: where focus is, that the
- * reader asked for a box that was not already open, and that there is no
- * gesture which throws a pending decision away.
+ * plus the four things only a mounted card can own: where focus is, that the
+ * reader asked for a box that was not already open, that the last decision did
+ * not land, and which keys this surface can act on. No gesture here throws a
+ * pending decision away: the card is left, never dismissed.
  */
 import * as React from "react";
-import { CaretLeftIcon, CaretRightIcon, HandPalmIcon, SquareIcon } from "@phosphor-icons/react";
+import {
+  CaretLeftIcon,
+  CaretRightIcon,
+  HandPalmIcon,
+  SquareIcon,
+  WarningIcon,
+} from "@phosphor-icons/react";
 import type { SessionInteraction, SessionInteractionResolution } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
@@ -54,6 +61,7 @@ import {
   emptyInteractionDraft,
   interactionCarousel,
   interactionQuestions,
+  interactionRedirected,
   interactionSubmission,
   interactionSubmitLabel,
   needsOwnRefusal,
@@ -62,7 +70,7 @@ import {
   promptDraft,
   promptFieldOpen,
   promptFieldRole,
-  promptRedirected,
+  promptResponseSuperseded,
   refusalSubmission,
   selectOption,
   setPromptResponse,
@@ -75,20 +83,41 @@ import {
 
 /* ------------------------------------------------------------------- card */
 
+/** Inside the box, where a sentence is a prompt rather than a name. */
 const FIELD_PLACEHOLDER: Record<InteractionFieldRole, string> = {
   answer: "Your answer",
   note: "Note",
   redirection: "What to do instead",
 };
 
+/**
+ * On the control that opens it, where a sentence is not. "What to do instead" is
+ * the box asking; a button wearing it reads as an instruction to the reader
+ * rather than the name of the thing one press away. One string cannot do both
+ * jobs — the placeholder is the question, this is the noun.
+ */
+const FIELD_LABEL: Record<InteractionFieldRole, string> = {
+  answer: "Answer",
+  note: "Note",
+  redirection: "Instructions",
+};
+
 export interface InteractionCardProps {
   interaction: SessionInteraction;
-  onResolve(submission: InteractionSubmission): void;
+  /**
+   * Where the decision goes, and — where the caller can say — whether it landed.
+   * A handler that returns nothing is taken at its word; one that returns a
+   * promise is awaited, and `false` or a rejection is what puts the card back
+   * with the failure on it. Without that, a decision the harness never heard
+   * left the card looking answered and said nothing anywhere near it.
+   */
+  onResolve(submission: InteractionSubmission): void | Promise<boolean | void>;
   /**
    * The turn's only other exit, at the mount where the composer is not on
-   * screen to offer it. A card on a row leaves it off: the composer is still
-   * there with its own, and two Stops in view are two different-looking ways to
-   * do one thing.
+   * screen to offer it — as a control and as Escape, which is the same act by
+   * keyboard. A card on a row leaves it off: the composer is still there with
+   * its own, and two Stops in view are two different-looking ways to do one
+   * thing.
    */
   onStop?(): void;
   /** A decision is in flight; the harness's own verdict is what clears the card. */
@@ -117,6 +146,11 @@ export function InteractionCard({
     emptyInteractionDraft(interaction),
   );
   const [step, setStep] = React.useState(0);
+  // The decision that did not land. `resolving` says one is in flight and the
+  // harness's own verdict is what clears the card, so the only state left
+  // unrepresented was the round trip that came back with nothing: the card
+  // re-enabled itself and looked exactly like one nobody had pressed.
+  const [failed, setFailed] = React.useState(false);
   const questions = interactionQuestions(interaction);
   const carousel = interactionCarousel(interaction, draft, step);
   const asked = questions[carousel?.index ?? 0];
@@ -139,19 +173,39 @@ export function InteractionCard({
   //
   // Focus is not selection: an unchecked radio stays unchecked when it takes
   // focus, so nothing here preselects a verdict.
+  //
+  // Re-seated whenever the card is showing a *different* interaction. Both
+  // mounts key on the id today, so this usually runs once on a fresh tree — but
+  // a caller that reuses the component leaves an answered question's focus
+  // sitting on the next one's controls, and the effect must not depend on a
+  // convention outside the file.
   React.useEffect(() => {
     if (!autoFocus) return;
     const form = own.current;
     const first = form?.querySelector<HTMLElement>("input:not(:disabled), textarea:not(:disabled)");
     (first ?? form)?.focus();
-  }, [autoFocus]);
+  }, [autoFocus, interaction.id]);
+
+  // One door out for both controls, so a refusal that never reached the harness
+  // reports itself the same way a submitted answer does. The flag clears on the
+  // attempt rather than on the next keystroke: what it says is that the last
+  // thing pressed did not land, and that stays true while it is being retried.
+  const send = (sending: InteractionSubmission) => {
+    setFailed(false);
+    const landing = onResolve(sending);
+    if (!(landing instanceof Promise)) return;
+    void landing.then(
+      (landed) => setFailed(landed === false),
+      () => setFailed(true),
+    );
+  };
 
   // Takes the draft rather than reading it, because the card can send on the
   // click that answers it — and the state that click set is not on `draft` yet.
   const submit = (next: InteractionDraft = draft) => {
     if (resolving) return;
     const sending = next === draft ? submission : interactionSubmission(interaction, next);
-    if (sending) onResolve(sending);
+    if (sending) send(sending);
   };
 
   return (
@@ -164,12 +218,25 @@ export function InteractionCard({
         submit();
       }}
       onKeyDown={(event) => {
-        // Nothing here dismisses the card. Escape is swallowed rather than left
-        // to bubble: an ancestor closing on it would take the question off
-        // screen while the turn is still waiting for its answer, and a decision
-        // that vanished without being made is the deadlock this card exists to
-        // remove. The exits are Submit and Stop, and both are buttons.
-        if (event.key === "Escape") event.stopPropagation();
+        if (event.key !== "Escape") return;
+        // Escape ends the turn; it never dismisses the question, which outlives
+        // the turn and leaves the projection only when it is answered or
+        // withdrawn. So it does exactly what Stop does, and only where this card
+        // has a Stop — at the foot, where the composer stood down and took its
+        // own exit with it.
+        //
+        // Where there is none, the key is left to bubble. Swallowing it there
+        // meant a card on a row absorbed the one gesture that interrupts from
+        // anywhere and offered nothing back: the composer beside it still owns
+        // the exit, and a key claimed by a surface that cannot act on it is a
+        // key that does nothing.
+        if (!onStop) return;
+        // Never mid-word: Escape closes an IME's candidate window, and taking
+        // that keystroke would end the turn under someone who was typing.
+        if (event.nativeEvent.isComposing) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (!resolving) onStop();
       }}
       className={cn(
         "pointer-events-auto rounded-xl border border-primary/40 bg-card shadow-[var(--shadow-raised)] outline-none",
@@ -217,50 +284,73 @@ export function InteractionCard({
             reads there because it stands beside Send in a row of controls; a
             naked square in the bottom-left corner of a *blocking* card reads as
             a checkbox you have to tick before the card will let you submit,
-            which is the worst thing this footer could say. */}
+            which is the worst thing this footer could say.
+
+            Ghost and muted, because Stop is not an answer. It reads at the
+            weight of the exit it is — below the verdict beside it, which is
+            what the card actually asked for. Two controls at one weight said an
+            interrupt and a refusal were the same kind of act. */}
         {onStop ? (
-          <Button type="button" variant="ghost" size="sm" disabled={resolving} onClick={onStop}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground"
+            disabled={resolving}
+            onClick={onStop}
+          >
             <SquareIcon className="size-3.5" weight="fill" />
             Stop
           </Button>
         ) : null}
-        {/* A refusal the harness did not declare an option for. It is a control
-            rather than a row in the list because none of a question's option
-            ids can mean "no" — they are the harness's own encoded values, and
-            one labelled `reject` would otherwise refuse itself when chosen. It
-            sends the empty resolution, so whatever was selected and abandoned
-            goes with it rather than travelling alongside the refusal. */}
-        {refusable ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            className="ml-auto"
-            disabled={resolving}
-            onClick={() => onResolve(refusalSubmission(interaction, draft))}
-          >
-            Reject
-          </Button>
+        {/* The decision that never reached the harness. Two words and the ink
+            that says which kind of state it is: the controls are live again and
+            pressing one is the retry, so there is nothing here to explain. At
+            the foot mount a session blocker says it too; on a row there is
+            nothing else on screen that would. */}
+        {failed ? (
+          <span className="flex min-w-0 items-center gap-1.5 text-xs text-destructive">
+            <WarningIcon aria-hidden className="size-3.5 shrink-0" weight="fill" />
+            <span className="min-w-0 truncate">Not delivered</span>
+          </span>
         ) : null}
-        {/* Disabled rather than swapped for a spinner: the round trip is one
-            HTTP reply and the harness's own verdict is what replaces the card,
-            so a progress affordance would flash for less time than it reads.
-            What matters is that a second click cannot land.
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          {/* A refusal the harness did not declare an option for. It is a
+              control rather than a row in the list because none of a question's
+              option ids can mean "no" — they are the harness's own encoded
+              values, and one labelled `reject` would otherwise refuse itself
+              when chosen. It sends the empty resolution, so whatever was
+              selected and abandoned goes with it rather than travelling
+              alongside the refusal.
 
-            The label is `interactionSubmitLabel`'s, not the word "Submit": a
-            dimmed control saying "Submit" is the same word before and after
-            the thing it is waiting for, so on a single question — where there
-            is no counter to say what is left — the gate said nothing at all.
-            Naming the act, and then the verdict, is the gate and the receipt
-            in one control, with no line of prose under it. */}
-        <Button
-          type="submit"
-          size="sm"
-          className={cn(!refusable && "ml-auto")}
-          disabled={!submittable}
-        >
-          {interactionSubmitLabel(interaction, draft)}
-        </Button>
+              Outlined: it stands beside the primary control because it is the
+              other half of the same decision, and above Stop because it is one. */}
+          {refusable ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={resolving}
+              onClick={() => send(refusalSubmission(interaction, draft))}
+            >
+              Reject
+            </Button>
+          ) : null}
+          {/* Disabled rather than swapped for a spinner: the round trip is one
+              HTTP reply and the harness's own verdict is what replaces the
+              card, so a progress affordance would flash for less time than it
+              reads. What matters is that a second click cannot land.
+
+              The label is `interactionSubmitLabel`'s, not the word "Submit": a
+              dimmed control saying "Submit" is the same word before and after
+              the thing it is waiting for, so on a single question — where there
+              is no counter to say what is left — the gate said nothing at all.
+              Naming the act, and then the verdict, is the gate and the receipt
+              in one control, with no line of prose under it. */}
+          <Button type="submit" size="sm" disabled={!submittable}>
+            {interactionSubmitLabel(interaction, draft)}
+          </Button>
+        </div>
       </div>
     </form>
   );
@@ -296,10 +386,15 @@ function InteractionQuestionFields({
   onSubmit(next?: InteractionDraft): void;
 }) {
   const { prompt, label } = question;
-  // Words that only a following message can carry contradict every option
-  // beside them, and the contradiction resolves toward the words. Dimming the
-  // list says so, instead of leaving it live and discarding it at submit.
-  const superseded = promptRedirected(prompt, draft);
+  // Words that only a following message can carry contradict every option on
+  // the card — not only the ones beside them — because the refusal they send is
+  // one empty resolution for the whole request. Dimming says so, instead of
+  // leaving three ticked answers live and discarding them at submit.
+  const superseded = interactionRedirected(interaction, draft);
+  // The redirection is made of this box's words wherever nothing else can carry
+  // them, so that box stays undimmed and live: clearing it is how a reader takes
+  // the card back. An answer or a note goes with the refusal like any selection.
+  const wordsDropped = promptResponseSuperseded(interaction, prompt, draft);
   const written = promptDraft(draft, prompt.id).response;
   // The one thing only a mounted card can own: the reader asked for the box.
   // Whether it stands open on its own is `promptFieldOpen`'s call, and text
@@ -391,7 +486,10 @@ function InteractionQuestionFields({
               onSubmit();
             }
           }}
-          className="mt-1.5 min-h-9 resize-none rounded-md text-sm shadow-none"
+          className={cn(
+            "mt-1.5 min-h-9 resize-none rounded-md text-sm shadow-none",
+            wordsDropped && "opacity-50",
+          )}
         />
       ) : (
         <Button
@@ -402,7 +500,7 @@ function InteractionQuestionFields({
           disabled={disabled}
           onClick={() => setRevealed(true)}
         >
-          {FIELD_PLACEHOLDER[fieldRole]}
+          {FIELD_LABEL[fieldRole]}
         </Button>
       )}
     </fieldset>
