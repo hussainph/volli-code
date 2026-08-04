@@ -112,7 +112,7 @@ Three workstreams. **1 and 2 are independent and can run in parallel; 3 gates th
 
 **Workstream 2 — the controller reshape.** Change the hook to `useSessionController(sessionId: string)`, delete the `started` ref and the `start()` at `:635-640`, and make the boot effect `snapshot` + `subscribe` (B1). Move `session.create` + `adapter.attach` to a store action returning a sessionId — `stores/sessions.ts` `byOwner` already models the tab set and `sessionOwner` already routes id → owner. Make `recover()` re-attach with `continuity: "native_resume"` on the same sessionId (B2). Lift `transcript` / `queued` / `selection` into a per-sessionId store slice outside React, copying `terminal/registry.ts:20` (B3). Teach `terminalSessionRecord` to say "not a terminal session" (B4). Decompose `chat-session.tsx` and de-lab the controller (D1, D2).
 
-**Workstream 3 — the two silent failures and the weight.** Add the `@source` directives to `renderer/src/globals.css` and confirm against a real built stylesheet, not a test (C1). Change the adapter's frame shape from full snapshot to delta, which is the single highest-value item in this document — it removes the 81× wire amplification, the 15 s long-task budget, and the highlighting flicker together (C3, C4). Drop mermaid and math from streamdown and dedupe the Shiki grammar set against `editor/shiki-langs.ts` (D4). Fix the clipboard swallow (D3).
+**Workstream 3 — the two silent failures and the weight.** Start with the frame shape: change it from full snapshot to delta, the single highest-value item in this document, which removes the 81× wire amplification, the 15 s long-task budget and the highlighting flicker together (C3, C4). Prove the win on the lab before anything moves. Then add the `@source` directives to `renderer/src/globals.css` and confirm against a real built stylesheet, not a test (C1). Drop math from streamdown, keep mermaid, and dedupe the Shiki grammar set against `editor/shiki-langs.ts` — with mermaid retained, that dedupe is the main remaining lever (D4). Fix the clipboard swallow (D3).
 
 **Then migrate.** The move itself is a file move plus wiring, once the above is true.
 
@@ -131,13 +131,13 @@ Stale claims in source comments, recorded rather than edited (this branch is aud
 - `lab/lab.css:5-12` asserts the lab tree is unscanned by the production Tailwind build. The built stylesheet contradicts it — lab-only utilities (`max-h-[32vh]`, `w-[34rem]`, `caret-foreground`) are all present in shipped CSS, because the scan base is the Vite root.
 - `packages/shared/src/session.ts:1-9` still claims `SessionRecord` backs "the `sessions` table, migration 003". False since migration 018. `createSessionRecord` (`:151`) has zero production callers.
 
-## Open calls
+## Decisions
 
-Three decisions that change the work and are not mine to make; recorded here rather than guessed at.
+Settled 2026-08-04, so the later session does not reopen them.
 
-1. **Coverage enrollment.** The chat will not auto-enroll. Enroll the pure `.ts` modules with the move (296 statements of debt, 244 of them `session-controller.ts`), or ship ungated and enroll later?
-2. **Mermaid.** 3.29 MiB and 89 chunks for diagram rendering in chat. Keep, or drop as the cheapest bundle lever?
-3. **Frame shape.** The delta change is the highest-value item here but it is upstream of the UI, in packages held at 100%. Migration prep, or its own project first?
+1. **Coverage: enroll the pure `.ts` modules with the move.** Repo convention holds — `.tsx` stays excluded per `vite.config.ts:99-102`. That is 5 files, 296 statements, 266 branches, and it must be *added to the 65-file allowlist explicitly*, because nothing about the move enrolls it. `session-controller.ts` is 244 of the 296 and is where transport, lifecycle and delivery correctness live; it is the reason to do this rather than an unfortunate side effect of it.
+2. **Mermaid stays; math goes.** Diagram rendering is worth its weight in a coding-session product. This leaves most of the measured growth standing, so **the Shiki duplicate is now the primary bundle lever, not a secondary one** — 82 chunk names in two copies, 6.69 MiB across them, including grammars `renderer/src/editor/shiki-langs.ts:13` deliberately curated out. Dedupe against that list rather than shipping a second full grammar and theme set. Re-measure after; the +192 KiB gzip on the eager boot chunk is the number that matters, not the lazy total.
+3. **The frame shape lands inside migration prep**, not as a separate project. It stays in Workstream 3 and is that workstream's first item, since C4 is downstream of it. Expect it to move a good number of the adapter's exact-object part-mapping assertions — that churn is the cost of the change and is not evidence of a regression. Land it and prove the perf win on the lab *before* anything moves, so the migration PR stays a move-and-wire.
 
 ## Coverage note
 
