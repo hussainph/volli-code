@@ -933,7 +933,9 @@ function TranscriptPane({
   working: boolean;
 }) {
   const onOpenFile = React.useCallback(() => {}, []);
-  const onResolve = React.useCallback(() => {}, []);
+  // The benchmark never opens an interaction, so nothing calls this. It answers
+  // "delivered" because the alternative reads as a failed decision.
+  const onResolve = React.useCallback(() => Promise.resolve(true), []);
 
   const turnContext = React.useMemo<TurnContext>(
     () => ({
@@ -1068,7 +1070,7 @@ function PerfHarness() {
             how much there is to lay out and paint. */}
         <pre
           ref={readout}
-          className="pointer-events-none fixed right-2 bottom-12 z-50 max-h-72 w-80 overflow-hidden rounded-md border border-border bg-background/80 p-2 font-mono text-[10px] leading-4 text-muted-foreground"
+          className="pointer-events-none fixed right-2 bottom-12 z-50 max-h-72 w-80 overflow-hidden rounded-md border border-border bg-background/80 p-2 font-mono text-label text-muted-foreground"
         />
       </div>
     </div>

@@ -530,6 +530,18 @@ const DETAIL_FRAME =
  * a margin. A left border plus padding reads as a second column, and a
  * transcript that indents its payloads ends up with as many left edges as it has
  * kinds of disclosure.
+ *
+ * It also keeps the row rhythm rather than inventing a gap: the transcript has
+ * two spacing values, 12px between segments and 2px between rows, and a payload
+ * belongs to the row that opened it.
+ *
+ * The clip fade ramps to the frame's own fill, which is a mix and not a rung:
+ * the frame is `--muted` at 25% over the transcript's `--background`, so it sits
+ * *between* the two named surfaces. A scrim off either one lands a band across
+ * the bottom of every clipped payload — measured at 2.5/255 dark and 5/255 light
+ * from `--card`, and the same distance the other way from `--background`. Mixing
+ * it the way the frame mixes it is the only value that leaves no edge, which is
+ * why {@link DETAIL_FRAME}'s fill and this ramp must be changed together.
  */
 function DetailFrame({
   revision,
@@ -538,12 +550,12 @@ function DetailFrame({
 }: React.PropsWithChildren<{ revision: number; className?: string }>) {
   const { ref, clipped } = useClipped<HTMLDivElement>(revision);
   return (
-    <div className="relative my-1">
+    <div className="relative my-0.5">
       <div ref={ref} className={cn(DETAIL_FRAME, className)}>
         {children}
       </div>
       {clipped ? (
-        <div className="pointer-events-none absolute inset-x-px bottom-px h-8 rounded-b-md bg-gradient-to-t from-card to-transparent" />
+        <div className="pointer-events-none absolute inset-x-px bottom-px h-8 rounded-b-md bg-[linear-gradient(to_top,color-mix(in_oklab,var(--muted)_25%,var(--background))_0,transparent_100%)]" />
       ) : null}
     </div>
   );
@@ -793,7 +805,7 @@ const ReasoningRow = React.memo(function ReasoningRow({
       </div>
       {body !== null ? (
         <Disclosure open={open}>
-          <ReasoningBody className="my-1 rounded-md border border-border/60 bg-muted/25 p-2 text-xs leading-5">
+          <ReasoningBody className="my-0.5 rounded-md border border-border/60 bg-muted/25 p-2 text-xs leading-5">
             {body}
           </ReasoningBody>
         </Disclosure>

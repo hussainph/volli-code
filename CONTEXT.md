@@ -105,6 +105,34 @@ whether recovery or input is needed. It is not a source of truth and never
 turns silence alone into an agent lifecycle fact.
 _Avoid_: waiting flag, notification state
 
+**SessionInteraction**:
+A decision a Session is waiting on — a permission or a question — held provider-neutral: a title, optional detail, the options the harness declared, and an opaque native reference the adapter correlates its reply by. It is durable ledger content, so it survives a reload and outlives the turn that raised it; only an answer or a cancellation ends the wait.
+_Avoid_: approval, prompt (that is one question inside it), Attention
+
+**SessionInteractionPrompt**:
+One question inside a SessionInteraction, with its own options, whether several may be chosen, and whether the harness accepts free text beside them. A permission is one prompt; a harness that asks several things at once declares one prompt per question. Records written before interactions carried questions project as a single prompt.
+_Avoid_: prompt (the model's input), field, form
+
+**SessionInteractionOption**:
+One declared choice on a prompt: an id, a label, and an optional description. Ids are the harness's own values, except for the permission vocabulary Volli mints (`once`, `always`, `reject`); an unrecognized id is an ordinary answer and never inferred to mean consent or refusal.
+_Avoid_: button, action, permission mode
+
+**SessionInteractionAnswer**:
+One prompt's answer: the option ids chosen, plus free text where that prompt allows it. Answers are per prompt, so a set of ids is always read against the question that declared them.
+_Avoid_: response, decision (that is the whole resolution)
+
+**SessionInteractionResolution**:
+The user's whole decision on one SessionInteraction, carried as the answers it gave. A resolution that chose nothing and said nothing is a refusal, not a missing answer. It is the durable record of what was authorized; a cancelled interaction never carries one.
+_Avoid_: Receipt, outcome, answer (that is one prompt's)
+
+**SessionInteractionCancelReason**:
+Why an interaction stopped waiting without a decision: `abandoned` (the user left it unanswered), `superseded` (a newer interaction replaced it), or `withdrawn` (the harness stopped asking). None of them is an answer, and none may be read downstream as a refusal.
+_Avoid_: rejection, denial, timeout
+
+**SessionInteractionProjection**:
+The reconstructed view of a Session's interactions: those still waiting, and those resolved, each with its resolution and when it was given. Derived from committed Session Events, never a source of truth.
+_Avoid_: pending list, approval queue
+
 **Split Tab**:
 One returnable tab-strip item that presents multiple independently owned surfaces together.
 _Avoid_: split session, pane tree

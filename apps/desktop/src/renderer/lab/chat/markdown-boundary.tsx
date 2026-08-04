@@ -38,15 +38,23 @@ import { MessageResponse, type MessageResponseProps } from "@ai-elements/message
 import { splitMarkdownSource } from "./markdown-source";
 
 interface BoundaryProps {
-  /** The markdown this block was asked to render; also the fallback's text. */
-  source: string;
+  /**
+   * The markdown this block was asked to render; also the fallback's text.
+   *
+   * Carried exactly as it arrived, `undefined` included. Folding "asked to
+   * render nothing" into the empty string would make two different sources
+   * compare equal, and the comparison below is the only thing that ever clears a
+   * verdict — a block that failed on one of them would stay in fallback after
+   * being handed the other.
+   */
+  source: string | undefined;
   children: React.ReactNode;
 }
 
 interface BoundaryState {
   failed: boolean;
   /** The source the current verdict was reached on. A new one earns a retry. */
-  source: string;
+  source: string | undefined;
 }
 
 class MarkdownBoundary extends React.Component<BoundaryProps, BoundaryState> {
@@ -79,7 +87,7 @@ class MarkdownBoundary extends React.Component<BoundaryProps, BoundaryState> {
     if (!this.state.failed) return this.props.children;
     return (
       <div className="flex w-full flex-col gap-2" data-lab-markdown-fallback>
-        {splitMarkdownSource(this.props.source).map((segment) =>
+        {splitMarkdownSource(this.props.source ?? "").map((segment) =>
           segment.kind === "code" ? (
             <div
               key={segment.line}
@@ -112,9 +120,8 @@ class MarkdownBoundary extends React.Component<BoundaryProps, BoundaryState> {
  * and `MessageResponse`'s own memo still bails on an unchanged source.
  */
 export function GuardedResponse({ children, ...props }: MessageResponseProps) {
-  const source = typeof children === "string" ? children : "";
   return (
-    <MarkdownBoundary source={source}>
+    <MarkdownBoundary source={children}>
       <MessageResponse {...props}>{children}</MessageResponse>
     </MarkdownBoundary>
   );

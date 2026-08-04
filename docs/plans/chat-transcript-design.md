@@ -2,7 +2,7 @@
 
 Decisions for the Session chat surface, made against the `labs/chat-ui` draft. Research inputs: OpenCode (TUI + web), T3 Code, Codex (CLI source + desktop), Cursor, Claude desktop. Design lenses: interface-craft, emil-design-eng, apple-design.
 
-Status: agreed, not yet implemented. The code in `apps/desktop/src/renderer/lab/` is the draft this replaces.
+Status: largely built. `apps/desktop/src/renderer/lab/` is no longer the draft this replaces — it is the implementation. Sections are amended in place as decisions land; where one still disagrees with the code, the code is the record.
 
 ## The rule
 
@@ -101,13 +101,17 @@ Parking the caret at the right edge — which container rows and leaf rows each 
 
 ## Attention
 
-Errors, denials and approval requests **always** break out as a full-width card. They can never sit inside a rolling window or a folded group.
+Amended 2026-08-04. The draft had errors, denials and approval requests all breaking out as one full-width card in the transcript. What shipped splits them: a failure is reported where it happened, and a decision is a durable `SessionInteraction` drawn by one card (`interaction-ui.tsx`) with two mount points, chosen by whether a row can hold it.
 
-The card carries a right-aligned action plus the escape hatch: **"No, and tell it what to do differently"** — which converts a refusal into steering rather than a dead end. After the decision resolves, the card leaves a one-line receipt in scrollback (`✓ You allowed rm -rf node_modules this time`) so the transcript stays an honest record of what was authorized.
+**A failure does not break out.** It stays inside its bundle, confessed by the summary in the destructive tone, and a bundle holding one is open before anyone asks — `bundleSummary` returns `SummarySegment[]` carrying a tone rather than a string, and `bundleNeedsAttention` is what derives open state. A collapsed bundle may hide detail; it never hides outcome.
 
-Folded headers confess outcomes: `Explored 4 reads · 1 failed`. A collapsed group may hide detail; it must never hide outcome. This requires `activitySummary` to return `{text, tone}[]` rather than a string.
+**A gated call carries its card on its row.** The call leaves the bundle as its own segment, and the card mounts under the row it gates, where the command and its detail already are. The composer stays: the turn is blocked, the reader's place is not. Correlation is the harness's own id on both sides (`interactionForApproval`), never adjacency — a gate with nothing to pair it to keeps its gated glyph and is drawn at the foot instead. Approval-pending never shares a glyph with running.
 
-Approval-pending must never share a glyph with running.
+**Anything no row can hold replaces the composer.** A question, or a permission the harness raised without a call, lands in the composer's own slot at the foot; `footInteraction` picks the oldest, because two blocking cards there are two things each claiming to be the one thing to do next. While it stands there is nothing to type and no plan progress to read, so the composer and the todo dock stand down and the card takes the slot whole — and it carries Stop, which is the exit the composer took with it. A blocker (a decision that never reached the harness, an auth or configuration failure) renders above the slot, card included: a card answers the question it was asked and cannot answer a failure.
+
+The card draws the options the harness declared, and a request that asks several things shows one question at a time behind a `2 of 3` counter. Refusal is an option id where the harness declares one and a control of the card's where it does not. The escape hatch is a text box on every question, never gated on a capability: what the harness cannot carry travels as the next message after the resolution rather than being merged into it, so a refusal stays empty and the steering still arrives.
+
+A resolved interaction leaves a one-line receipt at the point in scrollback where it was answered — `You allowed rm -rf node_modules once` — so the transcript stays an honest record of what was authorized. A denial the harness reports on its own leaves the same shape from the row's own verdict (`AttentionReceipt`), since a harness may refuse a call with no interaction of ours ever having been open.
 
 ## Composer
 
