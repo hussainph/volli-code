@@ -6,15 +6,52 @@ The question this answers is *not* "have we reached OpenCode parity" — `openco
 
 Audited 2026-08-04 against `497fd0c` across five parallel passes: transport, UI quality, live performance, session lifecycle, and quality gates. Every claim is cited to a file and line. Line numbers drift; the surrounding quote is the durable part.
 
-## Verdict
+## Revalidation on the migration branch
 
-**Migrate — but not on the current state. The prep is finite, well-bounded, and none of it is an architectural rewrite.**
+Revalidated 2026-08-04 against `8a358df` by three independent read-only passes plus a root architecture audit, before any further implementation. The original audit found real blockers, but its headline was too optimistic and three proposed fixes crossed contracts that the plan said would remain untouched.
+
+**Revised verdict: begin migration preparation, not the file move.** The durable Session foundation is ready. The production edge, renderer ownership model, recovery semantics, and streaming representation are not yet specified tightly enough to move the Lab surface into the app without baking prototype behavior into production.
+
+The following corrections supersede conflicting text below:
+
+1. **A1 needs project identity, not a singleton catalog.** `createRuntimeCatalog` is directory-bound, while every `runtimeCatalog.*` input and the current RPC context are adapter-only. `main/index.ts` therefore cannot safely “construct it per project” until the transport carries a project/session routing key or accepts a resolver. Deferring the catalog's single-directory behavior would make the production app probe the wrong checkout in a multi-project workspace.
+2. **B2's proposed `native_resume` attach is invalid.** A client-issued attach supplies `native: null`; OpenCode requires a provider Session id for `native_resume`. Runtime rehydration already resumes an existing *open* attachment internally. A closed or failed provider attachment needs an explicit product contract: either a fresh provider conversation attached to the same durable Session and labelled honestly, or a deliberate native-reference resume capability.
+3. **C3 necessarily touches the Session stream contract.** `HarnessObservation` currently carries a full `UIMessage`, the runtime persists it as a transcript artifact, and RPC publishes the resulting frame. Durable deltas require new engine/artifact/RPC semantics. A transient delta overlay with only final durable snapshots is a different durability choice. Neither is an adapter-only frame-shape edit.
+4. **C4 named the wrong renderer.** The active path is Streamdown's Shiki integration; `ai-elements/code-block.tsx` has no consumer and cannot be the measured source of fence rebuilds. Delta transport alone also does not prevent a growing open fence from being re-highlighted. The migration gate needs a browser benchmark for an open code fence and a renderer policy such as highlight-on-close/stability.
+5. **The app tab model is terminal-shaped.** `stores/sessions.ts` is not already a generic Session registry: a tab owns terminal split/pane geometry, exit codes, and launch facts, and `TicketSessionPlane` routes an active id to the terminal overlay. Structured Sessions need a discriminated tab model or a separate resident registry before controller state moves out of React.
+6. **The legacy list fix is filtering, not fallback copy.** `SessionRecord` requires terminal-only fields and is reused by PTY/agent compatibility paths. Structured-only Sessions must be omitted from the legacy terminal endpoints until a discriminated listing DTO lands; changing the fabricated words would preserve the lie.
+7. **A start failure was missing from the audit.** `adapter.attach` failures normally return rejected receipts. The Lab controller previously treated any resolved mutation as success and rendered Ready with no executor.
+8. **Several measurements are useful leads, not reproducible gates.** The 81x stream amplification, exact bundle totals, and coverage statement/branch counts were not committed as replayable evidence. Re-measure them with checked-in probes before using them as acceptance thresholds. `contains-task-list` is generated GFM markup, not a Tailwind utility selector.
+
+Safe preparation landed in this branch after the revalidation:
+
+- The IPC subscription protocol now carries explicit `data`, `done`, and sanitized `error` frames, with cancellation still silent to the cancelling renderer.
+- A rejected first adapter attachment leaves the durable Session id visible but returns an error lifecycle instead of Ready.
+- Legacy terminal-list IPC omits structured-only Sessions rather than fabricating terminal records.
+- Production Tailwind scanning includes AI Elements and Streamdown, and the desktop build asserts representative selectors in the emitted stylesheet.
+- Clipboard success/failure is covered, and Streamdown math is disabled in both message and reasoning renderers while code and Mermaid remain.
+- Native OpenCode lookup now resolves lazily through the login-shell PATH and canonicalizes the executable before the adapter fingerprints and spawns it; the packaged smoke below is still required.
+
+Still gating the file move:
+
+- project-aware Runtime Catalog routing and the production preload/tRPC link;
+- a resident structured-Session tab/store model and controller lifecycle tests;
+- an explicit post-provider-failure continuity contract;
+- a durable-versus-transient streaming decision plus reproducible wire and fenced-code browser benchmarks;
+- packaged OpenCode binary proof under a Finder-like environment;
+- coverage enrollment and a packaged Session-chat smoke alongside the move.
+
+Post-change proof on the combined tree: all focused seams passed, workspace typecheck and `vp check` passed, `vp run -r test:coverage` passed at 100% after rerunning the Unix-socket tests outside the sandbox, and the production desktop build passed the emitted-CSS assertion. A real Chrome smoke loaded `#chat-session` and the scripted single-question scenario with one assistant turn, its interaction controls, and no page exception; the existing favicon 404 remains unrelated. This is a functional smoke, not the missing fenced-code performance benchmark or packaged OpenCode launch proof.
+
+## Original verdict (superseded by the revalidation above)
+
+**Original call: migrate after finite preparation.** The revalidation above narrows that to migration preparation because several missing contracts are architectural decisions, not mechanical edge wiring.
 
 All five passes returned READY-WITH-WORK independently. The reason to trust that convergence is what the deepest question turned up: **the terminal path and the structured path are already one Session identity in one ledger.** Migration 018 (`apps/desktop/src/main/db/migrations.ts:470-585`) replaced the terminal-shaped `sessions` row with an identity-only row plus `session_attachments` / `session_commands` / `session_events` / `session_command_receipts`. A chat Session is a second adapter on that identity, not a second notion of session.
 
-That was the question that could have sunk this. It is already answered, and answered correctly. **Nothing in `@volli/session-engine`, `@volli/session-rpc`, or the SQLite schema has to change for the migration.**
+That was the question that could have sunk this. It is already answered, and answered correctly. The schema does not need to change. The revalidation refutes the stronger original claim about `@volli/session-engine` and `@volli/session-rpc`: a durable delta representation would change both contracts.
 
-What is missing is the *edge* — and the edge is small.
+The original audit treated the remainder as a small edge. The revalidation above records where that was too narrow.
 
 ## Where the boundary actually sits
 
