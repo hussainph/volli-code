@@ -30,7 +30,6 @@
     "@shikijs/vscode-textmate": "10.0.2",
     "@streamdown/cjk": "^1.0.3",
     "@streamdown/code": "^1.1.1",
-    "@streamdown/math": "^1.0.2",
     "@streamdown/mermaid": "^1.0.2",
     "@trpc/client": "^11.18.0",
     "@trpc/server": "^11.18.0",
