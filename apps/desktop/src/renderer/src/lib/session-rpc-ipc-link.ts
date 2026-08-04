@@ -76,14 +76,13 @@ export function sessionRpcIpcLink(bridge: SessionRpcBridge): TRPCLink<AppRouter>
   return () =>
     ({ op }) =>
       observable((observer) => {
-        const procedure = routedProcedure(op.path);
-        if (procedure === null) {
+        const request = routedRequest(op.path, op.input);
+        if (request === null) {
           observer.error(
             failure("NOT_FOUND", `${op.path} is not routed over Session IPC`, op.path),
           );
           return;
         }
-        const request = { procedure, input: op.input } as SessionRpcIpcRequest;
 
         if (op.type !== "subscription") {
           void (async () => {
@@ -209,10 +208,18 @@ export function sessionRpcClient(): SessionRpcClient {
   return client;
 }
 
-/** The routed procedure `path` names, or `null` when this transport has no route for it. */
-function routedProcedure(path: string): SessionRpcIpcProcedure | null {
+/**
+ * The request for `path`, or `null` when this transport has no route for it.
+ *
+ * The envelope is a union of one member per procedure — main narrows on it to
+ * reach the right caller, and its `never` arm is what makes a forgotten
+ * procedure a compile error. A union cannot be built from a variable
+ * discriminant, so the assertion lands here, once, immediately after membership
+ * has been checked.
+ */
+function routedRequest(path: string, input: unknown): SessionRpcIpcRequest | null {
   return (SESSION_RPC_IPC_PROCEDURES as readonly string[]).includes(path)
-    ? (path as SessionRpcIpcProcedure)
+    ? ({ procedure: path as SessionRpcIpcProcedure, input } as SessionRpcIpcRequest)
     : null;
 }
 
