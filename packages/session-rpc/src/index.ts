@@ -1,4 +1,4 @@
-import { initTRPC, tracked } from "@trpc/server";
+import { initTRPC, TRPCError, tracked } from "@trpc/server";
 import {
   MAX_RUNTIME_PREFERENCE_MODELS,
   type RuntimeCatalog,
@@ -19,7 +19,7 @@ type RpcUiMessage = Extract<SessionClientCommand, { kind: "message.submit" }>["m
  */
 export interface SessionRouterContext {
   runtime: SessionRuntime;
-  runtimeCatalog?: RuntimeCatalog;
+  resolveRuntimeCatalog?: (projectId?: string) => RuntimeCatalog | Promise<RuntimeCatalog>;
   diagnostics: RpcDiagnosticLog;
   transport?: "electron-ipc" | "lab-http" | "unknown";
 }
@@ -300,6 +300,7 @@ export function createSessionRouter() {
       inspect: instrumentedProcedure
         .input(
           z.object({
+            projectId: z.string().optional(),
             adapterId: nonEmptyString,
             providerId: nonEmptyString.optional(),
             query: z.string().max(200).optional(),
@@ -308,13 +309,30 @@ export function createSessionRouter() {
             refresh: z.boolean().optional(),
           }),
         )
-        .query(({ ctx, input }) => requireRuntimeCatalog(ctx).inspect(input)),
+        .query(async ({ ctx, input }) => {
+          const { projectId, ...rest } = input;
+          const catalog = await requireRuntimeCatalog(ctx, projectId);
+          return catalog.inspect(rest);
+        }),
       save: instrumentedProcedure
-        .input(z.object({ adapterId: nonEmptyString, preferences: runtimePreferencesSchema }))
-        .mutation(({ ctx, input }) => requireRuntimeCatalog(ctx).save(input)),
+        .input(
+          z.object({
+            projectId: z.string().optional(),
+            adapterId: nonEmptyString,
+            preferences: runtimePreferencesSchema,
+          }),
+        )
+        .mutation(async ({ ctx, input }) => {
+          const { projectId, ...rest } = input;
+          const catalog = await requireRuntimeCatalog(ctx, projectId);
+          return catalog.save(rest);
+        }),
       resolve: instrumentedProcedure
         .input(z.object({ adapterId: nonEmptyString }))
-        .query(({ ctx, input }) => requireRuntimeCatalog(ctx).resolve(input)),
+        .query(async ({ ctx, input }) => {
+          const catalog = await requireRuntimeCatalog(ctx, undefined);
+          return catalog.resolve(input);
+        }),
     }),
     session: t.router({
       snapshot: instrumentedProcedure
@@ -470,9 +488,21 @@ function rendererSnapshot(snapshot: SessionRuntimeSnapshot): SessionRuntimeSnaps
   };
 }
 
-function requireRuntimeCatalog(context: SessionRouterContext): RuntimeCatalog {
-  if (!context.runtimeCatalog) throw new Error("Runtime Catalog is unavailable on this transport");
-  return context.runtimeCatalog;
+async function requireRuntimeCatalog(
+  context: SessionRouterContext,
+  projectId: string | undefined,
+): Promise<RuntimeCatalog> {
+  if (!context.resolveRuntimeCatalog) {
+    throw new Error("Runtime Catalog is unavailable on this transport");
+  }
+  try {
+    return await context.resolveRuntimeCatalog(projectId);
+  } catch (error) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 export type AppRouter = ReturnType<typeof createSessionRouter>;

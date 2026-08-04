@@ -94,3 +94,9 @@ export interface RuntimeCatalogSaveInput {
   adapterId: string;
   preferences: RuntimePreferences;
 }
+
+/** Wire shape for `runtimeCatalog.inspect`: the engine-shaped browse input plus routing. */
+export type RuntimeCatalogInspectRequest = RuntimeCatalogBrowseInput & { projectId?: string };
+
+/** Wire shape for `runtimeCatalog.save`: the engine-shaped save input plus routing. */
+export type RuntimeCatalogSaveRequest = RuntimeCatalogSaveInput & { projectId?: string };
