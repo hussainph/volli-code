@@ -401,9 +401,12 @@ app.whenReady().then(async () => {
         // Resolve only when a native Session attaches. Finder launches do not
         // inherit the user's toolchain PATH, and doing this at boot could make
         // every launch wait on an interactive shell for an adapter it never
-        // uses. A stored per-harness override wins — read live, at resolution
-        // time, so a later Settings change takes effect on the next attach
-        // without a relaunch.
+        // uses. A stored per-harness override wins, read at resolution time
+        // rather than captured here — but the adapter caches the binary it
+        // verified (`#verifiedBinary`) for the rest of the launch, so this
+        // runs once per process and a Settings change lands on the NEXT
+        // relaunch, not the next attach. Applying an override live would need
+        // an adapter seam to drop that cached binary; there is none yet.
         resolveCommand: (command) =>
           resolveOpenCodeBinary(storedHarnessCommand(dbHandle.db, "opencode") ?? command),
         // The server child inherits the user's login-shell PATH, not
