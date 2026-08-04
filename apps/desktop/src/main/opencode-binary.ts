@@ -2,6 +2,9 @@ import { constants } from "node:fs";
 import { access, realpath } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 
+import { errorMessage } from "@volli/shared";
+import type { HarnessCommandFailureReason } from "@volli/shared";
+
 import { resolveOnPath } from "./agent-tools";
 import { loginShellPath } from "./login-path";
 
@@ -12,7 +15,7 @@ export interface OpenCodeBinaryResolverDeps {
   realpath(path: string): Promise<string>;
 }
 
-async function isExecutable(path: string): Promise<boolean> {
+export async function isExecutable(path: string): Promise<boolean> {
   try {
     await access(path, constants.X_OK);
     return true;
@@ -34,6 +37,49 @@ function isPath(command: string): boolean {
 }
 
 /**
+ * One candidate located on disk, or why the search for one refused to
+ * produce one — the shared outcome of both search strategies below, so a
+ * caller can turn it into a thrown `Error` (`resolveOpenCodeBinary`) or a
+ * typed result ({@link validateHarnessBinary}) without either strategy
+ * needing to know which.
+ */
+type BinaryLocation =
+  | { ok: true; path: string }
+  | { ok: false; reason: "not-executable" }
+  | { ok: false; reason: "path-unreadable" | "not-on-path" };
+
+/** The isPath branch: `command` is taken at its word and must already be executable. */
+export async function verifiedPath(
+  command: string,
+  deps: OpenCodeBinaryResolverDeps,
+): Promise<BinaryLocation> {
+  return (await deps.isExecutable(command))
+    ? { ok: true, path: command }
+    : { ok: false, reason: "not-executable" };
+}
+
+/** The bare-name branch: `command` is walked down the login-shell PATH. */
+async function resolvedOnLoginShellPath(
+  command: string,
+  deps: OpenCodeBinaryResolverDeps,
+): Promise<BinaryLocation> {
+  const pathValue = await deps.loginShellPath();
+  if (pathValue === null) return { ok: false, reason: "path-unreadable" };
+  const binaryPath = await deps.resolveOnPath(pathValue, command);
+  return binaryPath === null
+    ? { ok: false, reason: "not-on-path" }
+    : { ok: true, path: binaryPath };
+}
+
+/** The one search a candidate binary goes through, however it will be reported. */
+async function locateBinary(
+  command: string,
+  deps: OpenCodeBinaryResolverDeps,
+): Promise<BinaryLocation> {
+  return isPath(command) ? verifiedPath(command, deps) : resolvedOnLoginShellPath(command, deps);
+}
+
+/**
  * Resolves an OpenCode executable through the user's login shell, not
  * Electron's Finder/Dock environment. Call this only from the adapter's lazy
  * binary-resolution hook: asking a login shell is not a boot-time operation.
@@ -49,33 +95,56 @@ export async function resolveOpenCodeBinary(
   command: string,
   deps: OpenCodeBinaryResolverDeps = processDeps,
 ): Promise<string> {
-  const binaryPath = isPath(command)
-    ? await verifiedPath(command, deps)
-    : await resolvedOnLoginShellPath(command, deps);
+  const located = await locateBinary(command, deps);
+  if (!located.ok) {
+    throw new Error(
+      located.reason === "not-executable"
+        ? `OpenCode executable ${command} is not an executable file`
+        : located.reason === "path-unreadable"
+          ? "Could not read the login-shell PATH to find OpenCode"
+          : `OpenCode executable ${command} was not found on the login-shell PATH`,
+    );
+  }
   // Hash and spawn the same canonical target, whichever route named it. Keeping
   // a symlink here would reintroduce a swap window between fingerprinting and
   // launch.
-  return deps.realpath(binaryPath);
+  return deps.realpath(located.path);
 }
 
-async function verifiedPath(command: string, deps: OpenCodeBinaryResolverDeps): Promise<string> {
-  if (!(await deps.isExecutable(command))) {
-    throw new Error(`OpenCode executable ${command} is not an executable file`);
-  }
-  return command;
-}
+/** Outcome of {@link validateHarnessBinary}. */
+export type HarnessBinaryValidation =
+  | { ok: true; resolvedPath: string }
+  | { ok: false; reason: HarnessCommandFailureReason; error: string };
 
-async function resolvedOnLoginShellPath(
+/**
+ * Validates an arbitrary harness binary override candidate the same way
+ * {@link resolveOpenCodeBinary} treats OpenCode's — the same search
+ * ({@link locateBinary}), reused rather than re-walked, reported as a typed
+ * result instead of a throw so a settings write can surface exactly why a
+ * candidate was refused. The winning candidate is canonicalized with
+ * `realpath` before being accepted, same as the launch path: a symlink swap
+ * between validation and use must not slip through here either.
+ */
+export async function validateHarnessBinary(
   command: string,
-  deps: OpenCodeBinaryResolverDeps,
-): Promise<string> {
-  const pathValue = await deps.loginShellPath();
-  if (pathValue === null) {
-    throw new Error("Could not read the login-shell PATH to find OpenCode");
+  deps: OpenCodeBinaryResolverDeps = processDeps,
+): Promise<HarnessBinaryValidation> {
+  const located = await locateBinary(command, deps);
+  if (!located.ok) {
+    return located.reason === "not-executable"
+      ? { ok: false, reason: "not-executable", error: `${command} is not an executable file` }
+      : {
+          ok: false,
+          reason: "not-found",
+          error:
+            located.reason === "path-unreadable"
+              ? `Could not read the login-shell PATH to find ${command}`
+              : `${command} was not found on the login-shell PATH`,
+        };
   }
-  const binaryPath = await deps.resolveOnPath(pathValue, command);
-  if (binaryPath === null) {
-    throw new Error(`OpenCode executable ${command} was not found on the login-shell PATH`);
+  try {
+    return { ok: true, resolvedPath: await deps.realpath(located.path) };
+  } catch (error) {
+    return { ok: false, reason: "not-resolvable", error: errorMessage(error) };
   }
-  return binaryPath;
 }

@@ -459,12 +459,56 @@ export type HarnessRegisteredResult =
   | { ok: true; harnesses: HarnessAdapter[]; channels: HarnessChannelStatus[] }
   | { ok: false; error: string };
 
+/** `{ harnessId }` — which harness's binary override to read. */
+export interface HarnessCommandGetInput {
+  harnessId: string;
+}
+
+/**
+ * `{ harnessId, command }` — `command: null` clears the override back to
+ * default resolution; a string is validated and, if it resolves, persisted
+ * verbatim. Never the realpath: resolution runs live at attach time, so a
+ * later PATH or filesystem change is honored without the user re-entering
+ * anything.
+ */
+export interface HarnessCommandSetInput {
+  harnessId: string;
+  command: string | null;
+}
+
+/** The stored raw override for one harness's binary — returned by `volli:harness-command-get`. Null when unset. */
+export type HarnessCommandGetResult = Result<{ command: string | null }>;
+
+/**
+ * Why `volli:harness-command-set` refused a candidate. `not-found` covers a
+ * bare name absent from the login-shell PATH, including a PATH main could not
+ * read at all; `not-executable` is an explicit path that exists but cannot be
+ * run; `not-resolvable` is a candidate that located fine but could not be
+ * canonicalized (e.g. a broken symlink).
+ */
+export type HarnessCommandFailureReason = "not-found" | "not-executable" | "not-resolvable";
+
+/**
+ * Ack for `volli:harness-command-set`. Success carries the canonical realpath
+ * for display — `null` only when the call CLEARED the override, since a
+ * candidate that validated always resolved to a real path. Failure stores
+ * nothing: `reason` is what a caller branches on, `error` is what a human
+ * reads.
+ */
+export type HarnessCommandSetResult =
+  | { ok: true; resolvedPath: string | null }
+  | { ok: false; reason: HarnessCommandFailureReason; error: string };
+
 /**
  * The bring-your-own-harness surface (`src/main/harness-ipc.ts`): ask what is
  * waiting, answer one of them, and ask what the answers add up to. A registered
  * manifest is inert until a verdict lands here, so the first two channels are
  * the whole difference between a manifest on disk and a harness that can
  * launch — and the third is how anything but main gets to hear that it did.
+ *
+ * The last two channels are a separate concern living on the same surface: a
+ * per-harness binary override, read live and validated the same way the
+ * launch path itself resolves a binary.
  */
 export interface VolliHarnessIpcContract {
   /** Every discovered manifest nobody has ruled on, re-read and re-hashed per call. */
@@ -473,6 +517,16 @@ export interface VolliHarnessIpcContract {
   "volli:harness-trust-set": { args: [input: HarnessTrustSetInput]; result: Result };
   /** The trusted registered harnesses, as the launch path would resolve them. */
   "volli:harness-registered": { args: []; result: HarnessRegisteredResult };
+  /** The stored raw override for one harness's binary, or null when unset. */
+  "volli:harness-command-get": {
+    args: [input: HarnessCommandGetInput];
+    result: HarnessCommandGetResult;
+  };
+  /** Validates and persists (or, given `command: null`, clears) a per-harness binary override. */
+  "volli:harness-command-set": {
+    args: [input: HarnessCommandSetInput];
+    result: HarnessCommandSetResult;
+  };
 }
 
 export type HarnessIpcChannel = keyof VolliHarnessIpcContract;

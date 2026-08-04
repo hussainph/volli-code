@@ -43,6 +43,10 @@ import {
 import type {
   HarnessAdapter,
   HarnessChannelStatus,
+  HarnessCommandGetInput,
+  HarnessCommandGetResult,
+  HarnessCommandSetInput,
+  HarnessCommandSetResult,
   HarnessIpcChannel,
   HarnessPendingResult,
   HarnessRegisteredResult,
@@ -54,6 +58,11 @@ import type {
 import type { DbHandle } from "./data-ipc";
 import { listHarnessChannels } from "./db/harness-channel-repo";
 import {
+  clearStoredHarnessCommand,
+  setStoredHarnessCommand,
+  storedHarnessCommand,
+} from "./db/harness-command-repo";
+import {
   getRegisteredHarness,
   recordHarnessTrust,
   restoreRegisteredHarness,
@@ -62,6 +71,7 @@ import { decideRegisteredHarnesses, scanHarnessManifests } from "./harness-regis
 import type { DecidedHarnessManifest } from "./harness-registry";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
+import { validateHarnessBinary } from "./opencode-binary";
 
 export interface HarnessIpcDeps {
   /** `~/.agents/harnesses` — walked fresh per call, never remembered between them. */
@@ -270,6 +280,27 @@ export function registerHarnessIpcHandlers(handle: DbHandle, deps: HarnessIpcDep
       // exactly when the answer could have moved.
       channels: channelStates(db, deps),
     }),
+
+    "volli:harness-command-get": (input: HarnessCommandGetInput): HarnessCommandGetResult => ({
+      ok: true,
+      command: storedHarnessCommand(db, input.harnessId),
+    }),
+
+    "volli:harness-command-set": async (
+      input: HarnessCommandSetInput,
+    ): Promise<HarnessCommandSetResult> => {
+      if (input.command === null) {
+        clearStoredHarnessCommand(db, input.harnessId);
+        return { ok: true, resolvedPath: null };
+      }
+      const validation = await validateHarnessBinary(input.command);
+      if (!validation.ok) return validation;
+      // The raw value, never the realpath: a launch resolves fresh every time
+      // it attaches, so a PATH or filesystem change after this write is
+      // honored automatically rather than frozen at the moment of validation.
+      setStoredHarnessCommand(db, input.harnessId, input.command, deps.now());
+      return { ok: true, resolvedPath: validation.resolvedPath };
+    },
   };
 
   registerGuardedIpcHandlers(HARNESS_IPC, handlers);

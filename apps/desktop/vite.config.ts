@@ -142,11 +142,13 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/fs-deps.ts",
         "**/src/main/ghostty-config.ts",
         "**/src/main/harness-ipc.ts",
+        "**/src/main/opencode-binary.ts",
         "**/src/main/window-theme.ts",
         "**/src/main/theme-ipc.ts",
         "**/src/main/theme-overlay.ts",
         "**/src/main/db/export.ts",
         "**/src/main/db/theme-repo.ts",
+        "**/src/main/db/harness-command-repo.ts",
       ],
       // Global bar only — vitest applies global thresholds to every included
       // file even when per-glob entries exist, so partial carve-outs can't
