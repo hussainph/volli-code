@@ -14,6 +14,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   appendFrames,
+  attachLabExecutor,
   mergeTranscriptMessages,
   startLabSession,
   type LabSessionFrame,
@@ -230,5 +231,70 @@ describe("startLabSession", () => {
     } as unknown as Parameters<typeof startLabSession>[0];
 
     await expect(startLabSession(rpc, null)).rejects.toThrow("socket hang up");
+  });
+});
+
+describe("attachLabExecutor", () => {
+  it("retries onto the Session the refused attach left behind, not a new one", async () => {
+    // A rejected attach does not un-create the Session, so the retry must not
+    // create one either: one `session.create`, and every attempt after it is
+    // another `adapter.attach` addressed to the same durable id.
+    const mutations: Array<Record<string, unknown>> = [];
+    const rpc = {
+      session: {
+        command: {
+          mutate: async (input: unknown) => {
+            mutations.push(input as Record<string, unknown>);
+            if (mutations.length === 1) return { sessionId: "durable-session" };
+            if (mutations.length === 2) {
+              return {
+                sessionId: "durable-session",
+                receipt: {
+                  status: "rejected",
+                  code: "adapter_unavailable",
+                  detail: "OpenCode is unavailable",
+                },
+              };
+            }
+            return { sessionId: "durable-session", receipt: { status: "accepted" } };
+          },
+        },
+      },
+    } as unknown as Parameters<typeof startLabSession>[0];
+
+    const started = await startLabSession(rpc, null);
+    expect(started.lifecycle).toBe("error");
+
+    await expect(attachLabExecutor(rpc, started.sessionId, null)).resolves.toEqual({
+      sessionId: "durable-session",
+      lifecycle: "ready",
+      error: null,
+    });
+
+    expect(mutations.map((sent) => (sent.command as { kind: string }).kind)).toEqual([
+      "session.create",
+      "adapter.attach",
+      "adapter.attach",
+    ]);
+    expect(mutations[1]?.sessionId).toBe("durable-session");
+    expect(mutations[2]?.sessionId).toBe("durable-session");
+  });
+
+  it("keeps the Session id when the retried attach throws too", async () => {
+    const rpc = {
+      session: {
+        command: {
+          mutate: async () => {
+            throw new Error("socket hang up");
+          },
+        },
+      },
+    } as unknown as Parameters<typeof startLabSession>[0];
+
+    await expect(attachLabExecutor(rpc, "durable-session", null)).resolves.toEqual({
+      sessionId: "durable-session",
+      lifecycle: "error",
+      error: "Could not start OpenCode: socket hang up",
+    });
   });
 });
