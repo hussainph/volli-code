@@ -6,7 +6,7 @@
  *   • accessible name starts with "Create & start" and carries the current
  *     harness label, e.g. "Create & start · Claude Code";
  *   • a neighboring "Choose agent" picker (visible label = active harness)
- *     opens a menu of Claude Code / Codex / Opencode that switches the
+ *     opens a menu of Claude Code / Codex / OpenCode that switches the
  *     active harness;
  *   • clicking it creates the ticket DIRECTLY in Doing (regardless of the Status
  *     chip), navigates into the ticket detail view, creates + focuses a terminal

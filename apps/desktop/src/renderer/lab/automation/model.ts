@@ -191,7 +191,7 @@ export const HARNESS_ADAPTERS: Record<LabHarnessId, HarnessAdapterUi> = {
     },
   },
   opencode: {
-    label: "Opencode",
+    label: "OpenCode",
     invocation: "opencode run %p",
     modelArg: "-m %s",
     models: ["anthropic/claude-opus-5", "openai/gpt-5.1", "google/gemini-3-pro"],

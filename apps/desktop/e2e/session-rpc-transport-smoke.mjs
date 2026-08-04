@@ -88,6 +88,9 @@ async function main() {
     await attempt(5, "Settings answers about OpenCode instead of checking forever", async () => {
       await page.getByRole("button", { name: "Settings", exact: true }).first().click();
       await page.getByRole("button", { name: "Harness Runtimes", exact: true }).click();
+      // The category details one harness at a time and opens on the first
+      // built-in, so the model browser is behind OpenCode's own selection.
+      await page.getByRole("button", { name: "OpenCode", exact: true }).click();
       const settled = await waitUntil("the OpenCode section to settle", async () => {
         if ((await page.getByText("Checking the local runtime…").count()) > 0) return false;
         const unavailable = await page.getByText("OpenCode unavailable").count();

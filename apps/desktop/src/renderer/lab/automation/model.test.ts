@@ -179,7 +179,7 @@ describe("switchHarness", () => {
   });
 
   it("remaps effort by relative position when names disagree", () => {
-    // Claude: low medium high xhigh max (index 4 = max). Opencode: minimal high max.
+    // Claude: low medium high xhigh max (index 4 = max). OpenCode: minimal high max.
     const from = { ...defaultRuntime("claude-code"), effort: "max" };
     expect(switchHarness(from, "opencode").effort).toBe("max");
   });

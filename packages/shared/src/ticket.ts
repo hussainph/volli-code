@@ -123,7 +123,7 @@ export const HARNESS_LABELS: Record<FirstClassHarnessId, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
   cursor: "Cursor",
-  opencode: "Opencode",
+  opencode: "OpenCode",
 };
 
 /**

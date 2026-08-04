@@ -101,8 +101,12 @@ function ConnectedRuntimeCatalogSettings({ client }: { client: RuntimeCatalogCon
   }
 
   return (
+    // "Models" rather than "OpenCode": this section now renders inside the
+    // OpenCode harness pane, which already names the harness in its selector
+    // and its identity card. Titling it again would leave three OpenCodes
+    // stacked down one column saying nothing new.
     <SettingsSection
-      title="OpenCode"
+      title="Models"
       icon={CpuIcon}
       action={
         <Button

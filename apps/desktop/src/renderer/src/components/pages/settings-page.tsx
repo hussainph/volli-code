@@ -6,15 +6,10 @@ import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
 import { useCallback, useEffect, useState } from "react";
-import {
-  errorMessage,
-  FIRST_CLASS_HARNESS_IDS,
-  HARNESS_LABELS,
-  type DirtyWorktreeOrphan,
-} from "@volli/shared";
+import { errorMessage, type DirtyWorktreeOrphan } from "@volli/shared";
 
 import { AppearanceSettings } from "@renderer/components/pages/appearance-settings";
-import { RuntimeCatalogSettings } from "@renderer/components/pages/runtime-catalog-settings";
+import { HarnessSettings } from "@renderer/components/pages/harness-settings";
 import {
   SettingsRow,
   SettingsSection,
@@ -59,7 +54,7 @@ export function SettingsPage({ initialCategoryKey }: { initialCategoryKey?: stri
       key: "harness",
       label: "Harness Runtimes",
       icon: CpuIcon,
-      content: <HarnessRuntimesSettings />,
+      content: <HarnessSettings />,
     },
     {
       key: "worktrees",
@@ -177,29 +172,6 @@ function DoneTtlField() {
         {saving ? "Saving…" : "Save"}
       </Button>
     </SettingsRow>
-  );
-}
-
-/**
- * Harness Runtimes category — scaffold (CONCEPT: agent-agnostic command
- * templates). Lists the first-class harness ids read-only from the same
- * `@volli/shared` catalog the new-ticket composer sources; per-runtime
- * management (custom command templates, resume flags) lands later.
- */
-function HarnessRuntimesSettings() {
-  return (
-    <>
-      <RuntimeCatalogSettings />
-      <SettingsSection title="Runtimes" icon={CpuIcon}>
-        {FIRST_CLASS_HARNESS_IDS.map((id) => (
-          <SettingsRow key={id} label={HARNESS_LABELS[id]}>
-            <span className="rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground">
-              Built-in
-            </span>
-          </SettingsRow>
-        ))}
-      </SettingsSection>
-    </>
   );
 }
 
