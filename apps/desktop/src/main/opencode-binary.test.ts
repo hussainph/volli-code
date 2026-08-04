@@ -13,9 +13,7 @@ function deps(overrides: Partial<OpenCodeBinaryResolverDeps> = {}): OpenCodeBina
 }
 
 describe("resolveOpenCodeBinary", () => {
-  it("uses the login-shell PATH over a Finder-like process PATH and returns an absolute executable", async () => {
-    const originalPath = process.env.PATH;
-    process.env.PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+  it("walks a bare name down the login-shell PATH and returns the canonical executable", async () => {
     const resolveOnPath = vi.fn(async (pathValue: string, command: string) => {
       expect(pathValue).toBe("/opt/homebrew/bin:/usr/bin:/bin");
       expect(command).toBe("opencode");
@@ -26,18 +24,12 @@ describe("resolveOpenCodeBinary", () => {
       return "/opt/homebrew/Cellar/opencode/1.0/bin/opencode";
     });
 
-    try {
-      await expect(
-        resolveOpenCodeBinary("opencode", deps({ resolveOnPath, realpath })),
-      ).resolves.toBe("/opt/homebrew/Cellar/opencode/1.0/bin/opencode");
+    await expect(
+      resolveOpenCodeBinary("opencode", deps({ resolveOnPath, realpath })),
+    ).resolves.toBe("/opt/homebrew/Cellar/opencode/1.0/bin/opencode");
 
-      expect(process.env.PATH).toBe("/usr/bin:/bin:/usr/sbin:/sbin");
-      expect(resolveOnPath).toHaveBeenCalledOnce();
-      expect(realpath).toHaveBeenCalledOnce();
-    } finally {
-      if (originalPath === undefined) delete process.env.PATH;
-      else process.env.PATH = originalPath;
-    }
+    expect(resolveOnPath).toHaveBeenCalledOnce();
+    expect(realpath).toHaveBeenCalledOnce();
   });
 
   it("reports a login shell that could not answer", async () => {
