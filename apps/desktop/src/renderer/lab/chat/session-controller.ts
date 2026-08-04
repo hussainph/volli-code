@@ -173,6 +173,55 @@ export interface LabSessionController {
   recover(): Promise<boolean>;
 }
 
+/** The observable result of creating one durable Session and attaching its first executor. */
+export interface LabSessionStartResult {
+  sessionId: string;
+  lifecycle: "ready" | "error";
+  error: string | null;
+}
+
+/**
+ * Starts a Lab Session through the same RPC boundary the controller uses.
+ *
+ * An attachment rejection is a completed RPC round-trip, not an exception.
+ * Keep that distinction at the start boundary so callers never render Ready
+ * for a durable Session which has no executor.
+ */
+export async function startLabSession(
+  rpc: Pick<SessionRpcClient, "session">,
+  scenarioId: string | null,
+): Promise<LabSessionStartResult> {
+  const created = await rpc.session.command.mutate({
+    commandId: nextId(),
+    command: {
+      kind: "session.create",
+      projectId: LAB_SESSION_PROJECT_ID,
+      ticketId: LAB_SESSION_TICKET_ID,
+      title: "LAB-14 · OpenCode chat prototype",
+    },
+  });
+  const attached = await rpc.session.command.mutate({
+    commandId: nextId(),
+    sessionId: created.sessionId,
+    command: {
+      kind: "adapter.attach",
+      adapterId: scenarioId ? LAB_SCENARIO_ADAPTER_ID : "opencode",
+      // A scenario is a harness profile of the scripted adapter, so the
+      // pick rides the attach the runtime already validates.
+      profileId: scenarioId ?? "native",
+      continuity: "fresh",
+    },
+  });
+  const refusal = rejectedReceipt(attached);
+  return refusal === null
+    ? { sessionId: created.sessionId, lifecycle: "ready", error: null }
+    : {
+        sessionId: created.sessionId,
+        lifecycle: "error",
+        error: `Could not start OpenCode: ${refusal}`,
+      };
+}
+
 /**
  * Drives one lab Session.
  *
@@ -441,30 +490,11 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
     setProjection(null);
     setTranscript(EMPTY_TRANSCRIPT);
     try {
-      const created = await rpc.session.command.mutate({
-        commandId: nextId(),
-        command: {
-          kind: "session.create",
-          projectId: LAB_SESSION_PROJECT_ID,
-          ticketId: LAB_SESSION_TICKET_ID,
-          title: "LAB-14 · OpenCode chat prototype",
-        },
-      });
-      setSessionId(created.sessionId);
-      await rpc.session.command.mutate({
-        commandId: nextId(),
-        sessionId: created.sessionId,
-        command: {
-          kind: "adapter.attach",
-          adapterId: scenarioId ? LAB_SCENARIO_ADAPTER_ID : "opencode",
-          // A scenario is a harness profile of the scripted adapter, so the
-          // pick rides the attach the runtime already validates.
-          profileId: scenarioId ?? "native",
-          continuity: "fresh",
-        },
-      });
-      setLifecycle("ready");
-      return true;
+      const started = await startLabSession(rpc, scenarioId);
+      setSessionId(started.sessionId);
+      setLifecycle(started.lifecycle);
+      setError(started.error);
+      return started.lifecycle === "ready";
     } catch (failure) {
       setLifecycle("error");
       setError(`Could not start OpenCode: ${errorMessage(failure)}`);

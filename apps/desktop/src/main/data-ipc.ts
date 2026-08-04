@@ -92,7 +92,11 @@ import {
   updateProjectBaseBranch,
   updateProjectSetupCommand,
 } from "./db/projects-repo";
-import { createDesktopSessionEngine, terminalSessionRecord } from "./session-control";
+import {
+  createDesktopSessionEngine,
+  latestTerminalAttachment,
+  terminalSessionRecord,
+} from "./session-control";
 import {
   getTicketRow,
   listAllTickets,
@@ -477,7 +481,16 @@ export function registerDataIpcHandlers(
         projectId: input.projectId,
         scope: "all",
       });
-      return { ok: true, sessions: sessions.map(terminalSessionRecord) };
+      return {
+        ok: true,
+        // This is the legacy terminal-record endpoint. A structured-only
+        // Session has no honest `SessionRecord` representation (that DTO
+        // requires terminal harness/process facts), so omit it until the
+        // renderer can consume a discriminated Session listing.
+        sessions: sessions
+          .filter((session) => latestTerminalAttachment(session.attachments) !== null)
+          .map(terminalSessionRecord),
+      };
     },
 
     "volli:session-list-for-ticket": async (input: TicketIdInput): Promise<SessionsResult> => {
@@ -488,7 +501,12 @@ export function registerDataIpcHandlers(
         scope: "ticket",
         ticketId: input.ticketId,
       });
-      return { ok: true, sessions: sessions.map(terminalSessionRecord) };
+      return {
+        ok: true,
+        sessions: sessions
+          .filter((session) => latestTerminalAttachment(session.attachments) !== null)
+          .map(terminalSessionRecord),
+      };
     },
 
     "volli:session-rename": async (input: SessionRenameInput): Promise<SessionRenameResult> => {

@@ -12,7 +12,12 @@ import type { SessionEvent, SessionInteraction } from "@volli/shared";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
-import { appendFrames, mergeTranscriptMessages, type LabSessionFrame } from "./session-controller";
+import {
+  appendFrames,
+  mergeTranscriptMessages,
+  startLabSession,
+  type LabSessionFrame,
+} from "./session-controller";
 import { projectTranscriptMessages } from "./message-projection";
 
 const EMPTY = {
@@ -155,5 +160,37 @@ describe("mergeTranscriptMessages", () => {
     expect(merged.map((held) => held.id)).toEqual(["m1", "m2", "m3"]);
     expect(merged[0]?.parts).toEqual([{ type: "text", text: "one!" }]);
     expect(merged[1]).toBe(current[1]);
+  });
+});
+
+describe("startLabSession", () => {
+  it("keeps the durable Session but reports an error when OpenCode rejects its attachment", async () => {
+    const mutations: unknown[] = [];
+    const rpc = {
+      session: {
+        command: {
+          mutate: async (input: unknown) => {
+            mutations.push(input);
+            return mutations.length === 1
+              ? { sessionId: "durable-session" }
+              : {
+                  sessionId: "durable-session",
+                  receipt: {
+                    status: "rejected",
+                    code: "adapter_unavailable",
+                    detail: "OpenCode is unavailable",
+                  },
+                };
+          },
+        },
+      },
+    } as unknown as Parameters<typeof startLabSession>[0];
+
+    await expect(startLabSession(rpc, null)).resolves.toEqual({
+      sessionId: "durable-session",
+      lifecycle: "error",
+      error: "Could not start OpenCode: OpenCode is unavailable",
+    });
+    expect(mutations).toHaveLength(2);
   });
 });
