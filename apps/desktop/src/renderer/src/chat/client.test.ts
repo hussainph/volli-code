@@ -458,6 +458,19 @@ describe("session derivations", () => {
     expect(settledLifecycle(idle, turning)).toBe("working");
     expect(settledLifecycle(turning, { ...turning, transcript: EMPTY_TRANSCRIPT })).toBe("ready");
   });
+
+  it("settles a turn that opened and closed inside one batch", () => {
+    // Both ends read idle, exactly like a batch that said nothing about turns —
+    // and holding `working` here is what strands the queue behind a turn that
+    // has already finished.
+    const idle = sliceOf({ lifecycle: "working", projection: projectionFor("attach-1") });
+    const whole = {
+      ...idle,
+      transcript: { ...EMPTY_TRANSCRIPT, turnEpoch: EMPTY_TRANSCRIPT.turnEpoch + 2 },
+    };
+
+    expect(settledLifecycle(idle, whole)).toBe("ready");
+  });
 });
 
 /* -------------------------------------------------------------- first light */
@@ -1093,6 +1106,30 @@ describe("the queued message", () => {
     await settle();
 
     expect(rpc.submissions()).toHaveLength(2);
+  });
+
+  it("releases the next one when the whole turn arrived in a single fold", async () => {
+    // A turn can begin and end inside one batch — a fast refusal, an occluded
+    // window folding 50ms at a time, a reconnect replaying what it missed. The
+    // Session reads idle at both ends of that fold, and taking that for silence
+    // left the rest of the queue stranded behind a turn already over.
+    const { rpc, scheduler, store, sessionId, slice, stream } = await pending((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+    });
+
+    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
+    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
+    await settle();
+    expect(rpc.submissions()).toHaveLength(1);
+
+    stream().send("1", frameOf(1, "turn.started"));
+    stream().send("2", frameOf(2, "turn.completed"));
+    scheduler.paint();
+    await settle();
+
+    expect(rpc.submissions()).toHaveLength(2);
+    expect(slice()!.queue).toEqual([]);
   });
 });
 

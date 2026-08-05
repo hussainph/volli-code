@@ -116,6 +116,14 @@ export function isDeliverable(slice: ChatSessionSlice): boolean {
  * the Session to `ready` and the queued message behind it would be released into
  * a turn that had not begun.
  *
+ * Which is why the reading is not the only thing compared. A batch is not one
+ * frame, and a turn that opens and closes inside one — a fast refusal, an
+ * occluded window folding 50ms at a time, a reconnect replaying what it
+ * missed — reads the same at both ends as a batch that never mentioned a turn.
+ * Trusting the reading alone left that Session latched at `working` forever,
+ * with the queue behind it stranded, until some unrelated command settled it.
+ * {@link ChatTranscriptState.turnEpoch} is what separates the two.
+ *
  * `starting` and `error` survive regardless: both are latches a command set and
  * only a command clears, so a frame arriving mid-attach must not quietly declare
  * the Session ready.
@@ -126,7 +134,10 @@ export function settledLifecycle(
 ): ChatSessionLifecycle {
   if (after.lifecycle === "starting" || after.lifecycle === "error") return after.lifecycle;
   const working = isWorking(after);
-  return working === isWorking(before) ? after.lifecycle : working ? "working" : "ready";
+  const spoke =
+    working !== isWorking(before) || after.transcript.turnEpoch !== before.transcript.turnEpoch;
+  if (!spoke) return after.lifecycle;
+  return working ? "working" : "ready";
 }
 
 /* ---------------------------------------------------------------- the store */
@@ -234,7 +245,13 @@ export interface ChatSessionRpc {
  * painted, and a test has to be able to say when.
  */
 export interface FlushScheduler {
-  /** Runs `flush` once, soon. The returned cancel retires a flush that has not run. */
+  /**
+   * Runs `flush` once, soon, and never before returning: the caller records the
+   * cancel this hands back, so a scheduler that flushed synchronously would have
+   * that record overwrite the clean slate its own flush just left and no batch
+   * after it would ever be scheduled. The returned cancel retires a flush that
+   * has not run.
+   */
   schedule(flush: () => void): () => void;
 }
 
