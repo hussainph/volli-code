@@ -42,6 +42,13 @@
  * caches tokenization by code text, so all but the first three highlight out of
  * that cache. Real transcripts have distinct blocks and pay tokenization every
  * time. Treat the with-code figures as a floor, not a ceiling.
+ *
+ * `streamFence()` is the exception to all of that and the reason those numbers
+ * are a floor: it streams ONE turn a chunk at a time through two closed fences
+ * and stops inside a third, so every chunk hands Shiki a code string it has
+ * never seen. It is the transport-independent half of the delta-frames work
+ * (`docs/plans/delta-frames.md`, probe 3) — the wire decides how text arrives,
+ * this decides what the renderer does with a fence one character longer.
  */
 import * as React from "react";
 import { flushSync } from "react-dom";
@@ -69,7 +76,8 @@ import { groupTurns } from "../chat/activity";
 import { ChatTurn, holdList, sameMessages, type TurnContext } from "./chat-session";
 
 export const title = "Chat transcript · performance";
-export const note = "Mount, token, working-flip, scroll and heap at 100 / 1000 / 3000 turns";
+export const note =
+  "Mount, token, working-flip, scroll and heap at 100 / 1000 / 3000 turns, plus the open-fence stream";
 export const viewport = "window" as const;
 
 /* ------------------------------------------------------------- instrument */
@@ -152,6 +160,27 @@ function scroller(): HTMLElement | null {
   return transcriptNode()?.parentElement ?? null;
 }
 
+/** Every Shiki token in the turn: the highlighter's whole output, counted. */
+function codeSpans(root: HTMLElement | null): number {
+  return root?.querySelectorAll("pre span").length ?? 0;
+}
+
+/**
+ * Whether a mutation landed inside a highlighted block.
+ *
+ * The split is the interesting half of the fence probe. Re-highlighting a
+ * block that survives shows up INSIDE — the `<pre>` stays and its spans churn.
+ * Discarding the block and building a new one shows up OUTSIDE, because the
+ * record's target is then the parent that swapped the `<pre>` itself. So a
+ * large outside count on a message that is only growing means whole-block
+ * re-parse, not incremental highlighting.
+ */
+function mutatedInsideCode(record: MutationRecord): boolean {
+  const target = record.target;
+  const element = target instanceof Element ? target : target.parentElement;
+  return element?.closest("pre") != null;
+}
+
 function percentile(sorted: readonly number[], fraction: number): number {
   if (sorted.length === 0) return 0;
   const index = Math.min(sorted.length - 1, Math.floor(sorted.length * fraction));
@@ -192,10 +221,35 @@ interface ScrollResult {
   landedAt: number;
 }
 
+/**
+ * A moment where the rendered span count went DOWN while the source only grew
+ * — the flicker signature of a block being thrown away and re-parsed rather
+ * than extended. `at` is characters streamed, not milliseconds, so the same
+ * collapse names the same point in the answer on every machine.
+ */
+interface SpanCollapse {
+  at: number;
+  from: number;
+  to: number;
+}
+
+interface FenceStreamResult {
+  chunks: number;
+  /** The whole measured window: the stream plus the fixed post-stream drain. */
+  durationMs: number;
+  finalChars: number;
+  mutationsTotal: number;
+  mutationsInCode: number;
+  longTaskMs: number;
+  longTaskCount: number;
+  spanCollapses: readonly SpanCollapse[];
+}
+
 interface PerfApi {
   build(turns: number): Promise<MountResult>;
   token(samples?: number): Promise<UpdateResult>;
   flipWorking(samples?: number): Promise<UpdateResult>;
+  streamFence(): Promise<FenceStreamResult>;
   scroll(mode?: "flick" | "traverse"): Promise<ScrollResult>;
   /** Whether the live turn is actually animating — the correctness half. */
   animating(): { working: boolean; animatedSpans: number; inLastTurn: number };
@@ -327,6 +381,117 @@ async function measureUpdates(
 }
 
 /**
+ * The open-fence cost, C4 in the migration-readiness audit: one assistant turn
+ * streamed a chunk per frame through two closed fences and stopped inside a
+ * third, counting what the renderer did to the DOM while it grew.
+ *
+ * Delta transport cannot touch this number — the wire only decides how the
+ * text arrives, not what the markdown renderer does with a fence that is one
+ * character longer than it was. So this probe is the evidence for (or against)
+ * a renderer policy change, and it is deliberately measured on ONE turn: the
+ * transcript-wide numbers above would bury a per-block effect in mount cost.
+ *
+ * Three counters over the same window:
+ *
+ *  - `childList` mutations in the turn's subtree, split inside/outside `<pre>`
+ *    (see `mutatedInsideCode` — the split is what tells re-highlight apart
+ *    from re-parse).
+ *  - Long tasks, which is where a re-tokenization actually hurts: a fence
+ *    re-highlighted on the main thread is a dropped frame, not a slow one.
+ *  - Span collapses, sampled per mutation batch. Text only ever grows here, so
+ *    a span count that falls is a block that was discarded and rebuilt.
+ *
+ * Absolute milliseconds vary per machine and are dev-mode React besides. The
+ * mutation counts, the collapse list and the chunk schedule are fixed inputs
+ * with no randomness anywhere, so those are the figures to compare across runs.
+ */
+async function streamFence(): Promise<FenceStreamResult> {
+  // Empty and remount first: a stream measured on top of the 100-turn default
+  // would be counting that transcript's unmount as the answer's first frames.
+  flushSync(() => {
+    need("setMessages")([]);
+    need("setWorking")(true);
+    need("setEpoch")((epoch) => epoch + 1);
+  });
+  await nextPaint();
+
+  // The first chunk mounts the turn; measurement starts after it, so the
+  // number is the streaming cost and not the cost of the bubble appearing.
+  const first = FENCE_CHUNKS[0] ?? "";
+  flushSync(() => need("setMessages")([fenceMessage(first)]));
+  await nextPaint();
+
+  const root = transcriptNode();
+  if (!root) throw new Error("chat-perf: no transcript");
+
+  let mutationsTotal = 0;
+  let mutationsInCode = 0;
+  let chars = first.length;
+  let spans = codeSpans(root);
+  const spanCollapses: SpanCollapse[] = [];
+
+  const sampleBatch = (records: readonly MutationRecord[]): void => {
+    for (const record of records) {
+      mutationsTotal += 1;
+      if (mutatedInsideCode(record)) mutationsInCode += 1;
+    }
+    const next = codeSpans(root);
+    if (next < spans) spanCollapses.push({ at: chars, from: spans, to: next });
+    spans = next;
+  };
+
+  const mutations = new MutationObserver(sampleBatch);
+  mutations.observe(root, { childList: true, subtree: true });
+
+  let longTaskMs = 0;
+  let longTaskCount = 0;
+  const countTasks = (entries: readonly PerformanceEntry[]): void => {
+    for (const entry of entries) {
+      longTaskCount += 1;
+      longTaskMs += entry.duration;
+    }
+  };
+  const tasks = new PerformanceObserver((list) => countTasks(list.getEntries()));
+  tasks.observe({ type: "longtask", buffered: false });
+
+  const started = performance.now();
+  for (let index = 1; index < FENCE_CHUNKS.length; index += 1) {
+    const chunk = FENCE_CHUNKS[index] ?? "";
+    flushSync(() => need("setMessages")((messages) => appendToken(messages, chunk)));
+    chars += chunk.length;
+    await nextPaint();
+  }
+
+  // Streamdown hands a fence to Shiki asynchronously, so the last block's spans
+  // land after the final chunk's commit. A fixed drain keeps that work inside
+  // the window instead of leaving it to be counted by whatever runs next.
+  const drainUntil = performance.now() + FENCE_DRAIN_MS;
+  while (performance.now() < drainUntil) await raf();
+
+  sampleBatch(mutations.takeRecords());
+  mutations.disconnect();
+  countTasks(tasks.takeRecords());
+  tasks.disconnect();
+  const durationMs = performance.now() - started;
+
+  currentTurns = 1;
+  flushSync(() => need("setWorking")(false));
+
+  const result: FenceStreamResult = {
+    chunks: FENCE_CHUNKS.length,
+    durationMs: round(durationMs),
+    finalChars: chars,
+    mutationsTotal,
+    mutationsInCode,
+    longTaskMs: round(longTaskMs),
+    longTaskCount,
+    spanCollapses,
+  };
+  publish("fence", result);
+  return result;
+}
+
+/**
  * Bottom to top, which is both the direction a reader travels scrollback and
  * the one that escapes `use-stick-to-bottom`'s lock — scrolling down toward the
  * bottom re-arms it and the library would fight the benchmark for the scroller.
@@ -382,6 +547,7 @@ function installApi(): void {
       ),
     flipWorking: (samples = 6) =>
       measureUpdates("working", samples, () => need("setWorking")((working) => !working)),
+    streamFence,
     scroll: (mode = "flick") => scrollBench(mode),
     // Streamdown marks animated text with `data-sd-animate`, so "is the live
     // turn still streaming" is answerable from the DOM rather than by eye. The
@@ -579,6 +745,158 @@ vp run -r test
 vp fmt
 \`\`\``,
 ];
+
+/**
+ * The fence probe's answer: prose, a 46-line TypeScript fence, prose, a 44-line
+ * fence in a second grammar, prose, and then a third fence the stream stops
+ * INSIDE — the open-fence case, where every remaining chunk lands in a block
+ * that has no closing marker yet.
+ *
+ * Deliberately not one of `CODE_FENCES`. Shiki caches tokenization by code
+ * text, so replaying those blocks would report cache hits; and a fence that
+ * grows by a chunk is a different string every time, which is the case a real
+ * streamed answer pays and the one this probe exists to price.
+ */
+const FENCE_STREAM = [
+  "Traced it. The adapter already has the deltas — it is the flush that throws them away, and everything downstream is paying for that one decision.",
+  "",
+  "Here is the fold the runtime would keep in memory, with the overlay cleared at the settle point:",
+  "",
+  "```ts",
+  "interface KeyedTranscriptPart {",
+  "  readonly key: string;",
+  "  readonly part: UIMessagePart;",
+  "}",
+  "",
+  "interface KeyedTranscriptMessage {",
+  "  readonly id: string;",
+  "  readonly role: UIMessage['role'];",
+  "  readonly metadata?: unknown;",
+  "  readonly parts: readonly KeyedTranscriptPart[];",
+  "}",
+  "",
+  "export function foldDelta(",
+  "  base: KeyedTranscriptMessage | undefined,",
+  "  delta: TranscriptDelta,",
+  "): KeyedTranscriptMessage {",
+  "  switch (delta.op) {",
+  "    case 'reset':",
+  "      return delta.message;",
+  "    case 'metadata': {",
+  "      if (!base) throw new Error('overlay: metadata before baseline');",
+  "      return { ...base, metadata: delta.metadata };",
+  "    }",
+  "    case 'part.remove': {",
+  "      if (!base) throw new Error('overlay: remove before baseline');",
+  "      const parts = base.parts.filter((entry) => entry.key !== delta.key);",
+  "      return parts.length === base.parts.length ? base : { ...base, parts };",
+  "    }",
+  "    case 'part.append': {",
+  "      if (!base) throw new Error('overlay: append before baseline');",
+  "      const parts = base.parts.map((entry) =>",
+  "        entry.key === delta.key && entry.part.type === 'text'",
+  "          ? { ...entry, part: { ...entry.part, text: entry.part.text + delta.text } }",
+  "          : entry,",
+  "      );",
+  "      return { ...base, parts };",
+  "    }",
+  "    case 'part.upsert': {",
+  "      const parts = base ? [...base.parts] : [];",
+  "      const at = parts.findIndex((entry) => entry.key === delta.key);",
+  "      const next = { key: delta.key, part: delta.part };",
+  "      if (at === -1) parts.splice(delta.index, 0, next);",
+  "      else parts[at] = next;",
+  "      return { id: delta.key, role: 'assistant', ...base, parts };",
+  "    }",
+  "  }",
+  "}",
+  "```",
+  "",
+  "The projection back to a durable `UIMessage` is the boring half — strip the keys and hand the parts on, so a subscriber that never learned about overlays sees the shape it always saw.",
+  "",
+  "The adapter side is where the ops are actually decided. Per SSE event only the touched part is re-projected, and the old slice against the new one picks the op:",
+  "",
+  "```tsx",
+  "function opFor(",
+  "  key: string,",
+  "  index: number,",
+  "  previous: readonly UIMessagePart[],",
+  "  next: readonly UIMessagePart[],",
+  "): TranscriptDelta | null {",
+  "  if (previous.length !== 1 || next.length !== 1) {",
+  "    return { op: 'part.upsert', key, index, part: next[0] };",
+  "  }",
+  "",
+  "  const before = previous[0];",
+  "  const after = next[0];",
+  "  if (!before || !after) return null;",
+  "",
+  "  const growable =",
+  "    before.type === 'text' &&",
+  "    after.type === 'text' &&",
+  "    after.text.startsWith(before.text) &&",
+  "    after.text.length > before.text.length;",
+  "",
+  "  if (growable) {",
+  "    return { op: 'part.append', key, text: after.text.slice(before.text.length) };",
+  "  }",
+  "",
+  "  return { op: 'part.upsert', key, index, part: after };",
+  "}",
+  "",
+  "export function DeltaBoundary({ messageId, children }: DeltaBoundaryProps) {",
+  "  const overlay = useOverlay(messageId);",
+  "  const durable = useDurableMessage(messageId);",
+  "  const shown = overlay ? projectOverlay(overlay) : durable;",
+  "",
+  "  if (!shown) return null;",
+  "",
+  "  return (",
+  "    <MessageContent data-overlay={overlay ? 'transient' : 'durable'}>",
+  "      {children(shown)}",
+  "    </MessageContent>",
+  "  );",
+  "}",
+  "```",
+  "",
+  "Anything ambiguous — a reorder, a provider snapshot that disagrees with the buffer, a part that changed type — falls back to `reset`, which is exactly today's behavior and is correct by construction.",
+  "",
+  "Last piece, the ceiling the wire probe should assert once this lands:",
+  "",
+  "```ts",
+  "it('streams deltas, not snapshots', async () => {",
+  "  const network = new FakeNetwork();",
+  "  const adapter = createOpenCodeAdapter({ network });",
+  "  const emitted: HarnessObservation[] = [];",
+  "",
+  "  await adapter.attach({ sink: (observation) => emitted.push(observation) });",
+  "  await network.scriptAnswer(LONG_FENCED_ANSWER);",
+  "  await adapter.drain();",
+  "",
+  "  const bytes = emitted.reduce(",
+  "    (total, observation) => total + JSON.stringify(observation).length,",
+  "    0,",
+  "  );",
+].join("\n");
+
+/**
+ * One chunk per frame, every chunk the same size — the schedule is a fixed
+ * array so two runs of the probe stream the identical bytes at the identical
+ * points. 32 characters is roughly a provider's token batch, and small enough
+ * that a fence crosses several frames rather than appearing whole in one.
+ */
+const FENCE_CHUNK_CHARS = 32;
+const FENCE_DRAIN_MS = 400;
+
+const FENCE_CHUNKS: readonly string[] = Array.from(
+  { length: Math.ceil(FENCE_STREAM.length / FENCE_CHUNK_CHARS) },
+  (_unused, index) =>
+    FENCE_STREAM.slice(index * FENCE_CHUNK_CHARS, (index + 1) * FENCE_CHUNK_CHARS),
+);
+
+function fenceMessage(text: string): UIMessage {
+  return { id: "fence", role: "assistant", parts: [{ type: "text", text }] };
+}
 
 const PROSE = [
   "I traced the projection seam and the cache is holding: the incremental path only rebuilds the frames that actually moved, so a batch of one arrives as a batch of one all the way down to the transcript.",
@@ -1039,6 +1357,13 @@ function PerfHarness() {
           className="rounded-full px-2.5 py-0.5 font-mono text-label text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           working
+        </button>
+        <button
+          type="button"
+          onClick={() => void window.chatPerf?.streamFence()}
+          className="rounded-full px-2.5 py-0.5 font-mono text-label text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          fence
         </button>
         <button
           type="button"

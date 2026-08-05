@@ -168,9 +168,11 @@ The open-fence re-highlight (readiness doc C4, correction 4). Each text part
 already renders through its own memoized Streamdown, so settled parts bail
 today; the cost is inside the one growing text part, and delta transport does
 not change what that part re-renders. The fenced-code browser probe below
-measures it; if the numbers demand it, the renderer policy
-(highlight-on-close / block stability for the open fence) lands as this
-session's last item, scoped to the markdown components — not to the wire.
+measures it — and its numbers say the cost is bigger than "the open fence":
+every fence in the growing part is re-highlighted per chunk, closed ones
+included. So the renderer policy (block stability for the fences that have
+already closed) is a real item, scoped to the markdown components — not to the
+wire.
 
 ## Proof, checked in before the change
 
@@ -196,7 +198,57 @@ before any contract code changes:
 
 ## Baselines (recorded 2026-08-05, pre-change)
 
-To be filled by the phase-1 probes.
+Wire and persistence probes: to be filled.
+
+### Fence probe
+
+`apps/desktop/src/renderer/lab/scratches/chat-performance.tsx`, driven by
+`window.chatPerf.streamFence()`. `pnpm lab`, open `/lab/#chat-performance`,
+call it from the console (or press `fence` in the scratch's header). One
+assistant turn, 4,019 characters streamed as 126 fixed 32-character chunks, one
+per frame, through two closed fences (46 and 44 lines) and stopping inside a
+third. Chromium 150, dev-mode React, M-series laptop:
+
+```json
+{
+  "chunks": 126,
+  "durationMs": 4567,
+  "finalChars": 4019,
+  "mutationsTotal": 33309,
+  "mutationsInCode": 32638,
+  "longTaskMs": 0,
+  "longTaskCount": 0,
+  "spanCollapses": 117
+}
+```
+
+`spanCollapses` is a list in the result object; only its length is quoted here.
+First collapse at 320 characters — the moment the first fence opens — then one
+per chunk for the rest of the stream, deepest 704 → 185 spans.
+
+Three runs agree to 0.2% on every count (33,253 / 33,309 / 33,294 mutations,
+117 collapses in all three). Absolute milliseconds vary per machine; the counts
+are the comparable figures.
+
+What the split says, and it is not what C4 assumed:
+
+- 98% of `childList` mutations land INSIDE a `<pre>`, so the `<pre>` elements
+  survive and their token spans churn. This is re-highlighting, not the
+  markdown part being re-parsed into new blocks.
+- The churn is not confined to the fence that is growing. Per-block span counts
+  oscillate `344|264|41` → `92|73|11` → `344|264|49` on every chunk: all three
+  fences drop to line spans and are re-highlighted, including the two closed
+  ones whose source has been byte-identical for thousands of characters. The
+  settled blocks are ~86% of the span churn.
+- Same behavior with `working` off, so Streamdown's animation plugin is not the
+  cause — any change to the text part re-highlights every fence in it.
+- 264 mutations and ~36 ms per chunk, and no long tasks at all in run 2. The
+  cost sits just under the 50 ms long-task threshold while holding the stream
+  at ~27 fps, which is why it never showed up as a long task in the audit.
+
+This is what the renderer policy would have to fix — closed fences holding
+their highlighted output while the open one grows — and it is independent of
+the delta contract above.
 
 ## Phases
 
