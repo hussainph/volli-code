@@ -7,6 +7,7 @@ import {
   createNativeAdapterRegistry,
   createSessionEngine,
   createSessionRuntime,
+  isSessionStreamOverlay,
   SessionRuntimeConflictError,
   SessionRuntimeNotFoundError,
   type BindingHandle,
@@ -17,7 +18,11 @@ import {
   type ObservationSink,
   type SessionEngine,
   type SessionRuntime,
+  type SessionStreamEmission,
+  type SessionStreamFrame,
+  type SessionStreamOverlay,
   type TranscriptArtifactStore,
+  type TranscriptDelta,
 } from "./index";
 
 const venue = { id: "machine-1", kind: "local" as const };
@@ -62,6 +67,7 @@ class FakeAdapter implements NativeHarnessAdapter {
   attaches = 0;
   dispatches = 0;
   reconciles = 0;
+  reconcileCursors: Parameters<BindingHandle["reconcile"]>[0][] = [];
   reconcileAcknowledgements: Array<Awaited<ReturnType<BindingHandle["reconcile"]>>["cursor"]> = [];
   releases = 0;
   sink: ObservationSink | null = null;
@@ -135,8 +141,9 @@ class FakeAdapter implements NativeHarnessAdapter {
           }
         );
       },
-      reconcile: async () => {
+      reconcile: async (cursor) => {
         this.reconciles += 1;
+        this.reconcileCursors.push(cursor);
         this.reconcileStarted();
         await this.reconcileGate;
         return {
@@ -171,6 +178,7 @@ function composition(
     runtimeIdPrefix?: string;
     /** One clock for engine and runtime, as the composition root supplies. */
     clock?: { now: () => number };
+    onSubscriberFailure?: (error: unknown) => void;
   } = {},
 ): { runtime: SessionRuntime; engine: SessionEngine; adapter: FakeAdapter } {
   let now = 100;
@@ -197,6 +205,7 @@ function composition(
         } satisfies Parameters<typeof createSessionRuntime>[0]["locations"]),
       clock,
       ids: runtimeIds(options.runtimeIdPrefix),
+      ...(options.onSubscriberFailure ? { onSubscriberFailure: options.onSubscriberFailure } : {}),
     }),
   };
 }
@@ -387,9 +396,10 @@ describe("SessionRuntime native adapter contract", () => {
     const seen: SessionEvent[] = [];
     const unsubscribe = await runtime.subscribe(
       { sessionId, afterSequence: snapshot.throughSequence },
-      (frame) => {
+      (emission) => {
+        if (isSessionStreamOverlay(emission)) return;
         steps.push("published");
-        seen.push(frame.event);
+        seen.push(emission.event);
       },
     );
 
@@ -428,8 +438,9 @@ describe("SessionRuntime native adapter contract", () => {
     const seen: SessionEvent[] = [];
     const unsubscribe = await runtime.subscribe(
       { sessionId, afterSequence: before.throughSequence },
-      (frame) => {
-        seen.push(frame.event);
+      (emission) => {
+        if (isSessionStreamOverlay(emission)) return;
+        seen.push(emission.event);
       },
     );
 
@@ -475,8 +486,9 @@ describe("SessionRuntime native adapter contract", () => {
     const sequences: number[] = [];
     const subscription = racing.runtime.subscribe(
       { sessionId, afterSequence: start.throughSequence },
-      (frame) => {
-        sequences.push(frame.sequence);
+      (emission) => {
+        if (isSessionStreamOverlay(emission)) return;
+        sequences.push(emission.sequence);
       },
     );
     await Promise.resolve();
@@ -976,8 +988,9 @@ describe("SessionRuntime native adapter contract", () => {
       runtime.subscribe({ sessionId, afterSequence: -1 }, () => undefined),
     ).rejects.toThrow("non-negative integer");
     const seen: number[] = [];
-    const stop = await runtime.subscribe({ sessionId, afterSequence: 0 }, (frame) => {
-      seen.push(frame.sequence);
+    const stop = await runtime.subscribe({ sessionId, afterSequence: 0 }, (emission) => {
+      if (isSessionStreamOverlay(emission)) return;
+      seen.push(emission.sequence);
     });
     const beforeStop = [...seen];
     stop();
@@ -1815,5 +1828,445 @@ describe("SessionRuntime native adapter contract", () => {
     await runtime.projection({ sessionId: oldest });
 
     expect(reads).toEqual([...sessions, oldest]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The transient overlay (docs/plans/delta-frames.md, "Engine"). Nothing below
+// this line may cost a durable write: a delta is what the assistant is saying
+// right now, and only a settle point is what it said.
+// ---------------------------------------------------------------------------
+
+const OVERLAY_MESSAGE_ID = "assistant-1";
+
+function deltaObservation(
+  id: string,
+  delta: TranscriptDelta,
+  messageId = OVERLAY_MESSAGE_ID,
+): HarnessObservation {
+  return {
+    id,
+    kind: "transcript.delta",
+    occurredAt: 400,
+    threadId: "thread:overlay:root",
+    branchId: "branch:overlay:main",
+    attemptId: "attempt:overlay",
+    turnId: "turn-1",
+    messageId,
+    delta,
+  };
+}
+
+function resetDelta(text: string, messageId = OVERLAY_MESSAGE_ID): TranscriptDelta {
+  return {
+    op: "reset",
+    message: {
+      id: messageId,
+      role: "assistant",
+      parts: [{ key: "text-1", part: { type: "text", text } }],
+    },
+  };
+}
+
+function settleObservation(id: string, text: string, messageId = OVERLAY_MESSAGE_ID) {
+  return {
+    id,
+    kind: "transcript.message",
+    occurredAt: 500,
+    turnId: "turn-1",
+    threadId: "thread:overlay:root",
+    branchId: "branch:overlay:main",
+    attemptId: "attempt:overlay",
+    message: { id: messageId, role: "assistant", parts: [{ type: "text", text }] },
+  } satisfies HarnessObservation;
+}
+
+function overlaysIn(emissions: readonly SessionStreamEmission[]): SessionStreamOverlay[] {
+  return emissions.filter((emission) => isSessionStreamOverlay(emission));
+}
+
+/**
+ * Runs the microtasks an in-flight `emit` still owes before its overlay reaches
+ * a subscriber's chain. Nothing here waits on a timer, so a fixed number of
+ * turns is deterministic — and if it ever stopped being enough, the branch it
+ * exists to reach would show up uncovered rather than flaky.
+ */
+async function settleMicrotasks(): Promise<void> {
+  for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+}
+
+describe("SessionRuntime transient transcript overlay", () => {
+  it("publishes deltas without a durable trace, a dedupe window, or a cursor advance", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const before = await runtime.snapshot({ sessionId });
+    const attachmentId = before.projection.liveExecutor!.id;
+    const emissions: SessionStreamEmission[] = [];
+    const stop = await runtime.subscribe(
+      { sessionId, afterSequence: before.throughSequence },
+      (emission) => {
+        emissions.push(emission);
+      },
+    );
+
+    // The same observation id twice: a delta carries no durable identity, so
+    // the id that dedupes Session facts must not swallow the second one.
+    await adapter.emit(deltaObservation("delta-1", resetDelta("Hel")));
+    await adapter.emit(
+      deltaObservation("delta-1", { op: "part.append", key: "text-1", text: "lo" }),
+    );
+    await runtime.reconcile({ sessionId, attachmentId });
+    stop();
+
+    const after = await runtime.snapshot({ sessionId });
+    expect(after.throughSequence).toBe(before.throughSequence);
+    expect(after.transcript).toEqual([]);
+    expect(emissions).toEqual([
+      {
+        kind: "overlay",
+        sessionId,
+        throughSequence: before.throughSequence,
+        messageId: OVERLAY_MESSAGE_ID,
+        delta: resetDelta("Hel"),
+      },
+      {
+        kind: "overlay",
+        sessionId,
+        throughSequence: before.throughSequence,
+        messageId: OVERLAY_MESSAGE_ID,
+        delta: { op: "part.append", key: "text-1", text: "lo" },
+      },
+    ]);
+    // No delta moved the reconcile cursor: the provider is still asked for
+    // everything since the last fact this Session actually wrote down.
+    expect(adapter.reconcileCursors).toEqual([null]);
+  });
+
+  it("serves a late subscriber the folded message as one reset baseline", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    await adapter.emit(deltaObservation("delta-1", resetDelta("Hel")));
+    await adapter.emit(
+      deltaObservation("delta-2", { op: "part.append", key: "text-1", text: "lo" }),
+    );
+    await adapter.emit(
+      deltaObservation("delta-3", resetDelta("Second", "assistant-2"), "assistant-2"),
+    );
+
+    const latest = (await runtime.snapshot({ sessionId })).throughSequence;
+    const emissions: SessionStreamEmission[] = [];
+    const stop = await runtime.subscribe({ sessionId, afterSequence: latest }, (emission) => {
+      emissions.push(emission);
+    });
+    stop();
+
+    // One baseline per in-flight message, each carrying the engine's fold —
+    // not the deltas that built it.
+    expect(overlaysIn(emissions)).toEqual([
+      {
+        kind: "overlay",
+        sessionId,
+        throughSequence: latest,
+        messageId: OVERLAY_MESSAGE_ID,
+        delta: resetDelta("Hello"),
+      },
+      {
+        kind: "overlay",
+        sessionId,
+        throughSequence: latest,
+        messageId: "assistant-2",
+        delta: resetDelta("Second", "assistant-2"),
+      },
+    ]);
+  });
+
+  it("clears a message's overlay when its durable snapshot is processed", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    await adapter.emit(deltaObservation("delta-1", resetDelta("Hello")));
+    await adapter.emit(
+      deltaObservation("delta-2", resetDelta("Other", "assistant-2"), "assistant-2"),
+    );
+    await adapter.emit(settleObservation("settle-1", "Hello"));
+
+    const emissions: SessionStreamEmission[] = [];
+    const stop = await runtime.subscribe(
+      { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
+      (emission) => {
+        emissions.push(emission);
+      },
+    );
+    stop();
+
+    expect(overlaysIn(emissions).map(({ messageId }) => messageId)).toEqual(["assistant-2"]);
+    expect((await runtime.snapshot({ sessionId })).transcript).toMatchObject([
+      { message: { id: OVERLAY_MESSAGE_ID, parts: [{ text: "Hello" }] } },
+    ]);
+  });
+
+  it("stamps a baseline with the durable sequence a later settle can be told from", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    await adapter.emit(deltaObservation("delta-1", resetDelta("Hel")));
+
+    const emissions: SessionStreamEmission[] = [];
+    const stop = await runtime.subscribe(
+      { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
+      (emission) => {
+        emissions.push(emission);
+      },
+    );
+    await adapter.emit(settleObservation("settle-1", "Hello"));
+    stop();
+
+    const [baseline] = overlaysIn(emissions);
+    const settled = emissions.find(
+      (emission) =>
+        !isSessionStreamOverlay(emission) &&
+        emission.event.payload.kind === "transcript.referenced",
+    );
+    // The guard the consumer applies: this baseline is strictly below the
+    // settle's sequence, so a fold that already applied the settle drops it —
+    // which is what makes the order the two arrive in immaterial.
+    expect(baseline!.throughSequence).toBeLessThan(
+      (settled as SessionStreamFrame | undefined)!.sequence,
+    );
+  });
+
+  it("keeps an overlay ahead of a durable publish that arrives after it", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const order: string[] = [];
+    const entered = new Gate();
+    const release = new Gate();
+    let blocked = false;
+    const stop = await runtime.subscribe(
+      { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
+      async (emission) => {
+        order.push(isSessionStreamOverlay(emission) ? "overlay" : emission.event.payload.kind);
+        if (isSessionStreamOverlay(emission) && !blocked) {
+          blocked = true;
+          entered.resolve();
+          await release.promise;
+        }
+      },
+    );
+
+    const streaming = adapter.emit(deltaObservation("delta-1", resetDelta("Hel")));
+    await entered.promise;
+    const submitting = runtime.command({
+      commandId: "overlay-ordering-submit",
+      sessionId,
+      command: { kind: "message.submit", message: userMessage("overlay-ordering") },
+    });
+    await settleMicrotasks();
+    release.resolve();
+    await Promise.all([streaming, submitting]);
+    stop();
+
+    expect(order[0]).toBe("overlay");
+    expect(order.slice(1)).not.toContain("overlay");
+  });
+
+  it("drops the overlay when the attachment closes and when the adapter is released", async () => {
+    const closing = composition();
+    const closedSession = await createAndAttach(closing.runtime);
+    await closing.adapter.emit(deltaObservation("delta-1", resetDelta("Hel")));
+    await closing.adapter.emit({
+      id: "closed-1",
+      kind: "attachment.closed",
+      occurredAt: 600,
+      outcome: "completed",
+    });
+    const afterClose: SessionStreamEmission[] = [];
+    (
+      await closing.runtime.subscribe(
+        {
+          sessionId: closedSession,
+          afterSequence: (
+            await closing.runtime.snapshot({ sessionId: closedSession })
+          ).throughSequence,
+        },
+        (emission) => {
+          afterClose.push(emission);
+        },
+      )
+    )();
+
+    const releasing = composition();
+    const releasedSession = await createAndAttach(releasing.runtime);
+    const attachmentId = (await releasing.runtime.snapshot({ sessionId: releasedSession }))
+      .projection.liveExecutor!.id;
+    await releasing.adapter.emit(deltaObservation("delta-1", resetDelta("Hel")));
+    await releasing.runtime.command({
+      commandId: "overlay-release",
+      sessionId: releasedSession,
+      command: { kind: "adapter.release", attachmentId },
+    });
+    const afterRelease: SessionStreamEmission[] = [];
+    (
+      await releasing.runtime.subscribe(
+        {
+          sessionId: releasedSession,
+          afterSequence: (
+            await releasing.runtime.snapshot({ sessionId: releasedSession })
+          ).throughSequence,
+        },
+        (emission) => {
+          afterRelease.push(emission);
+        },
+      )
+    )();
+
+    expect(overlaysIn(afterClose)).toEqual([]);
+    expect(overlaysIn(afterRelease)).toEqual([]);
+  });
+
+  it("bounds how many Sessions keep an overlay", async () => {
+    const { runtime, adapter } = composition();
+    const sessions: string[] = [];
+    // One past the limit, so the first Session's in-flight message is the one
+    // evicted — and an evicted overlay is a message the next reset rebuilds.
+    for (let index = 0; index <= 8; index += 1) {
+      const created = await runtime.command({
+        commandId: `overlay-create-${index}`,
+        command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+      });
+      await runtime.command({
+        commandId: `overlay-attach-${index}`,
+        sessionId: created.sessionId,
+        command: {
+          kind: "adapter.attach",
+          adapterId: "fake",
+          profileId: "native",
+          continuity: "fresh",
+        },
+      });
+      await adapter.emit(deltaObservation(`delta-${index}`, resetDelta(`Session ${index}`)));
+      sessions.push(created.sessionId);
+    }
+
+    const seen = new Map<string, SessionStreamOverlay[]>();
+    for (const sessionId of [sessions[0]!, sessions[8]!]) {
+      const emissions: SessionStreamEmission[] = [];
+      (
+        await runtime.subscribe(
+          { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
+          (emission) => {
+            emissions.push(emission);
+          },
+        )
+      )();
+      seen.set(sessionId, overlaysIn(emissions));
+    }
+
+    expect(seen.get(sessions[0]!)).toEqual([]);
+    expect(seen.get(sessions[8]!)).toMatchObject([{ delta: { op: "reset" } }]);
+  });
+
+  it("re-seeds the overlay after a failed read rather than reporting sequence zero", async () => {
+    const base = composition();
+    let failListEvents = false;
+    const engine: SessionEngine = {
+      ...base.engine,
+      listEvents: async (query) => {
+        if (failListEvents) throw new Error("ledger unavailable");
+        return base.engine.listEvents(query);
+      },
+    };
+    const { runtime, adapter } = composition({ engine, adapter: base.adapter });
+    const sessionId = await createAndAttach(runtime);
+
+    failListEvents = true;
+    await expect(adapter.emit(deltaObservation("delta-1", resetDelta("Hel")))).rejects.toThrow(
+      "ledger unavailable",
+    );
+    failListEvents = false;
+    await adapter.emit(deltaObservation("delta-2", resetDelta("Hello")));
+
+    const latest = (await runtime.snapshot({ sessionId })).throughSequence;
+    const emissions: SessionStreamEmission[] = [];
+    (
+      await runtime.subscribe({ sessionId, afterSequence: latest }, (emission) => {
+        emissions.push(emission);
+      })
+    )();
+
+    expect(overlaysIn(emissions)).toEqual([
+      {
+        kind: "overlay",
+        sessionId,
+        throughSequence: latest,
+        messageId: OVERLAY_MESSAGE_ID,
+        delta: resetDelta("Hello"),
+      },
+    ]);
+  });
+
+  it("contains a subscriber that fails on an overlay, and stops delivering to one that left", async () => {
+    const failures: unknown[] = [];
+    const failing = composition({
+      onSubscriberFailure: (error) => {
+        failures.push(error);
+      },
+    });
+    const failingSession = await createAndAttach(failing.runtime);
+    const delivered: string[] = [];
+    await failing.runtime.subscribe(
+      {
+        sessionId: failingSession,
+        afterSequence: (await failing.runtime.snapshot({ sessionId: failingSession }))
+          .throughSequence,
+      },
+      (emission) => {
+        delivered.push(isSessionStreamOverlay(emission) ? "overlay" : emission.event.payload.kind);
+        if (isSessionStreamOverlay(emission)) throw new Error("overlay client failed");
+      },
+    );
+    await failing.adapter.emit(deltaObservation("delta-1", resetDelta("Hel")));
+    await failing.adapter.emit(settleObservation("settle-1", "Hello"));
+
+    expect(delivered).toEqual(["overlay"]);
+    expect(failures).toEqual([expect.objectContaining({ message: "overlay client failed" })]);
+
+    const leaving = composition();
+    const leavingSession = await createAndAttach(leaving.runtime);
+    // The record exists before the gated emit below, so that emit has only its
+    // own awaits left to run before the overlay reaches the chain.
+    await leaving.adapter.emit(deltaObservation("delta-1", resetDelta("Hel")));
+    const seen: string[] = [];
+    const entered = new Gate();
+    const release = new Gate();
+    const stop = await leaving.runtime.subscribe(
+      {
+        sessionId: leavingSession,
+        afterSequence: (await leaving.runtime.snapshot({ sessionId: leavingSession }))
+          .throughSequence,
+      },
+      async (emission) => {
+        seen.push(isSessionStreamOverlay(emission) ? "overlay" : emission.event.payload.kind);
+        if (!isSessionStreamOverlay(emission)) {
+          entered.resolve();
+          await release.promise;
+        }
+      },
+    );
+    const submitting = leaving.runtime.command({
+      commandId: "overlay-leaving-submit",
+      sessionId: leavingSession,
+      command: { kind: "message.submit", message: userMessage("overlay-leaving") },
+    });
+    await entered.promise;
+    const streaming = leaving.adapter.emit(
+      deltaObservation("delta-2", { op: "part.append", key: "text-1", text: "lo" }),
+    );
+    await settleMicrotasks();
+    stop();
+    release.resolve();
+    await Promise.all([submitting, streaming]);
+
+    // The baseline reached the chain before the subscriber left; the append
+    // queued behind it never reaches a listener that is no longer listening.
+    expect(seen).toEqual(["overlay", "command.recorded"]);
   });
 });

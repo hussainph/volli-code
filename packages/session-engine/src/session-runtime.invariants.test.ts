@@ -7,6 +7,7 @@ import {
   createNativeAdapterRegistry,
   createSessionEngine,
   createSessionRuntime,
+  isSessionStreamOverlay,
   type BindingHandle,
   type HarnessObservation,
   type NativeHarnessAdapter,
@@ -756,8 +757,9 @@ describe("SessionRuntime durable boundary invariants", () => {
     await runtime.subscribe({ sessionId: created.sessionId, afterSequence: 0 }, () => {
       if (failPeer) throw new Error("peer failed");
     });
-    await runtime.subscribe({ sessionId: created.sessionId, afterSequence: 0 }, (frame) => {
-      received.push(frame.event.payload.kind);
+    await runtime.subscribe({ sessionId: created.sessionId, afterSequence: 0 }, (emission) => {
+      if (isSessionStreamOverlay(emission)) return;
+      received.push(emission.event.payload.kind);
     });
     failPeer = true;
     await adapter.emit({

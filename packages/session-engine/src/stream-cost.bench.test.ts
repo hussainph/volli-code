@@ -8,6 +8,7 @@ import {
   createNativeAdapterRegistry,
   createSessionEngine,
   createSessionRuntime,
+  isSessionStreamOverlay,
   type BindingHandle,
   type HarnessObservation,
   type NativeHarnessAdapter,
@@ -295,8 +296,12 @@ describe("session-engine stream-cost probe (baseline, pre delta-frames change)",
     const frames: SessionStreamFrame[] = [];
     const unsubscribe = await runtime.subscribe(
       { sessionId, afterSequence: start.throughSequence },
-      (frame) => {
-        frames.push(frame);
+      (emission) => {
+        // Durable frames only — this probe prices what gets written down, and
+        // the fixture below feeds `transcript.message` exclusively, so no
+        // overlay can reach here in the first place.
+        if (isSessionStreamOverlay(emission)) return;
+        frames.push(emission);
       },
     );
 

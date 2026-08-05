@@ -18,6 +18,7 @@ import type {
   Reconciliation,
   ReleaseReason,
 } from "@volli/session-engine";
+import { observationCursor } from "@volli/session-engine";
 import {
   ACTIVITY_METADATA_KEY,
   SESSION_PERMISSION_OPTIONS,
@@ -1092,7 +1093,7 @@ class OpenCodeBinding implements BindingHandle {
     await sink.emit(observation);
     if (this.#released || this.#sink !== sink) return false;
     this.#remember(observation);
-    this.#cursor = observation.cursor ?? { eventId: observation.id };
+    this.#cursor = observationCursor(observation) ?? { eventId: observation.id };
     return true;
   }
 
