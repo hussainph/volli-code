@@ -604,6 +604,23 @@ class OpenCodeBinding implements BindingHandle {
   readonly #messages = new Map<string, BufferedOpenCodeMessage>();
   /** What each in-flight message last said on the wire; absent means it owes a `reset`. */
   readonly #streamEmissions = new Map<string, EmittedTranscript>();
+  /**
+   * How many times each message has settled, so a tick a settle overtook cannot
+   * write its baseline back over the retirement.
+   *
+   * A settle runs on the SSE loop and a tick runs on its own timer, and the two
+   * meet on the emission queue: `#flushMessages` drains what is in flight and
+   * then chains its durable `transcript.message` on, which lands *between* two
+   * deltas of a batch that is still going. Its `.delete` therefore runs before
+   * that batch's closing `.set`, and the record the settle retired is reinstalled
+   * a moment later. Every later tick then diffs against a state no consumer holds
+   * — and because the settle cleared the consumer's overlay entry, the fold's
+   * self-healing rule drops every non-`reset` op it is sent. The message's whole
+   * streaming tail goes dark, waiting for a `reset` the stale baseline guarantees
+   * will never come. A counter read either side of the batch is the smallest
+   * thing that makes that ordering observable to the tick.
+   */
+  readonly #streamGenerations = new Map<string, number>();
   readonly #streamDeltaTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Messages whose tick is still putting its batch on the wire. */
   readonly #streamDeltaTicks = new Set<string>();
@@ -958,6 +975,7 @@ class OpenCodeBinding implements BindingHandle {
     this.#sink = null;
     this.#messages.clear();
     this.#streamEmissions.clear();
+    this.#streamGenerations.clear();
     this.#pendingApprovals.clear();
     this.#approvalIndex = null;
     this.#subagents.clear();
@@ -1279,7 +1297,7 @@ class OpenCodeBinding implements BindingHandle {
     if (role) message.role = role;
     // Usage arrives on a later message.updated than the first one, so keep the
     // last non-empty reading rather than letting a partial snapshot erase it.
-    message.metadata = openCodeMessageMetadata(info) ?? message.metadata;
+    message.metadata = rereadMessageMetadata(message.metadata, info);
     if (!isRecord(raw) || !Array.isArray(raw.parts)) return messageId;
     message.parts.clear();
     message.partOrder.length = 0;
@@ -1414,6 +1432,7 @@ class OpenCodeBinding implements BindingHandle {
    */
   async #emitStreamDeltas(messageId: string): Promise<void> {
     try {
+      const generation = this.#streamGenerations.get(messageId) ?? 0;
       const buffered = this.#messages.get(messageId);
       if (!buffered?.role || buffered.role === "user") return;
       const parts = this.#projectKeyedParts(messageId, buffered);
@@ -1440,7 +1459,15 @@ class OpenCodeBinding implements BindingHandle {
       // released sink swallows the rest of the batch; release drops this map
       // behind it, so what was recorded here never outlives the binding.
       this.#streamEmissions.delete(messageId);
-      for (const delta of deltas) await this.#emitDelta(messageId, delta);
+      for (const delta of deltas) {
+        await this.#emitDelta(messageId, delta);
+        // A settle landed between two of this batch's deltas — see
+        // `#streamGenerations`. Everything left in the batch is addressed to an
+        // overlay entry the settle just cleared, so the fold would drop it
+        // anyway; stop, and leave the record absent so the next tick opens with
+        // the `reset` the settle owes.
+        if ((this.#streamGenerations.get(messageId) ?? 0) !== generation) return;
+      }
       this.#streamEmissions.set(messageId, { parts, metadata });
     } catch {
       // Dirty until the next tick's reset. A transient frame is not worth a
@@ -1496,15 +1523,38 @@ class OpenCodeBinding implements BindingHandle {
   }
 
   /**
+   * Retire what a message last said transiently, because something durable is
+   * about to say it instead.
+   *
+   * The single way any settle point ends a transient claim. Deleting the record
+   * on its own is not enough: a tick that is still emitting captured the
+   * generation before the delete and would put the record straight back (see
+   * `#streamGenerations`), so the bump is what tells that tick it has been
+   * overtaken.
+   */
+  #settleStreamMessage(messageId: string): void {
+    this.#streamEmissions.delete(messageId);
+    this.#streamGenerations.set(messageId, (this.#streamGenerations.get(messageId) ?? 0) + 1);
+  }
+
+  /**
    * Withdraw a message this binding is still transiently claiming.
    *
    * Nothing else ends an overlay entry that never reaches a durable snapshot —
    * a message the provider deleted, or one whose last projectable part was
    * removed — and an entry nothing ends renders as a message that will not go
    * away.
+   *
+   * The question is whether the message is *in flight*, not whether a record
+   * happens to be held at this instant: a tick deletes the record before it
+   * awaits its batch, so a `message.removed` arriving inside that window used to
+   * find nothing to delete and return without withdrawing anything — leaving a
+   * message the provider deleted drawn for the life of the attachment, which is
+   * the one failure this method exists to prevent. A live tick counts as a claim.
    */
   async #dropStreamMessage(messageId: string): Promise<void> {
-    if (!this.#streamEmissions.delete(messageId)) return;
+    if (!this.#streamEmissions.has(messageId) && !this.#streamDeltaTicks.has(messageId)) return;
+    this.#settleStreamMessage(messageId);
     await this.#emitDelta(messageId, { op: "message.remove" });
   }
 
@@ -1602,7 +1652,7 @@ class OpenCodeBinding implements BindingHandle {
       });
       // Settled: the durable record now says everything the overlay did, so the
       // message's next transient emission starts again from a `reset`.
-      this.#streamEmissions.delete(messageId);
+      this.#settleStreamMessage(messageId);
       if (this.#released) {
         this.#messages.clear();
         return;
@@ -1620,7 +1670,7 @@ class OpenCodeBinding implements BindingHandle {
     // Reconcile is a settle point like any other: whatever the provider says
     // this message is, it is about to be said durably, so the overlay's copy of
     // it ends here and the next transient emission starts from a `reset`.
-    this.#streamEmissions.delete(messageId);
+    this.#settleStreamMessage(messageId);
     const metadata = openCodeMessageMetadata(nested(raw, "info") ?? raw);
     const message: UIMessage = {
       id: messageId,
@@ -2063,6 +2113,51 @@ function openCodeMessageMetadata(info: unknown): OpenCodeMessageMetadata | null 
     : null;
   if (providerId === null && modelId === null && cost === null && tokens === null) return null;
   return { providerId, modelId, cost, tokens };
+}
+
+/**
+ * The metadata a message holds after a fresh snapshot, keeping the object it
+ * already had whenever the new reading says the same thing.
+ *
+ * The same memo the projection uses one level up, and for the same reason: the
+ * delta diff compares metadata with `Object.is`, while `openCodeMessageMetadata`
+ * builds a new object on every call. OpenCode restates a message's whole header
+ * on every `message.updated` — several a second on a busy turn — so without this
+ * each one is a `{op:"metadata"}` carrying a provider, model, cost and token bag
+ * byte-identical to what the consumer already holds, through the sink, the
+ * publish and a structured clone into the renderer. Holding the object is what
+ * makes identity an exact answer downstream rather than a cheap approximation.
+ */
+function rereadMessageMetadata(
+  previous: OpenCodeMessageMetadata | null,
+  info: unknown,
+): OpenCodeMessageMetadata | null {
+  const next = openCodeMessageMetadata(info);
+  if (!next) return previous;
+  return previous && sameMessageMetadata(previous, next) ? previous : next;
+}
+
+function sameMessageMetadata(
+  previous: OpenCodeMessageMetadata,
+  next: OpenCodeMessageMetadata,
+): boolean {
+  if (
+    previous.providerId !== next.providerId ||
+    previous.modelId !== next.modelId ||
+    previous.cost !== next.cost
+  ) {
+    return false;
+  }
+  // Both readings build their own token bag, so identity here means both are
+  // null — a turn OpenCode has not reported usage for yet.
+  if (previous.tokens === null || next.tokens === null) return previous.tokens === next.tokens;
+  return (
+    previous.tokens.input === next.tokens.input &&
+    previous.tokens.output === next.tokens.output &&
+    previous.tokens.reasoning === next.tokens.reasoning &&
+    previous.tokens.cacheRead === next.tokens.cacheRead &&
+    previous.tokens.cacheWrite === next.tokens.cacheWrite
+  );
 }
 
 interface OpenCodeQuestion {
