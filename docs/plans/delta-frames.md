@@ -25,12 +25,19 @@ streams the full decoded artifact inline per frame
 latest full snapshot per message id
 (`apps/desktop/src/renderer/lab/chat/message-projection.ts:12-21`).
 
-So one streamed answer costs, in its own length n: O(n²) wire bytes (the
-measured 81×), O(n²) artifact bytes on disk across O(chunks) files, one ledger
-event per 32 ms forever, and O(chunks) artifact reads on every rehydrate
+So one streamed answer costs, in its own length n: O(n²) wire bytes, O(n²)
+artifact bytes on disk across O(chunks) files, one ledger event per 32 ms
+forever, and O(chunks) artifact reads on every rehydrate
 (`session-runtime.ts:935-951` reads one artifact per referencing event). The
-deltas existed at the top of the pipe and were flattened into snapshots so the
-renderer could diff them back out.
+baselines below price the two n² terms at two points on that curve: **19.63×**
+on the wire for a 16,528-char answer the 32 ms timer coalesced into 40
+snapshots, and **198.15×** in artifact bytes with no coalescing at all, where
+each of 397 observations settles. Both are half the snapshot count, which is
+the n² restated — neither is a constant to quote back, because cutting the same
+answer into twice as many snapshots doubles it. That is what makes ~2.0× the
+floor worth aiming at: one transient copy of the answer plus one durable copy
+of it, whatever the cadence. The deltas existed at the top of the pipe and were
+flattened into snapshots so the renderer could diff them back out.
 
 ## Decision: transient overlay, durable settle points
 
