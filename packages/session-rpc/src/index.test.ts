@@ -5,7 +5,9 @@ import type {
   SessionRuntime,
   SessionRuntimeCommandRequest,
   SessionRuntimeSnapshot,
+  SessionStreamEmission,
   SessionStreamFrame,
+  SessionStreamOverlay,
 } from "@volli/session-engine";
 import { AsyncQueue, createSessionRouter, RpcDiagnosticLog, sanitizeDiagnosticText } from "./index";
 
@@ -101,6 +103,16 @@ function capabilityFrame(sequence: number): SessionStreamFrame {
   };
 }
 
+function overlay(throughSequence: number): SessionStreamOverlay {
+  return {
+    kind: "overlay",
+    sessionId: "session-1",
+    throughSequence,
+    messageId: "assistant-1",
+    delta: { op: "part.append", key: "text-1", text: "lo" },
+  };
+}
+
 function trackedValue(value: unknown): { id: string; data: unknown } {
   expect(Array.isArray(value)).toBe(true);
   if (!Array.isArray(value)) throw new Error("Expected a tracked SSE envelope");
@@ -116,7 +128,7 @@ function runtimeFixture(): {
     subscribeAfter: number[];
     cancelled: CancelInteractionRequest[];
   };
-  emit: (next: SessionStreamFrame) => void;
+  emit: (next: SessionStreamEmission) => void;
 } {
   const calls: {
     command: SessionRuntimeCommandRequest[];
@@ -127,7 +139,7 @@ function runtimeFixture(): {
     subscribeAfter: [],
     cancelled: [],
   };
-  let listener: ((next: SessionStreamFrame) => void) | null = null;
+  let listener: ((next: SessionStreamEmission) => void) | null = null;
   const runtime: SessionRuntime = {
     command: async (request) => {
       calls.command.push(request);
@@ -359,6 +371,33 @@ describe("Session tRPC router", () => {
         : null,
     ).toEqual([]);
     await iterator.return?.();
+  });
+
+  it("yields a transient overlay beside durable frames, leaving both exactly as published", async () => {
+    const fixture = runtimeFixture();
+    const diagnostics = new RpcDiagnosticLog();
+    const caller = createSessionRouter().createCaller({ runtime: fixture.runtime, diagnostics });
+
+    const stream = await caller.session.subscribe({ sessionId: "session-1" });
+    const iterator = stream[Symbol.asyncIterator]();
+    const durablePending = iterator.next();
+    await Promise.resolve();
+    fixture.emit(frame(5));
+    const durable = trackedValue((await durablePending).value);
+    const overlayPending = iterator.next();
+    await Promise.resolve();
+    fixture.emit(overlay(5));
+    const transient = trackedValue((await overlayPending).value);
+    await iterator.return?.();
+
+    // The durable arm is byte-identical to what it was before overlays existed:
+    // every consumer validating a frame by its `sequence` keeps working.
+    expect(durable.id).toBe("5");
+    expect(JSON.stringify(durable.data)).toBe(JSON.stringify(frame(5)));
+    // The overlay is tracked by the durable sequence it was emitted beside —
+    // unsuffixed, so a resubscribe from it still parses as a cursor.
+    expect(transient.id).toBe("5");
+    expect(transient.data).toEqual(overlay(5));
   });
 
   it("answers a projection read with Session state alone and no transcript replay", async () => {

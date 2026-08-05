@@ -1,5 +1,6 @@
 import { initTRPC, TRPCError, tracked } from "@trpc/server";
 import {
+  isSessionStreamOverlay,
   MAX_RUNTIME_PREFERENCE_MODELS,
   type RuntimeCatalog,
   type SessionClientCommand,
@@ -7,6 +8,7 @@ import {
   type SessionRuntimeCommandRequest,
   type SessionRuntimeProjectionSnapshot,
   type SessionRuntimeSnapshot,
+  type SessionStreamEmission,
   type SessionStreamFrame,
 } from "@volli/session-engine";
 import { z } from "zod";
@@ -351,10 +353,14 @@ export function createSessionRouter() {
         .subscription(async function* ({ ctx, input, signal }) {
           if (signal?.aborted) return;
           const afterSequence = maxCursor(input.afterSequence, input.lastEventId);
-          const queue = new AsyncQueue<SessionStreamFrame>();
+          const queue = new AsyncQueue<SessionStreamEmission>();
           const unsubscribe = await ctx.runtime.subscribe(
             { sessionId: input.sessionId, afterSequence },
-            (frame) => queue.push(rendererFrame(frame)),
+            // An overlay passes through untouched: `rendererFrame` exists to
+            // keep a durable capability inventory behind the server boundary,
+            // and a transient message part carries none.
+            (emission) =>
+              queue.push(isSessionStreamOverlay(emission) ? emission : rendererFrame(emission)),
           );
           if (signal?.aborted) {
             unsubscribe();
@@ -363,7 +369,16 @@ export function createSessionRouter() {
           const abort = () => queue.close();
           signal?.addEventListener("abort", abort, { once: true });
           try {
-            for await (const frame of queue) yield tracked(String(frame.sequence), frame);
+            // A transient emission is tracked by the durable sequence it was
+            // emitted beside, never by a suffixed id: `sseCursor` rejects one on
+            // resubscribe, and duplicate ids are safe on both transports. A
+            // reconnect from an overlay id therefore replays durable history and
+            // is served a fresh baseline.
+            for await (const emission of queue) {
+              yield isSessionStreamOverlay(emission)
+                ? tracked(String(emission.throughSequence), emission)
+                : tracked(String(emission.sequence), emission);
+            }
           } finally {
             signal?.removeEventListener("abort", abort);
             unsubscribe();
