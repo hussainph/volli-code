@@ -28,7 +28,10 @@ const SEARCH_DELAY_MS = 180;
 type CatalogState =
   | { status: "loading"; view: RuntimeCatalogView | null }
   | { status: "loaded"; view: RuntimeCatalogView }
-  | { status: "error"; view: RuntimeCatalogView | null };
+  // `reason` is why the LOOKUP failed, which is a different thing from a view
+  // that came back reporting the runtime unavailable — and the only thing there
+  // is to say when no view came back at all.
+  | { status: "error"; view: RuntimeCatalogView | null; reason: string };
 
 /** OpenCode discovery and the small app-wide model allowlist used by chat. */
 export function RuntimeCatalogSettings() {
@@ -66,7 +69,11 @@ function ConnectedRuntimeCatalogSettings({ client }: { client: RuntimeCatalogCon
         }
       } catch (error) {
         if (request.current !== requestId) return;
-        setState((current) => ({ status: "error", view: current.view }));
+        setState((current) => ({
+          status: "error",
+          view: current.view,
+          reason: errorMessage(error),
+        }));
         toastError(`Couldn't load OpenCode models: ${errorMessage(error)}`);
       }
     },
@@ -94,8 +101,12 @@ function ConnectedRuntimeCatalogSettings({ client }: { client: RuntimeCatalogCon
   }
 
   return (
+    // "Models" rather than "OpenCode": this section now renders inside the
+    // OpenCode harness pane, which already names the harness in its selector
+    // and its identity card. Titling it again would leave three OpenCodes
+    // stacked down one column saying nothing new.
     <SettingsSection
-      title="OpenCode"
+      title="Models"
       icon={CpuIcon}
       action={
         <Button
@@ -116,9 +127,7 @@ function ConnectedRuntimeCatalogSettings({ client }: { client: RuntimeCatalogCon
       {view?.status !== "available" ? (
         <div className="rounded-md border border-border bg-muted/40 px-3 py-3 text-ui">
           <p className="font-medium text-foreground">OpenCode unavailable</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {view?.reason ?? "Checking the local runtime…"}
-          </p>
+          <p className="mt-1 text-xs text-muted-foreground">{unavailableReason(state)}</p>
         </div>
       ) : (
         <div className="grid min-h-72 grid-cols-[12rem_minmax(0,1fr)] overflow-hidden rounded-lg border border-border">
@@ -260,6 +269,17 @@ function appendModel(
 
 function sameModel(left: RuntimeModelRef, right: RuntimeModelRef): boolean {
   return left.providerId === right.providerId && left.modelId === right.modelId;
+}
+
+/**
+ * The one line the blocked state gets. A failed lookup says what failed; the
+ * checking copy is only honest while a first answer is still outstanding —
+ * leaving it up after the lookup broke reads as a runtime that is merely slow.
+ * The section's refresh control is the recovery action.
+ */
+function unavailableReason(state: CatalogState): string {
+  if (state.status === "error") return state.reason;
+  return state.view?.reason ?? "Checking the local runtime…";
 }
 
 function errorMessage(error: unknown): string {

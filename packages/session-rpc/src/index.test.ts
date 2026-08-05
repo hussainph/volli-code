@@ -389,8 +389,10 @@ describe("Session tRPC router", () => {
   it("exposes bounded Runtime Catalog browsing and shortlist resolution to Lab clients", async () => {
     const fixture = runtimeFixture();
     const calls: string[] = [];
+    const resolverCalls: (string | undefined)[] = [];
     const runtimeCatalog: RuntimeCatalog = {
       inspect: async (input) => {
+        expect(input).not.toHaveProperty("projectId");
         calls.push(`inspect:${input.providerId ?? "overview"}`);
         return {
           adapterId: input.adapterId,
@@ -409,6 +411,7 @@ describe("Session tRPC router", () => {
         };
       },
       save: async (input) => {
+        expect(input).not.toHaveProperty("projectId");
         calls.push(`save:${input.preferences.enabledModels.length}`);
         return input.preferences;
       },
@@ -424,14 +427,22 @@ describe("Session tRPC router", () => {
     };
     const caller = createSessionRouter().createCaller({
       runtime: fixture.runtime,
-      runtimeCatalog,
+      resolveRuntimeCatalog: (projectId) => {
+        resolverCalls.push(projectId);
+        return runtimeCatalog;
+      },
       diagnostics: new RpcDiagnosticLog(),
       transport: "lab-http",
     });
 
-    await caller.runtimeCatalog.inspect({ adapterId: "opencode", providerId: "openai" });
+    await caller.runtimeCatalog.inspect({
+      adapterId: "opencode",
+      providerId: "openai",
+      projectId: "project-1",
+    });
     await caller.runtimeCatalog.save({
       adapterId: "opencode",
+      projectId: "project-1",
       preferences: {
         version: 1,
         enabledModels: [{ providerId: "openai", modelId: "codex" }],
@@ -455,6 +466,8 @@ describe("Session tRPC router", () => {
     ).rejects.toThrow();
 
     expect(calls).toEqual(["inspect:openai", "save:1", "resolve:opencode"]);
+    // `resolve` never reads the directory, so it never advertises project scope.
+    expect(resolverCalls).toEqual(["project-1", "project-1", undefined]);
   });
 
   it("rejects Runtime Catalog procedures on a transport that carries no catalog", async () => {
@@ -467,6 +480,75 @@ describe("Session tRPC router", () => {
     await expect(caller.runtimeCatalog.resolve({ adapterId: "opencode" })).rejects.toThrow(
       "Runtime Catalog is unavailable on this transport",
     );
+  });
+
+  it("wraps a Runtime Catalog resolver rejection as a not-found projectId", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      resolveRuntimeCatalog: () => {
+        throw new Error("Unknown project unknown-project");
+      },
+      diagnostics: new RpcDiagnosticLog(),
+      transport: "lab-http",
+    });
+
+    await expect(
+      caller.runtimeCatalog.inspect({ adapterId: "opencode", projectId: "unknown-project" }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND", message: "Unknown project unknown-project" });
+  });
+
+  it("stringifies a non-Error Runtime Catalog resolver rejection", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      // eslint-disable-next-line @typescript-eslint/only-throw-error -- exercises the non-Error fallback
+      resolveRuntimeCatalog: () => {
+        throw "boom";
+      },
+      diagnostics: new RpcDiagnosticLog(),
+      transport: "lab-http",
+    });
+
+    await expect(caller.runtimeCatalog.resolve({ adapterId: "opencode" })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: "boom",
+    });
+  });
+
+  // A blank `projectId` is a malformed request, and routing one reports it as
+  // the wrong thing entirely: the hub finds no project by that id and the
+  // caller is told NOT_FOUND, which reads as "your project is gone" rather
+  // than "you sent an empty string". Every other identifier this router takes
+  // is `nonEmptyString`, including `projectId` on `session.create`.
+  it("refuses a blank Runtime Catalog projectId as bad input, never routing it", async () => {
+    const fixture = runtimeFixture();
+    const resolverCalls: (string | undefined)[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      resolveRuntimeCatalog: (projectId) => {
+        resolverCalls.push(projectId);
+        throw new Error("the resolver must not be reached for a malformed request");
+      },
+      diagnostics: new RpcDiagnosticLog(),
+      transport: "lab-http",
+    });
+
+    await expect(
+      caller.runtimeCatalog.inspect({ adapterId: "opencode", projectId: "" }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(
+      caller.runtimeCatalog.save({
+        adapterId: "opencode",
+        projectId: "  ",
+        preferences: {
+          version: 1,
+          enabledModels: [],
+          defaults: { providerId: "", modelId: "", variant: "", agent: "" },
+        },
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(resolverCalls).toEqual([]);
   });
 
   it("passes a structurally valid create command to the runtime without a session identifier", async () => {

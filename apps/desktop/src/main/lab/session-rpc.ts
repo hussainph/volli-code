@@ -191,7 +191,7 @@ export class LabSessionRpcServer {
         path,
         createContext: () => ({
           runtime: resources.runtime,
-          runtimeCatalog: resources.runtimeCatalog,
+          resolveRuntimeCatalog: () => resources.runtimeCatalog,
           diagnostics: resources.diagnostics,
           transport: "lab-http" as const,
         }),

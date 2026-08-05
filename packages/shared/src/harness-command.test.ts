@@ -135,7 +135,7 @@ describe("buildHarnessCommand", () => {
     expect(buildHarnessCommand("codex", "hi there", null, builtIns)).toBe("codex 'hi there'");
   });
 
-  it("launches Opencode with --prompt (default TUI, not run)", () => {
+  it("launches OpenCode with --prompt (default TUI, not run)", () => {
     expect(buildHarnessCommand("opencode", "hi there", null, builtIns)).toBe(
       "opencode --prompt 'hi there'",
     );
@@ -226,13 +226,13 @@ describe("buildHarnessResumeCommand", () => {
     expect(buildHarnessResumeCommand("codex", null, null, builtIns)).toBe("codex resume --last");
   });
 
-  it("resumes Opencode by session id with --session", () => {
+  it("resumes OpenCode by session id with --session", () => {
     expect(buildHarnessResumeCommand("opencode", "abc123", null, builtIns)).toBe(
       "opencode --session 'abc123'",
     );
   });
 
-  it("falls back to Opencode's --continue when no session id is known", () => {
+  it("falls back to OpenCode's --continue when no session id is known", () => {
     expect(buildHarnessResumeCommand("opencode", null, null, builtIns)).toBe("opencode --continue");
   });
 

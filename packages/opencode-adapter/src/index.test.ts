@@ -465,6 +465,79 @@ describe("OpenCodeNativeAdapter", () => {
     expect(process.spawns[0]?.path).toBe("/login-shell/bin/opencode");
   });
 
+  it("spawns the server with an unchanged environment when no host hook is supplied", async () => {
+    const { adapter, process } = composition();
+
+    await adapter.attach(spec(), { emit: async () => undefined });
+
+    expect(process.spawns[0]?.env).toEqual({
+      OPENCODE_SERVER_PASSWORD: "never-persist-this",
+      OPENCODE_SERVER_USERNAME: "opencode",
+    });
+  });
+
+  it("merges the host's resolved environment beneath its own OPENCODE_SERVER_* vars", async () => {
+    const process = new FakeProcess();
+    const calls: number[] = [];
+    const adapter = createAdapter({
+      process,
+      network: new FakeNetwork(),
+      resolveEnv: () => {
+        calls.push(1);
+        return {
+          PATH: "/login-shell/bin",
+          OPENCODE_SERVER_USERNAME: "hijacked",
+        };
+      },
+    });
+
+    await adapter.attach(spec(), { emit: async () => undefined });
+
+    expect(calls).toHaveLength(1);
+    expect(process.spawns[0]?.env).toEqual({
+      PATH: "/login-shell/bin",
+      OPENCODE_SERVER_PASSWORD: "never-persist-this",
+      OPENCODE_SERVER_USERNAME: "opencode",
+    });
+  });
+
+  it("fails the server start when the host's environment hook rejects", async () => {
+    const process = new FakeProcess();
+    const adapter = createAdapter({
+      process,
+      network: new FakeNetwork(),
+      resolveEnv: () => Promise.reject(new Error("login shell timed out")),
+    });
+
+    await expect(adapter.attach(spec(), { emit: async () => undefined })).rejects.toThrow(
+      "login shell timed out",
+    );
+    expect(process.spawns).toHaveLength(0);
+  });
+
+  it("re-invokes the host's environment hook on every server respawn", async () => {
+    const process = new FakeProcess();
+    let calls = 0;
+    const adapter = createAdapter({
+      process,
+      network: new FakeNetwork(),
+      resolveEnv: () => {
+        calls += 1;
+        return { LIVE_HOOK_CALLS: String(calls) };
+      },
+    });
+
+    await adapter.attach(spec(), { emit: async () => undefined });
+    process.exited.resolve(0);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await adapter.attach(spec(), { emit: async () => undefined });
+
+    expect(calls).toBe(2);
+    expect(process.spawns).toHaveLength(2);
+    expect(process.spawns[0]?.env).toMatchObject({ LIVE_HOOK_CALLS: "1" });
+    expect(process.spawns[1]?.env).toMatchObject({ LIVE_HOOK_CALLS: "2" });
+  });
+
   it("routes every binding call through its immutable directory and keeps Basic credentials private", async () => {
     const { adapter, network, process } = composition();
     const probe = await adapter.probe(
@@ -528,6 +601,47 @@ describe("OpenCodeNativeAdapter", () => {
     await expect(adapter.attach(spec(), { emit: async () => undefined })).rejects.toThrow(
       "changed after verification",
     );
+  });
+
+  it("re-resolves the binary after invalidateBinary instead of reusing what an earlier probe verified", async () => {
+    const process = new FakeProcess();
+    let resolveCalls = 0;
+    process.resolveCommand = async () => {
+      resolveCalls += 1;
+      return resolveCalls === 1 ? "/first/opencode" : "/second/opencode";
+    };
+    const adapter = createAdapter({ process, network: new FakeNetwork() });
+
+    await adapter.probe(
+      { profileId: "native", directory: "/workspace/one" },
+      new AbortController().signal,
+    );
+    expect(resolveCalls).toBe(1);
+    expect(process.spawns[0]?.path).toBe("/first/opencode");
+
+    adapter.invalidateBinary();
+    process.exited.resolve(0);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await adapter.attach(spec(), { emit: async () => undefined });
+
+    expect(resolveCalls).toBe(2);
+    expect(process.spawns[1]?.path).toBe("/second/opencode");
+  });
+
+  it("leaves an already-spawned server's lease running when the binary is invalidated", async () => {
+    const { adapter, process } = composition();
+    const handle = await adapter.attach(spec(), { emit: async () => undefined });
+    expect(process.spawns).toHaveLength(1);
+
+    adapter.invalidateBinary();
+    const delivered = await handle.dispatch(messageCommand());
+    const second = await adapter.attach(spec("/workspace/two"), { emit: async () => undefined });
+
+    expect(delivered.status).toBe("accepted");
+    // Still the one lease: invalidation drops the cache, not the running child.
+    expect(process.spawns).toHaveLength(1);
+    expect(second.native).toBeDefined();
   });
 
   it("reports an already-aborted health probe without launching a usable binding", async () => {

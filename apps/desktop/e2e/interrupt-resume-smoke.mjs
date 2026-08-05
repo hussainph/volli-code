@@ -547,14 +547,14 @@ async function main() {
     // argv (`sessionId.kind === "argv"`) is handed a freshly minted one by its
     // own wrapper on every launch, so it ALWAYS has a resume seed and can never
     // reach this branch — the check's old premise, not its expectation, is what
-    // went stale. Opencode is `sessionId: { kind: "reported" }`: nothing is
+    // went stale. OpenCode is `sessionId: { kind: "reported" }`: nothing is
     // minted for it, and with the fake harness firing no events it reports
     // nothing either, so its seed is genuinely `null` and `resume.latest`
     // (`--continue`) is what a resume must build. This is the fallback tier
     // where the fallback actually lives.
     await attempt(
       4,
-      "Resume without any id (Opencode — a `reported` harness gets no minted id, and the fake reports none): resume falls back to `opencode --continue` on the same durable Session",
+      "Resume without any id (OpenCode — a `reported` harness gets no minted id, and the fake reports none): resume falls back to `opencode --continue` on the same durable Session",
       async () => {
         await goToBoard(page);
         const { ticketId, displayId, session } = await kickoffTicket(
@@ -562,7 +562,7 @@ async function main() {
           projectId,
           "Resume unlinked ticket",
           "Resume unlinked body marker DELTA",
-          { agentLabel: "Opencode", command: "opencode" },
+          { agentLabel: "OpenCode", command: "opencode" },
         );
         liveSessionIds.push(session.id);
 
@@ -639,7 +639,7 @@ async function main() {
           projectId,
           "Resume minted ticket",
           "Resume minted body marker EPSILON",
-          // Named, not inherited: check 4 left Opencode selected.
+          // Named, not inherited: check 4 left OpenCode selected.
           { agentLabel: "Claude Code", command: "claude" },
         );
         liveSessionIds.push(session.id);

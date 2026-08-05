@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { SessionRuntime, SessionStreamFrame } from "@volli/session-engine";
+import type { RuntimeCatalog, SessionRuntime, SessionStreamFrame } from "@volli/session-engine";
 
 const { handlers, listeners } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
@@ -28,19 +28,33 @@ vi.mock("@volli/session-rpc", async (importOriginal) => {
       const stream = terminalStream.current;
       if (stream === null) return actual.createSessionRouter();
       return {
-        createCaller: () => ({ session: { subscribe: async () => stream } }),
+        createCaller: () => ({
+          session: { subscribe: async () => stream },
+          runtimeCatalog: {
+            inspect: async () => {
+              throw new Error("runtimeCatalog is not exercised by the streaming fixture");
+            },
+            save: async () => {
+              throw new Error("runtimeCatalog is not exercised by the streaming fixture");
+            },
+            resolve: async () => {
+              throw new Error("runtimeCatalog is not exercised by the streaming fixture");
+            },
+          },
+        }),
       } as unknown as ReturnType<typeof actual.createSessionRouter>;
     },
   };
 });
 
 import {
-  registerSessionRpcIpcHandlers,
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
   SESSION_RPC_IPC_CHANNEL,
   type SessionRpcIpcResponse,
-} from "./session-rpc-ipc";
+} from "@volli/shared";
+
+import { registerSessionRpcIpcHandlers } from "./session-rpc-ipc";
 
 interface FakeSender {
   readonly id: number;
@@ -48,6 +62,8 @@ interface FakeSender {
   isDestroyed(): boolean;
   once(event: string, listener: () => void): void;
   removeListener(event: string, listener: () => void): void;
+  /** Fires whatever `once("destroyed", …)` registered — the WebContents teardown path. */
+  destroy(): void;
 }
 
 function runtimeFixture(): {
@@ -58,6 +74,8 @@ function runtimeFixture(): {
     subscribe: number[];
     cancelled: { sessionId: string; interactionId: string; reason: string }[];
   };
+  /** Whether the runtime subscription is still open — false once the bridge unsubscribed it. */
+  isListening(): boolean;
   emit(nextFrame: SessionStreamFrame): void;
 } {
   const calls = {
@@ -99,6 +117,7 @@ function runtimeFixture(): {
       close: async () => undefined,
     },
     calls,
+    isListening: () => listener !== null,
     emit: (nextFrame) => {
       if (listener === null) throw new Error("Subscription is not listening");
       listener(nextFrame);
@@ -132,13 +151,64 @@ function frame(sequence: number): SessionStreamFrame {
   };
 }
 
+function runtimeCatalogFixture(): {
+  resolveRuntimeCatalog: (projectId?: string) => RuntimeCatalog;
+  calls: {
+    resolvedFor: (string | undefined)[];
+    inspected: unknown[];
+    saved: unknown[];
+    resolved: unknown[];
+  };
+} {
+  const calls = {
+    resolvedFor: [] as (string | undefined)[],
+    inspected: [] as unknown[],
+    saved: [] as unknown[],
+    resolved: [] as unknown[],
+  };
+  const catalog: RuntimeCatalog = {
+    inspect: async (input) => {
+      calls.inspected.push(input);
+      return { providers: [], models: [], modelTotal: 0 } as never;
+    },
+    save: async (input) => {
+      calls.saved.push(input);
+      return input.preferences;
+    },
+    resolve: async (input) => {
+      calls.resolved.push(input);
+      return {
+        adapterId: input.adapterId,
+        observedAt: 10,
+        catalog: { providers: [], models: [], agents: [] },
+        selection: { providerId: "", modelId: "", variant: "", agent: "" },
+      };
+    },
+  };
+  return {
+    resolveRuntimeCatalog: (projectId) => {
+      calls.resolvedFor.push(projectId);
+      return catalog;
+    },
+    calls,
+  };
+}
+
 function sender(id = 1): FakeSender {
+  const destroyedListeners: (() => void)[] = [];
+  let destroyed = false;
   return {
     id,
     send: vi.fn(),
-    isDestroyed: () => false,
-    once: vi.fn(),
+    isDestroyed: () => destroyed,
+    once: vi.fn((event: string, listener: () => void) => {
+      if (event === "destroyed") destroyedListeners.push(listener);
+    }),
     removeListener: vi.fn(),
+    destroy: () => {
+      destroyed = true;
+      for (const listener of destroyedListeners.splice(0)) listener();
+    },
   };
 }
 
@@ -149,6 +219,12 @@ function invoke(owner: FakeSender, request: unknown): Promise<SessionRpcIpcRespo
     { sender: owner },
     request,
   ) as Promise<SessionRpcIpcResponse>;
+}
+
+function cancel(event: { sender: FakeSender }, subscriptionId: unknown): void {
+  const listener = listeners.get(SESSION_RPC_CANCEL_CHANNEL);
+  if (!listener) throw new Error("Session RPC cancellation handler is not registered");
+  (listener as (...args: unknown[]) => unknown)(event, subscriptionId);
 }
 
 beforeEach(() => {
@@ -199,6 +275,33 @@ describe("registerSessionRpcIpcHandlers", () => {
       }),
     ).resolves.toEqual({ ok: true, data: undefined });
 
+    await expect(
+      invoke(sender(), {
+        procedure: "session.command",
+        input: {
+          commandId: "command-1",
+          command: {
+            kind: "session.create",
+            projectId: "project-1",
+            ticketId: null,
+            title: null,
+          },
+        },
+      }),
+    ).resolves.toEqual({ ok: true, data: {} });
+    await expect(
+      invoke(sender(), {
+        procedure: "session.refreshCapabilities",
+        input: { sessionId: "session-1", attachmentId: "attachment-1" },
+      }),
+    ).resolves.toEqual({ ok: true, data: { catalog: [] } });
+    await expect(
+      invoke(sender(), {
+        procedure: "session.reconcile",
+        input: { sessionId: "session-1", attachmentId: "attachment-1" },
+      }),
+    ).resolves.toEqual({ ok: true, data: undefined });
+
     expect(fixture.calls.projection).toEqual(["session-1"]);
     // The reason is the router's to state, not the renderer's: this transport
     // is the user seam, and abandonment is all it can honestly report.
@@ -221,6 +324,25 @@ describe("registerSessionRpcIpcHandlers", () => {
     await expect(
       invoke(sender(), { procedure: "session.snapshot", input: { sessionId: "" } }),
     ).resolves.toMatchObject({ ok: false, error: { code: "BAD_REQUEST" } });
+
+    await registration.close();
+  });
+
+  // The renderer's link only ever sends the envelope, but this handler is on a
+  // channel any renderer code could reach; anything that is not one is refused
+  // before it can be read for a procedure name.
+  it("rejects a request that is not an envelope at all", async () => {
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+    const invalid = {
+      ok: false,
+      error: { code: "BAD_REQUEST", message: "Invalid Session RPC request" },
+    };
+
+    await expect(invoke(sender(), "session.snapshot")).resolves.toEqual(invalid);
+    await expect(invoke(sender(), ["session.snapshot", {}])).resolves.toEqual(invalid);
+    await expect(invoke(sender(), { procedure: "session.snapshot" })).resolves.toEqual(invalid);
+    await expect(invoke(sender(), { procedure: 7, input: {} })).resolves.toEqual(invalid);
 
     await registration.close();
   });
@@ -248,17 +370,94 @@ describe("registerSessionRpcIpcHandlers", () => {
       ),
     );
 
-    const cancel = listeners.get(SESSION_RPC_CANCEL_CHANNEL);
-    if (!cancel) throw new Error("Session RPC cancellation handler is not registered");
-    (cancel as (...args: unknown[]) => unknown)({ sender: sender(2) }, response.subscriptionId);
+    cancel({ sender: sender(2) }, response.subscriptionId);
     expect(owner.removeListener).not.toHaveBeenCalled();
-    (cancel as (...args: unknown[]) => unknown)({ sender: owner }, response.subscriptionId);
+    cancel({ sender: owner }, response.subscriptionId);
     await vi.waitFor(() =>
       expect(owner.removeListener).toHaveBeenCalledWith("destroyed", expect.any(Function)),
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(owner.send).toHaveBeenCalledTimes(1);
     await registration.close();
+  });
+
+  it("ignores a cancellation that does not name a subscription", async () => {
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+    const owner = sender();
+    const response = await invoke(owner, {
+      procedure: "session.subscribe",
+      input: { sessionId: "session-1", afterSequence: 0 },
+    });
+    if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
+
+    cancel({ sender: owner }, 42);
+    fixture.emit(frame(3));
+    await vi.waitFor(() => expect(owner.send).toHaveBeenCalledTimes(1));
+
+    await registration.close();
+  });
+
+  it("drops a subscription whose renderer announces it was destroyed", async () => {
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+    const owner = sender();
+    const response = await invoke(owner, {
+      procedure: "session.subscribe",
+      input: { sessionId: "session-1", afterSequence: 0 },
+    });
+    if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
+    await vi.waitFor(() => expect(fixture.calls.subscribe).toEqual([0]));
+
+    owner.destroy();
+    await vi.waitFor(() => expect(fixture.isListening()).toBe(false));
+
+    expect(owner.removeListener).toHaveBeenCalledWith("destroyed", expect.any(Function));
+    expect(owner.send).not.toHaveBeenCalled();
+    await registration.close();
+  });
+
+  // The teardown announcement is an event, so it can still be queued when a
+  // frame lands — and `webContents.send` on a destroyed WebContents throws
+  // rather than being ignored. The check at the top of the pump loop is already
+  // stale by the time the frame it is waiting for arrives.
+  it("stops streaming to a renderer that went away before it said so", async () => {
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+    const owner = sender();
+    const response = await invoke(owner, {
+      procedure: "session.subscribe",
+      input: { sessionId: "session-1", afterSequence: 0 },
+    });
+    if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
+    await vi.waitFor(() => expect(fixture.calls.subscribe).toEqual([0]));
+
+    owner.isDestroyed = () => true;
+    fixture.emit(frame(3));
+    await vi.waitFor(() =>
+      expect(owner.removeListener).toHaveBeenCalledWith("destroyed", expect.any(Function)),
+    );
+
+    expect(owner.send).not.toHaveBeenCalled();
+    await registration.close();
+  });
+
+  it("tears down every live subscription when the bridge closes", async () => {
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+    const owner = sender();
+    const response = await invoke(owner, {
+      procedure: "session.subscribe",
+      input: { sessionId: "session-1", afterSequence: 0 },
+    });
+    if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
+    await vi.waitFor(() => expect(fixture.calls.subscribe).toEqual([0]));
+
+    await registration.close();
+
+    expect(owner.removeListener).toHaveBeenCalledWith("destroyed", expect.any(Function));
+    expect(fixture.isListening()).toBe(false);
+    expect(owner.send).not.toHaveBeenCalled();
   });
 
   it("does not retain a subscription whose renderer is already destroyed", async () => {
@@ -325,6 +524,145 @@ describe("registerSessionRpcIpcHandlers", () => {
     );
     await registration.close();
   });
+
+  // A rejection that is not an Error has no message to sanitize and no code to
+  // read, so the frame says only what is true rather than stringifying whatever
+  // was thrown into the renderer.
+  it("reports a subscription failure that threw something other than an Error", async () => {
+    terminalStream.current = failingStream("native stream vanished");
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+    const owner = sender();
+
+    const response = await invoke(owner, {
+      procedure: "session.subscribe",
+      input: { sessionId: "session-1", afterSequence: 0 },
+    });
+    if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
+
+    await vi.waitFor(() =>
+      expect(owner.send).toHaveBeenCalledWith(SESSION_RPC_EVENT_CHANNEL, {
+        kind: "error",
+        subscriptionId: response.subscriptionId,
+        error: {
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Session subscription failed",
+        },
+      }),
+    );
+    await registration.close();
+  });
+
+  it("routes runtimeCatalog.inspect over IPC, carrying the resolver through the context", async () => {
+    const fixture = runtimeFixture();
+    const catalog = runtimeCatalogFixture();
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: fixture.runtime,
+      resolveRuntimeCatalog: catalog.resolveRuntimeCatalog,
+    });
+
+    await expect(
+      invoke(sender(), {
+        procedure: "runtimeCatalog.inspect",
+        input: { projectId: "project-1", adapterId: "opencode" },
+      }),
+    ).resolves.toEqual({ ok: true, data: { providers: [], models: [], modelTotal: 0 } });
+
+    expect(catalog.calls.resolvedFor).toEqual(["project-1"]);
+    expect(catalog.calls.inspected).toEqual([{ adapterId: "opencode" }]);
+    await registration.close();
+  });
+
+  it("routes runtimeCatalog.save over IPC, carrying the resolver through the context", async () => {
+    const fixture = runtimeFixture();
+    const catalog = runtimeCatalogFixture();
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: fixture.runtime,
+      resolveRuntimeCatalog: catalog.resolveRuntimeCatalog,
+    });
+    const preferences = {
+      version: 1 as const,
+      enabledModels: [],
+      defaults: { providerId: "", modelId: "", variant: "", agent: "" },
+    };
+
+    await expect(
+      invoke(sender(), {
+        procedure: "runtimeCatalog.save",
+        input: { adapterId: "opencode", preferences },
+      }),
+    ).resolves.toEqual({ ok: true, data: preferences });
+
+    // No `projectId` on this request — the router resolves against `undefined`.
+    expect(catalog.calls.resolvedFor).toEqual([undefined]);
+    expect(catalog.calls.saved).toEqual([{ adapterId: "opencode", preferences }]);
+    await registration.close();
+  });
+
+  it("routes runtimeCatalog.resolve over IPC, carrying the resolver through the context", async () => {
+    const fixture = runtimeFixture();
+    const catalog = runtimeCatalogFixture();
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: fixture.runtime,
+      resolveRuntimeCatalog: catalog.resolveRuntimeCatalog,
+    });
+
+    await expect(
+      invoke(sender(), { procedure: "runtimeCatalog.resolve", input: { adapterId: "opencode" } }),
+    ).resolves.toEqual({
+      ok: true,
+      data: {
+        adapterId: "opencode",
+        observedAt: 10,
+        catalog: { providers: [], models: [], agents: [] },
+        selection: { providerId: "", modelId: "", variant: "", agent: "" },
+      },
+    });
+
+    expect(catalog.calls.resolvedFor).toEqual([undefined]);
+    expect(catalog.calls.resolved).toEqual([{ adapterId: "opencode" }]);
+    await registration.close();
+  });
+
+  it("fails clearly when no resolver is registered for this transport", async () => {
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+
+    await expect(
+      invoke(sender(), { procedure: "runtimeCatalog.resolve", input: { adapterId: "opencode" } }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { message: "Runtime Catalog is unavailable on this transport" },
+    });
+    await registration.close();
+  });
+
+  // The bridge flattens every failure into `{ code, message }`, and a caller
+  // that cannot tell "this project does not exist" from "the catalog broke"
+  // has to guess which one it is showing. The router raises the resolver's
+  // rejection as a TRPCError, so the code has to survive the flattening — not
+  // collapse into the INTERNAL_SERVER_ERROR fallback the sanitizer applies to
+  // anything it cannot read a code off.
+  it("carries a NOT_FOUND for an unknown project id across the bridge, code intact", async () => {
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: fixture.runtime,
+      resolveRuntimeCatalog: (projectId) => {
+        throw new Error(`Unknown project ${projectId ?? "none"}`);
+      },
+    });
+
+    await expect(
+      invoke(sender(), {
+        procedure: "runtimeCatalog.inspect",
+        input: { projectId: "ghost-project", adapterId: "opencode" },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "NOT_FOUND", message: "Unknown project ghost-project" },
+    });
+    await registration.close();
+  });
 });
 
 function emptyStream(): AsyncIterable<readonly [string, unknown]> {
@@ -335,7 +673,7 @@ function emptyStream(): AsyncIterable<readonly [string, unknown]> {
   };
 }
 
-function failingStream(error: Error): AsyncIterable<readonly [string, unknown]> {
+function failingStream(error: unknown): AsyncIterable<readonly [string, unknown]> {
   return {
     [Symbol.asyncIterator](): AsyncIterator<readonly [string, unknown]> {
       return { next: async () => Promise.reject(error) };

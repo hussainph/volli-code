@@ -43,6 +43,10 @@ import {
 import type {
   HarnessAdapter,
   HarnessChannelStatus,
+  HarnessCommandGetInput,
+  HarnessCommandGetResult,
+  HarnessCommandSetInput,
+  HarnessCommandSetResult,
   HarnessIpcChannel,
   HarnessPendingResult,
   HarnessRegisteredResult,
@@ -54,10 +58,16 @@ import type {
 import type { DbHandle } from "./data-ipc";
 import { listHarnessChannels } from "./db/harness-channel-repo";
 import {
+  clearStoredHarnessCommand,
+  setStoredHarnessCommand,
+  storedHarnessCommand,
+} from "./db/harness-command-repo";
+import {
   getRegisteredHarness,
   recordHarnessTrust,
   restoreRegisteredHarness,
 } from "./db/harness-registry-repo";
+import { validateHarnessBinary } from "./harness-binary";
 import { decideRegisteredHarnesses, scanHarnessManifests } from "./harness-registry";
 import type { DecidedHarnessManifest } from "./harness-registry";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
@@ -98,6 +108,14 @@ export interface HarnessIpcDeps {
    */
   launchableHarnesses(): readonly HarnessAdapter[];
   now(): number;
+  /**
+   * Drops a live native adapter's cached verified binary for `harnessId`, so
+   * its NEXT resolution honors the override this call just stored or
+   * cleared instead of what an earlier probe verified. Optional: a db-failed
+   * boot never constructs a native adapter, and most harnesses resolve fresh
+   * on every launch and cache nothing this needs to drop.
+   */
+  invalidateNativeBinary?(harnessId: string): void;
 }
 
 /**
@@ -270,6 +288,32 @@ export function registerHarnessIpcHandlers(handle: DbHandle, deps: HarnessIpcDep
       // exactly when the answer could have moved.
       channels: channelStates(db, deps),
     }),
+
+    "volli:harness-command-get": (input: HarnessCommandGetInput): HarnessCommandGetResult => ({
+      ok: true,
+      command: storedHarnessCommand(db, input.harnessId),
+    }),
+
+    "volli:harness-command-set": async (
+      input: HarnessCommandSetInput,
+    ): Promise<HarnessCommandSetResult> => {
+      if (input.command === null) {
+        clearStoredHarnessCommand(db, input.harnessId);
+        // The stored override just changed, so a native adapter's cached
+        // verified binary is stale — drop it, or the clear would only take
+        // effect on the next relaunch.
+        deps.invalidateNativeBinary?.(input.harnessId);
+        return { ok: true, resolvedPath: null };
+      }
+      const validation = await validateHarnessBinary(input.command);
+      if (!validation.ok) return validation;
+      // The raw value, never the realpath: a launch resolves fresh every time
+      // it attaches, so a PATH or filesystem change after this write is
+      // honored automatically rather than frozen at the moment of validation.
+      setStoredHarnessCommand(db, input.harnessId, input.command, deps.now());
+      deps.invalidateNativeBinary?.(input.harnessId);
+      return { ok: true, resolvedPath: validation.resolvedPath };
+    },
   };
 
   registerGuardedIpcHandlers(HARNESS_IPC, handlers);

@@ -94,3 +94,27 @@ export interface RuntimeCatalogSaveInput {
   adapterId: string;
   preferences: RuntimePreferences;
 }
+
+/**
+ * Wire shape for `runtimeCatalog.inspect`: the engine-shaped browse input plus
+ * routing. `projectId` picks WHICH catalog answers — the host keeps one per
+ * project directory — so it decides which checkout gets probed for models.
+ * Omitting it asks the host's fallback directory, which is what a Session with
+ * no project yet wants and what a project-scoped Settings screen never does.
+ */
+export type RuntimeCatalogInspectRequest = RuntimeCatalogBrowseInput & { projectId?: string };
+
+/**
+ * Wire shape for `runtimeCatalog.save`: the engine-shaped save input plus
+ * routing.
+ *
+ * **Send the same `projectId` this client last inspected with.** A catalog
+ * persists models out of the discovery snapshot it is holding, and the snapshot
+ * belongs to that one catalog instance — so a save routed to a different (or
+ * omitted) `projectId` reaches an instance that has discovered nothing and is
+ * refused, no matter how recently the user inspected. The pairing cannot be
+ * enforced here because the two calls are independent requests; a client that
+ * lets a form default one and drop the other gets a refusal whose message
+ * ("inspect before saving") describes a state the user cannot see they are in.
+ */
+export type RuntimeCatalogSaveRequest = RuntimeCatalogSaveInput & { projectId?: string };

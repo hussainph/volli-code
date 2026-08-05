@@ -15,6 +15,7 @@ import type { Label } from "./label";
 import type { LegacyProject } from "./legacy-import";
 import type { Project } from "./project-identity";
 import type { HarnessEventOrder, SessionRecord } from "./session";
+import type { SessionRpcIpcRequest, SessionRpcIpcResponse } from "./session-rpc-wire";
 import type {
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
@@ -459,12 +460,62 @@ export type HarnessRegisteredResult =
   | { ok: true; harnesses: HarnessAdapter[]; channels: HarnessChannelStatus[] }
   | { ok: false; error: string };
 
+/** `{ harnessId }` — which harness's binary override to read. */
+export interface HarnessCommandGetInput {
+  harnessId: string;
+}
+
+/**
+ * `{ harnessId, command }` — `command: null` clears the override back to
+ * default resolution; a string is validated and, if it resolves, persisted
+ * verbatim. Never the realpath: resolution runs live at attach time, so a
+ * later PATH or filesystem change is honored without the user re-entering
+ * anything.
+ */
+export interface HarnessCommandSetInput {
+  harnessId: string;
+  command: string | null;
+}
+
+/** The stored raw override for one harness's binary — returned by `volli:harness-command-get`. Null when unset. */
+export type HarnessCommandGetResult = Result<{ command: string | null }>;
+
+/**
+ * Why `volli:harness-command-set` refused a candidate. `path-unavailable` is
+ * a bare name whose login-shell PATH itself could not be read — a transient
+ * host failure that says nothing about the name, so the honest recovery is
+ * retry, not retype. `not-found` is a bare name genuinely absent from a PATH
+ * that WAS read — a typo. `not-executable` is an explicit path that exists
+ * but cannot be run; `not-resolvable` is a candidate that located fine but
+ * could not be canonicalized (e.g. a broken symlink).
+ */
+export type HarnessCommandFailureReason =
+  | "not-found"
+  | "not-executable"
+  | "not-resolvable"
+  | "path-unavailable";
+
+/**
+ * Ack for `volli:harness-command-set`. Success carries the canonical realpath
+ * for display — `null` only when the call CLEARED the override, since a
+ * candidate that validated always resolved to a real path. Failure stores
+ * nothing: `reason` is what a caller branches on, `error` is what a human
+ * reads.
+ */
+export type HarnessCommandSetResult =
+  | { ok: true; resolvedPath: string | null }
+  | { ok: false; reason: HarnessCommandFailureReason; error: string };
+
 /**
  * The bring-your-own-harness surface (`src/main/harness-ipc.ts`): ask what is
  * waiting, answer one of them, and ask what the answers add up to. A registered
  * manifest is inert until a verdict lands here, so the first two channels are
  * the whole difference between a manifest on disk and a harness that can
  * launch — and the third is how anything but main gets to hear that it did.
+ *
+ * The last two channels are a separate concern living on the same surface: a
+ * per-harness binary override, read live and validated the same way the
+ * launch path itself resolves a binary.
  */
 export interface VolliHarnessIpcContract {
   /** Every discovered manifest nobody has ruled on, re-read and re-hashed per call. */
@@ -473,6 +524,16 @@ export interface VolliHarnessIpcContract {
   "volli:harness-trust-set": { args: [input: HarnessTrustSetInput]; result: Result };
   /** The trusted registered harnesses, as the launch path would resolve them. */
   "volli:harness-registered": { args: []; result: HarnessRegisteredResult };
+  /** The stored raw override for one harness's binary, or null when unset. */
+  "volli:harness-command-get": {
+    args: [input: HarnessCommandGetInput];
+    result: HarnessCommandGetResult;
+  };
+  /** Validates and persists (or, given `command: null`, clears) a per-harness binary override. */
+  "volli:harness-command-set": {
+    args: [input: HarnessCommandSetInput];
+    result: HarnessCommandSetResult;
+  };
 }
 
 export type HarnessIpcChannel = keyof VolliHarnessIpcContract;
@@ -703,7 +764,19 @@ export interface VolliSystemIpcContract {
 }
 
 /**
- * The 2 send-based channels (`ipcRenderer.send`, not `invoke`) — declared
+ * The native Session tRPC edge (`src/main/session-rpc-ipc.ts`): ONE invoke
+ * channel carrying every routed procedure, because the router — not this
+ * contract — is where a Session procedure's input and output are declared.
+ * The wire shapes live in `session-rpc-wire.ts`; the renderer's terminating
+ * tRPC link is the only thing that should ever speak them directly.
+ */
+export interface VolliSessionRpcIpcContract {
+  /** Runs one routed procedure; `session.subscribe` acknowledges with a subscription id instead. */
+  "volli:session-rpc": { args: [request: SessionRpcIpcRequest]; result: SessionRpcIpcResponse };
+}
+
+/**
+ * The 3 send-based channels (`ipcRenderer.send`, not `invoke`) — declared
  * separately from {@link VolliInvokeContract} because they have no result to
  * await.
  */
@@ -715,6 +788,10 @@ export interface VolliSendContract {
   // ⇄ session nav, needs no reply, and round-tripping an invoke per flip would
   // add latency to navigation for nothing.
   "volli:terminal-set-visible": { args: [sessionId: string, visible: boolean] };
+  // Send-based (ipcRenderer.send, not invoke): main answers a cancellation by
+  // stopping the frames, which the renderer is already listening for — an ack
+  // would only be a second way to learn the same thing, later.
+  "volli:session-rpc-cancel": { args: [subscriptionId: string] };
 }
 
 /** Every invoke channel with a contract entry — the full catalog. */
@@ -724,6 +801,7 @@ export interface VolliInvokeContract
     VolliFileIpcContract,
     VolliHarnessIpcContract,
     VolliThemeIpcContract,
+    VolliSessionRpcIpcContract,
     VolliSystemIpcContract {}
 
 export type IpcArgs<C extends keyof VolliInvokeContract> = VolliInvokeContract[C]["args"];
@@ -788,7 +866,11 @@ export type VolliIpcEvent =
   // A different harness is now running in one session's terminal, announced by
   // its own launch wrapper. The other involuntary channel, and the one that
   // reaches the tiers hooks cannot — see {@link SessionHarnessNotice}.
-  | "volli:session-harness";
+  | "volli:session-harness"
+  // Ordered frames for one live Session RPC subscription — see
+  // {@link SessionRpcIpcEvent}. Every subscription shares this channel and is
+  // told apart by the id main acknowledged the request with.
+  | "volli:session-rpc-event";
 
 /** Direction of a `volli:ui-zoom-command` event: step in/out one rung, or reset. */
 export type UiZoomCommand = "in" | "out" | "reset";

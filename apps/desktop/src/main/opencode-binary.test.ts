@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { resolveOpenCodeBinary, type OpenCodeBinaryResolverDeps } from "./opencode-binary";
+import {
+  isExecutable,
+  resolveOpenCodeBinary,
+  verifiedPath,
+  type OpenCodeBinaryResolverDeps,
+} from "./opencode-binary";
 
 function deps(overrides: Partial<OpenCodeBinaryResolverDeps> = {}): OpenCodeBinaryResolverDeps {
   return {
@@ -47,7 +52,7 @@ describe("resolveOpenCodeBinary", () => {
   it("canonicalizes a configured path instead of walking PATH with it", async () => {
     const loginShellPath = vi.fn(async () => "/opt/homebrew/bin:/usr/bin:/bin");
     const resolveOnPath = vi.fn(async () => "/usr/bin/opt/custom/opencode");
-    const isExecutable = vi.fn(async () => true);
+    const isExecutableSpy = vi.fn(async () => true);
 
     await expect(
       resolveOpenCodeBinary(
@@ -55,13 +60,13 @@ describe("resolveOpenCodeBinary", () => {
         deps({
           loginShellPath,
           resolveOnPath,
-          isExecutable,
+          isExecutable: isExecutableSpy,
           realpath: async () => "/opt/custom/opencode-1.0",
         }),
       ),
     ).resolves.toBe("/opt/custom/opencode-1.0");
 
-    expect(isExecutable).toHaveBeenCalledWith("/opt/custom/opencode");
+    expect(isExecutableSpy).toHaveBeenCalledWith("/opt/custom/opencode");
     expect(resolveOnPath).not.toHaveBeenCalled();
     expect(loginShellPath).not.toHaveBeenCalled();
   });
@@ -79,5 +84,33 @@ describe("resolveOpenCodeBinary", () => {
     await expect(
       resolveOpenCodeBinary("/opt/custom/opencode", deps({ isExecutable: async () => false })),
     ).rejects.toThrow("OpenCode executable /opt/custom/opencode is not an executable file");
+  });
+});
+
+describe("isExecutable", () => {
+  it("is true for a file the process can execute", async () => {
+    await expect(isExecutable(process.execPath)).resolves.toBe(true);
+  });
+
+  it("is false for a path with nothing there", async () => {
+    await expect(isExecutable("/nonexistent/definitely-not-a-binary")).resolves.toBe(false);
+  });
+});
+
+describe("verifiedPath", () => {
+  it("locates a command already at its word", async () => {
+    await expect(verifiedPath("/opt/custom/codex", deps())).resolves.toEqual({
+      ok: true,
+      path: "/opt/custom/codex",
+    });
+  });
+
+  it("refuses one that is not executable", async () => {
+    await expect(
+      verifiedPath("/opt/custom/codex", deps({ isExecutable: async () => false })),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "not-executable",
+    });
   });
 });

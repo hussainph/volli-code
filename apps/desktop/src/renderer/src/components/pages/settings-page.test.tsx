@@ -34,8 +34,21 @@ describe("SettingsPage (app-wide)", () => {
     const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="harness" />);
 
     expect(html).toContain('aria-current="page"');
-    expect(html).toContain("Runtimes");
+    expect(html).toContain("Harness Runtimes");
     expect(html).not.toContain("Archive Done tickets after");
+  });
+
+  // The built-in half of the harness list is compiled in, so the category has
+  // something to show before any preload call — which is also the only thing
+  // keeping this suite renderable, since it runs with no `window` at all.
+  it("selects a harness and details it without a preload bridge", () => {
+    const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="harness" />);
+
+    expect(html).toContain("Claude Code");
+    expect(html).toContain("OpenCode");
+    // The first harness is detailed by default: its identity card, not a blank.
+    expect(html).toContain("Command");
+    expect(html).toContain("Built-in");
   });
 });
 

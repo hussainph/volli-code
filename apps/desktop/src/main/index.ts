@@ -74,6 +74,8 @@ import { ensureShellInit } from "./shell-init";
 import { startAgentSocket, type AgentSocketServer } from "./agent-socket";
 import { loginShellPath } from "./login-path";
 import { resolveOpenCodeBinary } from "./opencode-binary";
+import { storedHarnessCommand } from "./db/harness-command-repo";
+import { createRuntimeCatalogHub } from "./runtime-catalog-hub";
 import {
   detectHarnesses,
   installHarnessSkills,
@@ -399,8 +401,21 @@ app.whenReady().then(async () => {
         // Resolve only when a native Session attaches. Finder launches do not
         // inherit the user's toolchain PATH, and doing this at boot could make
         // every launch wait on an interactive shell for an adapter it never
-        // uses.
-        resolveCommand: resolveOpenCodeBinary,
+        // uses. A stored per-harness override wins, read at resolution time
+        // rather than captured here — but the adapter caches the binary it
+        // verified (`#verifiedBinary`) for the rest of the launch, so a
+        // Settings change drops that cache immediately via
+        // `invalidateBinary()` (wired below, into `volli:harness-command-set`)
+        // rather than waiting for the next relaunch.
+        resolveCommand: (command) =>
+          resolveOpenCodeBinary(storedHarnessCommand(dbHandle.db, "opencode") ?? command),
+        // The server child inherits the user's login-shell PATH, not
+        // Electron's Finder/Dock environment — the same authority the harness
+        // wrapper and trust-prompt resolution below already defer to.
+        resolveEnv: async (): Promise<Record<string, string>> => {
+          const pathValue = await loginShellPath();
+          return pathValue === null ? {} : { PATH: pathValue };
+        },
       })
     : null;
   const sessionRuntime =
@@ -412,8 +427,31 @@ app.whenReady().then(async () => {
           sessionEngine,
         })
       : null;
+  // One Runtime Catalog per project directory, resolved by the `projectId` a
+  // `runtimeCatalog.*` request carries — never the directory that happened to
+  // construct first. See `runtime-catalog-hub.ts` for why it has no dispose
+  // and no cache eviction.
+  const runtimeCatalogHub =
+    dbHandle.ok && nativeAdapter !== null
+      ? createRuntimeCatalogHub({
+          db: dbHandle.db,
+          adapters: [
+            {
+              id: nativeAdapter.manifest.id,
+              profileId: "native",
+              discover: (context, signal) => nativeAdapter.probe(context, signal),
+            },
+          ],
+          fallbackDirectory: app.getPath("home"),
+        })
+      : null;
   const sessionRpc =
-    sessionRuntime === null ? null : registerSessionRpcIpcHandlers({ runtime: sessionRuntime });
+    sessionRuntime === null
+      ? null
+      : registerSessionRpcIpcHandlers({
+          runtime: sessionRuntime,
+          resolveRuntimeCatalog: runtimeCatalogHub ?? undefined,
+        });
   // Boot recovery: no PTY survives a relaunch. Close only stale local terminal
   // attachments; the durable Session itself intentionally remains open.
   if (dbHandle.ok && sessionEngine !== null) {
@@ -762,6 +800,15 @@ app.whenReady().then(async () => {
     // offer a harness the launch would then refuse.
     launchableHarnesses: () => agentRuntime.adapters ?? [],
     now: Date.now,
+    // Only the native OpenCode adapter caches a verified binary across a
+    // launch's lifetime; every other harness resolves fresh on each attach
+    // and has nothing to drop. `nativeAdapter` is null on the db-failed boot
+    // path, where this is never called anyway (no db, no stored overrides).
+    invalidateNativeBinary: (harnessId) => {
+      if (nativeAdapter !== null && harnessId === nativeAdapter.manifest.id) {
+        nativeAdapter.invalidateBinary();
+      }
+    },
   });
 
   // Renders hand-edited managed files that were preserved (never overwritten)
