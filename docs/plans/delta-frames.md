@@ -290,7 +290,7 @@ keeps seeing it until something durable replaces it or the surface reloads.
 Losing mid-word text with nothing in its place is worse than holding it, and
 nothing about it was durable to begin with.
 
-## What this deliberately does not fix
+## What the transport deliberately does not fix
 
 The open-fence re-highlight (readiness doc C4, correction 4). Each text part
 already renders through its own memoized Streamdown, so settled parts bail
@@ -301,6 +301,11 @@ every fence in the growing part is re-highlighted per chunk, closed ones
 included. So the renderer policy (block stability for the fences that have
 already closed) is a real item, scoped to the markdown components — not to the
 wire.
+
+It landed separately, on its own evidence, in `ai-elements/message.tsx`; the
+diagnosis and the before/after are in the fence-probe section below. Nothing
+about it touches the contract above, which is the point of having measured it
+apart from the wire.
 
 ## Proof, checked in before the change
 
@@ -475,25 +480,78 @@ are the comparable figures.
 
 What the split says, and it is not what C4 assumed:
 
-- 98% of `childList` mutations land INSIDE a `<pre>`, so the `<pre>` elements
-  survive and their token spans churn. This is re-highlighting, not the
-  markdown part being re-parsed into new blocks.
-- The churn is not confined to the fence that is growing. Per-block span counts
-  oscillate `344|264|41` → `92|73|11` → `344|264|49` on every chunk: all three
-  fences drop to line spans and are re-highlighted, including the two closed
-  ones whose source has been byte-identical for thousands of characters. The
-  settled blocks are ~86% of the span churn.
+- 98% of `childList` mutations land INSIDE a `<pre>`, and the churn is not
+  confined to the fence that is growing. Per-block span counts oscillate
+  `344|264|41` → `92|73|11` → `344|264|49` on every chunk: all three fences drop
+  to line spans and are re-highlighted, including the two closed ones whose
+  source has been byte-identical for thousands of characters. The settled blocks
+  are ~86% of the span churn.
 - Same behavior with `working` off, so Streamdown's animation plugin is not the
   cause — any change to the text part re-highlights every fence in it.
 - 264 mutations and ~36 ms per chunk, and no long tasks at all in run 2. The
   cost sits just under the 50 ms long-task threshold while holding the stream
   at ~27 fps, which is why it never showed up as a long task in the audit.
 
-This is what the renderer policy would have to fix — closed fences holding
-their highlighted output while the open one grows — and it is independent of
-the delta contract above.
+One reading in that list was wrong, and finding out why is what named the fix.
+"Mutations land inside a `<pre>`, so the `<pre>` survives" does not follow: a
+subtree React builds detached and then attaches costs ONE record on the parent,
+and the records inside it come afterwards. Tagging every
+`[data-streamdown="code-block"]` element as it appeared showed 195 created and
+192 destroyed across the 126-chunk stream — one per fence per chunk. The blocks
+were not re-highlighting in place; they were being torn down and rebuilt, each
+replacement mounting at its unhighlighted fallback (`useState(raw)`) and
+swapping to tokens when its effect read Shiki's cache. That flip is what
+`spanCollapses` had been counting all along.
 
-## Phases
+Below that, the cause: Streamdown re-derives its internal component map whenever
+the `components` prop changes identity, and when the map defines `inlineCode` it
+re-wraps `code` in a fresh closure each time. `code` is an element TYPE, so a new
+function there is a new type at the same position and React remounts every fenced
+block in the message. `MessageResponse` was building that map with a literal
+spread, so every token produced a new identity. Isolated, the difference is the
+whole effect: a fresh `components` object WITHOUT `inlineCode` costs 2 block
+mounts over a stream; the same object WITH `inlineCode` costs 22.
+
+**After** (recorded 2026-08-05, same machine and browser, page reloaded between
+the two readings so neither is measuring a hot-module state). The policy is one
+memo in `apps/desktop/src/components/ai-elements/message.tsx`: the merged
+`components` map keeps one identity for as long as its members do, and the
+common case — no caller override — passes the module constant straight through.
+`reasoning.tsx` already passed a module-level map and was already immune;
+measured alongside to confirm it, not changed.
+
+```json
+{
+  "chunks": 126,
+  "durationMs": 4567,
+  "finalChars": 4019,
+  "mutationsTotal": 689,
+  "mutationsInCode": 410,
+  "longTaskMs": 0,
+  "longTaskCount": 0,
+  "spanCollapses": 0
+}
+```
+
+| metric | before | after |
+| --- | --- | --- |
+| `childList` mutations | 33,309 | 689 |
+| …of those, inside a `<pre>` | 32,638 | 410 |
+| span collapses | 117 | 0 |
+| code blocks mounted (created / destroyed) | 195 / 192 | 3 / 0 |
+
+97.9% of the mutations and 98.7% of the in-`<pre>` mutations are gone, and every
+span collapse with them: no block ever falls back to unhighlighted source
+mid-stream any more. Three code blocks are mounted for three fences, which is
+the floor. What remains is the growth this probe exists to price — the open
+fence tokenizing one chunk longer each frame (410 records) and the prose around
+it (279) — and it is the same work a single settled render would do.
+
+Both readings are three runs each; the mutation counts are identical across runs
+after (689 / 689 / 689) and agree to 0.7% before. Long tasks are the one figure
+that is not stable, and they are a page-warm artifact rather than a difference:
+the first `streamFence()` after a reload records 4–5 tasks totalling ~370–490 ms
+in BOTH builds, and every later run in both records zero.
 
 1. Probes + recorded baselines (no behavior change). **Landed.**
 2. The contract: engine vocabulary + overlay fold + runtime publish/baseline;
@@ -509,4 +567,5 @@ the delta contract above.
    differently.
 3. Re-run probes and assert ceilings; re-point the persistence probe at the
    settle-count cadence; the fence policy if the probe demands it; docs and
-   gates.
+   gates. The probe demanded it: the fence policy landed as one memo in
+   `ai-elements/message.tsx`, measured before and after in this file.
