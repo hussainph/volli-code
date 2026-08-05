@@ -9,6 +9,7 @@ import type {
   DeliveryReceipt,
   HarnessCommand,
   HarnessObservation,
+  KeyedTranscriptPart,
   NativeAttachmentSpec,
   NativeCapabilityReport,
   NativeHarnessAdapter,
@@ -17,6 +18,7 @@ import type {
   ObservationSink,
   Reconciliation,
   ReleaseReason,
+  TranscriptDelta,
 } from "@volli/session-engine";
 import { observationCursor } from "@volli/session-engine";
 import {
@@ -41,7 +43,9 @@ import type {
   SessionNativeReference,
 } from "@volli/shared";
 type UIMessage = Extract<HarnessCommand, { kind: "message.submit" }>["message"];
-type DynamicToolPart = Extract<UIMessage["parts"][number], { type: "dynamic-tool" }>;
+type UIMessagePart = UIMessage["parts"][number];
+type ReasoningPart = Extract<UIMessagePart, { type: "reasoning" }>;
+type DynamicToolPart = Extract<UIMessagePart, { type: "dynamic-tool" }>;
 type ToolMetadata = NonNullable<DynamicToolPart["toolMetadata"]>;
 type OpenCodeStatusObservation = Extract<
   HarnessObservation,
@@ -59,7 +63,7 @@ const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_DEFERRED_EVENTS = 1_000;
 const MAX_REMEMBERED_EVENT_IDS = 10_000;
 const MAX_SSE_BUFFER_LENGTH = 1_048_576;
-const STREAM_SNAPSHOT_DELAY_MS = 32;
+const STREAM_DELTA_DELAY_MS = 32;
 /** What a message with nothing gated projects against, shared so it is one map. */
 const NO_APPROVALS: ReadonlyMap<string, string> = new Map();
 /**
@@ -535,6 +539,19 @@ interface BufferedOpenCodeMessage {
 }
 
 /**
+ * The last transient state of one message this binding put on the wire.
+ *
+ * A delta is only meaningful against what its consumer already holds, and the
+ * only record of that is this one — the deltas themselves are never written
+ * down. So every tick diffs against this, and losing it (a settle, a failed
+ * emission) is exactly what makes the next tick a `reset`.
+ */
+interface EmittedTranscript {
+  readonly parts: readonly KeyedTranscriptPart[];
+  readonly metadata: unknown;
+}
+
+/**
  * The tool call an open permission gates. OpenCode asks for permission on a
  * channel of its own, but names the call it is blocking on — so the prompt can
  * be raised on that tool row instead of only beside the transcript.
@@ -585,8 +602,9 @@ class OpenCodeBinding implements BindingHandle {
   readonly #seen = new Set<string>();
   readonly #streamEventsSeen = new Set<string>();
   readonly #messages = new Map<string, BufferedOpenCodeMessage>();
-  readonly #streamSnapshotTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  readonly #streamSnapshotTriggers = new Map<string, string>();
+  /** What each in-flight message last said on the wire; absent means it owes a `reset`. */
+  readonly #streamEmissions = new Map<string, EmittedTranscript>();
+  readonly #streamDeltaTimers = new Map<string, ReturnType<typeof setTimeout>>();
   readonly #deferredEvents: OpenCodeSseEvent[] = [];
   readonly #questions = new Map<string, readonly OpenCodeQuestion[]>();
   /** Open tool-gating permissions, by OpenCode's permission id. */
@@ -609,6 +627,8 @@ class OpenCodeBinding implements BindingHandle {
   #drainingDeferredEvents = false;
   #requiresFullReconciliation = false;
   #streamReconnectSequence = 0;
+  /** Transient observations carry no durable identity, so a counter is the whole of it. */
+  #deltaSequence = 0;
 
   constructor(options: BindingOptions) {
     this.#server = options.server;
@@ -921,12 +941,19 @@ class OpenCodeBinding implements BindingHandle {
       await this.#drainInFlightEmit();
       return;
     }
+    // Settle before the sink goes. The buffer holds the only copy of an
+    // in-flight message — its deltas are transient by construction and nothing
+    // wrote them down — and release is a normal user action, not a crash, so
+    // dropping the sink first would discard the whole message the Session is
+    // watching being written.
+    await this.#settleMessages(`opencode:release:${this.#nativeSessionId}`);
     this.#released = true;
-    this.#clearScheduledStreamSnapshots();
+    this.#clearScheduledStreamDeltas();
     this.#streamAbort.abort();
     await this.#drainInFlightEmit();
     this.#sink = null;
     this.#messages.clear();
+    this.#streamEmissions.clear();
     this.#pendingApprovals.clear();
     this.#approvalIndex = null;
     this.#subagents.clear();
@@ -1040,11 +1067,7 @@ class OpenCodeBinding implements BindingHandle {
   }
 
   async #emitDisconnected(disconnectDetail: string | null): Promise<void> {
-    try {
-      await this.#flushMessages(`opencode:sse-final:${this.#nativeSessionId}`);
-    } catch {
-      // Continue to the independently identified attention fact.
-    }
+    await this.#settleMessages(`opencode:sse-final:${this.#nativeSessionId}`);
     try {
       await this.#emit({
         id: `opencode:sse-disconnected:${this.#nativeSessionId}`,
@@ -1087,11 +1110,17 @@ class OpenCodeBinding implements BindingHandle {
   }
 
   async #emitNow(observation: HarnessObservation): Promise<boolean> {
-    if (this.#seen.has(observation.id)) return true;
+    // A transient delta has no durable identity to dedupe on and no position to
+    // resume from. Remembering one would evict, at ~31 ids a second, the durable
+    // and interaction ids the window exists to protect; recording one as the
+    // cursor would point a later reconcile past content nothing wrote down.
+    const transient = observation.kind === "transcript.delta";
+    if (!transient && this.#seen.has(observation.id)) return true;
     const sink = this.#sink;
     if (this.#released || !sink) return false;
     await sink.emit(observation);
     if (this.#released || this.#sink !== sink) return false;
+    if (transient) return true;
     this.#remember(observation);
     this.#cursor = observationCursor(observation) ?? { eventId: observation.id };
     return true;
@@ -1151,30 +1180,31 @@ class OpenCodeBinding implements BindingHandle {
     switch (event.type) {
       case "message.updated": {
         const messageId = this.#bufferMessage(event.properties);
-        this.#scheduleStreamSnapshot(messageId, event.id);
+        this.#scheduleStreamDeltas(messageId);
         return;
       }
       case "message.part.updated": {
         const messageId = this.#bufferPart(event.properties);
-        this.#scheduleStreamSnapshot(messageId, event.id);
+        this.#scheduleStreamDeltas(messageId);
         return;
       }
       case "message.part.delta": {
         const messageId = this.#applyPartDelta(event.properties);
-        this.#scheduleStreamSnapshot(messageId, event.id);
+        this.#scheduleStreamDeltas(messageId);
         return;
       }
       case "message.part.removed": {
         const messageId = this.#removePart(event.properties);
-        this.#scheduleStreamSnapshot(messageId, event.id);
+        this.#scheduleStreamDeltas(messageId);
         return;
       }
       case "message.removed": {
         const messageId =
           objectString(event.properties, "messageID") ?? objectString(event.properties, "id");
         if (messageId) {
-          this.#clearScheduledStreamSnapshot(messageId);
+          this.#clearScheduledStreamDelta(messageId);
           this.#messages.delete(messageId);
+          await this.#dropStreamMessage(messageId);
         }
         return;
       }
@@ -1209,10 +1239,7 @@ class OpenCodeBinding implements BindingHandle {
         // reply that already dismissed it. Resolved the same way the gate
         // itself is: a subagent's permission names a message this Session does
         // not hold, and repainting *that* one repaints nothing.
-        this.#scheduleStreamSnapshot(
-          this.#approvalTarget(event.properties)?.messageId ?? null,
-          event.id,
-        );
+        this.#scheduleStreamDeltas(this.#approvalTarget(event.properties)?.messageId ?? null);
         return;
       }
       case "permission.replied": {
@@ -1326,73 +1353,184 @@ class OpenCodeBinding implements BindingHandle {
     return message;
   }
 
-  #scheduleStreamSnapshot(messageId: string | null, triggerId: string): void {
+  /**
+   * Coalesce a message's stream traffic into one delta batch per interval.
+   *
+   * The window is unchanged — OpenCode's deltas arrive far faster than anything
+   * can draw them — but what leaves it is now the new bytes rather than the
+   * whole message, so a long reply costs its own length once instead of once
+   * per tick.
+   */
+  #scheduleStreamDeltas(messageId: string | null): void {
     if (!messageId || this.#released || !this.#messages.has(messageId)) return;
-    this.#streamSnapshotTriggers.set(messageId, triggerId);
-    if (this.#streamSnapshotTimers.has(messageId)) return;
+    if (this.#streamDeltaTimers.has(messageId)) return;
     const timer = setTimeout(() => {
-      this.#streamSnapshotTimers.delete(messageId);
-      void this.#emitStreamSnapshot(messageId).catch(() => undefined);
-    }, STREAM_SNAPSHOT_DELAY_MS);
-    this.#streamSnapshotTimers.set(messageId, timer);
+      this.#streamDeltaTimers.delete(messageId);
+      // Nothing to catch here on purpose: a tick contains its own failures,
+      // because a rejection reaching this callback is an unhandled rejection in
+      // main and there is no caller left to answer for it.
+      void this.#emitStreamDeltas(messageId);
+    }, STREAM_DELTA_DELAY_MS);
+    this.#streamDeltaTimers.set(messageId, timer);
   }
 
-  async #emitStreamSnapshot(messageId: string): Promise<void> {
-    const buffered = this.#messages.get(messageId);
-    const triggerId = this.#streamSnapshotTriggers.get(messageId);
-    if (!buffered?.role || buffered.role === "user" || !triggerId) return;
+  /**
+   * One tick: project the whole message, diff it against what this binding last
+   * put on the wire, and emit the difference.
+   *
+   * The diff runs over the *whole* projected array rather than the part an
+   * event touched, because most of what changes a projection is not a part
+   * event at all: a `turnBusy` flip re-projects every unfinished thought, the
+   * pass below settles every thought the model has moved past, and
+   * `permission.asked` gates a tool row while writing nothing to the buffer.
+   * A touched-part rule would have dropped the permission card — the surface's
+   * trust boundary — silently. Whole-array costs O(parts) identity checks,
+   * which the per-part projection memo makes exact rather than approximate.
+   */
+  async #emitStreamDeltas(messageId: string): Promise<void> {
+    try {
+      const buffered = this.#messages.get(messageId);
+      if (!buffered?.role || buffered.role === "user") return;
+      const parts = this.#projectKeyedParts(messageId, buffered);
+      const metadata = buffered.metadata ?? undefined;
+      const emitted = this.#streamEmissions.get(messageId);
+      if (!emitted && parts.length === 0) return;
+      const deltas = emitted
+        ? transcriptDeltas(emitted, { parts, metadata })
+        : [
+            {
+              op: "reset" as const,
+              message: {
+                id: messageId,
+                role: buffered.role,
+                ...(metadata === undefined ? {} : { metadata }),
+                parts,
+              },
+            },
+          ];
+      if (deltas.length === 0) return;
+      // Forget first, remember only on a clean batch: a delta that never reached
+      // the sink leaves the consumer holding a state this binding cannot name,
+      // and the next tick has to reset rather than diff against the fiction. A
+      // released sink swallows the rest of the batch; release drops this map
+      // behind it, so what was recorded here never outlives the binding.
+      this.#streamEmissions.delete(messageId);
+      for (const delta of deltas) await this.#emitDelta(messageId, delta);
+      this.#streamEmissions.set(messageId, { parts, metadata });
+    } catch {
+      // Dirty until the next tick's reset. A transient frame is not worth a
+      // retry — by then the message has moved on anyway.
+    }
+  }
+
+  /**
+   * The projected message, each part still carrying the provider id it came
+   * from. Projection is 1:0..1, so that id addresses the projected part on its
+   * own — there is no sub-index for a key to carry.
+   */
+  #projectKeyedParts(
+    messageId: string,
+    buffered: BufferedOpenCodeMessage,
+  ): readonly KeyedTranscriptPart[] {
     const turnBusy = this.#turnStatus !== "idle";
     const approvals = this.#approvalsForMessage(messageId);
-    const parts = buffered.partOrder.flatMap((partId) =>
-      openCodePart(buffered.parts.get(partId), { reasoningStreaming: turnBusy, approvals }),
-    );
-    if (parts.length === 0) return;
+    const keyed: KeyedTranscriptPart[] = [];
+    for (const key of buffered.partOrder) {
+      for (const part of openCodePart(buffered.parts.get(key), {
+        reasoningStreaming: turnBusy,
+        approvals,
+      })) {
+        keyed.push({ key, part });
+      }
+    }
     // Fallback for the window before `time.end` lands: a thought is live only
     // while it is the message's *final* part. Once text or a tool call follows
     // it the model has moved on, even though the turn is still busy — and a
     // reasoning part left "streaming" makes the elapsed counter tick forever.
-    if (turnBusy) {
-      const lastIndex = parts.length - 1;
-      for (let index = 0; index < parts.length; index += 1) {
-        const part = parts[index];
-        if (part?.type !== "reasoning" || index === lastIndex) continue;
-        parts[index] = { ...part, state: "done" };
-      }
+    if (!turnBusy) return keyed;
+    for (let index = 0; index + 1 < keyed.length; index += 1) {
+      const entry = keyed[index];
+      if (entry.part.type !== "reasoning") continue;
+      keyed[index] = { key: entry.key, part: settledReasoning(entry.part) };
     }
-    const message: UIMessage = {
-      id: messageId,
-      role: buffered.role,
-      parts,
-      ...(buffered.metadata ? { metadata: buffered.metadata } : {}),
-    };
-    await this.#emit({
-      id: transcriptObservationId(message),
-      kind: "transcript.message",
+    return keyed;
+  }
+
+  #emitDelta(messageId: string, delta: TranscriptDelta): Promise<boolean> {
+    return this.#emit({
+      id: `opencode:delta:${this.#nativeSessionId}:${++this.#deltaSequence}`,
+      kind: "transcript.delta",
       occurredAt: this.#now(),
-      cursor: { eventId: triggerId },
       threadId: `thread:${this.#spec.sessionId}:root`,
       branchId: `branch:${this.#spec.sessionId}:main`,
       attemptId: `attempt:${messageId}`,
       turnId: null,
-      message,
+      messageId,
+      delta,
     });
   }
 
-  #clearScheduledStreamSnapshot(messageId: string): void {
-    const timer = this.#streamSnapshotTimers.get(messageId);
-    if (timer) clearTimeout(timer);
-    this.#streamSnapshotTimers.delete(messageId);
-    this.#streamSnapshotTriggers.delete(messageId);
+  /**
+   * Withdraw a message this binding is still transiently claiming.
+   *
+   * Nothing else ends an overlay entry that never reaches a durable snapshot —
+   * a message the provider deleted, or one whose last projectable part was
+   * removed — and an entry nothing ends renders as a message that will not go
+   * away.
+   */
+  async #dropStreamMessage(messageId: string): Promise<void> {
+    if (!this.#streamEmissions.delete(messageId)) return;
+    await this.#emitDelta(messageId, { op: "message.remove" });
   }
 
-  #clearScheduledStreamSnapshots(): void {
-    for (const timer of this.#streamSnapshotTimers.values()) clearTimeout(timer);
-    this.#streamSnapshotTimers.clear();
-    this.#streamSnapshotTriggers.clear();
+  #clearScheduledStreamDelta(messageId: string): void {
+    const timer = this.#streamDeltaTimers.get(messageId);
+    if (timer) clearTimeout(timer);
+    this.#streamDeltaTimers.delete(messageId);
+  }
+
+  #clearScheduledStreamDeltas(): void {
+    for (const timer of this.#streamDeltaTimers.values()) clearTimeout(timer);
+    this.#streamDeltaTimers.clear();
+  }
+
+  /**
+   * A settle point that cannot fail loudly, since the sink has no error channel
+   * and both callers are already on their way out.
+   *
+   * Under transient deltas a swallowed flush is the moment the in-flight reply
+   * stops existing anywhere, so it is named on the one channel that survives
+   * this binding: the attention the Session raises to its reader.
+   */
+  async #settleMessages(triggerId: string): Promise<void> {
+    try {
+      await this.#flushMessages(triggerId);
+    } catch {
+      await this.#raiseTranscriptLoss(triggerId);
+    }
+  }
+
+  async #raiseTranscriptLoss(triggerId: string): Promise<void> {
+    try {
+      await this.#emit({
+        id: `opencode:transcript-lost:${triggerId}`,
+        kind: "attention.raised",
+        occurredAt: this.#now(),
+        attention: {
+          id: `opencode:transcript-lost:${this.#nativeSessionId}`,
+          kind: "partial_turn_interrupted",
+          detail: "OpenCode's in-flight reply could not be recorded",
+          diagnostic: null,
+        },
+      });
+    } catch {
+      // A sink that cannot take the loss report is the same sink that lost the
+      // transcript; there is no third channel to try.
+    }
   }
 
   async #flushMessages(triggerId: string): Promise<void> {
-    this.#clearScheduledStreamSnapshots();
+    this.#clearScheduledStreamDeltas();
     await this.#drainInFlightEmit();
     for (const [messageId, buffered] of this.#messages) {
       if (!buffered.role) {
@@ -1411,6 +1549,9 @@ class OpenCodeBinding implements BindingHandle {
       );
       if (parts.length === 0) {
         this.#messages.delete(messageId);
+        // Nothing durable to settle into, so the transient claim has to be
+        // withdrawn explicitly or it outlives the message it stood for.
+        await this.#dropStreamMessage(messageId);
         continue;
       }
       const message: UIMessage = {
@@ -1430,6 +1571,9 @@ class OpenCodeBinding implements BindingHandle {
         turnId: null,
         message,
       });
+      // Settled: the durable record now says everything the overlay did, so the
+      // message's next transient emission starts again from a `reset`.
+      this.#streamEmissions.delete(messageId);
       if (this.#released) {
         this.#messages.clear();
         return;
@@ -1444,6 +1588,10 @@ class OpenCodeBinding implements BindingHandle {
     role: ReturnType<typeof messageRole>,
     raw: unknown,
   ): Extract<HarnessObservation, { kind: "transcript.message" }> {
+    // Reconcile is a settle point like any other: whatever the provider says
+    // this message is, it is about to be said durably, so the overlay's copy of
+    // it ends here and the next transient emission starts from a `reset`.
+    this.#streamEmissions.delete(messageId);
     const metadata = openCodeMessageMetadata(nested(raw, "info") ?? raw);
     const message: UIMessage = {
       id: messageId,
@@ -1716,7 +1864,7 @@ class OpenCodeBinding implements BindingHandle {
     if (!target) return;
     this.#pendingApprovals.delete(permissionId);
     this.#approvalIndex = null;
-    this.#scheduleStreamSnapshot(target.messageId, event.id);
+    this.#scheduleStreamDeltas(target.messageId);
   }
 
   /**
@@ -2321,9 +2469,97 @@ function transcriptObservationId(message: UIMessage): string {
   return `message:${message.id}:${hash.digest("hex").slice(0, 24)}`;
 }
 
-const partDigests = new WeakMap<UIMessage["parts"][number], string>();
+/**
+ * The difference between two projections of one message, in the order a fold
+ * applies it.
+ *
+ * Removals first, then one left-to-right pass that puts each part at its final
+ * position — which is what `part.upsert.index` states, and why it is a position
+ * in the *projected* array and never in the provider's part order. The pass
+ * keeps a running copy of what the consumer holds so an index is always read
+ * against the same state the fold will read it against.
+ *
+ * Every difference is expressible this way, so the `reset` escape hatch is left
+ * for the three cases that are not differences at all: no baseline yet, a
+ * durable settle since the last one, and a batch that failed to reach the sink.
+ */
+function transcriptDeltas(previous: EmittedTranscript, next: EmittedTranscript): TranscriptDelta[] {
+  const deltas: TranscriptDelta[] = [];
+  if (!Object.is(previous.metadata, next.metadata)) {
+    deltas.push({ op: "metadata", metadata: next.metadata });
+  }
+  const wanted = new Set(next.parts.map((entry) => entry.key));
+  const held = previous.parts.filter((entry) => {
+    if (wanted.has(entry.key)) return true;
+    deltas.push({ op: "part.remove", key: entry.key });
+    return false;
+  });
+  for (let index = 0; index < next.parts.length; index += 1) {
+    const entry = next.parts[index];
+    const current = held[index];
+    if (current?.key === entry.key) {
+      // The memo hands back the very object it projected last time when nothing
+      // about the part changed, so identity is an exact answer here, not a
+      // cheap approximation of one.
+      if (current.part === entry.part) continue;
+      const appended = appendedText(current.part, entry.part);
+      if (appended !== null) {
+        deltas.push({ op: "part.append", key: entry.key, text: appended });
+        held[index] = entry;
+        continue;
+      }
+    }
+    deltas.push({ op: "part.upsert", key: entry.key, index, part: entry.part });
+    const from = held.findIndex((candidate) => candidate.key === entry.key);
+    if (from >= 0) held.splice(from, 1);
+    held.splice(index, 0, entry);
+  }
+  return deltas;
+}
 
-function partDigest(part: UIMessage["parts"][number]): string {
+/**
+ * The text one projection grew by, when growth is the whole of what changed.
+ *
+ * `projectOpenCodePart` builds text and reasoning parts out of exactly the
+ * fields compared here, so an unchanged neighbour is genuinely unchanged — and
+ * a thought that settles in the same tick it grows is not an append, because
+ * the suffix would carry the words and drop the state beside them.
+ */
+function appendedText(previous: UIMessagePart, next: UIMessagePart): string | null {
+  if (previous.type === "text" && next.type === "text") return grownText(previous.text, next.text);
+  if (previous.type === "reasoning" && next.type === "reasoning" && previous.state === next.state) {
+    return grownText(previous.text, next.text);
+  }
+  return null;
+}
+
+function grownText(previous: string, next: string): string | null {
+  if (next.length <= previous.length || !next.startsWith(previous)) return null;
+  return next.slice(previous.length);
+}
+
+/**
+ * The settled reading of a thought, remembered against the streaming one.
+ *
+ * The collapse pass runs on every tick, and a fresh object each time would make
+ * every thought a message has already moved past look changed — one full
+ * re-upsert per tick of text nobody is writing any more, which is the quadratic
+ * cost delta frames exist to remove.
+ */
+const settledReasoningParts = new WeakMap<ReasoningPart, ReasoningPart>();
+
+function settledReasoning(part: ReasoningPart): ReasoningPart {
+  if (part.state === "done") return part;
+  const cached = settledReasoningParts.get(part);
+  if (cached) return cached;
+  const settled: ReasoningPart = { ...part, state: "done" };
+  settledReasoningParts.set(part, settled);
+  return settled;
+}
+
+const partDigests = new WeakMap<UIMessagePart, string>();
+
+function partDigest(part: UIMessagePart): string {
   const cached = partDigests.get(part);
   if (cached !== undefined) return cached;
   const digest = createHash("sha256").update(JSON.stringify(part)).digest("hex").slice(0, 24);
