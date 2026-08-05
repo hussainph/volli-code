@@ -8,18 +8,19 @@
  * band. Data-driven by design: `TicketTabDescriptor` is the one shape a tab
  * needs, so ticket-detail.tsx appends one `"file"`-kind descriptor per open
  * `@file` ref, one `"diff"`-kind descriptor per open Change Set diff, and one
- * `"session"`-kind descriptor per linked terminal. Content routing stays with
- * the caller, keyed off each tab's `kind`; file, diff, and session tabs are
- * closable, session tabs alone are renameable.
+ * `"session"`-kind descriptor per linked terminal, and one `"chat"`-kind
+ * descriptor per open chat Session. Content routing stays with the caller,
+ * keyed off each tab's `kind`; file, diff, session, and chat tabs are closable,
+ * session tabs alone are renameable.
  */
 import * as React from "react";
 import { CornersOutIcon } from "@phosphor-icons/react/dist/csr/CornersOut";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
+import { NewSessionMenu } from "@renderer/components/sessions/new-session-menu";
 import { Button } from "@renderer/components/ui/button";
 import {
   ContextMenu,
@@ -51,12 +52,13 @@ function moveTabFocus(from: HTMLElement, to: "prev" | "next" | "first" | "last")
   target?.focus();
 }
 
-export type TicketTabKind = "body" | "session" | "file" | "diff";
+export type TicketTabKind = "body" | "session" | "file" | "diff" | "chat";
 
 /**
  * A session tab's liveness. It rides the tab because the tab already names the
  * Session — a chat plane with its own status header would be a third chrome
- * band saying a word the tab has said already.
+ * band saying a word the tab has said already. A terminal tab reads it off its
+ * PTY, a chat tab off its resident slice's lifecycle.
  */
 export type TicketTabStatus = "idle" | "starting" | "ready" | "working" | "error";
 
@@ -72,11 +74,15 @@ const TAB_STATUS_CLASS: Record<TicketTabStatus, string> = {
 
 /** Whether a ticket-strip tab of this kind shows a close affordance. */
 export function isClosableTicketTab(kind: TicketTabKind): boolean {
-  return kind === "session" || kind === "file" || kind === "diff";
+  return kind === "session" || kind === "file" || kind === "diff" || kind === "chat";
 }
 
 export interface TicketTabDescriptor {
-  /** Stable tab identity — session id, `file:<relPath>`, or `diff:<relPath>`. */
+  /**
+   * Stable tab identity — session id, `file:<relPath>`, `diff:<relPath>`, or
+   * `chat:<sessionId>`. A chat tab's id is prefixed and a terminal tab's is
+   * not, so the two never collide in one strip.
+   */
   id: string;
   kind: TicketTabKind;
   label: string;
@@ -89,7 +95,7 @@ export interface TicketTabDescriptor {
   previousPath?: string | null;
   /** A `"file"` tab whose file resolved from the ticket's worktree copy shows a subtle badge (decision #6). */
   badge?: "worktree";
-  /** Session tabs only: a leading liveness dot. Absent renders no dot. */
+  /** Session and chat tabs: a leading liveness dot. Absent renders no dot. */
   status?: TicketTabStatus;
   /**
    * A `"file"` tab in the replaceable preview slot (decision #56). Diff tabs
@@ -108,20 +114,22 @@ export interface TicketTabDescriptor {
 interface TicketTabStripProps {
   tabs: readonly TicketTabDescriptor[];
   activeTabId: string;
-  /** Disables the "+" button while a session is booting. */
+  /** Disables the "+" control while a session of either kind is booting. */
   creating: boolean;
   onSelectTab(tabId: string): void;
-  /** Closes a session, file, or diff tab. Doc has no close affordance. */
+  /** Closes a session, chat, file, or diff tab. Doc has no close affordance. */
   onCloseTab(tab: TicketTabDescriptor): void;
   /**
    * Double-click a preview File tab → pin it (decision #56). Ignored for
    * Diff/session/Doc tabs.
    */
   onPinFileTab?(relPath: string): void;
-  /** Commits a session-tab rename (double-click / context menu). Ignored for Doc/file tabs. */
+  /** Commits a session-tab rename (double-click / context menu). Ignored for Doc/file/chat tabs. */
   onRenameSessionTab(tabId: string, title: string): void;
-  /** Boots a new session tab — the same path as the rail's New-session button. */
+  /** Boots a terminal session tab — the same path as the rail's New-session button. */
   onNewSession(): void;
+  /** Mints a chat Session and opens its tab. */
+  onNewChat(): void;
   /** Focus mode is only meaningful when the active descriptor is a resident session tab. */
   canFocusTerminal: boolean;
   onEnterTerminalFocus(): void;
@@ -213,7 +221,7 @@ function TicketTab({
           : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
       )}
     >
-      {isSession && tab.status !== undefined ? (
+      {tab.status !== undefined ? (
         <span
           aria-hidden
           className={cn("mr-1.5 size-2 shrink-0 rounded-full", TAB_STATUS_CLASS[tab.status])}
@@ -310,6 +318,7 @@ export function TicketTabStrip({
   onPinFileTab,
   onRenameSessionTab,
   onNewSession,
+  onNewChat,
   canFocusTerminal,
   onEnterTerminalFocus,
 }: TicketTabStripProps) {
@@ -344,16 +353,12 @@ export function TicketTabStrip({
             />
           ))}
         </div>
-        <Button
-          size="icon-xs"
-          variant="ghost"
+        <NewSessionMenu
           disabled={creating}
-          onClick={onNewSession}
-          aria-label="New session"
           className="mb-1 ml-0.5 shrink-0"
-        >
-          <PlusIcon className="size-3.5" />
-        </Button>
+          onNewSession={onNewSession}
+          onNewChat={onNewChat}
+        />
       </div>
       {/* Full-height corner control: self-stretch ignores the parent's items-end
           and -mt-1.5 cancels its pt-1.5 so this column spans the strip's true

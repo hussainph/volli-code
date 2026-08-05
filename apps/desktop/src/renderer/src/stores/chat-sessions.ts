@@ -58,6 +58,25 @@ export interface ChatSessionsState extends ChatSessionWrites {
   closeChatSession(sessionId: string): void;
   setSelection(sessionId: string, selection: RuntimeSelection): void;
   enqueue(sessionId: string, message: QueuedMessage): void;
+
+  /**
+   * Which chat Sessions have a tab open, per ticket.
+   *
+   * Resident for the reason the client is: a chat view mounts and unmounts
+   * freely, and the tabs a person left open are not a fact about whether the
+   * ticket detail is on screen. Deliberately NOT persisted — a durable Session
+   * is recovered from its own record, and the workspace store's active tab id
+   * is the only thing that has to survive a restart.
+   */
+  openTabs: Readonly<Record<string, readonly string[]>>;
+  /** Records a tab for `sessionId`, appending at the end of the ticket's strip. */
+  openChatTab(ticketId: string, sessionId: string): void;
+  /**
+   * Drops the tab and retires the Session's resident state with it. Closing a
+   * chat view loses nothing — the Session is durable, and reopening it adopts
+   * the same history.
+   */
+  closeChatTab(ticketId: string, sessionId: string): void;
 }
 
 /** Factory so tests get isolated instances (sessions.ts's convention). */
@@ -90,6 +109,7 @@ export function createChatSessionsStore(
 
     return {
       sessions: {},
+      openTabs: {},
 
       async createChatSession(input) {
         const edge = transport();
@@ -199,6 +219,29 @@ export function createChatSessionsStore(
         update(sessionId, (slice) => {
           const queue = removeQueued(slice.queue, id);
           return queue.length === slice.queue.length ? slice : { ...slice, queue };
+        });
+      },
+
+      openChatTab(ticketId, sessionId) {
+        set((state) => {
+          const tabs = state.openTabs[ticketId] ?? [];
+          if (tabs.includes(sessionId)) return state;
+          return { openTabs: { ...state.openTabs, [ticketId]: [...tabs, sessionId] } };
+        });
+      },
+
+      closeChatTab(ticketId, sessionId) {
+        get().closeChatSession(sessionId);
+        set((state) => {
+          const tabs = state.openTabs[ticketId];
+          if (tabs === undefined || !tabs.includes(sessionId)) return state;
+          const remaining = tabs.filter((candidate) => candidate !== sessionId);
+          if (remaining.length > 0) {
+            return { openTabs: { ...state.openTabs, [ticketId]: remaining } };
+          }
+          const openTabs = { ...state.openTabs };
+          delete openTabs[ticketId];
+          return { openTabs };
         });
       },
     };

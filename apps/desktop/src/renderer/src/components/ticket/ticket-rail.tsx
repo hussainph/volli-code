@@ -108,7 +108,9 @@ export function TicketRail({
   ticket,
   creating,
   onNewSession,
+  onNewChat,
   onActivateSession,
+  onActivateChat,
   activeTabId,
   activeTabKind,
   filesContent,
@@ -119,8 +121,11 @@ export function TicketRail({
   ticket: Ticket;
   creating: boolean;
   onNewSession(): void;
+  onNewChat(): void;
   /** Focus (or open) a session tab in the main strip — deliberate selection only. */
   onActivateSession(sessionId: string): void;
+  /** Open (adopting first, if nothing is attached) a chat Session's tab. */
+  onActivateChat(sessionId: string): void;
   /**
    * The main strip's active tab. The rail never changes it — it is threaded in
    * so mode switches run through {@link selectRailMode} on the live path (see
@@ -167,7 +172,9 @@ export function TicketRail({
             ticketId={ticket.id}
             creating={creating}
             onNewSession={onNewSession}
+            onNewChat={onNewChat}
             onActivateSession={onActivateSession}
+            onActivateChat={onActivateChat}
           />
         ) : null}
         {mode === "files" ? (filesContent ?? <RailModePlaceholder label="Files" />) : null}

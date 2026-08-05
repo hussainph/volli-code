@@ -2,13 +2,12 @@ import * as React from "react";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { errorMessage, type SessionListingRow, type SessionRecord } from "@volli/shared";
 
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
+import { NewSessionMenu } from "@renderer/components/sessions/new-session-menu";
 import { resumeTicketSession } from "@renderer/components/sessions/session-create";
-import { Button } from "@renderer/components/ui/button";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -173,17 +172,21 @@ function SessionRow({
 }
 
 /**
- * A chat Session's row: title and liveness only, in the same frame `SessionRow`
- * draws for an inert (non-activatable) terminal row. No activate, resume, or
- * rename yet — there is no PTY behind it, and deep chat activation is future
- * UI work, not this.
+ * A chat Session's row: title and liveness, in the frame `SessionRow` draws.
+ *
+ * Always activatable, unlike a terminal row — a chat Session is durable, so one
+ * whose attachment has closed still opens onto its own history, and reattaching
+ * is the Retry the plane already offers. Rename stays out: the durable title has
+ * no live tab to keep in sync yet.
  */
-function ChatSessionRow({ row }: { row: TicketChatSessionRow }) {
+function ChatSessionRow({ row, onActivate }: { row: TicketChatSessionRow; onActivate(): void }) {
   return (
     <li>
-      <div
+      <button
+        type="button"
+        onClick={onActivate}
         className={cn(
-          "flex w-full items-center gap-2 rounded-md border px-2 py-1",
+          "flex w-full items-center gap-2 rounded-md border px-2 py-1 text-left transition-colors hover:bg-accent",
           row.isOpen ? "border-border/60" : "border-transparent opacity-60",
         )}
       >
@@ -193,7 +196,7 @@ function ChatSessionRow({ row }: { row: TicketChatSessionRow }) {
             {sessionSourceLabel({ kind: "chat", record: row.record })}
           </span>
         </span>
-      </div>
+      </button>
     </li>
   );
 }
@@ -207,6 +210,7 @@ function SessionList({
   setEditingId,
   setActivePane,
   onActivateSession,
+  onActivateChat,
   onCommitRename,
   onResumeSession,
 }: {
@@ -219,6 +223,7 @@ function SessionList({
   setEditingId(sessionId: string | null): void;
   setActivePane(ownerId: string, tabId: string, paneId: string): void;
   onActivateSession(sessionId: string): void;
+  onActivateChat(sessionId: string): void;
   onCommitRename(record: SessionRecord, isRoot: boolean, next: string): void;
   onResumeSession(record: SessionRecord): void;
 }) {
@@ -226,7 +231,13 @@ function SessionList({
     <ul className="flex flex-col gap-1">
       {rows.map((entry) => {
         if (entry.kind === "chat") {
-          return <ChatSessionRow key={entry.row.record.sessionId} row={entry.row} />;
+          return (
+            <ChatSessionRow
+              key={entry.row.record.sessionId}
+              row={entry.row}
+              onActivate={() => onActivateChat(entry.row.record.sessionId)}
+            />
+          );
         }
         const { record, title, isOpen, isRoot, tabId, status } = entry.row;
         return (
@@ -281,12 +292,16 @@ export function TicketSessionsPanel({
   ticketId,
   creating,
   onNewSession,
+  onNewChat,
   onActivateSession,
+  onActivateChat,
 }: {
   ticketId: string;
   creating: boolean;
   onNewSession(): void;
+  onNewChat(): void;
   onActivateSession(sessionId: string): void;
+  onActivateChat(sessionId: string): void;
 }) {
   const liveTabs = useSessionsStore((state) => state.byOwner[ticketId]?.tabs);
   const lastOutputAt = useSessionsStore((state) => state.lastOutputAt);
@@ -413,6 +428,7 @@ export function TicketSessionsPanel({
     setEditingId,
     setActivePane,
     onActivateSession,
+    onActivateChat,
     onCommitRename: commitRename,
     onResumeSession: handleResume,
   };
@@ -423,15 +439,12 @@ export function TicketSessionsPanel({
         <div className="flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <h2 className="text-label font-medium text-muted-foreground uppercase">Sessions</h2>
-            <Button
-              size="icon-xs"
-              variant="ghost"
+            <NewSessionMenu
               disabled={effectiveCreating}
-              onClick={onNewSession}
-              aria-label="New session"
-            >
-              <PlusIcon />
-            </Button>
+              align="end"
+              onNewSession={onNewSession}
+              onNewChat={onNewChat}
+            />
           </div>
           {current.length === 0 ? (
             <div className="flex flex-col items-center gap-1.5 rounded-md border border-dashed border-border py-6 text-center">
