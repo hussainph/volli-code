@@ -1,3 +1,7 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -94,6 +98,24 @@ describe("isExecutable", () => {
 
   it("is false for a path with nothing there", async () => {
     await expect(isExecutable("/nonexistent/definitely-not-a-binary")).resolves.toBe(false);
+  });
+
+  // A directory carries +x (that is what "searchable" means for one), so the
+  // X_OK probe alone says yes to `/opt/homebrew/bin` — and a saved override
+  // naming a directory only fails much later, as a spawn EACCES.
+  it("is false for a directory, which carries the execute bit but cannot be run", async () => {
+    await expect(isExecutable(dirname(process.execPath))).resolves.toBe(false);
+  });
+
+  it("is false for a regular file with no execute bit", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "volli-opencode-binary-"));
+    const script = join(dir, "not-executable");
+    await writeFile(script, "#!/bin/sh\necho hi\n", { mode: 0o644 });
+    try {
+      await expect(isExecutable(script)).resolves.toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

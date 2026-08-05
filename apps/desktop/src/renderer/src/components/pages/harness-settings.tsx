@@ -6,6 +6,7 @@ import {
   activeHarness,
   harnessCommandFailureLine,
   harnessListings,
+  isHarnessCommandFailureReason,
   type HarnessListing,
   type HarnessOrigin,
 } from "@renderer/components/pages/harness-catalog";
@@ -156,9 +157,11 @@ function OriginChip({ origin }: { origin: HarnessOrigin }) {
  * is honored on the next attach, and freezing the realpath into the input would
  * quietly turn that into a fixed path nobody chose.
  *
- * A refusal is typed, so it is answered inline with the one thing to do about
- * it. Anything that throws is a transport failure rather than a verdict about
- * the candidate, and toasts.
+ * A refusal that carries a typed reason is a verdict about the candidate, so it
+ * is answered inline with the one thing to do about it. Anything else — a
+ * throw, or an `ok: false` the IPC envelope composed without a reason in it —
+ * is not a verdict, so it toasts the message main sent instead of inventing an
+ * inline line for it.
  */
 function BinaryRow({ harnessId }: { harnessId: string }) {
   const [draft, setDraft] = React.useState("");
@@ -215,8 +218,20 @@ function BinaryRow({ harnessId }: { harnessId: string }) {
       const command = candidate === "" ? null : candidate;
       const result = await window.api.harness.commandSet({ harnessId, command });
       if (!result.ok) {
-        setFailure(result.reason);
         setResolvedPath(null);
+        // A verdict about the candidate is answered inline, where the candidate
+        // still is. Everything else — a guard miss, a throw inside the handler,
+        // a degraded-database boot — reaches here as `ok: false` with no
+        // `reason` at all, however required the type says it is, so it is
+        // toasted with the `error` main sent rather than narrowed to a line
+        // that does not exist. Reading `reason` on trust here is precisely what
+        // draws the empty red line and swallows the only readable half.
+        if (isHarnessCommandFailureReason(result.reason)) {
+          setFailure(result.reason);
+          return;
+        }
+        setFailure(null);
+        toastError(`Couldn't save the harness binary: ${result.error}`);
         return;
       }
       setFailure(null);

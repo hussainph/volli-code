@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { access, realpath } from "node:fs/promises";
+import { access, realpath, stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 
 import { resolveOnPath } from "./agent-tools";
@@ -12,8 +12,29 @@ export interface OpenCodeBinaryResolverDeps {
   realpath(path: string): Promise<string>;
 }
 
+/**
+ * Whether `path` names a FILE this process can execute — both halves, because
+ * `access(X_OK)` alone answers yes for a directory.
+ *
+ * A directory's +x bit means "searchable", not "runnable", so the probe on its
+ * own passes `/usr/bin` and `/opt/homebrew/bin`. That answer travels: {@link
+ * verifiedPath} reports the directory located, `validateHarnessBinary`
+ * canonicalizes it, and the Settings Binary row draws the canonical path as a
+ * successful save — with the "Not an executable file" refusal this surface
+ * exists to show never reached. The user then finds out at attach time, as a
+ * spawn EACCES/EISDIR raised nowhere near the setting that caused it.
+ *
+ * `stat` and not `lstat`: it follows symlinks on purpose. A binary reached
+ * through a link is still a binary — every Homebrew install is one — and the
+ * question here is what would run, not what the last path component happens to
+ * be. A throw (nothing there, an unreadable parent) folds into the same `false`
+ * an X_OK refusal gives, because there is nothing useful to tell apart: {@link
+ * verifiedPath} reports every one of them as `not-executable`, and the recovery
+ * — name a file that can actually be run — is the same either way.
+ */
 export async function isExecutable(path: string): Promise<boolean> {
   try {
+    if (!(await stat(path)).isFile()) return false;
     await access(path, constants.X_OK);
     return true;
   } catch {
