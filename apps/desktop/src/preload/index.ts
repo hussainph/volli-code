@@ -2,6 +2,19 @@ import { contextBridge, ipcRenderer } from "electron";
 // Type-only imports ONLY: the pack config keeps main and preload
 // dependency-disjoint (see CAUTION in vite.config.ts) — a runtime import
 // from @volli/shared here could split a shared chunk out of preload.cjs.
+//
+// Not a theoretical risk, and worth knowing before reaching for one: turning
+// the three `import type` channel constants below into value imports was tried
+// and measured. `vp pack` went from two output files to three, and preload.cjs
+// gained `require("./src-<hash>.cjs")` — a sibling chunk the sandboxed preload
+// (Electron ≥20 default) cannot resolve, so the door would fail to load at all
+// and take every `window.api` call in the app with it. Rolldown moves whatever
+// BOTH entries reach into a shared chunk, and reaching @volli/shared at all is
+// enough to reach the module graph main is built out of — the cost has nothing
+// to do with how small the imported value is.
+//
+// So agreement with main is proven the only way it can be from here: in the
+// type system, which is erased. See the Session RPC channels below.
 import type {
   AppStateSetResult,
   ArchivedTicketsResult,
@@ -53,6 +66,12 @@ import type {
   SessionRpcIpcEvent,
   SessionRpcIpcRequest,
   SessionRpcIpcResponse,
+  // Imported for `typeof` only — see the Session RPC door below. `import type`
+  // of a const is legal and fully erased, which is exactly why these three can
+  // be named here at all.
+  SESSION_RPC_CANCEL_CHANNEL,
+  SESSION_RPC_EVENT_CHANNEL,
+  SESSION_RPC_IPC_CHANNEL,
   HarnessEventNotice,
   SessionHarnessNotice,
   SessionsInterruptedEvent,
@@ -373,11 +392,21 @@ const api = {
    * router declares what a procedure takes and returns, so this door only has
    * to carry a request there and frames back. The renderer speaks it through
    * its terminating tRPC link, never directly.
+   *
+   * Each channel literal is pinned with `satisfies typeof <the constant
+   * `session-rpc-wire.ts` exports>`, which is the strongest statement this file
+   * can make about it. `satisfies VolliIpcChannel` — what every other door here
+   * uses — only proves the string is SOME channel; it says nothing about
+   * whether it is the one main registered a handler for, and a typo landing on
+   * another real channel is exactly the mistake that would pass it. Pinning to
+   * the constant makes a disagreement between the two ends of this wire a
+   * compile error, and the header explains why the constant cannot simply be
+   * called instead.
    */
   sessionRpc: {
     /** Runs one routed procedure; `session.subscribe` acknowledges with the id its frames will carry. */
     request: (request: SessionRpcIpcRequest): Promise<SessionRpcIpcResponse> =>
-      invoke("volli:session-rpc", request),
+      invoke("volli:session-rpc" satisfies typeof SESSION_RPC_IPC_CHANNEL, request),
     /**
      * Subscribes to the frames of EVERY live subscription; returns the
      * unsubscribe function. One listener rather than one per subscription
@@ -387,13 +416,13 @@ const api = {
     onEvent: (callback: (event: SessionRpcIpcEvent) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: SessionRpcIpcEvent) =>
         callback(payload);
-      ipcRenderer.on("volli:session-rpc-event" satisfies VolliIpcEvent, listener);
-      return () =>
-        ipcRenderer.removeListener("volli:session-rpc-event" satisfies VolliIpcEvent, listener);
+      const channel = "volli:session-rpc-event" satisfies typeof SESSION_RPC_EVENT_CHANNEL;
+      ipcRenderer.on(channel, listener);
+      return () => ipcRenderer.removeListener(channel, listener);
     },
     /** Ends one subscription: fire-and-forget, since the frames stopping is the answer. */
     cancel: (subscriptionId: string): void => {
-      send("volli:session-rpc-cancel", subscriptionId);
+      send("volli:session-rpc-cancel" satisfies typeof SESSION_RPC_CANCEL_CHANNEL, subscriptionId);
     },
   },
   labels: {
