@@ -102,6 +102,11 @@ describe("chatSessionRecord", () => {
       adapterId: null,
       live: false,
     });
+    // A newer terminal attachment does not become the adapter this names, and
+    // does not close the structured one that is still open behind it.
+    expect(
+      chatSessionRecord(projectionWith([structuredAttachment({ id: "structured" }), terminal])),
+    ).toMatchObject({ adapterId: "opencode", live: true });
   });
 });
 
