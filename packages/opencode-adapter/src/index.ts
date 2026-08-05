@@ -1871,12 +1871,13 @@ class OpenCodeBinding implements BindingHandle {
    * OpenCode keys permissions by their own id; a message projects by call id.
    *
    * Inverted once per change to the permission set rather than per read: a
-   * streaming message asks this on every snapshot, and answering by scanning
+   * streaming message asks this on every tick, and answering by scanning
    * would put the whole open set — and a fresh Map — in a loop that runs dozens
    * of times a second. Every mutation below drops the index; nothing else may
    * touch `#pendingApprovals` without doing the same. The shared empty map is
    * what most messages get back, and its stable identity is what lets a
-   * projection be reused across snapshots.
+   * projection be reused across ticks — which is also what lets a tick see that
+   * nothing about a part changed.
    */
   #approvalsForMessage(messageId: string): ReadonlyMap<string, string> {
     if (!this.#approvalIndex) {
@@ -2454,13 +2455,13 @@ function messageParts(raw: unknown, approvals: ReadonlyMap<string, string>): UIM
  * message be recognized as the same fact rather than recorded three times. So it
  * stays a hash of everything the message says.
  *
- * What it must not be is that hash recomputed from nothing every
- * `STREAM_SNAPSHOT_DELAY_MS`: a streaming reply would re-serialize everything it
- * has already serialized dozens of times a second, which is quadratic in its own
- * length. Each part version is hashed once instead — `openCodePart` holds a
- * projection alive for as long as the part it came from is unchanged, so the
- * digest below is keyed on the projected object — and a snapshot then costs one
- * hash over one short digest per part.
+ * What it must not be is that hash recomputed from nothing on every projection
+ * of a message still being written: it would re-serialize everything it has
+ * already serialized, which is quadratic in its own length. Each part version is
+ * hashed once instead — `openCodePart` holds a projection alive for as long as
+ * the part it came from is unchanged, so the digest below is keyed on the
+ * projected object — and a settle then costs one hash over one short digest per
+ * part.
  */
 function transcriptObservationId(message: UIMessage): string {
   const hash = createHash("sha256").update("volli:opencode:transcript:v1\0").update(message.role);
@@ -2584,7 +2585,7 @@ interface ProjectedOpenCodePart {
 /**
  * Projected parts, remembered against the part they were projected from.
  *
- * A streaming message is projected in full on every snapshot, and the buffer
+ * A streaming message is projected in full on every tick, and the buffer
  * replaces a part object whenever anything about it changes — a delta and a
  * merge both write a new one — so the source object *is* the version, and a
  * projection keyed on it stays true until it is replaced. The two facts that do
