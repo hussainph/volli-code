@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { nodeHTTPRequestHandler } from "@trpc/server/adapters/node-http";
 import { createOpenCodeNativeAdapter, type OpenCodeNativeAdapter } from "@volli/opencode-adapter";
+import type { RuntimeCatalog } from "@volli/session-engine";
 import { createSessionRouter, RpcDiagnosticLog } from "@volli/session-rpc";
 import { createTicket } from "@volli/shared";
 
@@ -191,7 +192,8 @@ export class LabSessionRpcServer {
         path,
         createContext: () => ({
           runtime: resources.runtime,
-          resolveRuntimeCatalog: () => resources.runtimeCatalog,
+          resolveRuntimeCatalog: (projectId) =>
+            labRuntimeCatalogFor(resources.runtimeCatalog, projectId),
           diagnostics: resources.diagnostics,
           transport: "lab-http" as const,
         }),
@@ -370,6 +372,39 @@ export class LabSessionRpcServer {
       throw error;
     }
   }
+}
+
+/**
+ * The one-catalog form of `runtime-catalog-hub.ts`, which is what
+ * `resolveRuntimeCatalog` becomes in the app. The hub keeps a catalog per
+ * project directory and answers an unknown `projectId` by throwing rather than
+ * by falling back — its docstring names the failure that rule prevents, a
+ * request probing the wrong checkout and persisting its models there. The Lab
+ * seeds exactly one project, so the *cache* half of the hub has nothing to do
+ * here; the *refusal* half still does. A `projectId` on a `runtimeCatalog.*`
+ * request is a claim about which checkout gets probed and whose runtime
+ * preferences a `save` writes, and answering `ghost-project` with this catalog
+ * is that claim quietly being false — an inspect result and a success receipt
+ * for a project that does not exist.
+ *
+ * Being dev-only bounds the damage but not the reason to fix it. The Lab is
+ * where the Session UI is built, so it is the surface those components are
+ * written and believed against: a Lab that accepts a project id the app would
+ * answer `NOT_FOUND` teaches the surface above it a contract that is not real,
+ * and the code learns the difference only once it is running over Electron IPC
+ * with no lab around it.
+ *
+ * So `undefined` resolves — a Session with no project yet, and what
+ * `runtimeCatalog.resolve` always sends — the Lab's own project id resolves,
+ * and anything else throws. `requireRuntimeCatalog` in `@volli/session-rpc`
+ * already maps a throw from here to `NOT_FOUND`, exactly as it does the hub's,
+ * so the Lab needs no error machinery of its own to refuse the same way.
+ */
+function labRuntimeCatalogFor(catalog: RuntimeCatalog, projectId?: string): RuntimeCatalog {
+  if (projectId !== undefined && projectId !== LAB_SESSION_PROJECT_ID) {
+    throw new Error(`Unknown project ${projectId}`);
+  }
+  return catalog;
 }
 
 function isOwnedLabDirectory(directory: string): boolean {
