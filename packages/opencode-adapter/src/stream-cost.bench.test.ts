@@ -193,6 +193,11 @@ function createAdapter(options: OpenCodeAdapterOptions = {}): OpenCodeNativeAdap
   });
 }
 
+/** What one observation costs on the wire, which is the whole measurement. */
+function bytes(observation: HarnessObservation): number {
+  return Buffer.byteLength(JSON.stringify(observation), "utf8");
+}
+
 function spec() {
   return {
     sessionId: "volli-session-1",
@@ -338,8 +343,10 @@ describe("opencode-adapter stream-cost probe", () => {
     // Both arms, because both are bytes on the wire: the transient overlay is
     // what the reader watches being written, the durable settle is what the
     // Session keeps.
-    const bytes = (observation: HarnessObservation) =>
-      Buffer.byteLength(JSON.stringify(observation), "utf8");
+    const deltaOpCounts: Record<string, number> = {};
+    for (const observation of transcriptDeltas) {
+      deltaOpCounts[observation.delta.op] = (deltaOpCounts[observation.delta.op] ?? 0) + 1;
+    }
     const durableBytes = transcriptMessages.reduce((sum, next) => sum + bytes(next), 0);
     const transientBytes = transcriptDeltas.reduce((sum, next) => sum + bytes(next), 0);
     const wireBytesTotal = durableBytes + transientBytes;
@@ -355,6 +362,10 @@ describe("opencode-adapter stream-cost probe", () => {
         `  message.part.delta events: ${chunks.length}`,
         `  transcript.message settles emitted:  ${transcriptMessages.length}`,
         `  transcript.delta frames emitted:     ${transcriptDeltas.length}`,
+        // The mix is the diagnostic: a run that re-upserts the growing part
+        // instead of appending to it is the regression this probe exists to
+        // catch, and it costs the whole answer per tick again.
+        `  delta ops by kind: ${JSON.stringify(deltaOpCounts)}`,
         `  durable wire bytes:   ${durableBytes}`,
         `  transient wire bytes: ${transientBytes}`,
         `  total wire bytes (sum of JSON.stringify(observation)): ${wireBytesTotal}`,
