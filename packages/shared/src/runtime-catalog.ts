@@ -95,26 +95,12 @@ export interface RuntimeCatalogSaveInput {
   preferences: RuntimePreferences;
 }
 
-/**
- * Wire shape for `runtimeCatalog.inspect`: the engine-shaped browse input plus
- * routing. `projectId` picks WHICH catalog answers — the host keeps one per
- * project directory — so it decides which checkout gets probed for models.
- * Omitting it asks the host's fallback directory, which is what a Session with
- * no project yet wants and what a project-scoped Settings screen never does.
- */
-export type RuntimeCatalogInspectRequest = RuntimeCatalogBrowseInput & { projectId?: string };
-
-/**
- * Wire shape for `runtimeCatalog.save`: the engine-shaped save input plus
- * routing.
- *
- * **Send the same `projectId` this client last inspected with.** A catalog
- * persists models out of the discovery snapshot it is holding, and the snapshot
- * belongs to that one catalog instance — so a save routed to a different (or
- * omitted) `projectId` reaches an instance that has discovered nothing and is
- * refused, no matter how recently the user inspected. The pairing cannot be
- * enforced here because the two calls are independent requests; a client that
- * lets a form default one and drop the other gets a refusal whose message
- * ("inspect before saving") describes a state the user cannot see they are in.
- */
-export type RuntimeCatalogSaveRequest = RuntimeCatalogSaveInput & { projectId?: string };
+// The transport adds a `projectId` beside each of these to choose which catalog
+// instance answers, and the rule pairing an `inspect` with the `save` that
+// follows it lives on the `runtimeCatalog` router in `@volli/session-rpc` — the
+// one place every request is actually shaped and validated. It was written here
+// once as a pair of `…Request` aliases, but nothing could import them (this
+// package sits below the edge, and `@volli/session-rpc` reaches it only through
+// the handful of names `@volli/session-engine` re-exports), so the guidance sat
+// on types no call site could be bound by while the router hand-rolled the same
+// shapes in zod. Guidance a caller cannot reach is worse than none.

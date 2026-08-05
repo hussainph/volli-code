@@ -33,6 +33,11 @@ import type {
   Reconciliation,
 } from "./native-adapter";
 import type { SessionTranscriptArtifact, TranscriptArtifactStore } from "./transcript-artifacts";
+import {
+  applyTranscriptDelta,
+  type TranscriptDelta,
+  type TranscriptOverlay,
+} from "./transcript-overlay";
 
 export interface SessionLocation {
   directory: string;
@@ -140,6 +145,41 @@ export interface SessionStreamFrame {
 }
 
 /**
+ * A message mid-word, on its way to a live subscriber and nowhere else.
+ *
+ * `throughSequence` is the latest durable sequence recorded when this was
+ * emitted, and it is the consumer's staleness guard: drop any overlay whose
+ * `throughSequence` is strictly below the last durable transcript sequence
+ * already applied for that message. With that guard in place the order in
+ * which one batch's durable frames and overlays are applied stops mattering —
+ * a settle that lands beside a stale append sorts itself out either way.
+ */
+export interface SessionStreamOverlay {
+  kind: "overlay";
+  sessionId: string;
+  throughSequence: number;
+  messageId: string;
+  delta: TranscriptDelta;
+}
+
+/**
+ * What a subscriber receives.
+ *
+ * The durable arm is the **bare** {@link SessionStreamFrame}, not a wrapped
+ * one: every existing consumer validates a frame by its `sequence`, so leaving
+ * it bare keeps them working untouched and simply ignoring overlays until a
+ * surface opts in.
+ */
+export type SessionStreamEmission = SessionStreamFrame | SessionStreamOverlay;
+
+/** The durable arm carries no `kind` of its own, which is the whole test. */
+export function isSessionStreamOverlay(
+  emission: SessionStreamEmission,
+): emission is SessionStreamOverlay {
+  return "kind" in emission;
+}
+
+/**
  * A Session's durable state on its own.
  *
  * The frames beside it in {@link SessionRuntimeSnapshot} are a transcript
@@ -165,7 +205,7 @@ export interface SessionRuntime {
   projection(input: { sessionId: string }): Promise<SessionRuntimeProjectionSnapshot>;
   subscribe(
     input: { sessionId: string; afterSequence: number },
-    listener: (frame: SessionStreamFrame) => void | Promise<void>,
+    listener: (emission: SessionStreamEmission) => void | Promise<void>,
   ): Promise<() => void>;
   cancelInteraction(request: CancelInteractionRequest): Promise<void>;
   refreshCapabilities(input: {
@@ -211,9 +251,21 @@ interface Subscriber {
   sessionId: string;
   cursor: number;
   events: Map<number, SessionEvent>;
-  listener: (frame: SessionStreamFrame) => void | Promise<void>;
+  listener: (emission: SessionStreamEmission) => void | Promise<void>;
   draining: Promise<void>;
   active: boolean;
+}
+
+/**
+ * One Session's in-flight transient transcript.
+ *
+ * `throughSequence` travels with it because an overlay emission has to state
+ * the durable sequence it was emitted beside, and that number is what makes a
+ * subscriber able to drop a baseline a settle has already overtaken.
+ */
+interface SessionOverlayState {
+  messages: TranscriptOverlay;
+  throughSequence: number;
 }
 
 /**
@@ -288,6 +340,15 @@ const EVENT_PAGE_SIZE = 500;
  * reads one or two Sessions at a time and an evicted entry costs one re-read.
  */
 const PROJECTION_CACHE_LIMIT = 8;
+/**
+ * How many Sessions keep a transient overlay, bounded the same way and for the
+ * same reason as the fold cache above: the explicit drop points (attachment
+ * closure, release, close) cover every orderly end, and this covers the rest,
+ * so no single rule's absence leaves the map growing. An evicted overlay costs
+ * the tail of one in-flight message — the emitter's next reset or settle
+ * rebuilds it.
+ */
+const OVERLAY_CACHE_LIMIT = 8;
 
 class DefaultSessionRuntime implements SessionRuntime {
   readonly #bindings = new Map<string, BindingRecord>();
@@ -298,6 +359,8 @@ class DefaultSessionRuntime implements SessionRuntime {
   readonly #capabilityWrites = new Map<string, Promise<SessionCapabilitySnapshot>>();
   /** Insertion-ordered, so the first key is the least recently read Session. */
   readonly #histories = new Map<string, ProjectedHistory>();
+  /** Insertion-ordered too, so the first key is the least recently folded Session. */
+  readonly #overlays = new Map<string, SessionOverlayState>();
   readonly #probeControllers = new Set<AbortController>();
   #closed = false;
 
@@ -894,6 +957,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     });
     await this.#publish([closed]);
     this.#bindings.delete(request.command.attachmentId);
+    this.#overlays.delete(request.sessionId);
     const receipt = await this.#recordDelivery(
       request.sessionId,
       request.command.attachmentId,
@@ -958,7 +1022,7 @@ class DefaultSessionRuntime implements SessionRuntime {
 
   async subscribe(
     input: { sessionId: string; afterSequence: number },
-    listener: (frame: SessionStreamFrame) => void | Promise<void>,
+    listener: (emission: SessionStreamEmission) => void | Promise<void>,
   ): Promise<() => void> {
     this.#assertOpen();
     if (!Number.isInteger(input.afterSequence) || input.afterSequence < 0) {
@@ -984,6 +1048,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         afterSequence: input.afterSequence,
       });
       await this.#enqueue(subscriber, replay);
+      await this.#enqueueOverlayBaselines(subscriber);
     } catch (error) {
       subscribers.delete(subscriber);
       throw error;
@@ -1052,6 +1117,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     }
     this.#subscribers.clear();
     this.#histories.clear();
+    this.#overlays.clear();
     await this.#releaseBindingsAfterClose();
   }
 
@@ -1189,6 +1255,17 @@ class DefaultSessionRuntime implements SessionRuntime {
     venue: SessionExecutionVenue,
     observation: HarnessObservation,
   ): Promise<void> {
+    // A transient fact, and every durable step below is skipped on purpose: no
+    // artifact write, no ledger event, and no observation-id dedupe — at ~31
+    // emissions a second a delta carries no durable identity worth deduping.
+    // It also returns here rather than falling through to the cursor advance at
+    // the foot of this method: the arm has no cursor, and moving the reconcile
+    // cursor for content that was never written down would make a later
+    // reconcile ask the provider for events past it.
+    if (observation.kind === "transcript.delta") {
+      await this.#recordTranscriptDelta(spec.sessionId, observation);
+      return;
+    }
     const base = {
       id: nativeObservationId(
         adapter.manifest.id,
@@ -1226,6 +1303,14 @@ class DefaultSessionRuntime implements SessionRuntime {
           turnId: observation.turnId,
           reference,
         });
+        // The settled snapshot is durable, so the transient tail it supersedes
+        // goes now — the durable message's own id is what a delta addresses, so
+        // the two arms join here. Keyed off this observation being *processed*,
+        // not off its frame being delivered: `observe` dedupes by id and returns
+        // the original event for a repeat; that event's sequence is behind every
+        // subscriber cursor, so its frame is never delivered again, and an entry
+        // waiting on that delivery would wait forever.
+        this.#clearOverlayMessage(spec.sessionId, observation.message.id);
         break;
       }
       case "turn.started":
@@ -1292,7 +1377,106 @@ class DefaultSessionRuntime implements SessionRuntime {
     await this.#publish([event]);
     if (observation.kind === "attachment.closed" || observation.kind === "attachment.failed") {
       this.#bindings.delete(spec.attachmentId);
+      // Nothing is left to finish what the overlay holds, and its content was
+      // never durable. Dropping it beside the binding keeps the two ends
+      // together.
+      this.#overlays.delete(spec.sessionId);
     }
+  }
+
+  /**
+   * Folds one transient delta and hands it to this Session's live subscribers.
+   *
+   * The emission is published even when the fold ignored the delta: a
+   * subscriber runs the same self-healing rule over the same entries, so an
+   * ignored delta is ignored identically on both ends, and filtering here would
+   * only make the two folds different code.
+   */
+  async #recordTranscriptDelta(
+    sessionId: string,
+    observation: Extract<HarnessObservation, { kind: "transcript.delta" }>,
+  ): Promise<void> {
+    const overlay = await this.#overlay(sessionId);
+    overlay.messages = applyTranscriptDelta(
+      overlay.messages,
+      observation.messageId,
+      observation.delta,
+    );
+    await this.#publishOverlay({
+      kind: "overlay",
+      sessionId,
+      throughSequence: overlay.throughSequence,
+      messageId: observation.messageId,
+      delta: observation.delta,
+    });
+  }
+
+  /**
+   * The Session's overlay, created on its first delta.
+   *
+   * The record is installed *before* the sequence it starts from is read, so a
+   * durable publish landing during that read raises the same record rather than
+   * a discarded one; `#recordDurableSequence` only ever moves the number
+   * forward, so whichever of the two arrives second is the one that wins. A
+   * record that starts from a stale sequence would emit overlays the
+   * subscriber's staleness guard drops, which is why this is worth one ledger
+   * read per streaming attachment.
+   *
+   * Installing it early is also what exposes it to deletion mid-read, so *both*
+   * exits have to honour a deletion, not just the failing one. A closed or
+   * failed attachment, a release command and `close()` each drop the entry,
+   * and every one of them can land while this read is in flight;
+   * `#keepOverlay` writes the record back unconditionally, so returning through
+   * it would undo whichever of them just ran. What survives is transient state
+   * for a Session with no binding left to finish it — published to subscribers
+   * as though something were still streaming, rebuilt as a baseline for every
+   * later subscriber, and, when the deleter was `close()`, held past the end of
+   * the runtime that owns it. The failure path resolves this by deleting; here
+   * the record may still be the live one, so the answer is to look before
+   * re-inserting.
+   */
+  async #overlay(sessionId: string): Promise<SessionOverlayState> {
+    const existing = this.#overlays.get(sessionId);
+    if (existing) return this.#keepOverlay(sessionId, existing);
+    const created: SessionOverlayState = { messages: new Map(), throughSequence: 0 };
+    this.#overlays.set(sessionId, created);
+    try {
+      this.#recordDurableSequence(sessionId, (await this.#history(sessionId)).throughSequence);
+    } catch (error) {
+      // A half-made record would report sequence 0 forever. Drop it so the next
+      // delta starts the seed again, and let the emitter hear the failure.
+      this.#overlays.delete(sessionId);
+      throw error;
+    }
+    // Not the record installed above means it was deleted during the read (and
+    // possibly replaced since). The caller still gets somewhere to fold this one
+    // delta, but it stays out of the map and dies with this call — the deletion
+    // is the newer fact about the Session, and this call has no standing to
+    // reverse it.
+    if (this.#overlays.get(sessionId) !== created) return created;
+    return this.#keepOverlay(sessionId, created);
+  }
+
+  #keepOverlay(sessionId: string, overlay: SessionOverlayState): SessionOverlayState {
+    this.#overlays.delete(sessionId);
+    this.#overlays.set(sessionId, overlay);
+    for (const oldest of this.#overlays.keys()) {
+      if (this.#overlays.size <= OVERLAY_CACHE_LIMIT) break;
+      this.#overlays.delete(oldest);
+    }
+    return overlay;
+  }
+
+  #clearOverlayMessage(sessionId: string, messageId: string): void {
+    const overlay = this.#overlays.get(sessionId);
+    if (!overlay) return;
+    overlay.messages = applyTranscriptDelta(overlay.messages, messageId, { op: "message.remove" });
+  }
+
+  #recordDurableSequence(sessionId: string, sequence: number): void {
+    const overlay = this.#overlays.get(sessionId);
+    if (!overlay) return;
+    if (sequence > overlay.throughSequence) overlay.throughSequence = sequence;
   }
 
   async #bindingForCommand(
@@ -1493,6 +1677,9 @@ class DefaultSessionRuntime implements SessionRuntime {
   async #publish(events: readonly SessionEvent[]): Promise<void> {
     const bySession = new Map<string, SessionEvent[]>();
     for (const event of events) {
+      // Recorded here, where an event is known to be durable: this is what the
+      // Session's overlay emissions report as their `throughSequence`.
+      this.#recordDurableSequence(event.sessionId, event.sequence);
       const items = bySession.get(event.sessionId) ?? [];
       items.push(event);
       bySession.set(event.sessionId, items);
@@ -1523,14 +1710,97 @@ class DefaultSessionRuntime implements SessionRuntime {
           subscriber.cursor = event.sequence;
         }
       })
-      .catch(async (error) => {
-        try {
-          await this.ports.onSubscriberFailure?.(error);
-        } finally {
-          this.#removeSubscriber(subscriber);
-        }
-      });
+      .catch((error: unknown) => this.#failSubscriber(subscriber, error));
     await subscriber.draining;
+  }
+
+  async #publishOverlay(emission: SessionStreamOverlay): Promise<void> {
+    const subscribers = this.#subscribers.get(emission.sessionId);
+    if (!subscribers) return;
+    await Promise.all(
+      [...subscribers].map((subscriber) => this.#appendOverlay(subscriber, emission)),
+    );
+  }
+
+  /**
+   * A fresh subscriber's view of what is in flight: one `reset` per overlay
+   * message, after the durable replay it belongs behind.
+   *
+   * The overlay read and the appends below are one synchronous step. Any await
+   * between them lets a concurrent settle clear an entry and a baseline
+   * resurrect it — and the tick-level race that even this cannot close is
+   * covered by the sequence each baseline carries, which a settle that already
+   * landed leaves strictly above it.
+   *
+   * That sequence is read off the overlay and never off the subscriber that
+   * asked for these baselines. A subscription cursor is client input —
+   * `subscribe` checks it is a non-negative integer and nothing else, and the
+   * RPC edge widens it further to whatever `Last-Event-ID` a reconnect carried —
+   * while `throughSequence` is Session-wide state stamped on the emissions
+   * *every* subscriber receives. Recording a cursor as durable progress would
+   * therefore let one caller resuming from a number above this Session's head
+   * raise it for all of them, permanently: `#recordDurableSequence` only moves
+   * forward. The consumer's whole defence against a pre-settle overlay arriving
+   * after its settle is `throughSequence < settledAt`, so an inflated number
+   * silently retires that guard and the late overlay replaces a durable message
+   * with an older partial one. Nothing here needs to record anything anyway:
+   * `#overlay` seeds the number from the folded history and `#publish` advances
+   * it on every durable event. Should it still trail what this subscriber was
+   * just replayed, that errs the only safe way — a baseline below a sequence
+   * the consumer has already folded is dropped, costing one transient message
+   * that the emitter's next delta rebuilds, where an inflated one costs durable
+   * content.
+   */
+  #enqueueOverlayBaselines(subscriber: Subscriber): Promise<void> {
+    const overlay = this.#overlays.get(subscriber.sessionId);
+    if (!overlay) return Promise.resolve();
+    const baselines = [...overlay.messages].map(([messageId, message]) =>
+      this.#appendOverlay(subscriber, {
+        kind: "overlay",
+        sessionId: subscriber.sessionId,
+        throughSequence: overlay.throughSequence,
+        messageId,
+        delta: { op: "reset", message },
+      }),
+    );
+    return Promise.all(baselines).then(() => undefined);
+  }
+
+  /**
+   * Hands one transient emission to a subscriber.
+   *
+   * The append is synchronous, at exactly the point `#enqueue` appends to the
+   * same chain. Awaiting `draining` first and appending after would let a
+   * durable publish that arrived in between interleave ahead of an overlay that
+   * preceded it.
+   *
+   * How far the resulting promise reaches back is the listener's choice, not
+   * this method's. A listener that awaits its own delivery holds the chain, and
+   * `#publishOverlay` awaits every subscriber's, so the adapter's emit is paced
+   * by the slowest of them — the same backpressure durable frames already get.
+   * A listener that hands the emission to a buffer of its own resolves at once
+   * and lets none of that through: the session-rpc subscription is exactly such
+   * a listener, and what bounds it is its own queue's capacity, which is its to
+   * size and to report on overflowing. Both shapes are allowed on purpose —
+   * what this seam owes is order and one delivery per emission, and a listener
+   * that chooses to buffer answers for the buffer.
+   */
+  #appendOverlay(subscriber: Subscriber, emission: SessionStreamOverlay): Promise<void> {
+    subscriber.draining = subscriber.draining
+      .then(async () => {
+        if (!subscriber.active) return;
+        await subscriber.listener(emission);
+      })
+      .catch((error: unknown) => this.#failSubscriber(subscriber, error));
+    return subscriber.draining;
+  }
+
+  async #failSubscriber(subscriber: Subscriber, error: unknown): Promise<void> {
+    try {
+      await this.ports.onSubscriberFailure?.(error);
+    } finally {
+      this.#removeSubscriber(subscriber);
+    }
   }
 
   #removeSubscriber(subscriber: Subscriber): void {

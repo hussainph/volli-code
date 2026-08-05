@@ -5,7 +5,9 @@ import type {
   SessionRuntime,
   SessionRuntimeCommandRequest,
   SessionRuntimeSnapshot,
+  SessionStreamEmission,
   SessionStreamFrame,
+  SessionStreamOverlay,
 } from "@volli/session-engine";
 import { AsyncQueue, createSessionRouter, RpcDiagnosticLog, sanitizeDiagnosticText } from "./index";
 
@@ -101,6 +103,16 @@ function capabilityFrame(sequence: number): SessionStreamFrame {
   };
 }
 
+function overlay(throughSequence: number): SessionStreamOverlay {
+  return {
+    kind: "overlay",
+    sessionId: "session-1",
+    throughSequence,
+    messageId: "assistant-1",
+    delta: { op: "part.append", key: "text-1", text: "lo" },
+  };
+}
+
 function trackedValue(value: unknown): { id: string; data: unknown } {
   expect(Array.isArray(value)).toBe(true);
   if (!Array.isArray(value)) throw new Error("Expected a tracked SSE envelope");
@@ -116,7 +128,7 @@ function runtimeFixture(): {
     subscribeAfter: number[];
     cancelled: CancelInteractionRequest[];
   };
-  emit: (next: SessionStreamFrame) => void;
+  emit: (next: SessionStreamEmission) => void;
 } {
   const calls: {
     command: SessionRuntimeCommandRequest[];
@@ -127,7 +139,7 @@ function runtimeFixture(): {
     subscribeAfter: [],
     cancelled: [],
   };
-  let listener: ((next: SessionStreamFrame) => void) | null = null;
+  let listener: ((next: SessionStreamEmission) => void) | null = null;
   const runtime: SessionRuntime = {
     command: async (request) => {
       calls.command.push(request);
@@ -359,6 +371,33 @@ describe("Session tRPC router", () => {
         : null,
     ).toEqual([]);
     await iterator.return?.();
+  });
+
+  it("yields a transient overlay beside durable frames, leaving both exactly as published", async () => {
+    const fixture = runtimeFixture();
+    const diagnostics = new RpcDiagnosticLog();
+    const caller = createSessionRouter().createCaller({ runtime: fixture.runtime, diagnostics });
+
+    const stream = await caller.session.subscribe({ sessionId: "session-1" });
+    const iterator = stream[Symbol.asyncIterator]();
+    const durablePending = iterator.next();
+    await Promise.resolve();
+    fixture.emit(frame(5));
+    const durable = trackedValue((await durablePending).value);
+    const overlayPending = iterator.next();
+    await Promise.resolve();
+    fixture.emit(overlay(5));
+    const transient = trackedValue((await overlayPending).value);
+    await iterator.return?.();
+
+    // The durable arm is byte-identical to what it was before overlays existed:
+    // every consumer validating a frame by its `sequence` keeps working.
+    expect(durable.id).toBe("5");
+    expect(JSON.stringify(durable.data)).toBe(JSON.stringify(frame(5)));
+    // The overlay is tracked by the durable sequence it was emitted beside —
+    // unsuffixed, so a resubscribe from it still parses as a cursor.
+    expect(transient.id).toBe("5");
+    expect(transient.data).toEqual(overlay(5));
   });
 
   it("answers a projection read with Session state alone and no transcript replay", async () => {
@@ -768,6 +807,105 @@ describe("Session tRPC router", () => {
     expect(diagnostics.list().filter(({ code }) => code === "SUBSCRIPTION_OVERFLOW")).toHaveLength(
       2,
     );
+  });
+
+  // Overflow used to end the stream the way a finished stream ends. The Electron
+  // pump turned that into `{kind:"done"}`, the renderer link into
+  // `observer.complete()`, and a consumer holding only `onData`/`onError` into a
+  // transcript that quietly stopped moving — the drop legible nowhere but a
+  // main-process log. These two assert the client is now told.
+  it("ends an overflowing session subscription with an error its subscriber can catch", async () => {
+    const fixture = runtimeFixture();
+    const diagnostics = new RpcDiagnosticLog({ capacity: 10_000 });
+    const caller = createSessionRouter().createCaller({ runtime: fixture.runtime, diagnostics });
+
+    const stream = await caller.session.subscribe({ sessionId: "session-1" });
+    const iterator = stream[Symbol.asyncIterator]();
+    const firstFrame = iterator.next();
+    await Promise.resolve();
+    for (let sequence = 1; sequence <= 4_098; sequence += 1) fixture.emit(frame(sequence));
+    await firstFrame;
+
+    let delivered = 0;
+    const drain = async () => {
+      for (;;) {
+        const next = await iterator.next();
+        if (next.done) return;
+        delivered += 1;
+      }
+    };
+    await expect(drain()).rejects.toMatchObject({
+      code: "TOO_MANY_REQUESTS",
+      message: "Session subscription fell behind; resume from the last event id",
+    });
+
+    // Terminal, not a discard: everything the queue had buffered still reached
+    // the subscriber, and only the gap after it is reported.
+    expect(delivered).toBeGreaterThan(0);
+    // Still recorded — the main-process log keeps its evidence either way.
+    expect(diagnostics.list().filter(({ code }) => code === "SUBSCRIPTION_OVERFLOW")).toHaveLength(
+      1,
+    );
+    expect(fixture.calls.subscribeAfter).toEqual([0]);
+  });
+
+  it("ends an overflowing diagnostics subscription with an error its subscriber can catch", async () => {
+    const fixture = runtimeFixture();
+    const diagnostics = new RpcDiagnosticLog({ capacity: 10_000 });
+    const caller = createSessionRouter().createCaller({ runtime: fixture.runtime, diagnostics });
+
+    const stream = await caller.labDiagnostics.subscribe({ afterId: 0 });
+    const iterator = stream[Symbol.asyncIterator]();
+    const firstEntry = iterator.next();
+    await Promise.resolve();
+    for (let index = 0; index < 4_100; index += 1) {
+      diagnostics.record({
+        procedure: `live-${index}`,
+        phase: "success",
+        transport: "unknown",
+        code: null,
+        message: null,
+      });
+    }
+    await firstEntry;
+
+    const drain = async () => {
+      for (;;) {
+        if ((await iterator.next()).done) return;
+      }
+    };
+    await expect(drain()).rejects.toMatchObject({
+      code: "TOO_MANY_REQUESTS",
+      message: "Diagnostics subscription fell behind; resume from the last event id",
+    });
+    expect(diagnostics.list().filter(({ code }) => code === "SUBSCRIPTION_OVERFLOW")).toHaveLength(
+      1,
+    );
+  });
+
+  // The other half of the overflow rule: a stream that simply ended still ends.
+  // Raising on every clean close would make every teardown look like data loss.
+  it("completes a subscription that ended without dropping frames, raising nothing", async () => {
+    const fixture = runtimeFixture();
+    const diagnostics = new RpcDiagnosticLog();
+    const controller = new AbortController();
+    const caller = createSessionRouter().createCaller(
+      { runtime: fixture.runtime, diagnostics },
+      { signal: controller.signal },
+    );
+
+    const stream = await caller.session.subscribe({ sessionId: "session-1" });
+    const iterator = stream[Symbol.asyncIterator]();
+    const delivered = iterator.next();
+    await Promise.resolve();
+    fixture.emit(frame(5));
+    expect(trackedValue((await delivered).value).id).toBe("5");
+    const ended = iterator.next();
+    await Promise.resolve();
+    controller.abort();
+
+    expect(await ended).toEqual({ done: true, value: undefined });
+    expect(diagnostics.list().filter((entry) => entry.phase === "error")).toEqual([]);
   });
 
   it("records sanitized failures and rejects structurally invalid commands", async () => {

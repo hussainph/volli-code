@@ -290,15 +290,31 @@ export const MessageResponse = memo(
     animated = immediateStreamingAnimation,
     components,
     ...props
-  }: MessageResponseProps) => (
-    <Streamdown
-      {...props}
-      className={cn("size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", className)}
-      animated={animated}
-      plugins={streamdownPlugins}
-      components={{ ...chatMarkdownComponents, ...components }}
-    />
-  ),
+  }: MessageResponseProps) => {
+    // The `components` map must keep one identity for as long as its members do.
+    // Streamdown re-derives its internal map whenever this object's identity
+    // changes, and because we define `inlineCode` it re-wraps `code` in a fresh
+    // closure each time. `code` is an element TYPE, so a new function there is a
+    // new type at the same position: React tears down every fenced block in the
+    // message and mounts a replacement, which restarts each block at its
+    // unhighlighted fallback before Shiki's cache puts the tokens back. On a
+    // streaming answer that is every closed fence re-highlighting per chunk —
+    // measured at 33k DOM mutations for a 4KB message (docs/plans/delta-frames.md).
+    // A literal spread here recreated the object on every token.
+    const merged = useMemo(
+      () => (components ? { ...chatMarkdownComponents, ...components } : chatMarkdownComponents),
+      [components],
+    );
+    return (
+      <Streamdown
+        {...props}
+        className={cn("size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", className)}
+        animated={animated}
+        plugins={streamdownPlugins}
+        components={merged}
+      />
+    );
+  },
   (prevProps, nextProps) =>
     prevProps.children === nextProps.children && nextProps.isAnimating === prevProps.isAnimating,
 );

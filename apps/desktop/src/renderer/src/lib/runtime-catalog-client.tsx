@@ -42,7 +42,16 @@ export function RuntimeCatalogProvider({
   return <RuntimeCatalogContext.Provider value={value}>{children}</RuntimeCatalogContext.Provider>;
 }
 
-/** Null in the shipped app until its production transport is wired. */
+/**
+ * Live wherever a provider is mounted, which in the shipped app is everywhere:
+ * `App.tsx` wraps `AppShell` in `DesktopRuntimeCatalogProvider`, and the lab
+ * wraps its scratch in `LabRuntimeCatalogProvider`. Null is what is left — a
+ * unit test rendering one settings pane through `renderToStaticMarkup`, with no
+ * provider and no preload bridge under it. Nullable rather than throwing for
+ * exactly that case: those tests render the surface to assert its markup, and a
+ * hook that threw would make an unmounted transport a test failure instead of
+ * the "nothing to fetch" the pane already knows how to draw.
+ */
 export function useRuntimeCatalogClient(): RuntimeCatalogContextValue | null {
   return React.useContext(RuntimeCatalogContext);
 }

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { HarnessCommand, HarnessObservation, ObservationSink } from "@volli/session-engine";
+import type {
+  HarnessCommand,
+  HarnessObservation,
+  ObservationSink,
+  TranscriptDelta,
+  TranscriptOverlay,
+} from "@volli/session-engine";
+import { applyTranscriptDelta, projectKeyedTranscriptMessage } from "@volli/session-engine";
 import {
   ACTIVITY_METADATA_KEY,
   DEFAULT_INTERACTION_PROMPT_ID,
@@ -81,13 +88,68 @@ const toolPart = (tool: string, callID: string, state: Record<string, unknown>) 
   state,
 });
 
-/** Every tool row the transcript projected, in the order it projected them. */
+/**
+ * Every part the transcript stated, durable or transient, in the order it
+ * stated them: a settled message states all of its parts, a `reset` states all
+ * of the ones it carries, an upsert states the one it names.
+ */
+function statedParts(observations: readonly HarnessObservation[]) {
+  return observations.flatMap((observation) => {
+    if (observation.kind === "transcript.message") return [...observation.message.parts];
+    if (observation.kind !== "transcript.delta") return [];
+    if (observation.delta.op === "reset") {
+      return observation.delta.message.parts.map((entry) => entry.part);
+    }
+    return observation.delta.op === "part.upsert" ? [observation.delta.part] : [];
+  });
+}
+
+/** Every tool row the transcript stated, in the order it stated them. */
 function toolRows(observations: readonly HarnessObservation[]) {
+  return statedParts(observations).flatMap((part) => (part.type === "dynamic-tool" ? [part] : []));
+}
+
+/** The transient ops one message's stream carried, in order. */
+function deltaOps(
+  observations: readonly HarnessObservation[],
+  messageId = "provider-assistant",
+): TranscriptDelta[] {
   return observations.flatMap((observation) =>
-    observation.kind !== "transcript.message"
-      ? []
-      : observation.message.parts.flatMap((part) => (part.type === "dynamic-tool" ? [part] : [])),
+    observation.kind === "transcript.delta" && observation.messageId === messageId
+      ? [observation.delta]
+      : [],
   );
+}
+
+/**
+ * The message a consumer holds after each observation that changed it — folded
+ * exactly as the engine folds it, so what a test reads here is what a reader
+ * saw, not what the adapter meant.
+ *
+ * A durable snapshot settles the entry the way the runtime does (it clears the
+ * overlay when it records one) and takes its place in the sequence, so both
+ * arms are read as the one transcript they are.
+ */
+function transcriptStates(
+  observations: readonly HarnessObservation[],
+  messageId = "provider-assistant",
+) {
+  let overlay: TranscriptOverlay = new Map();
+  const states = [];
+  for (const observation of observations) {
+    if (observation.kind === "transcript.message" && observation.message.id === messageId) {
+      const settled = new Map(overlay);
+      settled.delete(messageId);
+      overlay = settled;
+      states.push(observation.message);
+      continue;
+    }
+    if (observation.kind !== "transcript.delta" || observation.messageId !== messageId) continue;
+    overlay = applyTranscriptDelta(overlay, messageId, observation.delta);
+    const held = overlay.get(messageId);
+    if (held) states.push(projectKeyedTranscriptMessage(held));
+  }
+  return states;
 }
 
 /**
@@ -175,6 +237,84 @@ function delegatedTurn(tail: readonly OpenCodeSseEvent[], hold: Deferred<void>) 
   };
   return network;
 }
+
+/**
+ * A stream that yields each scripted batch and then waits out the coalescing
+ * window, so every batch lands in a tick of its own. A fixture that yields
+ * everything in one microtask collapses into a single tick and can say nothing
+ * about what one tick puts on the wire.
+ */
+function tickedStream(
+  network: FakeNetwork,
+  batches: readonly (readonly OpenCodeSseEvent[])[],
+  hold: Deferred<void>,
+) {
+  network.subscribe = async (input) => {
+    network.subscriptions.push(input);
+    return (async function* () {
+      for (const batch of batches) {
+        yield* batch;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      await hold.promise;
+    })();
+  };
+  return network;
+}
+
+/** The event that opens the assistant turn every ticked fixture below streams. */
+const assistantOpened: OpenCodeSseEvent = {
+  id: "assistant",
+  type: "message.updated",
+  properties: {
+    info: { id: "provider-assistant", sessionID: "native-session-1", role: "assistant" },
+  },
+};
+
+const partUpdated = (id: string, part: Record<string, unknown>): OpenCodeSseEvent => ({
+  id,
+  type: "message.part.updated",
+  properties: { sessionID: "native-session-1", part: { messageID: "provider-assistant", ...part } },
+});
+
+const textDelta = (id: string, partID: string, delta: string): OpenCodeSseEvent => ({
+  id,
+  type: "message.part.delta",
+  properties: {
+    sessionID: "native-session-1",
+    messageID: "provider-assistant",
+    partID,
+    field: "text",
+    delta,
+  },
+});
+
+/**
+ * A repeat snapshot of the running turn, carrying whatever usage OpenCode has
+ * read so far. Provider and model are stamped on every one of them because
+ * OpenCode restates the whole header each time, which is the habit the metadata
+ * memo exists to absorb.
+ */
+const usageUpdated = (id: string, usage: Record<string, unknown>): OpenCodeSseEvent => ({
+  id,
+  type: "message.updated",
+  properties: {
+    info: {
+      id: "provider-assistant",
+      sessionID: "native-session-1",
+      role: "assistant",
+      providerID: "anthropic",
+      modelID: "claude-sonnet-4-5",
+      ...usage,
+    },
+  },
+});
+
+const sessionStatus = (id: string, type: string): OpenCodeSseEvent => ({
+  id,
+  type: "session.status",
+  properties: { sessionID: "native-session-1", status: { type } },
+});
 
 /**
  * A permission raised inside a subagent: tagged with the child Session, naming
@@ -773,6 +913,26 @@ describe("OpenCodeNativeAdapter", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 50));
 
+    // The first thing said about a message is always a baseline, and nothing
+    // about it is durable yet — mid-word is view state.
+    expect(deltaOps(observations)).toEqual([
+      {
+        op: "reset",
+        message: {
+          id: "provider-assistant",
+          role: "assistant",
+          parts: [{ key: "answer", part: { type: "text", text: "Stream this now" } }],
+        },
+      },
+    ]);
+    expect(observations.some((observation) => observation.kind === "transcript.message")).toBe(
+      false,
+    );
+    expect(observations.some((observation) => observation.kind === "turn.completed")).toBe(false);
+
+    allowIdle.resolve(undefined);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The turn settling is what writes it down, and it says the same thing.
     expect(observations).toContainEqual(
       expect.objectContaining({
         kind: "transcript.message",
@@ -783,15 +943,11 @@ describe("OpenCodeNativeAdapter", () => {
         },
       }),
     );
-    expect(observations.some((observation) => observation.kind === "turn.completed")).toBe(false);
-
-    allowIdle.resolve(undefined);
-    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(observations.some((observation) => observation.kind === "turn.completed")).toBe(true);
     await handle.release("requested");
   });
 
-  it("carries a settled part's projection from one stream snapshot into the next", async () => {
+  it("says nothing about a part no tick has touched", async () => {
     const hold = new Deferred<void>();
     const network = new FakeNetwork();
     network.subscribe = async (input) => {
@@ -845,22 +1001,767 @@ describe("OpenCodeNativeAdapter", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 120));
 
-    const snapshots = observations.flatMap((observation) =>
-      observation.kind === "transcript.message" ? [observation] : [],
-    );
-    expect(snapshots.map(({ message }) => message.parts)).toEqual([
-      [{ type: "text", text: "The tree is stale." }],
-      [
+    // The second tick states the new part and nothing else: a part nothing has
+    // touched is the same projection, not an equal one, so the whole-array diff
+    // sees identity and says nothing — which is the entire point of the change.
+    expect(deltaOps(observations)).toEqual([
+      {
+        op: "reset",
+        message: {
+          id: "provider-assistant",
+          role: "assistant",
+          parts: [{ key: "p1", part: { type: "text", text: "The tree is stale." } }],
+        },
+      },
+      {
+        op: "part.upsert",
+        key: "p2",
+        index: 1,
+        part: { type: "text", text: "Reinstalling now." },
+      },
+    ]);
+    // And a consumer folding those two ops holds the whole message.
+    expect(transcriptStates(observations).at(-1)).toEqual({
+      id: "provider-assistant",
+      role: "assistant",
+      parts: [
         { type: "text", text: "The tree is stale." },
         { type: "text", text: "Reinstalling now." },
       ],
+    });
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("grows a text part by the suffix it gained", async () => {
+    const hold = new Deferred<void>();
+    const network = tickedStream(
+      new FakeNetwork(),
+      [
+        [assistantOpened, textDelta("d1", "answer", "The tree")],
+        [textDelta("d2", "answer", " is stale.")],
+        [textDelta("d3", "answer", " Reinstalling.")],
+      ],
+      hold,
+    );
+    const adapter = createAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // The whole of the win: after the baseline, a growing answer costs the new
+    // characters and nothing it has already said.
+    expect(deltaOps(observations)).toEqual([
+      {
+        op: "reset",
+        message: {
+          id: "provider-assistant",
+          role: "assistant",
+          parts: [{ key: "answer", part: { type: "text", text: "The tree" } }],
+        },
+      },
+      { op: "part.append", key: "answer", text: " is stale." },
+      { op: "part.append", key: "answer", text: " Reinstalling." },
     ]);
-    // A part nothing has touched since the last snapshot is the same projection,
-    // not an equal one — which is what keeps a long reply from being serialized
-    // again in full, and hashed again in full, every 32 milliseconds.
-    expect(snapshots[1]?.message.parts[0]).toBe(snapshots[0]?.message.parts[0]);
-    // And the identity still moves with the content it stands for.
-    expect(snapshots[0]?.id).not.toBe(snapshots[1]?.id);
+    expect(transcriptStates(observations).at(-1)).toEqual({
+      id: "provider-assistant",
+      role: "assistant",
+      parts: [{ type: "text", text: "The tree is stale. Reinstalling." }],
+    });
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("keeps one tick per message however slow the reader is", async () => {
+    const hold = new Deferred<void>();
+    const network = tickedStream(
+      new FakeNetwork(),
+      [
+        [assistantOpened, textDelta("d1", "answer", "The tree")],
+        [textDelta("d2", "answer", " is stale.")],
+        [textDelta("d3", "answer", " Reinstalling")],
+        [textDelta("d4", "answer", " now.")],
+      ],
+      hold,
+    );
+    const adapter = createAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        // Slower than the 32ms window on purpose. Overlay delivery inherits the
+        // slowest subscriber's backpressure by design, so a batch outliving its
+        // own tick is the case to build for, not an unlucky one.
+        if (observation.kind === "transcript.delta") {
+          await new Promise((resolve) => setTimeout(resolve, 60));
+        }
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 900));
+
+    // Exactly one baseline. A second `reset` is the signature of two ticks
+    // running at once: the later one found `#streamEmissions` already cleared by
+    // the earlier one, and the earlier one then wrote its own older record back
+    // over it — after which every diff is computed against a state the reader
+    // does not hold.
+    expect(deltaOps(observations).filter((delta) => delta.op === "reset")).toHaveLength(1);
+    // Which is what that costs, and why it has to be a test: the reader would
+    // be sent an append of text it already had, and the answer would quietly
+    // say part of itself twice.
+    expect(transcriptStates(observations).at(-1)).toEqual({
+      id: "provider-assistant",
+      role: "assistant",
+      parts: [{ type: "text", text: "The tree is stale. Reinstalling now." }],
+    });
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("says nothing at all when a tick finds nothing new", async () => {
+    const hold = new Deferred<void>();
+    const network = tickedStream(
+      new FakeNetwork(),
+      [
+        [
+          assistantOpened,
+          // OpenCode stamped this thought finished itself, so it projects settled
+          // and the pass that collapses overtaken thoughts has nothing to change.
+          partUpdated("think", {
+            id: "r1",
+            type: "reasoning",
+            text: "Settled",
+            time: { start: 1, end: 2 },
+          }),
+          partUpdated("answer", { id: "t1", type: "text", text: "Answer" }),
+        ],
+        // A repeat message snapshot carrying nothing new still schedules a tick.
+        [{ ...assistantOpened, id: "assistant-again" }],
+        [textDelta("d1", "t1", " continues")],
+      ],
+      hold,
+    );
+    const adapter = createAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    // A tick that finds every part identical to what it last said puts nothing
+    // on the wire — including the settled thought, which keeps the exact
+    // projection it was given rather than an equal copy of it.
+    expect(deltaOps(observations)).toEqual([
+      {
+        op: "reset",
+        message: {
+          id: "provider-assistant",
+          role: "assistant",
+          parts: [
+            { key: "r1", part: { type: "reasoning", text: "Settled", state: "done" } },
+            { key: "t1", part: { type: "text", text: "Answer" } },
+          ],
+        },
+      },
+      { op: "part.append", key: "t1", text: " continues" },
+    ]);
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("restates a part whose change is not growth", async () => {
+    const hold = new Deferred<void>();
+    const network = tickedStream(
+      new FakeNetwork(),
+      [
+        [assistantOpened, partUpdated("first", { id: "p1", type: "text", text: "Alpha" })],
+        // Not a prefix of what the buffer holds: OpenCode replaced the text.
+        [partUpdated("replaced", { id: "p1", type: "text", text: "Beta" })],
+        // The same words again, in a part object the buffer had to rebuild.
+        [partUpdated("restated", { id: "p1", type: "text", text: "Beta" })],
+        // A part that streamed as text before OpenCode typed it: the accumulated
+        // text survives onto the new type, and a type change is not an append.
+        [textDelta("thought", "r1", "Thinking")],
+        [partUpdated("typed", { id: "r1", type: "reasoning" })],
+      ],
+      hold,
+    );
+    const adapter = createAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 320));
+
+    expect(deltaOps(observations).slice(1)).toEqual([
+      { op: "part.upsert", key: "p1", index: 0, part: { type: "text", text: "Beta" } },
+      { op: "part.upsert", key: "p1", index: 0, part: { type: "text", text: "Beta" } },
+      { op: "part.upsert", key: "r1", index: 1, part: { type: "text", text: "Thinking" } },
+      {
+        op: "part.upsert",
+        key: "r1",
+        index: 1,
+        part: { type: "reasoning", text: "Thinking", state: "streaming" },
+      },
+    ]);
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("takes back a part the provider removed, and the message it deleted", async () => {
+    const hold = new Deferred<void>();
+    const network = tickedStream(
+      new FakeNetwork(),
+      [
+        [
+          assistantOpened,
+          partUpdated("first", { id: "p1", type: "text", text: "Draft" }),
+          partUpdated("second", { id: "p2", type: "text", text: "Keeper" }),
+        ],
+        [
+          {
+            id: "part-gone",
+            type: "message.part.removed",
+            properties: {
+              sessionID: "native-session-1",
+              messageID: "provider-assistant",
+              partID: "p1",
+            },
+          },
+        ],
+        [
+          {
+            id: "message-gone",
+            type: "message.removed",
+            properties: { sessionID: "native-session-1", messageID: "provider-assistant" },
+          },
+        ],
+      ],
+      hold,
+    );
+    const adapter = createAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(deltaOps(observations).slice(1)).toEqual([
+      { op: "part.remove", key: "p1" },
+      // Nothing durable ever recorded this message, so the transient claim on it
+      // has to be withdrawn or it renders forever.
+      { op: "message.remove" },
+    ]);
+    expect(transcriptStates(observations)).toHaveLength(2);
+    expect(observations.some(({ kind }) => kind === "transcript.message")).toBe(false);
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("takes back a message the provider deleted while its tick was still emitting", async () => {
+    const hold = new Deferred<void>();
+    const network = new FakeNetwork();
+    network.subscribe = async (input) => {
+      network.subscriptions.push(input);
+      return (async function* () {
+        yield assistantOpened;
+        yield partUpdated("first", { id: "p1", type: "text", text: "Draft" });
+        // Inside the baseline tick, which opens at ~32ms and spends 60ms
+        // putting its one delta on the wire: the record a withdrawal would look
+        // for is gone by then, because a tick forgets before it awaits.
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        yield {
+          id: "message-gone",
+          type: "message.removed",
+          properties: { sessionID: "native-session-1", messageID: "provider-assistant" },
+        };
+        await hold.promise;
+      })();
+    };
+    const adapter = createAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        if (observation.kind === "transcript.delta") {
+          await new Promise((resolve) => setTimeout(resolve, 60));
+        }
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    // The claim a live tick holds is the same claim the record holds, and
+    // asking only about the record let the withdrawal be skipped: nothing
+    // durable was ever written for this message, so the reader went on drawing
+    // one OpenCode had deleted for as long as the attachment lived.
+    expect(deltaOps(observations).map(({ op }) => op)).toEqual(["reset", "message.remove"]);
+    expect(observations.some(({ kind }) => kind === "transcript.message")).toBe(false);
+    expect(transcriptStates(observations)).toHaveLength(1);
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("states usage the moment OpenCode reports it, without restating the answer", async () => {
+    const hold = new Deferred<void>();
+    const network = tickedStream(
+      new FakeNetwork(),
+      [
+        [assistantOpened, textDelta("d1", "answer", "Answer")],
+        [
+          {
+            id: "usage",
+            type: "message.updated",
+            properties: {
+              info: {
+                id: "provider-assistant",
+                sessionID: "native-session-1",
+                role: "assistant",
+                providerID: "anthropic",
+                modelID: "claude-sonnet-4-5",
+                cost: 0.5,
+              },
+            },
+          },
+        ],
+      ],
+      hold,
+    );
+    const adapter = createAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    expect(deltaOps(observations).slice(1)).toEqual([
+      {
+        op: "metadata",
+        metadata: {
+          providerId: "anthropic",
+          modelId: "claude-sonnet-4-5",
+          cost: 0.5,
+          tokens: null,
+        },
+      },
+    ]);
+    expect(transcriptStates(observations).at(-1)).toMatchObject({
+      metadata: { modelId: "claude-sonnet-4-5" },
+      parts: [{ type: "text", text: "Answer" }],
+    });
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("says nothing when a repeat snapshot restates the usage it already stated", async () => {
+    const hold = new Deferred<void>();
+    const tokens = { input: 1200, output: 340, cache: { read: 8000, write: 512 } };
+    const network = tickedStream(
+      new FakeNetwork(),
+      [
+        [assistantOpened, textDelta("d1", "answer", "Answer")],
+        [usageUpdated("usage", { cost: 0.5 })],
+        // The same reading again, in the new object every parse builds. The
+        // diff compares metadata by identity, so without the memo one of these
+        // costs a `metadata` op — sink, publish and a structured clone into the
+        // renderer — to restate what the reader is already holding.
+        [usageUpdated("usage-again", { cost: 0.5 })],
+        // A reading that genuinely moved still gets through, which is the half
+        // a memo that never lets go would break.
+        [usageUpdated("usage-tokens", { cost: 0.5, tokens })],
+        // Including through the token bag, which is a fresh object every time
+        // and so can only be compared field by field.
+        [usageUpdated("usage-tokens-again", { cost: 0.5, tokens: { ...tokens } })],
+        [usageUpdated("usage-costed", { cost: 0.75, tokens: { ...tokens } })],
+      ],
+      hold,
+    );
+    const adapter = createAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    const reported = {
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4-5",
+      tokens: { input: 1200, output: 340, reasoning: null, cacheRead: 8000, cacheWrite: 512 },
+    };
+    expect(deltaOps(observations).slice(1)).toEqual([
+      { op: "metadata", metadata: { ...reported, cost: 0.5, tokens: null } },
+      { op: "metadata", metadata: { ...reported, cost: 0.5 } },
+      { op: "metadata", metadata: { ...reported, cost: 0.75 } },
+    ]);
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("re-baselines a message that has settled durably since its last delta", async () => {
+    const hold = new Deferred<void>();
+    const network = tickedStream(
+      new FakeNetwork(),
+      [
+        [assistantOpened, partUpdated("first", { id: "p1", type: "text", text: "One" })],
+        [{ id: "idle", type: "session.idle", properties: { sessionID: "native-session-1" } }],
+        // The same message keeps growing after the turn that settled it.
+        [
+          { ...assistantOpened, id: "assistant-again" },
+          partUpdated("grown", { id: "p1", type: "text", text: "One two" }),
+        ],
+      ],
+      hold,
+    );
+    const adapter = createAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // The settle cleared the reader's overlay entry, so an append naming a part
+    // it no longer holds would be dropped and the tail lost. The rule that
+    // makes every fold self-healing is that the first delta after a settle is a
+    // baseline, whatever the diff would have said.
+    expect(deltaOps(observations).map(({ op }) => op)).toEqual(["reset", "reset"]);
+    expect(deltaOps(observations).at(-1)).toEqual({
+      op: "reset",
+      message: {
+        id: "provider-assistant",
+        role: "assistant",
+        parts: [{ key: "p1", part: { type: "text", text: "One two" } }],
+      },
+    });
+    expect(
+      observations.flatMap((observation) =>
+        observation.kind === "transcript.message" ? [observation.message.parts] : [],
+      ),
+    ).toEqual([[{ type: "text", text: "One" }]]);
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("re-baselines a message whose settle landed inside a delta batch", async () => {
+    const hold = new Deferred<void>();
+    const network = new FakeNetwork();
+    network.subscribe = async (input) => {
+      network.subscriptions.push(input);
+      return (async function* () {
+        yield assistantOpened;
+        yield partUpdated("first", { id: "p1", type: "text", text: "One" });
+        // Long enough for the baseline tick to finish, so the three parts below
+        // land in a tick of their own — one carrying more than a single delta,
+        // which is what a settle can land *inside*.
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        yield partUpdated("second", { id: "p2", type: "text", text: "Two" });
+        yield partUpdated("third", { id: "p3", type: "text", text: "Three" });
+        yield partUpdated("fourth", { id: "p4", type: "text", text: "Four" });
+        // That tick opens ~32ms later and spends 60ms per delta, so the turn
+        // ends between its first and its last. The settle is driven by this
+        // loop and the tick by its own timer: they meet on the emission queue,
+        // where the flush's durable message chains between two deltas and its
+        // `delete` therefore runs before the batch's closing `set`.
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        yield { id: "idle", type: "session.idle", properties: { sessionID: "native-session-1" } };
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        // The same message keeps growing after the turn that settled it.
+        yield { ...assistantOpened, id: "assistant-again" };
+        yield partUpdated("grown", { id: "p1", type: "text", text: "One two" });
+        await hold.promise;
+      })();
+    };
+    const adapter = createAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        if (observation.kind === "transcript.delta") {
+          await new Promise((resolve) => setTimeout(resolve, 60));
+        }
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 900));
+
+    // The fixture is only worth anything if the settle really did overtake the
+    // batch: something the tick had already computed reaches the wire after the
+    // durable message. Without this the test could go green on a run where the
+    // two never met, and stop guarding anything.
+    const settleIndex = observations.findIndex(({ kind }) => kind === "transcript.message");
+    expect(settleIndex).toBeGreaterThanOrEqual(0);
+    expect(
+      observations
+        .slice(settleIndex + 1)
+        .some(
+          (observation) =>
+            observation.kind === "transcript.delta" && observation.delta.op !== "reset",
+        ),
+    ).toBe(true);
+    // Two baselines: the message's first, and the one the settle owes. A single
+    // one is the signature of the overtaken tick writing its record back over
+    // the retirement — after which every later tick diffs against a state the
+    // settle already cleared out of the reader, and the fold's self-healing
+    // rule drops the whole streaming tail on the floor.
+    expect(deltaOps(observations).filter(({ op }) => op === "reset")).toHaveLength(2);
+    expect(deltaOps(observations).at(-1)).toEqual({
+      op: "reset",
+      message: {
+        id: "provider-assistant",
+        role: "assistant",
+        parts: [{ key: "p1", part: { type: "text", text: "One two" } }],
+      },
+    });
+    // Which is what that costs: a reader folding both arms holds the message as
+    // it grew, not the snapshot it settled at with everything after it silently
+    // discarded.
+    expect(transcriptStates(observations).at(-1)).toEqual({
+      id: "provider-assistant",
+      role: "assistant",
+      parts: [{ type: "text", text: "One two" }],
+    });
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("re-states the thoughts a turn transition re-projects, and only those", async () => {
+    const hold = new Deferred<void>();
+    const network = tickedStream(
+      new FakeNetwork(),
+      [
+        // Settled first, so the thought below opens against an idle turn and the
+        // busy flip that follows is a real transition rather than the start.
+        [sessionStatus("idle-first", "idle")],
+        [assistantOpened, partUpdated("think-1", { id: "r1", type: "reasoning", text: "First" })],
+        [
+          sessionStatus("busy", "busy"),
+          partUpdated("think-2", { id: "r2", type: "reasoning", text: "Second" }),
+        ],
+        [partUpdated("answer", { id: "t1", type: "text", text: "Answer" })],
+        [textDelta("d1", "t1", " continues")],
+      ],
+      hold,
+    );
+    const adapter = createAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 320));
+
+    // The busy flip re-projects every unfinished thought and the collapse pass
+    // settles all but the live one — neither is a part event, and a diff keyed
+    // on the part an event touched would have missed both.
+    expect(deltaOps(observations).slice(1)).toEqual([
+      {
+        op: "part.upsert",
+        key: "r1",
+        index: 0,
+        part: { type: "reasoning", text: "First", state: "done" },
+      },
+      {
+        op: "part.upsert",
+        key: "r2",
+        index: 1,
+        part: { type: "reasoning", text: "Second", state: "streaming" },
+      },
+      {
+        op: "part.upsert",
+        key: "r2",
+        index: 1,
+        part: { type: "reasoning", text: "Second", state: "done" },
+      },
+      { op: "part.upsert", key: "t1", index: 2, part: { type: "text", text: "Answer" } },
+      // A thought the model has already moved past keeps its settled reading
+      // across ticks, so the tick that grows the answer says nothing about it.
+      { op: "part.append", key: "t1", text: " continues" },
+    ]);
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("gates a tool row on a permission that writes nothing to the buffer", async () => {
+    const hold = new Deferred<void>();
+    const network = tickedStream(
+      new FakeNetwork(),
+      [
+        [
+          assistantOpened,
+          partUpdated("call", {
+            id: "p1",
+            ...toolPart("write", "call-write", {
+              status: "running",
+              input: { path: "src/index.ts" },
+            }),
+          }),
+        ],
+        [askedFor("call-write")],
+        [
+          {
+            id: "allowed",
+            type: "permission.replied",
+            properties: { sessionID: "native-session-1", requestID: "per_1", reply: "once" },
+          },
+        ],
+      ],
+      hold,
+    );
+    const adapter = createAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // Neither the ask nor the reply touches the buffered part at all — only a
+    // diff over the whole projected array sees the gate open and close, and the
+    // permission card is the surface's trust boundary, not a decoration.
+    expect(deltaOps(observations).slice(1)).toMatchObject([
+      {
+        op: "part.upsert",
+        key: "p1",
+        index: 0,
+        part: { state: "approval-requested", approval: { id: "per_1" } },
+      },
+      { op: "part.upsert", key: "p1", index: 0, part: { state: "input-available" } },
+    ]);
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("settles the message it is about to drop when the binding is released", async () => {
+    const hold = new Deferred<void>();
+    const network = tickedStream(
+      new FakeNetwork(),
+      [[assistantOpened, textDelta("d1", "answer", "Half a thou")]],
+      hold,
+    );
+    const adapter = createAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(observations.some(({ kind }) => kind === "transcript.message")).toBe(false);
+
+    await handle.release("requested");
+
+    // Release is a user action, not a crash. The deltas were never written down
+    // anywhere, so dropping the sink first would discard the whole reply.
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        kind: "transcript.message",
+        message: {
+          id: "provider-assistant",
+          role: "assistant",
+          parts: [{ type: "text", text: "Half a thou" }],
+        },
+      }),
+    );
+    hold.resolve(undefined);
+  });
+
+  it("re-baselines a message whose delta never reached the sink", async () => {
+    const hold = new Deferred<void>();
+    const network = tickedStream(
+      new FakeNetwork(),
+      [
+        [assistantOpened, textDelta("d1", "answer", "One")],
+        [textDelta("d2", "answer", " two")],
+        [textDelta("d3", "answer", " three")],
+      ],
+      hold,
+    );
+    const adapter = createAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    let deltasSeen = 0;
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        if (observation.kind === "transcript.delta" && ++deltasSeen === 2) {
+          throw new Error("sink unavailable");
+        }
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // The consumer never received the append, so the next tick cannot diff
+    // against a state it may not hold — it says the whole message again.
+    expect(deltaOps(observations)).toEqual([
+      {
+        op: "reset",
+        message: {
+          id: "provider-assistant",
+          role: "assistant",
+          parts: [{ key: "answer", part: { type: "text", text: "One" } }],
+        },
+      },
+      {
+        op: "reset",
+        message: {
+          id: "provider-assistant",
+          role: "assistant",
+          parts: [{ key: "answer", part: { type: "text", text: "One two three" } }],
+        },
+      },
+    ]);
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
+  it("keeps a transient delta out of the cursor it would corrupt", async () => {
+    const hold = new Deferred<void>();
+    const network = tickedStream(
+      new FakeNetwork(),
+      [[assistantOpened, textDelta("d1", "answer", "Mid-word")]],
+      hold,
+    );
+    const originalRequest = network.request.bind(network);
+    // An unreadable status and an empty history: nothing to reconcile, so the
+    // batch reports the position this binding believes it is at.
+    network.request = async (input) =>
+      input.path.startsWith("/session/status")
+        ? { status: 200, body: {} }
+        : input.path.includes("/message")
+          ? { status: 200, body: [] }
+          : originalRequest(input);
+    const adapter = createAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const transient = observations.filter(({ kind }) => kind === "transcript.delta");
+    expect(transient).toHaveLength(1);
+    // Deltas carry no durable identity — nothing to dedupe on, nothing to
+    // resume from. A cursor here would make a later reconcile ask OpenCode for
+    // events after content this Session never wrote down.
+    expect(transient.every((observation) => !("cursor" in observation))).toBe(true);
+    expect(new Set(transient.map(({ id }) => id)).size).toBe(transient.length);
+    const { observations: reconciled, cursor } = await handle.reconcile(null);
+    expect(reconciled).toEqual([]);
+    expect(cursor).toEqual({ eventId: null });
     hold.resolve(undefined);
     await handle.release("requested");
   });
@@ -3038,15 +3939,12 @@ describe("OpenCodeNativeAdapter", () => {
 
     // Text after the thought means the model moved on: the elapsed counter must
     // freeze even though the turn is still busy.
-    expect(observations).toContainEqual(
+    expect(transcriptStates(observations)).toContainEqual(
       expect.objectContaining({
-        kind: "transcript.message",
-        message: expect.objectContaining({
-          parts: [
-            { type: "reasoning", text: "Overtaken", state: "done" },
-            { type: "text", text: "Answer so far" },
-          ],
-        }),
+        parts: [
+          { type: "reasoning", text: "Overtaken", state: "done" },
+          { type: "text", text: "Answer so far" },
+        ],
       }),
     );
     hold.resolve(undefined);
@@ -3126,17 +4024,16 @@ describe("OpenCodeNativeAdapter", () => {
     // explain the settle — `time.end` is the whole signal. And the opening
     // empty snapshot never drew a part of its own.
     expect(
-      observations.flatMap((observation) =>
-        observation.kind === "transcript.message"
-          ? observation.message.parts.flatMap((part) =>
-              part.type === "reasoning" ? [{ text: part.text, state: part.state }] : [],
-            )
-          : [],
+      transcriptStates(observations).flatMap(({ parts }) =>
+        parts.flatMap((part) => (part.type === "reasoning" ? [part] : [])),
       ),
     ).toEqual([
-      { text: "Weighing the trade-offs", state: "streaming" },
-      { text: "Weighing the trade-offs", state: "done" },
+      { type: "reasoning", text: "Weighing the trade-offs", state: "streaming" },
+      { type: "reasoning", text: "Weighing the trade-offs", state: "done" },
     ]);
+    // The settle is a state change, not growth, so it costs a whole part rather
+    // than the suffix an append would have carried.
+    expect(deltaOps(observations).at(-1)).toMatchObject({ op: "part.upsert", key: "r1", index: 0 });
     hold.resolve(undefined);
     await handle.release("requested");
   });
@@ -3207,12 +4104,9 @@ describe("OpenCodeNativeAdapter", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    expect(observations).toContainEqual(
+    expect(transcriptStates(observations)).toContainEqual(
       expect.objectContaining({
-        kind: "transcript.message",
-        message: expect.objectContaining({
-          parts: [{ type: "reasoning", text: "Still thinking", state: "streaming" }],
-        }),
+        parts: [{ type: "reasoning", text: "Still thinking", state: "streaming" }],
       }),
     );
     hold.resolve(undefined);
@@ -3899,10 +4793,12 @@ describe("OpenCodeNativeAdapter", () => {
 
     allowEmit.resolve();
     await release;
-    expect(committed.map(({ kind }) => kind)).toEqual(["transcript.message"]);
+    // Release settles before it drops the sink, so the disconnect fact queued
+    // behind the in-flight snapshot still lands rather than being cut off.
+    expect(committed.map(({ kind }) => kind)).toEqual(["transcript.message", "attention.raised"]);
     await handle.release("requested");
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(committed.map(({ kind }) => kind)).toEqual(["transcript.message"]);
+    expect(committed.map(({ kind }) => kind)).toEqual(["transcript.message", "attention.raised"]);
   });
 
   it("keeps malformed catalog responses out while reporting successful safe metadata", async () => {
@@ -5057,28 +5953,31 @@ describe("OpenCodeNativeAdapter", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    expect(observations).toContainEqual(
-      expect.objectContaining({
-        kind: "transcript.message",
-        message: {
-          id: "provider-assistant",
-          role: "assistant",
-          metadata: {
-            providerId: "anthropic",
-            modelId: "claude-sonnet-4-5",
-            cost: 0.0123,
-            tokens: { input: 1200, output: 340, reasoning: 96, cacheRead: 8000, cacheWrite: 512 },
-          },
-          parts: [
-            { type: "reasoning", text: "First, restated", state: "done" },
-            { type: "reasoning", text: "Second", state: "streaming" },
-          ],
-        },
-      }),
-    );
+    expect(transcriptStates(observations).at(-1)).toEqual({
+      id: "provider-assistant",
+      role: "assistant",
+      metadata: {
+        providerId: "anthropic",
+        modelId: "claude-sonnet-4-5",
+        cost: 0.0123,
+        tokens: { input: 1200, output: 340, reasoning: 96, cacheRead: 8000, cacheWrite: 512 },
+      },
+      parts: [
+        { type: "reasoning", text: "First, restated", state: "done" },
+        { type: "reasoning", text: "Second", state: "streaming" },
+      ],
+    });
+    // The user's own turn and a message with nothing projectable are the two
+    // things that never earn a frame of any kind.
     expect(
       observations.flatMap((observation) =>
-        observation.kind === "transcript.message" ? [observation.message.id] : [],
+        observation.kind === "transcript.delta" || observation.kind === "transcript.message"
+          ? [
+              observation.kind === "transcript.delta"
+                ? observation.messageId
+                : observation.message.id,
+            ]
+          : [],
       ),
     ).toEqual(["provider-assistant"]);
     hold.resolve(undefined);
@@ -5281,17 +6180,14 @@ describe("OpenCodeNativeAdapter", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    // The turn already settled, so nothing in the snapshot is still thinking.
-    expect(observations).toContainEqual(
-      expect.objectContaining({
-        kind: "transcript.message",
-        message: {
-          id: "late",
-          role: "assistant",
-          parts: [{ type: "reasoning", text: "Late thought", state: "done" }],
-        },
-      }),
-    );
+    // The turn already settled, so nothing in the frame is still thinking.
+    expect(transcriptStates(observations, "late").at(-1)).toEqual({
+      id: "late",
+      role: "assistant",
+      parts: [{ type: "reasoning", text: "Late thought", state: "done" }],
+    });
+    // A message this binding never claimed is removed without a word about it.
+    expect(deltaOps(observations, "ghost")).toEqual([]);
     hold.resolve(undefined);
     await handle.release("requested");
   });

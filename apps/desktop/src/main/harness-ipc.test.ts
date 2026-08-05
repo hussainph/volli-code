@@ -38,6 +38,7 @@ import {
   scanHarnessManifests,
 } from "./harness-registry";
 import { recordHarnessChannelEvent, recordHarnessLaunch } from "./db/harness-channel-repo";
+import { storedHarnessCommand } from "./db/harness-command-repo";
 import { getRegisteredHarness } from "./db/harness-registry-repo";
 import { openTestDb, type TestDb } from "./db/test-helpers";
 
@@ -694,6 +695,90 @@ describe("volli:harness-command-get / volli:harness-command-set", () => {
     await writeFile(notExecutable, "#!/bin/sh\n");
 
     await expect(setCommand("opencode", notExecutable)).resolves.toMatchObject({ ok: false });
+  });
+});
+
+// The UI only ever offers this control for `opencode`, but the channel is the
+// contract and the id it takes is spliced into an `app_state` key — so an id no
+// launch path will ever read back must not be able to buy a row.
+describe("volli:harness-command-get / -set — an id this host cannot launch", () => {
+  const getCommand = (harnessId: string): HarnessCommandGetResult =>
+    invoke<HarnessCommandGetResult>("volli:harness-command-get", { harnessId });
+  const setCommand = (
+    harnessId: string,
+    command: string | null,
+  ): Promise<HarnessCommandSetResult> =>
+    invoke<Promise<HarnessCommandSetResult>>("volli:harness-command-set", { harnessId, command });
+
+  it("refuses to read an override for a harness nothing registered", () => {
+    setup();
+
+    expect(getCommand("ghost")).toEqual({
+      ok: false,
+      error: "ghost isn't a harness this host can launch.",
+    });
+  });
+
+  it("refuses to store an override for a harness nothing registered, and writes no row", async () => {
+    setup({
+      invalidateNativeBinary: () => {
+        throw new Error("must not be called");
+      },
+    });
+
+    await expect(setCommand("ghost", process.execPath)).resolves.toEqual({
+      ok: false,
+      error: "ghost isn't a harness this host can launch.",
+    });
+    expect(storedHarnessCommand(fixture.db, "ghost")).toBeNull();
+  });
+
+  // The check has to run before the clear, or an unknown id still reaches the
+  // delete and the channel answers `{ ok: true }` about a harness it cannot name.
+  it("refuses to clear an override for a harness nothing registered", async () => {
+    setup();
+
+    await expect(setCommand("ghost", null)).resolves.toEqual({
+      ok: false,
+      error: "ghost isn't a harness this host can launch.",
+    });
+  });
+
+  it("refuses an id that is not even a well-formed harness slug", async () => {
+    setup();
+
+    expect(getCommand("../../etc/passwd")).toEqual({
+      ok: false,
+      error: "../../etc/passwd isn't a harness this host can launch.",
+    });
+    await expect(setCommand("../../etc/passwd", process.execPath)).resolves.toEqual({
+      ok: false,
+      error: "../../etc/passwd isn't a harness this host can launch.",
+    });
+  });
+
+  // A registered manifest is a legitimate id that is not first-class — gating on
+  // the built-ins alone would lock every bring-your-own harness out of its own
+  // override.
+  it("accepts a registered harness the launch path resolved", async () => {
+    setup({ launchableHarnesses: [adapter(registeredSlug("my-harness"))] });
+
+    await expect(setCommand("my-harness", process.execPath)).resolves.toMatchObject({ ok: true });
+    expect(getCommand("my-harness")).toEqual({ ok: true, command: process.execPath });
+  });
+
+  it("stops accepting a registered harness once the launch path stops resolving it", async () => {
+    setup({ launchableHarnesses: [adapter(registeredSlug("my-harness"))] });
+    await setCommand("my-harness", process.execPath);
+
+    // The manifest was untrusted or removed, so this launch resolved nothing for
+    // it — the same set `volli:harness-registered` answers from.
+    setup();
+
+    expect(getCommand("my-harness")).toEqual({
+      ok: false,
+      error: "my-harness isn't a harness this host can launch.",
+    });
   });
 });
 

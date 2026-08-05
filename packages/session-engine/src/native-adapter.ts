@@ -8,6 +8,7 @@ import type {
   SessionNativeReference,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
+import type { TranscriptDelta } from "./transcript-overlay";
 
 export interface NativeHarnessProfile {
   id: string;
@@ -116,6 +117,21 @@ interface HarnessObservationBase {
   cursor?: SessionNativeDetail | null;
 }
 
+/**
+ * The envelope for a fact that is never made durable, and deliberately not
+ * {@link HarnessObservationBase}.
+ *
+ * The base carries `cursor`, and the runtime advances the reconcile cursor for
+ * any observation that has one. A transient delta that moved it would make a
+ * later reconcile ask the provider for events *after* content this Session
+ * never wrote down — so the arm has no cursor to advance, and the runtime's
+ * handling of it returns before the advance.
+ */
+interface TransientObservationBase {
+  id: string;
+  occurredAt: number;
+}
+
 export type HarnessObservation =
   | (HarnessObservationBase & {
       /** The native binding ended after it was already attached. */
@@ -128,12 +144,28 @@ export type HarnessObservation =
       detail: string | null;
     })
   | (HarnessObservationBase & {
+      /** The durable record: a message as it stands at a settle point. */
       kind: "transcript.message";
       threadId: string;
       branchId: string;
       attemptId: string;
       turnId: string | null;
       message: UIMessage;
+    })
+  | (TransientObservationBase & {
+      /**
+       * A message mid-word. View state, not a Session fact: it is folded into an
+       * in-memory overlay and published to live subscribers, and nothing about
+       * it is written down. The durable record of the same message arrives as
+       * `transcript.message` when it settles.
+       */
+      kind: "transcript.delta";
+      threadId: string;
+      branchId: string;
+      attemptId: string;
+      turnId: string | null;
+      messageId: string;
+      delta: TranscriptDelta;
     })
   | (HarnessObservationBase & { kind: "turn.started"; turnId: string })
   | (HarnessObservationBase & { kind: "turn.completed"; turnId: string })
@@ -167,6 +199,20 @@ export type HarnessObservation =
       };
     })
   | (HarnessObservationBase & { kind: "attention.cleared"; attentionId: string });
+
+/**
+ * The reconcile cursor an observation carries, for a caller holding one whose
+ * kind it has not narrowed yet.
+ *
+ * `undefined` means the observation names no position to resume from — either
+ * because its kind has no cursor at all, or because a durable kind left it
+ * unset — and a caller that stores cursors must leave the one it has alone.
+ */
+export function observationCursor(
+  observation: HarnessObservation,
+): SessionNativeDetail | null | undefined {
+  return "cursor" in observation ? observation.cursor : undefined;
+}
 
 export interface ObservationSink {
   /** Resolves only after the observation's durable Session facts commit. */
