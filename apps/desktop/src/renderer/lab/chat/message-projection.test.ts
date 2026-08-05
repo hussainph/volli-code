@@ -1,10 +1,23 @@
+import type { KeyedTranscriptMessage, TranscriptOverlay } from "@volli/session-engine";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
-import { projectTranscriptMessages } from "./message-projection";
+import { layerTranscriptOverlay, projectTranscriptMessages } from "./message-projection";
 
 function frame(sequence: number, message: UIMessage) {
   return { sequence, transcript: { message } };
+}
+
+function durable(id: string, text: string): UIMessage {
+  return { id, role: "assistant", parts: [{ type: "text", text }] };
+}
+
+function inFlight(id: string, ...parts: KeyedTranscriptMessage["parts"]): KeyedTranscriptMessage {
+  return { id, role: "assistant", parts };
+}
+
+function overlay(...messages: readonly KeyedTranscriptMessage[]): TranscriptOverlay {
+  return new Map(messages.map((message) => [message.id, message]));
 }
 
 describe("projectTranscriptMessages", () => {
@@ -72,5 +85,59 @@ describe("projectTranscriptMessages", () => {
         } as UIMessage),
       ]).map(({ id }) => id),
     ).toEqual(["assistant-1"]);
+  });
+});
+
+describe("layerTranscriptOverlay", () => {
+  it("hands back the durable list untouched when nothing is in flight", () => {
+    const settled = [durable("assistant-1", "I found the cause.")];
+
+    // Identity: the overwhelmingly common case must not hand the plane a new
+    // list to re-group and re-segment.
+    expect(layerTranscriptOverlay(settled, new Map())).toBe(settled);
+  });
+
+  it("rewrites a durable message in place and drops the keys", () => {
+    const layered = layerTranscriptOverlay(
+      [durable("user-1", "Investigate."), durable("assistant-1", "I found")],
+      overlay(
+        inFlight("assistant-1", { key: "prt_1", part: { type: "text", text: "I found the" } }),
+      ),
+    );
+
+    expect(layered).toEqual([
+      durable("user-1", "Investigate."),
+      durable("assistant-1", "I found the"),
+    ]);
+  });
+
+  it("renders a message that has never settled after every one that has", () => {
+    const layered = layerTranscriptOverlay(
+      [durable("assistant-1", "On it.")],
+      overlay(
+        inFlight("assistant-2", { key: "prt_1", part: { type: "text", text: "second" } }),
+        inFlight("assistant-3", { key: "prt_2", part: { type: "text", text: "third" } }),
+      ),
+    );
+
+    // In the overlay's own order, which is the order it first heard of them.
+    expect(layered.map(({ id }) => id)).toEqual(["assistant-1", "assistant-2", "assistant-3"]);
+  });
+
+  it("keeps a baseline with nothing drawable out of the transcript", () => {
+    // An emitter leads a message with a reset that can carry no parts yet.
+    // Drawing it opens an empty bubble in front of the first word — the same
+    // reason `projectTranscriptMessages` filters a durable message that says
+    // nothing.
+    expect(layerTranscriptOverlay([], overlay(inFlight("assistant-1")))).toEqual([]);
+  });
+
+  it("holds the durable message when the overlay over it has nothing to draw", () => {
+    const settled = [durable("assistant-1", "I found the cause.")];
+
+    // The same rule, read the other way: the overlay is what renders while it
+    // has something to render, and the durable latest is the fallback — so a
+    // partial baseline cannot blank a row that already said something.
+    expect(layerTranscriptOverlay(settled, overlay(inFlight("assistant-1")))).toEqual(settled);
   });
 });

@@ -1,3 +1,4 @@
+import { projectKeyedTranscriptMessage, type TranscriptOverlay } from "@volli/session-engine";
 import type { UIMessage } from "ai";
 
 export interface TranscriptMessageFrame {
@@ -18,6 +19,46 @@ export function projectTranscriptMessages(
       latestByMessageId.set(frame.transcript.message.id, frame.transcript.message);
   }
   return [...latestByMessageId.values()];
+}
+
+/**
+ * The durable transcript with every in-flight message laid over it.
+ *
+ * A settled message is a fact and holds a position; a message mid-word is view
+ * state and holds none, so the two live in different places and meet here. The
+ * durable list owns order — a message that has settled once keeps the position
+ * it first spoke at even while a later overlay entry rewrites its contents —
+ * and a message that exists *only* in the overlay has no position to keep yet,
+ * so it renders after everything durable, in the order the overlay first heard
+ * of it, and takes its real place the moment its settle frame lands.
+ *
+ * `speaks` gates the overlay projection for the same reason it gates the
+ * durable one, and the fallback is what makes it one rule rather than two: an
+ * emitter leads a message with a baseline `reset` that can carry nothing
+ * drawable yet, and rendering that would open an empty bubble in front of the
+ * first word. So the rendered message is the overlay while the overlay has
+ * something to draw, else the durable latest, else no row at all.
+ */
+export function layerTranscriptOverlay(
+  durable: readonly UIMessage[],
+  overlay: TranscriptOverlay,
+): readonly UIMessage[] {
+  if (overlay.size === 0) return durable;
+  // Consumed as it is laid down, so what remains is exactly the set with no
+  // durable position — still in the overlay's own insertion order.
+  const pending = new Map(overlay);
+  const layered = durable.map((message) => {
+    const entry = pending.get(message.id);
+    if (!entry) return message;
+    pending.delete(message.id);
+    const projected = projectKeyedTranscriptMessage(entry);
+    return speaks(projected) ? projected : message;
+  });
+  for (const entry of pending.values()) {
+    const projected = projectKeyedTranscriptMessage(entry);
+    if (speaks(projected)) layered.push(projected);
+  }
+  return layered;
 }
 
 /**
