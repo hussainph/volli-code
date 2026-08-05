@@ -42,6 +42,17 @@ Landed since, in the approved four-session order:
    33,309 → 689 mutations per streamed message. An end-to-end integration
    test drives scripted SSE through the real adapter, runtime, subscription,
    and renderer fold.
+3. **The discriminated Session listing — shipped** (`session/chat-move`).
+   `volli:session-list`/`session-list-for-ticket` return a
+   `SessionListingRow` union instead of a flat `SessionRecord[]`: a Session
+   that ever opened a terminal attachment renders as its terminal row,
+   byte-for-byte as before, and everything else — no attachment yet, or a
+   structured-only Session — renders as a chat row carrying identity, the
+   latest structured adapter, and liveness. Precedence is decided once, in
+   `data-ipc.ts`'s `sessionListingRows`. The sidebar and the ticket rail both
+   name chat Sessions now; every terminal-only affordance (rename, resume,
+   the CLI socket, the exited-pane overlay) filters to the terminal arm
+   rather than coercing a chat row into a shape it isn't.
 
 ## What still gates the file move
 
@@ -52,10 +63,6 @@ Landed since, in the approved four-session order:
   in a per-sessionId store slice outside React, copying
   `terminal/registry.ts`. The app tab model is terminal-shaped today and
   needs a discriminated tab model or a separate resident registry.
-- A discriminated Session listing DTO. A structured Session is honestly
-  *absent* from the legacy terminal endpoints (`terminalSessionRecord`
-  returns null for it) — absent is not visible, and the sidebar cannot name
-  what it cannot see.
 - An explicit post-provider-failure continuity contract. The lab controller
   already re-attaches on the same durable id as a fresh provider
   conversation; the store action must keep that shape and its honesty.
@@ -119,7 +126,7 @@ Settled 2026-08-04/05; do not reopen.
 ## The remaining plan
 
 Workstream 2 — the controller reshape — then the move, which is a file move
-plus wiring once the gates above are true. Two things land *alongside* the
-move rather than after it, because they are wrong the moment a chat Session
-exists in the app: the discriminated Session listing, and coverage
-enrollment.
+plus wiring once the gates above are true. Coverage enrollment lands
+*alongside* the move rather than after it (decision 1). The discriminated
+Session listing was the other such item and went early, ahead of the move —
+it was wrong the moment a chat Session could exist in the app at all.
