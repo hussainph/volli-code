@@ -14,11 +14,12 @@
  */
 import * as React from "react";
 import type { RuntimeSelection, SessionInteractionResolution } from "@volli/shared";
+import { useStore, type StoreApi } from "zustand";
 
 import { getChatClient } from "@renderer/chat/registry";
 import type { ChatMessageDelivery, ChatSessionSlice } from "@renderer/chat/client";
 import type { QueuedMessage } from "@renderer/chat/session-model";
-import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { useChatSessionsStore, type ChatSessionsState } from "@renderer/stores/chat-sessions";
 
 export interface SessionController {
   /** `undefined` until the Session is durable, and again once it is closed. */
@@ -38,25 +39,35 @@ export interface SessionController {
   close(): void;
 }
 
-export function useSessionController(sessionId: string): SessionController {
-  const session = useChatSessionsStore((state) => state.sessions[sessionId]);
-  const actions = React.useMemo(() => bind(sessionId), [sessionId]);
+/**
+ * The store this binding writes to. The app has exactly one; the parameter is
+ * for a surface that owns its own instance because it owns its own transport —
+ * the UI lab, which drives these components over HTTP instead of Session IPC.
+ * The registry underneath is shared either way: a client is found by Session id,
+ * whichever store it writes back to.
+ */
+export type ChatSessionsStore = StoreApi<ChatSessionsState>;
+
+export function useSessionController(
+  sessionId: string,
+  store: ChatSessionsStore = useChatSessionsStore,
+): SessionController {
+  const session = useStore(store, (state) => state.sessions[sessionId]);
+  const actions = React.useMemo(() => bind(sessionId, store), [sessionId, store]);
   return { session, ...actions };
 }
 
-const store = () => useChatSessionsStore.getState();
-
-function bind(sessionId: string): Omit<SessionController, "session"> {
+function bind(sessionId: string, store: ChatSessionsStore): Omit<SessionController, "session"> {
   const refused = Promise.resolve(false);
   return {
     setSelection: (selection) => {
-      store().setSelection(sessionId, selection);
+      store.getState().setSelection(sessionId, selection);
     },
     enqueue: (message) => {
-      store().enqueue(sessionId, message);
+      store.getState().enqueue(sessionId, message);
     },
     dequeue: (id) => {
-      store().dequeue(sessionId, id);
+      store.getState().dequeue(sessionId, id);
     },
     submit: (text, delivery) => getChatClient(sessionId)?.submit(text, delivery) ?? refused,
     interrupt: () => getChatClient(sessionId)?.interrupt() ?? refused,
@@ -66,7 +77,7 @@ function bind(sessionId: string): Omit<SessionController, "session"> {
       getChatClient(sessionId)?.cancelInteraction(interactionId) ?? refused,
     recover: () => getChatClient(sessionId)?.recover() ?? refused,
     close: () => {
-      store().closeChatSession(sessionId);
+      store.getState().closeChatSession(sessionId);
     },
   };
 }
