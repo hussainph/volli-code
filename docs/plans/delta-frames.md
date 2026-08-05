@@ -288,7 +288,49 @@ before any contract code changes:
 
 ## Baselines (recorded 2026-08-05, pre-change)
 
-Wire and persistence probes: to be filled.
+### Wire probe
+
+`packages/opencode-adapter/src/stream-cost.bench.test.ts`. Deterministic
+fixture: fixed prose plus three fenced code blocks (ts/tsx/json), 16,528
+chars, split into 395 fixed 24-64-char chunks fed as `message.part.delta`
+events through `FakeNetwork`, in batches of 10 with a real 40ms wait between
+batches — long enough for the 32ms coalescing timer to fire and flush before
+the next batch lands, instead of the whole run collapsing into one snapshot.
+
+| metric | value |
+| --- | --- |
+| `message.part.delta` events fed | 395 |
+| `transcript.message` snapshots emitted | 40 |
+| total wire bytes (sum of `JSON.stringify(observation)` across every emitted snapshot) | 367,709 |
+| final snapshot bytes | 18,729 |
+| amplification (total / final) | 19.63x |
+
+### Persistence probe
+
+`packages/session-engine/src/stream-cost.bench.test.ts`. Same fixture, fed as
+397 cumulative `transcript.message` observations straight to
+`DefaultSessionRuntime` (395 growing-text steps plus two tool-part beats on
+the tail) — no adapter, no timers. This is the worst case named above ("one
+ledger event per 32 ms forever"): every coalescing tick settling durably, so
+it prices exactly the part of the cost the wire probe's coalescing does not
+touch.
+
+| metric | value |
+| --- | --- |
+| `transcript.message` observations fed | 397 |
+| artifact writes | 397 |
+| artifact bytes total (`canonicalJson` length, summed) | 3,498,547 |
+| ledger events appended (`transcript.referenced`) | 397 |
+| subscriber frame bytes total (sum of `JSON.stringify(frame)`, full decoded artifact inline) | 3,760,666 |
+| final message bytes | 17,656 |
+| artifact amplification (bytes total / final) | 198.15x |
+| frame amplification (bytes total / final) | 213.00x |
+
+Ledger events appended equal artifact writes 1:1 — no compaction today.
+Artifact writes equal observations fed exactly: an engine invariant this
+probe confirms and the delta-frame change leaves alone, since
+`transcript.message` keeps its current persistence semantics; only the
+adapter's emission cadence changes.
 
 ### Fence probe
 
