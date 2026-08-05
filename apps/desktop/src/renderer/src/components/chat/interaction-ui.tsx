@@ -475,6 +475,9 @@ function InteractionQuestionFields({
           autoFocus={revealed}
           value={written}
           disabled={disabled}
+          // A placeholder is not a name: it leaves the box unnamed to AT, and
+          // it is gone the moment anyone types into it.
+          aria-label={FIELD_LABEL[fieldRole]}
           placeholder={FIELD_PLACEHOLDER[fieldRole]}
           onChange={(event) =>
             onDraftChange(setPromptResponse(draft, prompt.id, event.currentTarget.value))

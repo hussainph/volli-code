@@ -38,7 +38,8 @@ import "@renderer/typeset.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
-import { HighlighterWarmup } from "./chat/markdown-boundary";
+import { HighlighterWarmup } from "@renderer/components/chat/markdown-boundary";
+
 import { installFakeApi } from "./fake-api";
 import { LabShell } from "./shell";
 
