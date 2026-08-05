@@ -341,9 +341,9 @@ const api = {
     remove: (input: CommentIdInput): Promise<Result> => invoke("volli:comment-remove", input),
   },
   sessions: {
-    /** Every durable session record in a project (ticket-scoped and project-scoped scratch), newest first. */
+    /** Every Session in a project (ticket-scoped and project-scoped scratch), newest first — a terminal or chat row per Session, never dropped. */
     list: (input: ProjectIdInput): Promise<SessionsResult> => invoke("volli:session-list", input),
-    /** A ticket's durable session records, newest first — backs the right-rail linked-sessions list. */
+    /** A ticket's Session listing rows, newest first — backs the right-rail linked-sessions list. */
     listForTicket: (input: TicketIdInput): Promise<SessionsResult> =>
       invoke("volli:session-list-for-ticket", input),
     /** Renames a session (scratch or ticket-scoped); the title is trimmed and must be non-empty in main. */

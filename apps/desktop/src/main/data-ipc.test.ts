@@ -6,6 +6,7 @@ import type {
   ProjectMutationResult,
   Result,
   RetentionTtlResult,
+  SessionListingRow,
   SessionRenameResult,
   SessionsResult,
   Ticket,
@@ -814,6 +815,11 @@ describe("volli:comment-* channels", () => {
   });
 });
 
+/** A row's identity, whichever kind it is — `SessionRecord.id` and `ChatSessionRecord.sessionId` are the same session, spelled differently per the DTO. */
+function rowId(row: SessionListingRow): string {
+  return row.kind === "terminal" ? row.record.id : row.record.sessionId;
+}
+
 describe("volli:session-list / volli:session-list-for-ticket", () => {
   it("session-list returns every session in a project, newest first", async () => {
     const projectId = createProject();
@@ -822,7 +828,7 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
     insertSession(ctx.db, testSession(projectId, ticket.id, { id: "s2", createdAt: 200 }));
 
     const result = await invoke<Promise<SessionsResult>>("volli:session-list", { projectId });
-    expect(result.ok && result.sessions.map((s) => s.id)).toEqual(["s2", "s1"]);
+    expect(result.ok && result.sessions.map(rowId)).toEqual(["s2", "s1"]);
   });
 
   it("session-list-for-ticket scopes to just that ticket", async () => {
@@ -834,10 +840,10 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
     const result = await invoke<Promise<SessionsResult>>("volli:session-list-for-ticket", {
       ticketId: ticket.id,
     });
-    expect(result.ok && result.sessions.map((s) => s.id)).toEqual(["scoped"]);
+    expect(result.ok && result.sessions.map(rowId)).toEqual(["scoped"]);
   });
 
-  it("omits a structured-only Session instead of fabricating a terminal record", async () => {
+  it("renders a structured-only Session as a chat row instead of dropping it", async () => {
     const projectId = createProject();
     const ticket = createTicket(projectId);
     insertSession(ctx.db, testSession(projectId, ticket.id, { id: "terminal-session" }));
@@ -863,16 +869,33 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
       ticketId: ticket.id,
     });
 
-    expect(projectSessions.ok && projectSessions.sessions.map((session) => session.id)).toEqual([
+    expect(projectSessions.ok && projectSessions.sessions.map(rowId)).toEqual([
+      structured.session.id,
       "terminal-session",
     ]);
-    expect(ticketSessions.ok && ticketSessions.sessions.map((session) => session.id)).toEqual([
+    expect(ticketSessions.ok && ticketSessions.sessions.map(rowId)).toEqual([
+      structured.session.id,
       "terminal-session",
     ]);
     expect(
       projectSessions.ok &&
-        projectSessions.sessions.some((session) => session.id === structured.session.id),
-    ).toBe(false);
+        projectSessions.sessions.find((row) => rowId(row) === structured.session.id),
+    ).toEqual({
+      kind: "chat",
+      record: {
+        sessionId: structured.session.id,
+        title: "Structured OpenCode Session",
+        projectId,
+        ticketId: ticket.id,
+        createdAt: 500,
+        adapterId: null,
+        live: false,
+      },
+    });
+    expect(
+      projectSessions.ok &&
+        projectSessions.sessions.find((row) => rowId(row) === "terminal-session"),
+    ).toMatchObject({ kind: "terminal" });
   });
 
   it("rejects invalid input", () => {
@@ -950,7 +973,7 @@ describe("volli:session-rename", () => {
     expect(result).toEqual({ ok: true });
 
     const list = await invoke<Promise<SessionsResult>>("volli:session-list", { projectId });
-    expect(list.ok && list.sessions[0]?.title).toBe("Renamed");
+    expect(list.ok && list.sessions[0]?.record.title).toBe("Renamed");
   });
 
   it("rejects a blank title", () => {

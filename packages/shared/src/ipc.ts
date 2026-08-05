@@ -14,7 +14,7 @@ import type { DirEntry } from "./fs-entries";
 import type { Label } from "./label";
 import type { LegacyProject } from "./legacy-import";
 import type { Project } from "./project-identity";
-import type { HarnessEventOrder, SessionRecord } from "./session";
+import type { HarnessEventOrder, SessionListingRow } from "./session";
 import type { SessionRpcIpcRequest, SessionRpcIpcResponse } from "./session-rpc-wire";
 import type {
   CreateTerminalSessionRequest,
@@ -1091,8 +1091,8 @@ export type TicketCommentResult = Result<{ comment: TicketComment }>;
 /** A ticket's comments, chronological — returned by `comment-list` (the work-log read). */
 export type TicketCommentsResult = Result<{ comments: TicketComment[] }>;
 
-/** A project's or a ticket's durable session records, newest first — returned by `session-list`/`session-list-for-ticket`. */
-export type SessionsResult = Result<{ sessions: SessionRecord[] }>;
+/** A project's or a ticket's durable Session listing, newest first — returned by `session-list`/`session-list-for-ticket`. */
+export type SessionsResult = Result<{ sessions: SessionListingRow[] }>;
 
 /** Ack for a session title rename (`session-rename`); the caller already holds the new title optimistically. */
 export type SessionRenameResult = Result;
