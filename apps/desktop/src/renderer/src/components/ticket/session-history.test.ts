@@ -2,12 +2,15 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   createSessionHarnessState,
   getHarnessAdapter,
+  type ChatSessionRecord,
   type HarnessAdapter,
   type HarnessId,
+  type SessionListingRow,
   type SessionRecord,
 } from "@volli/shared";
 
 import {
+  buildTicketChatSessionRows,
   buildTicketSessionRows,
   canResumeSession,
   filterSessionHistory,
@@ -19,14 +22,20 @@ import {
 } from "./session-history";
 import { ticketScope, type SessionTab } from "../../stores/sessions";
 
+function terminalRow(session: SessionRecord): SessionListingRow {
+  return { kind: "terminal", record: session };
+}
+
 /**
  * The built-ins, which is what these cases are about. The lookup is a parameter
  * so a BYO harness can be handed in deliberately — see the registered-manifest
  * case below, which is the regression this parameter exists to prevent.
  */
-const resumable = (session: SessionRecord) => canResumeSession(session, getHarnessAdapter);
+const resumable = (session: SessionRecord) =>
+  canResumeSession(terminalRow(session), getHarnessAdapter);
 const latestResumable = (records: readonly SessionRecord[]) =>
-  latestResumableSession(records, getHarnessAdapter);
+  latestResumableSession(records.map(terminalRow), getHarnessAdapter);
+const sourceLabel = (session: SessionRecord) => sessionSourceLabel(terminalRow(session));
 
 function record(overrides: Partial<SessionRecord> = {}): SessionRecord {
   return {
@@ -43,6 +52,19 @@ function record(overrides: Partial<SessionRecord> = {}): SessionRecord {
     createdAt: 1,
     endedAt: null,
     exitCode: null,
+    ...overrides,
+  };
+}
+
+function chatRecord(overrides: Partial<ChatSessionRecord> = {}): ChatSessionRecord {
+  return {
+    sessionId: "chat-1",
+    title: "Plan the migration",
+    projectId: "p1",
+    ticketId: "t1",
+    createdAt: 1,
+    adapterId: "opencode",
+    live: true,
     ...overrides,
   };
 }
@@ -208,23 +230,21 @@ describe("buildTicketSessionRows", () => {
 
 describe("sessionSourceLabel", () => {
   it("uses the actual harness only for sessions that launched an agent", () => {
-    expect(
-      sessionSourceLabel(record({ launchKind: "agent", harnessId: "codex", placement: "tab" })),
-    ).toBe("Codex");
+    expect(sourceLabel(record({ launchKind: "agent", harnessId: "codex", placement: "tab" }))).toBe(
+      "Codex",
+    );
   });
 
   it("describes bare terminal tabs and splits without pretending they are Claude Code", () => {
-    expect(sessionSourceLabel(record({ launchKind: "shell", placement: "tab" }))).toBe("Shell");
-    expect(sessionSourceLabel(record({ launchKind: "shell", placement: "split" }))).toBe(
-      "Shell · Split",
-    );
+    expect(sourceLabel(record({ launchKind: "shell", placement: "tab" }))).toBe("Shell");
+    expect(sourceLabel(record({ launchKind: "shell", placement: "split" }))).toBe("Shell · Split");
   });
 
   // The pane says what is IN it. A terminal opened by opencode that the user
   // quit and replaced with claude reads as Claude Code.
   it("names the harness that is running, not the one that opened the pane", () => {
     expect(
-      sessionSourceLabel(
+      sourceLabel(
         record({ launchKind: "agent", harnessId: "opencode", activeHarnessId: "claude-code" }),
       ),
     ).toBe("Claude Code");
@@ -233,14 +253,23 @@ describe("sessionSourceLabel", () => {
   // `launchKind` is a fact about the pane's origin, and no announce changes it:
   // a shell that later ran an agent is still a shell tab.
   it("still reads as a shell when a harness announced itself inside one", () => {
-    expect(
-      sessionSourceLabel(record({ launchKind: "shell", activeHarnessId: "claude-code" })),
-    ).toBe("Shell");
+    expect(sourceLabel(record({ launchKind: "shell", activeHarnessId: "claude-code" }))).toBe(
+      "Shell",
+    );
   });
 
   it("keeps legacy records honest when their launch kind was never recorded", () => {
-    expect(sessionSourceLabel(record())).toBe("Terminal");
-    expect(sessionSourceLabel(record({ placement: "split" }))).toBe("Terminal · Split");
+    expect(sourceLabel(record())).toBe("Terminal");
+    expect(sourceLabel(record({ placement: "split" }))).toBe("Terminal · Split");
+  });
+
+  // A chat row has no PTY to describe, so it names its own thing — whether the
+  // structured attachment is still open — instead of borrowing terminal words.
+  it("names a chat row by its liveness, not a harness", () => {
+    expect(sessionSourceLabel({ kind: "chat", record: chatRecord({ live: true }) })).toBe(
+      "Chat · Live",
+    );
+    expect(sessionSourceLabel({ kind: "chat", record: chatRecord({ live: false }) })).toBe("Chat");
   });
 });
 
@@ -310,7 +339,7 @@ describe("canResumeSession", () => {
           }
         : getHarnessAdapter(id);
 
-    expect(canResumeSession(ended, knows)).toBe(true);
+    expect(canResumeSession(terminalRow(ended), knows)).toBe(true);
     expect(resumable(ended)).toBe(false);
   });
 
@@ -337,6 +366,17 @@ describe("canResumeSession", () => {
           activeHarnessId: "my-custom-harness" as HarnessId,
         }),
       ),
+    ).toBe(false);
+  });
+
+  // There is no terminal behind a chat row to resume as — deep chat
+  // activation is a different, future affordance.
+  it("is false for a chat row, live or ended", () => {
+    expect(
+      canResumeSession({ kind: "chat", record: chatRecord({ live: true }) }, getHarnessAdapter),
+    ).toBe(false);
+    expect(
+      canResumeSession({ kind: "chat", record: chatRecord({ live: false }) }, getHarnessAdapter),
     ).toBe(false);
   });
 });
@@ -376,6 +416,21 @@ describe("latestResumableSession", () => {
     expect(latestResumable([unresumableNewest, older, newer])).toEqual(newer);
     expect(latestResumable([newer, unresumableNewest, older])).toEqual(newer);
   });
+
+  it("skips chat rows even when they would otherwise be newest", () => {
+    const older = terminalRow(
+      record({
+        id: "older",
+        launchKind: "agent",
+        harnessId: "claude-code",
+        createdAt: 10,
+        endedAt: 20,
+      }),
+    );
+    const chat: SessionListingRow = { kind: "chat", record: chatRecord({ createdAt: 999 }) };
+
+    expect(latestResumableSession([chat, older], getHarnessAdapter)).toEqual(older.record);
+  });
 });
 
 describe("filterSessionHistory", () => {
@@ -396,5 +451,31 @@ describe("filterSessionHistory", () => {
 
   it("returns every row for a blank query", () => {
     expect(filterSessionHistory([codex, split], "   ")).toEqual([codex, split]);
+  });
+});
+
+describe("buildTicketChatSessionRows", () => {
+  it("names each row by its title, open only while its attachment is live", () => {
+    expect(
+      buildTicketChatSessionRows([
+        chatRecord({ sessionId: "live", title: "Plan the migration", live: true }),
+        chatRecord({ sessionId: "ended", title: "Draft the RFC", live: false }),
+      ]),
+    ).toEqual([
+      {
+        record: chatRecord({ sessionId: "live", title: "Plan the migration", live: true }),
+        title: "Plan the migration",
+        isOpen: true,
+      },
+      {
+        record: chatRecord({ sessionId: "ended", title: "Draft the RFC", live: false }),
+        title: "Draft the RFC",
+        isOpen: false,
+      },
+    ]);
+  });
+
+  it("is empty for a ticket with no chat Sessions", () => {
+    expect(buildTicketChatSessionRows([])).toEqual([]);
   });
 });

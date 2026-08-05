@@ -20,7 +20,9 @@ import type {
   Result,
   RetentionStateResult,
   RetentionTtlResult,
+  SessionListingRow,
   SessionsResult,
+  TicketIdInput,
   TicketLatestSignalsResult,
   TicketRetentionState,
 } from "@volli/shared";
@@ -42,6 +44,12 @@ import { labels, project, projects, sessions, signals, tickets } from "./fixture
  */
 const ARCHIVE_READY_TICKET_ID = "tkt-11";
 let retentionTtlDays = 14;
+
+/** `fixtures.ts`'s durable session records, wrapped into the discriminated listing shape `sessions.list`/`listForTicket` actually return. Every fixture is terminal-shaped — there is no chat scenario in the lab yet. */
+const sessionRows: SessionListingRow[] = sessions.map((record) => ({
+  kind: "terminal",
+  record,
+}));
 
 function retentionState(ticketId: string): TicketRetentionState {
   const archiveReady = ticketId === ARCHIVE_READY_TICKET_ID;
@@ -108,7 +116,12 @@ export const appApi: ApiOverrides = {
       Promise.resolve({ ok: true, harnesses: [], channels: [] }),
   },
   sessions: {
-    list: (): Promise<SessionsResult> => Promise.resolve({ ok: true, sessions }),
+    list: (): Promise<SessionsResult> => Promise.resolve({ ok: true, sessions: sessionRows }),
+    listForTicket: (input: TicketIdInput): Promise<SessionsResult> =>
+      Promise.resolve({
+        ok: true,
+        sessions: sessionRows.filter((row) => row.record.ticketId === input.ticketId),
+      }),
   },
   tickets: {
     latestSignals: (): Promise<TicketLatestSignalsResult> => Promise.resolve({ ok: true, signals }),

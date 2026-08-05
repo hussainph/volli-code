@@ -6,7 +6,7 @@ import { MinusCircleIcon } from "@phosphor-icons/react/dist/csr/MinusCircle";
 import { PlusCircleIcon } from "@phosphor-icons/react/dist/csr/PlusCircle";
 import { RowsPlusBottomIcon } from "@phosphor-icons/react/dist/csr/RowsPlusBottom";
 import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
-import type { SessionRecord } from "@volli/shared";
+import type { SessionListingRow, SessionRecord } from "@volli/shared";
 
 import { TerminalView } from "@renderer/components/sessions/terminal-view";
 import { Button } from "@renderer/components/ui/button";
@@ -54,16 +54,23 @@ export function SessionSplitLayout({
   onResume,
 }: SessionSplitLayoutProps) {
   const isSplit = sessionPanes(tab.layout).length > 1;
-  // The ticket's durable session records (stores/ticket-session-records.ts) —
-  // the ONE shared cache also fed by the rail and SessionsLayer's exit
-  // handler, so an exited pane's resumability shows up here without a second
+  // The ticket's Session listing rows (stores/ticket-session-records.ts) — the
+  // ONE shared cache also fed by the rail and SessionsLayer's exit handler, so
+  // an exited pane's resumability shows up here without a second
   // `listForTicket` fetch. `byTicket` is keyed by ticketId only, so this is a
-  // no-op lookup (undefined) for the scratch surface.
-  const records = useTicketSessionRecordsStore((state) => state.byTicket[ownerId]);
+  // no-op lookup (undefined) for the scratch surface. Every pane here is a PTY,
+  // so only terminal rows can ever answer a lookup by pane id.
+  const rows = useTicketSessionRecordsStore((state) => state.byTicket[ownerId]);
   const recordsById = React.useMemo(() => {
-    if (records === undefined) return null;
-    return new Map<string, SessionRecord>(records.map((record) => [record.id, record]));
-  }, [records]);
+    if (rows === undefined) return null;
+    return new Map<string, SessionRecord>(
+      rows
+        .filter(
+          (row): row is Extract<SessionListingRow, { kind: "terminal" }> => row.kind === "terminal",
+        )
+        .map((row) => [row.record.id, row.record]),
+    );
+  }, [rows]);
 
   return (
     <div className={cn("absolute inset-0 min-h-0 min-w-0", !visible && "hidden")}>
@@ -113,7 +120,7 @@ function SplitNode(props: SplitNodeProps) {
     const resumable =
       layout.exitCode !== null &&
       record !== undefined &&
-      canResumeSession(record, launchAdapter) &&
+      canResumeSession({ kind: "terminal", record }, launchAdapter) &&
       props.onResume !== undefined;
     return (
       <ContextMenu>

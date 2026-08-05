@@ -142,13 +142,16 @@ async function resetProbe() {
 
 // ---- bridge helpers ----------------------------------------------------
 
+// Terminal rows only, unwrapped to plain durable records: every reader below
+// is about a live/ended PTY, which is exactly the shape `SessionListingRow`'s
+// `"terminal"` arm carries.
 async function sessionsForTicket(page, ticketId) {
   const res = await page.evaluate(
     (tid) => window.api.sessions.listForTicket({ ticketId: tid }),
     ticketId,
   );
   if (!res.ok) throw new Error(`sessions.listForTicket: ${res.error}`);
-  return res.sessions;
+  return res.sessions.filter((row) => row.kind === "terminal").map((row) => row.record);
 }
 
 async function eventsFor(page, ticketId) {

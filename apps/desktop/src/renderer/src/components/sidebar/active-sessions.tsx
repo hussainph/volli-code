@@ -3,6 +3,7 @@ import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwis
 import {
   displayTicketId,
   errorMessage,
+  type ChatSessionRecord,
   type LatestSessionSignal,
   type Project,
   type SessionActivityState,
@@ -223,6 +224,7 @@ export function ActiveSessions({ project }: { project: Project }) {
   const openTicketWorkspace = useWorkspaceStore((state) => state.openTicketWorkspace);
   const openTicketSession = useWorkspaceStore((state) => state.openTicketSession);
   const [records, setRecords] = React.useState<SessionRecord[]>([]);
+  const [chatSessions, setChatSessions] = React.useState<ChatSessionRecord[]>([]);
   const [signalsByTicket, setSignalsByTicket] = React.useState<Record<string, LatestSessionSignal>>(
     {},
   );
@@ -264,7 +266,10 @@ export function ActiveSessions({ project }: { project: Project }) {
           toastError(`Couldn't load active sessions: ${result.error}`);
           return;
         }
-        setRecords(result.sessions);
+        setRecords(result.sessions.flatMap((row) => (row.kind === "terminal" ? [row.record] : [])));
+        setChatSessions(
+          result.sessions.flatMap((row) => (row.kind === "chat" ? [row.record] : [])),
+        );
       })
       .catch((error: unknown) => {
         if (sessionsFetch.isCurrent(token))
@@ -355,12 +360,23 @@ export function ActiveSessions({ project }: { project: Project }) {
         containers,
         signalsByTicket,
         records,
+        chatSessions,
         lastOutputAt,
         parkState,
         harness,
         now,
       }),
-    [tickets, containers, signalsByTicket, records, lastOutputAt, parkState, harness, now],
+    [
+      tickets,
+      containers,
+      signalsByTicket,
+      records,
+      chatSessions,
+      lastOutputAt,
+      parkState,
+      harness,
+      now,
+    ],
   );
   const rowCount = listing.needsYou.length + listing.active.length;
   const activeTabId =

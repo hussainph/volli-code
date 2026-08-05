@@ -1,5 +1,6 @@
 import {
   sessionActivitySource,
+  type ChatSessionRecord,
   type SessionActivitySource,
   type SessionActivityState,
   type SessionHarnessState,
@@ -91,6 +92,13 @@ export interface BuildActiveSessionListingInput {
   /** Latest durable Session signal by ticket, fetched from Session Engine projections. */
   signalsByTicket: Readonly<Record<string, LatestSessionSignal>>;
   records: readonly SessionRecord[];
+  /**
+   * Chat Sessions across this project's tickets — structured Sessions with no
+   * terminal attachment. There is no PTY behind one, so it can only ever join
+   * the Active tier's fallback row for a Doing ticket with nothing live
+   * (`lastRunRow`); optional, and absent reads as none. Defaults to `[]`.
+   */
+  chatSessions?: readonly ChatSessionRecord[];
   lastOutputAt: Readonly<Record<string, number>>;
   parkState: Readonly<Record<string, { parked: boolean; keepAwake: boolean }>>;
   /** Per-session harness reporting state; a missing entry means nothing reports here. */
@@ -99,7 +107,30 @@ export interface BuildActiveSessionListingInput {
 }
 
 function sessionSource(record: SessionRecord | undefined): string {
-  return record === undefined ? "Terminal" : sessionSourceLabel(record);
+  return record === undefined ? "Terminal" : sessionSourceLabel({ kind: "terminal", record });
+}
+
+/**
+ * The chat Session a Doing ticket's fallback row speaks for when nothing
+ * terminal claims it: a live one over an ended one (still actionable), then
+ * the most recently created. `null` when the ticket has none.
+ */
+function latestChatSession(
+  chatSessions: readonly ChatSessionRecord[],
+  ticketId: string,
+): ChatSessionRecord | null {
+  let latest: ChatSessionRecord | null = null;
+  for (const session of chatSessions) {
+    if (session.ticketId !== ticketId) continue;
+    if (
+      latest === null ||
+      (session.live && !latest.live) ||
+      (session.live === latest.live && session.createdAt > latest.createdAt)
+    ) {
+      latest = session;
+    }
+  }
+  return latest;
 }
 
 type ActivityInput = Pick<
@@ -208,7 +239,10 @@ function sessionRow(
  * the navigator must too, especially after an app relaunch kills every PTY).
  * Prefers a still-mounted exited tab (it can reopen the exact terminal and
  * knows its exit code); otherwise degrades to the ticket's most recent durable
- * record (split panes never stand alone as a row); otherwise a bare row.
+ * record (split panes never stand alone as a row); otherwise a chat Session,
+ * named by its title with no resume seed — there is no PTY behind it to
+ * resume as, only a future deep-activation path this is not it; otherwise a
+ * bare row.
  */
 function lastRunRow(
   ticket: Ticket,
@@ -231,7 +265,8 @@ function lastRunRow(
       attention: null,
       lastRun: {
         endedAt: record?.endedAt ?? null,
-        resumable: record !== undefined && canResumeSession(record, launchAdapter),
+        resumable:
+          record !== undefined && canResumeSession({ kind: "terminal", record }, launchAdapter),
       },
       target: { tabId: mounted.sessionId, paneId: mounted.activePaneId },
     };
@@ -256,14 +291,29 @@ function lastRunRow(
       id: `ticket:${ticket.id}`,
       ticket,
       title: latest.title,
-      source: sessionSourceLabel(latest),
+      source: sessionSourceLabel({ kind: "terminal", record: latest }),
       activity: null,
       activitySource: "inferred",
       attention: null,
       lastRun: {
         endedAt: latest.endedAt,
-        resumable: canResumeSession(latest, launchAdapter),
+        resumable: canResumeSession({ kind: "terminal", record: latest }, launchAdapter),
       },
+      target: null,
+    };
+  }
+
+  const chat = latestChatSession(input.chatSessions ?? [], ticket.id);
+  if (chat !== null) {
+    return {
+      id: `ticket:${ticket.id}`,
+      ticket,
+      title: chat.title,
+      source: sessionSourceLabel({ kind: "chat", record: chat }),
+      activity: null,
+      activitySource: "inferred",
+      attention: null,
+      lastRun: null,
       target: null,
     };
   }
