@@ -375,8 +375,15 @@ describe("opencode-adapter stream-cost probe", () => {
       ].join("\n"),
     );
 
-    // Structural placeholder for phase 3, which asserts the ceiling this now
-    // measures instead of logging it.
-    expect(Number.isFinite(amplification)).toBe(true);
+    // Phase 3 ceilings (docs/plans/delta-frames.md, "after" column). A
+    // regression back to snapshot-per-tick coalescing would blow every one of
+    // these: settles would climb off 1, durable bytes would stop being a
+    // single settle's worth, and amplification would jump back toward 19.63x.
+    expect(transcriptMessages).toHaveLength(1);
+    expect(durableBytes).toBe(finalMessageBytes);
+    // The floor is ~2.0x (one transient copy of the answer plus one durable
+    // copy of it, named in the doc); the ceiling here is generous headroom
+    // above the measured 2.55x, not a target to creep toward.
+    expect(amplification).toBeLessThan(3.0);
   });
 });
