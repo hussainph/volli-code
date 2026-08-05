@@ -343,6 +343,28 @@ the next batch lands, instead of the whole run collapsing into one snapshot.
 | final snapshot bytes | 18,729 |
 | amplification (total / final) | 19.63x |
 
+**After** (recorded 2026-08-05 against `c76f1d4`, same fixture, same probe
+file — now asserting ceilings instead of logging a number nothing checked):
+
+| metric | before | after |
+| --- | --- | --- |
+| `transcript.message` settles emitted | 40 | 1 |
+| `transcript.delta` frames emitted | — | 39 (`{"reset":1,"part.append":38}`) |
+| durable wire bytes | 367,709 | 18,729 |
+| transient wire bytes | — | 29,008 |
+| total wire bytes | 367,709 | 47,737 |
+| final settle bytes | 18,729 | 18,729 |
+| amplification (total / final) | 19.63x | 2.55x |
+
+Ceilings the test now asserts, in `stream-cost.bench.test.ts` (opencode-adapter):
+`transcriptMessages` has length exactly 1 (durable settles === 1 for the
+scenario), durable bytes equal final settle bytes exactly (the 1.00x fact —
+only the transient arm carries amplification, the settle carries none), and
+`amplification < 3.0` — generous headroom above the measured 2.55x, sitting
+above the ~2.0x floor named in "The problem, measured at its source" (one
+transient copy of the answer plus one durable copy of it). A regression back
+to snapshot-per-tick would blow all three.
+
 ### Persistence probe
 
 `packages/session-engine/src/stream-cost.bench.test.ts`. Same fixture, fed as
@@ -376,6 +398,50 @@ shipped pipeline: it feeds per-chunk `transcript.message` observations
 directly, which the real adapter no longer does. It prices the ceiling a
 durable per-chunk adapter would still pay. Phase 3 owns re-pointing it at the
 settle-count cadence and asserting that instead.
+
+**After** (recorded 2026-08-05 against `c76f1d4`): the probe no longer feeds
+per-chunk `transcript.message` observations as its primary case. It now feeds
+the observation mix the real adapter emits — verified against the wire probe's
+own measured shape — straight to `DefaultSessionRuntime`: one `transcript.delta`
+reset, 38 `part.append` deltas (the wire probe's measured 39-frame shape), then
+one durable `transcript.message` settle carrying the full text plus the two
+tail tool parts. Still no adapter, no timers — this is the engine's own side of
+the contract; the adapter-conformance half already lives in
+`apps/desktop/src/renderer/lab/chat/delta-frames.integration.test.ts`.
+
+| metric | value |
+| --- | --- |
+| `transcript.delta` fed | 39 (1 reset + 38 `part.append`) |
+| `transcript.message` fed | 1 (the settle) |
+| artifact writes | 1 |
+| artifact bytes (single settle, `canonicalJson` length) | 17,656 |
+| ledger events appended (`transcript.referenced`) | 1 |
+| subscriber durable frame bytes | 18,313 |
+| subscriber overlay bytes | 22,629 |
+| subscriber bytes total (durable + overlay) | 40,942 |
+| final message bytes | 17,656 |
+| subscriber amplification (bytes total / final) | 2.32x |
+
+Before/after on the two numbers durability actually turns on:
+
+| metric | before (397 observations fed) | after (39 deltas + 1 settle) |
+| --- | --- | --- |
+| artifact writes | 397 | 1 |
+| ledger events appended | 397 | 1 |
+
+Ceilings the test now asserts, in `stream-cost.bench.test.ts` (session-engine):
+`counting.writes()` equals exactly 1 and the subscriber's
+`transcript.referenced` frames number exactly 1 — a regression to
+durable-per-chunk emission would blow both straight past 1, the same way it
+would blow the wire probe's settle count.
+
+The old per-chunk feed this file used to run as its only case is kept as a
+second, small one — "historical worst case / old-session replay still folds
+correctly" — because a session recorded before this change has exactly that
+shape sitting on disk, and `snapshot()`'s latest-wins fold has to keep
+resolving it to the right content. That case asserts the folded final message
+only, not its cost: the per-chunk cost is priced nowhere any more, because no
+adapter pays it going forward.
 
 ### Fence probe
 
