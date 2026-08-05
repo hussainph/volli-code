@@ -56,6 +56,10 @@ const TICK_MS = 50;
 // ---------------------------------------------------------------------------
 
 class FakeProcess implements OpenCodeProcessPort {
+  /**
+   * Not a port method — command resolution is the adapter's own seam, and the
+   * adapter only reaches it if {@link composition} routes `resolveCommand` here.
+   */
   async resolveCommand(command: string): Promise<string> {
     return command;
   }
@@ -206,8 +210,18 @@ function composition(network: ScriptedNetwork): SessionRuntime {
   const clock = { now: () => now++ };
   let sequence = 0;
   const ids = { next: (kind: string) => `${kind}-${++sequence}` };
+  const fake = new FakeProcess();
   const adapter = createOpenCodeNativeAdapter({
-    process: new FakeProcess(),
+    process: fake,
+    // `resolveCommand` is not part of `OpenCodeProcessPort`, so supplying the
+    // fake process does not supply a resolver: left unset, the adapter falls
+    // through to its default, which walks the real `process.env.PATH` looking
+    // for an `opencode` binary. On a host that has one the suite passes for the
+    // wrong reason; on CI, which has none, every attach here is rejected
+    // `adapter_unavailable` and all four tests fail with no hint that PATH was
+    // the difference. Route it at the fake so the composition is closed over
+    // the machine it runs on.
+    resolveCommand: (command) => fake.resolveCommand(command),
     network,
     now: clock.now,
     // A reconnect has to happen inside one test's patience, not OpenCode's.
