@@ -374,7 +374,11 @@ export function bundleSummary(rows: readonly BundleRow[]): SummarySegment[] {
   }
 
   const phrase = order
-    .map((kind) => kindPhrase(kind, groups.get(kind) ?? []))
+    .map((kind) => {
+      /* v8 ignore next -- every kind pushed to `order` was set into `groups` in the same branch above, so the lookup can never miss. */
+      const parts = groups.get(kind) ?? [];
+      return kindPhrase(kind, parts);
+    })
     .join(", ")
     .replace(/^./, (character) => character.toUpperCase());
   const streaming = tools.some((row) => isRowActive(row.part));
@@ -405,6 +409,7 @@ function subjectName(part: DynamicToolUIPart): string | null {
 }
 
 function joinNames(names: readonly string[]): string {
+  /* v8 ignore next -- the sole call site only reaches here with names.length > 0, so a length-1 array's index 0 is never undefined. */
   if (names.length <= 1) return names[0] ?? "";
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
@@ -832,10 +837,12 @@ export function parseMatches(text: string): MatchGroup[] {
     const match = /^([^\s:][^:]*):(\d+):(.*)$/.exec(line);
     if (!match) continue;
     const [, file, lineNumber, rest] = match;
+    /* v8 ignore next -- all three capture groups are mandatory in the regex (no `?`), so a successful exec() never leaves them undefined. */
     if (file === undefined || lineNumber === undefined) continue;
     const entry = groups.get(file) ?? { lines: [], total: 0 };
     entry.total += 1;
     if (entry.lines.length < MATCH_LINES_PER_FILE) {
+      /* v8 ignore next -- same guarantee as above: the third capture group is never undefined. */
       entry.lines.push(`${lineNumber}  ${(rest ?? "").trim()}`);
     }
     groups.set(file, entry);
@@ -988,6 +995,7 @@ export function todosFromUnknown(value: unknown): SessionTodo[] | null {
       typeof item.id === "string" && item.id.trim().length > 0
         ? item.id
         : `todo-${index}-${content.slice(0, 24)}`;
+    /* v8 ignore next -- normalizeTodoPriority always returns a priority, never null; the fallback is for its wider return type. */
     todos.push({ id, content, status, priority: priority ?? "medium" });
   }
   // A payload that was a todo list but whose rows all failed to parse reads as

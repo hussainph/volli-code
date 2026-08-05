@@ -7,11 +7,13 @@ import {
   activityContext,
   activityStatus,
   approvalId,
+  bestEffortSubject,
   bundleNeedsAttention,
   gatedApprovalIds,
   bundleSummary,
   compactSignature,
   describeActivity,
+  detailText,
   diffStat,
   extractTodos,
   groupTurns,
@@ -30,6 +32,7 @@ import {
   segmentMessageParts,
   segmentTurn,
   splitPath,
+  todosFromUnknown,
   type BundleRow,
   type ChatSegment,
 } from "./activity";
@@ -76,6 +79,7 @@ function tool(
     toolName?: string;
     state?: DynamicToolUIPart["state"];
     errorText?: string;
+    approved?: boolean;
     descriptor?: Partial<ActivityDescriptor>;
   } = {},
 ): DynamicToolUIPart {
@@ -115,6 +119,14 @@ function tool(
       state: "approval-requested",
       input: overrides.input ?? null,
       approval: { id: "approval-1" },
+    };
+  }
+  if (state === "approval-responded") {
+    return {
+      ...base,
+      state: "approval-responded",
+      input: overrides.input ?? null,
+      approval: { id: "approval-1", approved: overrides.approved ?? true },
     };
   }
   return {
@@ -270,6 +282,17 @@ describe("segmentMessageParts", () => {
     expect(row.kind).toBe("other");
     expect(row.verb).toBe("linear_create_issue");
     expect(row.object).toBe("VC-12 chat seam");
+  });
+
+  it("ignores a part that is neither prose, thought, nor tool", () => {
+    // A step boundary some harnesses emit between messages; it carries nothing
+    // for the transcript to show and must not open or break a bundle.
+    const segments = segmentMessageParts(
+      [tool("read-file"), { type: "step-start" }, tool("run-command")],
+      "m6",
+    );
+    expect(segments.map((segment) => segment.kind)).toEqual(["bundle"]);
+    expect(bundleOf(segments)).toHaveLength(2);
   });
 });
 
@@ -433,6 +456,18 @@ describe("bundleSummary", () => {
       { text: "1 denied", tone: "danger" },
     ]);
   });
+
+  it("names a single file without a joining word", () => {
+    const rows = bundleOf(segmentMessageParts([named("edit-file", "activity.ts")], "s9"));
+    expect(summaryText(rows)).toEqual(["Edited activity.ts"]);
+  });
+
+  it("falls back to the full label when trimming to a basename empties it", () => {
+    // `splitPath` on a trailing slash yields an empty basename; the whole
+    // label reads better than nothing.
+    const rows = bundleOf(segmentMessageParts([named("edit-file", "src/generated/")], "s10"));
+    expect(summaryText(rows)).toEqual(["Edited src/generated/"]);
+  });
 });
 
 describe("thought settlement", () => {
@@ -479,6 +514,13 @@ describe("thought settlement", () => {
       ),
     );
     expect(rows.map((row) => row.kind)).toEqual(["tool"]);
+  });
+
+  it("drops an entire bundle that turns out to hold only wordless thoughts", () => {
+    // Nothing else was ever pushed into it, so once the one settled reasoning
+    // row is filtered out the bundle itself has nothing left to summarize.
+    const segments = segmentMessageParts([{ type: "reasoning", text: "  ", state: "done" }], "t9");
+    expect(segments).toEqual([]);
   });
 
   it("keeps a wordless thought that is still being written", () => {
@@ -544,6 +586,15 @@ describe("activityStatus", () => {
     expect(activityStatus(tool("run-command", { state: "input-streaming" }))).toBe("pending");
     expect(activityStatus(tool("run-command", { state: "output-error" }))).toBe("failed");
   });
+
+  it("resumes running once a gated call is approved, or stays denied", () => {
+    expect(
+      activityStatus(tool("run-command", { state: "approval-responded", approved: true })),
+    ).toBe("running");
+    expect(
+      activityStatus(tool("run-command", { state: "approval-responded", approved: false })),
+    ).toBe("denied");
+  });
 });
 
 describe("presenters", () => {
@@ -586,6 +637,36 @@ describe("presenters", () => {
     expect(row.metaTone).toBe("danger");
   });
 
+  it("carries the harness's error text on a failed row", () => {
+    const row = describeActivity(
+      tool("run-command", { state: "output-error", errorText: "exit 127: not found" }),
+    );
+    expect(row.errorText).toBe("exit 127: not found");
+    expect(describeActivity(tool("run-command")).errorText).toBeNull();
+  });
+
+  it("shows a pending row before the harness has sent any input at all", () => {
+    // `input?: unknown` — a harness may open a call before it has streamed a
+    // single argument, so the part carries no `input` key at all rather than an
+    // explicit null one.
+    const part: DynamicToolUIPart = {
+      type: "dynamic-tool",
+      toolName: "native-other",
+      toolCallId: "call-raw-1",
+      state: "input-streaming",
+    };
+    const row = describeActivity(part);
+    expect(row.status).toBe("pending");
+    expect(row.object).toBeNull();
+  });
+
+  it("plan carries no meta and no detail — the rail owns the content", () => {
+    const row = describeActivity(tool("plan"));
+    expect(row.verb).toBe("Planned");
+    expect(row.meta).toBeNull();
+    expect(row.detail).toBeNull();
+  });
+
   it("edit-file shows the change counts only once settled", () => {
     const outcome = {
       exitCode: null,
@@ -605,6 +686,27 @@ describe("presenters", () => {
     ).toBeNull();
   });
 
+  it("edit-file shows the real diff when the harness sends one", () => {
+    const row = describeActivity(
+      tool("edit-file", {
+        descriptor: { outcome: { ...emptyOutcome, diff: "@@ -1 +1 @@\n-old\n+new" } },
+      }),
+    );
+    expect(row.detail).toEqual({
+      view: "diff",
+      lines: [
+        { id: 0, kind: "hunk", text: "@@ -1 +1 @@" },
+        { id: 1, kind: "remove", text: "-old" },
+        { id: 2, kind: "add", text: "+new" },
+      ],
+    });
+  });
+
+  it("edit-file falls back to plain output when the harness sends no diff", () => {
+    const row = describeActivity(tool("edit-file", { output: "patched" }));
+    expect(row.detail).toEqual({ view: "output", text: "patched" });
+  });
+
   it("read-file shows a line range only for a partial read", () => {
     expect(
       describeActivity(
@@ -620,6 +722,28 @@ describe("presenters", () => {
       ).meta,
     ).toBe("1–48");
     expect(describeActivity(tool("read-file")).meta).toBeNull();
+  });
+
+  it("numbers a partial read starting from where it began", () => {
+    const row = describeActivity(
+      tool("read-file", {
+        output: "first\nsecond\nthird",
+        descriptor: { subject: { label: null, path: null, lineRange: { start: 10, end: 12 } } },
+      }),
+    );
+    expect(row.detail).toEqual({
+      view: "numbered",
+      lines: [
+        { number: 10, text: "first" },
+        { number: 11, text: "second" },
+        { number: 12, text: "third" },
+      ],
+    });
+  });
+
+  it("numbers a full read from line one when no range is given", () => {
+    const row = describeActivity(tool("read-file", { output: "only line" }));
+    expect(row.detail).toEqual({ view: "numbered", lines: [{ number: 1, text: "only line" }] });
   });
 
   it("search says 'no matches' without an error tone", () => {
@@ -670,6 +794,37 @@ describe("presenters", () => {
     });
   });
 
+  it("search shows no meta while the grep is still running", () => {
+    expect(describeActivity(tool("search", { state: "input-available" })).meta).toBeNull();
+  });
+
+  it("search counts matches even when the harness reports no file count", () => {
+    const row = describeActivity(
+      tool("search", { descriptor: { outcome: { ...emptyOutcome, matchCount: 5 } } }),
+    );
+    expect(row.meta).toBe("5");
+  });
+
+  it("search says 'file' in the singular", () => {
+    const row = describeActivity(
+      tool("search", { descriptor: { outcome: { ...emptyOutcome, matchCount: 3, fileCount: 1 } } }),
+    );
+    expect(row.meta).toBe("3 in 1 file");
+  });
+
+  it("search detail groups real matches by file", () => {
+    const row = describeActivity(tool("search", { output: "src/a.ts:1:one\nsrc/a.ts:2:two" }));
+    expect(row.detail).toEqual({
+      view: "matches",
+      groups: [{ file: "src/a.ts", lines: ["1  one", "2  two"], hidden: 0 }],
+    });
+  });
+
+  it("search detail falls back to plain output when nothing parses as a match", () => {
+    const row = describeActivity(tool("search", { output: "no structure here" }));
+    expect(row.detail).toEqual({ view: "output", text: "no structure here" });
+  });
+
   it("list-directory and fetch-url carry their own numbers", () => {
     expect(
       describeActivity(
@@ -686,6 +841,55 @@ describe("presenters", () => {
         tool("write-file", { descriptor: { outcome: { ...emptyOutcome, addedLines: 41 } } }),
       ).meta,
     ).toBe("+41");
+  });
+
+  it("list-directory uses the singular for one entry", () => {
+    expect(
+      describeActivity(
+        tool("list-directory", { descriptor: { outcome: { ...emptyOutcome, fileCount: 1 } } }),
+      ).meta,
+    ).toBe("1 entry");
+  });
+
+  it("write-file counts total lines when nothing marks them added", () => {
+    // Some harnesses report only how long the file is, not how many lines were
+    // newly written; total length is the honest number to show as "added".
+    expect(
+      describeActivity(
+        tool("write-file", { descriptor: { outcome: { ...emptyOutcome, lineCount: 20 } } }),
+      ).meta,
+    ).toBe("+20");
+  });
+
+  it("write-file has no count to show when the harness reports none", () => {
+    expect(describeActivity(tool("write-file")).meta).toBeNull();
+  });
+
+  it("write-file shows no count before the write settles", () => {
+    expect(
+      describeActivity(
+        tool("write-file", {
+          state: "input-available",
+          descriptor: { outcome: { ...emptyOutcome, addedLines: 41 } },
+        }),
+      ).meta,
+    ).toBeNull();
+  });
+
+  it("write-file shows the content it wrote", () => {
+    const row = describeActivity(tool("write-file", { input: "line one\nline two" }));
+    expect(row.detail).toEqual({ view: "output", text: "line one\nline two" });
+  });
+
+  it("fetch-url falls back to duration when the harness reports no size", () => {
+    const row = describeActivity(
+      tool("fetch-url", { descriptor: { startedAt: 0, endedAt: 2400 } }),
+    );
+    expect(row.meta).toBe("2.4s");
+  });
+
+  it("fetch-url shows no meta before the fetch settles", () => {
+    expect(describeActivity(tool("fetch-url", { state: "input-available" })).meta).toBeNull();
   });
 
   it("delegate names the subagent and joins its summary with the duration", () => {
@@ -715,6 +919,13 @@ describe("presenters", () => {
     expect(row.meta).toBe("4 tools · 1m12s");
   });
 
+  it("delegate reports nothing extra when the child leaves no summary", () => {
+    const row = describeActivity(
+      tool("delegate", { descriptor: { nativeToolName: "explore", startedAt: 0, endedAt: 3 } }),
+    );
+    expect(row.meta).toBeNull();
+  });
+
   it("shows raw JSON only for 'other', and only in the detail", () => {
     const other = describeActivity(
       tool(null, { toolName: "linear_create_issue", input: { query: "seam", limit: 3 } }),
@@ -724,6 +935,20 @@ describe("presenters", () => {
       const row = describeActivity(tool(kind, { output: { unknown: { shape: 1 } } }));
       expect(row.detail?.view === "signature").toBe(false);
     }
+  });
+
+  it("shows nothing in the detail when 'other' has no input and no output", () => {
+    const row = describeActivity(tool(null, { toolName: "noop" }));
+    expect(row.detail).toBeNull();
+  });
+
+  it("reads output text from any of the harness's common field names", () => {
+    const row = describeActivity(tool("run-command", { output: { text: "   ", stdout: "ok\n" } }));
+    expect(row.detail).toEqual({ view: "output", text: "ok\n" });
+  });
+
+  it("treats blank output as no output at all", () => {
+    expect(describeActivity(tool("run-command", { output: "   " })).detail).toBeNull();
   });
 });
 
@@ -824,7 +1049,17 @@ describe("formatters", () => {
     expect(formatBytes(512)).toBe("512 B");
     expect(formatBytes(4300)).toBe("4.2 KB");
     expect(formatBytes(5_000_000)).toBe("4.8 MB");
+    expect(formatBytes(null)).toBeNull();
     expect(diffStat(descriptor("edit-file"))).toBeNull();
+  });
+
+  it("diff stats zero out the side the harness never reported", () => {
+    expect(diffStat(descriptor("edit-file", { outcome: { ...emptyOutcome, addedLines: 5 } }))).toBe(
+      "+5 −0",
+    );
+    expect(
+      diffStat(descriptor("edit-file", { outcome: { ...emptyOutcome, removedLines: 3 } })),
+    ).toBe("+0 −3");
   });
 
   it("splits paths into directory and basename", () => {
@@ -840,6 +1075,17 @@ describe("formatters", () => {
       `({"query":"${"a".repeat(39)}…","limit":3})`,
     );
     expect(compactSignature({})).toBeNull();
+  });
+
+  it("compacts a bare string input inline", () => {
+    expect(compactSignature("find the seam")).toBe("(find the seam)");
+    expect(compactSignature(42)).toBeNull();
+  });
+
+  it("compacts every value shape a tool call carries", () => {
+    expect(
+      compactSignature({ count: 3, ok: true, missing: null, tags: ["a", "b"], nested: { x: 1 } }),
+    ).toBe('({"count":3,"ok":true,"missing":null,"tags":[2],"nested":{…}})');
   });
 });
 
@@ -872,6 +1118,40 @@ describe("detail parsers", () => {
       { file: "src/b.ts", lines: ["9  nine"], hidden: 0 },
     ]);
     expect(parseMatches("no structure here")).toEqual([]);
+  });
+});
+
+describe("detailText", () => {
+  it("surfaces the plain-text views and hides the structured ones", () => {
+    // Cards show text, not views — the detail's own presentation stays inside.
+    expect(detailText(null)).toBeNull();
+    expect(detailText({ view: "output", text: "hello" })).toBe("hello");
+    expect(detailText({ view: "signature", text: "(x)" })).toBe("(x)");
+    expect(detailText({ view: "diff", lines: [] })).toBeNull();
+    expect(detailText({ view: "numbered", lines: [] })).toBeNull();
+    expect(detailText({ view: "matches", groups: [] })).toBeNull();
+  });
+});
+
+describe("bestEffortSubject", () => {
+  it("trims a bare string input", () => {
+    expect(bestEffortSubject("  git status  ")).toBe("git status");
+    expect(bestEffortSubject("   ")).toBeNull();
+  });
+
+  it("returns null for input that carries no usable shape", () => {
+    expect(bestEffortSubject(42)).toBeNull();
+    expect(bestEffortSubject(null)).toBeNull();
+  });
+
+  it("skips fields that cannot be a usable label", () => {
+    expect(
+      bestEffortSubject({ count: 3, blank: "   ", blob: "x".repeat(241), note: "the real one" }),
+    ).toBe("the real one");
+  });
+
+  it("finds nothing when every field is unusable", () => {
+    expect(bestEffortSubject({ count: 3, blank: "   ", blob: "x".repeat(241) })).toBeNull();
   });
 });
 
@@ -1038,5 +1318,136 @@ describe("projectSessionTodos", () => {
     expect(
       projectSessionTodos([{ id: "a4", role: "assistant", parts: [tool("read-file")] }]),
     ).toBeNull();
+  });
+
+  it("skips a message that is not the assistant's", () => {
+    const todos = projectSessionTodos([
+      {
+        id: "a5",
+        role: "assistant",
+        parts: [
+          tool("plan", {
+            input: { todos: [{ id: "t1", content: "First", status: "pending", priority: "low" }] },
+          }),
+        ],
+      },
+      { id: "u5", role: "user", parts: [{ type: "text", text: "thanks" }] },
+    ]);
+    expect(todos?.map((todo) => todo.id)).toEqual(["t1"]);
+  });
+
+  it("skips a plan call that failed or was denied and reads the one before it", () => {
+    const todos = projectSessionTodos([
+      {
+        id: "a6",
+        role: "assistant",
+        parts: [
+          tool("plan", {
+            input: {
+              todos: [{ id: "t1", content: "Good plan", status: "pending", priority: "low" }],
+            },
+          }),
+        ],
+      },
+      { id: "a7", role: "assistant", parts: [tool("plan", { state: "output-error" })] },
+    ]);
+    expect(todos?.map((todo) => todo.id)).toEqual(["t1"]);
+  });
+
+  it("keeps searching when the latest plan call has nothing parseable", () => {
+    const todos = projectSessionTodos([
+      {
+        id: "a8",
+        role: "assistant",
+        parts: [
+          tool("plan", {
+            input: { todos: [{ id: "t1", content: "Good", status: "pending", priority: "low" }] },
+          }),
+        ],
+      },
+      { id: "a9", role: "assistant", parts: [tool("plan", { input: { unrelated: true } })] },
+    ]);
+    expect(todos?.map((todo) => todo.id)).toEqual(["t1"]);
+  });
+
+  it("reads no todos from a plan call that has not sent anything yet", () => {
+    // Same shape as an unstarted tool call elsewhere in this file: the harness
+    // opened the call before it streamed any input.
+    const part: DynamicToolUIPart = {
+      type: "dynamic-tool",
+      toolName: "native-plan",
+      toolCallId: "call-plan-raw",
+      state: "input-streaming",
+      toolMetadata: metadata(descriptor("plan")),
+    };
+    expect(extractTodos(part)).toBeNull();
+  });
+});
+
+describe("todosFromUnknown", () => {
+  it("reads an explicit empty list as empty, not missing", () => {
+    expect(todosFromUnknown([])).toEqual([]);
+    expect(todosFromUnknown({ todos: [] })).toEqual([]);
+  });
+
+  it("drops rows that are not objects or that carry no content at all", () => {
+    expect(
+      todosFromUnknown([
+        "not a todo",
+        { status: "pending", priority: "low" },
+        { content: "Kept", status: "pending", priority: "low" },
+      ]),
+    ).toEqual([{ id: expect.any(String), content: "Kept", status: "pending", priority: "low" }]);
+  });
+
+  it("reads content from 'title' or 'text' when 'content' is absent", () => {
+    expect(todosFromUnknown([{ title: "From title", status: "pending" }])?.[0]?.content).toBe(
+      "From title",
+    );
+    expect(todosFromUnknown([{ text: "From text", status: "pending" }])?.[0]?.content).toBe(
+      "From text",
+    );
+  });
+
+  it("is null for a value that is not a todo list at all", () => {
+    expect(todosFromUnknown(42)).toBeNull();
+    expect(todosFromUnknown("   ")).toBeNull();
+    expect(todosFromUnknown("not json")).toBeNull();
+  });
+
+  it("normalizes status synonyms the same way across harnesses", () => {
+    const statuses = ["complete", "done", "canceled", "active", "running", "cancelled"].map(
+      (status, index) => ({ id: `${index}`, content: `todo ${index}`, status, priority: "low" }),
+    );
+    expect(todosFromUnknown(statuses)?.map((todo) => todo.status)).toEqual([
+      "completed",
+      "completed",
+      "cancelled",
+      "in_progress",
+      "in_progress",
+      "cancelled",
+    ]);
+  });
+
+  it("drops a row whose status does not normalize to anything known", () => {
+    expect(todosFromUnknown([{ content: "x", status: "bogus" }])).toEqual([]);
+    expect(todosFromUnknown([{ content: "x", status: 5 }])).toEqual([]);
+  });
+
+  it("defaults priority to medium when it is missing, blank, or unrecognized", () => {
+    const rows = [
+      { content: "a", status: "pending" },
+      { content: "b", status: "pending", priority: null },
+      { content: "c", status: "pending", priority: "" },
+      { content: "d", status: "pending", priority: 5 },
+      { content: "e", status: "pending", priority: "urgent" },
+    ];
+    expect(todosFromUnknown(rows)?.map((todo) => todo.priority)).toEqual([
+      "medium",
+      "medium",
+      "medium",
+      "medium",
+      "medium",
+    ]);
   });
 });
