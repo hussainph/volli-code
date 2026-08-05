@@ -11,6 +11,10 @@
  * The transient half is the delta contract, and its rules are the ones a batch
  * can break silently: appends that must not collapse, a baseline that must not
  * outlive the settle it predates, and an orphan that must not become a message.
+ *
+ * The fold is total only over well-formed deltas, so what decides whether it is
+ * ever handed a malformed one is `labSessionOverlay` — tested here too, because
+ * it is the last place a bad delta can be dropped rather than drawn.
  */
 import type {
   SessionStreamOverlay,
@@ -24,6 +28,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   appendFrames,
   attachLabExecutor,
+  labSessionOverlay,
   mergeTranscriptMessages,
   startLabSession,
   type LabSessionFrame,
@@ -71,6 +76,19 @@ function baseline(id: string, text: string): TranscriptDelta {
 
 function append(text: string): TranscriptDelta {
   return { op: "part.append", key: "prt_1", text };
+}
+
+/**
+ * One transient emission exactly as it arrives — JSON, unvalidated, off the
+ * wire — so the decoder is handed shapes its own types would have refused.
+ */
+function wire(delta: unknown): unknown {
+  return { kind: "overlay", sessionId: "session-1", throughSequence: 0, messageId: "m1", delta };
+}
+
+/** A `reset`'s message with its parts left untyped, which is the half under test. */
+function keyedMessage(parts: readonly unknown[]): unknown {
+  return { id: "m1", role: "assistant", parts };
 }
 
 /**
@@ -299,6 +317,48 @@ describe("appendFrames overlays", () => {
 
     expect(removed.overlay.size).toBe(0);
     expect(removed.messages).toEqual([]);
+  });
+});
+
+describe("labSessionOverlay", () => {
+  it("accepts a well-formed baseline", () => {
+    expect(labSessionOverlay(wire(baseline("m1", "half a ")))?.delta).toEqual(
+      baseline("m1", "half a "),
+    );
+  });
+
+  it("refuses a baseline whose parts are not keyed entries", () => {
+    // Each of these survives `Array.isArray` and none survives the fold: a
+    // `null` entry throws in `projectKeyedTranscriptMessage`, and one with no
+    // `part` projects to `undefined`, which `speaks()` then reads `.type` off
+    // inside a React state updater — taking the chat surface down rather than
+    // losing one message. Dropped here instead.
+    const malformed = [
+      [null],
+      [{}],
+      [{ key: "prt_1" }],
+      [{ part: { type: "text", text: "hi" } }],
+      // A key that is not a string names no part the later ops could address.
+      [{ key: 1, part: { type: "text", text: "hi" } }],
+      // A part that is not a record has no `type` to render off.
+      [{ key: "prt_1", part: "text" }],
+    ];
+
+    for (const parts of malformed) {
+      expect(labSessionOverlay(wire({ op: "reset", message: keyedMessage(parts) }))).toBeNull();
+    }
+  });
+
+  it("accepts a baseline that carries no parts at all", () => {
+    // An emitter leads a message with a baseline before it has anything
+    // drawable, so an empty array is well-formed rather than malformed —
+    // `layerTranscriptOverlay` already declines to open a bubble for it.
+    expect(labSessionOverlay(wire({ op: "reset", message: keyedMessage([]) }))).not.toBeNull();
+  });
+
+  it("refuses an emission whose delta op it does not know", () => {
+    expect(labSessionOverlay(wire({ op: "part.append", key: "prt_1" }))).toBeNull();
+    expect(labSessionOverlay(wire({ op: "part.rewrite", key: "prt_1" }))).toBeNull();
   });
 });
 

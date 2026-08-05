@@ -1014,8 +1014,12 @@ function labSessionFrame(value: unknown): LabSessionFrame | null {
  * the RPC edge as JSON, and validated per op because the fold downstream is
  * total over well-formed deltas and says nothing about malformed ones: an
  * append with no text would concatenate the word "undefined" into the answer.
+ *
+ * Exported for its tests: this is the only check standing between whatever
+ * arrives on the wire and a fold that assumes well-formed input, and every op
+ * it lets through is one nothing downstream looks at again.
  */
-function labSessionOverlay(value: unknown): SessionStreamOverlay | null {
+export function labSessionOverlay(value: unknown): SessionStreamOverlay | null {
   if (
     !isRecord(value) ||
     value.kind !== "overlay" ||
@@ -1043,7 +1047,7 @@ function labTranscriptDelta(value: unknown): TranscriptDelta | null {
       return isRecord(value.message) &&
         typeof value.message.id === "string" &&
         typeof value.message.role === "string" &&
-        Array.isArray(value.message.parts)
+        isKeyedPartArray(value.message.parts)
         ? (value as unknown as TranscriptDelta)
         : null;
     case "part.upsert":
@@ -1080,6 +1084,27 @@ function labTranscript(value: unknown): LabSessionFrame["transcript"] | undefine
     return undefined;
   }
   return { message: message as unknown as UIMessage };
+}
+
+/**
+ * A `reset`'s parts, checked entry by entry rather than only as an array.
+ *
+ * `reset` is the one op that hands the fold a whole message instead of an edit
+ * to one it already holds, so it is the one op whose payload nothing downstream
+ * re-checks: `applyTranscriptDelta` stores the baseline as given, and
+ * `projectKeyedTranscriptMessage` maps straight over `entry.part` to build the
+ * `UIMessage` the chat draws. An entry that is `null` throws there, and one that
+ * is merely missing `part` projects to `undefined` and reaches
+ * `message-projection.ts`, where `speaks()` reads `part.type` off it — inside a
+ * React state updater, which takes the whole chat surface down with it rather
+ * than losing one message. `Array.isArray` alone lets both through, so the
+ * shape is settled here, where a malformed delta can still just be dropped.
+ */
+function isKeyedPartArray(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.every((entry) => isRecord(entry) && typeof entry.key === "string" && isRecord(entry.part))
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
