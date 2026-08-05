@@ -1,15 +1,9 @@
 import * as React from "react";
-import {
-  applyTranscriptDelta,
-  type SessionStreamOverlay,
-  type TranscriptDelta,
-  type TranscriptOverlay,
-} from "@volli/session-engine";
+import { type SessionStreamOverlay } from "@volli/session-engine";
 import type {
   RuntimeCatalogChoices,
   RuntimeSelection,
   SessionAttentionProjection,
-  SessionEvent,
   SessionInteraction,
   SessionInteractionResolution,
   SessionProjection,
@@ -17,12 +11,20 @@ import type {
 import type { RpcDiagnosticEntry } from "@volli/session-rpc";
 import type { UIMessage } from "ai";
 
-import { indexOpenedInteractions } from "@renderer/chat/interaction";
-import {
-  layerTranscriptOverlay,
-  projectTranscriptMessages,
-} from "@renderer/chat/message-projection";
 import { resolveRuntimeSelection } from "@renderer/chat/session-model";
+import {
+  appendFrames,
+  EMPTY_TRANSCRIPT,
+  movesProjection,
+  type ChatSessionFrame,
+  type ChatTranscriptState,
+} from "@renderer/chat/transcript";
+import {
+  chatSessionFrame,
+  chatSessionOverlay,
+  rejectedReceipt,
+  startFailure,
+} from "@renderer/chat/wire";
 import { useRuntimeCatalogClient } from "@renderer/lib/runtime-catalog-client";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -55,80 +57,10 @@ export type MessageDelivery = "queue" | "steer" | "replace";
  */
 export type CatalogState = "loading" | "ready" | "empty" | "error";
 
-export interface LabSessionFrame {
-  sessionId: string;
-  sequence: number;
-  event: SessionEvent;
-  transcript: { message: UIMessage } | null;
-}
-
-/**
- * What the stream alone can say, kept between batches.
- *
- * Every fact this surface needs about a live turn is already in the frames it
- * is subscribed to, so this is folded forward as they arrive rather than
- * re-derived from the whole transcript on every render: `turnActive` used to be
- * a scan of all frames in the render body, and the ordered list used to be a
- * copy-and-sort of a Map per animation frame. All of it is now linear in the
- * batch.
- *
- * `messages` and `openedInteractions` joined it for the same reason and after
- * the same measurement mistake. Both were memoized on the frame list, and that
- * list is rebuilt on every batch — so the memo missed every time, and each miss
- * re-read *every frame the Session has ever committed*. Frames outgrew messages
- * badly: a streamed reply committed a transcript snapshot per chunk, several
- * per animation frame, and every one of them made both scans longer for the
- * rest of the Session. Folded, a batch costs the batch — and the flood itself
- * is gone now, since a message mid-word arrives as an overlay and commits
- * nothing.
- */
-interface LabTranscriptState {
-  frames: readonly LabSessionFrame[];
-  throughSequence: number;
-  turnActive: boolean;
-  /** Latest settled shape per message id, in the order the ids first spoke. */
-  durableMessages: readonly UIMessage[];
-  /**
-   * The messages still being written, keyed by id in the order they first
-   * spoke. Transient by construction: an entry exists only between a message's
-   * first delta and the durable frame that settles it.
-   */
-  overlay: TranscriptOverlay;
-  /**
-   * The last durable transcript sequence applied per message id — the staleness
-   * guard's whole state.
-   *
-   * An overlay carries the durable sequence it was emitted beside, and delivery
-   * can reorder the two: a baseline emitted before a settle can arrive after
-   * it, and applying it would resurrect a message that has already finished.
-   * Comparing against what settled is what makes that harmless, and it is why
-   * durable frames and overlays inside one batch can be applied in either order.
-   */
-  durableSequences: ReadonlyMap<string, number>;
-  /** What the chat draws: the durable list with every live overlay laid over it. */
-  messages: readonly UIMessage[];
-  /** Every interaction this Session has opened, for the receipts they leave. */
-  openedInteractions: ReadonlyMap<string, SessionInteraction>;
-}
-
-const EMPTY_INTERACTION_INDEX: ReadonlyMap<string, SessionInteraction> = new Map();
-const EMPTY_OVERLAY: TranscriptOverlay = new Map();
-const EMPTY_DURABLE_SEQUENCES: ReadonlyMap<string, number> = new Map();
-const EMPTY_TRANSCRIPT: LabTranscriptState = {
-  frames: [],
-  throughSequence: 0,
-  turnActive: false,
-  durableMessages: [],
-  overlay: EMPTY_OVERLAY,
-  durableSequences: EMPTY_DURABLE_SEQUENCES,
-  messages: [],
-  openedInteractions: EMPTY_INTERACTION_INDEX,
-};
-
 export interface LabSessionController {
   sessionId: string;
   projection: SessionProjection | null;
-  frames: readonly LabSessionFrame[];
+  frames: readonly ChatSessionFrame[];
   messages: readonly UIMessage[];
   diagnostics: readonly RpcDiagnosticEntry[];
   lifecycle: SessionLifecycle;
@@ -295,7 +227,7 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
   const client = React.useRef<SessionRpcClient | null>(null);
   const [sessionId, setSessionId] = React.useState("");
   const [projection, setProjection] = React.useState<SessionProjection | null>(null);
-  const [transcript, setTranscript] = React.useState<LabTranscriptState>(EMPTY_TRANSCRIPT);
+  const [transcript, setTranscript] = React.useState<ChatTranscriptState>(EMPTY_TRANSCRIPT);
   const [diagnostics, setDiagnostics] = React.useState<readonly RpcDiagnosticEntry[]>([]);
   const [lifecycle, setLifecycle] = React.useState<SessionLifecycle>("idle");
   const [sessionError, setError] = React.useState<string | null>(null);
@@ -357,7 +289,7 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
     let projectionRefresh: Promise<void> | null = null;
     let projectionRefreshQueued = false;
     let frameFlush: number | null = null;
-    const pendingFrames = new Map<number, LabSessionFrame>();
+    const pendingFrames = new Map<number, ChatSessionFrame>();
     // Overlays batch in an ordered array and never in the map above. Every
     // overlay in one paint carries the same `throughSequence` — the latest
     // durable sequence, which does not move while a message streams — so a
@@ -402,7 +334,7 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
         appendFrames(
           EMPTY_TRANSCRIPT,
           snapshot.frames.flatMap((frame) => {
-            const normalized = labSessionFrame(frame);
+            const normalized = chatSessionFrame(frame);
             return normalized ? [normalized] : [];
           }),
         ),
@@ -412,10 +344,10 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
         {
           onData: (emission) => {
             if (!active) return;
-            const overlay = labSessionOverlay(emission.data);
+            const overlay = chatSessionOverlay(emission.data);
             if (overlay) pendingOverlays.push(overlay);
             else {
-              const frame = labSessionFrame(emission.data);
+              const frame = chatSessionFrame(emission.data);
               if (!frame) return;
               pendingFrames.set(frame.sequence, frame);
             }
@@ -807,136 +739,6 @@ export function useLabSessionController(scenarioId: string | null = null): LabSe
   };
 }
 
-/**
- * Adds one batch of frames and overlays, and carries everything derived from
- * them across it.
- *
- * Frames arrive in strict sequence order — the subscription drains its cursor
- * one step at a time, and the snapshot that seeds it is ordered too — so this
- * appends rather than merges, and drops anything at or below the cursor so a
- * replayed frame cannot double-count a turn boundary.
- *
- * The two arms are applied durable-first, and the staleness guard is what makes
- * that a choice rather than a requirement: an overlay from before the settle it
- * predates is dropped whichever way round the two are read.
- *
- * Exported for its tests: this is where the transcript's whole per-frame budget
- * now lives, and a fold is only worth having if it says exactly what the scan
- * it replaced said.
- */
-export function appendFrames(
-  state: LabTranscriptState,
-  batch: readonly LabSessionFrame[],
-  overlays: readonly SessionStreamOverlay[] = [],
-): LabTranscriptState {
-  const fresh = batch.filter((frame) => frame.sequence > state.throughSequence);
-  const last = fresh.at(-1);
-  if (!last && overlays.length === 0) return state;
-
-  let turnActive = state.turnActive;
-  let overlay = state.overlay;
-  // Copied once, and only if something settles. A history replay hands this
-  // every transcript frame the Session ever committed in a single batch, and
-  // copying per frame would make seeding an old Session quadratic in its own
-  // length — the exact cost the delta contract exists to remove.
-  let settled: Map<string, number> | null = null;
-  for (const frame of fresh) {
-    if (frame.event.payload.kind === "turn.started") turnActive = true;
-    else if (frame.event.payload.kind === "turn.completed") turnActive = false;
-    const settledId = frame.transcript?.message.id;
-    if (settledId === undefined) continue;
-    // The settle point: the message is durable now, so the transient entry goes
-    // and the sequence it settled at is what the guard below compares against.
-    // Same words on both sides when the emitter is honest, so nothing jumps.
-    settled ??= new Map(state.durableSequences);
-    settled.set(settledId, frame.sequence);
-    if (overlay.has(settledId)) overlay = withoutOverlayMessage(overlay, settledId);
-  }
-  const durableSequences: ReadonlyMap<string, number> = settled ?? state.durableSequences;
-  for (const emission of overlays) {
-    const settledAt = durableSequences.get(emission.messageId);
-    // The staleness guard, and the only rule this fold owns: everything else
-    // about a delta is `applyTranscriptDelta`'s, including its self-healing
-    // answer to a non-reset delta for a message it holds no entry for.
-    if (settledAt !== undefined && emission.throughSequence < settledAt) continue;
-    overlay = applyTranscriptDelta(overlay, emission.messageId, emission.delta);
-  }
-  // A batch of nothing but stale or orphaned overlays folds to the state it was
-  // handed, and a fresh object here would repaint the transcript for nothing.
-  if (!last && overlay === state.overlay) return state;
-
-  // These keep their previous identity when the batch had nothing for them,
-  // which is the other half of the point: a batch of pure tool traffic must not
-  // hand the plane a new message list to re-group and re-segment.
-  const opened = indexOpenedInteractions(fresh);
-  const durableMessages = mergeTranscriptMessages(
-    state.durableMessages,
-    projectTranscriptMessages(fresh),
-  );
-  return {
-    frames: last ? [...state.frames, ...fresh] : state.frames,
-    throughSequence: last ? last.sequence : state.throughSequence,
-    turnActive,
-    durableMessages,
-    overlay,
-    durableSequences,
-    messages:
-      durableMessages === state.durableMessages && overlay === state.overlay
-        ? state.messages
-        : layerTranscriptOverlay(durableMessages, overlay),
-    openedInteractions:
-      opened.size === 0
-        ? state.openedInteractions
-        : new Map([...state.openedInteractions, ...opened]),
-  };
-}
-
-function withoutOverlayMessage(overlay: TranscriptOverlay, messageId: string): TranscriptOverlay {
-  const next = new Map(overlay);
-  next.delete(messageId);
-  return next;
-}
-
-/**
- * One batch of projected messages, folded into the ones already on screen.
- *
- * The rule is {@link projectTranscriptMessages}'s own, held across batches
- * rather than re-derived from the start: transcript events are immutable
- * snapshots, so a message id keeps the position it first spoke at and shows its
- * latest shape. Searching from the tail because that is where a streaming
- * snapshot always lands — a re-emitted message from further back costs the walk
- * it would have cost anyway.
- */
-export function mergeTranscriptMessages(
-  current: readonly UIMessage[],
-  projected: readonly UIMessage[],
-): readonly UIMessage[] {
-  if (projected.length === 0) return current;
-  const merged = [...current];
-  for (const message of projected) {
-    const at = merged.findLastIndex((held) => held.id === message.id);
-    if (at < 0) merged.push(message);
-    else merged[at] = message;
-  }
-  return merged;
-}
-
-/**
- * Whether a frame can move what this surface reads off the projection.
- *
- * Everything except a transcript reference. The flood this was built to hold
- * back — a snapshot per chunk, several per animation frame — is typed away
- * rather than filtered now: a message mid-word arrives as an overlay, which
- * never reaches this function and never asks for a projection. What is left is
- * the settle point, and it still carries a message this surface already has in
- * `frames`. Every other fact is rare and changes something read off the
- * projection (the live executor, an open interaction, an attention, a turn
- * boundary), so it earns its round trip.
- */
-function movesProjection(frame: LabSessionFrame): boolean {
-  return frame.event.payload.kind !== "transcript.referenced";
-}
-
 function appendDiagnostics(
   current: readonly RpcDiagnosticEntry[],
   entries: readonly RpcDiagnosticEntry[],
@@ -956,160 +758,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/**
- * The one sentence a failed start says, wherever in the start it failed.
- *
- * A refusal, a dropped attach and a `session.create` that never answered are
- * three different faults with one recovery, and the surface renders one error
- * row for all of them. Written once so they cannot drift into three phrasings.
- */
-function startFailure(detail: string): string {
-  return `Could not start OpenCode: ${detail}`;
-}
-
-/**
- * The refusal a resolved mutation can still be carrying.
- *
- * A command that reaches a harness earns a delivery receipt, and `rejected` is
- * one of its arms: the round trip succeeded and the harness said no. Read
- * structurally because this crosses the RPC edge as JSON and because only some
- * of the commands sent here carry a receipt at all — a shape without one is not
- * a refusal. Null means nothing refused it.
- */
-function rejectedReceipt(result: unknown): string | null {
-  if (!isRecord(result) || !isRecord(result.receipt)) return null;
-  const receipt = result.receipt;
-  if (receipt.status !== "rejected") return null;
-  if (typeof receipt.detail === "string" && receipt.detail.length > 0) return receipt.detail;
-  return typeof receipt.code === "string" ? receipt.code : "rejected";
-}
-
 function reportError(scope: string, error: unknown): void {
   console.error(`[chat-ui:${scope}]`, error);
-}
-
-function labSessionFrame(value: unknown): LabSessionFrame | null {
-  if (
-    !isRecord(value) ||
-    typeof value.sessionId !== "string" ||
-    typeof value.sequence !== "number" ||
-    !isRecord(value.event) ||
-    !isRecord(value.event.payload)
-  ) {
-    return null;
-  }
-  const transcript = labTranscript(value.transcript);
-  if (transcript === undefined) return null;
-  return {
-    sessionId: value.sessionId,
-    sequence: value.sequence,
-    event: value.event as unknown as SessionEvent,
-    transcript,
-  };
-}
-
-/**
- * The transient arm of the stream, told apart from the durable one by shape.
- *
- * The durable frame carries no `kind` of its own and is validated by its
- * `sequence`, so the two arms cannot be confused for each other — which is the
- * point of leaving the durable arm bare. Read structurally because this crosses
- * the RPC edge as JSON, and validated per op because the fold downstream is
- * total over well-formed deltas and says nothing about malformed ones: an
- * append with no text would concatenate the word "undefined" into the answer.
- *
- * Exported for its tests: this is the only check standing between whatever
- * arrives on the wire and a fold that assumes well-formed input, and every op
- * it lets through is one nothing downstream looks at again.
- */
-export function labSessionOverlay(value: unknown): SessionStreamOverlay | null {
-  if (
-    !isRecord(value) ||
-    value.kind !== "overlay" ||
-    typeof value.sessionId !== "string" ||
-    typeof value.throughSequence !== "number" ||
-    typeof value.messageId !== "string"
-  ) {
-    return null;
-  }
-  const delta = labTranscriptDelta(value.delta);
-  if (!delta) return null;
-  return {
-    kind: "overlay",
-    sessionId: value.sessionId,
-    throughSequence: value.throughSequence,
-    messageId: value.messageId,
-    delta,
-  };
-}
-
-function labTranscriptDelta(value: unknown): TranscriptDelta | null {
-  if (!isRecord(value)) return null;
-  switch (value.op) {
-    case "reset":
-      return isRecord(value.message) &&
-        typeof value.message.id === "string" &&
-        typeof value.message.role === "string" &&
-        isKeyedPartArray(value.message.parts)
-        ? (value as unknown as TranscriptDelta)
-        : null;
-    case "part.upsert":
-      return typeof value.key === "string" &&
-        typeof value.index === "number" &&
-        isRecord(value.part)
-        ? (value as unknown as TranscriptDelta)
-        : null;
-    case "part.append":
-      return typeof value.key === "string" && typeof value.text === "string"
-        ? (value as unknown as TranscriptDelta)
-        : null;
-    case "part.remove":
-      return typeof value.key === "string" ? (value as unknown as TranscriptDelta) : null;
-    // `metadata` is opaque by contract, and `message.remove` carries nothing:
-    // both are fully described by their op.
-    case "metadata":
-    case "message.remove":
-      return value as unknown as TranscriptDelta;
-    default:
-      return null;
-  }
-}
-
-function labTranscript(value: unknown): LabSessionFrame["transcript"] | undefined {
-  if (value === null) return null;
-  if (!isRecord(value) || !isRecord(value.message)) return undefined;
-  const message = value.message;
-  if (
-    typeof message.id !== "string" ||
-    (message.role !== "user" && message.role !== "assistant" && message.role !== "system") ||
-    !Array.isArray(message.parts)
-  ) {
-    return undefined;
-  }
-  return { message: message as unknown as UIMessage };
-}
-
-/**
- * A `reset`'s parts, checked entry by entry rather than only as an array.
- *
- * `reset` is the one op that hands the fold a whole message instead of an edit
- * to one it already holds, so it is the one op whose payload nothing downstream
- * re-checks: `applyTranscriptDelta` stores the baseline as given, and
- * `projectKeyedTranscriptMessage` maps straight over `entry.part` to build the
- * `UIMessage` the chat draws. An entry that is `null` throws there, and one that
- * is merely missing `part` projects to `undefined` and reaches
- * `message-projection.ts`, where `speaks()` reads `part.type` off it — inside a
- * React state updater, which takes the whole chat surface down with it rather
- * than losing one message. `Array.isArray` alone lets both through, so the
- * shape is settled here, where a malformed delta can still just be dropped.
- */
-function isKeyedPartArray(value: unknown): boolean {
-  return (
-    Array.isArray(value) &&
-    value.every((entry) => isRecord(entry) && typeof entry.key === "string" && isRecord(entry.part))
-  );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }

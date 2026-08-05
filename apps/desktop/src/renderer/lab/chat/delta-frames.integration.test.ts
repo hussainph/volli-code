@@ -12,11 +12,11 @@
  * and into the renderer's real `appendFrames` — then reads the lines the chat
  * would draw.
  *
- * It lives beside the renderer fold because that is the half with no other
- * home: `session-controller.ts` resolves `@renderer/*`, so only the renderer
- * test project can load it. The Node-hosted adapter is imported here for that
- * reason alone; a test file never enters the renderer bundle, which is the
- * module graph the "no Node imports" rule is about.
+ * It lives beside the lab chat surface because that is the half with no other
+ * home: `@renderer/chat/transcript` resolves `@renderer/*`, so only the
+ * renderer test project can load it. The Node-hosted adapter is imported here
+ * for that reason alone; a test file never enters the renderer bundle, which
+ * is the module graph the "no Node imports" rule is about.
  */
 import {
   createInMemorySessionLedger,
@@ -41,7 +41,7 @@ import type { SessionInteraction } from "@volli/shared";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
-import { appendFrames, type LabSessionFrame } from "./session-controller";
+import { appendFrames, type ChatSessionFrame } from "@renderer/chat/transcript";
 
 const NATIVE_SESSION_ID = "native-session-1";
 const MESSAGE_ID = "provider-assistant";
@@ -267,7 +267,7 @@ async function startSession(runtime: SessionRuntime): Promise<string> {
 // ---------------------------------------------------------------------------
 
 const EMPTY = {
-  frames: [] as readonly LabSessionFrame[],
+  frames: [] as readonly ChatSessionFrame[],
   throughSequence: 0,
   turnActive: false,
   durableMessages: [] as readonly UIMessage[],
@@ -290,7 +290,7 @@ class Reader {
   state = EMPTY as ReturnType<typeof appendFrames>;
   /** Every emission this reader was handed, in delivery order, for the tests about order. */
   readonly received: SessionStreamEmission[] = [];
-  readonly #frames = new Map<number, LabSessionFrame>();
+  readonly #frames = new Map<number, ChatSessionFrame>();
   readonly #overlays: SessionStreamOverlay[] = [];
   #unsubscribe: (() => void) | null = null;
 
@@ -299,7 +299,7 @@ class Reader {
       const wire = JSON.parse(JSON.stringify(emission)) as SessionStreamEmission;
       this.received.push(wire);
       if (isSessionStreamOverlay(wire)) this.#overlays.push(wire);
-      else this.#frames.set(wire.sequence, wire as unknown as LabSessionFrame);
+      else this.#frames.set(wire.sequence, wire as unknown as ChatSessionFrame);
     });
   }
 
