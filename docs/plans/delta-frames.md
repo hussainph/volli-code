@@ -42,9 +42,13 @@ compaction — or a transient delta overlay with only settled snapshots durable.
 
 - Per-chunk durability today is accidental, not a product requirement. "The
   assistant said X" is a fact when it settles; "the assistant is mid-word" is
-  view state. A crash mid-turn re-attaches and reconciles from the provider's
-  own history (the adapter's reconcile path already re-emits full messages),
-  and a half-written message with no receipt was never accepted work.
+  view state. The cost, named honestly: OpenCode's own database never receives
+  streaming deltas — a mid-turn re-hydrate serves reasoning parts as empty
+  strings and at best a prefix of text
+  (`opencode-adapter/src/index.ts:2397-2400`) — so a hard crash mid-turn keeps
+  every settled turn and loses the in-flight one's tail. That is the trade,
+  made on purpose. Every orderly exit — turn end, stream disconnect, adapter
+  release — settles durably first, so only a genuine crash pays it.
 - The ledger schema, the artifact schema, `snapshot()`, and cursor semantics
   do not change at all. No migration; old sessions' per-chunk events still
   fold correctly under latest-wins. Durable deltas would have touched all
@@ -52,6 +56,13 @@ compaction — or a transient delta overlay with only settled snapshots durable.
 - Adapters that cannot reconcile from provider history keep the tool they
   already have: emit durable `transcript.message` snapshots as often as they
   need. Durability granularity becomes adapter policy, not engine mandate.
+
+The contract below was adversarially validated against the code on 2026-08-05.
+Nine findings — silent approval-state loss under per-part diffing, a
+baseline/settle race, non-idempotent appends under sequence-keyed batching,
+release() discarding the in-flight message, a reconcile-cursor corruption, an
+unbounded overlay map, a wrong index base, a dead key arm, and a settle point
+that does not exist — are folded in below where they belong.
 
 ## The contract
 
@@ -63,7 +74,7 @@ projection:
 
 ```ts
 interface KeyedTranscriptPart {
-  key: string; // adapter-chosen, stable for the part's lifetime
+  key: string; // the buffered part's provider id — projection is 1:0..1, so no sub-index exists
   part: UIMessagePart;
 }
 interface KeyedTranscriptMessage {
@@ -74,7 +85,7 @@ interface KeyedTranscriptMessage {
 }
 ```
 
-Five delta ops:
+Six delta ops:
 
 ```ts
 type TranscriptDelta =
@@ -82,74 +93,143 @@ type TranscriptDelta =
   | { op: "part.upsert"; key: string; index: number; part: UIMessagePart }
   | { op: "part.append"; key: string; text: string } // text-bearing parts only
   | { op: "part.remove"; key: string }
-  | { op: "metadata"; metadata: unknown };
+  | { op: "metadata"; metadata: unknown }
+  | { op: "message.remove" }; // the provider deleted the in-flight message
 ```
 
-One new observation arm:
+`part.upsert.index` is the position in the **projected** keyed array after the
+op applies — never a `partOrder` position. Projection elides parts
+(`projectOpenCodePart` returns nothing for empty text, empty reasoning, and
+unknown tool states, and empty text parts between tool calls are common), so
+buffer order and projected order disagree routinely.
+
+The observation arm deliberately does **not** extend `HarnessObservationBase`:
+the base carries `cursor`, and the runtime advances the reconcile cursor for
+any observation that has one (`session-runtime.ts:1290-1291`). A delta that
+moved it would make a later reconcile ask the provider for events after
+content that was never made durable. The arm has its own base — `id`,
+`occurredAt`, no `cursor` — and the runtime's handling of it returns before
+the cursor-advance lines:
 
 ```ts
-| (HarnessObservationBase & {
-    kind: "transcript.delta";
+| { kind: "transcript.delta";
+    id: string; occurredAt: number;
     threadId: string; branchId: string; attemptId: string;
     turnId: string | null;
     messageId: string;
-    delta: TranscriptDelta;
-  })
+    delta: TranscriptDelta }
 ```
 
 `transcript.message` keeps its exact current shape and meaning — the durable
 record — but adapters now emit it at settle points, not per tick.
 
+Two sequencing rules make every fold self-healing: **the first transient
+emission for a message id is always `reset`**, and **the first transient
+emission after that message settles durably is always `reset`**. Any fold —
+engine or renderer — that receives a non-reset delta for a message it has no
+overlay entry for ignores it and waits; the next reset or settle heals it.
+
 ### Engine (`DefaultSessionRuntime`)
 
 - `transcript.delta` observations are never persisted: no artifact write, no
-  ledger event. The runtime folds them into an in-memory per-session overlay
+  ledger event, and they bypass the observation-id dedupe entirely. The
+  runtime folds them into an in-memory per-session overlay
   (`Map<messageId, KeyedTranscriptMessage>`; the fold is a pure, unit-tested
-  module) and publishes them to live subscribers in the same ordered channel
-  as durable frames.
-- A durable `transcript.message` frame for message X clears X's overlay entry.
-  Channel ordering guarantees the settle frame arrives after its deltas.
+  module) and publishes them to live subscribers.
+- Overlay delivery appends to each subscriber's `draining` chain
+  **synchronously, at the same point `#enqueue` appends** — never by awaiting
+  `draining` from outside, which would let a concurrent durable publish
+  interleave ahead of an overlay that preceded it. Overlays thereby inherit
+  the existing slowest-subscriber backpressure on the adapter's emit path;
+  accepted, and worth a comment at the site.
+- The runtime clears message X's overlay entry **when it processes** a durable
+  `transcript.message` observation for X — not when the resulting frame is
+  delivered. `SessionEngine.observe` dedupes by observation id and returns the
+  original event for a repeat; that event's old sequence is behind every
+  subscriber cursor, the frame is never re-delivered, and clearing keyed off
+  delivery would strand the entry forever.
 - On subscribe: durable replay from cursor as today, then one `reset` baseline
-  per in-flight overlay message, then live. A subscriber can never observe a
-  delta whose base it lacks.
+  per in-flight overlay message, then live. The overlay-map read and the
+  baseline enqueue happen **synchronously, with no await between them** — any
+  gap lets a concurrent settle clear an entry and a stale baseline resurrect
+  it. The subscriber-side staleness guard (below) covers the tick-level race
+  that even this cannot close.
+- Overlay memory has explicit ends. The session's overlay drops on
+  `attachment.closed` / `attachment.failed`, on `adapter.release`, and in
+  `close()` — the same points that already drop `#bindings`. `message.remove`
+  drops the single entry. The whole map is LRU-bounded the way `#histories`
+  already is, so no single rule's absence is unbounded.
 - `snapshot()` stays durable-only and unchanged.
 
 ### Stream shape (engine + `@volli/session-rpc`)
 
-Subscribers receive a union:
+The durable arm stays the **bare** `SessionStreamFrame`, not a wrapped one.
+Every existing consumer validates a frame by `sequence: number`
+(`session-controller.ts`, `session-tracer.tsx`); wrapping the durable arm
+would make them reject every frame, while leaving it bare means they keep
+working untouched and simply ignore overlays until a surface opts in — the
+tracer deliberately stays durable-only.
 
 ```ts
 type SessionStreamEmission =
-  | { kind: "frame"; frame: SessionStreamFrame } // durable, sequenced, unchanged inside
+  | SessionStreamFrame // durable, sequenced — byte-identical to today
   | { kind: "overlay"; sessionId: string; throughSequence: number;
       messageId: string; delta: TranscriptDelta };
 ```
 
-`throughSequence` names the durable cursor the overlay sits on. RPC yields
-both arms; `tracked()` id for an overlay emission is
-`String(throughSequence)` — transient frames never advance the resume cursor,
-and a reconnect from that id replays durable history and receives a fresh
-baseline. `maxCursor` and the subscription schema do not change.
+`throughSequence` is the latest durable sequence recorded at emission time,
+and it is the consumer's staleness guard: **drop any overlay emission whose
+`throughSequence` is strictly below the last durable transcript sequence
+already applied for that message.** With the guard in place, application
+order inside one batch stops mattering: a stale pre-settle append sorts
+itself out no matter when the settle frame lands.
+
+RPC yields both arms; `tracked()` id for an overlay emission is
+`String(throughSequence)`. Duplicate tracked ids are safe on both transports
+(verified on tRPC 11.18: the IPC link buffers by subscription id, not event
+id; `httpSubscriptionLink` keeps last-write-wins `lastEventId`), transient
+frames never advance the resume cursor, and a reconnect from an overlay id
+replays durable history and receives a fresh baseline. Do not suffix the id
+(`"123~4"` fails the `sseCursor` regex on resubscribe). `maxCursor` and the
+subscription schema do not change.
 
 ### Adapter (`@volli/opencode-adapter`)
 
 - The buffer and the per-part projection memo stay. The 32 ms timer stays but
-  flushes accumulated deltas (appends concatenated per key) instead of
-  rebuilding the message — per-tick wire cost becomes the new bytes only.
-- Part keys: `partId` when one buffered part projects to one UIMessage part,
-  `partId:i` when it projects to several. Order index comes from `partOrder`.
-- Per SSE event, only the touched buffered part is re-projected; old projected
-  slice vs new decides the op: same single text-bearing part growing by a
-  suffix → `part.append`; anything else → `part.upsert`/`part.remove`.
-  Reorders, provider full snapshots that disagree with the buffer, or any
-  ambiguity → `reset`. The escape hatch is the old behavior as worst case,
-  and it is always correct by construction.
-- Durable settle points: the provider marks a message completed, the turn
-  completes, the flush paths (`#flushMessages`), and reconcile
-  (`#messageObservation`) — those two already build the right shape. A failed
-  settle emission must be recorded through the sink's error path (this closes
-  the documented silent-final-snapshot gap where it matters); a failed delta
-  emission marks the message dirty and the next flush emits `reset`.
+  emits a delta batch instead of rebuilding the message — per-tick wire cost
+  becomes the new bytes only. Part keys are the buffered part's provider id,
+  plain: projection is 1:0..1, so no sub-index arm exists.
+- **The diff runs over the whole projected array, not the touched part.** Each
+  tick projects all of `partOrder` exactly as `#emitStreamSnapshot` does today
+  — the per-part memo makes unchanged parts reference-identical — and diffs
+  the keyed result against the last-emitted array: reference-equal → nothing;
+  the same single text-bearing part grown by a suffix → `part.append`;
+  anything else per key → `part.upsert` / `part.remove`. This is complete by
+  construction where a touched-part rule silently is not: `turnBusy` flips
+  re-project every unfinished reasoning part in every message, a
+  post-projection pass marks all-but-the-last reasoning part done when a new
+  part opens, and `permission.asked` / `permission.replied` change pending
+  tool parts without writing to the buffer at all — the last one is how the
+  permission card, the surface's trust boundary, would have silently vanished.
+  Cost per tick is O(parts) identity checks, not O(bytes). Provider full
+  snapshots that disagree with the buffer, reorders, or any ambiguity →
+  `reset`; the escape hatch is the old behavior as worst case.
+- Delta observations bypass the adapter's `#seen` dedupe window: they carry no
+  durable identity, and at ~31 emissions/sec they would evict the durable and
+  interaction ids the window exists to protect.
+- Durable settle points, in the vocabulary that actually exists (there is no
+  provider "message completed" signal; none is claimed): turn completion
+  (`session.idle`, or idle `session.status`, → `#flushMessages`), stream
+  disconnect (`#emitDisconnected`'s flush), reconcile (`#messageObservation`),
+  and — new behavior — **`release()` flushes buffered messages durably before
+  dropping the sink.** Today release costs at most 32 ms of staleness; under
+  deltas it would have discarded the whole in-flight message, and release is
+  a normal user action, not a crash.
+- A failed settle flush raises attention — the sink has no error channel, and
+  `attention.raised` is the mechanism `#emitDisconnected` already pairs with
+  its swallowed flush. That names the documented silent-final-snapshot gap at
+  the one point it becomes data loss. A failed delta emission marks the
+  message dirty; the next tick emits `reset`.
 - The scenario adapter is untouched: its full `transcript.message` beats are
   valid durable emissions and every lab scenario keeps working.
 
@@ -157,10 +237,20 @@ baseline. `maxCursor` and the subscription schema do not change.
 
 `LabTranscriptState` gains a per-message overlay map folded from `overlay`
 emissions. The rendered message for id X is the overlay projection while an
-entry exists, else the durable latest. The settle frame clears the entry —
-same content when the adapter is honest, so no visual jump. Overlay emissions
+entry exists, else the durable latest; a message that exists only in the
+overlay renders after every durable message, in first-delta order, and takes
+its durable position on settle. The settle frame clears the entry — same
+content when the adapter is honest, so no visual jump. Overlay emissions
 never trigger `refreshProjection` (they are the flood `movesProjection` was
 built to suppress, now typed instead of filtered).
+
+Two rules the batching must keep: overlay emissions accumulate in an
+**ordered array**, never in the sequence-keyed `pendingFrames` map — every
+emission in one paint shares a `throughSequence`, latest-wins would collapse
+them, and `part.append` is not idempotent: a collapsed append is silently
+truncated text. And the fold applies the per-message staleness guard from the
+stream-shape section, which is what makes durable-then-overlay application
+order inside one batch immaterial.
 
 ## What this deliberately does not fix
 
