@@ -361,24 +361,18 @@ export function bundleSummary(rows: readonly BundleRow[]): SummarySegment[] {
   const tools = bundleToolRows(rows);
   if (tools.length === 0) return [];
 
-  const order: ActivityKind[] = [];
+  // A Map iterates in insertion order, and a kind is inserted the first time it
+  // appears — so the Map itself is the first-appearance order the sentence needs.
   const groups = new Map<ActivityKind, DynamicToolUIPart[]>();
   for (const row of tools) {
     const kind = activityDescriptor(row.part).kind;
     const group = groups.get(kind);
     if (group) group.push(row.part);
-    else {
-      groups.set(kind, [row.part]);
-      order.push(kind);
-    }
+    else groups.set(kind, [row.part]);
   }
 
-  const phrase = order
-    .map((kind) => {
-      /* v8 ignore next -- every kind pushed to `order` was set into `groups` in the same branch above, so the lookup can never miss. */
-      const parts = groups.get(kind) ?? [];
-      return kindPhrase(kind, parts);
-    })
+  const phrase = [...groups]
+    .map(([kind, parts]) => kindPhrase(kind, parts))
     .join(", ")
     .replace(/^./, (character) => character.toUpperCase());
   const streaming = tools.some((row) => isRowActive(row.part));
@@ -995,8 +989,7 @@ export function todosFromUnknown(value: unknown): SessionTodo[] | null {
       typeof item.id === "string" && item.id.trim().length > 0
         ? item.id
         : `todo-${index}-${content.slice(0, 24)}`;
-    /* v8 ignore next -- normalizeTodoPriority always returns a priority, never null; the fallback is for its wider return type. */
-    todos.push({ id, content, status, priority: priority ?? "medium" });
+    todos.push({ id, content, status, priority });
   }
   // A payload that was a todo list but whose rows all failed to parse reads as
   // empty rather than missing, so the dock can clear.
@@ -1035,8 +1028,9 @@ function normalizeTodoStatus(value: unknown): SessionTodoStatus | null {
   return null;
 }
 
-function normalizeTodoPriority(value: unknown): SessionTodoPriority | null {
-  if (value === undefined || value === null || value === "") return "medium";
+// Unlike status, priority is never a reason to drop a row: a todo with an
+// unreadable priority is still a todo, so this always names one.
+function normalizeTodoPriority(value: unknown): SessionTodoPriority {
   if (typeof value !== "string") return "medium";
   const normalized = value.trim().toLowerCase();
   if (normalized === "high" || normalized === "medium" || normalized === "low") return normalized;
