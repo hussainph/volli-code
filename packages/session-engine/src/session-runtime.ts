@@ -1307,8 +1307,9 @@ class DefaultSessionRuntime implements SessionRuntime {
           reference,
         });
         // The settled snapshot is durable, so the transient tail it supersedes
-        // goes now — while this observation is being *processed*, not when its
-        // frame is delivered. `observe` dedupes by observation id and returns
+        // goes now — the durable message's own id is what a delta addresses, so
+        // the two arms join here. Keyed off this observation being *processed*,
+        // not off its frame being delivered: `observe` dedupes by id and returns
         // the original event for a repeat; that event's sequence is behind every
         // subscriber cursor, so its frame is never delivered again, and an entry
         // waiting on that delivery would wait forever.
