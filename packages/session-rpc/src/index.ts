@@ -269,6 +269,41 @@ const diagnosticsSubscriptionSchema = z.object({
   lastEventId: sseCursor.optional(),
 });
 
+/** The domain reason recorded in diagnostics when a bounded queue drops frames. */
+const SUBSCRIPTION_OVERFLOW_CODE = "SUBSCRIPTION_OVERFLOW";
+/**
+ * One message per subscription arm, shared by the diagnostic and the terminal
+ * error so the two cannot drift. Both name the recovery rather than the fault,
+ * because resuming from the last event id is the only thing the caller can do.
+ */
+const SESSION_OVERFLOW_MESSAGE = "Session subscription fell behind; resume from the last event id";
+const DIAGNOSTICS_OVERFLOW_MESSAGE =
+  "Diagnostics subscription fell behind; resume from the last event id";
+
+/**
+ * The terminal error a subscription ends on once its bounded queue has dropped
+ * frames. Ending normally is what this replaces, and a normal end is a lie the
+ * client cannot detect: over Electron IPC the pump sends `{kind:"done"}` and the
+ * renderer link calls `observer.complete()`, so a surface that registered only
+ * `onData`/`onError` — the lab chat controller is one — simply stops updating,
+ * with the loss visible solely in a main-process diagnostic no user can read.
+ * This matters more now that one runtime tick emits several deltas instead of a
+ * single snapshot: the queue fills faster, and holding up under concurrent
+ * sessions is the point of emitting deltas at all.
+ *
+ * `TOO_MANY_REQUESTS` is the 429 slot, where gRPC's `RESOURCE_EXHAUSTED` also
+ * lands, and it is the only bucket in tRPC's vocabulary that means flow control
+ * rather than a malformed request or a broken server. The retryable codes
+ * (`INTERNAL_SERVER_ERROR`, `BAD_GATEWAY`, `SERVICE_UNAVAILABLE`,
+ * `GATEWAY_TIMEOUT`) are avoided deliberately: `httpSubscriptionLink` reconnects
+ * on those by itself, which would re-arm the same losing race on the lab
+ * transport without the consumer ever learning it fell behind — the exact
+ * silence this error exists to break.
+ */
+function subscriptionOverflowError(message: string): TRPCError {
+  return new TRPCError({ code: "TOO_MANY_REQUESTS", message });
+}
+
 const t = initTRPC.context<SessionRouterContext>().create();
 
 const instrumentedProcedure = t.procedure.use(async ({ ctx, path, next }) => {
@@ -298,6 +333,25 @@ const instrumentedProcedure = t.procedure.use(async ({ ctx, path, next }) => {
 /** Creates the reusable Session API used by both Electron IPC and Lab HTTP/SSE adapters. */
 export function createSessionRouter() {
   return t.router({
+    /**
+     * `projectId` picks WHICH catalog answers — the host keeps one per project
+     * directory — so it decides which checkout gets probed for models. Omitting
+     * it asks the host's fallback directory, which is what a Session with no
+     * project yet wants and what a project-scoped Settings screen never does.
+     *
+     * **Send `save` the same `projectId` the preceding `inspect` used.** A
+     * catalog persists models out of the discovery snapshot it is holding, and
+     * that snapshot belongs to the one instance that produced it — so a save
+     * routed to a different (or omitted) `projectId` reaches an instance that
+     * has discovered nothing and is refused, however recently the user
+     * inspected. Nothing here can enforce it: the two are independent requests
+     * and `resolveRuntimeCatalog` is free to answer each with a different
+     * instance. A client that lets a form default one and drop the other earns a
+     * refusal whose message ("inspect before saving") describes a state the user
+     * cannot see they are in. Both renderer clients dodge it by sending no
+     * `projectId` at all, which pairs them on the fallback catalog; a client
+     * that does scope itself owns keeping the pair.
+     */
     runtimeCatalog: t.router({
       inspect: instrumentedProcedure
         .input(
@@ -379,6 +433,15 @@ export function createSessionRouter() {
                 ? tracked(String(emission.throughSequence), emission)
                 : tracked(String(emission.sequence), emission);
             }
+            // The loop ends the same way on a clean close and on an overflow, so
+            // this throw is the only thing that tells them apart downstream. It
+            // sits inside the `try` on purpose: `finally` still runs on the way
+            // out, so `unsubscribe()` fires before the error leaves the
+            // generator and no runtime listener outlives the stream it fed.
+            // A consumer that tears the iterator down instead resumes at the
+            // `yield` with a return completion and never reaches this line —
+            // an overflow the client already walked away from stays a diagnostic.
+            if (queue.overflowed) throw subscriptionOverflowError(SESSION_OVERFLOW_MESSAGE);
           } finally {
             signal?.removeEventListener("abort", abort);
             unsubscribe();
@@ -387,8 +450,8 @@ export function createSessionRouter() {
                 procedure: "session.subscribe",
                 phase: "error",
                 transport: ctx.transport ?? "unknown",
-                code: "SUBSCRIPTION_OVERFLOW",
-                message: "Session subscription fell behind; resume from the last event id",
+                code: SUBSCRIPTION_OVERFLOW_CODE,
+                message: SESSION_OVERFLOW_MESSAGE,
               });
             }
           }
@@ -441,6 +504,11 @@ export function createSessionRouter() {
           signal?.addEventListener("abort", abort, { once: true });
           try {
             for await (const entry of queue) yield tracked(String(entry.id), entry);
+            // Same shape, same reasoning as `session.subscribe` above: a dropped
+            // diagnostic that ends the stream normally reads to the lab panel as
+            // "nothing more happened", which is the one thing a diagnostics
+            // surface must never say.
+            if (queue.overflowed) throw subscriptionOverflowError(DIAGNOSTICS_OVERFLOW_MESSAGE);
           } finally {
             signal?.removeEventListener("abort", abort);
             unsubscribe();
@@ -449,8 +517,8 @@ export function createSessionRouter() {
                 procedure: "labDiagnostics.subscribe",
                 phase: "error",
                 transport: ctx.transport ?? "unknown",
-                code: "SUBSCRIPTION_OVERFLOW",
-                message: "Diagnostics subscription fell behind; resume from the last event id",
+                code: SUBSCRIPTION_OVERFLOW_CODE,
+                message: DIAGNOSTICS_OVERFLOW_MESSAGE,
               });
             }
           }
@@ -536,6 +604,14 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
     this.#capacity = capacity;
   }
 
+  /**
+   * True once a push found the buffer full. **A consumer must convert this into
+   * a terminal error rather than letting the iteration end.** An overflowed
+   * queue ends exactly like an exhausted one, and a normal end is the single
+   * thing this stream must never claim after dropping frames: downstream it
+   * becomes a `done` frame, then `observer.complete()`, then a surface that
+   * silently stops updating while its own state is already stale.
+   */
   get overflowed(): boolean {
     return this.#overflowed;
   }
@@ -546,6 +622,9 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
     if (waiter) waiter({ done: false, value });
     else if (this.#values.length < this.#capacity) this.#values.push(value);
     else {
+      // Closed without discarding: what the queue did hold is still contiguous
+      // history the consumer can use, and the gap only starts after it. Dropping
+      // it would widen the hole the consumer then has to resume across.
       this.#overflowed = true;
       this.close(false);
     }
