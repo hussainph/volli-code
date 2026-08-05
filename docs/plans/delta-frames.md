@@ -199,6 +199,17 @@ subscription schema do not change.
   emits a delta batch instead of rebuilding the message — per-tick wire cost
   becomes the new bytes only. Part keys are the buffered part's provider id,
   plain: projection is 1:0..1, so no sub-index arm exists.
+- **One tick per message at a time, and the interval does not guarantee it.**
+  A tick is over when its batch reaches the sink, and the sink carries the
+  slowest subscriber's backpressure by the rule above — so a batch outliving
+  its own 32 ms window is a designed-for case, not an unlucky one. Two ticks
+  running at once both diff against the last-emitted record the first has
+  already cleared: the second sends a `reset`, the first writes its older
+  record back over it, and every later diff is then computed against a state
+  the consumer does not hold. On a growing text part that is an append of text
+  it already has — the answer quietly saying part of itself twice, on the one
+  surface with no way to notice. A message that changes while its tick is
+  emitting is marked pending instead, and the tick re-arms on the way out.
 - **The diff runs over the whole projected array, not the touched part.** Each
   tick projects all of `partOrder` exactly as `#emitStreamSnapshot` does today
   — the per-part memo makes unchanged parts reference-identical — and diffs

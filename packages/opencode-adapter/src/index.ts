@@ -605,6 +605,10 @@ class OpenCodeBinding implements BindingHandle {
   /** What each in-flight message last said on the wire; absent means it owes a `reset`. */
   readonly #streamEmissions = new Map<string, EmittedTranscript>();
   readonly #streamDeltaTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Messages whose tick is still putting its batch on the wire. */
+  readonly #streamDeltaTicks = new Set<string>();
+  /** Messages that changed while their tick was emitting, owed one more. */
+  readonly #streamDeltaPending = new Set<string>();
   readonly #deferredEvents: OpenCodeSseEvent[] = [];
   readonly #questions = new Map<string, readonly OpenCodeQuestion[]>();
   /** Open tool-gating permissions, by OpenCode's permission id. */
@@ -1360,16 +1364,37 @@ class OpenCodeBinding implements BindingHandle {
    * can draw them — but what leaves it is now the new bytes rather than the
    * whole message, so a long reply costs its own length once instead of once
    * per tick.
+   *
+   * **One tick per message at a time**, and the interval is not what guarantees
+   * it: a tick is only over once its whole batch reaches the sink, and the sink
+   * carries the slowest subscriber's backpressure, so a batch outliving its own
+   * 32ms window is a designed-for case rather than an unlucky one. Two ticks
+   * running at once both diff against `#streamEmissions` — which the first one
+   * has already cleared — so the second sends a `reset` the first then
+   * overwrites with its own older record, and every later diff is computed
+   * against a state the consumer does not hold. For a growing text part that is
+   * an append of text it already has: silently duplicated prose, on the one
+   * surface with no way to notice. So a message that changes while its tick is
+   * still emitting is marked pending, and the tick re-arms itself on the way
+   * out.
    */
   #scheduleStreamDeltas(messageId: string | null): void {
     if (!messageId || this.#released || !this.#messages.has(messageId)) return;
+    if (this.#streamDeltaTicks.has(messageId)) {
+      this.#streamDeltaPending.add(messageId);
+      return;
+    }
     if (this.#streamDeltaTimers.has(messageId)) return;
     const timer = setTimeout(() => {
       this.#streamDeltaTimers.delete(messageId);
+      this.#streamDeltaTicks.add(messageId);
       // Nothing to catch here on purpose: a tick contains its own failures,
       // because a rejection reaching this callback is an unhandled rejection in
       // main and there is no caller left to answer for it.
-      void this.#emitStreamDeltas(messageId);
+      void this.#emitStreamDeltas(messageId).then(() => {
+        this.#streamDeltaTicks.delete(messageId);
+        if (this.#streamDeltaPending.delete(messageId)) this.#scheduleStreamDeltas(messageId);
+      });
     }, STREAM_DELTA_DELAY_MS);
     this.#streamDeltaTimers.set(messageId, timer);
   }
@@ -1487,11 +1512,15 @@ class OpenCodeBinding implements BindingHandle {
     const timer = this.#streamDeltaTimers.get(messageId);
     if (timer) clearTimeout(timer);
     this.#streamDeltaTimers.delete(messageId);
+    // The pending mark goes with the timer: whatever it was owed, the caller
+    // clearing the schedule is about to say durably.
+    this.#streamDeltaPending.delete(messageId);
   }
 
   #clearScheduledStreamDeltas(): void {
     for (const timer of this.#streamDeltaTimers.values()) clearTimeout(timer);
     this.#streamDeltaTimers.clear();
+    this.#streamDeltaPending.clear();
   }
 
   /**

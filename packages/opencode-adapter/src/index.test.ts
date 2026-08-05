@@ -1055,6 +1055,51 @@ describe("OpenCodeNativeAdapter", () => {
     await handle.release("requested");
   });
 
+  it("keeps one tick per message however slow the reader is", async () => {
+    const hold = new Deferred<void>();
+    const network = tickedStream(
+      new FakeNetwork(),
+      [
+        [assistantOpened, textDelta("d1", "answer", "The tree")],
+        [textDelta("d2", "answer", " is stale.")],
+        [textDelta("d3", "answer", " Reinstalling")],
+        [textDelta("d4", "answer", " now.")],
+      ],
+      hold,
+    );
+    const adapter = createAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        // Slower than the 32ms window on purpose. Overlay delivery inherits the
+        // slowest subscriber's backpressure by design, so a batch outliving its
+        // own tick is the case to build for, not an unlucky one.
+        if (observation.kind === "transcript.delta") {
+          await new Promise((resolve) => setTimeout(resolve, 60));
+        }
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 900));
+
+    // Exactly one baseline. A second `reset` is the signature of two ticks
+    // running at once: the later one found `#streamEmissions` already cleared by
+    // the earlier one, and the earlier one then wrote its own older record back
+    // over it — after which every diff is computed against a state the reader
+    // does not hold.
+    expect(deltaOps(observations).filter((delta) => delta.op === "reset")).toHaveLength(1);
+    // Which is what that costs, and why it has to be a test: the reader would
+    // be sent an append of text it already had, and the answer would quietly
+    // say part of itself twice.
+    expect(transcriptStates(observations).at(-1)).toEqual({
+      id: "provider-assistant",
+      role: "assistant",
+      parts: [{ type: "text", text: "The tree is stale. Reinstalling now." }],
+    });
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
   it("says nothing at all when a tick finds nothing new", async () => {
     const hold = new Deferred<void>();
     const network = tickedStream(
