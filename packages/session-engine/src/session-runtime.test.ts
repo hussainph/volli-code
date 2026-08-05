@@ -2203,6 +2203,127 @@ describe("SessionRuntime transient transcript overlay", () => {
     ]);
   });
 
+  it("does not let one subscriber's cursor inflate the sequence other subscribers are stamped with", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    await adapter.emit(deltaObservation("delta-1", resetDelta("Hel")));
+    const head = (await runtime.snapshot({ sessionId })).throughSequence;
+
+    // A cursor names where one subscriber resumes. It is client input — an SSE
+    // reconnect supplies it — and it is checked only for being a non-negative
+    // integer, so it says nothing about what this Session has durably written.
+    const stopAhead = await runtime.subscribe(
+      { sessionId, afterSequence: head + 1_000_000 },
+      () => undefined,
+    );
+    const emissions: SessionStreamEmission[] = [];
+    const stop = await runtime.subscribe({ sessionId, afterSequence: head }, (emission) => {
+      emissions.push(emission);
+    });
+    await adapter.emit(
+      deltaObservation("delta-2", { op: "part.append", key: "text-1", text: "lo" }),
+    );
+    stopAhead();
+    stop();
+
+    // Both the baseline and the delta behind it still carry the real head. A
+    // number above it would be a claim to be newer than every settle, which is
+    // what the consumer's staleness guard reads to drop an overtaken overlay.
+    expect(overlaysIn(emissions).map(({ throughSequence }) => throughSequence)).toEqual([
+      head,
+      head,
+    ]);
+  });
+
+  it("lets a durable publish that lands during the seeding read outrank the seed", async () => {
+    const base = composition();
+    let publishDuringRead: (() => Promise<void>) | null = null;
+    const engine: SessionEngine = {
+      ...base.engine,
+      listEvents: async (query) => {
+        const publish = publishDuringRead;
+        publishDuringRead = null;
+        const page = await base.engine.listEvents(query);
+        // Between the page and the moment `#overlay` records what it says. The
+        // seed is now the older of the two facts, and the record it is seeding
+        // has already been moved past it.
+        if (publish) await publish();
+        return page;
+      },
+    };
+    const { runtime, adapter } = composition({ engine, adapter: base.adapter });
+    const sessionId = await createAndAttach(runtime);
+    const seededFrom = (await runtime.snapshot({ sessionId })).throughSequence;
+
+    const emissions: SessionStreamEmission[] = [];
+    const stop = await runtime.subscribe({ sessionId, afterSequence: seededFrom }, (emission) => {
+      emissions.push(emission);
+    });
+    publishDuringRead = async () => {
+      await runtime.command({
+        commandId: "overlay-seed-race-submit",
+        sessionId,
+        command: { kind: "message.submit", message: userMessage("overlay-seed-race") },
+      });
+    };
+    await adapter.emit(deltaObservation("delta-1", resetDelta("Hel")));
+    stop();
+
+    // The number only ever moves forward, so the later of the two wins whichever
+    // order they arrive in. Stamping the delta with the seed's older sequence
+    // would put it below events the subscriber has already folded, and the
+    // staleness guard would throw away an overlay that is not stale at all.
+    const durableHead = (await runtime.snapshot({ sessionId })).throughSequence;
+    expect(durableHead).toBeGreaterThan(seededFrom);
+    expect(overlaysIn(emissions).map(({ throughSequence }) => throughSequence)).toEqual([
+      durableHead,
+    ]);
+  });
+
+  it("honours an overlay dropped while the read that seeds it is still in flight", async () => {
+    const base = composition();
+    let dropOverlay: (() => Promise<void>) | null = null;
+    const engine: SessionEngine = {
+      ...base.engine,
+      listEvents: async (query) => {
+        // Fires once, from inside the seeding read `#overlay` awaits — the one
+        // window where the record is in the map and the value it starts from is
+        // not yet known.
+        const drop = dropOverlay;
+        dropOverlay = null;
+        if (drop) await drop();
+        return base.engine.listEvents(query);
+      },
+    };
+    const { runtime, adapter } = composition({ engine, adapter: base.adapter });
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+
+    dropOverlay = async () => {
+      await runtime.command({
+        commandId: "overlay-dropped-mid-read",
+        sessionId,
+        command: { kind: "adapter.release", attachmentId },
+      });
+    };
+    await adapter.emit(deltaObservation("delta-1", resetDelta("Hel")));
+
+    expect(adapter.releases).toBe(1);
+    const emissions: SessionStreamEmission[] = [];
+    (
+      await runtime.subscribe(
+        { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
+        (emission) => {
+          emissions.push(emission);
+        },
+      )
+    )();
+    // The release dropped the overlay; the delta that was mid-read may not put
+    // it back. A baseline here would be transient text for a Session with no
+    // binding left to finish it.
+    expect(overlaysIn(emissions)).toEqual([]);
+  });
+
   it("contains a subscriber that fails on an overlay, and stops delivering to one that left", async () => {
     const failures: unknown[] = [];
     const failing = composition({

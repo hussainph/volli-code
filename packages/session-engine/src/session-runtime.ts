@@ -1048,10 +1048,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         afterSequence: input.afterSequence,
       });
       await this.#enqueue(subscriber, replay);
-      await this.#enqueueOverlayBaselines(
-        subscriber,
-        replay.at(-1)?.sequence ?? input.afterSequence,
-      );
+      await this.#enqueueOverlayBaselines(subscriber);
     } catch (error) {
       subscribers.delete(subscriber);
       throw error;
@@ -1424,6 +1421,19 @@ class DefaultSessionRuntime implements SessionRuntime {
    * record that starts from a stale sequence would emit overlays the
    * subscriber's staleness guard drops, which is why this is worth one ledger
    * read per streaming attachment.
+   *
+   * Installing it early is also what exposes it to deletion mid-read, so *both*
+   * exits have to honour a deletion, not just the failing one. A closed or
+   * failed attachment, a release command and `close()` each drop the entry,
+   * and every one of them can land while this read is in flight;
+   * `#keepOverlay` writes the record back unconditionally, so returning through
+   * it would undo whichever of them just ran. What survives is transient state
+   * for a Session with no binding left to finish it — published to subscribers
+   * as though something were still streaming, rebuilt as a baseline for every
+   * later subscriber, and, when the deleter was `close()`, held past the end of
+   * the runtime that owns it. The failure path resolves this by deleting; here
+   * the record may still be the live one, so the answer is to look before
+   * re-inserting.
    */
   async #overlay(sessionId: string): Promise<SessionOverlayState> {
     const existing = this.#overlays.get(sessionId);
@@ -1438,6 +1448,12 @@ class DefaultSessionRuntime implements SessionRuntime {
       this.#overlays.delete(sessionId);
       throw error;
     }
+    // Not the record installed above means it was deleted during the read (and
+    // possibly replaced since). The caller still gets somewhere to fold this one
+    // delta, but it stays out of the map and dies with this call — the deletion
+    // is the newer fact about the Session, and this call has no standing to
+    // reverse it.
+    if (this.#overlays.get(sessionId) !== created) return created;
     return this.#keepOverlay(sessionId, created);
   }
 
@@ -1715,9 +1731,27 @@ class DefaultSessionRuntime implements SessionRuntime {
    * resurrect it — and the tick-level race that even this cannot close is
    * covered by the sequence each baseline carries, which a settle that already
    * landed leaves strictly above it.
+   *
+   * That sequence is read off the overlay and never off the subscriber that
+   * asked for these baselines. A subscription cursor is client input —
+   * `subscribe` checks it is a non-negative integer and nothing else, and the
+   * RPC edge widens it further to whatever `Last-Event-ID` a reconnect carried —
+   * while `throughSequence` is Session-wide state stamped on the emissions
+   * *every* subscriber receives. Recording a cursor as durable progress would
+   * therefore let one caller resuming from a number above this Session's head
+   * raise it for all of them, permanently: `#recordDurableSequence` only moves
+   * forward. The consumer's whole defence against a pre-settle overlay arriving
+   * after its settle is `throughSequence < settledAt`, so an inflated number
+   * silently retires that guard and the late overlay replaces a durable message
+   * with an older partial one. Nothing here needs to record anything anyway:
+   * `#overlay` seeds the number from the folded history and `#publish` advances
+   * it on every durable event. Should it still trail what this subscriber was
+   * just replayed, that errs the only safe way — a baseline below a sequence
+   * the consumer has already folded is dropped, costing one transient message
+   * that the emitter's next delta rebuilds, where an inflated one costs durable
+   * content.
    */
-  #enqueueOverlayBaselines(subscriber: Subscriber, replayedThrough: number): Promise<void> {
-    this.#recordDurableSequence(subscriber.sessionId, replayedThrough);
+  #enqueueOverlayBaselines(subscriber: Subscriber): Promise<void> {
     const overlay = this.#overlays.get(subscriber.sessionId);
     if (!overlay) return Promise.resolve();
     const baselines = [...overlay.messages].map(([messageId, message]) =>
@@ -1738,10 +1772,18 @@ class DefaultSessionRuntime implements SessionRuntime {
    * The append is synchronous, at exactly the point `#enqueue` appends to the
    * same chain. Awaiting `draining` first and appending after would let a
    * durable publish that arrived in between interleave ahead of an overlay that
-   * preceded it. Overlays therefore inherit the existing slowest-subscriber
-   * backpressure on the adapter's emit path — deliberate: the alternative is an
-   * unbounded transient queue per subscriber, which is the cost this whole
-   * change exists to stop paying.
+   * preceded it.
+   *
+   * How far the resulting promise reaches back is the listener's choice, not
+   * this method's. A listener that awaits its own delivery holds the chain, and
+   * `#publishOverlay` awaits every subscriber's, so the adapter's emit is paced
+   * by the slowest of them — the same backpressure durable frames already get.
+   * A listener that hands the emission to a buffer of its own resolves at once
+   * and lets none of that through: the session-rpc subscription is exactly such
+   * a listener, and what bounds it is its own queue's capacity, which is its to
+   * size and to report on overflowing. Both shapes are allowed on purpose —
+   * what this seam owes is order and one delivery per emission, and a listener
+   * that chooses to buffer answers for the buffer.
    */
   #appendOverlay(subscriber: Subscriber, emission: SessionStreamOverlay): Promise<void> {
     subscriber.draining = subscriber.draining
