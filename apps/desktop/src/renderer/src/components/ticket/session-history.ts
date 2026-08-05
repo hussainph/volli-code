@@ -249,9 +249,10 @@ export function filterChatSessionHistory(
 
 /**
  * One rendered row of the rail: a terminal row (rename, resume, activate) or a
- * chat row (title and liveness only — there is no PTY behind it, so no
- * activation, resume, or rename yet). Discriminated the same way
- * `SessionListingRow` is, one layer up the view model.
+ * chat row (activate, and title and liveness — a chat Session is durable, so
+ * even a closed one opens onto its own history; rename waits for a live tab to
+ * keep in sync). Discriminated the same way `SessionListingRow` is, one layer up
+ * the view model.
  */
 export type SessionRailRow =
   | { kind: "terminal"; row: TicketSessionRow }
