@@ -119,4 +119,13 @@ try {
 } finally {
   await cleanup().catch(() => {});
 }
-summarize();
+// `summarize()` RETURNS the exit code (see `createRunner` in lib/smoke-kit.mjs:
+// "the roll-up line + process exit code"), and dropping it is not a style slip.
+// An abort still fails, because the throw escapes the `try` above — but a
+// recorded FAIL only prints, so the process exits 0 and CI's
+// `node … || failures=$((failures + 1))` counts a pass. That silences precisely
+// what this probe exists to catch: a channel declared but never handled, a
+// preload door that never reached `contextBridge`, an allow-list spelling a
+// procedure differently from the router. Every other smoke here ends on
+// `process.exit(code)` for the same reason.
+process.exit(summarize());
