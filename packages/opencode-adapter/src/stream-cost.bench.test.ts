@@ -298,9 +298,9 @@ describe("opencode-adapter stream-cost probe", () => {
 
     const network = new FakeNetwork();
     network.events = buildScenarioEvents(chunks);
-    // >32ms (STREAM_SNAPSHOT_DELAY_MS) so each batch's coalescing timer fires
-    // and flushes before the next batch arrives, instead of collapsing into
-    // one snapshot for the whole run.
+    // >32ms (STREAM_DELTA_DELAY_MS) so each batch's coalescing timer fires and
+    // flushes before the next batch arrives, instead of the whole run
+    // collapsing into a single tick that prices nothing.
     network.batchSize = 10;
     network.batchWaitMs = 40;
 

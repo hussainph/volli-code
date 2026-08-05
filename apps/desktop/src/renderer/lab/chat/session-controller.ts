@@ -72,10 +72,12 @@ export interface LabSessionFrame {
  * `messages` and `openedInteractions` joined it for the same reason and after
  * the same measurement mistake. Both were memoized on the frame list, and that
  * list is rebuilt on every batch — so the memo missed every time, and each miss
- * re-read *every frame the Session has ever committed*. Frames outgrow messages
- * badly: a streamed reply commits a transcript snapshot per chunk, several per
- * animation frame, and every one of them made both scans longer for the rest of
- * the Session. Folded, a batch costs the batch.
+ * re-read *every frame the Session has ever committed*. Frames outgrew messages
+ * badly: a streamed reply committed a transcript snapshot per chunk, several
+ * per animation frame, and every one of them made both scans longer for the
+ * rest of the Session. Folded, a batch costs the batch — and the flood itself
+ * is gone now, since a message mid-word arrives as an overlay and commits
+ * nothing.
  */
 interface LabTranscriptState {
   frames: readonly LabSessionFrame[];

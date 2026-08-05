@@ -21,22 +21,27 @@ import {
 } from "./index";
 
 /**
- * Baseline probe for `docs/plans/delta-frames.md` ("Proof, checked in before
- * the change", item 2). Today every `transcript.message` observation the
+ * Persistence probe for `docs/plans/delta-frames.md` ("Proof, checked in
+ * before the change", item 2). Every `transcript.message` observation the
  * runtime records writes the WHOLE message as a fresh content-addressed
- * artifact and appends one `transcript.referenced` ledger event
- * (`session-runtime.ts:1214-1230`); subscribers get the full decoded artifact
- * inlined on the frame (`SessionStreamFrame.transcript`). If an adapter emits
- * a full snapshot once per 32ms coalescing tick — which is exactly what
- * `packages/opencode-adapter`'s stream-cost probe measures at the wire — this
- * is what that cadence costs in durable storage and in every subscriber's
- * feed.
+ * artifact and appends one `transcript.referenced` ledger event; subscribers
+ * get the full decoded artifact inlined on the frame
+ * (`SessionStreamFrame.transcript`). That is unchanged by delta frames, on
+ * purpose: `transcript.message` keeps its meaning and only the adapter's
+ * emission cadence moved.
  *
- * This drives `DefaultSessionRuntime` directly with the SAME deterministic
- * long-answer fixture `opencode-adapter/src/stream-cost.bench.test.ts` uses
- * (fixed prose + three fenced code blocks, ~16-20KB, fixed 24-64 char
- * chunks), feeding cumulative `transcript.message` observations straight to
- * the sink — no adapter, no timers, no coalescing to wait out.
+ * Which makes what this measures a **synthetic worst case**, and it is worth
+ * being plain about it. The fixture feeds cumulative `transcript.message`
+ * observations straight to the sink — one per chunk, no adapter, no timers —
+ * so it prices "one ledger event per 32ms forever", the cadence the OpenCode
+ * adapter used to have and now does not. The number is the ceiling a durable
+ * per-chunk adapter would still pay, not a reading of the shipped pipeline.
+ * Phase 3 owns re-pointing it at the settle-count cadence and asserting that.
+ *
+ * The fixture is the same deterministic long answer
+ * `opencode-adapter/src/stream-cost.bench.test.ts` uses (fixed prose + three
+ * fenced code blocks, ~16-20KB, fixed 24-64 char chunks), so the two probes
+ * describe the same answer.
  */
 
 // ---------------------------------------------------------------------------
@@ -279,7 +284,7 @@ function buildSnapshotMessages(chunks: readonly string[]): UIMessage[] {
   return messages;
 }
 
-describe("session-engine stream-cost probe (baseline, pre delta-frames change)", () => {
+describe("session-engine stream-cost probe (synthetic per-chunk durability)", () => {
   it("measures persistence and frame-wire amplification for a long streamed answer", async () => {
     const fixtureText = buildFixtureText();
     const chunks = chunkFixture(fixtureText);

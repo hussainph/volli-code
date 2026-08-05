@@ -216,7 +216,20 @@ subscription schema do not change.
   `reset`; the escape hatch is the old behavior as worst case.
 - Delta observations bypass the adapter's `#seen` dedupe window: they carry no
   durable identity, and at ~31 emissions/sec they would evict the durable and
-  interaction ids the window exists to protect.
+  interaction ids the window exists to protect. Having no durable identity,
+  they carry a plain per-binding counter (`opencode:delta:<session>:<n>`) as
+  their observation id, and they never move `#cursor`.
+- The tick's post-projection pass — the one that marks every thought but the
+  last one done while the turn is still busy — memoizes its settled reading
+  against the streaming part it came from. A fresh object per tick would make
+  every thought the message has already moved past look changed, which is one
+  full re-upsert per tick of text nobody is writing any more: the quadratic
+  cost this change exists to remove, reintroduced by the collapse pass.
+- **The adapter withdraws what it will not settle.** An entry that reaches no
+  durable snapshot has no other end: `message.remove` is emitted when the
+  provider deletes an in-flight message, and when a settle flush finds the
+  message projects to nothing at all. Without it the overlay renders a message
+  that will not go away.
 - Durable settle points, in the vocabulary that actually exists (there is no
   provider "message completed" signal; none is claimed): turn completion
   (`session.idle`, or idle `session.status`, → `#flushMessages`), stream
@@ -251,6 +264,20 @@ them, and `part.append` is not idempotent: a collapsed append is silently
 truncated text. And the fold applies the per-message staleness guard from the
 stream-shape section, which is what makes durable-then-overlay application
 order inside one batch immaterial.
+
+The overlay projection is gated by the same `speaks` rule the durable
+projection uses, **with the durable message as its fallback**. A baseline
+`reset` can carry nothing drawable yet — an emitter leads with one before the
+first word — and rendering that would open an empty bubble in front of the
+answer, or blank a settled message the moment its next turn opens. So the
+rendered message is the overlay while the overlay has something to draw, else
+the durable latest, else no row at all. One rule, not two.
+
+The renderer's own overlay is **not** dropped when the attachment closes: the
+engine drops its map there, but a reader that watched a sentence being written
+keeps seeing it until something durable replaces it or the surface reloads.
+Losing mid-word text with nothing in its place is worse than holding it, and
+nothing about it was durable to begin with.
 
 ## What this deliberately does not fix
 
@@ -332,6 +359,13 @@ probe confirms and the delta-frame change leaves alone, since
 `transcript.message` keeps its current persistence semantics; only the
 adapter's emission cadence changes.
 
+Which is why this probe still reads the same after the change, and why the
+number above is now a **synthetic worst case** rather than a reading of the
+shipped pipeline: it feeds per-chunk `transcript.message` observations
+directly, which the real adapter no longer does. It prices the ceiling a
+durable per-chunk adapter would still pay. Phase 3 owns re-pointing it at the
+settle-count cadence and asserting that instead.
+
 ### Fence probe
 
 `apps/desktop/src/renderer/lab/scratches/chat-performance.tsx`, driven by
@@ -384,10 +418,18 @@ the delta contract above.
 
 ## Phases
 
-1. Probes + recorded baselines (no behavior change).
+1. Probes + recorded baselines (no behavior change). **Landed.**
 2. The contract: engine vocabulary + overlay fold + runtime publish/baseline;
    adapter delta emission + settle snapshots; RPC union; renderer fold.
    Expect the adapter's exact-object part-mapping assertions to churn — that
-   churn is the priced-in cost (readiness doc, decision 3).
-3. Re-run probes and assert ceilings; the fence policy if the probe demands
-   it; docs and gates.
+   churn is the priced-in cost (readiness doc, decision 3). **Landed**, with
+   one addition the three layers earned by being written apart:
+   `apps/desktop/src/renderer/lab/chat/delta-frames.integration.test.ts`
+   drives the real adapter from scripted SSE through the real
+   `DefaultSessionRuntime` and into the renderer's real `appendFrames`. Each
+   layer's own tests state the contract in that layer's vocabulary, which is
+   exactly the shape of test that cannot catch a handshake two layers spell
+   differently.
+3. Re-run probes and assert ceilings; re-point the persistence probe at the
+   settle-count cadence; the fence policy if the probe demands it; docs and
+   gates.
