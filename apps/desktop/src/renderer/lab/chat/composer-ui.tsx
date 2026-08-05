@@ -46,10 +46,6 @@ import {
   PromptInputTextarea,
   PromptInputTools,
 } from "@ai-elements/prompt-input";
-import { Button } from "@renderer/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
-import { cn } from "@renderer/lib/utils";
-
 import {
   composerIntent,
   offersAgentChoice,
@@ -59,7 +55,10 @@ import {
   type ComposerAgent,
   type ComposerIntent,
   type QueuedMessage,
-} from "./session-model";
+} from "@renderer/chat/session-model";
+import { Button } from "@renderer/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import { cn } from "@renderer/lib/utils";
 
 export interface SessionComposerProps {
   value: string;

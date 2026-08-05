@@ -25,6 +25,8 @@ import type { SessionEvent, SessionInteraction } from "@volli/shared";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
+import { projectTranscriptMessages } from "@renderer/chat/message-projection";
+
 import {
   appendFrames,
   attachLabExecutor,
@@ -33,7 +35,6 @@ import {
   startLabSession,
   type LabSessionFrame,
 } from "./session-controller";
-import { projectTranscriptMessages } from "./message-projection";
 
 const EMPTY = {
   frames: [] as readonly LabSessionFrame[],

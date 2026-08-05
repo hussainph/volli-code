@@ -17,15 +17,18 @@ import type {
 import type { RpcDiagnosticEntry } from "@volli/session-rpc";
 import type { UIMessage } from "ai";
 
+import { indexOpenedInteractions } from "@renderer/chat/interaction";
+import {
+  layerTranscriptOverlay,
+  projectTranscriptMessages,
+} from "@renderer/chat/message-projection";
+import { resolveRuntimeSelection } from "@renderer/chat/session-model";
 import { useRuntimeCatalogClient } from "@renderer/lib/runtime-catalog-client";
 import { useUiStore } from "@renderer/stores/ui";
 
 import { LAB_SCENARIO_ADAPTER_ID } from "../../../lab-scenarios";
 import { LAB_SESSION_PROJECT_ID, LAB_SESSION_TICKET_ID } from "../../../lab-session-rpc-path";
 import { createSessionRpcClient, type SessionRpcClient } from "../session-rpc-client";
-import { indexOpenedInteractions } from "./interaction";
-import { layerTranscriptOverlay, projectTranscriptMessages } from "./message-projection";
-import { resolveRuntimeSelection } from "./session-model";
 
 const DIAGNOSTIC_LIMIT = 100;
 const EMPTY_SELECTION: RuntimeSelection = {

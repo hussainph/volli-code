@@ -52,10 +52,6 @@ import {
 } from "@phosphor-icons/react";
 import type { SessionInteraction, SessionInteractionResolution } from "@volli/shared";
 
-import { Button } from "@renderer/components/ui/button";
-import { Textarea } from "@renderer/components/ui/textarea";
-import { cn } from "@renderer/lib/utils";
-
 import {
   describeInteractionResolution,
   emptyInteractionDraft,
@@ -79,7 +75,10 @@ import {
   type InteractionFieldRole,
   type InteractionQuestion,
   type InteractionSubmission,
-} from "./interaction";
+} from "@renderer/chat/interaction";
+import { Button } from "@renderer/components/ui/button";
+import { Textarea } from "@renderer/components/ui/textarea";
+import { cn } from "@renderer/lib/utils";
 
 /* ------------------------------------------------------------------- card */
 
