@@ -11,14 +11,16 @@ import {
 } from "./index";
 
 /**
- * Baseline probe for `docs/plans/delta-frames.md` ("Proof, checked in before
- * the change", item 1). Today the adapter coalesces `message.part.delta`
- * traffic into a full-`UIMessage` rebuild every `STREAM_SNAPSHOT_DELAY_MS`
- * (32ms) and emits it as a `transcript.message` observation — so one streamed
- * answer costs the whole message's bytes, repeated once per coalescing tick.
- * This records that cost against a deterministic long-answer fixture so the
- * delta-frame change can prove its win against a real number instead of the
- * (uncommitted) audit estimate.
+ * Wire probe for `docs/plans/delta-frames.md` ("Proof, checked in before the
+ * change", item 1), now measuring the change it was built to price.
+ *
+ * The baseline it recorded: a full-`UIMessage` rebuild every 32ms, emitted as a
+ * `transcript.message` observation, so one streamed answer cost the whole
+ * message's bytes once per coalescing tick (19.63x its own final size). The
+ * adapter now emits a transient delta batch per tick and settles durably at
+ * turn end, so the same run costs the answer's own bytes plus one settled copy
+ * of it. Both arms are summed here — a probe that counted only the durable one
+ * would report a win it did not measure.
  *
  * Not a `vitest bench` — a plain assertion-bearing test whose console output
  * is the artifact. Determinism matters more than wall-clock speed: fixed
@@ -131,10 +133,9 @@ class FakeProcess implements OpenCodeProcessPort {
 /**
  * A network whose SSE subscription yields a scripted event list in batches,
  * sleeping (real timer) between batches. The sleep is what lets
- * `STREAM_SNAPSHOT_DELAY_MS` (32ms) fire and coalesce each batch into its own
- * `transcript.message` snapshot — a subscribe() that yields everything in one
- * microtask tick would produce exactly one snapshot and prove nothing about
- * per-tick amplification.
+ * `STREAM_DELTA_DELAY_MS` (32ms) fire and coalesce each batch into a tick of
+ * its own — a subscribe() that yields everything in one microtask tick would
+ * produce exactly one frame and prove nothing about per-tick amplification.
  */
 class FakeNetwork implements OpenCodeNetworkPort {
   requests: Array<{ path: string; method: string; body: unknown }> = [];
@@ -281,8 +282,8 @@ function buildScenarioEvents(chunks: readonly string[]): OpenCodeSseEvent[] {
   return events;
 }
 
-describe("opencode-adapter stream-cost probe (baseline, pre delta-frames change)", () => {
-  it("measures full-snapshot wire amplification for a long streamed answer", async () => {
+describe("opencode-adapter stream-cost probe", () => {
+  it("measures wire amplification for a long streamed answer", async () => {
     const fixtureText = buildFixtureText();
     const chunks = chunkFixture(fixtureText);
     // Sanity on the fixture itself: stay in the 16-20KB band the plan asks for.
@@ -315,10 +316,14 @@ describe("opencode-adapter stream-cost probe (baseline, pre delta-frames change)
       (observation): observation is Extract<HarnessObservation, { kind: "transcript.message" }> =>
         observation.kind === "transcript.message",
     );
+    const transcriptDeltas = observations.filter(
+      (observation): observation is Extract<HarnessObservation, { kind: "transcript.delta" }> =>
+        observation.kind === "transcript.delta",
+    );
 
     // Sanity facts that hold both before and after the delta-frame change:
-    // some snapshot painted, and the settled content matches the fixture
-    // exactly (a flushed final message is always durable, delta or not).
+    // something painted, and the settled content matches the fixture exactly
+    // (a flushed final message is always durable, delta or not).
     expect(transcriptMessages.length).toBeGreaterThanOrEqual(1);
     const finalObservation = transcriptMessages.at(-1)!;
     const finalTextPart = finalObservation.message.parts.find((part) => part.type === "text");
@@ -330,31 +335,37 @@ describe("opencode-adapter stream-cost probe (baseline, pre delta-frames change)
       expect.objectContaining({ id: "idle-final", kind: "turn.completed" }),
     );
 
-    // The baseline numbers docs/plans/delta-frames.md records.
-    const wireBytesTotal = transcriptMessages.reduce(
-      (sum, observation) => sum + Buffer.byteLength(JSON.stringify(observation), "utf8"),
-      0,
-    );
-    const finalMessageBytes = Buffer.byteLength(JSON.stringify(finalObservation), "utf8");
+    // Both arms, because both are bytes on the wire: the transient overlay is
+    // what the reader watches being written, the durable settle is what the
+    // Session keeps.
+    const bytes = (observation: HarnessObservation) =>
+      Buffer.byteLength(JSON.stringify(observation), "utf8");
+    const durableBytes = transcriptMessages.reduce((sum, next) => sum + bytes(next), 0);
+    const transientBytes = transcriptDeltas.reduce((sum, next) => sum + bytes(next), 0);
+    const wireBytesTotal = durableBytes + transientBytes;
+    const finalMessageBytes = bytes(finalObservation);
     const amplification = wireBytesTotal / finalMessageBytes;
 
     // eslint-disable-next-line no-console -- the probe's numbers ARE the deliverable
     console.log(
       [
         "",
-        "[stream-cost probe 1] opencode-adapter wire bytes (pre delta-frames baseline)",
+        "[stream-cost probe 1] opencode-adapter wire bytes",
         `  fixture length:            ${fixtureText.length} chars`,
         `  message.part.delta events: ${chunks.length}`,
-        `  transcript.message snapshots emitted: ${transcriptMessages.length}`,
+        `  transcript.message settles emitted:  ${transcriptMessages.length}`,
+        `  transcript.delta frames emitted:     ${transcriptDeltas.length}`,
+        `  durable wire bytes:   ${durableBytes}`,
+        `  transient wire bytes: ${transientBytes}`,
         `  total wire bytes (sum of JSON.stringify(observation)): ${wireBytesTotal}`,
-        `  final snapshot bytes (JSON.stringify(observation)):    ${finalMessageBytes}`,
+        `  final settle bytes (JSON.stringify(observation)):      ${finalMessageBytes}`,
         `  amplification (total / final): ${amplification.toFixed(2)}x`,
         "",
       ].join("\n"),
     );
 
-    // Structural placeholder for phase 3: after the delta-frame change lands,
-    // this flips to a hard ceiling (e.g. amplification < 2) instead of a log.
+    // Structural placeholder for phase 3, which asserts the ceiling this now
+    // measures instead of logging it.
     expect(Number.isFinite(amplification)).toBe(true);
   });
 });
