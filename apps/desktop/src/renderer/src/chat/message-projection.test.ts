@@ -86,6 +86,21 @@ describe("projectTranscriptMessages", () => {
       ]).map(({ id }) => id),
     ).toEqual(["assistant-1"]);
   });
+
+  it("skips a durable frame that carries no transcript message at all", () => {
+    // Not every durable frame is a message — a tool-only or interaction event
+    // shares the same log without ever setting `transcript`.
+    expect(
+      projectTranscriptMessages([
+        { transcript: null },
+        frame(2, {
+          id: "assistant-1",
+          role: "assistant",
+          parts: [{ type: "text", text: "Done." }],
+        }),
+      ]).map(({ id }) => id),
+    ).toEqual(["assistant-1"]);
+  });
 });
 
 describe("layerTranscriptOverlay", () => {

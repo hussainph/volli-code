@@ -61,6 +61,7 @@ export function splitMarkdownSource(source: string): readonly MarkdownSegment[] 
   const flushCode = (at: number): void => {
     // Only the trailing blank lines go: leading indentation inside a block is
     // part of the program, and stripping it would misreport the code.
+    /* v8 ignore next -- both call sites only run once `code` has been set to an array; the fallback is for the closure's wider type. */
     const text = (code ?? []).join("\n").replace(/\s+$/, "");
     if (text !== "") segments.push({ kind: "code", text, language, line: start });
     code = null;

@@ -88,6 +88,70 @@ describe("native Session runtime picker", () => {
     });
   });
 
+  it("reads no snapshot as no catalog at all", () => {
+    expect(deriveRuntimeCatalog(null)).toEqual({ providers: [], models: [], agents: [] });
+  });
+
+  it("drops a model whose detail is missing a provider or model id", () => {
+    const catalog = deriveRuntimeCatalog({
+      ...snapshot,
+      catalog: [
+        {
+          kind: "model",
+          id: "broken",
+          label: "Broken",
+          state: "available",
+          evidence: "reported",
+          detail: { providerId: "anthropic" },
+        },
+      ],
+    });
+    expect(catalog.models).toEqual([]);
+  });
+
+  it("reads an agent with no detail as one with no mode, hidden flag, or description", () => {
+    const catalog = deriveRuntimeCatalog({
+      ...snapshot,
+      catalog: [
+        {
+          kind: "agent",
+          id: "bare",
+          label: "Bare",
+          state: "available",
+          evidence: "reported",
+          detail: null,
+        },
+      ],
+    });
+    expect(catalog.agents).toEqual([
+      {
+        id: "bare",
+        label: "Bare",
+        state: "available",
+        mode: null,
+        hidden: null,
+        description: null,
+      },
+    ]);
+  });
+
+  it("reads a model with no declared variants as offering none", () => {
+    const catalog = deriveRuntimeCatalog({
+      ...snapshot,
+      catalog: [
+        {
+          kind: "model",
+          id: "anthropic/opus",
+          label: "Opus",
+          state: "available",
+          evidence: "reported",
+          detail: { providerId: "anthropic", modelId: "opus" },
+        },
+      ],
+    });
+    expect(catalog.models[0]?.variants).toEqual([]);
+  });
+
   it("carries the harness's own hidden flag through to the picker", () => {
     const catalog = deriveRuntimeCatalog({
       ...snapshot,

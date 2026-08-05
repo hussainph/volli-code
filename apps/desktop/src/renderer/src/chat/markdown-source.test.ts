@@ -54,6 +54,10 @@ describe("splitMarkdownSource", () => {
     expect(splitMarkdownSource("   ")).toEqual([]);
   });
 
+  it("drops a fenced block with nothing between its markers", () => {
+    expect(splitMarkdownSource("```\n```")).toEqual([]);
+  });
+
   it("returns prose untouched when there is no fence at all", () => {
     expect(splitMarkdownSource("just **words**")).toEqual([
       { kind: "prose", text: "just **words**", language: null, line: 0 },
