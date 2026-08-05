@@ -1254,6 +1254,52 @@ describe("OpenCodeNativeAdapter", () => {
     await handle.release("requested");
   });
 
+  it("re-baselines a message that has settled durably since its last delta", async () => {
+    const hold = new Deferred<void>();
+    const network = tickedStream(
+      new FakeNetwork(),
+      [
+        [assistantOpened, partUpdated("first", { id: "p1", type: "text", text: "One" })],
+        [{ id: "idle", type: "session.idle", properties: { sessionID: "native-session-1" } }],
+        // The same message keeps growing after the turn that settled it.
+        [
+          { ...assistantOpened, id: "assistant-again" },
+          partUpdated("grown", { id: "p1", type: "text", text: "One two" }),
+        ],
+      ],
+      hold,
+    );
+    const adapter = createAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // The settle cleared the reader's overlay entry, so an append naming a part
+    // it no longer holds would be dropped and the tail lost. The rule that
+    // makes every fold self-healing is that the first delta after a settle is a
+    // baseline, whatever the diff would have said.
+    expect(deltaOps(observations).map(({ op }) => op)).toEqual(["reset", "reset"]);
+    expect(deltaOps(observations).at(-1)).toEqual({
+      op: "reset",
+      message: {
+        id: "provider-assistant",
+        role: "assistant",
+        parts: [{ key: "p1", part: { type: "text", text: "One two" } }],
+      },
+    });
+    expect(
+      observations.flatMap((observation) =>
+        observation.kind === "transcript.message" ? [observation.message.parts] : [],
+      ),
+    ).toEqual([[{ type: "text", text: "One" }]]);
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
   it("re-states the thoughts a turn transition re-projects, and only those", async () => {
     const hold = new Deferred<void>();
     const network = tickedStream(
