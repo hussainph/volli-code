@@ -174,6 +174,11 @@ export function sessionRpcIpcLink(bridge: SessionRpcBridge): TRPCLink<AppRouter>
             unclaimed.delete(claimed);
             for (const event of buffered) onFrame(event);
           } catch (cause) {
+            // Reaching an observer whose subscriber already tore down is safe
+            // for a reason that lives outside this file: tRPC's client pipes
+            // every operation through `share()`, which drops the observer on
+            // unsubscribe, so a post-teardown error lands on nobody. If that
+            // upstream property ever changes, this call needs a `left` guard.
             observer.error(unreachable(cause, op.path));
           } finally {
             settleAck();
@@ -202,9 +207,30 @@ let client: SessionRpcClient | null = null;
  * Lazy so that importing this module has no transport effect, and a singleton
  * so a StrictMode double render — or a second surface asking — reuses the one
  * event listener rather than stacking another onto the bridge.
+ *
+ * The bridge listener is tracked so hot replacement can drop it: without the
+ * dispose hook, every re-execution of this module would mint a fresh client
+ * whose listener joins — not replaces — the orphaned one, and each live frame
+ * would be handled once per surviving copy until a full reload.
  */
 export function sessionRpcClient(): SessionRpcClient {
-  client ??= createSessionRpcClient(window.api.sessionRpc);
+  if (client === null) {
+    const bridge = window.api.sessionRpc;
+    let detach: (() => void) | null = null;
+    client = createSessionRpcClient({
+      ...bridge,
+      onEvent: (listener) => {
+        detach = bridge.onEvent(listener);
+        return detach;
+      },
+    });
+    /* v8 ignore next 4 -- `import.meta.hot` exists only under the dev server;
+       tests and production builds cannot take this branch. */
+    import.meta.hot?.dispose(() => {
+      detach?.();
+      client = null;
+    });
+  }
   return client;
 }
 
