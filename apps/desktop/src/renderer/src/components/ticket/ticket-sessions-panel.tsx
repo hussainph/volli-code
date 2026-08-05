@@ -21,9 +21,12 @@ import {
   buildTicketChatSessionRows,
   buildTicketSessionRows,
   canResumeSession,
+  filterChatSessionHistory,
   filterSessionHistory,
   groupSessionRows,
+  mergeSessionRailRows,
   sessionSourceLabel,
+  type SessionRailRow,
   type TicketChatSessionRow,
   type TicketSessionRow,
   type TicketSessionStatus,
@@ -44,30 +47,6 @@ import { renameTerminalSession } from "@renderer/terminal/session-lifecycle";
 /** Stable empty list so the rows selector never returns a fresh reference
  *  (and re-renders the panel) on unrelated store updates while the cache is cold. */
 const NO_ROWS: SessionListingRow[] = [];
-
-/**
- * One rendered row in the rail: a terminal row (full session-history
- * treatment — rename, resume, activate) or a chat row (title and liveness
- * only; there is no PTY behind it, so no activation, resume, or rename yet —
- * deep chat activation is future UI work).
- */
-type SessionRailRow =
-  | { kind: "terminal"; row: TicketSessionRow }
-  | { kind: "chat"; row: TicketChatSessionRow };
-
-/** {@link filterSessionHistory}'s title+source match, over chat rows instead of durable records. */
-function filterChatSessionHistory(
-  rows: readonly TicketChatSessionRow[],
-  query: string,
-): TicketChatSessionRow[] {
-  const needle = query.trim().toLocaleLowerCase();
-  if (needle === "") return [...rows];
-  return rows.filter((row) =>
-    `${row.title}\n${sessionSourceLabel({ kind: "chat", record: row.record })}`
-      .toLocaleLowerCase()
-      .includes(needle),
-  );
-}
 
 const STATUS_LABEL: Record<TicketSessionStatus, string> = {
   working: "Working",
@@ -415,26 +394,18 @@ export function TicketSessionsPanel({
     now,
   });
   const { current: terminalCurrent, history: terminalHistory } = groupSessionRows(terminalRows);
+  // A chat Session's only lifecycle fact is whether its attachment is still
+  // open, which is the same current/history line `groupSessionRows` draws.
   const chatRows = buildTicketChatSessionRows(chatSessions);
   const chatCurrent = chatRows.filter((row) => row.isOpen);
   const chatHistory = chatRows.filter((row) => !row.isOpen);
 
-  const current: SessionRailRow[] = [
-    ...terminalCurrent.map((row): SessionRailRow => ({ kind: "terminal", row })),
-    ...chatCurrent.map((row): SessionRailRow => ({ kind: "chat", row })),
-  ];
-  const history: SessionRailRow[] = [
-    ...terminalHistory.map((row): SessionRailRow => ({ kind: "terminal", row })),
-    ...chatHistory.map((row): SessionRailRow => ({ kind: "chat", row })),
-  ];
-  const filteredHistory: SessionRailRow[] = [
-    ...filterSessionHistory(terminalHistory, historyQuery).map(
-      (row): SessionRailRow => ({ kind: "terminal", row }),
-    ),
-    ...filterChatSessionHistory(chatHistory, historyQuery).map(
-      (row): SessionRailRow => ({ kind: "chat", row }),
-    ),
-  ];
+  const current = mergeSessionRailRows(terminalCurrent, chatCurrent);
+  const history = mergeSessionRailRows(terminalHistory, chatHistory);
+  const filteredHistory = mergeSessionRailRows(
+    filterSessionHistory(terminalHistory, historyQuery),
+    filterChatSessionHistory(chatHistory, historyQuery),
+  );
 
   const listProps = {
     ticketId,

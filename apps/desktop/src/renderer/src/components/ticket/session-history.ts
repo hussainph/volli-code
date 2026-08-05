@@ -232,3 +232,44 @@ export function buildTicketChatSessionRows(
 ): TicketChatSessionRow[] {
   return records.map((record) => ({ record, title: record.title, isOpen: record.live }));
 }
+
+/** {@link filterSessionHistory}'s title+source match, over chat rows instead of durable records. */
+export function filterChatSessionHistory(
+  rows: readonly TicketChatSessionRow[],
+  query: string,
+): TicketChatSessionRow[] {
+  const needle = query.trim().toLocaleLowerCase();
+  if (needle === "") return [...rows];
+  return rows.filter((row) =>
+    `${row.title}\n${sessionSourceLabel({ kind: "chat", record: row.record })}`
+      .toLocaleLowerCase()
+      .includes(needle),
+  );
+}
+
+/**
+ * One rendered row of the rail: a terminal row (rename, resume, activate) or a
+ * chat row (title and liveness only — there is no PTY behind it, so no
+ * activation, resume, or rename yet). Discriminated the same way
+ * `SessionListingRow` is, one layer up the view model.
+ */
+export type SessionRailRow =
+  | { kind: "terminal"; row: TicketSessionRow }
+  | { kind: "chat"; row: TicketChatSessionRow };
+
+/**
+ * The rail's two row kinds in one list, newest first. Ordering is by creation,
+ * across both kinds, rather than by concatenation: `listForTicket` hands its
+ * rows back newest-first already, and appending the chat ones would sink every
+ * chat Session below every terminal one however recent it is.
+ */
+export function mergeSessionRailRows(
+  terminal: readonly TicketSessionRow[],
+  chat: readonly TicketChatSessionRow[],
+): SessionRailRow[] {
+  const rows: SessionRailRow[] = [
+    ...terminal.map((row): SessionRailRow => ({ kind: "terminal", row })),
+    ...chat.map((row): SessionRailRow => ({ kind: "chat", row })),
+  ];
+  return rows.toSorted((a, b) => b.row.record.createdAt - a.row.record.createdAt);
+}

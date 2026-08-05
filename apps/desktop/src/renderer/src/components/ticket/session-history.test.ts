@@ -13,9 +13,11 @@ import {
   buildTicketChatSessionRows,
   buildTicketSessionRows,
   canResumeSession,
+  filterChatSessionHistory,
   filterSessionHistory,
   groupSessionRows,
   latestResumableSession,
+  mergeSessionRailRows,
   sessionSourceLabel,
   type TicketSessionRow,
   type TicketSessionRowsInput,
@@ -477,5 +479,48 @@ describe("buildTicketChatSessionRows", () => {
 
   it("is empty for a ticket with no chat Sessions", () => {
     expect(buildTicketChatSessionRows([])).toEqual([]);
+  });
+});
+
+describe("filterChatSessionHistory", () => {
+  // [0] is live, [1] is ended — the source line each matches on differs.
+  const chatRows = buildTicketChatSessionRows([
+    chatRecord({ sessionId: "live", title: "Plan the migration", live: true }),
+    chatRecord({ sessionId: "ended", title: "Review auth flow", live: false }),
+  ]);
+
+  it("matches titles and source metadata case-insensitively", () => {
+    expect(filterChatSessionHistory(chatRows, "AUTH")).toEqual([chatRows[1]]);
+    // "Chat · Live" is the live row's source line, and nothing else's.
+    expect(filterChatSessionHistory(chatRows, "live")).toEqual([chatRows[0]]);
+    expect(filterChatSessionHistory(chatRows, "chat")).toEqual(chatRows);
+  });
+
+  it("returns every row for a blank query", () => {
+    expect(filterChatSessionHistory(chatRows, "   ")).toEqual(chatRows);
+  });
+});
+
+describe("mergeSessionRailRows", () => {
+  const terminalOld = row({ record: record({ id: "terminal-old", createdAt: 10 }) });
+  const terminalNew = row({ record: record({ id: "terminal-new", createdAt: 30 }) });
+  const chatRows = buildTicketChatSessionRows([chatRecord({ sessionId: "chat", createdAt: 20 })]);
+
+  // What this replaced: concatenating the two kinds sank every chat Session
+  // below every terminal one, however recent it was.
+  it("interleaves both kinds newest first rather than grouping by kind", () => {
+    expect(
+      mergeSessionRailRows([terminalNew, terminalOld], chatRows).map((entry) =>
+        entry.kind === "terminal" ? entry.row.record.id : entry.row.record.sessionId,
+      ),
+    ).toEqual(["terminal-new", "chat", "terminal-old"]);
+  });
+
+  it("keeps a list of one kind exactly as it was", () => {
+    expect(mergeSessionRailRows([terminalNew, terminalOld], [])).toEqual([
+      { kind: "terminal", row: terminalNew },
+      { kind: "terminal", row: terminalOld },
+    ]);
+    expect(mergeSessionRailRows([], chatRows)).toEqual([{ kind: "chat", row: chatRows[0] }]);
   });
 });
