@@ -14,6 +14,7 @@ import {
   type NativeHarnessAdapter,
   type ObservationSink,
   type SessionEngine,
+  type SessionLocationResolver,
   type SessionRuntime,
   type SessionStreamFrame,
   type SessionStreamOverlay,
@@ -130,6 +131,12 @@ function splitIntoPieces(text: string, count: number): string[] {
 
 const venue = { id: "machine-1", kind: "local" as const };
 
+/** A host with nothing to materialize: preparing a location is resolving it. */
+function fixedLocation(directory: string): SessionLocationResolver {
+  const at = async () => ({ directory, venue });
+  return { resolve: at, prepare: at };
+}
+
 function ids(): SessionLedgerIds {
   let sequence = 0;
   return { next: (kind) => `${kind}-${++sequence}` };
@@ -221,7 +228,7 @@ function buildRuntime(): {
     engine,
     adapters: createNativeAdapterRegistry([adapter]),
     artifacts: counting.store,
-    locations: { resolve: async () => ({ directory: "/projects/fake", venue }) },
+    locations: fixedLocation("/projects/fake"),
     clock,
     ids: runtimeIds(),
   });

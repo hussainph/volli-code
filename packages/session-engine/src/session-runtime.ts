@@ -45,7 +45,18 @@ export interface SessionLocation {
 }
 
 export interface SessionLocationResolver {
+  /** Where the Session runs as the record stands. A read — the directory may not exist yet. */
   resolve(session: Session): Promise<SessionLocation>;
+  /**
+   * The same location, materialized — what a binding is allowed to attach to.
+   *
+   * Separate from {@link resolve} because materializing is real work (for a
+   * ticket that runs in its own checkout, git plus a durable event) and only an
+   * attach needs it: every later command reuses the directory its binding
+   * already holds. A host that cannot produce the directory throws rather than
+   * substituting one, so the attach fails instead of binding somewhere else.
+   */
+  prepare(session: Session): Promise<SessionLocation>;
 }
 
 export interface SessionRuntimeClock {
@@ -413,7 +424,7 @@ class DefaultSessionRuntime implements SessionRuntime {
 
     switch (request.command.kind) {
       case "adapter.attach":
-        return this.#attach(request as AttachCommandRequest, location, existed);
+        return this.#attach(request as AttachCommandRequest, projection, location, existed);
       case "message.submit":
         return this.#submitMessage(request as MessageCommandRequest, projection, location, existed);
       case "executor.interrupt":
@@ -432,6 +443,7 @@ class DefaultSessionRuntime implements SessionRuntime {
 
   async #attach(
     request: AttachCommandRequest,
+    projection: SessionProjection,
     location: SessionLocation,
     existed: boolean,
   ): Promise<SessionRuntimeCommandResult> {
@@ -474,11 +486,28 @@ class DefaultSessionRuntime implements SessionRuntime {
       });
     }
 
+    // The directory has to be real before it is probed, let alone bound: an
+    // adapter handed one that is not there fails per prompt, deep inside the
+    // harness, wearing whatever name that harness gives a missing path.
+    let site: SessionLocation;
+    try {
+      site = await this.ports.locations.prepare(projection.session);
+    } catch (error) {
+      return this.#failAttach({
+        request,
+        submitted,
+        adapter,
+        location,
+        code: "location_unavailable",
+        detail: errorMessage(error),
+      });
+    }
+
     let probe: NativeProbeResult;
     try {
       probe = await this.#probe(adapter, {
         profileId: request.command.profileId,
-        directory: location.directory,
+        directory: site.directory,
       });
     } catch (error) {
       return this.#failAttach({
@@ -506,7 +535,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       sessionId: request.sessionId,
       attachmentId,
       profileId: request.command.profileId,
-      directory: location.directory,
+      directory: site.directory,
       continuity: request.command.continuity,
       native: null,
     };

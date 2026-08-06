@@ -79,6 +79,12 @@ const MODEL_LABEL = "Fake Model";
 const PROJECT = { id: "chat-smoke-project", name: "Chat Smoke Project", prefix: "CS" };
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("session-chat-smoke-");
+// `tickets.create` defaults `usesWorktree` to true, so the chat attach below
+// materializes a real worktree. `VOLLI_WORKTREE_HOME_DIR` is what keeps that
+// out of the developer's own `~/.volli/worktrees` — same isolation
+// worktree-smoke.mjs relies on, and it is load-bearing here, not hygiene.
+const fakeHome = join(scratch, "home");
+const worktreesRoot = join(fakeHome, ".volli", "worktrees");
 const { attempt, summarize } = createRunner();
 
 const EVIDENCE_DIR = process.argv[2] ?? join(os.tmpdir(), "volli-session-chat-smoke-evidence");
@@ -206,12 +212,32 @@ function dotIsWorking(classes) {
   return classes !== null && classes.includes("shadow-[0_0_0_3px");
 }
 
+/**
+ * The absolute path of a directory named `<needle>-*` (or exactly `needle`)
+ * anywhere under `root`, or null. Ground truth for "did the ensure pipeline
+ * actually run", independent of anything the UI claims — mirrors the same
+ * helper in worktree-smoke.mjs.
+ */
+async function findWorktreeDir(root, needle) {
+  let entries;
+  try {
+    entries = await fs.readdir(root, { recursive: true, withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const hit = entries.find(
+    (e) => e.isDirectory() && (e.name === needle || e.name.startsWith(`${needle}-`)),
+  );
+  return hit ? join(hit.parentPath ?? hit.path, hit.name) : null;
+}
+
 async function main() {
   const fakeLog = join(scratch, "fake-opencode.log");
+  await fs.mkdir(fakeHome, { recursive: true });
   const app = await launch({
     dbPath,
     userDataDir,
-    extraEnv: { VOLLI_FAKE_OPENCODE_LOG: fakeLog },
+    extraEnv: { VOLLI_FAKE_OPENCODE_LOG: fakeLog, VOLLI_WORKTREE_HOME_DIR: fakeHome },
   });
   const mainStdout = [];
   const mainStderr = [];
@@ -314,7 +340,35 @@ async function main() {
       return { ok: chatTabLabel !== null, detail: chatTabLabel };
     });
 
-    await attempt(7, "the composer becomes ready once the model resolves", async () => {
+    // The regression this check exists for: a chat on a worktree ticket used to
+    // attach against `ticket.worktreePath ?? project.path` and provision
+    // nothing, so OpenCode got a directory that was not there and every prompt
+    // died server-side. The fake server does not care what its cwd is, so the
+    // prompt surviving proves nothing — the worktree being ON DISK does.
+    await attempt(7, "creating the chat materialized the ticket's worktree", async () => {
+      const worktreeDir = await waitUntil(
+        "the ticket's worktree to appear on disk",
+        async () => (await findWorktreeDir(worktreesRoot, displayId)) ?? false,
+        { timeout: 20000 },
+      ).catch(async (error) => {
+        await captureFailureEvidence(page, mainStdout, mainStderr, fakeLog, "worktree-absent");
+        throw error;
+      });
+      const row = await page.evaluate(async (pid) => {
+        const boot = await window.api.data.bootstrap();
+        if (!boot.ok) return null;
+        return (
+          (boot.data.ticketsByProject?.[pid] ?? []).find((t) => t.worktreePath !== null) ?? null
+        );
+      }, projectId);
+      // Stamped, not merely created: the same row the terminal path writes.
+      return {
+        ok: row !== null && row.worktreePath === worktreeDir,
+        detail: `dir=${worktreeDir} stamped=${row?.worktreePath ?? "none"}`,
+      };
+    });
+
+    await attempt(8, "the composer becomes ready once the model resolves", async () => {
       const textarea = page.getByPlaceholder("Ask, plan, or implement…");
       await waitUntil("the composer to mount", async () => (await textarea.count()) > 0);
       await waitUntil(
@@ -328,7 +382,7 @@ async function main() {
       return { ok: true };
     });
 
-    await attempt(8, "submitting a prompt starts a turn (Stop button appears)", async () => {
+    await attempt(9, "submitting a prompt starts a turn (Stop button appears)", async () => {
       const textarea = page.getByPlaceholder("Ask, plan, or implement…").first();
       await textarea.click();
       await textarea.fill(PROMPT_TEXT);
@@ -341,7 +395,7 @@ async function main() {
       return { ok: true };
     });
 
-    await attempt(9, "the streamed answer renders", async () => {
+    await attempt(10, "the streamed answer renders", async () => {
       await waitUntil(
         "the streamed answer text",
         async () => (await page.getByText(ANSWER_TEXT, { exact: false }).count()) > 0,
@@ -354,7 +408,7 @@ async function main() {
     });
 
     await attempt(
-      10,
+      11,
       "the turn settles: Stop clears and the tab's working dot clears",
       async () => {
         await waitUntil(
@@ -382,7 +436,7 @@ async function main() {
     const app2 = await launch({
       dbPath,
       userDataDir,
-      extraEnv: { VOLLI_FAKE_OPENCODE_LOG: fakeLog },
+      extraEnv: { VOLLI_FAKE_OPENCODE_LOG: fakeLog, VOLLI_WORKTREE_HOME_DIR: fakeHome },
     });
     // Its own buffers: the first app's are closed, and the relaunch is the one
     // check whose failure mode (a boot that adopted nothing) is only legible
@@ -397,7 +451,7 @@ async function main() {
       await page2.waitForLoadState("domcontentloaded");
 
       await attempt(
-        11,
+        12,
         "after relaunch, the ticket + chat tab reopen with the durable transcript",
         async () => {
           const detailOpen = await waitUntil(
@@ -453,7 +507,7 @@ async function main() {
       // from. Standing the active tab down before the close is the whole of
       // what stops it — and a reordering that lost it would leave a chat tab
       // nobody can close, with every check above still green.
-      await attempt(12, "closing the chat tab retires it, and nothing puts it back", async () => {
+      await attempt(13, "closing the chat tab retires it, and nothing puts it back", async () => {
         const chatTab = page2.getByRole("tab", { name: chatTabLabel, exact: true });
         await page2.getByRole("button", { name: `Close ${chatTabLabel}`, exact: true }).click();
         await waitUntil("the chat tab to go", async () => (await chatTab.count()) === 0);

@@ -14,10 +14,17 @@ import {
   type NativeProbeResult,
   type ObservationSink,
   type SessionEngine,
+  type SessionLocationResolver,
   type SessionRuntime,
 } from "./index";
 
 const venue = { id: "invariant-machine", kind: "local" as const };
+
+/** A host with nothing to materialize: preparing a location is resolving it. */
+function fixedLocation(directory: () => string): SessionLocationResolver {
+  const at = async () => ({ directory: directory(), venue });
+  return { resolve: at, prepare: at };
+}
 
 function ledgerIds(): SessionLedgerIds {
   let sequence = 0;
@@ -129,9 +136,7 @@ function composition(
       engine,
       adapters: createNativeAdapterRegistry([adapter]),
       artifacts: createInMemoryTranscriptArtifactStore(),
-      locations: {
-        resolve: async () => ({ directory: input.directory?.() ?? "/ticket/original", venue }),
-      },
+      locations: fixedLocation(() => input.directory?.() ?? "/ticket/original"),
       clock: { now: () => now++ },
       ids: runtimeIds(input.runtimeIdPrefix),
       ...(input.onSubscriberFailure ? { onSubscriberFailure: input.onSubscriberFailure } : {}),
@@ -167,7 +172,7 @@ describe("SessionRuntime durable boundary invariants", () => {
       engine: base.engine,
       adapters: createNativeAdapterRegistry([]),
       artifacts: createInMemoryTranscriptArtifactStore(),
-      locations: { resolve: async () => ({ directory: "/ticket/original", venue }) },
+      locations: fixedLocation(() => "/ticket/original"),
       clock: { now: () => 100 },
       ids: runtimeIds(),
     });

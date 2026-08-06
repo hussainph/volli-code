@@ -17,6 +17,7 @@ import {
   type NativeProbeResult,
   type ObservationSink,
   type SessionEngine,
+  type SessionLocationResolver,
   type SessionRuntime,
   type SessionStreamEmission,
   type SessionStreamFrame,
@@ -26,6 +27,12 @@ import {
 } from "./index";
 
 const venue = { id: "machine-1", kind: "local" as const };
+
+/** A host with nothing to materialize: preparing a location is resolving it. */
+function fixedLocation(directory: string): SessionLocationResolver {
+  const at = async () => ({ directory, venue });
+  return { resolve: at, prepare: at };
+}
 
 function ids(): SessionLedgerIds {
   let sequence = 0;
@@ -198,11 +205,7 @@ function composition(
       engine,
       adapters: createNativeAdapterRegistry([adapter]),
       artifacts: options.artifacts ?? createInMemoryTranscriptArtifactStore(),
-      locations:
-        options.locations ??
-        ({
-          resolve: async () => ({ directory: "/projects/fake", venue }),
-        } satisfies Parameters<typeof createSessionRuntime>[0]["locations"]),
+      locations: options.locations ?? fixedLocation("/projects/fake"),
       clock,
       ids: runtimeIds(options.runtimeIdPrefix),
       ...(options.onSubscriberFailure ? { onSubscriberFailure: options.onSubscriberFailure } : {}),
@@ -591,6 +594,50 @@ describe("SessionRuntime native adapter contract", () => {
     ).resolves.toMatchObject({ receipt: { detail: "socket disappeared" } });
   });
 
+  it("refuses the attach when the host cannot produce the directory", async () => {
+    // The adapter is never asked. A binding made against a directory that is
+    // not there is the failure the reader gets per prompt instead of once, and
+    // wearing the harness's name for a missing path rather than this one.
+    const detail = "Couldn't prepare the worktree at /w/VC-12 — fatal: invalid reference";
+    const { runtime, adapter } = composition({
+      locations: {
+        resolve: async () => ({ directory: "/w/VC-12", venue }),
+        prepare: async () => {
+          throw new Error(detail);
+        },
+      },
+    });
+    const session = await runtime.command({
+      commandId: "unprepared-create",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        title: null,
+      },
+    });
+
+    await expect(
+      runtime.command({
+        commandId: "unprepared-attach",
+        sessionId: session.sessionId,
+        command: {
+          kind: "adapter.attach",
+          adapterId: "fake",
+          profileId: "native",
+          continuity: "fresh",
+        },
+      }),
+    ).resolves.toMatchObject({
+      receipt: { status: "rejected", code: "location_unavailable", detail },
+    });
+    expect(adapter.probes).toBe(0);
+    expect((await runtime.snapshot({ sessionId: session.sessionId })).projection).toMatchObject({
+      liveExecutor: null,
+      attachments: [{ status: "failed", failure: { code: "location_unavailable", detail } }],
+    });
+  });
+
   it("dispatches interrupts and resolves durable interactions against their owning attachment", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);
@@ -921,17 +968,14 @@ describe("SessionRuntime native adapter contract", () => {
     const locationStarted = new Gate();
     const releaseLocation = new Gate();
     let delayLocation = false;
-    const { runtime, adapter } = composition({
-      locations: {
-        resolve: async () => {
-          if (delayLocation) {
-            locationStarted.resolve();
-            await releaseLocation.promise;
-          }
-          return { directory: "/projects/fake", venue };
-        },
-      },
-    });
+    const at = async () => {
+      if (delayLocation) {
+        locationStarted.resolve();
+        await releaseLocation.promise;
+      }
+      return { directory: "/projects/fake", venue };
+    };
+    const { runtime, adapter } = composition({ locations: { resolve: at, prepare: at } });
     const sessionId = await createAndAttach(runtime);
     const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
     delayLocation = true;

@@ -205,6 +205,13 @@ const IDLE: OpenCodeSseEvent = {
 // Composition: the real runtime hosting the real adapter.
 // ---------------------------------------------------------------------------
 
+async function labLocation() {
+  return { directory: "/workspace/one", venue: { id: "lab", kind: "local" as const } };
+}
+
+/** A host with nothing to materialize: preparing a location is resolving it. */
+const LAB_LOCATION = { resolve: labLocation, prepare: labLocation };
+
 function composition(network: ScriptedNetwork): SessionRuntime {
   let now = 1000;
   const clock = { now: () => now++ };
@@ -231,9 +238,7 @@ function composition(network: ScriptedNetwork): SessionRuntime {
     engine: createSessionEngine({ ledger: createInMemorySessionLedger(), clock, ids }),
     adapters: createNativeAdapterRegistry([adapter]),
     artifacts: createInMemoryTranscriptArtifactStore(),
-    locations: {
-      resolve: async () => ({ directory: "/workspace/one", venue: { id: "lab", kind: "local" } }),
-    },
+    locations: LAB_LOCATION,
     clock,
     ids,
   });
