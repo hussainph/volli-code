@@ -868,7 +868,7 @@ async function main() {
         const shellSource = (await aside.getByText("Shell", { exact: true }).count()) === 1;
         const noFalseClaude = (await aside.getByText("Claude Code", { exact: true }).count()) === 0;
 
-        // Active Sessions intentionally indexes Doing/Needs Review work only.
+        // The ACTIVE band intentionally indexes Doing/Needs Review work only.
         // Put this live shell ticket into Doing through the real property UI
         // (Properties icon mode replaces the retired Details drawer).
         await aside.getByTestId("ticket-rail-mode-properties").click();
@@ -894,7 +894,7 @@ async function main() {
     // ===================================================================
     await attempt(
       6,
-      "Active Sessions opens the exact live tab; its terminal canvas node + shell stay resident across ticket → board → session",
+      "the ACTIVE band opens the exact live tab; its terminal canvas node + shell stay resident across ticket → board → session",
       async () => {
         await fs.rm(PROBE_NAV, { force: true });
         const sessionTab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
@@ -919,7 +919,7 @@ async function main() {
           .filter({ hasText: SESSION_INITIAL })
           .filter({ hasText: DISPLAY_ID });
         await waitUntil(
-          "live session row in Active Sessions",
+          "live session row in the session bands",
           async () => (await activeSessionRow.count()) === 1,
         );
         await activeSessionRow.click();

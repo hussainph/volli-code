@@ -21,7 +21,7 @@
  *      column composer, the non-destructive context menu, priority mutation
  *      reconcile + persistence, the Ordering dropdown, the board/list view
  *      toggle (list-view add + drag parity),
- *      the sidebar's Active Sessions, the chrome-static UI zoom (uiScale now
+ *      the sidebar's ACTIVE session band, the chrome-static UI zoom (uiScale now
  *      read back from SQLite `app_state`, not localStorage), and the global
  *      New-ticket dialog ("c" hotkey, chrome-search guard, header button),
  *      plus the persisted workspace-switcher visibility toggle.
@@ -298,20 +298,24 @@ async function columnCardIds(page, label) {
   }, label);
 }
 
-/** The ticket ids listed in the sidebar's "Active Sessions" group, in DOM order. */
-async function sidebarSessionIds(page) {
-  return page.evaluate(() => {
-    const groups = Array.from(document.querySelectorAll('[data-sidebar="group"]'));
-    const group = groups.find((g) =>
-      Array.from(g.querySelectorAll('[data-sidebar="group-label"]')).some(
-        (label) => label.textContent?.trim() === "Active Sessions",
-      ),
-    );
+/**
+ * The ticket ids listed in one of the sidebar's session bands, in DOM order.
+ * `null` when that band is not on screen at all.
+ *
+ * Anchored on `data-session-band` rather than on heading text. The bands' own
+ * labels are uppercased by CSS from sentence-case strings, so matching them
+ * would be matching a typographic treatment; and a ticketless row prints a
+ * globe instead of an id, so a row is not guaranteed to contribute an entry
+ * here at all — which is exactly why the attribute exists.
+ */
+async function sidebarSessionIds(page, band = "active") {
+  return page.evaluate((name) => {
+    const group = document.querySelector(`[data-session-band="${name}"]`);
     if (!group) return null;
     return Array.from(group.querySelectorAll('[data-sidebar="menu-button"] span.font-mono')).map(
       (span) => span.textContent?.trim(),
     );
-  });
+  }, band);
 }
 
 /**
@@ -971,29 +975,36 @@ async function main() {
       },
     );
 
-    // === 16. Sidebar attention tier is truthful without a live terminal =====
+    // === 16. Sidebar ACTIVE band is truthful without a live terminal ========
     await attempt(
       16,
-      "Active Sessions mirrors Needs Review and Doing in one band without inventing live sessions",
+      "the ACTIVE band mirrors Needs Review and Doing without inventing live sessions",
       async () => {
-        // The band guarantees every Doing and Needs Review ticket a presence
-        // (bare rows here — no PTY ever ran). The separate "Needs you" tier is
-        // gone: attention rides on the row now, and nothing here has an agent
-        // to raise one.
+        // The board guarantee is an ACTIVE-band promise: every Doing and Needs
+        // Review ticket gets a presence there (bare rows here — no PTY ever
+        // ran). Scoping the id list to that band is what keeps this an exact
+        // equality; PREVIOUS is a different question and has its own filter.
         const doingIds = await columnCardIds(page, "Doing");
-        const ids = await sidebarSessionIds(page);
+        const ids = await sidebarSessionIds(page, "active");
         const expectedIds = ["VC-10", "VC-11", ...doingIds];
         const idsMatch =
           Array.isArray(ids) &&
           doingIds.length > 0 &&
           ids.length === expectedIds.length &&
           expectedIds.every((id) => ids.includes(id));
-        const activeTier = (await page.getByText("Active", { exact: true }).count()) === 1;
+        // Both bands are drawn, each header exactly once. The strings are
+        // sentence case in the DOM — globals.css does the uppercasing.
+        const bandHeaders =
+          (await page.getByText("Active", { exact: true }).count()) === 1 &&
+          (await page.getByText("Previous", { exact: true }).count()) === 1;
         const bareDoingRows =
           (await page.getByText("No live session", { exact: false }).count()) >= doingIds.length;
         const noInProgress = (await page.getByText("In progress", { exact: true }).count()) === 0;
+        // Scoped to the band under test: PREVIOUS draws mono id chips too, so a
+        // page-wide locator would stop naming one row the day this ticket has
+        // an ended session as well as its bare guarantee row.
         const reviewRow = page
-          .locator('[data-sidebar="menu-button"]')
+          .locator('[data-session-band="active"] [data-sidebar="menu-button"]')
           .filter({ has: page.locator("span.font-mono", { hasText: /^VC-10$/ }) })
           .first();
         const subtextBefore = await reviewRow
@@ -1020,14 +1031,14 @@ async function main() {
         await sleep(300);
         const ok =
           idsMatch &&
-          activeTier &&
+          bandHeaders &&
           bareDoingRows &&
           noInProgress &&
           ticketOpened &&
           subtextHighlighted;
         return {
           ok,
-          detail: `ids=${JSON.stringify(ids)} doing=${JSON.stringify(doingIds)} activeTier=${activeTier} bareDoingRows=${bareDoingRows} noInProgress=${noInProgress} ticketOpened=${ticketOpened} subtext=${JSON.stringify(subtextHighlight)}`,
+          detail: `ids=${JSON.stringify(ids)} doing=${JSON.stringify(doingIds)} bandHeaders=${bandHeaders} bareDoingRows=${bareDoingRows} noInProgress=${noInProgress} ticketOpened=${ticketOpened} subtext=${JSON.stringify(subtextHighlight)}`,
         };
       },
     );

@@ -29,6 +29,7 @@
 import {
   sessionActivitySource,
   type ChatSessionRecord,
+  type ChatWaitingReason,
   type SessionActivitySource,
   type SessionActivityState,
   type SessionHarnessState,
@@ -134,6 +135,16 @@ export interface ActiveSessionRow {
    */
   activitySource: SessionActivitySource;
   attention: SessionAttention | null;
+  /**
+   * What a waiting CHAT is waiting for, straight off its record; `null` on
+   * every other row, including a terminal waiting via the hook channel — that
+   * channel reports only that someone is needed, never what for.
+   *
+   * The enum travels rather than a sentence because the words belong to the
+   * view. This module decides which band a Session is in; it does not decide
+   * how to ask a person for a decision.
+   */
+  waitingOn: ChatWaitingReason | null;
   /** Present on a concluded board-guarantee row — see {@link LastRun}. */
   lastRun: LastRun | null;
   target: ActiveSessionTarget | null;
@@ -345,6 +356,7 @@ function sessionRow(
     activity: subject.activity,
     activitySource: paneActivitySource(subject.paneId, input),
     attention,
+    waitingOn: null,
     lastRun: null,
     target: { tabId: tab.sessionId, paneId: subject.paneId },
   };
@@ -360,6 +372,9 @@ function chatRow(record: ChatSessionRecord, ticket: Ticket | null): ActiveSessio
     activity: record.activity,
     activitySource: "reported",
     attention: record.activity === "waiting" ? { signal: "waiting", reason: null } : null,
+    // The record's two waiting fields move together by construction in main, so
+    // this rides along with the attention above rather than being re-decided.
+    waitingOn: record.waitingOn,
     lastRun: null,
     target: null,
   };
@@ -402,6 +417,7 @@ function boardRow(
         activity: null,
         activitySource: "inferred",
         attention: null,
+        waitingOn: null,
         lastRun: exited
           ? {
               endedAt: record?.endedAt ?? null,
@@ -440,6 +456,7 @@ function boardRow(
         activity: null,
         activitySource: "inferred",
         attention: null,
+        waitingOn: null,
         lastRun: {
           endedAt: latest.endedAt,
           resumable: canResumeSession({ kind: "terminal", record: latest }, launchAdapter),
@@ -461,6 +478,7 @@ function boardRow(
         activity: null,
         activitySource: "inferred",
         attention: null,
+        waitingOn: null,
         lastRun: null,
         target: null,
       },
@@ -477,6 +495,7 @@ function boardRow(
       activity: null,
       activitySource: "inferred",
       attention: null,
+      waitingOn: null,
       lastRun: null,
       target: null,
     },

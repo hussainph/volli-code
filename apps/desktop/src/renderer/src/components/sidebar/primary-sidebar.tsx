@@ -41,6 +41,7 @@ export function PrimarySidebar() {
   const settingsOpen = useUiStore((state) => state.settingsOpen);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
   const collapsed = sidebarState === "collapsed";
+  const sessionsVisible = !settingsOpen && (activeNav === "board" || activeNav === "sessions");
 
   return (
     <div className="relative h-full w-full overflow-hidden">
@@ -79,12 +80,12 @@ export function PrimarySidebar() {
               <div className={cn((settingsOpen || activeNav !== "files") && "hidden")}>
                 <FileTree key={selected.id} project={selected} />
               </div>
-              <div
-                className={cn(
-                  (settingsOpen || (activeNav !== "board" && activeNav !== "sessions")) && "hidden",
-                )}
-              >
-                <ActiveSessions project={selected} />
+              <div className={cn(!sessionsVisible && "hidden")}>
+                {/* Render-hidden, not unmounted (above) — so the section cannot
+                    tell it is off screen, and the coarse chat-activity poll it
+                    runs would keep firing behind Files or Settings. `visible`
+                    is that fact, handed down from the one place that has it. */}
+                <ActiveSessions project={selected} visible={sessionsVisible} />
               </div>
             </SidebarContent>
           </>
