@@ -62,6 +62,8 @@ function snapshot(): SessionRuntimeSnapshot {
       capabilities: [],
       interactions: { active: [], resolved: [] },
       signal: null,
+      turnActive: false,
+      lastActivityAt: 10,
     },
     throughSequence: 4,
     frames: [frame(4)],

@@ -68,6 +68,8 @@ function projectionFor(attachmentId: string | null): SessionProjection {
     capabilities: [],
     interactions: { active: [], resolved: [] },
     signal: null,
+    turnActive: false,
+    lastActivityAt: SESSION.createdAt,
   };
 }
 

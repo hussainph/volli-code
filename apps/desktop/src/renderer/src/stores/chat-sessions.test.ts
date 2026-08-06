@@ -33,6 +33,8 @@ const projection: SessionProjection = {
   capabilities: [],
   interactions: { active: [], resolved: [] },
   signal: null,
+  turnActive: false,
+  lastActivityAt: SESSION.createdAt,
 };
 
 interface CommandAnswer {

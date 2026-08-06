@@ -222,6 +222,8 @@ export function getSession(db: Database.Database, sessionId: string): SessionRec
     capabilities: [],
     interactions: { active: [], resolved: [] },
     signal: null,
+    turnActive: false,
+    lastActivityAt: session.created_at,
   });
   return record ?? undefined;
 }
