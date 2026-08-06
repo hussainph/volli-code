@@ -91,9 +91,11 @@ export default defineConfig(({ mode }) => ({
       include: [
         "src/stores/**",
         "src/chat/activity.ts",
+        "src/chat/client.ts",
         "src/chat/interaction.ts",
         "src/chat/markdown-source.ts",
         "src/chat/message-projection.ts",
+        "src/chat/registry.ts",
         "src/chat/session-model.ts",
         "src/chat/transcript.ts",
         "src/chat/wire.ts",

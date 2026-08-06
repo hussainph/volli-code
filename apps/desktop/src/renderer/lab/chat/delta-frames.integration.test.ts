@@ -270,6 +270,7 @@ const EMPTY = {
   frames: [] as readonly ChatSessionFrame[],
   throughSequence: 0,
   turnActive: false,
+  turnEpoch: 0,
   durableMessages: [] as readonly UIMessage[],
   overlay: new Map() as TranscriptOverlay,
   durableSequences: new Map() as ReadonlyMap<string, number>,

@@ -163,6 +163,20 @@ describe("appendFrames", () => {
 
     expect(replayed).toBe(started);
     expect(replayed.turnActive).toBe(false);
+    expect(replayed.turnEpoch).toBe(started.turnEpoch);
+  });
+
+  it("counts a turn that opened and closed inside one batch", () => {
+    // The flag reads the same at both ends of this batch as it does across one
+    // that never mentioned a turn, and the two mean opposite things to a Session
+    // waiting on the turn it just delivered into.
+    const quiet = appendFrames(EMPTY_TRANSCRIPT, [opening(1, "permission:1")]);
+    expect(quiet.turnEpoch).toBe(0);
+
+    const whole = appendFrames(quiet, [turn(2, "turn.started"), turn(3, "turn.completed")]);
+
+    expect(whole.turnActive).toBe(false);
+    expect(whole.turnEpoch).toBe(2);
   });
 });
 

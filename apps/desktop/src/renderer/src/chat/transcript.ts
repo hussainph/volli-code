@@ -53,6 +53,19 @@ export interface ChatTranscriptState {
   frames: readonly ChatSessionFrame[];
   throughSequence: number;
   turnActive: boolean;
+  /**
+   * How many turn boundaries this Session has crossed.
+   *
+   * `turnActive` alone cannot say that a turn happened, only that one is open
+   * now, and a batch is not one frame: a turn that opens and closes inside a
+   * single fold — a fast refusal, a 50ms occluded-window batch, a reconnect
+   * replaying what was missed — leaves the flag exactly where it found it. The
+   * count is what tells that batch apart from one that said nothing about turns
+   * at all, and `settledLifecycle` needs the difference: without it, a Session
+   * optimistically marked busy by a delivered message never learns that the turn
+   * it was waiting on has already been and gone.
+   */
+  turnEpoch: number;
   /** Latest settled shape per message id, in the order the ids first spoke. */
   durableMessages: readonly UIMessage[];
   /**
@@ -85,6 +98,7 @@ export const EMPTY_TRANSCRIPT: ChatTranscriptState = {
   frames: [],
   throughSequence: 0,
   turnActive: false,
+  turnEpoch: 0,
   durableMessages: [],
   overlay: EMPTY_OVERLAY,
   durableSequences: EMPTY_DURABLE_SEQUENCES,
@@ -119,6 +133,7 @@ export function appendFrames(
   if (!last && overlays.length === 0) return state;
 
   let turnActive = state.turnActive;
+  let turnEpoch = state.turnEpoch;
   let overlay = state.overlay;
   // Copied once, and only if something settles. A history replay hands this
   // every transcript frame the Session ever committed in a single batch, and
@@ -126,8 +141,11 @@ export function appendFrames(
   // length — the exact cost the delta contract exists to remove.
   let settled: Map<string, number> | null = null;
   for (const frame of fresh) {
-    if (frame.event.payload.kind === "turn.started") turnActive = true;
-    else if (frame.event.payload.kind === "turn.completed") turnActive = false;
+    const kind = frame.event.payload.kind;
+    if (kind === "turn.started" || kind === "turn.completed") {
+      turnActive = kind === "turn.started";
+      turnEpoch += 1;
+    }
     const settledId = frame.transcript?.message.id;
     if (settledId === undefined) continue;
     // The settle point: the message is durable now, so the transient entry goes
@@ -162,6 +180,7 @@ export function appendFrames(
     frames: last ? [...state.frames, ...fresh] : state.frames,
     throughSequence: last ? last.sequence : state.throughSequence,
     turnActive,
+    turnEpoch,
     durableMessages,
     overlay,
     durableSequences,
