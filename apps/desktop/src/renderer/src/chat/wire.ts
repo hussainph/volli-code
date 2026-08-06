@@ -74,7 +74,7 @@ function chatTranscriptDelta(value: unknown): TranscriptDelta | null {
     case "reset":
       return isRecord(value.message) &&
         typeof value.message.id === "string" &&
-        typeof value.message.role === "string" &&
+        isTranscriptRole(value.message.role) &&
         isKeyedPartArray(value.message.parts)
         ? (value as unknown as TranscriptDelta)
         : null;
@@ -106,12 +106,20 @@ function chatTranscript(value: unknown): ChatSessionFrame["transcript"] | undefi
   const message = value.message;
   if (
     typeof message.id !== "string" ||
-    (message.role !== "user" && message.role !== "assistant" && message.role !== "system") ||
-    !Array.isArray(message.parts)
+    !isTranscriptRole(message.role) ||
+    !isMessagePartArray(message.parts)
   ) {
     return undefined;
   }
   return { message: message as unknown as UIMessage };
+}
+
+function isTranscriptRole(value: unknown): value is "user" | "assistant" | "system" {
+  return value === "user" || value === "assistant" || value === "system";
+}
+
+function isMessagePartArray(value: unknown): boolean {
+  return Array.isArray(value) && value.every(isRecord);
 }
 
 /**

@@ -111,6 +111,13 @@ describe("chatSessionFrame", () => {
     const message = { id: "m1", role: "assistant", parts: "text" };
     expect(chatSessionFrame(wireFrame({ transcript: { message } }))).toBeNull();
   });
+
+  it("refuses a transcript message whose parts contain non-record entries", () => {
+    for (const parts of [[null], ["text"], [[]]]) {
+      const message = { id: "m1", role: "assistant", parts };
+      expect(chatSessionFrame(wireFrame({ transcript: { message } }))).toBeNull();
+    }
+  });
 });
 
 describe("chatSessionOverlay", () => {
@@ -175,7 +182,7 @@ describe("chatSessionOverlay", () => {
     ).not.toBeNull();
   });
 
-  it("refuses a reset whose message is not a record, or whose id or role are not strings", () => {
+  it("refuses a reset whose message is not a record, or whose id or role are not known", () => {
     expect(chatSessionOverlay(wireOverlay({ op: "reset", message: "nope" }))).toBeNull();
     expect(
       chatSessionOverlay(
@@ -184,6 +191,11 @@ describe("chatSessionOverlay", () => {
     ).toBeNull();
     expect(
       chatSessionOverlay(wireOverlay({ op: "reset", message: { id: "m1", role: 1, parts: [] } })),
+    ).toBeNull();
+    expect(
+      chatSessionOverlay(
+        wireOverlay({ op: "reset", message: { id: "m1", role: "tool", parts: [] } }),
+      ),
     ).toBeNull();
   });
 
