@@ -1,9 +1,14 @@
 /**
  * E2e proof of the chat Session seam, end to end, against the BUILT app: create
- * a chat Session through the real UI, stream a scripted answer through a fake
- * `opencode` binary (./lib/fake-opencode-server.mjs), and assert it settles
- * durably — then relaunch on the same profile and assert the durable
- * transcript comes back without a live adapter.
+ * a chat Session through the real UI, stream two scripted answers through a
+ * fake `opencode` binary (./lib/fake-opencode-server.mjs), and assert both
+ * settle durably — then relaunch on the same profile and assert both come back
+ * from the durable transcript without a live adapter.
+ *
+ * Two turns, not one, because turn state used to be derived from a single
+ * `session.status` busy event: the second turn's `session.idle` deduped against
+ * the first's and was dropped, so the second reply never settled and existed
+ * only until the app was closed. One turn cannot see that.
  *
  * Two things have to be true before a single message can be typed:
  *
@@ -68,9 +73,12 @@ const FAKE_SERVER_PATH = join(
 
 // Kept byte-for-byte in sync with ANSWER_CHUNKS in lib/fake-opencode-server.mjs
 // (that file can't be imported here — it argv-dispatches into `--version`/
-// `serve` on load, which would hijack this process's own argv).
-const ANSWER_TEXT = "This is a fake OpenCode answer, streamed in three pieces, and now it settles.";
-const PROMPT_TEXT = "Say hello and settle.";
+// `serve` on load, which would hijack this process's own argv). The fake numbers
+// each answer, which is what lets the relaunch below tell one turn's reply from
+// the other's instead of counting identical strings.
+const ANSWER_BODY = "This is a fake OpenCode answer, streamed in three pieces, and now it settles.";
+const answerText = (turn) => `Answer ${turn}: ${ANSWER_BODY}`;
+const promptText = (turn) => `Say hello and settle, take ${turn}.`;
 // Kept in sync with MODEL_LABEL in lib/fake-opencode-server.mjs. Matched
 // exactly (never a loose "any switch") so a real `opencode` install on this
 // machine can never be mistaken for the fake — see the module doc comment.
@@ -194,6 +202,18 @@ async function openNewChatTab(page) {
     .getAttribute("aria-label");
   if (activeLabel === null) throw new Error("no tab became active after New Chat");
   return activeLabel;
+}
+
+/** The Stop button, which is on screen for exactly as long as a turn is running. */
+function stopButton(page) {
+  return page.getByRole("button", { name: "Stop", exact: true });
+}
+
+async function submitPrompt(page, text) {
+  const textarea = page.getByPlaceholder("Ask, plan, or implement…").first();
+  await textarea.click();
+  await textarea.fill(text);
+  await page.keyboard.press("Enter");
 }
 
 /** The `span[aria-hidden]` liveness dot on the tab named `label`, or null if the tab/dot isn't there. */
@@ -383,22 +403,17 @@ async function main() {
     });
 
     await attempt(9, "submitting a prompt starts a turn (Stop button appears)", async () => {
-      const textarea = page.getByPlaceholder("Ask, plan, or implement…").first();
-      await textarea.click();
-      await textarea.fill(PROMPT_TEXT);
-      await page.keyboard.press("Enter");
-      await waitUntil(
-        "the turn to start",
-        async () => (await page.getByRole("button", { name: "Stop", exact: true }).count()) > 0,
-        { timeout: 10000 },
-      );
+      await submitPrompt(page, promptText(1));
+      await waitUntil("the turn to start", async () => (await stopButton(page).count()) > 0, {
+        timeout: 10000,
+      });
       return { ok: true };
     });
 
     await attempt(10, "the streamed answer renders", async () => {
       await waitUntil(
         "the streamed answer text",
-        async () => (await page.getByText(ANSWER_TEXT, { exact: false }).count()) > 0,
+        async () => (await page.getByText(answerText(1), { exact: false }).count()) > 0,
         { timeout: 15000 },
       ).catch(async (error) => {
         await captureFailureEvidence(page, mainStdout, mainStderr, fakeLog, "answer-missing");
@@ -411,13 +426,11 @@ async function main() {
       11,
       "the turn settles: Stop clears and the tab's working dot clears",
       async () => {
-        await waitUntil(
-          "the turn to settle",
-          async () => (await page.getByRole("button", { name: "Stop", exact: true }).count()) === 0,
-          { timeout: 15000 },
-        );
+        await waitUntil("the turn to settle", async () => (await stopButton(page).count()) === 0, {
+          timeout: 15000,
+        });
         const classes = await tabDotClasses(page, chatTabLabel);
-        const stillRendered = (await page.getByText(ANSWER_TEXT, { exact: false }).count()) > 0;
+        const stillRendered = (await page.getByText(answerText(1), { exact: false }).count()) > 0;
         // The dot has to BE there for the absence of a halo on it to mean
         // anything: a tab that vanished has no working dot either, and
         // `dotIsWorking(null)` is false.
@@ -427,6 +440,55 @@ async function main() {
         };
       },
     );
+
+    await attempt(12, "a second prompt in the same Session starts its own turn", async () => {
+      await submitPrompt(page, promptText(2));
+      await waitUntil(
+        "the second turn to start",
+        async () => (await stopButton(page).count()) > 0,
+        {
+          timeout: 10000,
+        },
+      );
+      await waitUntil(
+        "the second answer to render",
+        async () => (await page.getByText(answerText(2), { exact: false }).count()) > 0,
+        { timeout: 15000 },
+      ).catch(async (error) => {
+        await captureFailureEvidence(
+          page,
+          mainStdout,
+          mainStderr,
+          fakeLog,
+          "second-answer-missing",
+        );
+        throw error;
+      });
+      return { ok: true };
+    });
+
+    // The check that pins the bug this smoke was extended for: a Session's turn
+    // state used to be derived from a busy event alone, so the second turn's
+    // idle read as a repeat of the first's and was dropped — Stop stayed lit,
+    // the dot kept spinning, and the reply was never written down (check 14 is
+    // where that last part shows).
+    await attempt(13, "the second turn settles too — Stop clears again", async () => {
+      const settled = await waitUntil(
+        "the second turn to settle",
+        async () => (await stopButton(page).count()) === 0,
+        { timeout: 15000 },
+      )
+        .then(() => true)
+        .catch(() => false);
+      if (!settled) {
+        await captureFailureEvidence(page, mainStdout, mainStderr, fakeLog, "second-turn-stuck");
+      }
+      const classes = await tabDotClasses(page, chatTabLabel);
+      return {
+        ok: settled && classes !== null && !dotIsWorking(classes),
+        detail: `settled=${settled} dotClasses=${classes}`,
+      };
+    });
 
     // ---- stretch: relaunch on the same profile, adopt (no live attach), and
     // assert the DURABLE transcript (not the fake server) is what renders it.
@@ -451,8 +513,8 @@ async function main() {
       await page2.waitForLoadState("domcontentloaded");
 
       await attempt(
-        12,
-        "after relaunch, the ticket + chat tab reopen with the durable transcript",
+        14,
+        "after relaunch, the chat tab reopens with BOTH answers from the durable transcript",
         async () => {
           const detailOpen = await waitUntil(
             "the ticket detail to reopen",
@@ -478,13 +540,19 @@ async function main() {
             );
           }
           await chatTab.click();
+          // Both, not just the last: a turn whose settle never landed leaves its
+          // reply in the transient overlay only, which a relaunch discards. The
+          // first answer coming back while the second does not is precisely the
+          // shape of the bug, and a one-answer assertion would call it green.
           const rendered = await waitUntil(
-            "the durable answer to render without a live adapter",
-            async () => (await page2.getByText(ANSWER_TEXT, { exact: false }).count()) > 0,
+            "both durable answers to render without a live adapter",
+            async () => {
+              const first = await page2.getByText(answerText(1), { exact: false }).count();
+              const second = await page2.getByText(answerText(2), { exact: false }).count();
+              return first > 0 && second > 0 ? { first, second } : false;
+            },
             { timeout: 10000 },
-          )
-            .then(() => true)
-            .catch(() => false);
+          ).catch(() => null);
           if (!rendered) {
             await captureFailureEvidence(
               page2,
@@ -494,9 +562,12 @@ async function main() {
               "relaunch-transcript-missing",
             );
           }
+          const present = await Promise.all(
+            [1, 2].map((turn) => page2.getByText(answerText(turn), { exact: false }).count()),
+          );
           return {
-            ok: rendered,
-            detail: rendered ? "durable transcript rendered" : "answer did not reappear",
+            ok: rendered !== null,
+            detail: `answer1=${present[0]} answer2=${present[1]}`,
           };
         },
       );
@@ -507,7 +578,7 @@ async function main() {
       // from. Standing the active tab down before the close is the whole of
       // what stops it — and a reordering that lost it would leave a chat tab
       // nobody can close, with every check above still green.
-      await attempt(13, "closing the chat tab retires it, and nothing puts it back", async () => {
+      await attempt(15, "closing the chat tab retires it, and nothing puts it back", async () => {
         const chatTab = page2.getByRole("tab", { name: chatTabLabel, exact: true });
         await page2.getByRole("button", { name: `Close ${chatTabLabel}`, exact: true }).click();
         await waitUntil("the chat tab to go", async () => (await chatTab.count()) === 0);
