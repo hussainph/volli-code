@@ -275,9 +275,18 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
 
   // See CHAT_ACTIVITY_REFRESH_MS: main has no push channel for chat activity,
   // and this section is render-hidden rather than unmounted across nav
-  // switches, so `visible` is what stops it polling behind another page.
+  // switches, so `visible` is what stops it polling behind another page — and
+  // what triggers an immediate re-read on return, so coming back from Files
+  // never shows minutes-stale activity for up to another poll interval. The ref
+  // starts true so the mount fetch is not doubled.
+  const wasVisible = React.useRef(true);
   React.useEffect(() => {
-    if (!visible) return;
+    if (!visible) {
+      wasVisible.current = false;
+      return;
+    }
+    if (!wasVisible.current) setRefreshTick((tick) => tick + 1);
+    wasVisible.current = true;
     const timer = window.setInterval(
       () => setRefreshTick((tick) => tick + 1),
       CHAT_ACTIVITY_REFRESH_MS,

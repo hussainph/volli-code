@@ -242,9 +242,13 @@ export function PreviousBandRow({
           </span>
         ) : null}
         <KindGlyph kind={row.kind} />
-        <span className="shrink-0 text-label tabular-nums">
-          {compactAge(row.endedOrQuietAt, now)}
-        </span>
+        {/* 0 is the model's "nothing durable can date this" sentinel — an age
+            drawn from it would read as the epoch, so the row says nothing. */}
+        {row.endedOrQuietAt > 0 ? (
+          <span className="shrink-0 text-label tabular-nums">
+            {compactAge(row.endedOrQuietAt, now)}
+          </span>
+        ) : null}
       </SidebarMenuButton>
     </SidebarMenuItem>
   );
