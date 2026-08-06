@@ -9,8 +9,8 @@
  * packages/opencode-adapter/src/index.test.ts's `FakeNetwork`/`FakeProcess`,
  * apps/desktop/src/renderer/lab/chat/delta-frames.integration.test.ts's
  * `ScriptedNetwork`, and packages/opencode-adapter/src/stream-cost.bench.test.ts.
- * This is not a general OpenCode simulator: one session, one scripted answer,
- * then idle.
+ * This is not a general OpenCode simulator: one session, and one numbered
+ * scripted answer per prompt.
  *
  * argv selects the mode, mirroring the real binary:
  *   --version                                  → print a version line, exit 0
@@ -26,8 +26,8 @@
  *   GET  /global/health                     → { healthy, version }
  *   POST /session                           → { id }  (title ignored, stored)
  *   GET  /session/:id                       → { id, title } | 404
- *   POST /session/:id/prompt_async          → 204, then streams the scripted
- *                                              answer over SSE and goes idle
+ *   POST /session/:id/prompt_async          → 204, then goes busy, streams the
+ *                                              scripted answer over SSE, idles
  *   GET  /session/:id/message               → the settled answer, once it has
  *                                              one (reconcile/hydrate shape)
  *   GET  /session/:id/todo                  → []
@@ -53,10 +53,12 @@ const FAKE_VERSION = "1.17.18-fake";
 const PROVIDER_ID = "fake-provider";
 const MODEL_ID = "fake-model";
 const MODEL_LABEL = "Fake Model";
-const TEXT_PART_ID = "answer";
-const CHUNK_DELAY_MS = 60;
+const textPartId = (turn) => `answer-${turn}`;
+// Overridable so a manual driving session can slow the stream enough to watch
+// mid-stream states (tab switches, Stop, the working dot) with human eyes.
+const CHUNK_DELAY_MS = Number(process.env.VOLLI_FAKE_OPENCODE_CHUNK_MS ?? "") || 60;
 
-// Kept byte-for-byte in sync with ANSWER_TEXT in session-chat-smoke.mjs, which
+// Kept byte-for-byte in sync with ANSWER_BODY in session-chat-smoke.mjs, which
 // asserts this exact string renders and settles — the two files don't share an
 // import (this one runs as a spawned binary, argv-dispatched; importing it
 // would re-trigger that dispatch against the smoke's own argv).
@@ -65,6 +67,15 @@ const ANSWER_CHUNKS = [
   "streamed in three pieces, ",
   "and now it settles.",
 ];
+
+/**
+ * Every answer names the turn that produced it, so a smoke driving more than
+ * one can tell them apart — and can assert that BOTH survive a relaunch rather
+ * than only the last one written down.
+ */
+function answerChunks(turn) {
+  return [`Answer ${turn}: `, ...ANSWER_CHUNKS];
+}
 
 function log(...parts) {
   const target = process.env.VOLLI_FAKE_OPENCODE_LOG;
@@ -104,7 +115,7 @@ const port = Number(flagValue("--port") ?? "0");
 
 // ---- session state -------------------------------------------------------
 
-/** @type {Map<string, {id:string, title:string|null, status:"idle"|"busy", assistantMessageId:string|null, text:string}>} */
+/** @type {Map<string, {id:string, title:string|null, status:"idle"|"busy", messages:{id:string, partId:string, text:string}[]}>} */
 const sessions = new Map();
 const sseClients = new Set();
 let eventSequence = 0;
@@ -122,20 +133,25 @@ function broadcast(type, properties) {
 }
 
 async function runScriptedTurn(session) {
-  const messageId = randomUUID();
+  const turn = session.messages.length + 1;
+  const message = { id: randomUUID(), partId: textPartId(turn), text: "" };
   session.status = "busy";
-  session.assistantMessageId = messageId;
-  session.text = "";
+  session.messages.push(message);
+  // Real OpenCode declares the turn busy before it has a message to show for
+  // it, and the adapter reads that as the turn start. A fake that skips it
+  // exercises only the recovery path and would never catch a regression in the
+  // one the product actually runs on.
+  broadcast("session.status", { sessionID: session.id, status: { type: "busy" } });
   broadcast("message.updated", {
-    info: { id: messageId, sessionID: session.id, role: "assistant" },
+    info: { id: message.id, sessionID: session.id, role: "assistant" },
   });
-  for (const chunk of ANSWER_CHUNKS) {
+  for (const chunk of answerChunks(turn)) {
     await sleep(CHUNK_DELAY_MS);
-    session.text += chunk;
+    message.text += chunk;
     broadcast("message.part.delta", {
       sessionID: session.id,
-      messageID: messageId,
-      partID: TEXT_PART_ID,
+      messageID: message.id,
+      partID: message.partId,
       field: "text",
       delta: chunk,
     });
@@ -192,20 +208,10 @@ function providerCatalogBody() {
 }
 
 function messageResponseBody(session) {
-  if (!session.assistantMessageId) return [];
-  return [
-    {
-      info: { id: session.assistantMessageId, sessionID: session.id, role: "assistant" },
-      parts: [
-        {
-          id: TEXT_PART_ID,
-          messageID: session.assistantMessageId,
-          type: "text",
-          text: session.text,
-        },
-      ],
-    },
-  ];
+  return session.messages.map((message) => ({
+    info: { id: message.id, sessionID: session.id, role: "assistant" },
+    parts: [{ id: message.partId, messageID: message.id, type: "text", text: message.text }],
+  }));
 }
 
 function statusBody() {
@@ -249,8 +255,7 @@ const server = createServer(async (req, res) => {
       id,
       title: typeof body.title === "string" ? body.title : null,
       status: "idle",
-      assistantMessageId: null,
-      text: "",
+      messages: [],
     });
     log("session created", id);
     sendJson(res, 200, { id });
