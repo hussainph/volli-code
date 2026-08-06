@@ -183,6 +183,15 @@ const COMMENT_TWO = "Second note to delete";
 const SESSION_INITIAL = "Session 1";
 const SESSION_RENAMED = "Renamed session";
 
+/**
+ * A sidebar session row's meta line (`VC-1 · Shell · Working`).
+ *
+ * Everything dimmed in the row promotes together under decision #74's vibrancy
+ * rule, so the hook class is `session-row-dim` and the title carries it too —
+ * pin the selector to the one span that holds the mono ticket id.
+ */
+const SESSION_ROW_META = "span.session-row-dim:has(> span.font-mono)";
+
 // ---- check 12: the ticket file tab's dirty-close guard ---------------------
 // A repository (non-artifact) Markdown file, so `fileSavePolicy` puts it on the
 // explicit-⌘S Monaco path — the surface whose drafts the guard defends.
@@ -873,10 +882,9 @@ async function main() {
 
         // Put this live shell ticket into Doing through the real property UI
         // (Properties icon mode replaces the retired Details drawer). A live
-        // pane reaches the ACTIVE band from any column now — the board
-        // guarantee is only the fourth of its four groups — so this is what
-        // makes the next scenario's row the GUARANTEED one either way, and it
-        // exercises the property UI on the way past.
+        // pane reaches the ACTIVE band from any column, so the next scenario's
+        // row does not depend on this move — it is here to exercise the
+        // property UI on the way past.
         await aside.getByTestId("ticket-rail-mode-properties").click();
         await aside.getByRole("button", { name: "Todo", exact: true }).click();
         await page.getByRole("menuitemradio", { name: "Doing", exact: true }).click();
@@ -928,7 +936,31 @@ async function main() {
           "live session row in the session bands",
           async () => (await activeSessionRow.count()) === 1,
         );
+        // Decision #74's vibrancy rule, on the only surface that can show it: a
+        // real live row. Everything dimmed in the row promotes TOGETHER on
+        // selection — the row's fill is a veil, so the meta line measures under
+        // the contrast floor un-promoted and over it promoted.
+        const subtextBefore = await activeSessionRow
+          .locator(SESSION_ROW_META)
+          .evaluate((element) => getComputedStyle(element).color);
         await activeSessionRow.click();
+        // Both colours are read after the promotion has SETTLED: the meta line
+        // carries `transition-colors`, and sampling mid-flight compares a
+        // colour still in motion against one that has arrived.
+        await sleep(400);
+        const subtextHighlight = await activeSessionRow.evaluate((button, metaSelector) => {
+          const subtext = button.querySelector(metaSelector);
+          if (!(subtext instanceof HTMLElement)) return null;
+          return {
+            active: button.getAttribute("data-active"),
+            buttonColor: getComputedStyle(button).color,
+            subtextColor: getComputedStyle(subtext).color,
+          };
+        }, SESSION_ROW_META);
+        const subtextHighlighted =
+          subtextHighlight?.active === "true" &&
+          subtextHighlight.subtextColor === subtextHighlight.buttonColor &&
+          subtextHighlight.subtextColor !== subtextBefore;
         const exactTabSelected = await waitUntil("exact session tab selected", async () => {
           const tab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
           return (await tab.count()) === 1 && (await tab.getAttribute("aria-selected")) === "true";
@@ -952,10 +984,11 @@ async function main() {
           return text !== null && text.includes("nav-survivor");
         });
 
-        const ok = marked && !!exactTabSelected && !!nodeSurvived && !!shellAlive;
+        const ok =
+          marked && !!exactTabSelected && !!nodeSurvived && !!shellAlive && subtextHighlighted;
         return {
           ok,
-          detail: `marked=${marked} exactTab=${!!exactTabSelected} nodeSurvived=${!!nodeSurvived} shellAlive=${!!shellAlive}`,
+          detail: `marked=${marked} exactTab=${!!exactTabSelected} nodeSurvived=${!!nodeSurvived} shellAlive=${!!shellAlive} subtext=${JSON.stringify(subtextHighlight)}`,
         };
       },
     );

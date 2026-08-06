@@ -117,8 +117,8 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   const scratchContainer = containers[project.id];
   // Which of this project's Sessions are live on this surface — the key the one
   // fetch below re-reads the durable listing on. Both kinds count: a chat has no
-  // PTY pane to name, so a signature made of panes alone left a Doing ticket
-  // reading "No live session" while a chat streamed inside it.
+  // PTY pane to name, so a signature made of panes alone left a streaming chat
+  // out of every refetch, and its row sat stale until something else moved.
   const liveSignature = React.useMemo(
     () =>
       [
@@ -392,7 +392,6 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
                 key={row.id}
                 row={row}
                 ticketPrefix={project.ticketPrefix}
-                now={now}
                 selected={isSelected(row)}
                 onSelect={() => activate(row)}
               />

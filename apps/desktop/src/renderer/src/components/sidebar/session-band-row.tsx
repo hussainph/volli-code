@@ -102,18 +102,12 @@ function attentionLine(attention: SessionAttention, waitingOn: ChatWaitingReason
   return waitingOn === null ? "Waiting for you" : WAITING_COPY[waitingOn];
 }
 
-/** The Active row's second line: why a human is needed, else what ended, else what is running. */
-function stateLine(row: ActiveSessionRow, now: number): string {
+/** The Active row's second line: why a human is needed, else what is running. */
+function stateLine(row: ActiveSessionRow): string {
   if (row.attention !== null) return attentionLine(row.attention, row.waitingOn);
-  if (row.lastRun !== null) {
-    return row.lastRun.endedAt === null
-      ? "Ended"
-      : `Ended · ${relativeTime(row.lastRun.endedAt, now)}`;
-  }
   // A session whose hooks never arrived states that, in place of an activity it
   // would only be guessing at. Every other row keeps its activity word: a Known
   // harness never promised to report, so inference there is not news.
-  if (row.activity === null) return row.source;
   if (row.activitySource === "silent") return `${row.source} · Not reporting`;
   return `${row.source} · ${ACTIVITY_LABEL[row.activity]}`;
 }
@@ -132,19 +126,16 @@ function stateLine(row: ActiveSessionRow, now: number): string {
 export function ActiveBandRow({
   row,
   ticketPrefix,
-  now,
   selected,
   onSelect,
 }: {
   row: ActiveSessionRow;
   ticketPrefix: string;
-  now: number;
   selected: boolean;
   onSelect(): void;
 }) {
   const needsYou = row.attention !== null;
   const working = !needsYou && row.activity === "working";
-  const concluded = row.lastRun !== null;
 
   return (
     <SidebarMenuItem>
@@ -160,13 +151,7 @@ export function ActiveBandRow({
           aria-hidden
           className={cn(
             "mt-1.5 size-1.5 shrink-0 rounded-full",
-            needsYou
-              ? "bg-amber-500"
-              : working
-                ? "bg-emerald-500"
-                : concluded
-                  ? "bg-muted-foreground/25"
-                  : "bg-muted-foreground/40",
+            needsYou ? "bg-amber-500" : working ? "bg-emerald-500" : "bg-muted-foreground/40",
           )}
         />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -178,19 +163,14 @@ export function ActiveBandRow({
               </span>
             </span>
           ) : (
-            <span
-              className={cn(
-                "session-row-dim truncate text-ui transition-colors",
-                concluded ? "text-muted-foreground" : "text-sidebar-foreground",
-              )}
-            >
+            <span className="session-row-dim truncate text-ui text-sidebar-foreground transition-colors">
               {row.title}
             </span>
           )}
           <span className="session-row-dim flex min-w-0 items-center gap-1 text-label text-muted-foreground transition-colors">
             <RowIdentity ticket={row.ticket} ticketPrefix={ticketPrefix} />
             <span aria-hidden>·</span>
-            <span className="truncate">{stateLine(row, now)}</span>
+            <span className="truncate">{stateLine(row)}</span>
           </span>
         </span>
       </SidebarMenuButton>

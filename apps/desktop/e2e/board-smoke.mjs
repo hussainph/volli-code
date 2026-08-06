@@ -335,15 +335,6 @@ async function sidebarBandCount(page, band) {
   }, band);
 }
 
-/**
- * A session row's meta line (`VC-10 · Ready for review`).
- *
- * Everything dimmed in the row promotes together under decision #74's vibrancy
- * rule, so the hook class is `session-row-dim` and the title carries it too —
- * pin the selector to the one span that holds the mono ticket id.
- */
-const SESSION_ROW_META = "span.session-row-dim:has(> span.font-mono)";
-
 // ---- main ------------------------------------------------------------------
 
 async function main() {
@@ -992,71 +983,43 @@ async function main() {
       },
     );
 
-    // === 16. Sidebar ACTIVE band is truthful without a live terminal ========
+    // === 16. The session bands speak for Sessions, never for tickets ========
     await attempt(
       16,
-      "the ACTIVE band mirrors Needs Review and Doing without inventing live sessions",
+      "a board full of Doing and Needs Review tickets with no Session produces no session rows",
       async () => {
-        // The board guarantee is an ACTIVE-band promise: every Doing and Needs
-        // Review ticket gets a presence there (bare rows here — no PTY ever
-        // ran). Scoping the id list to that band is what makes this an equality
-        // over TICKETED rows; PREVIOUS is a different question, and a ticketless
-        // row draws a globe rather than an id, so it contributes nothing here.
-        // The band COUNTS below are what close that gap.
+        // This fixture has never run a Session, and the board is full of work
+        // in flight — the exact state an earlier rule filled ACTIVE with one
+        // synthetic row per Doing/Needs-Review ticket, pushing real Sessions
+        // below them. Both bands must now be empty: a ticket is not a Session,
+        // and the board is where a ticket's status lives.
         const doingIds = await columnCardIds(page, "Doing");
-        const ids = await sidebarSessionIds(page, "active");
-        const expectedIds = ["VC-10", "VC-11", ...doingIds];
-        const idsMatch =
-          Array.isArray(ids) &&
+        const activeIds = await sidebarSessionIds(page, "active");
+        const previousIds = await sidebarSessionIds(page, "previous");
+        // Non-vacuous: there really is in-flight work for a ticket row to have
+        // been invented from.
+        const boardHasWork =
           doingIds.length > 0 &&
-          ids.length === expectedIds.length &&
-          expectedIds.every((id) => ids.includes(id));
-        // Both bands are drawn, and each reports the model's own row count:
-        // exactly the guaranteed rows in ACTIVE, and — no Session has ever run
-        // in this fixture — nothing at all in PREVIOUS. An exact count is what
-        // makes "without inventing live sessions" an assertion rather than a
-        // title: a ticketless row nobody asked for would show up here.
+          (await columnCardIds(page, "Needs Review")).length > 0 &&
+          Array.isArray(activeIds) &&
+          Array.isArray(previousIds);
+        const noTicketRows = activeIds?.length === 0 && previousIds?.length === 0;
+        // The counts come from the model, the ids from what rendered — a band
+        // that counted rows it never drew would read as truthful on either
+        // one alone.
         const bandCounts =
-          (await sidebarBandCount(page, "active")) === expectedIds.length &&
+          (await sidebarBandCount(page, "active")) === 0 &&
           (await sidebarBandCount(page, "previous")) === 0;
-        // And every one of those rows is BARE. A floor here could not tell a
-        // truthful guarantee row from one that had invented something live.
-        const bareRows =
-          (await page.getByText("No live session", { exact: false }).count()) ===
-          expectedIds.length;
-        // Scoped to the band under test: PREVIOUS draws mono id chips too, so a
-        // page-wide locator would stop naming one row the day this ticket has
-        // an ended session as well as its bare guarantee row.
-        const reviewRow = page
-          .locator('[data-session-band="active"] [data-sidebar="menu-button"]')
-          .filter({ has: page.locator("span.font-mono", { hasText: /^VC-10$/ }) })
-          .first();
-        const subtextBefore = await reviewRow
-          .locator(SESSION_ROW_META)
-          .evaluate((element) => getComputedStyle(element).color);
-        await reviewRow.click();
-        await sleep(400);
-        const ticketOpened =
-          (await page.getByRole("tab", { name: "VC-10", exact: true }).count()) === 1;
-        const subtextHighlight = await reviewRow.evaluate((button, metaSelector) => {
-          const subtext = button.querySelector(metaSelector);
-          if (!(subtext instanceof HTMLElement)) return null;
-          return {
-            active: button.getAttribute("data-active"),
-            buttonColor: getComputedStyle(button).color,
-            subtextColor: getComputedStyle(subtext).color,
-          };
-        }, SESSION_ROW_META);
-        const subtextHighlighted =
-          subtextHighlight?.active === "true" &&
-          subtextHighlight.subtextColor === subtextHighlight.buttonColor &&
-          subtextHighlight.subtextColor !== subtextBefore;
-        await page.keyboard.press("Escape");
-        await sleep(300);
-        const ok = idsMatch && bandCounts && bareRows && ticketOpened && subtextHighlighted;
+        // The retired bare row's own words, gone from the app entirely.
+        const noBareRows =
+          (await page.getByText("No live session", { exact: false }).count()) === 0;
+        const emptyCopy =
+          (await page.getByText("No active sessions", { exact: true }).count()) === 1 &&
+          (await page.getByText("Nothing yet", { exact: true }).count()) === 1;
+        const ok = boardHasWork && noTicketRows && bandCounts && noBareRows && emptyCopy;
         return {
           ok,
-          detail: `ids=${JSON.stringify(ids)} doing=${JSON.stringify(doingIds)} bandCounts=${bandCounts} bareRows=${bareRows} ticketOpened=${ticketOpened} subtext=${JSON.stringify(subtextHighlight)}`,
+          detail: `doing=${JSON.stringify(doingIds)} activeIds=${JSON.stringify(activeIds)} previousIds=${JSON.stringify(previousIds)} bandCounts=${bandCounts} noBareRows=${noBareRows} emptyCopy=${emptyCopy}`,
         };
       },
     );

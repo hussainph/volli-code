@@ -104,11 +104,15 @@ Settled 2026-08-04/05; do not reopen.
   (`chat/rename.ts` — the optimistic writes are load-bearing).
 - **#181** — per-project runtime pickers, end to end (see item 1 above).
 - **#182** — the two-band sidebar. Pure core in `active-session-listing.ts`:
-  Active (waiting pinned by owner decision · working · quiet ≤30 min ·
-  board-guarantee rows) and Previous (one-line rows, passive cleanup —
+  Active (waiting pinned by owner decision · working · quiet ≤30 min) and
+  Previous (one-line rows, passive cleanup —
   archived/gone ticket, Done ≥1h and predates-column-move via
   `volli:ticket-status-entries`, >7 d; born-ticketless exempt, orphans not;
-  everything reachable under the "Cleaned up" filter item). Chats auto-title
+  everything reachable under the "Cleaned up" filter item). Every row is a
+  Session: the rule that guaranteed one row per Doing/Needs-Review ticket is
+  gone, because it filled Active with ticket titles while the real Sessions sat
+  below in Previous — the board is where a ticket's status lives, and Active
+  showing nothing is the honest answer to nothing running. Chats auto-title
   from their first delivered message. The lab scratch imports the shipped band
   components, so the prototype cannot drift.
 

@@ -152,11 +152,7 @@ function ListingReadout({
           <dd className="truncate">
             {row.id}
             {row.attention === null ? "" : " · attention"}
-            {/* A board-guarantee row is named by its TICKET, not by a Session —
-                which is what makes the bare and chat-backed ones (no `lastRun`
-                to read) visible here at all. */}
-            {row.id.startsWith("ticket:") ? " · board" : ""}
-            {row.lastRun === null ? "" : " · ended"}
+            {` · ${row.activity}`}
           </dd>
         </React.Fragment>
       ))}
@@ -228,7 +224,6 @@ export default function SidebarSessionsScratch() {
                       key={row.id}
                       row={row}
                       ticketPrefix={project.ticketPrefix}
-                      now={now}
                       selected={row.id === selectedId}
                       onSelect={() => setSelectedId(row.id)}
                     />

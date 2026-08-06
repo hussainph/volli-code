@@ -180,13 +180,15 @@ describe("buildActiveSessionListing — the Active band", () => {
     ]);
   });
 
-  it("sorts Active by group: waiting, then working, then recently quiet, then the board guarantee", () => {
+  it("sorts Active by group: waiting, then working, then recently quiet", () => {
     const now = 10_000_000;
     const result = buildActiveSessionListing({
       tickets: [
         ticket({ id: "t-wait", status: "doing", ticketNumber: 1 }),
         ticket({ id: "t-work", status: "doing", ticketNumber: 2 }),
         ticket({ id: "t-quiet", status: "doing", ticketNumber: 3 }),
+        // Doing, and nothing ever ran for it: the list speaks for Sessions, so
+        // this ticket has no row to contribute.
         ticket({ id: "t-board", status: "doing", ticketNumber: 4, title: "Nothing live" }),
       ],
       containers: {
@@ -204,12 +206,7 @@ describe("buildActiveSessionListing — the Active band", () => {
       now,
     });
 
-    expect(titles(result.active)).toEqual([
-      "Waiting on a human",
-      "Working now",
-      "Quiet a while",
-      "Nothing live",
-    ]);
+    expect(titles(result.active)).toEqual(["Waiting on a human", "Working now", "Quiet a while"]);
   });
 
   it("orders the working group by recency", () => {
@@ -402,7 +399,7 @@ describe("buildActiveSessionListing — the Active band", () => {
     ]);
   });
 
-  it("falls back truthfully to the active tab, or the ticket when no live session can be identified", () => {
+  it("falls back truthfully to the active tab, and says nothing for a ticket with no session", () => {
     const result = buildActiveSessionListing({
       tickets: [
         ticket({ id: "t1", status: "needs_review", ticketNumber: 1 }),
@@ -443,12 +440,11 @@ describe("buildActiveSessionListing — the Active band", () => {
     });
 
     // Nothing has said why either ticket needs a human, so no row carries an
-    // attention; the promoted tab still leads its ticket's rows, and the ticket
-    // with nothing live keeps its board row at the bottom.
+    // attention; the promoted tab still leads its ticket's rows, and t2 —
+    // Needs Review with nothing ever run for it — contributes no row at all.
     expect(result.active.map((row) => ({ title: row.title, target: row.target }))).toEqual([
       { title: "Current tab", target: { tabId: "s2", paneId: "s2" } },
       { title: "Earlier tab", target: { tabId: "s1", paneId: "s1" } },
-      { title: "Review finished work", target: null },
     ]);
   });
 
@@ -522,6 +518,7 @@ describe("buildActiveSessionListing — the Active band", () => {
           title: "Done work",
           updatedAt: now - 100,
         }),
+        // Needs Review with no Session behind it — it contributes nothing here.
         ticket({ id: "t-bare", status: "needs_review", ticketNumber: 2, title: "Bare review" }),
         ticket({
           id: "t-blocked",
@@ -566,454 +563,8 @@ describe("buildActiveSessionListing — the Active band", () => {
     });
 
     // `blocked` no longer outranks `done`: both are rows a human is holding up,
-    // and the useful question between two of them is which one is fresher. The
-    // bare review prompt is a board row, so it sits below both regardless.
-    expect(titles(result.active)).toEqual(["Done session", "Blocked session", "Bare review"]);
-  });
-});
-
-describe("buildActiveSessionListing — the board guarantee", () => {
-  it("keeps a Doing ticket visible after relaunch as a record-backed resume row", () => {
-    const now = 1_000_000;
-    const result = buildActiveSessionListing({
-      tickets: [ticket({ id: "t1", status: "doing" })],
-      containers: {},
-      signalsByTicket: {},
-      records: [
-        record({
-          id: "old",
-          ticketId: "t1",
-          title: "Earlier run",
-          endedAt: now - 60_000,
-        }),
-        record({
-          id: "split",
-          ticketId: "t1",
-          title: "Split pane",
-          placement: "split",
-          endedAt: now - 500,
-        }),
-        record({ id: "live", ticketId: "t1", title: "Still open", endedAt: null }),
-        record({
-          id: "s1",
-          ticketId: "t1",
-          title: "Claude run",
-          harnessSessionId: "resume-seed-1",
-          endedAt: now - 1_000,
-        }),
-      ],
-      lastOutputAt: {},
-      parkState: {},
-      harness: {},
-      now,
-    });
-
-    // The newest ended tab-placement record wins: split panes never stand alone
-    // and a not-yet-ended record is not a concluded run. `resumable` reads
-    // `canResumeSession` — the same predicate the rail asks — rather than the
-    // seed alone; the seed-less half of that is pinned by the mounted-tab tests
-    // below, whose records carry no `harnessSessionId` at all.
-    expect(result.active).toMatchObject([
-      {
-        title: "Claude run",
-        activity: null,
-        lastRun: { endedAt: now - 1_000, resumable: true },
-        target: null,
-      },
-    ]);
-    // The record the board row speaks for is consumed; the other ended run is
-    // still a Session, and Previous is where it goes.
-    expect(titles(result.previous)).toEqual(["Earlier run"]);
-  });
-
-  it("prefers a still-mounted exited tab for the fallback row, reopenable in place", () => {
-    const now = 1_000_000;
-    const result = buildActiveSessionListing({
-      tickets: [ticket({ id: "t1", status: "doing" })],
-      containers: {
-        t1: container("quit", [
-          paneTab("clean", "Finished cleanly", 0),
-          paneTab("quit", "Quit the agent", 1),
-        ]),
-      },
-      signalsByTicket: {},
-      records: [
-        record({ id: "quit", ticketId: "t1", title: "Quit the agent", endedAt: now - 5_000 }),
-      ],
-      lastOutputAt: {},
-      parkState: {},
-      harness: {},
-      now,
-    });
-
-    // One board row per unrepresented ticket: the container's active tab,
-    // reopenable in place, dated by its durable record.
-    expect(result.active).toMatchObject([
-      {
-        title: "Quit the agent",
-        lastRun: { endedAt: now - 5_000, resumable: true },
-        target: { tabId: "quit", paneId: "quit" },
-      },
-    ]);
-    expect(titles(result.previous)).toEqual(["Finished cleanly"]);
-  });
-
-  it("takes the last tab when the container names no active one", () => {
-    const now = 1_000_000;
-    const result = buildActiveSessionListing({
-      tickets: [ticket({ id: "t1", status: "doing" })],
-      containers: {
-        t1: container(null, [paneTab("first", "First", 0), paneTab("last", "Last", 0)]),
-      },
-      signalsByTicket: {},
-      records: [],
-      lastOutputAt: {},
-      parkState: {},
-      harness: {},
-      now,
-    });
-
-    expect(result.active).toMatchObject([{ title: "Last", target: { tabId: "last" } }]);
-    expect(titles(result.previous)).toEqual(["First"]);
-  });
-
-  it("reads a manually quit agent's nonzero exit code as ended, never as a failure", () => {
-    const now = 1_000_000;
-    const result = buildActiveSessionListing({
-      tickets: [ticket({ id: "t1", status: "doing" })],
-      containers: {
-        // opencode exits 1 when the user quits it; the shell that ran it then
-        // carries that 1 out as its own status on Ctrl-D.
-        t1: container("s1", [paneTab("s1", "Quit the agent", 1)]),
-      },
-      signalsByTicket: {},
-      records: [
-        record({ id: "s1", ticketId: "t1", title: "Quit the agent", endedAt: now - 1_000 }),
-      ],
-      lastOutputAt: {},
-      parkState: {},
-      harness: {},
-      now,
-    });
-
-    expect(result.active).toMatchObject([{ lastRun: { endedAt: now - 1_000, resumable: true } }]);
-  });
-
-  it("reads the 129 a SIGHUP-trapping shell exits with on tab close as ended", () => {
-    const now = 1_000_000;
-    const result = buildActiveSessionListing({
-      tickets: [ticket({ id: "t1", status: "doing" })],
-      containers: {
-        // Volli's own tab close kills the PTY with SIGHUP; zsh traps it and
-        // exits 129, so this code is the app closing a tab the user asked it to.
-        t1: container("s1", [paneTab("s1", "Closed the tab", 129)]),
-      },
-      signalsByTicket: {},
-      records: [
-        record({ id: "s1", ticketId: "t1", title: "Closed the tab", endedAt: now - 1_000 }),
-      ],
-      lastOutputAt: {},
-      parkState: {},
-      harness: {},
-      now,
-    });
-
-    expect(result.active).toMatchObject([{ lastRun: { endedAt: now - 1_000, resumable: true } }]);
-  });
-
-  it("never claims a still-live tab ended, however long it has been quiet", () => {
-    const now = 10_000_000;
-    const result = buildActiveSessionListing({
-      tickets: [ticket({ id: "t1", status: "doing" })],
-      containers: { t1: container("s1", [paneTab("s1", "Open and silent")]) },
-      signalsByTicket: {},
-      records: [],
-      lastOutputAt: { s1: now - 2 * ACTIVE_QUIET_WINDOW_MS },
-      parkState: {},
-      harness: {},
-      now,
-    });
-
-    // The tab aged out of Active on its own, which leaves its Doing ticket
-    // unrepresented — so the board row picks it back up. It is still running,
-    // so it gets a muted presence row and no "Ended" claim, and it does not
-    // also appear down in Previous.
-    expect(result.active).toMatchObject([
-      {
-        title: "Open and silent",
-        activity: null,
-        lastRun: null,
-        target: { tabId: "s1", paneId: "s1" },
-      },
-    ]);
-    expect(result.previous).toEqual([]);
-  });
-
-  it("gives every unrepresented Doing ticket exactly one board row, ordered by recency", () => {
-    const now = 1_000_000;
-    const result = buildActiveSessionListing({
-      tickets: [
-        ticket({ id: "t-live", status: "doing", ticketNumber: 1 }),
-        ticket({ id: "t-done", status: "doing", ticketNumber: 2 }),
-        ticket({ id: "t-nonzero", status: "doing", ticketNumber: 3 }),
-        ticket({ id: "t-finished", status: "done", ticketNumber: 4 }),
-      ],
-      containers: {
-        "t-live": {
-          activeSessionId: "s-live",
-          tabs: [
-            {
-              sessionId: "s-live",
-              title: "Live agent",
-              scope: { kind: "ticket", projectId: "p1", ticketId: "t-live" },
-              layout: { kind: "pane", sessionId: "s-live", exitCode: null },
-              activePaneId: "s-live",
-            },
-          ],
-        },
-      },
-      signalsByTicket: {},
-      records: [
-        record({
-          id: "r-done",
-          ticketId: "t-done",
-          title: "Clean run",
-          exitCode: 0,
-          endedAt: now - 5_000,
-        }),
-        record({
-          id: "r-nonzero",
-          ticketId: "t-nonzero",
-          title: "Nonzero run",
-          exitCode: 2,
-          endedAt: now - 1_000,
-        }),
-        record({
-          id: "r-finished",
-          ticketId: "t-finished",
-          title: "On a done ticket",
-          exitCode: 0,
-          endedAt: now - 1_000,
-        }),
-      ],
-      lastOutputAt: {},
-      parkState: {},
-      harness: {},
-      now,
-    });
-
-    // Board rows trail the live one, most recently ended first. The clean run
-    // and the nonzero one are ordered by when they ended and nothing else — a 0
-    // and a 2 read the same here, because the shell's code is not a verdict on
-    // the agent.
-    expect(
-      result.active.map((row) => ({ title: row.title, endedAt: row.lastRun?.endedAt ?? null })),
-    ).toEqual([
-      { title: "Live agent", endedAt: null },
-      { title: "Nonzero run", endedAt: now - 1_000 },
-      { title: "Clean run", endedAt: now - 5_000 },
-    ]);
-    // A Done-column ticket gets no board row — it is not in flight — but its
-    // Session is still a Session, and Previous is where it goes.
-    expect(titles(result.previous)).toEqual(["On a done ticket"]);
-  });
-
-  it("gives a Doing ticket with no sessions at all a bare presence row", () => {
-    const result = buildActiveSessionListing({
-      tickets: [ticket({ id: "t1", status: "doing", title: "Just moved here" })],
-      containers: {},
-      signalsByTicket: {},
-      records: [],
-      lastOutputAt: {},
-      parkState: {},
-      harness: {},
-      now: 100_000,
-    });
-
-    expect(result.active).toMatchObject([
-      { title: "Just moved here", source: "No live session", lastRun: null, target: null },
-    ]);
-  });
-
-  it("gives a promoted Needs Review attention session no duplicate row in either band", () => {
-    const now = 1_000_000;
-    const latest = signal("t1", "s1", "blocked", "Approve", now - 2_000);
-    const result = buildActiveSessionListing({
-      tickets: [ticket({ id: "t1", status: "needs_review" })],
-      containers: {
-        t1: container("s1", [paneTab("s1", "Agent", 1)]),
-      },
-      signalsByTicket: { t1: latest },
-      records: [record({ id: "s1", ticketId: "t1", title: "Agent", endedAt: now - 1_000 })],
-      lastOutputAt: {},
-      parkState: {},
-      harness: {},
-      now,
-    });
-
-    // An exited tab the agent signalled from is still what the ticket is about,
-    // so the promotion keeps it in Active — and nothing repeats it in Previous.
-    expect(result.active).toMatchObject([
-      { title: "Agent", attention: { signal: "blocked", reason: "Approve" } },
-    ]);
-    expect(result.previous).toEqual([]);
-  });
-
-  it("uses the Session Engine's projected latest signal", () => {
-    const latest = signal("t1", "s1", "blocked", "Approve access", 50);
-    const result = buildActiveSessionListing({
-      tickets: [ticket({ id: "t1", status: "needs_review" })],
-      containers: { t1: container("s1", [paneTab("s1", "Agent review")]) },
-      signalsByTicket: { t1: latest },
-      records: [],
-      lastOutputAt: {},
-      parkState: {},
-      harness: {},
-      now: 100,
-    });
-
-    // The Session Engine has already reduced durable Session evidence to the latest signal.
-    expect(result.active[0]).toMatchObject({
-      attention: { signal: "blocked", reason: "Approve access" },
-    });
-  });
-
-  it("keeps the truly most-recent resume record even when it is not last in the array", () => {
-    const now = 1_000_000;
-    const result = buildActiveSessionListing({
-      tickets: [ticket({ id: "t1", status: "doing" })],
-      containers: {},
-      signalsByTicket: {},
-      records: [
-        record({ id: "later", ticketId: "t1", title: "Actually latest", endedAt: now - 1_000 }),
-        record({ id: "earlier", ticketId: "t1", title: "Really earlier", endedAt: now - 5_000 }),
-      ],
-      lastOutputAt: {},
-      parkState: {},
-      harness: {},
-      now,
-    });
-
-    // The earlier-ended record, though it comes second, must never overwrite
-    // the true latest found first.
-    expect(result.active).toMatchObject([{ title: "Actually latest" }]);
-    expect(titles(result.previous)).toEqual(["Really earlier"]);
-  });
-
-  it("still names the mounted tab's stale pane as the target, and ends from the record", () => {
-    const now = 1_000_000;
-    const result = buildActiveSessionListing({
-      tickets: [ticket({ id: "t1", status: "doing" })],
-      containers: {
-        t1: {
-          activeSessionId: "s1",
-          tabs: [
-            {
-              sessionId: "s1",
-              title: "Ran the suite",
-              scope: { kind: "ticket", projectId: "p1", ticketId: "t1" },
-              layout: { kind: "pane", sessionId: "s1", exitCode: 1 },
-              activePaneId: "stale-pane",
-            },
-          ],
-        },
-      },
-      signalsByTicket: {},
-      records: [
-        record({
-          id: "s1",
-          ticketId: "t1",
-          title: "Ran the suite",
-          exitCode: 0,
-          endedAt: now - 5_000,
-        }),
-      ],
-      lastOutputAt: {},
-      parkState: {},
-      harness: {},
-      now,
-    });
-
-    // The tab's active pane id is stale, so its layout can answer nothing about
-    // the run; `endedAt` comes off the ticket's durable record. The target still
-    // names the stale pane, because reopening the tab is what recovers it.
-    expect(result.active).toMatchObject([
-      {
-        lastRun: { endedAt: now - 5_000, resumable: true },
-        target: { tabId: "s1", paneId: "stale-pane" },
-      },
-    ]);
-  });
-
-  it("says a run ended without an endedAt when neither the layout nor a record can date it", () => {
-    const result = buildActiveSessionListing({
-      tickets: [ticket({ id: "t1", status: "doing" })],
-      containers: {
-        t1: {
-          activeSessionId: "s1",
-          tabs: [
-            {
-              sessionId: "s1",
-              title: "Mystery exit",
-              scope: { kind: "ticket", projectId: "p1", ticketId: "t1" },
-              layout: { kind: "pane", sessionId: "s1", exitCode: 1 },
-              activePaneId: "stale-pane",
-            },
-          ],
-        },
-      },
-      signalsByTicket: {},
-      records: [],
-      lastOutputAt: {},
-      parkState: {},
-      harness: {},
-      now: 1_000_000,
-    });
-
-    // The pane says the run is over; nothing says WHEN. `activePaneId` names a
-    // pane the layout does not hold and no durable record was fetched, so the
-    // row reports an end it cannot date rather than inventing one.
-    expect(result.active).toMatchObject([
-      { source: "Terminal", lastRun: { endedAt: null, resumable: false } },
-    ]);
-  });
-
-  it("orders two board rows by recency even when one has no matching record yet", () => {
-    const now = 1_000_000;
-    const result = buildActiveSessionListing({
-      tickets: [
-        ticket({
-          id: "t-recent",
-          status: "doing",
-          ticketNumber: 1,
-          updatedAt: now - 200,
-          title: "Recently touched",
-        }),
-        ticket({
-          id: "t-stale",
-          status: "doing",
-          ticketNumber: 2,
-          updatedAt: now - 900_000,
-          title: "Long untouched",
-        }),
-      ],
-      containers: {
-        "t-recent": container("s-recent", [paneTab("s-recent", "Recently exited", 0)]),
-      },
-      signalsByTicket: {},
-      records: [],
-      lastOutputAt: {},
-      parkState: {},
-      harness: {},
-      now,
-    });
-
-    // Both rows are board rows with no ended time of their own to sort by — one
-    // from a mounted tab whose record hasn't landed yet, the other with no
-    // session at all — so both must fall back to the ticket's own recency
-    // instead of crashing or silently tying.
-    expect(titles(result.active)).toEqual(["Recently exited", "Long untouched"]);
-    expect(result.previous).toEqual([]);
+    // and the useful question between two of them is which one is fresher.
+    expect(titles(result.active)).toEqual(["Done session", "Blocked session"]);
   });
 });
 
@@ -1031,10 +582,8 @@ describe("buildActiveSessionListing — chat Sessions", () => {
       now: 100_000,
     });
 
-    // The ticket is represented by the chat itself now, so no board row is
-    // added behind it.
     expect(result.active).toMatchObject([
-      { title: "Plan the migration", source: "Chat · Live", lastRun: null, target: null },
+      { title: "Plan the migration", source: "Chat · Live", target: null },
     ]);
     expect(result.previous).toEqual([]);
   });
@@ -1127,171 +676,7 @@ describe("buildActiveSessionListing — chat Sessions", () => {
     expect(titles(result.active)).toEqual(["Actually working", "Closed mid-turn"]);
   });
 
-  it("prefers a terminal record over a chat Session when the board row picks between them", () => {
-    const now = 5_000_000;
-    const result = buildActiveSessionListing({
-      tickets: [ticket({ id: "t1", status: "doing" })],
-      containers: {},
-      signalsByTicket: {},
-      records: [record({ id: "s1", ticketId: "t1", title: "Terminal run", endedAt: now - 1_000 })],
-      chatSessions: [chatSession({ ticketId: "t1", title: "Plan the migration", live: true })],
-      lastOutputAt: {},
-      parkState: {},
-      harness: {},
-      now,
-    });
-
-    expect(result.active).toMatchObject([{ title: "Terminal run" }]);
-    expect(titles(result.previous)).toEqual(["Plan the migration"]);
-  });
-
-  it("prefers a live chat Session over an ended one for the same ticket", () => {
-    const result = buildActiveSessionListing({
-      tickets: [ticket({ id: "t1", status: "doing" })],
-      containers: {},
-      signalsByTicket: {},
-      records: [],
-      chatSessions: [
-        chatSession({
-          sessionId: "ended",
-          ticketId: "t1",
-          title: "Older",
-          live: false,
-          createdAt: 50,
-        }),
-        chatSession({
-          sessionId: "live",
-          ticketId: "t1",
-          title: "Newer, live",
-          live: true,
-          createdAt: 10,
-        }),
-      ],
-      lastOutputAt: {},
-      parkState: {},
-      harness: {},
-      now: 5_000_000,
-    });
-
-    // Both chats are long past the quiet window, so the board row is what picks
-    // between them — and the Session it names is not repeated in Previous.
-    expect(result.active).toMatchObject([{ title: "Newer, live" }]);
-    expect(titles(result.previous)).toEqual(["Older"]);
-  });
-
-  it("keeps a live chat Session over a newer ended one, array order reversed from the other case", () => {
-    const result = buildActiveSessionListing({
-      tickets: [ticket({ id: "t1", status: "doing" })],
-      containers: {},
-      signalsByTicket: {},
-      records: [],
-      chatSessions: [
-        chatSession({
-          sessionId: "live",
-          ticketId: "t1",
-          title: "Older, live",
-          live: true,
-          createdAt: 10,
-        }),
-        chatSession({
-          sessionId: "ended",
-          ticketId: "t1",
-          title: "Newer, ended",
-          live: false,
-          createdAt: 50,
-        }),
-      ],
-      lastOutputAt: {},
-      parkState: {},
-      harness: {},
-      now: 5_000_000,
-    });
-
-    expect(result.active).toMatchObject([{ title: "Older, live" }]);
-  });
-
-  it("breaks a tie between two ended chat Sessions by recency, regardless of array order", () => {
-    const result = buildActiveSessionListing({
-      tickets: [ticket({ id: "t1", status: "doing" })],
-      containers: {},
-      signalsByTicket: {},
-      records: [],
-      chatSessions: [
-        chatSession({
-          sessionId: "older",
-          ticketId: "t1",
-          title: "Older",
-          live: false,
-          createdAt: 10,
-        }),
-        chatSession({
-          sessionId: "newer",
-          ticketId: "t1",
-          title: "Newer",
-          live: false,
-          createdAt: 50,
-        }),
-      ],
-      lastOutputAt: {},
-      parkState: {},
-      harness: {},
-      now: 5_000_000,
-    });
-
-    expect(result.active).toMatchObject([{ title: "Newer" }]);
-  });
-
-  it("breaks a tie between two live chat Sessions by recency, regardless of array order", () => {
-    const result = buildActiveSessionListing({
-      tickets: [ticket({ id: "t1", status: "doing" })],
-      containers: {},
-      signalsByTicket: {},
-      records: [],
-      chatSessions: [
-        chatSession({
-          sessionId: "newer",
-          ticketId: "t1",
-          title: "Newer",
-          live: true,
-          createdAt: 50,
-        }),
-        chatSession({
-          sessionId: "older",
-          ticketId: "t1",
-          title: "Older",
-          live: true,
-          createdAt: 10,
-        }),
-      ],
-      lastOutputAt: {},
-      parkState: {},
-      harness: {},
-      now: 5_000_000,
-    });
-
-    expect(result.active).toMatchObject([{ title: "Newer" }]);
-  });
-
-  it("falls back to No live session when a ticket has neither a terminal record nor a chat Session", () => {
-    const result = buildActiveSessionListing({
-      tickets: [ticket({ id: "t1", status: "doing" })],
-      containers: {},
-      signalsByTicket: {},
-      records: [],
-      chatSessions: [chatSession({ ticketId: "t2", title: "Someone else's ticket", live: false })],
-      lastOutputAt: {},
-      parkState: {},
-      harness: {},
-      now: 5_000_000,
-    });
-
-    expect(result.active).toMatchObject([{ title: "Ship the feature", source: "No live session" }]);
-    // The other ticket is not on this board at all, so its closed chat can
-    // navigate nowhere — cleanup rule (a) takes it.
-    expect(result.previous).toEqual([]);
-  });
-
-  it("never reaches the chat fallback when a live terminal tab already covers the ticket", () => {
+  it("bands a ticket's live terminal and its quiet chat separately, each on its own state", () => {
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
       containers: { t1: container("s1", [paneTab("s1", "Implement UI")]) },
@@ -1304,25 +689,34 @@ describe("buildActiveSessionListing — chat Sessions", () => {
       now: 5_000_000,
     });
 
-    // The chat is no longer discarded for having lost to a terminal — it is a
-    // Previous row.
+    // Two Sessions on one ticket are two rows: neither speaks for the other.
     expect(titles(result.active)).toEqual(["Implement UI"]);
     expect(titles(result.previous)).toEqual(["Quiet since yesterday"]);
   });
 
-  it("omits the chat fallback entirely when `chatSessions` is absent", () => {
-    const result = buildActiveSessionListing({
+  it("orphans a chat whose ticket has left the board, and cleanup rule (a) takes it", () => {
+    const input = {
       tickets: [ticket({ id: "t1", status: "doing" })],
       containers: {},
       signalsByTicket: {},
       records: [],
+      chatSessions: [
+        chatSession({ ticketId: "t-archived", title: "Someone else's ticket", live: false }),
+      ],
       lastOutputAt: {},
       parkState: {},
       harness: {},
-      now: 100_000,
-    });
+      now: 5_000_000,
+    };
 
-    expect(result.active).toMatchObject([{ title: "Ship the feature", source: "No live session" }]);
+    // Its ticket is not on this board, so the row can navigate nowhere.
+    expect(buildActiveSessionListing(input).previous).toEqual([]);
+    expect(
+      buildActiveSessionListing({
+        ...input,
+        filter: { kinds: null, showCleaned: true },
+      }).previous,
+    ).toMatchObject([{ title: "Someone else's ticket", ticket: null, cleaned: true }]);
   });
 });
 
@@ -1523,7 +917,7 @@ describe("buildActiveSessionListing — the scratch container", () => {
     expect(result.active[0]?.ticket).toBeNull();
   });
 
-  it("makes no board guarantee for a scratch Session, having no ticket to guarantee", () => {
+  it("lists a scratch Session without letting a bare Doing ticket in beside it", () => {
     const now = 10_000_000;
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
@@ -1537,10 +931,9 @@ describe("buildActiveSessionListing — the scratch container", () => {
       now,
     });
 
-    // The Doing ticket still gets its own bare row; the scratch row neither
-    // satisfies nor suppresses it.
-    expect(titles(result.active)).toEqual(["Poke at the repo", "Ship the feature"]);
-    expect(result.active[1]?.source).toBe("No live session");
+    // The Doing ticket has no Session of its own, so it has no row — and the
+    // scratch row stands for itself, not for the board.
+    expect(titles(result.active)).toEqual(["Poke at the repo"]);
   });
 });
 
@@ -1794,28 +1187,19 @@ describe("buildActiveSessionListing — cleanup", () => {
     const now = 10_000_000;
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing", title: "Still in flight" })],
-      containers: {},
+      containers: { t1: container("s1", [paneTab("s1", "Predates the move")]) },
       signalsByTicket: {},
-      records: [
-        record({
-          id: "r1",
-          ticketId: "t1",
-          title: "Predates the move",
-          createdAt: 1,
-          endedAt: now - 1_000,
-        }),
-      ],
+      records: [record({ id: "s1", ticketId: "t1", title: "Predates the move", createdAt: 1 })],
       statusEnteredAt: new Map([["t1", now - 500]]),
-      lastOutputAt: {},
+      lastOutputAt: { s1: now - 1_000 },
       parkState: {},
       harness: {},
       now,
     });
 
-    // Rule (c) matches this Session, and cleanup only ever runs over Previous —
-    // the board still says the ticket is in flight, so its guarantee row names
-    // the Session and Previous never sees it.
-    expect(result.active).toMatchObject([{ title: "Predates the move", activity: null }]);
+    // Rule (c) matches this Session's dates exactly, and cannot touch it:
+    // cleanup only ever runs over Previous, and a live pane is not in it.
+    expect(result.active).toMatchObject([{ title: "Predates the move", activity: "working" }]);
     expect(result.previous).toEqual([]);
   });
 
@@ -1973,7 +1357,9 @@ describe("buildActiveSessionListing — nextBoundaryAt", () => {
   it("is null when nothing about the result depends on the clock", () => {
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
-      containers: {},
+      // A live pane nothing can date: it stays in Active, and no instant can
+      // change that, so there is no boundary to wake anyone for.
+      containers: { t1: container("s1", [paneTab("s1", "Undatable")]) },
       signalsByTicket: {},
       records: [],
       lastOutputAt: {},

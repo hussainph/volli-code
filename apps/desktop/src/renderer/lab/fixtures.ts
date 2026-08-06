@@ -273,8 +273,8 @@ function session(
  *
  * Chosen to cover what the sidebar's bands actually branch on: a clean exit, a
  * failure (non-zero `exitCode`), and a Doing ticket with NO record at all
- * (tkt-13) — the "bare row" case that guarantees every Doing ticket a presence
- * even when no PTY ever ran.
+ * (tkt-13) — which the bands are silent about, since a ticket nothing ever ran
+ * for has no Session to show.
  */
 export const sessions: SessionRecord[] = [
   session({
@@ -551,8 +551,8 @@ function liveTab(ticketId: string, sessionId: string, title: string): SessionCon
  *     the ONLY row that rule fires for;
  *   • tkt-2 has been Done for two hours (its linger is over) and tkt-1 for ten
  *     minutes (its linger expires 50 minutes into the scrub);
- *   • tkt-13 is Doing with nothing at all behind it, so the board guarantee has
- *     to invent its row;
+ *   • tkt-13 is Doing with nothing at all behind it, so it appears in NEITHER
+ *     band — the case that proves the list speaks for Sessions, not tickets;
  *   • ses-12b's harness declares `working`, so it keeps working however far the
  *     clock is scrubbed, while ses-14b's is the one that announced and then went
  *     silent — the honest "not reporting" row.
