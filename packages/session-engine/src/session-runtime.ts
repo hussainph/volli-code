@@ -1730,7 +1730,8 @@ class DefaultSessionRuntime implements SessionRuntime {
     subscriber.draining = subscriber.draining
       .then(async () => {
         while (subscriber.active) {
-          const event = subscriber.events.get(subscriber.cursor + 1);
+          const event =
+            subscriber.events.get(subscriber.cursor + 1) ?? (await this.#nextAfterGap(subscriber));
           if (!event) break;
           subscriber.events.delete(event.sequence);
           const frame = await this.#frame(event);
@@ -1741,6 +1742,45 @@ class DefaultSessionRuntime implements SessionRuntime {
       })
       .catch((error: unknown) => this.#failSubscriber(subscriber, error));
     await subscriber.draining;
+  }
+
+  /**
+   * The event after a hole the publish path left, read back from the ledger.
+   *
+   * The drain above delivers strictly contiguously, which reads as an ordering
+   * guarantee but is really a bet: that every durable event reaches a subscriber
+   * through {@link #publish}. The runtime is not the ledger's only writer — a
+   * Session retitle, a terminal's own command bookkeeping, and the agent CLI all
+   * submit straight to the Engine — and each of those appends sequences no
+   * subscriber is ever handed. One of them lands mid-turn and the hole is
+   * permanent: `cursor + 1` never arrives, so every event after it sits in
+   * `events` unread, the Session's own `turn.completed` among them, and it holds
+   * a Stop button nothing will ever clear.
+   *
+   * The ledger is canonical, and already the authority {@link #history} re-reads
+   * for exactly this reason, so the hole is closed from it rather than by asking
+   * every writer to remember to publish.
+   *
+   * A non-empty buffer is the whole test for "there is a hole", and it is exact
+   * rather than a heuristic: {@link #enqueue} admits only sequences above the
+   * cursor, this is reached only when `cursor + 1` is absent, so anything still
+   * buffered is strictly beyond the hole. A healthy stream drains its buffer
+   * empty every time and therefore never reads the ledger at all.
+   *
+   * Returning the event rather than a flag is what bounds the loop: a hole the
+   * ledger cannot close — which the per-Session `MAX(sequence) + 1` contiguity
+   * says cannot happen — stops the drain here instead of spinning on it.
+   */
+  async #nextAfterGap(subscriber: Subscriber): Promise<SessionEvent | undefined> {
+    if (subscriber.events.size === 0) return undefined;
+    const events = await this.#listEventsPaged({
+      sessionId: subscriber.sessionId,
+      afterSequence: subscriber.cursor,
+    });
+    // Every one of these is above the cursor by construction, and re-setting one
+    // the buffer already holds replaces an immutable event with itself.
+    for (const event of events) subscriber.events.set(event.sequence, event);
+    return subscriber.events.get(subscriber.cursor + 1);
   }
 
   async #publishOverlay(emission: SessionStreamOverlay): Promise<void> {

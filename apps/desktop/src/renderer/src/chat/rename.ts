@@ -6,9 +6,18 @@
  * The two optimistic writes below are not a latency nicety, which is the whole
  * reason this is a shared function rather than an inline call: `volli:session-
  * rename` submits `session.retitle` straight to the engine, bypassing the
- * runtime's publish, so NO live chat subscriber is told the title changed. The
- * ledger fold self-heals on the next projection read — an unrelated refresh
- * away — and until then these writes are the only thing moving the labels.
+ * runtime's publish, so no live chat subscriber is told the title changed at the
+ * moment it changes. The ledger fold self-heals on the next projection read — an
+ * unrelated refresh away — and until then these writes are the only thing moving
+ * the labels.
+ *
+ * The bypass is no longer free elsewhere, and this is the comment that used to
+ * undersell it: those three unpublished events are a hole in every live
+ * subscriber's stream, and `SessionRuntime` now has to re-read the ledger to
+ * deliver past one (`#closeStreamGap`). Before it did, the hole was permanent —
+ * a chat titling itself mid-turn swallowed its own `turn.completed` and sat
+ * "working" forever. Publishing from here would be the better fix; until then,
+ * nothing about this path may assume a subscriber saw it.
  */
 import { errorMessage } from "@volli/shared";
 

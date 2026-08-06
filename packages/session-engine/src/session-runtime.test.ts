@@ -2136,6 +2136,62 @@ describe("SessionRuntime transient transcript overlay", () => {
     expect(order.slice(1)).not.toContain("overlay");
   });
 
+  /**
+   * The runtime is not the ledger's only writer, and a subscriber that assumed
+   * it was went deaf for the rest of the Session.
+   *
+   * A retitle submitted straight to the Engine — what `volli:session-rename`
+   * does, and what a chat titling itself from its first message now does on
+   * every first turn — appends three events the publish path never sees. The
+   * drain delivers `cursor + 1` and nothing else, so those three were a hole
+   * that never filled: the turn's own `turn.completed` landed behind it and was
+   * never handed over, leaving the Session working forever with a Stop button
+   * nothing could clear.
+   */
+  it("delivers past a gap left by a writer that bypassed the publish path", async () => {
+    const { runtime, engine, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const kinds: string[] = [];
+    const stop = await runtime.subscribe(
+      { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
+      (emission) => {
+        if (!isSessionStreamOverlay(emission)) kinds.push(emission.event.payload.kind);
+      },
+    );
+
+    await adapter.emit({
+      id: "turn-open",
+      kind: "turn.started",
+      occurredAt: 800,
+      turnId: "turn-1",
+    });
+    // Out of band, exactly as the rename IPC does it: durable, and invisible to
+    // every live subscriber.
+    await engine.submit({
+      commandId: "rename-mid-turn",
+      sessionId,
+      intent: { kind: "session.retitle", title: "Titled from its first message" },
+      provenance: { source: { kind: "user", id: "renderer", detail: null }, venue },
+    });
+    await adapter.emit({
+      id: "turn-close",
+      kind: "turn.completed",
+      occurredAt: 801,
+      turnId: "turn-1",
+    });
+    stop();
+
+    // In sequence order, with the three unpublished events read back from the
+    // ledger rather than skipped — a subscriber may never be handed a hole.
+    expect(kinds).toEqual([
+      "turn.started",
+      "command.recorded",
+      "session.retitled",
+      "command.receipt.recorded",
+      "turn.completed",
+    ]);
+  });
+
   it("drops the overlay when the attachment closes and when the adapter is released", async () => {
     const closing = composition();
     const closedSession = await createAndAttach(closing.runtime);

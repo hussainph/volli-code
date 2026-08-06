@@ -41,6 +41,13 @@
  * disabled (`ready = selection.modelId.length > 0`) and no prompt can ever be
  * typed, let alone sent.
  *
+ * The chat tab is addressed by TWO different labels over this run, and mixing
+ * them up reads as a vanished tab rather than a renamed one: it is created as
+ * `Chat N`, and the first delivered message retitles it to {@link autoTitle}.
+ * Check 11 is where the rebind happens, because that is the first assertion
+ * after a message has been delivered — everything from there on, including the
+ * relaunch and the close, uses the title.
+ *
  *   Run:
  *     pnpm run build
  *     node apps/desktop/e2e/session-chat-smoke.mjs
@@ -79,6 +86,13 @@ const FAKE_SERVER_PATH = join(
 const ANSWER_BODY = "This is a fake OpenCode answer, streamed in three pieces, and now it settles.";
 const answerText = (turn) => `Answer ${turn}: ${ANSWER_BODY}`;
 const promptText = (turn) => `Say hello and settle, take ${turn}.`;
+// A chat titles itself from its first delivered message, so the `Chat N` label a
+// tab is created with names nothing once the first prompt lands, and every
+// lookup after that has to use this instead. `autoTitleFromMessage`
+// (chat/rename.ts) keeps a first line of 48 characters or fewer verbatim and
+// this prompt is 29, so the title IS the prompt — no transformation restated
+// here, and a change to either end surfaces as this smoke failing.
+const autoTitle = (turn) => promptText(turn);
 // Kept in sync with MODEL_LABEL in lib/fake-opencode-server.mjs. Matched
 // exactly (never a loose "any switch") so a real `opencode` install on this
 // machine can never be mistaken for the fake — see the module doc comment.
@@ -429,6 +443,21 @@ async function main() {
         await waitUntil("the turn to settle", async () => (await stopButton(page).count()) === 0, {
           timeout: 15000,
         });
+        // The tab retitled itself off the first message while the turn ran, so
+        // the label it was created with names nothing now. Rebound here rather
+        // than by loosening the lookup below: the dot assertion only means
+        // something if it is addressed at a tab that must exist, and waiting for
+        // the exact expected title pins the auto-title on the way past.
+        chatTabLabel = await waitUntil(
+          "the chat tab to carry the title taken from its first message",
+          async () => {
+            const titled = autoTitle(1);
+            return (await page.getByRole("tab", { name: titled, exact: true }).count()) === 1
+              ? titled
+              : false;
+          },
+          { timeout: 10000 },
+        );
         const classes = await tabDotClasses(page, chatTabLabel);
         const stillRendered = (await page.getByText(answerText(1), { exact: false }).count()) > 0;
         // The dot has to BE there for the absence of a halo on it to mean
@@ -436,7 +465,7 @@ async function main() {
         // `dotIsWorking(null)` is false.
         return {
           ok: classes !== null && !dotIsWorking(classes) && stillRendered,
-          detail: `dotClasses=${classes} answerStillRendered=${stillRendered}`,
+          detail: `label=${chatTabLabel} dotClasses=${classes} answerStillRendered=${stillRendered}`,
         };
       },
     );
