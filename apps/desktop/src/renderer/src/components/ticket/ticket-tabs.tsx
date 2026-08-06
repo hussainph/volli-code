@@ -11,7 +11,7 @@
  * `"session"`-kind descriptor per linked terminal, and one `"chat"`-kind
  * descriptor per open chat Session. Content routing stays with the caller,
  * keyed off each tab's `kind`; file, diff, session, and chat tabs are closable,
- * session tabs alone are renameable.
+ * and the two Session kinds — session and chat — are renamable.
  */
 import * as React from "react";
 import { CornersOutIcon } from "@phosphor-icons/react/dist/csr/CornersOut";
@@ -124,7 +124,11 @@ interface TicketTabStripProps {
    * Diff/session/Doc tabs.
    */
   onPinFileTab?(relPath: string): void;
-  /** Commits a session-tab rename (double-click / context menu). Ignored for Doc/file/chat tabs. */
+  /**
+   * Commits a Session-tab rename (double-click / context menu), for a terminal
+   * or a chat tab — the caller discriminates on the tab id. Ignored for
+   * Doc/file/diff tabs, which never raise it.
+   */
   onRenameSessionTab(tabId: string, title: string): void;
   /** Boots a terminal session tab — the same path as the rail's New-session button. */
   onNewSession(): void;
@@ -139,8 +143,8 @@ interface TicketTabStripProps {
  * A single Chrome-style tab. The active tab lifts onto the content background
  * with rounded top corners (no bottom edge, so it fuses with the content plane
  * beneath the strip); inactive tabs sit flat and muted on the recessed band
- * with a hover surface. Session tabs carry a hover-revealed close ×, double-
- * click inline rename, and a right-click Rename menu.
+ * with a hover surface. Session tabs (terminal and chat alike) carry a hover-
+ * revealed close ×, double-click inline rename, and a right-click Rename menu.
  */
 function TicketTab({
   tab,
@@ -164,7 +168,10 @@ function TicketTab({
   onCommitRename(next: string): void;
   onCancelRename(): void;
 }) {
-  const isSession = tab.kind === "session";
+  // Both Session kinds rename: the label is the Session's durable title either
+  // way, and one `session.retitle` moves it — the consumer routes by tab id
+  // (chat ids are `chat:`-prefixed) to the store that holds that title.
+  const renamable = tab.kind === "session" || tab.kind === "chat";
   const closable = isClosableTicketTab(tab.kind);
   const dirty = tab.dirty === true;
   const preview = tab.preview === true;
@@ -184,7 +191,7 @@ function TicketTab({
       data-preview={preview ? "true" : undefined}
       tabIndex={active ? 0 : -1}
       onClick={onSelect}
-      onDoubleClick={isSession ? onStartRename : preview && onPin !== undefined ? onPin : undefined}
+      onDoubleClick={renamable ? onStartRename : preview && onPin !== undefined ? onPin : undefined}
       onKeyDown={(event) => {
         switch (event.key) {
           case "ArrowRight":
@@ -286,15 +293,15 @@ function TicketTab({
     </div>
   );
 
-  // Session tabs rename; preview File tabs get Keep Open (decision #56).
-  // Doc / Diff / pinned File tabs skip the menu.
-  if (!isSession && !(preview && onPin !== undefined)) return inner;
+  // Session and chat tabs rename; preview File tabs get Keep Open (decision
+  // #56). Doc / Diff / pinned File tabs skip the menu.
+  if (!renamable && !(preview && onPin !== undefined)) return inner;
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{inner}</ContextMenuTrigger>
       <ContextMenuContent>
-        {isSession ? (
+        {renamable ? (
           <ContextMenuItem icon={PencilSimpleIcon} onSelect={onStartRename}>
             Rename
           </ContextMenuItem>

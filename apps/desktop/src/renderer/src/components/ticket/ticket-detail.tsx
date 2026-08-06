@@ -9,6 +9,7 @@ import {
   type Ticket,
 } from "@volli/shared";
 
+import { renameChatSession } from "@renderer/chat/rename";
 import { ChatPlane } from "@renderer/components/chat/chat-plane";
 import {
   planTabClose,
@@ -932,13 +933,15 @@ export function TicketDetail({
               closeGuard.guard(liveIds, () => closeTicketSession(ticket.id, sessionId));
             }}
             onRenameSessionTab={(tabId, title) => {
-              // Scaffolding, not behavior: the strip raises this for `session`
-              // tabs only, so the chat arm is unreachable until the rename wave
-              // gives a chat tab an editable label. It is here so that wave
-              // changes one branch rather than re-deriving which store owns a
-              // title — and so a chat tab id can never reach the PTY rename,
-              // which would address a terminal that does not exist.
-              if (parseChatTabId(tabId) !== null) return;
+              // The tab id says which Session kind this is, and each kind has
+              // its own optimistic surface to move before the durable write —
+              // a chat tab id must never reach the PTY rename, which would
+              // address a terminal that does not exist.
+              const chatSessionId = parseChatTabId(tabId);
+              if (chatSessionId !== null) {
+                void renameChatSession(chatSessionId, title);
+                return;
+              }
               renameTerminalSession(tabId, title);
             }}
             onNewSession={() => void createSession()}

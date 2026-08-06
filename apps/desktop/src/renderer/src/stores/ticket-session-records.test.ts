@@ -122,19 +122,33 @@ describe("renameLocally", () => {
     ]);
   });
 
-  // There is no chat rename call site yet — the affordance is terminal-only —
-  // so a chat row sharing the target id must pass through untouched rather
-  // than being coerced into a terminal shape it isn't.
-  it("leaves a chat row untouched even when its id matches", async () => {
+  // A chat row renames as a chat row: same `title` field, same call, and the
+  // rest of the record (which has no terminal shape to be coerced into) intact.
+  it("renames the matching chat row in place, leaving the rest of its record alone", async () => {
     stubListForTicket(() =>
-      Promise.resolve({ ok: true, sessions: [chatRow({ sessionId: "s2" })] }),
+      Promise.resolve({ ok: true, sessions: [chatRow(), chatRow({ sessionId: "s2" })] }),
     );
     const store = createTicketSessionRecordsStore();
     await store.getState().refresh("t1");
 
     store.getState().renameLocally("t1", "s2", "Renamed");
 
-    expect(store.getState().byTicket["t1"]).toEqual([chatRow({ sessionId: "s2" })]);
+    expect(store.getState().byTicket["t1"]).toEqual([
+      chatRow(),
+      chatRow({ sessionId: "s2", title: "Renamed" }),
+    ]);
+  });
+
+  it("leaves a row of the other kind alone when only the other kind's id matches", async () => {
+    stubListForTicket(() =>
+      Promise.resolve({ ok: true, sessions: [terminalRow(), chatRow({ sessionId: "s2" })] }),
+    );
+    const store = createTicketSessionRecordsStore();
+    await store.getState().refresh("t1");
+
+    store.getState().renameLocally("t1", "unknown", "Renamed");
+
+    expect(store.getState().byTicket["t1"]).toEqual([terminalRow(), chatRow({ sessionId: "s2" })]);
   });
 
   it("is a no-op for a ticket with no cached rows", () => {

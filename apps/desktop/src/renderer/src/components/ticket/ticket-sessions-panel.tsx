@@ -5,6 +5,7 @@ import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { errorMessage, type SessionListingRow, type SessionRecord } from "@volli/shared";
 
+import { renameChatSession } from "@renderer/chat/rename";
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
 import { NewSessionMenu } from "@renderer/components/sessions/new-session-menu";
 import { resumeTicketSession } from "@renderer/components/sessions/session-create";
@@ -172,31 +173,78 @@ function SessionRow({
 }
 
 /**
- * A chat Session's row: title and liveness, in the frame `SessionRow` draws.
+ * A chat Session's row: title and liveness, in the frame `SessionRow` draws,
+ * and renaming the same two ways (double-click, right-click) — the title is
+ * the Session's own, whether a terminal or a structured adapter is attached to
+ * it.
  *
  * Always activatable, unlike a terminal row — a chat Session is durable, so one
  * whose attachment has closed still opens onto its own history, and reattaching
- * is the Retry the plane already offers. Rename stays out: the durable title has
- * no live tab to keep in sync yet.
+ * is the Retry the plane already offers. Resume stays out for the same reason:
+ * there is nothing to resume that opening it doesn't already do.
  */
-function ChatSessionRow({ row, onActivate }: { row: TicketChatSessionRow; onActivate(): void }) {
+function ChatSessionRow({
+  row,
+  editing,
+  onActivate,
+  onStartRename,
+  onCommitRename,
+  onCancelRename,
+}: {
+  row: TicketChatSessionRow;
+  editing: boolean;
+  onActivate(): void;
+  onStartRename(): void;
+  onCommitRename(next: string): void;
+  onCancelRename(): void;
+}) {
+  const content = (
+    <span className="flex min-w-0 flex-1 flex-col">
+      {editing ? (
+        <InlineRename
+          value={row.title}
+          ariaLabel={`Rename ${row.title}`}
+          className="h-5 w-full text-xs"
+          onCommit={onCommitRename}
+          onCancel={onCancelRename}
+        />
+      ) : (
+        <span className="truncate text-xs text-foreground" onDoubleClick={onStartRename}>
+          {row.title}
+        </span>
+      )}
+      <span className="truncate text-label text-muted-foreground">
+        {sessionSourceLabel({ kind: "chat", record: row.record })}
+      </span>
+    </span>
+  );
+
+  const className = cn(
+    "flex w-full items-center gap-2 rounded-md border px-2 py-1 text-left transition-colors",
+    row.isOpen ? "border-border/60" : "border-transparent opacity-60",
+  );
+
+  // While editing the row is a plain div: an input inside the activating button
+  // would both nest an interactive control and open the Session on every click
+  // into the field.
+  const element = editing ? (
+    <div className={className}>{content}</div>
+  ) : (
+    <button type="button" onClick={onActivate} className={cn(className, "hover:bg-accent")}>
+      {content}
+    </button>
+  );
+
   return (
     <li>
-      <button
-        type="button"
-        onClick={onActivate}
-        className={cn(
-          "flex w-full items-center gap-2 rounded-md border px-2 py-1 text-left transition-colors hover:bg-accent",
-          row.isOpen ? "border-border/60" : "border-transparent opacity-60",
-        )}
-      >
-        <span className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-xs text-foreground">{row.title}</span>
-          <span className="truncate text-label text-muted-foreground">
-            {sessionSourceLabel({ kind: "chat", record: row.record })}
-          </span>
-        </span>
-      </button>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>{element}</ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem icon={PencilSimpleIcon} onSelect={onStartRename}>
+            Rename
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
     </li>
   );
 }
@@ -212,6 +260,7 @@ function SessionList({
   onActivateSession,
   onActivateChat,
   onCommitRename,
+  onCommitChatRename,
   onResumeSession,
 }: {
   rows: readonly SessionRailRow[];
@@ -225,17 +274,23 @@ function SessionList({
   onActivateSession(sessionId: string): void;
   onActivateChat(sessionId: string): void;
   onCommitRename(record: SessionRecord, isRoot: boolean, next: string): void;
+  onCommitChatRename(sessionId: string, next: string): void;
   onResumeSession(record: SessionRecord): void;
 }) {
   return (
     <ul className="flex flex-col gap-1">
       {rows.map((entry) => {
         if (entry.kind === "chat") {
+          const { sessionId } = entry.row.record;
           return (
             <ChatSessionRow
-              key={entry.row.record.sessionId}
+              key={sessionId}
               row={entry.row}
-              onActivate={() => onActivateChat(entry.row.record.sessionId)}
+              editing={editingId === sessionId}
+              onActivate={() => onActivateChat(sessionId)}
+              onStartRename={() => setEditingId(sessionId)}
+              onCommitRename={(next) => onCommitChatRename(sessionId, next)}
+              onCancelRename={() => setEditingId(null)}
             />
           );
         }
@@ -387,6 +442,14 @@ export function TicketSessionsPanel({
       });
   };
 
+  // A chat row's whole rename — optimistic slice, optimistic cached record,
+  // persist, toast — lives in `renameChatSession`, since the tab strip renames
+  // the same Sessions and the two surfaces must not drift.
+  const commitChatRename = (sessionId: string, next: string) => {
+    setEditingId(null);
+    void renameChatSession(sessionId, next);
+  };
+
   // The shared boot pipeline (session-create.ts) — starting-flag guard, engine
   // pre-create, structured-error toast — same as "New session", just with a
   // resume intent instead of a fresh kickoff. Lands as a NEW tab; the ended
@@ -430,6 +493,7 @@ export function TicketSessionsPanel({
     onActivateSession,
     onActivateChat,
     onCommitRename: commitRename,
+    onCommitChatRename: commitChatRename,
     onResumeSession: handleResume,
   };
 
