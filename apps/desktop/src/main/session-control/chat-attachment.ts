@@ -1,7 +1,9 @@
-import { sessionAwaitsUser } from "@volli/shared";
+import { SESSION_USER_BLOCKING_ATTENTION_KINDS, sessionAwaitsUser } from "@volli/shared";
 import type {
   ChatSessionRecord,
+  ChatWaitingReason,
   SessionAttachmentProjection,
+  SessionAttentionKind,
   SessionProjection,
 } from "@volli/shared";
 
@@ -30,6 +32,7 @@ export function chatSessionRecord(projection: SessionProjection): ChatSessionRec
     adapterId: attachment?.adapterId ?? null,
     live: attachment?.status === "open",
     activity: chatActivity(projection, attachment),
+    waitingOn: chatWaitingOn(projection),
     lastActivityAt: projection.lastActivityAt,
     bornTicketless: projection.bornTicketless,
   };
@@ -51,6 +54,42 @@ function chatActivity(
   if (sessionAwaitsUser(projection)) return "waiting";
   if (projection.turnActive && attachment?.status === "open") return "working";
   return "idle";
+}
+
+/**
+ * The user-blocking Attention kinds, in the coarser vocabulary a row can say.
+ * Only the three {@link SESSION_USER_BLOCKING_ATTENTION_KINDS} appear: the rest
+ * of the Attention vocabulary is the world blocking the agent, which no row
+ * should ask a person to go fix.
+ */
+const WAITING_ON_BY_ATTENTION: Readonly<Partial<Record<SessionAttentionKind, ChatWaitingReason>>> =
+  {
+    input_required: "question",
+    permission_required: "permission",
+    auth_required: "auth",
+    // `satisfies` against the shared list is the completeness pin: a fourth
+    // user-blocking kind added there fails to compile here until it is given a
+    // word, rather than silently reading as "not waiting".
+  } satisfies Record<(typeof SESSION_USER_BLOCKING_ATTENTION_KINDS)[number], ChatWaitingReason>;
+
+/**
+ * What the Session is waiting on, in the same order {@link sessionAwaitsUser}
+ * decides THAT it is waiting: an open Interaction is a question already asked
+ * and outranks any Attention, then the first user-blocking Attention speaks.
+ *
+ * Reads the same two projection fields as `sessionAwaitsUser` in the same
+ * precedence, so `activity === "waiting"` and `waitingOn !== null` cannot come
+ * apart — one saying a human is needed while the other has nothing to tell them
+ * to do is exactly the drift the shared predicate exists to prevent. Pinned by
+ * a test rather than by comment alone.
+ */
+function chatWaitingOn(projection: SessionProjection): ChatWaitingReason | null {
+  if (projection.interactions.active.length > 0) return "question";
+  for (const attention of projection.attention.active) {
+    const reason = WAITING_ON_BY_ATTENTION[attention.kind];
+    if (reason !== undefined) return reason;
+  }
+  return null;
 }
 
 /** The newest attachment that is not the terminal adapter, or `null` if none has ever attached. */

@@ -892,6 +892,7 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
         adapterId: null,
         live: false,
         activity: "idle",
+        waitingOn: null,
         lastActivityAt: 500,
         bornTicketless: false,
       },

@@ -133,6 +133,20 @@ export interface SessionRecord {
 }
 
 /**
+ * Why a chat Session is blocked on its user, in the vocabulary a one-line row
+ * can say out loud: it asked something (`question`), it wants a tool call
+ * approved (`permission`), or its credentials will not carry it further
+ * (`auth`).
+ *
+ * Deliberately coarser than {@link SessionAttentionKind}: that vocabulary
+ * covers everything a Session can be stopped by, including the stops nobody is
+ * being asked about (a rate limit, a dead transport). These three are the
+ * subset a person can clear by doing something, which is the only distinction a
+ * row prompting them to act needs to draw.
+ */
+export type ChatWaitingReason = "question" | "permission" | "auth";
+
+/**
  * The honest record for a Session that {@link SessionRecord} cannot describe:
  * one with no terminal attachment, because it either hasn't attached anything
  * yet or has only ever attached a structured (chat) adapter. Identity plus the
@@ -159,6 +173,14 @@ export interface ChatSessionRecord {
    * ever had, so never "exited" — a chat row that stops is "idle".
    */
   activity: Extract<SessionActivityState, "working" | "waiting" | "idle">;
+  /**
+   * What the Session is waiting on, when `activity` is `"waiting"`; `null` in
+   * every other state. The two move together by construction — a waiting row
+   * always has a reason and a non-waiting row never does — because "Waiting"
+   * with nothing after it tells the user to go look, which is the one thing a
+   * navigator row exists to save them.
+   */
+  waitingOn: ChatWaitingReason | null;
   /** Epoch milliseconds of the newest fact in this Session — a listing's recency sort key. */
   lastActivityAt: number;
   /**

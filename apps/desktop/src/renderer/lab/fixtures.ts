@@ -349,6 +349,11 @@ function chat(
     adapterId: "claude-code",
     live: true,
     activity: "idle",
+    // Idle by default, so nothing is waiting on anything. A scenario that wants
+    // a waiting row overrides BOTH — the record's two waiting fields move
+    // together in main, and a fixture that split them would be testing a state
+    // the app cannot produce.
+    waitingOn: null,
     bornTicketless: overrides.ticketId === null,
     ...overrides,
   };

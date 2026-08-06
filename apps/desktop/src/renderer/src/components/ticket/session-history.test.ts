@@ -70,6 +70,7 @@ function chatRecord(overrides: Partial<ChatSessionRecord> = {}): ChatSessionReco
     adapterId: "opencode",
     live: true,
     activity: "idle",
+    waitingOn: null,
     lastActivityAt: 1,
     bornTicketless: false,
     ...overrides,

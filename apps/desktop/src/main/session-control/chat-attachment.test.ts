@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
+import { SESSION_ATTENTION_KINDS, SESSION_USER_BLOCKING_ATTENTION_KINDS } from "@volli/shared";
 import type {
+  ChatWaitingReason,
   SessionAttachmentProjection,
   SessionAttention,
   SessionAttentionKind,
@@ -94,6 +96,7 @@ describe("chatSessionRecord", () => {
       adapterId: null,
       live: false,
       activity: "idle",
+      waitingOn: null,
       lastActivityAt: 1,
       bornTicketless: true,
     });
@@ -109,6 +112,7 @@ describe("chatSessionRecord", () => {
       adapterId: "opencode",
       live: true,
       activity: "idle",
+      waitingOn: null,
       lastActivityAt: 1,
       bornTicketless: true,
     });
@@ -185,22 +189,59 @@ describe("chatSessionRecord activity", () => {
     });
   });
 
-  it("reads an unanswered Interaction as waiting", () => {
+  it("reads an unanswered Interaction as waiting on a question", () => {
     expect(
       chatSessionRecord(projectionWith([structuredAttachment()], openInteraction())),
-    ).toMatchObject({ activity: "waiting" });
+    ).toMatchObject({ activity: "waiting", waitingOn: "question" });
   });
 
-  it("reads every Attention a human clears as waiting, and the rest as not", () => {
-    for (const kind of ["input_required", "permission_required", "auth_required"] as const) {
+  it("reads every Attention a human clears as waiting, with the word for it", () => {
+    const expected: Record<
+      (typeof SESSION_USER_BLOCKING_ATTENTION_KINDS)[number],
+      ChatWaitingReason
+    > = {
+      input_required: "question",
+      permission_required: "permission",
+      auth_required: "auth",
+    };
+    for (const kind of SESSION_USER_BLOCKING_ATTENTION_KINDS) {
       expect(
         chatSessionRecord(projectionWith([structuredAttachment()], attentionOf(kind))),
-      ).toMatchObject({ activity: "waiting" });
+      ).toMatchObject({ activity: "waiting", waitingOn: expected[kind] });
     }
-    // A rate limit stops the agent too, but nobody is being asked anything.
+    // A rate limit stops the agent too, but nobody is being asked anything —
+    // so there is no word for it, and the row must not prompt anyone to act.
     expect(
       chatSessionRecord(projectionWith([structuredAttachment()], attentionOf("rate_limited"))),
-    ).toMatchObject({ activity: "idle" });
+    ).toMatchObject({ activity: "idle", waitingOn: null });
+  });
+
+  it("lets an open Interaction outrank a concurrent Attention", () => {
+    expect(
+      chatSessionRecord(
+        projectionWith([structuredAttachment()], {
+          ...openInteraction(),
+          ...attentionOf("auth_required"),
+        }),
+      ),
+    ).toMatchObject({ activity: "waiting", waitingOn: "question" });
+  });
+
+  // The two fields are derived separately and must not be able to disagree: a
+  // row saying a human is needed while having nothing for them to do (or vice
+  // versa) is the drift the shared `sessionAwaitsUser` predicate exists to stop.
+  it("keeps waiting and waitingOn inseparable across every projection shape", () => {
+    const shapes: Partial<SessionProjection>[] = [
+      {},
+      { turnActive: true },
+      openInteraction(),
+      ...SESSION_ATTENTION_KINDS.map((kind) => attentionOf(kind)),
+      { turnActive: true, ...openInteraction() },
+    ];
+    for (const shape of shapes) {
+      const record = chatSessionRecord(projectionWith([structuredAttachment()], shape));
+      expect(record.waitingOn !== null).toBe(record.activity === "waiting");
+    }
   });
 
   it("lets waiting outrank working, so a mid-turn question is not hidden", () => {
