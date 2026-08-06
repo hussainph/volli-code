@@ -190,6 +190,17 @@ export interface BuildActiveSessionListingInput {
   signalsByTicket: Readonly<Record<string, LatestSessionSignal>>;
   records: readonly SessionRecord[];
   /**
+   * The project's scratch container — Sessions started outside any ticket.
+   *
+   * It arrives on its own key because {@link BuildActiveSessionListingInput.containers}
+   * is walked BY TICKET, while the store files a scratch container in that same
+   * flat map under the PROJECT's id (`ownerKey`: projectId for scratch, ticketId
+   * for ticket). A live scratch terminal therefore sat under a key no ticket
+   * loop would ever ask for, and reached neither band — only its ended siblings
+   * got in, via the durable records below. Absent reads as none.
+   */
+  scratchContainer?: SessionContainer;
+  /**
    * Chat Sessions across this project — structured Sessions with no terminal
    * attachment. They carry their own activity and recency, so they join both
    * bands on the same terms a terminal does; optional, and absent reads as
@@ -319,7 +330,7 @@ function tabSubject(tab: SessionTab, input: ActivityInput): PaneState {
  * separately is how the row learned to contradict itself.
  */
 function sessionRow(
-  ticket: Ticket,
+  ticket: Ticket | null,
   tab: SessionTab,
   subject: PaneState,
   attention: SessionAttention | null,
@@ -581,7 +592,8 @@ function activeGroup(
  * band means; this is the order the answer is assembled in:
  *
  *   1. every ticket's live tabs, plus the Needs-Review promotion that hands one
- *      of them the ticket's latest attention signal, plus its exited tabs;
+ *      of them the ticket's latest attention signal, plus its exited tabs; then
+ *      the project's scratch container's tabs on the same terms, ticketless;
  *   2. durable terminal records and chat Sessions, which is where ended and
  *      ticketless Sessions enter;
  *   3. the board guarantee, for any Doing/Needs-Review ticket steps 1–2 left
@@ -609,15 +621,38 @@ export function buildActiveSessionListing(
   const quietStamp = (paneId: string): number | null =>
     input.lastOutputAt[paneId] ?? recordsById.get(paneId)?.endedAt ?? null;
 
+  /**
+   * How recently a terminal row did anything, when no quiet stamp can say. A
+   * ticket dates its own rows; a scratch tab has no ticket to borrow from and
+   * falls back to the Session's own newest durable fact, then to 0 — a sort key
+   * we could not establish, never a stamp invented from `now`.
+   */
+  const recencyFallback = (ticket: Ticket | null, paneId: string): number =>
+    ticket?.updatedAt ?? recordsById.get(paneId)?.lastActivityAt ?? 0;
+
+  /**
+   * Whether a terminal row's Session was born without a ticket. The durable
+   * record answers wherever we have one; otherwise a `null` ticket here means
+   * the row came out of the SCRATCH container, and a scratch container holding
+   * a pane is itself proof of ticketless birth — the store files it under
+   * `ownerKey({kind: "scratch"})`, a key only a Session created with no ticket
+   * can ever land on. This matters because a live scratch pane's record is
+   * routinely absent from `records` (that listing leads with ended Sessions),
+   * and defaulting to `false` there would strip the cleanup exemption from
+   * exactly the rows {@link isCleanupExempt} exists to protect.
+   */
+  const bornTicketlessOf = (ticket: Ticket | null, paneId: string): boolean =>
+    recordsById.get(paneId)?.bornTicketless ?? ticket === null;
+
   /** Files one terminal tab's row into whichever band its state earns. */
-  const fileTab = (row: ActiveSessionRow, ticket: Ticket, subject: PaneState): void => {
+  const fileTab = (row: ActiveSessionRow, ticket: Ticket | null, subject: PaneState): void => {
     const quietAt = quietStamp(subject.paneId);
     const attached = subject.activity !== "exited";
-    const recency = quietAt ?? ticket.updatedAt;
+    const recency = quietAt ?? recencyFallback(ticket, subject.paneId);
     const group = activeGroup(row, quietAt, attached, now);
     if (group !== null) {
       activeEntries.push({ row, group, recency, quietAt });
-      representedTickets.add(ticket.id);
+      if (ticket !== null) representedTickets.add(ticket.id);
       return;
     }
     previousById.set(row.id, {
@@ -630,10 +665,33 @@ export function buildActiveSessionListing(
         target: row.target,
         cleaned: false,
       },
-      ticketId: ticket.id,
+      ticketId: ticket?.id ?? null,
       createdAt: recordsById.get(subject.paneId)?.createdAt ?? null,
       attached,
-      bornTicketless: recordsById.get(subject.paneId)?.bornTicketless ?? false,
+      bornTicketless: bornTicketlessOf(ticket, subject.paneId),
+    });
+  };
+
+  /**
+   * Files an exited tab into Previous. It is a concluded Session the layout can
+   * still reopen, so it keeps its target — but it is over, and Previous is
+   * where over lives unless the board guarantee claims it.
+   */
+  const fileExitedTab = (tab: SessionTab, ticket: Ticket | null): void => {
+    previousById.set(`session:${tab.sessionId}`, {
+      row: {
+        id: `session:${tab.sessionId}`,
+        ticket,
+        title: tab.title,
+        kind: "terminal",
+        endedOrQuietAt: quietStamp(tab.sessionId) ?? recencyFallback(ticket, tab.sessionId),
+        target: { tabId: tab.sessionId, paneId: tab.activePaneId },
+        cleaned: false,
+      },
+      ticketId: ticket?.id ?? null,
+      createdAt: recordsById.get(tab.sessionId)?.createdAt ?? null,
+      attached: false,
+      bornTicketless: bornTicketlessOf(ticket, tab.sessionId),
     });
   };
 
@@ -705,29 +763,41 @@ export function buildActiveSessionListing(
       fileTab(row, ticket, subject);
     }
 
-    // An exited tab is a concluded Session the layout can still reopen, so it
-    // keeps its target — but it is over, and Previous is where over lives
-    // unless the board guarantee below claims it.
     for (const tab of tabs) {
       if (tab.sessionId === promotedTabId) continue;
       if (tabSubject(tab, input).activity !== "exited") continue;
-      const record = recordsById.get(tab.sessionId);
-      previousById.set(`session:${tab.sessionId}`, {
-        row: {
-          id: `session:${tab.sessionId}`,
-          ticket,
-          title: tab.title,
-          kind: "terminal",
-          endedOrQuietAt: quietStamp(tab.sessionId) ?? ticket.updatedAt,
-          target: { tabId: tab.sessionId, paneId: tab.activePaneId },
-          cleaned: false,
-        },
-        ticketId: ticket.id,
-        createdAt: record?.createdAt ?? null,
-        attached: false,
-        bornTicketless: record?.bornTicketless ?? false,
-      });
+      fileExitedTab(tab, ticket);
     }
+  }
+
+  // 1b. The project's scratch container, on exactly the terms a ticket's tabs
+  // get — minus the board. A scratch Session has no ticket, so it makes no
+  // board guarantee and can never be the Needs-Review promotion; but it is a
+  // terminal the user started and is watching, and a band that omits it is
+  // wrong about what is running. Ended scratch Sessions already arrived through
+  // the durable records below; this is the live half that had no route in.
+  const scratchTabs = input.scratchContainer?.tabs ?? [];
+  for (const tab of scratchTabs) {
+    for (const pane of sessionPanes(tab.layout)) mountedPaneIds.add(pane.sessionId);
+  }
+  for (const tab of scratchTabs) {
+    const subject = tabSubject(tab, input);
+    if (subject.activity === "exited") {
+      fileExitedTab(tab, null);
+      continue;
+    }
+    fileTab(
+      sessionRow(
+        null,
+        tab,
+        subject,
+        subject.activity === "waiting" ? { signal: "waiting", reason: null } : null,
+        input,
+        recordsById,
+      ),
+      null,
+      subject,
+    );
   }
 
   // 2a. Durable terminal records: every ended Session the live layout is not

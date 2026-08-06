@@ -112,6 +112,22 @@ function container(activeSessionId: string | null, tabs: ReturnType<typeof paneT
   return { activeSessionId, tabs };
 }
 
+/** A single-pane SCRATCH tab: no ticket, filed in the store under the project id. */
+function scratchTab(sessionId: string, title: string, exitCode: number | null = null) {
+  return {
+    sessionId,
+    title,
+    scope: { kind: "scratch", projectId: "p1" } as const,
+    layout: { kind: "pane", sessionId, exitCode } as const,
+    activePaneId: sessionId,
+  };
+}
+
+/** The store's container for those tabs — the shared `container()` is typed to ticket tabs. */
+function scratchOf(tabs: ReturnType<typeof scratchTab>[]) {
+  return { activeSessionId: tabs[0]?.sessionId ?? null, tabs };
+}
+
 function signal(
   ticketId: string,
   sessionId: string,
@@ -1286,6 +1302,224 @@ describe("buildActiveSessionListing — chat Sessions", () => {
     });
 
     expect(result.active).toMatchObject([{ title: "Ship the feature", source: "No live session" }]);
+  });
+});
+
+describe("buildActiveSessionListing — the scratch container", () => {
+  it("lists a live scratch terminal in Active, with no ticket", () => {
+    const now = 10_000_000;
+    const result = buildActiveSessionListing({
+      tickets: [],
+      containers: {},
+      scratchContainer: scratchOf([scratchTab("scratch-1", "Poke at the repo")]),
+      signalsByTicket: {},
+      records: [],
+      lastOutputAt: { "scratch-1": now - 1_000 },
+      parkState: {},
+      harness: {},
+      now,
+    });
+
+    expect(titles(result.active)).toEqual(["Poke at the repo"]);
+    expect(result.active[0]?.ticket).toBeNull();
+    expect(result.active[0]?.target).toEqual({ tabId: "scratch-1", paneId: "scratch-1" });
+    expect(result.previous).toEqual([]);
+  });
+
+  // The regression this whole pass exists for: `containers` is walked by
+  // ticket, so before the scratch container arrived on its own key a live
+  // scratch terminal reached neither band.
+  it("keeps a live scratch terminal that no ticket loop would ever visit", () => {
+    const now = 10_000_000;
+    const withoutScratch = buildActiveSessionListing({
+      tickets: [],
+      // The store's real shape: one flat map, scratch keyed by PROJECT id.
+      containers: { p1: scratchOf([scratchTab("scratch-1", "Poke at the repo")]) },
+      signalsByTicket: {},
+      records: [],
+      lastOutputAt: { "scratch-1": now - 1_000 },
+      parkState: {},
+      harness: {},
+      now,
+    });
+
+    expect(withoutScratch.active).toEqual([]);
+    expect(withoutScratch.previous).toEqual([]);
+  });
+
+  it("drops a quiet scratch terminal into Previous once the window closes", () => {
+    const now = 10_000_000;
+    const result = buildActiveSessionListing({
+      tickets: [],
+      containers: {},
+      scratchContainer: scratchOf([scratchTab("scratch-1", "Poke at the repo")]),
+      signalsByTicket: {},
+      records: [],
+      lastOutputAt: { "scratch-1": now - ACTIVE_QUIET_WINDOW_MS - 1 },
+      parkState: {},
+      harness: {},
+      now,
+    });
+
+    expect(result.active).toEqual([]);
+    expect(titles(result.previous)).toEqual(["Poke at the repo"]);
+    expect(result.previous[0]?.ticket).toBeNull();
+    expect(result.previous[0]?.kind).toBe("terminal");
+  });
+
+  // A scratch container holding the pane is the proof of ticketless birth, so
+  // the exemption survives the record being absent from the listing entirely —
+  // which is the normal case for a pane that has not ended.
+  it("exempts a scratch row from cleanup even with no durable record to ask", () => {
+    const now = 10_000_000;
+    const result = buildActiveSessionListing({
+      tickets: [],
+      containers: {},
+      scratchContainer: scratchOf([scratchTab("scratch-1", "Poke at the repo")]),
+      signalsByTicket: {},
+      records: [],
+      // Far past PREVIOUS_MAX_AGE_MS: a ticketed row this old is cleaned away.
+      lastOutputAt: { "scratch-1": now - PREVIOUS_MAX_AGE_MS - 1 },
+      parkState: {},
+      harness: {},
+      now,
+    });
+
+    expect(titles(result.previous)).toEqual(["Poke at the repo"]);
+    expect(result.previous[0]?.cleaned).toBe(false);
+  });
+
+  it("files an exited scratch tab into Previous, still reachable and still exempt", () => {
+    const now = 10_000_000;
+    const result = buildActiveSessionListing({
+      tickets: [],
+      containers: {},
+      scratchContainer: scratchOf([
+        scratchTab("scratch-1", "Poke at the repo", 0),
+        scratchTab("scratch-2", "Still going"),
+      ]),
+      signalsByTicket: {},
+      records: [],
+      lastOutputAt: { "scratch-1": now - PREVIOUS_MAX_AGE_MS - 1, "scratch-2": now - 1_000 },
+      parkState: {},
+      harness: {},
+      now,
+    });
+
+    expect(titles(result.active)).toEqual(["Still going"]);
+    expect(titles(result.previous)).toEqual(["Poke at the repo"]);
+    expect(result.previous[0]?.cleaned).toBe(false);
+    expect(result.previous[0]?.target).toEqual({ tabId: "scratch-1", paneId: "scratch-1" });
+  });
+
+  // The mounted pane wins: a live scratch tab and its own durable record are
+  // one Session, and Previous must not grow a second row for it.
+  it("never doubles a scratch Session that also has a durable record", () => {
+    const now = 10_000_000;
+    const result = buildActiveSessionListing({
+      tickets: [],
+      containers: {},
+      scratchContainer: scratchOf([scratchTab("scratch-1", "Poke at the repo")]),
+      signalsByTicket: {},
+      records: [
+        record({
+          id: "scratch-1",
+          ticketId: null,
+          title: "Poke at the repo",
+          endedAt: now - 5_000,
+          bornTicketless: true,
+        }),
+      ],
+      lastOutputAt: { "scratch-1": now - 1_000 },
+      parkState: {},
+      harness: {},
+      now,
+    });
+
+    expect(titles(result.active)).toEqual(["Poke at the repo"]);
+    expect(result.previous).toEqual([]);
+  });
+
+  // The post-relaunch case, with no ticket to borrow a date from: `lastOutputAt`
+  // died with the window, so a scratch tab is datable only through its own
+  // record's newest durable fact, and otherwise not at all. Both stay in Active
+  // (the module's documented bias), and the one that can be dated sorts above
+  // the one that cannot — 0 is "we could not establish this", never `now`.
+  it("dates an unstamped scratch row by its record, and keeps an undatable one anyway", () => {
+    const now = 10_000_000;
+    const result = buildActiveSessionListing({
+      tickets: [],
+      containers: {},
+      scratchContainer: scratchOf([
+        scratchTab("scratch-undatable", "Nothing can date this"),
+        scratchTab("scratch-dated", "Dated by its record"),
+      ]),
+      signalsByTicket: {},
+      records: [
+        record({
+          id: "scratch-dated",
+          ticketId: null,
+          title: "Dated by its record",
+          endedAt: null,
+          lastActivityAt: now - 1_000,
+          bornTicketless: true,
+        }),
+      ],
+      lastOutputAt: {},
+      parkState: {},
+      harness: {},
+      now,
+    });
+
+    expect(titles(result.active)).toEqual(["Dated by its record", "Nothing can date this"]);
+    expect(result.previous).toEqual([]);
+  });
+
+  // A scratch Session can never be the Needs-Review promotion (it has no
+  // ticket and no column), so the hook channel is its ONLY route to an
+  // attention — and a ticketless row is the one row with no board card to raise
+  // the flag instead.
+  it("raises a hook-declared wait on a scratch terminal, and pins it to the top", () => {
+    const now = 100_000;
+    const result = buildActiveSessionListing({
+      tickets: [],
+      containers: {},
+      scratchContainer: scratchOf([
+        scratchTab("scratch-quiet", "Just sitting there"),
+        scratchTab("scratch-asking", "Asking for something"),
+      ]),
+      signalsByTicket: {},
+      records: [],
+      lastOutputAt: { "scratch-quiet": now - 500, "scratch-asking": now - 1_000 },
+      parkState: {},
+      harness: { "scratch-asking": reporting("input.needed") },
+      now,
+    });
+
+    // Ahead of the more recently active row: attention outranks recency.
+    expect(titles(result.active)).toEqual(["Asking for something", "Just sitting there"]);
+    expect(result.active[0]?.attention).toEqual({ signal: "waiting", reason: null });
+    expect(result.active[0]?.ticket).toBeNull();
+  });
+
+  it("makes no board guarantee for a scratch Session, having no ticket to guarantee", () => {
+    const now = 10_000_000;
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: {},
+      scratchContainer: scratchOf([scratchTab("scratch-1", "Poke at the repo")]),
+      signalsByTicket: {},
+      records: [],
+      lastOutputAt: { "scratch-1": now - 1_000 },
+      parkState: {},
+      harness: {},
+      now,
+    });
+
+    // The Doing ticket still gets its own bare row; the scratch row neither
+    // satisfies nor suppresses it.
+    expect(titles(result.active)).toEqual(["Poke at the repo", "Ship the feature"]);
+    expect(result.active[1]?.source).toBe("No live session");
   });
 });
 
