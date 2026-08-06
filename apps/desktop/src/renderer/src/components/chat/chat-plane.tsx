@@ -480,15 +480,18 @@ function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
       {blocker.tone === "waiting" ? (
         <ClockIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" weight="fill" />
       ) : null}
-      <span
-        className="min-w-0 flex-1 truncate text-muted-foreground"
-        title={blocker.detail === null ? blocker.message : `${blocker.message} — ${blocker.detail}`}
-      >
-        {blocker.message}
-      </span>
-      {/* The detail hovers for a pointer and is read out for everything else —
-          a `title` alone is not text any screen reader is obliged to announce. */}
-      {blocker.detail === null ? null : <span className="sr-only">{blocker.detail}</span>}
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-muted-foreground">{blocker.message}</p>
+        {/* The cause, under the headline it qualifies. "Session stopped" alone
+            names the state and not one thing about why, and the harness's own
+            wording is the only place the reason is ever written down — so it is
+            read on sight, not hidden behind a hover a pointer has to find. */}
+        {blocker.detail === null ? null : (
+          <p className="truncate text-muted-foreground/70" title={blocker.detail}>
+            {blocker.detail}
+          </p>
+        )}
+      </div>
       {blocker.action ? (
         <Button size="xs" variant="ghost" className="shrink-0" onClick={blocker.action.act}>
           {blocker.action.label}
