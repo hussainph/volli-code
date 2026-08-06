@@ -584,6 +584,35 @@ CREATE INDEX session_receipts_command_sequence ON session_command_receipts(comma
 CREATE INDEX session_receipts_session_sequence ON session_command_receipts(session_id, sequence);
 `;
 
+/**
+ * Migration 019: per-project runtime preferences — the project half of what
+ * `app_state` holds globally under `volli:runtime-preferences:<adapterId>`.
+ * One nullable JSON column, `NULL` = inherit, taking 014's shape rather than
+ * 013's flat columns for 014's reason: the payload is a map keyed by adapter id
+ * whose values are variable-shaped blobs, so no column set describes it and
+ * nobody asks `WHERE runtime_preferences = ?`.
+ *
+ * **The value under each adapter key is the FULL stored record** —
+ * `{recordVersion, preferences, observedAt, models, agents}` — not the user's
+ * intent alone, and that is the part worth writing down. `resolve`
+ * (`main/runtime-catalog.ts`) answers chat out of the stored record and never
+ * discovers, and a global `save` pre-filters `models` down to the GLOBALLY
+ * enabled set. An override that stored intent alone would therefore resolve
+ * against a global snapshot that need not contain a model this project enabled
+ * — the project's own chosen model missing from the project's own picker. That
+ * is a wrong answer, not a degraded one. Carrying the snapshot the project's
+ * save actually observed costs a few KB per project and makes the override
+ * answerable on its own.
+ *
+ * The `CHECK` follows 014's `theme_appearance`: a column whose whole contract
+ * is "this is JSON" should fail at the write, not several layers up inside a
+ * parser that then has to invent a policy for the corpse.
+ */
+const MIGRATION_019_PROJECT_RUNTIME_PREFERENCES = `
+ALTER TABLE projects ADD COLUMN runtime_preferences TEXT
+  CHECK (runtime_preferences IS NULL OR json_valid(runtime_preferences));
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -666,6 +695,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 18,
     name: "session control plane ledger — terminal attachments are evidence, not Session state",
     sql: MIGRATION_018_SESSION_LEDGER,
+  },
+  {
+    version: 19,
+    name: "projects.runtime_preferences — the per-project override of the global runtime record",
+    sql: MIGRATION_019_PROJECT_RUNTIME_PREFERENCES,
   },
 ];
 

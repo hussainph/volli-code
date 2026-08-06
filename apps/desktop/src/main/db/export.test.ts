@@ -12,6 +12,7 @@ import { addTicketLabel, getOrCreateLabel } from "./labels-repo";
 import { MIGRATIONS } from "./migrations";
 import {
   insertProject,
+  setProjectRuntimeRecord,
   updateProjectAppearance,
   updateProjectCanvas,
   updateProjectThemeOverride,
@@ -122,6 +123,9 @@ describe("buildExportDocument — populated db", () => {
     // an export that a user is running to rescue their data.
     updateProjectCanvas(ctx.db, project.id, exportedCanvas, 61);
     updateProjectAppearance(ctx.db, project.id, "auto", 62);
+    // Migration 019's one. Same stance as the canvas: the STORED string, and
+    // the global half of the same setting rides `app_state` beside it.
+    setProjectRuntimeRecord(ctx.db, project.id, "opencode", '{"recordVersion":1}', 63);
 
     const liveTicket = testTicket(project.id, {
       id: "ticket-live",
@@ -217,12 +221,13 @@ describe("buildExportDocument — populated db", () => {
         themeSeed: null,
         themeCanvas: JSON.stringify(exportedCanvas),
         themeAppearance: "auto",
+        runtimePreferences: '{"opencode":{"recordVersion":1}}',
         colorIndex: project.colorIndex,
         sortOrder: project.sortOrder,
-        // Bumped by the three theme writes above.
-        rowVersion: 4,
+        // Bumped by the three theme writes above plus the runtime one.
+        rowVersion: 5,
         createdAt: project.createdAt,
-        updatedAt: 62,
+        updatedAt: 63,
       },
     ]);
 
