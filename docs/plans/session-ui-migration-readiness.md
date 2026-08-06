@@ -19,12 +19,9 @@ second adapter on that identity, not a second notion of session.
    Catalog over IPC, `projectId` routing through a per-directory hub,
    `api.sessionRpc` preload door, multi-harness settings with a validated
    per-harness binary override, login-shell PATH proven under a bare-PATH
-   launch. The named seam for session 4's per-project pickers — **discovery is
-   per-project, persistence stayed global** — is now closed on the storage
-   side: migration 019 adds `projects.runtime_preferences`, an adapter-keyed
-   JSON override of `volli:runtime-preferences:<adapterId>` where `NULL` means
-   inherit, and `projectId` travels into `inspect`/`save`/`resolve` as the
-   scope (presence IS the scope) beside `clear`. What remains is the UI.
+   launch. The named seam — discovery per-project, persistence global — closed
+   in session 4 (PR #181): migration 019, `projectId` as the scope on
+   `inspect`/`save`/`resolve`/`clear`, and the Configure → Runtime surface.
 2. **Delta frames — shipped** (`docs/plans/delta-frames.md` is the record).
    Streaming is a transient overlay over durable settle-point snapshots;
    wire 19.63× → 2.55×, artifact writes and ledger events per answer
@@ -98,14 +95,38 @@ Settled 2026-08-04/05; do not reopen.
   `opencode serve` stranding live bindings; `PROJECTION_CACHE_LIMIT = 8`
   thrashing past 8 live sessions.
 
-## The remaining plan
+## Session 4 — shipped (2026-08-06, stacked PRs #180/#181/#182)
 
-Session 4 has started: chat creation now funnels through `session-create.ts`'s
-owner guard, per-Session drafts persist (`stores/chat-drafts.ts`), chat Sessions
-rename from the tab strip and the rail (`chat/rename.ts`), and the sidebar's
-session list is two bands — Active and Previous — with passive cleanup and a
-chat/terminal filter on Previous. Still outstanding: the Terminals→Sessions nav
-rename and Sessions-page chat hosting (a ticketless row lands on the page, not
-in its Session); the per-project runtime pickers themselves — storage, catalog
-and RPC are in place (see the seam above), so what is left is the Configure
-surface that reads `preferencesOrigin` and sends `clear`.
+- **#180** — one creation seam: chat boots through `session-create.ts`'s owner
+  guard (landing gated on the create, never the attach); listing rows carry
+  real `activity`/`lastActivityAt`; drafts survive relaunch
+  (`stores/chat-drafts.ts`, one capped blob); chat rename everywhere
+  (`chat/rename.ts` — the optimistic writes are load-bearing).
+- **#181** — per-project runtime pickers, end to end (see item 1 above).
+- **#182** — the two-band sidebar. Pure core in `active-session-listing.ts`:
+  Active (waiting pinned by owner decision · working · quiet ≤30 min ·
+  board-guarantee rows) and Previous (one-line rows, passive cleanup —
+  archived/gone ticket, Done ≥1h and predates-column-move via
+  `volli:ticket-status-entries`, >7 d; born-ticketless exempt, orphans not;
+  everything reachable under the "Cleaned up" filter item). Chats auto-title
+  from their first delivered message. The lab scratch imports the shipped band
+  components, so the prototype cannot drift.
+
+## Session 5 owns
+
+- **Terminals → Sessions**: nav label rename (routing key `sessions` stays),
+  the page hosts chats (adopt the ticket tab-strip pattern, not `SessionTabs`),
+  scratch-chat creation ("+" → Terminal | Chat; `bootChatSession` scratch scope
+  already works), `useChatSessionsStore.openTabs` rekeyed ticketId → ownerId
+  (`active-sessions.tsx` already tolerates the new key). A ticketless sidebar
+  row currently lands on the page, not in its Session — that is the seam.
+- The 5 nav-label smokes (`terminal-smoke` ×4 clicks + 2 DOM predicates,
+  `park-smoke`, `memory-smoke`, `ghostty-config-smoke`), `docs-shots.mjs`
+  recapture + `ticket-workspace.mdx` band alt-text, and
+  `ticket-detail-smoke.mjs:920`'s page-wide menu-button locator (scope it to
+  the active band like board-smoke's warning comment says).
+- Known bills, flagged in review, deliberately unpaid: `sessions.list` folds
+  every event of every session and is now behind a 10 s poll (wants a push
+  channel or a cache; the code comment names it); Previous has no cap or
+  virtualization, and exempt scratch Sessions accumulate forever; the
+  lab/app duplicate of the filter mapping.
