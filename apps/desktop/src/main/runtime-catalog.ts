@@ -133,6 +133,12 @@ export function createRuntimeCatalog(options: RuntimeCatalogOptions): RuntimeCat
         throw new Error("Inspect the Runtime Catalog before saving model preferences");
       }
       const discovered = capabilityCatalog(snapshot.result);
+      // The stored `models` are THIS catalog's discovery ∩ enabled. For a
+      // project-scoped save that means pinning can narrow what "inherit" was
+      // showing: a model enabled app-wide but not discoverable in this checkout
+      // gets no snapshot entry here, so the project cannot offer it. That is the
+      // honest outcome — a checkout cannot run what it cannot see — but it is
+      // the one place "Custom pins what was inherited" is not literally true.
       const enabled = new Set(normalized.enabledModels.map(modelRefKey));
       const record: StoredRuntimeRecord = {
         preferences: normalized,
