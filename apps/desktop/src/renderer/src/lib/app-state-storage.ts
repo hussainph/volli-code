@@ -102,7 +102,10 @@ export interface SyncStateStorage {
   removeItem(key: string): void;
 }
 
-/** The ui/workspace persist stores' storage adapter (see stores/ui.ts, stores/workspace.ts). */
+/**
+ * The persist stores' storage adapter (see stores/ui.ts, stores/workspace.ts,
+ * stores/chat-drafts.ts).
+ */
 export const appStateStorage: StateStorage & SyncStateStorage = {
   getItem: (key) => cache.get(key) ?? null,
   setItem: (key, value) => {

@@ -23,6 +23,7 @@ import {
   useProjectsStore,
 } from "@renderer/stores/projects";
 import { useBoardStore } from "@renderer/stores/board";
+import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useThemeStore } from "@renderer/stores/theme";
 import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
@@ -278,7 +279,11 @@ export async function boot(
   // nothing of its own in localStorage. Every value it holds comes from SQLite —
   // the `app_state` rows adopted above, the `projects` columns the scope
   // listener hands it, and `volli:theme-state` for the terminal chain.
-  await Promise.all([useUiStore.persist.rehydrate(), useWorkspaceStore.persist.rehydrate()]);
+  await Promise.all([
+    useUiStore.persist.rehydrate(),
+    useWorkspaceStore.persist.rehydrate(),
+    useChatDraftsStore.persist.rehydrate(),
+  ]);
 
   // Fire-and-forget — never awaited, so it can't delay the app's first paint,
   // and its own try/catch means it can't fail boot either.

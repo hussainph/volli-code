@@ -84,6 +84,7 @@ import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Button } from "@renderer/components/ui/button";
 import { useRuntimeCatalogClient } from "@renderer/lib/runtime-catalog-client";
 import { cn } from "@renderer/lib/utils";
+import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useUiStore } from "@renderer/stores/ui";
 
 /**
@@ -115,7 +116,16 @@ export function ChatPlane({ sessionId, onOpenFile, store }: ChatPlaneProps) {
   const setSelection = controller.setSelection;
   const slice = controller.session;
 
-  const [input, setInput] = React.useState("");
+  // The half-typed message is part of the Session, not this view: it has to
+  // survive both a tab switch (this component unmounts) and a relaunch, so it
+  // lives in the chat-drafts store rather than local state (see stores/chat-drafts.ts).
+  const input = useChatDraftsStore((state) => state.drafts[sessionId]?.text ?? "");
+  const setDraft = useChatDraftsStore((state) => state.setDraft);
+  const clearDraft = useChatDraftsStore((state) => state.clearDraft);
+  const onInputChange = React.useCallback(
+    (text: string) => setDraft(sessionId, text),
+    [sessionId, setDraft],
+  );
   // Per interaction, not per surface: a harness can have several cards open at
   // once, and one boolean disables every other card's controls while one of
   // them is in flight.
@@ -181,10 +191,10 @@ export function ChatPlane({ sessionId, onOpenFile, store }: ChatPlaneProps) {
   const send = React.useCallback(
     (text: string, intent: ComposerIntent) => {
       void deliver(text, intent).then((kept) => {
-        if (kept) setInput("");
+        if (kept) clearDraft(sessionId);
       });
     },
-    [deliver],
+    [clearDraft, deliver, sessionId],
   );
 
   // The composer only ever takes messages OUT of the queue — editing one puts
@@ -380,7 +390,7 @@ export function ChatPlane({ sessionId, onOpenFile, store }: ChatPlaneProps) {
               ) : null}
               <SessionComposer
                 value={input}
-                onValueChange={setInput}
+                onValueChange={onInputChange}
                 textareaRef={textareaRef}
                 models={catalog.models}
                 agents={catalog.agents}
