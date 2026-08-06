@@ -36,8 +36,19 @@ interface ChatDraftsState {
   drafts: Readonly<Record<string, ChatDraft>>;
   /** Sets (or overwrites) a session's draft text, stamping `touchedAt` to now. */
   setDraft(sessionId: string, text: string): void;
-  /** Removes a session's draft outright — called once a message actually sends. */
-  clearDraft(sessionId: string): void;
+  /**
+   * Drops a session's draft once its message is safely away — but only if the
+   * box still holds that message.
+   *
+   * Delivery is a round trip to main and the composer stays editable across it,
+   * so whatever is in the box when the reply lands is not necessarily what was
+   * sent: anything typed in between is a NEW draft, and clearing on the reply
+   * regardless would delete keystrokes the user watched themselves type. `sent`
+   * is the composer's already-trimmed value (see `composer-ui.tsx`), so the
+   * comparison trims too — trailing whitespace is not a keystroke worth keeping
+   * a draft alive for.
+   */
+  clearSentDraft(sessionId: string, sent: string): void;
 }
 
 type PersistedChatDraftsState = Pick<ChatDraftsState, "drafts">;
@@ -77,9 +88,10 @@ export function createChatDraftsStore(storage?: StateStorage) {
           set((state) => ({
             drafts: { ...state.drafts, [sessionId]: { text, touchedAt: Date.now() } },
           })),
-        clearDraft: (sessionId) =>
+        clearSentDraft: (sessionId, sent) =>
           set((state) => {
-            if (!(sessionId in state.drafts)) return {};
+            const draft = state.drafts[sessionId];
+            if (draft === undefined || draft.text.trim() !== sent) return {};
             const next = { ...state.drafts };
             delete next[sessionId];
             return { drafts: next };

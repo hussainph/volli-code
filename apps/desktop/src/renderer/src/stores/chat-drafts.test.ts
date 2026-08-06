@@ -62,21 +62,42 @@ describe("setDraft", () => {
   });
 });
 
-describe("clearDraft", () => {
-  it("removes a session's draft entirely", () => {
+describe("clearSentDraft", () => {
+  it("removes a session's draft once the message it holds is away", () => {
     const store = createChatDraftsStore(createMemoryStorage());
     store.getState().setDraft("s1", "hello");
 
-    store.getState().clearDraft("s1");
+    store.getState().clearSentDraft("s1", "hello");
 
     expect(store.getState().drafts).not.toHaveProperty("s1");
+  });
+
+  it("clears a draft whose only difference from the sent text is whitespace", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().setDraft("s1", "hello\n");
+
+    store.getState().clearSentDraft("s1", "hello");
+
+    expect(store.getState().drafts).not.toHaveProperty("s1");
+  });
+
+  // Delivery is a round trip and the composer stays editable across it: what
+  // was typed while it was in flight is a new message, not the one that left.
+  it("keeps a draft typed while the send was in flight", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().setDraft("s1", "hello");
+    store.getState().setDraft("s1", "and one more thing");
+
+    store.getState().clearSentDraft("s1", "hello");
+
+    expect(store.getState().drafts.s1?.text).toBe("and one more thing");
   });
 
   it("is a no-op for a session with no draft", () => {
     const store = createChatDraftsStore(createMemoryStorage());
     const before = store.getState().drafts;
 
-    store.getState().clearDraft("missing");
+    store.getState().clearSentDraft("missing", "hello");
 
     expect(store.getState().drafts).toBe(before);
   });
