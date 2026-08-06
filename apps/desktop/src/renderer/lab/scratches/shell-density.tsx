@@ -520,7 +520,7 @@ function NavRow({
 }
 
 function SessionRow({
-  title,
+  title: sessionTitle,
   ticket,
   state,
   orb,
@@ -577,9 +577,9 @@ function SessionRow({
               preset !== "current" && "text-ui",
             )}
           >
-            {title}
+            {sessionTitle}
             <span className="lab-session-title-shimmer-peak" aria-hidden>
-              {title}
+              {sessionTitle}
             </span>
           </span>
         ) : (
@@ -590,7 +590,7 @@ function SessionRow({
               preset !== "current" && "text-ui",
             )}
           >
-            {title}
+            {sessionTitle}
           </span>
         )}
         <span className="flex min-w-0 items-center gap-1 text-label text-muted-foreground">
@@ -605,7 +605,7 @@ function SessionRow({
 
 /** One-line history row — ticket + title + when; no orb, no second line. */
 function PreviousSessionRow({
-  title,
+  title: sessionTitle,
   ticket,
   when,
   preset,
@@ -624,7 +624,7 @@ function PreviousSessionRow({
       )}
     >
       <span className="shrink-0 font-mono text-label">{ticket}</span>
-      <span className="min-w-0 flex-1 truncate">{title}</span>
+      <span className="min-w-0 flex-1 truncate">{sessionTitle}</span>
       <span className="shrink-0 text-label tabular-nums opacity-80">{when}</span>
     </div>
   );
