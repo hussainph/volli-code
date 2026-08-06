@@ -212,7 +212,14 @@ function ConnectedRuntimeCatalogSettings({
               // would store a record with no models in it — a project pinned to
               // nothing, which resolves worse than inheriting. The blocked state
               // below says why, and its refresh is the way back.
-              disabled={saving || view?.status !== "available"}
+              //
+              // Only that DIRECTION is blocked. `clear` deliberately carries no
+              // "inspect first" precondition (see the catalog's `clear`), so a
+              // project that already overrides can always stop — and it must,
+              // because an uninstalled or signed-out runtime is exactly when
+              // someone wants to: disabling both arms would strand the override
+              // in the one state whose recovery needs no discovery at all.
+              disabled={saving || (inheriting && view?.status !== "available")}
               onChange={(mode: SurfaceMode) => void setScope(mode)}
             />
             {refresh}
