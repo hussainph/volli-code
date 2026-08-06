@@ -142,10 +142,14 @@ function SessionRow({
             ) : null}
           </span>
           <span className="session-row-dim flex min-w-0 items-center gap-1 text-label text-muted-foreground transition-colors">
-            <span className="shrink-0 font-mono">
-              {displayTicketId(project.ticketPrefix, row.ticket.ticketNumber)}
-            </span>
-            <span aria-hidden>·</span>
+            {row.ticket === null ? null : (
+              <>
+                <span className="shrink-0 font-mono">
+                  {displayTicketId(project.ticketPrefix, row.ticket.ticketNumber)}
+                </span>
+                <span aria-hidden>·</span>
+              </>
+            )}
             <span className="truncate">{stateLabel}</span>
           </span>
         </span>
@@ -156,7 +160,6 @@ function SessionRow({
 
 function SessionTier({
   label,
-  tier,
   rows,
   project,
   now,
@@ -165,7 +168,6 @@ function SessionTier({
   onActivate,
 }: {
   label: string;
-  tier: "needs-you" | "active";
   rows: readonly ActiveSessionRow[];
   project: Project;
   now: number;
@@ -187,8 +189,9 @@ function SessionTier({
             project={project}
             row={row}
             now={now}
-            needsAttention={tier === "needs-you"}
+            needsAttention={row.attention !== null}
             active={
+              row.ticket !== null &&
               openTicketId === row.ticket.id &&
               (row.target === null || activeTabId === row.target.tabId)
             }
@@ -201,13 +204,16 @@ function SessionTier({
 }
 
 /**
- * Attention-first navigator for the selected project's ticket sessions. The
- * rows come from the resident session model, not ticket-status stand-ins:
- * Needs Review promotes the exact latest signaled session when possible; every
- * live tab remains independently reachable under Active, and a Doing ticket
- * with nothing live keeps one last-run row there (outcome + resume seed), so
- * the tier always mirrors the board's Doing column — even right after a
- * relaunch killed every PTY.
+ * Attention-first navigator for the selected project's sessions. The rows come
+ * from the resident session model, not ticket-status stand-ins: Needs Review
+ * promotes the exact latest signaled session when possible; every live tab
+ * remains independently reachable, and a Doing ticket with nothing live keeps
+ * one board-guarantee row (outcome + resume seed), so the band always mirrors
+ * the board's Doing column — even right after a relaunch killed every PTY.
+ *
+ * Renders the Active band only. `buildActiveSessionListing` also returns the
+ * Previous band and a `nextBoundaryAt` to replace the one-second interval
+ * below; drawing them is the band redesign's own landing.
  */
 export function ActiveSessions({ project }: { project: Project }) {
   const tickets = useBoardStore((state) => state.ticketsByProject[project.id]) ?? EMPTY_TICKETS;
@@ -387,16 +393,20 @@ export function ActiveSessions({ project }: { project: Project }) {
       now,
     ],
   );
-  const rowCount = listing.needsYou.length + listing.active.length;
+  const rowCount = listing.active.length;
   const activeTabId =
     openTicketId === null ? null : (ticketTabs[openTicketId]?.active ?? TICKET_BODY_TAB_ID);
 
+  // Ticketless rows have no ticket workspace to open; the chat-first surface
+  // that can activate one lands with the band redesign.
   const activate = (row: ActiveSessionRow) => {
+    const ticket = row.ticket;
+    if (ticket === null) return;
     if (row.target !== null) {
-      openTicketSession(project.id, row.ticket.id, row.target.tabId, row.target.paneId);
+      openTicketSession(project.id, ticket.id, row.target.tabId, row.target.paneId);
       return;
     }
-    openTicketWorkspace(project.id, row.ticket.id);
+    openTicketWorkspace(project.id, ticket.id);
   };
 
   return (
@@ -409,18 +419,7 @@ export function ActiveSessions({ project }: { project: Project }) {
       ) : (
         <SidebarMenu>
           <SessionTier
-            label="Needs you"
-            tier="needs-you"
-            rows={listing.needsYou}
-            project={project}
-            now={now}
-            openTicketId={openTicketId}
-            activeTabId={activeTabId}
-            onActivate={activate}
-          />
-          <SessionTier
             label="Active"
-            tier="active"
             rows={listing.active}
             project={project}
             now={now}

@@ -974,10 +974,12 @@ async function main() {
     // === 16. Sidebar attention tier is truthful without a live terminal =====
     await attempt(
       16,
-      "Active Sessions promotes Needs Review to Needs you and mirrors Doing under Active without inventing live sessions",
+      "Active Sessions mirrors Needs Review and Doing in one band without inventing live sessions",
       async () => {
-        // The Active tier guarantees every Doing ticket a presence (bare rows
-        // here — no PTY ever ran), alongside the promoted Needs Review rows.
+        // The band guarantees every Doing and Needs Review ticket a presence
+        // (bare rows here — no PTY ever ran). The separate "Needs you" tier is
+        // gone: attention rides on the row now, and nothing here has an agent
+        // to raise one.
         const doingIds = await columnCardIds(page, "Doing");
         const ids = await sidebarSessionIds(page);
         const expectedIds = ["VC-10", "VC-11", ...doingIds];
@@ -986,23 +988,22 @@ async function main() {
           doingIds.length > 0 &&
           ids.length === expectedIds.length &&
           expectedIds.every((id) => ids.includes(id));
-        const needsYou = (await page.getByText("Needs you", { exact: true }).count()) === 1;
         const activeTier = (await page.getByText("Active", { exact: true }).count()) === 1;
         const bareDoingRows =
           (await page.getByText("No live session", { exact: false }).count()) >= doingIds.length;
         const noInProgress = (await page.getByText("In progress", { exact: true }).count()) === 0;
-        const needsYouRow = page
+        const reviewRow = page
           .locator('[data-sidebar="menu-button"]')
           .filter({ has: page.locator("span.font-mono", { hasText: /^VC-10$/ }) })
           .first();
-        const subtextBefore = await needsYouRow
+        const subtextBefore = await reviewRow
           .locator(SESSION_ROW_META)
           .evaluate((element) => getComputedStyle(element).color);
-        await needsYouRow.click();
+        await reviewRow.click();
         await sleep(400);
         const ticketOpened =
           (await page.getByRole("tab", { name: "VC-10", exact: true }).count()) === 1;
-        const subtextHighlight = await needsYouRow.evaluate((button, metaSelector) => {
+        const subtextHighlight = await reviewRow.evaluate((button, metaSelector) => {
           const subtext = button.querySelector(metaSelector);
           if (!(subtext instanceof HTMLElement)) return null;
           return {
@@ -1019,7 +1020,6 @@ async function main() {
         await sleep(300);
         const ok =
           idsMatch &&
-          needsYou &&
           activeTier &&
           bareDoingRows &&
           noInProgress &&
@@ -1027,7 +1027,7 @@ async function main() {
           subtextHighlighted;
         return {
           ok,
-          detail: `ids=${JSON.stringify(ids)} doing=${JSON.stringify(doingIds)} needsYou=${needsYou} activeTier=${activeTier} bareDoingRows=${bareDoingRows} noInProgress=${noInProgress} ticketOpened=${ticketOpened} subtext=${JSON.stringify(subtextHighlight)}`,
+          detail: `ids=${JSON.stringify(ids)} doing=${JSON.stringify(doingIds)} activeTier=${activeTier} bareDoingRows=${bareDoingRows} noInProgress=${noInProgress} ticketOpened=${ticketOpened} subtext=${JSON.stringify(subtextHighlight)}`,
         };
       },
     );

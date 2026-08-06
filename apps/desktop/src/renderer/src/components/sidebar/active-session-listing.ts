@@ -1,3 +1,31 @@
+/**
+ * The project sidebar's session listing: two bands, Active and Previous, built
+ * from already-loaded board, terminal, durable-session and Session-signal state.
+ * Pure — view code owns fetching, navigation and the clock; this module owns
+ * which band a Session is in, what order it sits in, and when that answer next
+ * changes on its own.
+ *
+ * **Active** is recent work, in four groups: Sessions waiting on a human, then
+ * Sessions working now, then Sessions that went quiet inside
+ * {@link ACTIVE_QUIET_WINDOW_MS}, then the board-guarantee rows — one muted row
+ * for every Doing/Needs-Review ticket the first three left unrepresented,
+ * because the board calling work active is a claim this list must mirror.
+ * **Previous** is everything else the project's Session listing returned: ended
+ * terminals, chats past the window, live panes nobody has touched in half an
+ * hour.
+ *
+ * **Terminal quiet stamps are volatile.** `lastOutputAt` lives in the renderer
+ * store and dies with the window, so after a relaunch a genuinely busy terminal
+ * has no stamp at all. The stamp chain therefore ends in a deliberate bias
+ * rather than a guess: a row nothing can date stays in Active. Keeping a live
+ * Session visible is the failure worth having; a precise-looking timestamp
+ * invented from `now` is not.
+ *
+ * **Every time boundary is the first instant its rule holds**, so
+ * {@link ActiveSessionListing.nextBoundaryAt} is exactly when a caller must
+ * recompute — one `setTimeout`, not a polling interval that stops mattering the
+ * moment nothing is live.
+ */
 import {
   sessionActivitySource,
   type ChatSessionRecord,
@@ -19,17 +47,37 @@ import {
   type SessionTab,
 } from "../../stores/sessions";
 
+/**
+ * How long a Session that has gone quiet stays in Active. Long enough that
+ * stepping away from a running agent does not reshuffle the list under you,
+ * short enough that Active still means "recent".
+ */
+export const ACTIVE_QUIET_WINDOW_MS = 30 * 60_000;
+
+/**
+ * How long a ticket's Sessions linger in Previous after it lands in Done. The
+ * ticket is finished; its Sessions are the trace of finishing it, and stay
+ * reachable for one hour of "wait, what did it actually do".
+ */
+export const DONE_LINGER_MS = 60 * 60_000;
+
+/** How old a Previous row gets before it counts as concluded business. */
+export const PREVIOUS_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
+
 export interface ActiveSessionTarget {
   tabId: string;
   paneId: string;
 }
 
+/** Which execution surface a row speaks for — the axis the Previous band filters on. */
+export type SessionRowKind = "terminal" | "chat";
+
 /**
- * A Doing ticket's most recent concluded run, carried by its Active fallback
- * row when nothing is live. Backed by a durable {@link SessionRecord} where one
- * is known — the record's documented purpose is "trace and resume seed", which
- * makes this row the fourth resume surface (issue #78): `resumable` marks a
- * harness session to resume from.
+ * A ticket's most recent concluded run, carried by its board-guarantee row when
+ * nothing is live. Backed by a durable {@link SessionRecord} where one is known
+ * — the record's documented purpose is "trace and resume seed", which makes
+ * this row the fourth resume surface (issue #78): `resumable` marks a harness
+ * session to resume from.
  *
  * A concluded run carries no verdict, and that is deliberate. The PTY runs the
  * user's login shell, not the harness — the launch command is typed into that
@@ -57,6 +105,11 @@ export interface LastRun {
  * Why this row needs a human. `blocked`/`done` are the agent's own voluntary
  * `volli session` signals and carry its words; `waiting` is the involuntary
  * hook channel, which is more reliable but has nothing to say beyond the fact.
+ *
+ * This is what carries the needs-you signal now that there is no needs-you
+ * band: a row with an attention sorts to the top of Active and draws its
+ * attention dot from here, so the vocabulary is exactly the one the promoted
+ * Needs-Review row has always spoken.
  */
 export interface SessionAttention {
   signal: "done" | "blocked" | "waiting";
@@ -65,9 +118,14 @@ export interface SessionAttention {
 
 export interface ActiveSessionRow {
   id: string;
-  ticket: Ticket;
+  /**
+   * The ticket this row belongs to, or `null` for a ticketless Session — a
+   * project scratch Session, or one whose ticket has left the board.
+   */
+  ticket: Ticket | null;
   title: string;
   source: string;
+  /** `null` on a board-guarantee row: it speaks for a ticket, not for a live process. */
   activity: SessionActivityState | null;
   /**
    * Whether the row's activity is the harness's own report or the PTY
@@ -76,14 +134,53 @@ export interface ActiveSessionRow {
    */
   activitySource: SessionActivitySource;
   attention: SessionAttention | null;
-  /** Present on a concluded Active fallback row — see {@link LastRun}. */
+  /** Present on a concluded board-guarantee row — see {@link LastRun}. */
   lastRun: LastRun | null;
   target: ActiveSessionTarget | null;
 }
 
+/**
+ * A Previous-band row. Deliberately smaller than {@link ActiveSessionRow}: this
+ * band renders one line per Session, so it carries identity, when the Session
+ * last did anything, and how to get back to it — and nothing a one-line row
+ * cannot show.
+ */
+export interface PreviousSessionRow {
+  id: string;
+  ticket: Ticket | null;
+  title: string;
+  kind: SessionRowKind;
+  /** Epoch ms of the last thing this Session did: a terminal's end or output, a chat's last fact. */
+  endedOrQuietAt: number;
+  target: ActiveSessionTarget | null;
+  /**
+   * Whether a cleanup rule matched this row and it is here only because
+   * {@link SessionListingFilter.showCleaned} asked for it.
+   */
+  cleaned: boolean;
+}
+
 export interface ActiveSessionListing {
-  needsYou: ActiveSessionRow[];
   active: ActiveSessionRow[];
+  previous: PreviousSessionRow[];
+  /**
+   * Epoch ms of the next moment this listing changes with no new input — a row
+   * ageing out of Active, or a cleanup rule newly firing. `null` when nothing
+   * about the result depends on the clock any more.
+   */
+  nextBoundaryAt: number | null;
+}
+
+/**
+ * What the Previous band shows. Cleanup decides what it *would* show; this
+ * decides what it does — `showCleaned` being the escape hatch for the user who
+ * knows a Session existed and wants to know where it went.
+ */
+export interface SessionListingFilter {
+  /** Which kinds to show; `null` is every kind. */
+  kinds: ReadonlySet<SessionRowKind> | null;
+  /** Whether cleaned-away rows come back, marked {@link PreviousSessionRow.cleaned}. */
+  showCleaned: boolean;
 }
 
 export interface BuildActiveSessionListingInput {
@@ -93,25 +190,37 @@ export interface BuildActiveSessionListingInput {
   signalsByTicket: Readonly<Record<string, LatestSessionSignal>>;
   records: readonly SessionRecord[];
   /**
-   * Chat Sessions across this project's tickets — structured Sessions with no
-   * terminal attachment. There is no PTY behind one, so it can only ever join
-   * the Active tier's fallback row for a Doing ticket with nothing live
-   * (`lastRunRow`); optional, and absent reads as none. Defaults to `[]`.
+   * Chat Sessions across this project — structured Sessions with no terminal
+   * attachment. They carry their own activity and recency, so they join both
+   * bands on the same terms a terminal does; optional, and absent reads as
+   * none. Defaults to `[]`.
    */
   chatSessions?: readonly ChatSessionRecord[];
   lastOutputAt: Readonly<Record<string, number>>;
   parkState: Readonly<Record<string, { parked: boolean; keepAwake: boolean }>>;
   /** Per-session harness reporting state; a missing entry means nothing reports here. */
   harness: Readonly<Record<string, SessionHarnessState>>;
+  /**
+   * ticketId → epoch ms it entered its CURRENT status. Two cleanup rules need
+   * it and neither guesses without it: a ticket missing from this map is one
+   * whose column history we do not have, so those rules stay silent for its
+   * Sessions. Defaults to empty.
+   */
+  statusEnteredAt?: ReadonlyMap<string, number>;
+  /** Defaults to every kind, cleaned rows hidden. */
+  filter?: SessionListingFilter;
   now: number;
 }
+
+const EMPTY_STATUS_ENTERED_AT: ReadonlyMap<string, number> = new Map();
+const DEFAULT_FILTER: SessionListingFilter = { kinds: null, showCleaned: false };
 
 function sessionSource(record: SessionRecord | undefined): string {
   return record === undefined ? "Terminal" : sessionSourceLabel({ kind: "terminal", record });
 }
 
 /**
- * The chat Session a Doing ticket's fallback row speaks for when nothing
+ * The chat Session a ticket's board-guarantee row speaks for when nothing
  * terminal claims it: a live one over an ended one (still actionable), then
  * the most recently created. `null` when the ticket has none.
  */
@@ -166,16 +275,13 @@ const ACTIVITY_PRIORITY: Record<SessionActivityState, number> = {
   exited: 4,
 };
 
-/** Concluded fallback rows (activity `null`) sort after every live state. */
-const CONCLUDED_PRIORITY = 5;
-
 /**
- * Needs-you ordering: a hard stop (`blocked`) outranks a finished-and-waiting
- * review (`done`), which outranks a bare "review this ticket" prompt with no
- * mapped signal. Data-driven so a future hook-derived state is an insert, not a
- * rewrite (mirrors {@link ACTIVITY_PRIORITY}).
+ * The Active band's sort groups, top to bottom. Data-driven so a future group
+ * is an insert rather than a rewrite of the comparator.
  */
-const NEEDS_YOU_PRIORITY = { blocked: 0, waiting: 1, done: 2, bare: 3 } as const;
+const ACTIVE_GROUP = { waiting: 0, working: 1, recent: 2, board: 3 } as const;
+
+type ActiveGroup = (typeof ACTIVE_GROUP)[keyof typeof ACTIVE_GROUP];
 
 /** One of a tab's panes, with the activity it is currently in. */
 interface PaneState {
@@ -189,8 +295,8 @@ interface PaneState {
  * the row describes too. Reading activity from the whole tab while reading its
  * source, its record and its click target from `activePaneId` let one row say
  * two things at once: in a split whose background pane had just declared
- * `input.needed`, that pane pulled the row into "Needs you" while the source
- * line described the plain shell in front, so the row claimed a
+ * `input.needed`, that pane pulled the row to the top of Active while the
+ * source line described the plain shell in front, so the row claimed a
  * harness-declared wait and reported that nothing was reporting — and the
  * click landed on the pane that wasn't asking for anything.
  */
@@ -233,42 +339,69 @@ function sessionRow(
   };
 }
 
+/** A chat Session's row. Its activity is the adapter's own word, never a PTY heuristic. */
+function chatRow(record: ChatSessionRecord, ticket: Ticket | null): ActiveSessionRow {
+  return {
+    id: `chat:${record.sessionId}`,
+    ticket,
+    title: record.title,
+    source: sessionSourceLabel({ kind: "chat", record }),
+    activity: record.activity,
+    activitySource: "reported",
+    attention: record.activity === "waiting" ? { signal: "waiting", reason: null } : null,
+    lastRun: null,
+    target: null,
+  };
+}
+
 /**
- * The Active fallback row for a Doing ticket with nothing live — the tier
- * guarantees every Doing ticket a presence (the board says it's in flight, so
- * the navigator must too, especially after an app relaunch kills every PTY).
- * Prefers a still-mounted exited tab (it can reopen the exact terminal and
- * knows its exit code); otherwise degrades to the ticket's most recent durable
- * record (split panes never stand alone as a row); otherwise a chat Session,
- * named by its title with no resume seed — there is no PTY behind it to
- * resume as, only a future deep-activation path this is not it; otherwise a
- * bare row.
+ * The board-guarantee row for a Doing or Needs-Review ticket that produced no
+ * Active row of its own — the board says the work is in flight, so the
+ * navigator must say so too, especially after an app relaunch has killed every
+ * PTY. Prefers the ticket's mounted tab (it can reopen the exact terminal and,
+ * once that tab has exited, knows its exit code); otherwise degrades to the
+ * ticket's most recent durable record (split panes never stand alone as a row);
+ * otherwise a chat Session, named by its title with no resume seed — there is
+ * no PTY behind it to resume as, only a future deep-activation path this is not
+ * it; otherwise a bare row.
+ *
+ * `consumes` names the Session this row already speaks for, so the same Session
+ * does not turn up a second time down in Previous.
  */
-function lastRunRow(
+function boardRow(
   ticket: Ticket,
   input: BuildActiveSessionListingInput,
   recordsById: ReadonlyMap<string, SessionRecord>,
-): ActiveSessionRow {
+): { row: ActiveSessionRow; consumes: string | null } {
   const container = input.containers[ticket.id];
   const tabs = container?.tabs ?? [];
-  // Every tab here is exited — live ones already produced their own rows.
   const mounted = tabs.find((tab) => tab.sessionId === container?.activeSessionId) ?? tabs.at(-1);
   if (mounted !== undefined) {
     const record = recordsById.get(mounted.sessionId);
+    // A mounted tab reaches this row two ways: it has exited, or it is alive
+    // and has been quiet long enough to fall out of Active on its own. Only the
+    // first is a run that ended, and only the first may say so.
+    const exited = tabSubject(mounted, input).activity === "exited";
     return {
-      id: `ticket:${ticket.id}`,
-      ticket,
-      title: mounted.title,
-      source: sessionSource(record),
-      activity: null,
-      activitySource: "inferred",
-      attention: null,
-      lastRun: {
-        endedAt: record?.endedAt ?? null,
-        resumable:
-          record !== undefined && canResumeSession({ kind: "terminal", record }, launchAdapter),
+      row: {
+        id: `ticket:${ticket.id}`,
+        ticket,
+        title: mounted.title,
+        source: sessionSource(record),
+        activity: null,
+        activitySource: "inferred",
+        attention: null,
+        lastRun: exited
+          ? {
+              endedAt: record?.endedAt ?? null,
+              resumable:
+                record !== undefined &&
+                canResumeSession({ kind: "terminal", record }, launchAdapter),
+            }
+          : null,
+        target: { tabId: mounted.sessionId, paneId: mounted.activePaneId },
       },
-      target: { tabId: mounted.sessionId, paneId: mounted.activePaneId },
+      consumes: `session:${mounted.sessionId}`,
     };
   }
 
@@ -288,194 +421,424 @@ function lastRunRow(
   }
   if (latest !== undefined) {
     return {
-      id: `ticket:${ticket.id}`,
-      ticket,
-      title: latest.title,
-      source: sessionSourceLabel({ kind: "terminal", record: latest }),
-      activity: null,
-      activitySource: "inferred",
-      attention: null,
-      lastRun: {
-        endedAt: latest.endedAt,
-        resumable: canResumeSession({ kind: "terminal", record: latest }, launchAdapter),
+      row: {
+        id: `ticket:${ticket.id}`,
+        ticket,
+        title: latest.title,
+        source: sessionSourceLabel({ kind: "terminal", record: latest }),
+        activity: null,
+        activitySource: "inferred",
+        attention: null,
+        lastRun: {
+          endedAt: latest.endedAt,
+          resumable: canResumeSession({ kind: "terminal", record: latest }, launchAdapter),
+        },
+        target: null,
       },
-      target: null,
+      consumes: `session:${latest.id}`,
     };
   }
 
   const chat = latestChatSession(input.chatSessions ?? [], ticket.id);
   if (chat !== null) {
     return {
+      row: {
+        id: `ticket:${ticket.id}`,
+        ticket,
+        title: chat.title,
+        source: sessionSourceLabel({ kind: "chat", record: chat }),
+        activity: null,
+        activitySource: "inferred",
+        attention: null,
+        lastRun: null,
+        target: null,
+      },
+      consumes: `chat:${chat.sessionId}`,
+    };
+  }
+
+  return {
+    row: {
       id: `ticket:${ticket.id}`,
       ticket,
-      title: chat.title,
-      source: sessionSourceLabel({ kind: "chat", record: chat }),
+      title: ticket.title,
+      source: "No live session",
       activity: null,
       activitySource: "inferred",
       attention: null,
       lastRun: null,
       target: null,
-    };
-  }
-
-  return {
-    id: `ticket:${ticket.id}`,
-    ticket,
-    title: ticket.title,
-    source: "No live session",
-    activity: null,
-    activitySource: "inferred",
-    attention: null,
-    lastRun: null,
-    target: null,
+    },
+    consumes: null,
   };
 }
 
-/** A needs-you row plus its ordering keys; kept together so the sort is honest. */
-interface NeedsYouEntry {
-  row: ActiveSessionRow;
-  priority: number;
-  recency: number;
+/** The facts a cleanup rule may consult. Nothing here is derived from how a row renders. */
+export interface SessionCleanupFacts {
+  /** The Session's own ticket id; `null` for a ticketless (scratch) Session. */
+  ticketId: string | null;
+  /** That ticket as the board currently knows it; `null` once it is no longer there. */
+  ticket: Ticket | null;
+  /** Epoch ms the Session was created, or `null` when nothing durable can date it. */
+  createdAt: number | null;
+  /** Epoch ms of the last thing the Session did. */
+  endedOrQuietAt: number;
+  /** Whether the Session's execution surface is still attached — a live PTY, an open chat. */
+  attached: boolean;
+  statusEnteredAt: ReadonlyMap<string, number>;
+  now: number;
 }
 
 /**
- * Builds the project sidebar's attention-first session list from already-loaded
- * board, terminal, durable-session, and Session-signal state. The result is pure: view
- * code owns fetching and navigation, while this module owns truthful tiering and
- * lifecycle ordering — Needs You (blocked → done → bare), then Active (working →
- * idle → parked → concluded), where every Doing ticket is guaranteed a row:
- * its live tabs when it has them, else one last-run fallback row.
+ * Sessions cleanup must never touch, whatever the rules say.
+ *
+ * A ticketless Session has no ticket to fall back to: clean it and there is no
+ * board row, no ticket rail, no second surface it can be reached from — it is
+ * simply stranded. An attached Session is not concluded business by definition;
+ * a live pane vanishing out of the sidebar is the one outcome no cleanup rule
+ * is worth.
+ *
+ * (Ticketless covers two situations today — a Session born as a project
+ * scratch, and one orphaned when its ticket left the board. Telling them apart
+ * belongs to a later wave; exempting both belongs to this one, and it lands
+ * here so that wave changes one predicate.)
+ */
+export function isCleanupExempt(
+  facts: Pick<SessionCleanupFacts, "ticketId" | "attached">,
+): boolean {
+  return facts.ticketId === null || facts.attached;
+}
+
+/**
+ * Whether a Previous-band Session is concluded business — over, and not worth a
+ * row. Four rules, in the order they can be decided:
+ *
+ * (a) its ticket is gone from the board (archived), so the row navigates
+ * nowhere; (b) the ticket has been in Done for {@link DONE_LINGER_MS}; (c) the
+ * Session predates the ticket's entry into its CURRENT column, so it traces
+ * some earlier stretch of work rather than this one; (d) it is
+ * {@link PREVIOUS_MAX_AGE_MS} old.
+ *
+ * (b) and (c) both need `statusEnteredAt`, which is a fact this module is given
+ * rather than one it can derive. A ticket missing from that map is one whose
+ * column history we do not have — both rules stay silent for it, because a
+ * cleanup rule guessing is a Session disappearing for no reason.
+ */
+export function isConcludedBusiness(facts: SessionCleanupFacts): boolean {
+  if (isCleanupExempt(facts)) return false;
+  if (facts.ticket === null) return true;
+  const enteredAt = facts.statusEnteredAt.get(facts.ticket.id);
+  if (enteredAt !== undefined) {
+    if (facts.ticket.status === "done" && facts.now - enteredAt >= DONE_LINGER_MS) return true;
+    if (facts.createdAt !== null && facts.createdAt < enteredAt) return true;
+  }
+  return facts.now - facts.endedOrQuietAt >= PREVIOUS_MAX_AGE_MS;
+}
+
+/** An Active row with the keys it is sorted by. */
+interface ActiveEntry {
+  row: ActiveSessionRow;
+  group: ActiveGroup;
+  /** How recently this row did anything — the within-group sort key. */
+  recency: number;
+  /** The stamp the quiet window is measured from; `null` when nothing can date it. */
+  quietAt: number | null;
+}
+
+/** A Previous-band candidate, before cleanup and filtering have had their say. */
+interface PreviousCandidate {
+  row: PreviousSessionRow;
+  ticketId: string | null;
+  createdAt: number | null;
+  attached: boolean;
+}
+
+/**
+ * Which Active group a row belongs to, or `null` when it has aged out of Active
+ * altogether. Order matters: an attention outranks everything (that is the
+ * whole needs-you signal now), and the window is the last thing asked. Never
+ * called for a board-guarantee row — those are filed straight into their group,
+ * because a muted row must not be mistaken for a quiet live one.
+ */
+function activeGroup(
+  row: ActiveSessionRow,
+  quietAt: number | null,
+  attached: boolean,
+  now: number,
+): ActiveGroup | null {
+  if (row.attention !== null) return ACTIVE_GROUP.waiting;
+  if (row.activity === "working" && attached) return ACTIVE_GROUP.working;
+  // Nothing can date this row — the post-relaunch live terminal — so it stays
+  // rather than vanishing on the strength of a stamp we never had.
+  if (quietAt === null) return ACTIVE_GROUP.recent;
+  return now - quietAt < ACTIVE_QUIET_WINDOW_MS ? ACTIVE_GROUP.recent : null;
+}
+
+/**
+ * Builds the sidebar's two session bands. See the module comment for what each
+ * band means; this is the order the answer is assembled in:
+ *
+ *   1. every ticket's live tabs, plus the Needs-Review promotion that hands one
+ *      of them the ticket's latest attention signal, plus its exited tabs;
+ *   2. durable terminal records and chat Sessions, which is where ended and
+ *      ticketless Sessions enter;
+ *   3. the board guarantee, for any Doing/Needs-Review ticket steps 1–2 left
+ *      with no Active row at all;
+ *   4. cleanup, filtering, ordering and the boundary clock.
  */
 export function buildActiveSessionListing(
   input: BuildActiveSessionListingInput,
 ): ActiveSessionListing {
+  const now = input.now;
+  const filter = input.filter ?? DEFAULT_FILTER;
+  const statusEnteredAt = input.statusEnteredAt ?? EMPTY_STATUS_ENTERED_AT;
+  const chatSessions = input.chatSessions ?? [];
   const recordsById = new Map(input.records.map((record) => [record.id, record]));
-  const needsYouEntries: NeedsYouEntry[] = [];
-  const active: ActiveSessionRow[] = [];
+  const ticketsById = new Map(input.tickets.map((ticket) => [ticket.id, ticket]));
 
-  /**
-   * Files one live tab into the tier its state earns — Needs you when the
-   * harness says a human is blocking it, Active otherwise. Returns whether the
-   * tab produced a row at all, which is what a Doing ticket's presence
-   * guarantee counts; a promoted row still counts, since the ticket is visible.
-   */
-  const placeLiveTab = (ticket: Ticket, tab: SessionTab): boolean => {
-    const subject = tabSubject(tab, input);
-    const activity = subject.activity;
-    if (activity === "exited") return false;
-    const row = sessionRow(
-      ticket,
-      tab,
-      subject,
-      activity === "waiting" ? { signal: "waiting", reason: null } : null,
-      input,
-      recordsById,
-    );
-    if (activity === "waiting") {
-      needsYouEntries.push({
-        row,
-        priority: NEEDS_YOU_PRIORITY.waiting,
-        recency: ticket.updatedAt,
-      });
-    } else {
-      active.push(row);
+  const activeEntries: ActiveEntry[] = [];
+  const previousById = new Map<string, PreviousCandidate>();
+  /** Tickets with at least one Active row — what the board guarantee is measured against. */
+  const representedTickets = new Set<string>();
+  /** Pane ids the live layout already covers, so a durable record never doubles one. */
+  const mountedPaneIds = new Set<string>();
+
+  /** The documented terminal quiet-stamp chain: last output, else the durable end, else nothing. */
+  const quietStamp = (paneId: string): number | null =>
+    input.lastOutputAt[paneId] ?? recordsById.get(paneId)?.endedAt ?? null;
+
+  /** Files one terminal tab's row into whichever band its state earns. */
+  const fileTab = (row: ActiveSessionRow, ticket: Ticket, subject: PaneState): void => {
+    const quietAt = quietStamp(subject.paneId);
+    const attached = subject.activity !== "exited";
+    const recency = quietAt ?? ticket.updatedAt;
+    const group = activeGroup(row, quietAt, attached, now);
+    if (group !== null) {
+      activeEntries.push({ row, group, recency, quietAt });
+      representedTickets.add(ticket.id);
+      return;
     }
-    return true;
+    previousById.set(row.id, {
+      row: {
+        id: row.id,
+        ticket,
+        title: row.title,
+        kind: "terminal",
+        endedOrQuietAt: recency,
+        target: row.target,
+        cleaned: false,
+      },
+      ticketId: ticket.id,
+      createdAt: recordsById.get(subject.paneId)?.createdAt ?? null,
+      attached,
+    });
   };
 
+  // 1. Live tabs, one row each, plus the Needs-Review promotion.
   for (const ticket of input.tickets) {
     const container = input.containers[ticket.id];
+    const tabs = container?.tabs ?? [];
+    for (const tab of tabs) {
+      for (const pane of sessionPanes(tab.layout)) mountedPaneIds.add(pane.sessionId);
+    }
+    const liveTabs = tabs.filter((tab) => tabSubject(tab, input).activity !== "exited");
+
+    let promotedTabId: string | null = null;
     if (ticket.status === "needs_review") {
       const signal = input.signalsByTicket[ticket.id];
-      const signaledPaneId = signal?.sessionId ?? undefined;
-      const signaledTab = container?.tabs.find(
-        (tab) =>
-          signaledPaneId !== undefined &&
-          sessionPanes(tab.layout).some((pane) => pane.sessionId === signaledPaneId),
-      );
-      const liveTabs = (container?.tabs ?? []).filter(
-        (tab) => tabSubject(tab, input).activity !== "exited",
-      );
+      // A CLI signal names the exact pane that raised it. Only a signal whose
+      // pane is still in some tab can be routed to a row, so `exact` stands for
+      // both facts at once: there is a signal, and we found where it lives.
+      let signaledTab: SessionTab | undefined;
+      let exact: LatestSessionSignal | null = null;
+      if (signal !== undefined) {
+        signaledTab = tabs.find((tab) =>
+          sessionPanes(tab.layout).some((pane) => pane.sessionId === signal.sessionId),
+        );
+        if (signaledTab !== undefined) exact = signal;
+      }
       const fallbackTab =
         liveTabs.find((tab) => tab.sessionId === container?.activeSessionId) ?? liveTabs.at(-1);
       const attentionTab = signaledTab ?? fallbackTab;
-      const exactSignal =
-        signaledTab !== undefined && signaledPaneId !== undefined && signal !== undefined
-          ? { signal, paneId: signaledPaneId, createdAt: signal.createdAt }
-          : null;
       if (attentionTab !== undefined) {
+        promotedTabId = attentionTab.sessionId;
         const paneStates = tabPaneStates(attentionTab, input);
-        // A CLI signal names the exact pane that raised it, so that pane is
-        // what the row is about; absent one, the tab's highest-priority pane
-        // is. `signaledTab` was found BY this pane's presence in it, so the
-        // lookup cannot miss.
-        const subject =
-          exactSignal === null
-            ? paneStates[0]!
-            : paneStates.find((pane) => pane.paneId === exactSignal.paneId)!;
+        let subject: PaneState;
+        if (exact === null) {
+          subject = paneStates[0]!;
+        } else {
+          // `signaledTab` was found BY this pane's presence in it, so the
+          // lookup cannot miss.
+          const signaledPaneId = exact.sessionId;
+          subject = paneStates.find((pane) => pane.paneId === signaledPaneId)!;
+        }
         // The agent's own signal wins where there is one: a hook payload knows
         // that a human is needed, but only the CLI signal knows what for.
         const attention: SessionAttention | null =
-          exactSignal !== null
-            ? { signal: exactSignal.signal.signal, reason: exactSignal.signal.reason }
+          exact !== null
+            ? { signal: exact.signal, reason: exact.reason }
             : subject.activity === "waiting"
               ? { signal: "waiting", reason: null }
               : null;
-        needsYouEntries.push({
-          row: sessionRow(ticket, attentionTab, subject, attention, input, recordsById),
-          priority:
-            attention === null ? NEEDS_YOU_PRIORITY.bare : NEEDS_YOU_PRIORITY[attention.signal],
-          recency: exactSignal?.createdAt ?? ticket.updatedAt,
-        });
-      } else {
-        needsYouEntries.push({
-          row: {
-            id: `ticket:${ticket.id}`,
-            ticket,
-            title: ticket.title,
-            source: "No live session",
-            activity: null,
-            activitySource: "inferred",
-            attention: null,
-            lastRun: null,
-            target: null,
-          },
-          priority: NEEDS_YOU_PRIORITY.bare,
-          recency: ticket.updatedAt,
-        });
+        fileTab(
+          sessionRow(ticket, attentionTab, subject, attention, input, recordsById),
+          ticket,
+          subject,
+        );
       }
-
-      for (const tab of container?.tabs ?? []) {
-        if (tab === attentionTab) continue;
-        placeLiveTab(ticket, tab);
-      }
-      continue;
     }
 
-    if (ticket.status !== "doing") continue;
-    let liveRows = 0;
-    for (const tab of container?.tabs ?? []) {
-      if (placeLiveTab(ticket, tab)) liveRows += 1;
+    for (const tab of liveTabs) {
+      if (tab.sessionId === promotedTabId) continue;
+      const subject = tabSubject(tab, input);
+      const row = sessionRow(
+        ticket,
+        tab,
+        subject,
+        subject.activity === "waiting" ? { signal: "waiting", reason: null } : null,
+        input,
+        recordsById,
+      );
+      fileTab(row, ticket, subject);
     }
-    // The tier guarantees every Doing ticket a presence: nothing live means one
-    // concluded fallback row instead of silence.
-    if (liveRows === 0) active.push(lastRunRow(ticket, input, recordsById));
+
+    // An exited tab is a concluded Session the layout can still reopen, so it
+    // keeps its target — but it is over, and Previous is where over lives
+    // unless the board guarantee below claims it.
+    for (const tab of tabs) {
+      if (tab.sessionId === promotedTabId) continue;
+      if (tabSubject(tab, input).activity !== "exited") continue;
+      const record = recordsById.get(tab.sessionId);
+      previousById.set(`session:${tab.sessionId}`, {
+        row: {
+          id: `session:${tab.sessionId}`,
+          ticket,
+          title: tab.title,
+          kind: "terminal",
+          endedOrQuietAt: quietStamp(tab.sessionId) ?? ticket.updatedAt,
+          target: { tabId: tab.sessionId, paneId: tab.activePaneId },
+          cleaned: false,
+        },
+        ticketId: ticket.id,
+        createdAt: record?.createdAt ?? null,
+        attached: false,
+      });
+    }
   }
 
-  needsYouEntries.sort((a, b) => a.priority - b.priority || b.recency - a.recency);
-  const needsYou = needsYouEntries.map((entry) => entry.row);
+  // 2a. Durable terminal records: every ended Session the live layout is not
+  // already showing. Split panes never stand alone as a row, and a record with
+  // no end is either mounted above or a live-looking leftover nothing can date.
+  for (const record of input.records) {
+    if (record.endedAt === null || record.placement === "split") continue;
+    if (mountedPaneIds.has(record.id)) continue;
+    const ticket = record.ticketId === null ? null : (ticketsById.get(record.ticketId) ?? null);
+    previousById.set(`session:${record.id}`, {
+      row: {
+        id: `session:${record.id}`,
+        ticket,
+        title: record.title,
+        kind: "terminal",
+        endedOrQuietAt: record.endedAt,
+        target: null,
+        cleaned: false,
+      },
+      ticketId: record.ticketId,
+      createdAt: record.createdAt,
+      attached: false,
+    });
+  }
 
-  // Lifecycle order: live rows by activity, then concluded fallback rows (a
-  // null activity) by how recently they ended.
-  const activityRank = (row: ActiveSessionRow): number =>
-    row.activity === null ? CONCLUDED_PRIORITY : ACTIVITY_PRIORITY[row.activity];
-  active.sort((a, b) => {
-    const rank = activityRank(a) - activityRank(b);
-    if (rank !== 0) return rank;
-    const recencyA = a.lastRun?.endedAt ?? a.ticket.updatedAt;
-    const recencyB = b.lastRun?.endedAt ?? b.ticket.updatedAt;
-    return recencyB - recencyA;
-  });
+  // 2b. Chat Sessions, which carry their own activity and recency.
+  for (const record of chatSessions) {
+    const ticket = record.ticketId === null ? null : (ticketsById.get(record.ticketId) ?? null);
+    const row = chatRow(record, ticket);
+    const group = activeGroup(row, record.lastActivityAt, record.live, now);
+    if (group !== null) {
+      activeEntries.push({
+        row,
+        group,
+        recency: record.lastActivityAt,
+        quietAt: record.lastActivityAt,
+      });
+      if (ticket !== null) representedTickets.add(ticket.id);
+      continue;
+    }
+    previousById.set(row.id, {
+      row: {
+        id: row.id,
+        ticket,
+        title: record.title,
+        kind: "chat",
+        endedOrQuietAt: record.lastActivityAt,
+        target: null,
+        cleaned: false,
+      },
+      ticketId: record.ticketId,
+      createdAt: record.createdAt,
+      attached: record.live,
+    });
+  }
 
-  return { needsYou, active };
+  // 3. The board guarantee.
+  for (const ticket of input.tickets) {
+    if (ticket.status !== "doing" && ticket.status !== "needs_review") continue;
+    if (representedTickets.has(ticket.id)) continue;
+    const { row, consumes } = boardRow(ticket, input, recordsById);
+    if (consumes !== null) previousById.delete(consumes);
+    activeEntries.push({
+      row,
+      group: ACTIVE_GROUP.board,
+      recency: row.lastRun?.endedAt ?? ticket.updatedAt,
+      quietAt: null,
+    });
+  }
+
+  // 4. Cleanup, filtering, ordering, and the one boundary the caller waits on.
+  let nextBoundaryAt: number | null = null;
+  const considerBoundary = (at: number): void => {
+    if (at <= now) return;
+    if (nextBoundaryAt === null || at < nextBoundaryAt) nextBoundaryAt = at;
+  };
+
+  for (const entry of activeEntries) {
+    // Only the two groups the window actually holds can age out of Active on
+    // their own: an attention row leaves when its agent moves, and a board row
+    // never leaves at all.
+    if (entry.group !== ACTIVE_GROUP.working && entry.group !== ACTIVE_GROUP.recent) continue;
+    if (entry.quietAt !== null) considerBoundary(entry.quietAt + ACTIVE_QUIET_WINDOW_MS);
+  }
+
+  const previous: PreviousSessionRow[] = [];
+  for (const candidate of previousById.values()) {
+    if (filter.kinds !== null && !filter.kinds.has(candidate.row.kind)) continue;
+    const cleaned = isConcludedBusiness({
+      ticketId: candidate.ticketId,
+      ticket: candidate.row.ticket,
+      createdAt: candidate.createdAt,
+      endedOrQuietAt: candidate.row.endedOrQuietAt,
+      attached: candidate.attached,
+      statusEnteredAt,
+      now,
+    });
+    if (cleaned) {
+      if (filter.showCleaned) previous.push({ ...candidate.row, cleaned: true });
+      continue;
+    }
+    const ticket = candidate.row.ticket;
+    // Only a row cleanup can reach has a cleanup boundary to wait for.
+    if (ticket !== null && !isCleanupExempt(candidate)) {
+      const enteredAt = statusEnteredAt.get(ticket.id);
+      if (ticket.status === "done" && enteredAt !== undefined) {
+        considerBoundary(enteredAt + DONE_LINGER_MS);
+      }
+      considerBoundary(candidate.row.endedOrQuietAt + PREVIOUS_MAX_AGE_MS);
+    }
+    previous.push(candidate.row);
+  }
+
+  activeEntries.sort((a, b) => a.group - b.group || b.recency - a.recency);
+  previous.sort((a, b) => b.endedOrQuietAt - a.endedOrQuietAt);
+
+  return { active: activeEntries.map((entry) => entry.row), previous, nextBoundaryAt };
 }
