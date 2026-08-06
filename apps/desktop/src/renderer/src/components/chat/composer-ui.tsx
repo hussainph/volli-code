@@ -156,6 +156,9 @@ export function SessionComposer({
           ref={textareaRef}
           value={value}
           disabled={!ready}
+          // A placeholder is not a name — it is gone the moment anyone types —
+          // and this is the surface's primary input.
+          aria-label="Message"
           placeholder="Ask, plan, or implement…"
           className="min-h-16 text-sm"
           onChange={(event) => onValueChange(event.currentTarget.value)}
