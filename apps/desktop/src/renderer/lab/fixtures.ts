@@ -271,7 +271,7 @@ function session(
 /**
  * Durable session records, as `window.api.sessions.list` would return them.
  *
- * Chosen to cover what the sidebar's tiers actually branch on: a clean exit, a
+ * Chosen to cover what the sidebar's bands actually branch on: a clean exit, a
  * failure (non-zero `exitCode`), and a Doing ticket with NO record at all
  * (tkt-13) — the "bare row" case that guarantees every Doing ticket a presence
  * even when no PTY ever ran.
@@ -314,8 +314,8 @@ export const sessions: SessionRecord[] = [
 ];
 
 /**
- * The latest attention signal per Needs Review ticket — what promotes a row
- * into the "Needs you" tier and supplies its reason line. One `blocked` and one
+ * The latest attention signal per Needs Review ticket — what sorts a row to the
+ * top of the Active band and supplies its reason line. One `blocked` and one
  * `done` so both label paths render side by side.
  */
 export const signals: LatestSessionSignal[] = [
@@ -378,34 +378,41 @@ export const chatSessions: ChatSessionRecord[] = [
     ticketId: "tkt-14",
     title: "Trace the dropped decorations back to the debounce",
     activity: "waiting",
+    waitingOn: "question",
     lastActivityAt: NOW - 2 * MINUTE,
   }),
+  // Waiting with its executor gone — producible, and the one waiting shape that
+  // is: the record's Interaction/Attention is what makes it waiting, and neither
+  // needs an open attachment. A different `waitingOn` from the row above so both
+  // errands the band can hand over are on screen at once.
   chat({
     sessionId: "chat-11a",
     ticketId: "tkt-11",
     title: "Pick the resume seed for a split pane",
     activity: "waiting",
+    waitingOn: "permission",
     live: false,
     lastActivityAt: NOW - 3 * HOUR,
   }),
-  // Two of these keep the title the app ACTUALLY gives a new Session. Both
-  // kinds are named by an ordinal at birth ("Session 3", "Chat 2") and only a
-  // manual rename ever makes one descriptive — nothing derives a title from the
-  // first prompt or the launched command. A fixture set where every row had
-  // been helpfully renamed would flatter the design into looking scannable when
-  // the shipped default is a column of ordinals, so the bands are shown carrying
-  // both.
+  // Two of these keep the title the app ACTUALLY leaves behind. Both kinds are
+  // named by an ordinal at birth ("Session 3", "Chat 2"); a chat then retitles
+  // itself off its first delivered message, but a TERMINAL never does, and no
+  // Session of either kind that was never talked to does either. A fixture set
+  // where every row had been helpfully renamed would flatter the design into
+  // looking scannable when a real band still carries ordinals, so both are here.
   chat({
     sessionId: "chat-12a",
     ticketId: "tkt-12",
     title: "Chat 2",
     lastActivityAt: NOW - 20 * MINUTE,
   }),
+  // A turn that outlived its executor. Main reports this as IDLE, not working —
+  // `working` needs the attachment open as well as the turn — so the honest
+  // fixture is the quiet one, and it is what puts a 45-minute row in Previous.
   chat({
     sessionId: "chat-10a",
     ticketId: "tkt-10",
     title: "Summarize the hover-state regression",
-    activity: "working",
     live: false,
     lastActivityAt: NOW - 45 * MINUTE,
   }),
@@ -476,7 +483,12 @@ const doneJustNow: Ticket = ticket({
   updatedAt: NOW - 10 * MINUTE,
 });
 
-/** Durable records for the panes `sessionListingInput` keeps live — `endedAt: null` is what makes them live. */
+/**
+ * Durable records for the panes `sessionListingInput` mounts — `endedAt: null`
+ * is what makes one live — plus tkt-2's single concluded run, which is here
+ * rather than in `sessions` above because only this listing has the Done ticket
+ * whose linger it exists to expire.
+ */
 const liveSessions: SessionRecord[] = [
   session({
     id: "ses-14b",

@@ -152,7 +152,11 @@ function ListingReadout({
           <dd className="truncate">
             {row.id}
             {row.attention === null ? "" : " · attention"}
-            {row.lastRun === null ? "" : " · board"}
+            {/* A board-guarantee row is named by its TICKET, not by a Session —
+                which is what makes the bare and chat-backed ones (no `lastRun`
+                to read) visible here at all. */}
+            {row.id.startsWith("ticket:") ? " · board" : ""}
+            {row.lastRun === null ? "" : " · ended"}
           </dd>
         </React.Fragment>
       ))}
