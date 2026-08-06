@@ -231,11 +231,15 @@ export function createChatSessionsStore(
       },
 
       closeChatTab(ticketId, sessionId) {
+        // The tab decides, and it decides first: retiring the Session before
+        // knowing whether this ticket held a tab for it would dispose the
+        // client another ticket's open tab is still drawing from, leaving a tab
+        // on screen with nothing behind it.
+        const tabs = get().openTabs[ticketId];
+        if (tabs === undefined || !tabs.includes(sessionId)) return;
         get().closeChatSession(sessionId);
+        const remaining = tabs.filter((candidate) => candidate !== sessionId);
         set((state) => {
-          const tabs = state.openTabs[ticketId];
-          if (tabs === undefined || !tabs.includes(sessionId)) return state;
-          const remaining = tabs.filter((candidate) => candidate !== sessionId);
           if (remaining.length > 0) {
             return { openTabs: { ...state.openTabs, [ticketId]: remaining } };
           }

@@ -467,4 +467,17 @@ describe("open chat tabs", () => {
 
     expect(store.getState().openTabs).toBe(before);
   });
+
+  /** The tab decides: a close aimed at a ticket that holds none must not retire
+   * the client the tab that DOES hold it is still drawing from. */
+  it("keeps the Session alive when the close named a ticket without its tab", () => {
+    const { store } = fixture();
+    store.getState().adoptChatSession("durable-1");
+    store.getState().openChatTab("t1", "durable-1");
+
+    store.getState().closeChatTab("t9", "durable-1");
+
+    expect(store.getState().sessions["durable-1"]).toBeDefined();
+    expect(getChatClient("durable-1")).toBeDefined();
+  });
 });
