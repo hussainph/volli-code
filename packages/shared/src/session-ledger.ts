@@ -310,7 +310,7 @@ export const SESSION_USER_BLOCKING_ATTENTION_KINDS = [
  * opened and not had answered, or an active Attention only a human can clear.
  *
  * Written once and exported because "waiting" is about to be read by more than
- * one surface — the chat listing row and the sidebar's attention tier — and two
+ * one surface — the chat listing row and the sidebar's Active band — and two
  * hand-copies of this rule is how one of them comes to show a question the
  * other has already stopped believing in.
  */

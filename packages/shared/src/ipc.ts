@@ -259,7 +259,7 @@ export interface VolliDataIpcContract {
   "volli:ticket-list-archived": { args: [projectId: string]; result: ArchivedTicketsResult };
   /** A ticket's full event history, chronological — backs the Activity feed. */
   "volli:ticket-events": { args: [input: TicketIdInput]; result: TicketEventsResult };
-  /** The latest durable Session outcome per ticket — one batched read backing the sidebar's attention tiers. */
+  /** The latest durable Session outcome per ticket — one batched read backing the sidebar's attention rows. */
   "volli:ticket-latest-signals": {
     args: [input: ProjectIdInput];
     result: TicketLatestSignalsResult;
@@ -1095,7 +1095,7 @@ export type TicketEventsResult = Result<{ events: TicketEvent[] }>;
 /** The latest durable Session outcome per ticket — returned by `ticket-latest-signals` (the sidebar's batched attention read). */
 export type TicketLatestSignalsResult = Result<{ signals: LatestSessionSignal[] }>;
 
-/** When each ticket entered its current status — returned by `ticket-status-entries` (the sidebar's batched attention read). */
+/** When each ticket entered its current status — returned by `ticket-status-entries` (what the Previous band's cleanup rules date against). */
 export type TicketStatusEntriesResult = Result<{ entries: TicketStatusEntry[] }>;
 
 /** A single comment, returned by a mutation that affects only that one comment — create, update. */

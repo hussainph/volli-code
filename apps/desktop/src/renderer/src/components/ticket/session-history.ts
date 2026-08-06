@@ -82,7 +82,7 @@ export interface TicketSessionRowsInput {
  * `active-session-listing`) — and, more to the point, so BOTH surfaces reach
  * `sessionActivityState` through the same argument list. A rail that fed it only
  * PTY facts was structurally unable to show a blocked agent while the sidebar,
- * reading the same store, filed that session under "Needs you".
+ * reading the same store, sorted that session to the top of its Active band.
  */
 export function buildTicketSessionRows(input: TicketSessionRowsInput): TicketSessionRow[] {
   // paneSessionId → its live state, for EVERY pane of every open tab (not just

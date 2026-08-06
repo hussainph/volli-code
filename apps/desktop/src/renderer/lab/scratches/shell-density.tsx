@@ -28,7 +28,7 @@ import { project, ticketById } from "../fixtures";
 import { appApi, seedApp } from "../seed";
 
 export const title = "Shell density";
-export const note = "IC retune · sidebar Quiet vs Orbs · Active/Previous tiers — lab only";
+export const note = "IC retune · sidebar Quiet vs Orbs · Active/Previous bands — lab only";
 export const viewport = "window" as const;
 
 export const seed = seedApp;

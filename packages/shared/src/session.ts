@@ -482,8 +482,8 @@ const TELEMETRY_EVENTS: ReadonlySet<HarnessEvent> = new Set(["subagent.completed
  * **How a stale `waiting` clears: the newest event wins.** There is no TTL and
  * no explicit acknowledgement, because both would lie. A permission prompt can
  * legitimately sit unanswered for an hour, so expiring `waiting` on a timer
- * would drop a genuinely blocked session out of "Needs you" while the human is
- * still the blocker; and no harness in the table emits a
+ * would drop a genuinely blocked session out of the sidebar's attention rows
+ * while the human is still the blocker; and no harness in the table emits a
  * `permission.replied`-shaped signal to acknowledge against — answering
  * permissions is explicitly out of scope for this landing. What every harness
  * DOES emit is proof of the agent moving again (`turn.started` on the next

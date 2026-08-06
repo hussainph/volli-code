@@ -361,9 +361,9 @@ export function TicketSessionsPanel({
   const liveTabs = useSessionsStore((state) => state.byOwner[ticketId]?.tabs);
   const lastOutputAt = useSessionsStore((state) => state.lastOutputAt);
   const parkState = useSessionsStore((state) => state.parkState);
-  // The sidebar's Active Sessions list reads this exact map for its own
-  // "Waiting for you" tier; reading it here is what keeps the two surfaces from
-  // answering "is the agent blocked on me?" differently at the same instant.
+  // The sidebar's session bands read this exact map for their own attention
+  // rows; reading it here is what keeps the two surfaces from answering "is the
+  // agent blocked on me?" differently at the same instant.
   const harness = useSessionsStore((state) => state.harness);
   const setActivePane = useSessionsStore((state) => state.setActivePane);
   const worktreePhase = useWorktreeStore((state) => phaseFor(state.phases, ticketId));

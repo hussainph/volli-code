@@ -119,7 +119,7 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
   // reason again (docs/plans/harness-events.md): the events address live
   // sessions by the same id the PTY streams above carry, and this layer is the
   // only component that outlives every surface reading them — the sidebar's
-  // "Needs you" tier, the ticket rail, the session header.
+  // Active band, the ticket rail, the session header.
   React.useEffect(() => subscribeHarnessEvents(), []);
 
   // The other involuntary channel, mounted here for the same reason: a

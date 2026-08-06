@@ -83,9 +83,10 @@ Settled 2026-08-04/05; do not reopen.
 ## Not blockers — recorded so they are not re-filed
 
 - **Virtualization.** Measured clean to 500 turns. A "when", not an "if".
-- **A live-but-idle chat sorts and dots as concluded** in Active Sessions
-  while its label reads "Chat · Live" — a sidebar-semantics call that
-  belongs to session 4's chat-first sidebar, not a data bug.
+- ~~**A live-but-idle chat sorts and dots as concluded** in Active Sessions
+  while its label reads "Chat · Live"~~ — settled by the two-band sidebar: a
+  chat row now draws its activity, dot and sort position from
+  `ChatSessionRecord.activity`.
 - **`prepare` skips the terminal path's containment guard** (defense-in-depth
   against a hand-edited `worktree_path`); the module comment doesn't
   overclaim it.
@@ -100,10 +101,11 @@ Settled 2026-08-04/05; do not reopen.
 ## The remaining plan
 
 Session 4 has started: chat creation now funnels through `session-create.ts`'s
-owner guard, per-Session drafts persist (`stores/chat-drafts.ts`), and chat
-Sessions rename from the tab strip and the rail (`chat/rename.ts`). Still
-outstanding: the sidebar goes chat-first with a chat/terminal filter (including
-the live-chat dot semantics above — `ChatSessionRecord.activity` now carries
-the fact, and nothing reads it yet); the per-project runtime pickers themselves
-— storage, catalog and RPC are in place (see the seam above), so what is left
-is the Configure surface that reads `preferencesOrigin` and sends `clear`.
+owner guard, per-Session drafts persist (`stores/chat-drafts.ts`), chat Sessions
+rename from the tab strip and the rail (`chat/rename.ts`), and the sidebar's
+session list is two bands — Active and Previous — with passive cleanup and a
+chat/terminal filter on Previous. Still outstanding: the Terminals→Sessions nav
+rename and Sessions-page chat hosting (a ticketless row lands on the page, not
+in its Session); the per-project runtime pickers themselves — storage, catalog
+and RPC are in place (see the seam above), so what is left is the Configure
+surface that reads `preferencesOrigin` and sends `clear`.
