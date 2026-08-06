@@ -39,12 +39,16 @@ import {
   type ComposerAgent,
   type QueuedMessage,
 } from "@renderer/chat/session-model";
+import {
+  ActivityBundle,
+  AttentionReceipt,
+  SessionTodoDock,
+  ToolRow,
+} from "@renderer/components/chat/activity-ui";
+import { SessionComposer } from "@renderer/components/chat/composer-ui";
+import { InteractionCard, InteractionReceiptLine } from "@renderer/components/chat/interaction-ui";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Button } from "@renderer/components/ui/button";
-
-import { ActivityBundle, AttentionReceipt, SessionTodoDock, ToolRow } from "../chat/activity-ui";
-import { SessionComposer } from "../chat/composer-ui";
-import { InteractionCard, InteractionReceiptLine } from "../chat/interaction-ui";
 
 export const title = "Chat activity · fixtures";
 export const note = "Every transcript row, state and composer mode without a live Session";

@@ -902,6 +902,11 @@ export function createAgentCommandService(
       // Session directly, so avoid taking a complete multi-project snapshot
       // merely to find it. Other commands retain the established list snapshot
       // until their own command-specific resolution is made lazy.
+      // Stays terminal-only, unlike the renderer's discriminated, chat-aware
+      // listing (`data-ipc.ts`'s `sessions.list`/`listForTicket`): every verb
+      // below (identify, rename, resume, hooks) is about a PTY the CLI's own
+      // wrapper is running inside, so a structured-only Session has nothing
+      // here to answer to and dropping it is correct, not a compatibility gap.
       const sessions =
         request.cmd === "hook" ||
         request.cmd === "session.done" ||

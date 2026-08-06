@@ -8,6 +8,7 @@ import {
   type HarnessId,
   type HarnessRegisteredResult,
   type SessionHarnessNotice,
+  type SessionListingRow,
 } from "@volli/shared";
 import { useTicketSessionRecordsStore } from "./ticket-session-records";
 import {
@@ -1140,21 +1141,24 @@ const ANNOUNCE: SessionHarnessNotice = {
   at: 9000,
 };
 
-/** The cached durable record the announce mirrors onto. */
-const RECORD = {
-  id: "s1",
-  projectId: "p",
-  ticketId: "t1",
-  harnessId: "opencode" as HarnessId,
-  activeHarnessId: null as HarnessId | null,
-  harnessSessionId: null,
-  launchKind: "agent" as const,
-  placement: "tab" as const,
-  title: "Session 1",
-  cwd: "/repo",
-  createdAt: 0,
-  endedAt: null,
-  exitCode: null,
+/** The cached durable row the announce mirrors onto. */
+const RECORD: SessionListingRow = {
+  kind: "terminal",
+  record: {
+    id: "s1",
+    projectId: "p",
+    ticketId: "t1",
+    harnessId: "opencode" as HarnessId,
+    activeHarnessId: null as HarnessId | null,
+    harnessSessionId: null,
+    launchKind: "agent" as const,
+    placement: "tab" as const,
+    title: "Session 1",
+    cwd: "/repo",
+    createdAt: 0,
+    endedAt: null,
+    exitCode: null,
+  },
 };
 
 describe("announceHarness / subscribeSessionHarness", () => {
@@ -1235,10 +1239,10 @@ describe("announceHarness / subscribeSessionHarness", () => {
     subscribeSessionHarness();
     channel.push(ANNOUNCE);
 
-    const record = useTicketSessionRecordsStore.getState().byTicket["t1"]?.[0];
-    expect(record?.activeHarnessId).toBe("claude-code");
+    const row = useTicketSessionRecordsStore.getState().byTicket["t1"]?.[0];
+    expect(row?.kind === "terminal" && row.record.activeHarnessId).toBe("claude-code");
     // The launch stays exactly what it was — it is history, not a live fact.
-    expect(record?.harnessId).toBe("opencode");
+    expect(row?.kind === "terminal" && row.record.harnessId).toBe("opencode");
   });
 
   // A relaunch of the same harness is broadcast, but names nothing new. The
@@ -1246,7 +1250,9 @@ describe("announceHarness / subscribeSessionHarness", () => {
   it("leaves the durable record untouched when the announce named no change", () => {
     useSessionsStore.getState().addSession(P, "s1", agentLaunch("claude-code"));
     useTicketSessionRecordsStore.setState({
-      byTicket: { t1: [{ ...RECORD, activeHarnessId: "claude-code" }] },
+      byTicket: {
+        t1: [{ kind: "terminal", record: { ...RECORD.record, activeHarnessId: "claude-code" } }],
+      },
     });
     const before = useTicketSessionRecordsStore.getState().byTicket["t1"];
     const channel = stubAnnounceChannel();

@@ -341,7 +341,9 @@ async function main() {
         (projectId) => window.api.sessions.list({ projectId }),
         "hw-project",
       );
-      const seed = recorded?.sessions?.find((s) => s.id === created.sessionId)?.harnessSessionId;
+      const seed = recorded?.sessions?.find(
+        (row) => row.kind === "terminal" && row.record.id === created.sessionId,
+      )?.record.harnessSessionId;
       const ok =
         UUID_V4.test(first ?? "") &&
         UUID_V4.test(second ?? "") &&
@@ -397,8 +399,11 @@ async function main() {
             (projectId) => window.api.sessions.list({ projectId }),
             "hw-project",
           );
-          const row = result?.sessions?.find((s) => s.id === created.sessionId);
-          return row?.harnessSessionId ?? null;
+          const row = result?.sessions?.find(
+            (candidate) =>
+              candidate.kind === "terminal" && candidate.record.id === created.sessionId,
+          );
+          return row?.record.harnessSessionId ?? null;
         },
       ).catch(() => null);
       const ok = run.code === 0 && run.stdout === "" && recorded === "smoke-harness-uuid";

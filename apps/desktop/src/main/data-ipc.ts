@@ -44,6 +44,8 @@ import type {
   RetentionStateResult,
   RetentionTtlResult,
   RetentionTtlSetInput,
+  SessionListingRow,
+  SessionProjection,
   SessionRenameInput,
   SessionRenameResult,
   SessionsResult,
@@ -92,7 +94,11 @@ import {
   updateProjectBaseBranch,
   updateProjectSetupCommand,
 } from "./db/projects-repo";
-import { createDesktopSessionEngine, terminalSessionRecord } from "./session-control";
+import {
+  chatSessionRecord,
+  createDesktopSessionEngine,
+  terminalSessionRecord,
+} from "./session-control";
 import {
   getTicketRow,
   listAllTickets,
@@ -173,6 +179,25 @@ function buildBootstrapPayload(db: Database.Database): BootstrapPayload {
  */
 function liveSessionWithin(target: string, cwds: string[]): boolean {
   return cwds.some((cwd) => isInsideWorktreeHome(target, cwd));
+}
+
+/**
+ * The renderer's Session listing: a discriminated row per Session, so a
+ * structured-only Session is visible instead of silently dropping out.
+ *
+ * PRECEDENCE: a Session that has ever opened a terminal attachment renders as
+ * its terminal row, byte-for-byte what `terminalSessionRecord` always
+ * returned; only an attachment-less or structured-only Session renders as a
+ * chat row. This is the one place that precedence is decided — the CLI socket
+ * (`agent-commands.ts`) stays terminal-only on purpose and never reaches here.
+ */
+function sessionListingRows(sessions: readonly SessionProjection[]): SessionListingRow[] {
+  return sessions.map((session): SessionListingRow => {
+    const terminal = terminalSessionRecord(session);
+    return terminal !== null
+      ? { kind: "terminal", record: terminal }
+      : { kind: "chat", record: chatSessionRecord(session) };
+  });
 }
 
 // ---- registration --------------------------------------------------------
@@ -477,13 +502,7 @@ export function registerDataIpcHandlers(
         projectId: input.projectId,
         scope: "all",
       });
-      return {
-        ok: true,
-        // This is the legacy terminal-record endpoint, so a structured-only
-        // Session drops out here (`terminalSessionRecord` returns null for it)
-        // until the renderer can consume a discriminated Session listing.
-        sessions: sessions.flatMap((session) => terminalSessionRecord(session) ?? []),
-      };
+      return { ok: true, sessions: sessionListingRows(sessions) };
     },
 
     "volli:session-list-for-ticket": async (input: TicketIdInput): Promise<SessionsResult> => {
@@ -494,10 +513,7 @@ export function registerDataIpcHandlers(
         scope: "ticket",
         ticketId: input.ticketId,
       });
-      return {
-        ok: true,
-        sessions: sessions.flatMap((session) => terminalSessionRecord(session) ?? []),
-      };
+      return { ok: true, sessions: sessionListingRows(sessions) };
     },
 
     "volli:session-rename": async (input: SessionRenameInput): Promise<SessionRenameResult> => {

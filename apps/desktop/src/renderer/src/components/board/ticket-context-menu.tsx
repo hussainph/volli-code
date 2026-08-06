@@ -18,7 +18,7 @@ import {
   TICKET_PRIORITY_LABELS,
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
-  type SessionRecord,
+  type SessionListingRow,
   type Ticket,
 } from "@volli/shared";
 
@@ -49,7 +49,7 @@ import { useCloseGuard } from "@renderer/terminal/close-guard";
 
 /** Stable empty array so the per-card session-records selector never forces a
  *  re-render of every OTHER card's menu when one ticket's cache is touched. */
-const NO_RECORDS: readonly SessionRecord[] = [];
+const NO_ROWS: readonly SessionListingRow[] = [];
 
 const STATUS_ICON = {
   backlog: TrayIcon,
@@ -123,8 +123,8 @@ export function TicketContextMenu({
   // session records — the same shared cache the rail and the exited-pane
   // overlay read (stores/ticket-session-records.ts), fetched lazily on menu
   // open rather than eagerly for every card on the board.
-  const records = useTicketSessionRecordsStore((state) => state.byTicket[ticket.id] ?? NO_RECORDS);
-  const resumableSession = latestResumableSession(records, launchAdapter);
+  const rows = useTicketSessionRecordsStore((state) => state.byTicket[ticket.id] ?? NO_ROWS);
+  const resumableSession = latestResumableSession(rows, launchAdapter);
 
   const resumeLastSession = () => {
     if (resumableSession === null) return;

@@ -2,13 +2,12 @@ import * as React from "react";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { errorMessage, type SessionRecord } from "@volli/shared";
+import { errorMessage, type SessionListingRow, type SessionRecord } from "@volli/shared";
 
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
+import { NewSessionMenu } from "@renderer/components/sessions/new-session-menu";
 import { resumeTicketSession } from "@renderer/components/sessions/session-create";
-import { Button } from "@renderer/components/ui/button";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -18,11 +17,16 @@ import {
 import { Input } from "@renderer/components/ui/input";
 import { RailDrawer } from "@renderer/components/ticket/rail-drawer";
 import {
+  buildTicketChatSessionRows,
   buildTicketSessionRows,
   canResumeSession,
+  filterChatSessionHistory,
   filterSessionHistory,
   groupSessionRows,
+  mergeSessionRailRows,
   sessionSourceLabel,
+  type SessionRailRow,
+  type TicketChatSessionRow,
   type TicketSessionRow,
   type TicketSessionStatus,
 } from "@renderer/components/ticket/session-history";
@@ -39,9 +43,9 @@ import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-re
 import { phaseFor, useWorktreeStore } from "@renderer/stores/worktree";
 import { renameTerminalSession } from "@renderer/terminal/session-lifecycle";
 
-/** Stable empty list so the records selector never returns a fresh reference
+/** Stable empty list so the rows selector never returns a fresh reference
  *  (and re-renders the panel) on unrelated store updates while the cache is cold. */
-const NO_RECORDS: SessionRecord[] = [];
+const NO_ROWS: SessionListingRow[] = [];
 
 const STATUS_LABEL: Record<TicketSessionStatus, string> = {
   working: "Working",
@@ -119,7 +123,7 @@ function SessionRow({
       <span className="flex min-w-0 flex-1 flex-col">
         {titleNode}
         <span className="truncate text-label text-muted-foreground">
-          {sessionSourceLabel(record)}
+          {sessionSourceLabel({ kind: "terminal", record })}
         </span>
       </span>
       {trailing}
@@ -167,6 +171,36 @@ function SessionRow({
   );
 }
 
+/**
+ * A chat Session's row: title and liveness, in the frame `SessionRow` draws.
+ *
+ * Always activatable, unlike a terminal row — a chat Session is durable, so one
+ * whose attachment has closed still opens onto its own history, and reattaching
+ * is the Retry the plane already offers. Rename stays out: the durable title has
+ * no live tab to keep in sync yet.
+ */
+function ChatSessionRow({ row, onActivate }: { row: TicketChatSessionRow; onActivate(): void }) {
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={onActivate}
+        className={cn(
+          "flex w-full items-center gap-2 rounded-md border px-2 py-1 text-left transition-colors hover:bg-accent",
+          row.isOpen ? "border-border/60" : "border-transparent opacity-60",
+        )}
+      >
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-xs text-foreground">{row.title}</span>
+          <span className="truncate text-label text-muted-foreground">
+            {sessionSourceLabel({ kind: "chat", record: row.record })}
+          </span>
+        </span>
+      </button>
+    </li>
+  );
+}
+
 function SessionList({
   rows,
   variant,
@@ -176,10 +210,11 @@ function SessionList({
   setEditingId,
   setActivePane,
   onActivateSession,
+  onActivateChat,
   onCommitRename,
   onResumeSession,
 }: {
-  rows: readonly TicketSessionRow[];
+  rows: readonly SessionRailRow[];
   /** Current rows trail with live status; history rows trail with when they ended. */
   variant: "current" | "history";
   now: number;
@@ -188,44 +223,57 @@ function SessionList({
   setEditingId(sessionId: string | null): void;
   setActivePane(ownerId: string, tabId: string, paneId: string): void;
   onActivateSession(sessionId: string): void;
+  onActivateChat(sessionId: string): void;
   onCommitRename(record: SessionRecord, isRoot: boolean, next: string): void;
   onResumeSession(record: SessionRecord): void;
 }) {
   return (
     <ul className="flex flex-col gap-1">
-      {rows.map(({ record, title, isOpen, isRoot, tabId, status }) => (
-        <SessionRow
-          key={record.id}
-          record={record}
-          title={title}
-          trailing={
-            variant === "current" ? (
-              <StatusChip status={status} />
-            ) : (
-              <span className="shrink-0 text-label text-muted-foreground/70">
-                {relativeTime(record.endedAt ?? record.createdAt, now)}
-              </span>
-            )
-          }
-          isOpen={isOpen}
-          editing={editingId === record.id}
-          // Exited-but-open panes live in History but still activate their tab
-          // and exact split pane; closed records remain inert until resume lands.
-          onActivate={() => {
-            if (tabId === undefined) return;
-            onActivateSession(tabId);
-            setActivePane(ticketId, tabId, record.id);
-          }}
-          onStartRename={() => setEditingId(record.id)}
-          onCommitRename={(next) => onCommitRename(record, isRoot, next)}
-          onCancelRename={() => setEditingId(null)}
-          onResume={
-            variant === "history" && canResumeSession(record, launchAdapter)
-              ? () => onResumeSession(record)
-              : undefined
-          }
-        />
-      ))}
+      {rows.map((entry) => {
+        if (entry.kind === "chat") {
+          return (
+            <ChatSessionRow
+              key={entry.row.record.sessionId}
+              row={entry.row}
+              onActivate={() => onActivateChat(entry.row.record.sessionId)}
+            />
+          );
+        }
+        const { record, title, isOpen, isRoot, tabId, status } = entry.row;
+        return (
+          <SessionRow
+            key={record.id}
+            record={record}
+            title={title}
+            trailing={
+              variant === "current" ? (
+                <StatusChip status={status} />
+              ) : (
+                <span className="shrink-0 text-label text-muted-foreground/70">
+                  {relativeTime(record.endedAt ?? record.createdAt, now)}
+                </span>
+              )
+            }
+            isOpen={isOpen}
+            editing={editingId === record.id}
+            // Exited-but-open panes live in History but still activate their tab
+            // and exact split pane; closed records remain inert until resume lands.
+            onActivate={() => {
+              if (tabId === undefined) return;
+              onActivateSession(tabId);
+              setActivePane(ticketId, tabId, record.id);
+            }}
+            onStartRename={() => setEditingId(record.id)}
+            onCommitRename={(next) => onCommitRename(record, isRoot, next)}
+            onCancelRename={() => setEditingId(null)}
+            onResume={
+              variant === "history" && canResumeSession({ kind: "terminal", record }, launchAdapter)
+                ? () => onResumeSession(record)
+                : undefined
+            }
+          />
+        );
+      })}
     </ul>
   );
 }
@@ -244,12 +292,16 @@ export function TicketSessionsPanel({
   ticketId,
   creating,
   onNewSession,
+  onNewChat,
   onActivateSession,
+  onActivateChat,
 }: {
   ticketId: string;
   creating: boolean;
   onNewSession(): void;
+  onNewChat(): void;
   onActivateSession(sessionId: string): void;
+  onActivateChat(sessionId: string): void;
 }) {
   const liveTabs = useSessionsStore((state) => state.byOwner[ticketId]?.tabs);
   const lastOutputAt = useSessionsStore((state) => state.lastOutputAt);
@@ -271,7 +323,9 @@ export function TicketSessionsPanel({
   // and SessionsLayer's exit handler refreshes it directly so a just-ended
   // session's `endedAt`/resumability lands here without this panel needing to
   // be the one to notice the exit.
-  const records = useTicketSessionRecordsStore((state) => state.byTicket[ticketId] ?? NO_RECORDS);
+  const rows = useTicketSessionRecordsStore((state) => state.byTicket[ticketId] ?? NO_ROWS);
+  const records = rows.flatMap((row) => (row.kind === "terminal" ? [row.record] : []));
+  const chatSessions = rows.flatMap((row) => (row.kind === "chat" ? [row.record] : []));
   const [now, setNow] = React.useState(() => Date.now());
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = React.useState(false);
@@ -345,7 +399,7 @@ export function TicketSessionsPanel({
     );
   };
 
-  const rows: TicketSessionRow[] = buildTicketSessionRows({
+  const terminalRows: TicketSessionRow[] = buildTicketSessionRows({
     records,
     tabs,
     lastOutputAt,
@@ -354,8 +408,19 @@ export function TicketSessionsPanel({
     settingUp: worktreePhase === "setting-up",
     now,
   });
-  const { current, history } = groupSessionRows(rows);
-  const filteredHistory = filterSessionHistory(history, historyQuery);
+  const { current: terminalCurrent, history: terminalHistory } = groupSessionRows(terminalRows);
+  // A chat Session's only lifecycle fact is whether its attachment is still
+  // open, which is the same current/history line `groupSessionRows` draws.
+  const chatRows = buildTicketChatSessionRows(chatSessions);
+  const chatCurrent = chatRows.filter((row) => row.isOpen);
+  const chatHistory = chatRows.filter((row) => !row.isOpen);
+
+  const current = mergeSessionRailRows(terminalCurrent, chatCurrent);
+  const history = mergeSessionRailRows(terminalHistory, chatHistory);
+  const filteredHistory = mergeSessionRailRows(
+    filterSessionHistory(terminalHistory, historyQuery),
+    filterChatSessionHistory(chatHistory, historyQuery),
+  );
 
   const listProps = {
     ticketId,
@@ -363,6 +428,7 @@ export function TicketSessionsPanel({
     setEditingId,
     setActivePane,
     onActivateSession,
+    onActivateChat,
     onCommitRename: commitRename,
     onResumeSession: handleResume,
   };
@@ -373,15 +439,12 @@ export function TicketSessionsPanel({
         <div className="flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <h2 className="text-label font-medium text-muted-foreground uppercase">Sessions</h2>
-            <Button
-              size="icon-xs"
-              variant="ghost"
+            <NewSessionMenu
               disabled={effectiveCreating}
-              onClick={onNewSession}
-              aria-label="New session"
-            >
-              <PlusIcon />
-            </Button>
+              align="end"
+              onNewSession={onNewSession}
+              onNewChat={onNewChat}
+            />
           </div>
           {current.length === 0 ? (
             <div className="flex flex-col items-center gap-1.5 rounded-md border border-dashed border-border py-6 text-center">

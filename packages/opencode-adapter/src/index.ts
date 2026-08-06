@@ -601,6 +601,13 @@ class OpenCodeBinding implements BindingHandle {
   readonly #onRelease: () => void;
   readonly #seen = new Set<string>();
   readonly #streamEventsSeen = new Set<string>();
+  /**
+   * Assistant messages this binding has already accounted a turn to — the memory
+   * behind {@link #openTurnForNewMessage}. Separate from `#messages`, which a
+   * settle empties: a message that has been written down durably is still one
+   * this binding has seen, and re-counting it would open a turn nothing ends.
+   */
+  readonly #assistantMessages = new Set<string>();
   readonly #messages = new Map<string, BufferedOpenCodeMessage>();
   /** What each in-flight message last said on the wire; absent means it owes a `reset`. */
   readonly #streamEmissions = new Map<string, EmittedTranscript>();
@@ -893,6 +900,9 @@ class OpenCodeBinding implements BindingHandle {
         const id = objectString(info, "id");
         if (!id) continue;
         const role = messageRole(info);
+        // The sweep is this binding meeting the message too, so a later live
+        // update to one it already holds is not evidence of a new turn.
+        if (role === "assistant") this.#rememberId(this.#assistantMessages, id);
         if (role !== "user" || importNativeHistory) {
           const observation = this.#messageObservation(`message:${id}`, id, role, message);
           if (observation.message.parts.length > 0) push(observation);
@@ -1202,6 +1212,7 @@ class OpenCodeBinding implements BindingHandle {
     switch (event.type) {
       case "message.updated": {
         const messageId = this.#bufferMessage(event.properties);
+        await this.#openTurnForNewMessage(event.id, messageId);
         this.#scheduleStreamDeltas(messageId);
         return;
       }
@@ -1240,16 +1251,7 @@ class OpenCodeBinding implements BindingHandle {
         ) {
           await this.#flushMessages(event.id);
         }
-        const statusSignature = observation ? statusSignatureForObservation(observation) : null;
-        if (
-          observation &&
-          (statusSignature === null || statusSignature !== this.#statusSignature) &&
-          (await this.#emit(observation))
-        ) {
-          const turnStatus = turnStatusForObservation(observation);
-          if (turnStatus) this.#turnStatus = turnStatus;
-          if (statusSignature) this.#statusSignature = statusSignature;
-        }
+        if (observation) await this.#emitStatus(observation);
         return;
       }
       case "permission.asked":
@@ -1285,6 +1287,47 @@ class OpenCodeBinding implements BindingHandle {
       }
       default:
         return;
+    }
+  }
+
+  /**
+   * A turn's first assistant message is turn-start evidence in its own right.
+   *
+   * `session.status` busy is what OpenCode calls a turn start, and the dedupe in
+   * {@link #statusObservation} exists so a restated busy is not counted as a
+   * second turn. That makes the *absence* of a busy load-bearing, which it was
+   * never strong enough to be: swallow one across an SSE reconnect gap and
+   * `#turnStatus` stays "idle", so the turn's own `session.idle` is deduped away
+   * as a repeat — the turn never settles, its reply is never written down, and
+   * the Session is left holding a Stop button nothing will ever clear.
+   *
+   * An assistant message id this binding has not accounted for cannot belong to
+   * a turn that already ended, so it is admitted as the busy transition. The
+   * busy event still leads when it arrives first; this only fills the silence.
+   */
+  async #openTurnForNewMessage(eventId: string, messageId: string | null): Promise<void> {
+    if (!messageId || this.#messages.get(messageId)?.role !== "assistant") return;
+    if (this.#assistantMessages.has(messageId)) return;
+    this.#rememberId(this.#assistantMessages, messageId);
+    if (this.#turnStatus === "busy") return;
+    await this.#emitStatus({
+      id: eventId,
+      kind: "turn.started",
+      occurredAt: this.#now(),
+      turnId: `turn:${this.#nativeSessionId}`,
+    });
+  }
+
+  /** Emit a status fact, and remember it as the state later ones are read against. */
+  async #emitStatus(observation: OpenCodeStatusObservation): Promise<void> {
+    const statusSignature = statusSignatureForObservation(observation);
+    if (
+      (statusSignature === null || statusSignature !== this.#statusSignature) &&
+      (await this.#emit(observation))
+    ) {
+      const turnStatus = turnStatusForObservation(observation);
+      if (turnStatus) this.#turnStatus = turnStatus;
+      if (statusSignature) this.#statusSignature = statusSignature;
     }
   }
 
@@ -2444,21 +2487,48 @@ function safeOpenCodeError(
   const name = safeOpenCodeErrorName(objectString(error, "name"));
   const statusCode = objectFiniteNumber(data, "statusCode");
   const isRetryable = objectBoolean(data, "isRetryable");
+  const message = errorMessage(objectString(data, "message"));
   if (name) diagnostic.name = name;
   if (statusCode !== null) diagnostic.statusCode = statusCode;
   if (isRetryable !== null) diagnostic.isRetryable = isRetryable;
+  if (message !== null) diagnostic.message = message;
   const hasDiagnostic = Object.keys(diagnostic).length > 0;
   const attention = openCodeAttentionKind(name, statusCode);
   return {
     attention,
     retryAt: attention === "rate_limited" ? retryAfter(data, now) : null,
-    detail: name
-      ? `OpenCode ${name}${statusCode === null ? "" : ` (status ${statusCode})`}`
-      : statusCode === null
-        ? null
-        : `OpenCode session error (status ${statusCode})`,
+    detail: openCodeErrorDetail(name, statusCode, message),
     diagnostic: hasDiagnostic ? diagnostic : null,
   };
+}
+
+/**
+ * The one line a blocked Session shows.
+ *
+ * The union member alone is not a cause: a chat pointed at a worktree that is
+ * not on disk and a provider that fell over both arrive as `UnknownError`, and
+ * the ENOENT that separates them is only ever in OpenCode's own text. So
+ * `data.message` is the one field promoted out of `data` — `responseBody` and
+ * `responseHeaders` stay unread, the latter because it carries `authorization`.
+ */
+function openCodeErrorDetail(
+  name: string | null,
+  statusCode: number | null,
+  message: string | null,
+): string | null {
+  if (name === null && statusCode === null && message === null) return null;
+  const status = statusCode === null ? "" : ` (status ${statusCode})`;
+  const cause = message === null ? "" : `: ${message}`;
+  return `OpenCode ${name ?? "session error"}${status}${cause}`;
+}
+
+/** Provider text is unbounded; a ledger entry is a line, not a log. */
+const MAX_ERROR_MESSAGE = 300;
+
+function errorMessage(message: string | null): string | null {
+  const trimmed = message === null ? "" : message.trim();
+  if (trimmed.length === 0) return null;
+  return trimmed.length > MAX_ERROR_MESSAGE ? `${trimmed.slice(0, MAX_ERROR_MESSAGE)}…` : trimmed;
 }
 
 /**

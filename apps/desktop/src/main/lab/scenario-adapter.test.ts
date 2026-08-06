@@ -14,6 +14,7 @@ import {
   createNativeAdapterRegistry,
   createSessionEngine,
   createSessionRuntime,
+  type SessionLocationResolver,
   type SessionRuntime,
 } from "@volli/session-engine";
 import {
@@ -27,6 +28,12 @@ import { LAB_SCENARIOS, LAB_SCENARIO_ADAPTER_ID } from "../../lab-scenarios";
 import { createLabScenarioAdapter } from "./scenario-adapter";
 
 const venue = { id: "lab-machine", kind: "local" as const };
+
+/** A host with nothing to materialize: preparing a location is resolving it. */
+function fixedLocation(directory: string): SessionLocationResolver {
+  const at = async () => ({ directory, venue });
+  return { resolve: at, prepare: at };
+}
 
 function runtime(): SessionRuntime {
   let sequence = 0;
@@ -42,7 +49,7 @@ function runtime(): SessionRuntime {
       createLabScenarioAdapter({ beatDelayMs: 0, now: () => clock }),
     ]),
     artifacts: createInMemoryTranscriptArtifactStore(),
-    locations: { resolve: async () => ({ directory: "/lab/workspace", venue }) },
+    locations: fixedLocation("/lab/workspace"),
     clock: { now: () => clock++ },
     ids: { next },
   });

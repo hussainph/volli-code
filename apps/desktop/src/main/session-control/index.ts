@@ -26,3 +26,4 @@ export {
   terminalSessionRecord,
 } from "./terminal-attachment";
 export type { TerminalAttachmentDetail } from "./terminal-attachment";
+export { chatSessionRecord, latestStructuredAttachment } from "./chat-attachment";

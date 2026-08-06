@@ -1,4 +1,4 @@
-import type { SessionRecord } from "@volli/shared";
+import type { ChatSessionRecord, SessionListingRow, SessionRecord } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 
@@ -25,6 +25,32 @@ function record(overrides: Partial<SessionRecord> = {}): SessionRecord {
   };
 }
 
+function terminalRow(overrides: Partial<SessionRecord> = {}): SessionListingRow {
+  return { kind: "terminal", record: record(overrides) };
+}
+
+function chatRow(overrides: Partial<ChatSessionRecord> = {}): SessionListingRow {
+  return {
+    kind: "chat",
+    record: {
+      sessionId: "chat-1",
+      title: "Plan the migration",
+      projectId: "p1",
+      ticketId: "t1",
+      createdAt: 1,
+      adapterId: "opencode",
+      live: true,
+      ...overrides,
+    },
+  };
+}
+
+/** Narrows a row to its terminal record, for assertions the fixtures already know are terminal-only. */
+function terminalRecord(row: SessionListingRow): SessionRecord {
+  if (row.kind !== "terminal") throw new Error("expected a terminal row");
+  return row.record;
+}
+
 /** Stub the preload bridge with a canned `listForTicket` response (or rejection). */
 function stubListForTicket(impl: () => Promise<unknown>) {
   vi.stubGlobal("window", { api: { sessions: { listForTicket: vi.fn(impl) } } });
@@ -39,14 +65,14 @@ afterEach(() => {
 });
 
 describe("refresh", () => {
-  it("caches the fetched records under their ticket id", async () => {
-    const records = [record({ id: "s2", createdAt: 2 }), record()];
-    stubListForTicket(() => Promise.resolve({ ok: true, sessions: records }));
+  it("caches the fetched rows under their ticket id, terminal and chat alike", async () => {
+    const rows = [terminalRow({ id: "s2", createdAt: 2 }), chatRow()];
+    stubListForTicket(() => Promise.resolve({ ok: true, sessions: rows }));
     const store = createTicketSessionRecordsStore();
 
     await store.getState().refresh("t1");
 
-    expect(store.getState().byTicket["t1"]).toEqual(records);
+    expect(store.getState().byTicket["t1"]).toEqual(rows);
   });
 
   it("toasts and keeps the cache unchanged on a typed failure", async () => {
@@ -74,22 +100,42 @@ describe("refresh", () => {
 });
 
 describe("renameLocally", () => {
-  it("renames the matching record in place", async () => {
+  it("renames the matching terminal row in place", async () => {
     stubListForTicket(() =>
-      Promise.resolve({ ok: true, sessions: [record(), record({ id: "s2" })] }),
+      Promise.resolve({ ok: true, sessions: [terminalRow(), terminalRow({ id: "s2" })] }),
     );
     const store = createTicketSessionRecordsStore();
     await store.getState().refresh("t1");
 
     store.getState().renameLocally("t1", "s2", "Renamed");
 
-    expect(store.getState().byTicket["t1"]?.map(({ id, title }) => ({ id, title }))).toEqual([
+    expect(
+      store
+        .getState()
+        .byTicket["t1"]?.map(terminalRecord)
+        .map(({ id, title }) => ({ id, title })),
+    ).toEqual([
       { id: "s1", title: "Session 1" },
       { id: "s2", title: "Renamed" },
     ]);
   });
 
-  it("is a no-op for a ticket with no cached records", () => {
+  // There is no chat rename call site yet — the affordance is terminal-only —
+  // so a chat row sharing the target id must pass through untouched rather
+  // than being coerced into a terminal shape it isn't.
+  it("leaves a chat row untouched even when its id matches", async () => {
+    stubListForTicket(() =>
+      Promise.resolve({ ok: true, sessions: [chatRow({ sessionId: "s2" })] }),
+    );
+    const store = createTicketSessionRecordsStore();
+    await store.getState().refresh("t1");
+
+    store.getState().renameLocally("t1", "s2", "Renamed");
+
+    expect(store.getState().byTicket["t1"]).toEqual([chatRow({ sessionId: "s2" })]);
+  });
+
+  it("is a no-op for a ticket with no cached rows", () => {
     const store = createTicketSessionRecordsStore();
 
     store.getState().renameLocally("t1", "s1", "Renamed");
@@ -101,9 +147,9 @@ describe("renameLocally", () => {
 describe("setActiveHarness", () => {
   // What is running moves; what launched does not. Both are wanted, and the
   // rail reads them together through `effectiveHarnessId`.
-  it("records the announced harness beside the launch one, on the named record", async () => {
+  it("records the announced harness beside the launch one, on the named terminal row", async () => {
     stubListForTicket(() =>
-      Promise.resolve({ ok: true, sessions: [record(), record({ id: "s2" })] }),
+      Promise.resolve({ ok: true, sessions: [terminalRow(), terminalRow({ id: "s2" })] }),
     );
     const store = createTicketSessionRecordsStore();
     await store.getState().refresh("t1");
@@ -111,18 +157,31 @@ describe("setActiveHarness", () => {
     store.getState().setActiveHarness("t1", "s2", "opencode");
 
     expect(
-      store.getState().byTicket["t1"]?.map(({ id, harnessId, activeHarnessId }) => ({
-        id,
-        harnessId,
-        activeHarnessId,
-      })),
+      store
+        .getState()
+        .byTicket["t1"]?.map(terminalRecord)
+        .map(({ id, harnessId, activeHarnessId }) => ({ id, harnessId, activeHarnessId })),
     ).toEqual([
       { id: "s1", harnessId: "claude-code", activeHarnessId: null },
       { id: "s2", harnessId: "claude-code", activeHarnessId: "opencode" },
     ]);
   });
 
-  it("is a no-op for a ticket with no cached records", () => {
+  // `activeHarnessId` is a PTY-wrapper fact `ChatSessionRecord` has no field
+  // for at all — a chat row sharing the target id must pass through untouched.
+  it("leaves a chat row untouched even when its id matches", async () => {
+    stubListForTicket(() =>
+      Promise.resolve({ ok: true, sessions: [chatRow({ sessionId: "s2" })] }),
+    );
+    const store = createTicketSessionRecordsStore();
+    await store.getState().refresh("t1");
+
+    store.getState().setActiveHarness("t1", "s2", "opencode");
+
+    expect(store.getState().byTicket["t1"]).toEqual([chatRow({ sessionId: "s2" })]);
+  });
+
+  it("is a no-op for a ticket with no cached rows", () => {
     const store = createTicketSessionRecordsStore();
 
     store.getState().setActiveHarness("t1", "s1", "opencode");

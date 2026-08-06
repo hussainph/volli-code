@@ -1,18 +1,16 @@
 /**
  * The chat plane's decisions, without a plane.
  *
- * Four rules that were each a bug: what a blocker row still says while a card
- * is up, when a redirection is allowed to leave, which card a decision in
- * flight disables, and where words go when there is nowhere to send them. Named
- * `.test.ts` rather than `.tsx` so the lab shell's `scratches/*.tsx` glob does
- * not pick it up as a scratch.
- *
- * The identity rules at the foot are the fifth, and the only one that is not
- * about correctness: what a streamed token is allowed to re-render. They are
- * pure on purpose — a memo is only ever as good as the equality under it, and
- * that equality is testable without a renderer.
+ * Five rules that were each a bug: what a blocker row still says while a card is
+ * up, when a redirection is allowed to leave, which card a decision in flight
+ * disables, where words go when there is nowhere to send them, and what a
+ * streamed token is allowed to re-render.
  */
-import type { SessionAttention, SessionInteractionResolution } from "@volli/shared";
+import type {
+  RuntimeSelection,
+  SessionAttention,
+  SessionInteractionResolution,
+} from "@volli/shared";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -23,24 +21,26 @@ import {
   holdList,
   messageRoute,
   resolvingWith,
+  sameInteractionId,
   sameMessages,
+  sameSelection,
   sameTodos,
   sessionBlocker,
+  todosSettled,
   withdrawInteraction,
-} from "./chat-session";
-
-type BlockerSession = Parameters<typeof sessionBlocker>[0];
+  type SessionBlockerActs,
+  type SessionBlockerInput,
+} from "./chat-plane-model";
 
 const NO_OP = () => undefined;
+const ACTS: SessionBlockerActs = { recover: NO_OP, openSettings: NO_OP };
 
-function labSession(overrides: Partial<BlockerSession> = {}): BlockerSession {
+function blockerInput(overrides: Partial<SessionBlockerInput> = {}): SessionBlockerInput {
   return {
-    error: null,
-    diagnosticsError: null,
-    catalogError: null,
+    sessionError: null,
     attention: { active: [], primary: null },
     catalogState: "ready",
-    recover: () => Promise.resolve(true),
+    catalogError: null,
     ...overrides,
   };
 }
@@ -48,9 +48,31 @@ function labSession(overrides: Partial<BlockerSession> = {}): BlockerSession {
 /** The kinds that carry nothing but the base fields — no `retryAt`, no `resetAt`. */
 type PlainAttentionKind = Exclude<SessionAttention["kind"], "quota_exhausted" | "rate_limited">;
 
-function attention(kind: PlainAttentionKind): SessionAttention {
-  return { id: `attention-${kind}`, attachmentId: null, detail: null, diagnostic: null, kind };
+function attention(kind: PlainAttentionKind, detail: string | null = null): SessionAttention {
+  return { id: `attention-${kind}`, attachmentId: null, detail, diagnostic: null, kind };
 }
+
+function raised(primary: SessionAttention): SessionBlockerInput {
+  return blockerInput({ attention: { active: [primary], primary } });
+}
+
+const rateLimited = (retryAt: number | null): SessionAttention => ({
+  id: "attention-rate",
+  attachmentId: null,
+  detail: null,
+  diagnostic: null,
+  kind: "rate_limited",
+  retryAt,
+});
+
+const quotaSpent = (resetAt: number | null): SessionAttention => ({
+  id: "attention-quota",
+  attachmentId: null,
+  detail: null,
+  diagnostic: null,
+  kind: "quota_exhausted",
+  resetAt,
+});
 
 const REFUSAL: SessionInteractionResolution = { optionIds: [], response: null };
 
@@ -72,8 +94,8 @@ function recorder(resolved: boolean) {
 describe("sessionBlocker", () => {
   it("reports a failed decision while its card is still on screen", () => {
     const blocker = sessionBlocker(
-      labSession({ error: "Decision not delivered: socket hang up" }),
-      NO_OP,
+      blockerInput({ sessionError: "Decision not delivered: socket hang up" }),
+      ACTS,
       true,
     );
 
@@ -82,48 +104,32 @@ describe("sessionBlocker", () => {
   });
 
   it("keeps a harness attention the card cannot answer", () => {
-    const blocker = sessionBlocker(
-      labSession({ attention: { active: [], primary: attention("auth_required") } }),
-      NO_OP,
-      true,
+    expect(sessionBlocker(raised(attention("auth_required")), ACTS, true)?.message).toBe(
+      "Sign-in required",
     );
-
-    expect(blocker?.message).toBe("Sign-in required");
   });
 
   it("stands down for the attention the card is itself the answer to", () => {
-    const asked = { active: [], primary: attention("permission_required") };
+    const asked = raised(attention("permission_required"));
 
-    expect(sessionBlocker(labSession({ attention: asked }), NO_OP, true)).toBeNull();
-    expect(sessionBlocker(labSession({ attention: asked }), NO_OP, false)?.message).toBe(
-      "Waiting for approval",
-    );
+    expect(sessionBlocker(asked, ACTS, true)).toBeNull();
+    expect(sessionBlocker(asked, ACTS, false)?.message).toBe("Waiting for approval");
   });
 
   it("does not ask for models while a card is waiting for an answer", () => {
-    expect(sessionBlocker(labSession({ catalogState: "empty" }), NO_OP, true)).toBeNull();
-    expect(sessionBlocker(labSession({ catalogState: "empty" }), NO_OP, false)?.message).toBe(
-      "No models configured",
-    );
-  });
+    const empty = blockerInput({ catalogState: "empty" });
 
-  it("never lets a diagnostics failure mask a state to recover from", () => {
-    const blocker = sessionBlocker(
-      labSession({
-        diagnosticsError: "stream closed",
-        attention: { active: [], primary: attention("auth_required") },
-      }),
-      NO_OP,
-      false,
-    );
-
-    expect(blocker?.message).toBe("Sign-in required");
+    expect(sessionBlocker(empty, ACTS, true)).toBeNull();
+    expect(sessionBlocker(empty, ACTS, false)?.message).toBe("No models configured");
   });
 
   it("never lets a catalog failure stand in for the Session's own", () => {
     const blocker = sessionBlocker(
-      labSession({ error: "Lost the Session stream: socket hang up", catalogError: "ECONNRESET" }),
-      NO_OP,
+      blockerInput({
+        sessionError: "Lost the Session stream: socket hang up",
+        catalogError: "ECONNRESET",
+      }),
+      ACTS,
       false,
     );
 
@@ -133,8 +139,8 @@ describe("sessionBlocker", () => {
 
   it("says a catalog refresh failed, and offers the place that re-asks it", () => {
     const blocker = sessionBlocker(
-      labSession({ catalogError: "ECONNRESET", catalogState: "error" }),
-      NO_OP,
+      blockerInput({ catalogError: "ECONNRESET", catalogState: "error" }),
+      ACTS,
       false,
     );
 
@@ -144,17 +150,76 @@ describe("sessionBlocker", () => {
       tone: "error",
       action: { label: "Settings", act: NO_OP },
     });
+    // A card on screen is not a reason to hide it, but it IS a reason not to
+    // add a second row about models to one.
+    expect(sessionBlocker(blockerInput({ catalogError: "ECONNRESET" }), ACTS, true)).toBeNull();
   });
 
-  it("still says a diagnostics failure when nothing else is blocking", () => {
-    const blocker = sessionBlocker(labSession({ diagnosticsError: "stream closed" }), NO_OP, false);
+  it("stays quiet when a loading catalog has simply not answered yet", () => {
+    expect(sessionBlocker(blockerInput({ catalogState: "loading" }), ACTS, false)).toBeNull();
+    expect(sessionBlocker(blockerInput(), ACTS, false)).toBeNull();
+  });
 
-    expect(blocker).toEqual({
-      message: "Diagnostics unavailable",
-      detail: "stream closed",
-      tone: "error",
-      action: null,
+  it("carries the harness's own wording under every attention it draws", () => {
+    expect(sessionBlocker(raised(attention("adapter_disconnected", "EPIPE")), ACTS, false)).toEqual(
+      {
+        message: "Disconnected",
+        detail: "EPIPE",
+        tone: "error",
+        action: { label: "Retry", act: NO_OP },
+      },
+    );
+  });
+
+  it("answers every attention kind, and offers a button only where one can help", () => {
+    const plain: PlainAttentionKind[] = [
+      "auth_required",
+      "configuration_invalid",
+      "transport_retrying",
+      "adapter_disconnected",
+      "context_limit_reached",
+      "partial_turn_interrupted",
+      "adapter_unrecoverable",
+      "input_required",
+      "permission_required",
+    ];
+    const drawn = plain.map((kind) => {
+      const blocker = sessionBlocker(raised(attention(kind)), ACTS, false);
+      return [blocker?.message, blocker?.action?.label ?? null];
     });
+
+    expect(drawn).toEqual([
+      ["Sign-in required", "Settings"],
+      ["Configuration invalid", "Settings"],
+      ["Reconnecting", "Retry"],
+      ["Disconnected", "Retry"],
+      ["Context limit reached", null],
+      ["Turn interrupted", null],
+      ["Session stopped", null],
+      ["Waiting for an answer", null],
+      ["Waiting for approval", null],
+    ]);
+  });
+
+  it("names the provider's own time where it sent one, and invents none where it did not", () => {
+    const at = Date.UTC(2026, 0, 2, 15, 4);
+    const clause = ` until ${new Date(at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+
+    expect(sessionBlocker(raised(rateLimited(at)), ACTS, false)?.message).toBe(
+      `Rate limited${clause}`,
+    );
+    expect(sessionBlocker(raised(rateLimited(null)), ACTS, false)).toEqual({
+      message: "Rate limited",
+      detail: null,
+      tone: "waiting",
+      action: { label: "Retry", act: NO_OP },
+    });
+    expect(sessionBlocker(raised(quotaSpent(at)), ACTS, false)?.message).toBe(
+      `Quota exhausted${clause}`,
+    );
+    expect(sessionBlocker(raised(quotaSpent(Number.NaN)), ACTS, false)?.message).toBe(
+      "Quota exhausted",
+    );
   });
 });
 
@@ -232,8 +297,6 @@ describe("withdrawInteraction", () => {
         return Promise.resolve(true);
       },
       cancel: (interactionId) => {
-        // Marked before either act, so a second click lands on a disabled Stop
-        // rather than on a second withdrawal of the same interaction.
         expect(flags).toEqual([["permission:1", true]]);
         acts.push(`cancel:${interactionId}`);
         return Promise.resolve(true);
@@ -315,16 +378,13 @@ function plan(step: SessionTodo["status"]): SessionTodo[] {
 describe("holdList", () => {
   /**
    * The whole of the transcript's frame budget, stated as a count. Every turn
-   * arrives in a new array on every frame batch, so without this each of them
-   * is a new prop and each of them re-segments and repaints.
+   * arrives in a new array on every frame batch, so without this each of them is
+   * a new prop and each of them re-segments and repaints.
    */
   it("hands back every turn but the one the token landed in", () => {
     const settled = [assistantMessage("m1", "one"), assistantMessage("m2", "two")];
     const live = assistantMessage("m3", "thin");
     const previous = [[settled[0]!], [settled[1]!], [live]];
-    // What the next batch projects: the same objects for everything settled, a
-    // fresh snapshot for the message still being written, and new arrays around
-    // all three because `groupTurns` rebuilds every one of them.
     const next = [[settled[0]!], [settled[1]!], [assistantMessage("m3", "thinking")]];
 
     const held = holdList(previous, next, sameMessages);
@@ -351,6 +411,12 @@ describe("holdList", () => {
     expect(held[0]).toBe(previous[0]);
     expect(held[1]).toBe(next[1]);
   });
+
+  it("takes the shorter list rather than holding a row that is gone", () => {
+    const previous = [[assistantMessage("m1", "one")], [assistantMessage("m2", "two")]];
+
+    expect(holdList(previous, [previous[0]!], sameMessages)).toEqual([previous[0]]);
+  });
 });
 
 describe("sameMessages", () => {
@@ -363,6 +429,21 @@ describe("sameMessages", () => {
       false,
     );
     expect(sameMessages([settled], [settled, streaming])).toBe(false);
+  });
+});
+
+describe("sameInteractionId", () => {
+  it("reads an interaction re-projected under the same id as the one it already had", () => {
+    const opened = {
+      id: "permission:1",
+      title: "Run tests?",
+      detail: null,
+    } as unknown as Parameters<typeof sameInteractionId>[0];
+    const again = { ...opened };
+    const other = { ...opened, id: "permission:2" };
+
+    expect(sameInteractionId(opened, again)).toBe(true);
+    expect(sameInteractionId(opened, other)).toBe(false);
   });
 });
 
@@ -380,5 +461,42 @@ describe("sameTodos", () => {
     expect(sameTodos(null, null)).toBe(true);
     expect(sameTodos(null, [])).toBe(false);
     expect(sameTodos([], null)).toBe(false);
+  });
+
+  it("compares every field the dock draws", () => {
+    const [first, second] = plan("in_progress");
+
+    expect(sameTodos(plan("in_progress"), [{ ...first!, content: "Other" }, second!])).toBe(false);
+    expect(sameTodos(plan("in_progress"), [{ ...first!, id: "t9" }, second!])).toBe(false);
+    expect(sameTodos(plan("in_progress"), [{ ...first!, priority: "low" }, second!])).toBe(false);
+  });
+});
+
+describe("todosSettled", () => {
+  it("is settled only once nothing is left to do", () => {
+    expect(todosSettled(plan("in_progress"))).toBe(false);
+    expect(todosSettled(plan("completed"))).toBe(true);
+    expect(todosSettled(plan("cancelled"))).toBe(true);
+    expect(todosSettled([])).toBe(true);
+  });
+});
+
+describe("sameSelection", () => {
+  const selection: RuntimeSelection = {
+    providerId: "anthropic",
+    modelId: "sonnet-4.5",
+    variant: "high",
+    agent: "build",
+  };
+
+  it("holds a pick the catalog re-resolved to the same answer", () => {
+    expect(sameSelection(selection, { ...selection })).toBe(true);
+  });
+
+  it("gives way on any of the four values", () => {
+    expect(sameSelection(selection, { ...selection, providerId: "openai" })).toBe(false);
+    expect(sameSelection(selection, { ...selection, modelId: "haiku" })).toBe(false);
+    expect(sameSelection(selection, { ...selection, variant: "low" })).toBe(false);
+    expect(sameSelection(selection, { ...selection, agent: "plan" })).toBe(false);
   });
 });

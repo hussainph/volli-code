@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
   baseNameOf,
   displayTicketId,
@@ -8,6 +9,7 @@ import {
   type Ticket,
 } from "@volli/shared";
 
+import { ChatPlane } from "@renderer/components/chat/chat-plane";
 import {
   planTabClose,
   resolveTabClose,
@@ -23,6 +25,14 @@ import { FileView } from "@renderer/components/ticket/file-view";
 import { DiffView } from "@renderer/components/ticket/diff-view";
 import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
+import {
+  chatTabId,
+  chatTabStatus,
+  nextChatOrdinal,
+  parseChatTabId,
+  resolveChatRelaunch,
+  CHAT_TAB_FALLBACK_LABEL,
+} from "@renderer/components/ticket/ticket-chat-tab";
 import { TicketBodyPanel } from "@renderer/components/ticket/ticket-body-panel";
 import { TicketChangesPanel } from "@renderer/components/ticket/ticket-changes-panel";
 import {
@@ -43,7 +53,9 @@ import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
+import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { sessionPanes, ticketScope, useSessionsStore } from "@renderer/stores/sessions";
+import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
@@ -55,11 +67,31 @@ import { getEngine } from "@renderer/terminal/registry";
  * Wire value remains `"doc"` (see ticket-body-tab.ts). */
 const BODY_TAB_ID = TICKET_BODY_TAB_ID;
 
-/** Stable empty lists, so "no open files/diffs" aren't new arrays every render. */
+/** Stable empty lists, so "no open files/diffs/chats" aren't new arrays every render. */
 const NO_OPEN_FILES: readonly FileWorkspaceTab[] = [];
 const NO_OPEN_DIFFS: readonly string[] = [];
+const NO_OPEN_CHATS: readonly string[] = [];
 const NO_DIFF_META: Readonly<Record<string, { previousPath?: string | null; status?: string }>> =
   {};
+
+/**
+ * The ticket's durable chat Session ids from the shared listing cache, and the
+ * fetch that fills it. `undefined` means the listing has never answered — which
+ * is a different fact from a ticket that has no chats, and the only one a
+ * relaunch may not act on.
+ */
+function useChatSessionRecordIds(ticketId: string): readonly string[] | undefined {
+  React.useEffect(() => {
+    void useTicketSessionRecordsStore.getState().refresh(ticketId);
+  }, [ticketId]);
+  return useTicketSessionRecordsStore(
+    useShallow((state) =>
+      state.byTicket[ticketId]?.flatMap((row) =>
+        row.kind === "chat" ? [row.record.sessionId] : [],
+      ),
+    ),
+  );
+}
 
 /** Whether a ticket File-tab list already holds `relPath` (preview or pinned). */
 function ticketFilesInclude(files: readonly FileWorkspaceTab[], relPath: string): boolean {
@@ -119,6 +151,40 @@ export function TicketDetail({
   );
   const sessionTabs = useSessionsStore((state) => state.byOwner[ticket.id]?.tabs);
   const creating = useSessionsStore((state) => state.starting[ticket.id] ?? false);
+  /**
+   * The ticket's open chat tabs, and the two facts the strip draws for each.
+   *
+   * Three primitive-valued reads rather than one that builds descriptors: a
+   * chat's slice is replaced on every folded frame batch, so a selector whose
+   * result is a fresh array of objects would re-render this whole view — the
+   * strip, the rail, the content plane — on every streamed token. Shallow
+   * equality over strings is what makes a batch that moved neither a title nor a
+   * lifecycle cost nothing here.
+   */
+  const openChatIds = useChatSessionsStore(
+    useShallow((state) => state.openTabs[ticket.id] ?? NO_OPEN_CHATS),
+  );
+  const chatTitles = useChatSessionsStore(
+    useShallow((state) =>
+      (state.openTabs[ticket.id] ?? NO_OPEN_CHATS).map(
+        (sessionId) =>
+          state.sessions[sessionId]?.projection?.session.title ?? CHAT_TAB_FALLBACK_LABEL,
+      ),
+    ),
+  );
+  const chatStatuses = useChatSessionsStore(
+    useShallow((state) =>
+      (state.openTabs[ticket.id] ?? NO_OPEN_CHATS).map((sessionId) =>
+        chatTabStatus(state.sessions[sessionId]?.lifecycle),
+      ),
+    ),
+  );
+  /**
+   * This ticket's durable chat Session ids, or `undefined` while the listing has
+   * never been read. The distinction is what a relaunch turns on — see
+   * {@link resolveChatRelaunch}.
+   */
+  const durableChatIds = useChatSessionRecordIds(ticket.id);
   const railCollapsed = useUiStore((state) => state.railCollapsed);
   const railWidth = useUiStore((state) => state.railWidth);
   const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
@@ -603,6 +669,14 @@ export function TicketDetail({
         label: tab.title,
       }),
     ),
+    ...openChatIds.map(
+      (sessionId, index): TicketTabDescriptor => ({
+        id: chatTabId(sessionId),
+        kind: "chat",
+        label: chatTitles[index] ?? CHAT_TAB_FALLBACK_LABEL,
+        status: chatStatuses[index],
+      }),
+    ),
   ];
   // A closed session tab, or a persisted active id with no live tab, falls back to Doc.
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0]!;
@@ -611,6 +685,7 @@ export function TicketDetail({
     activeTab.kind === "session"
       ? sessionTabs?.find((candidate) => candidate.sessionId === activeTab.id)
       : undefined;
+  const activeChatSessionId = activeTab.kind === "chat" ? parseChatTabId(activeTab.id) : null;
   const terminalFocused =
     terminalFocusTarget?.projectId === projectId &&
     terminalFocusTarget.ticketId === ticket.id &&
@@ -646,16 +721,38 @@ export function TicketDetail({
   // The fallback above is purely visual — it renders the Ticket Body without
   // writing the store, so a persisted `active` naming a session that's since
   // closed (or one restored from a previous launch, which never repopulates:
-  // sessions don't survive an app restart) stays wedged in workspace.ts forever
-  // (`sanitizeTicketTabs` keeps any record whose `active` isn't the body tab).
-  // Reset it to the Ticket Body for real once we're sure it's actually stale
-  // rather than just not hydrated yet — `creating` covers the one in-flight
-  // window where a new session tab has been asked for but hasn't landed in the
-  // sessions store, so `tabs` doesn't include it yet even though it's about to.
+  // terminal sessions don't survive an app restart) stays wedged in workspace.ts
+  // forever (`sanitizeTicketTabs` keeps any record whose `active` isn't the body
+  // tab). Reset it to the Ticket Body for real once we're sure it's actually
+  // stale rather than just not hydrated yet — `creating` covers the one
+  // in-flight window where a new session tab has been asked for but hasn't
+  // landed in the sessions store, so `tabs` doesn't include it yet even though
+  // it's about to.
+  //
+  // A chat Session DOES survive a restart, so a persisted `chat:<id>` is not
+  // evidence of anything until the ticket's durable listing has answered: the
+  // reset waits, then either adopts the Session (which puts its tab back) or
+  // falls back because it is genuinely gone.
   React.useEffect(() => {
     if (creating || activeTabIsRenderable) return;
+    const relaunch = resolveChatRelaunch(activeTabId, durableChatIds);
+    if (relaunch.kind === "wait") return;
+    if (relaunch.kind === "adopt") {
+      const chat = useChatSessionsStore.getState();
+      chat.adoptChatSession(relaunch.sessionId);
+      chat.openChatTab(ticket.id, relaunch.sessionId);
+      return;
+    }
     setTicketActiveTab(projectId, ticket.id, BODY_TAB_ID);
-  }, [creating, activeTabIsRenderable, setTicketActiveTab, projectId, ticket.id]);
+  }, [
+    activeTabId,
+    activeTabIsRenderable,
+    creating,
+    durableChatIds,
+    projectId,
+    setTicketActiveTab,
+    ticket.id,
+  ]);
 
   // A focus target names one concrete ticket-session tab. If tab selection or an
   // explicit close invalidates that identity within this ticket, restore ordinary
@@ -710,6 +807,57 @@ export function TicketDetail({
     if (sessionId !== null) setActiveTab(sessionId);
   }, [projectId, ticket.id, setActiveTab]);
 
+  // Mints one durable chat Session on this ticket and opens its tab. Its own
+  // in-flight flag, because the PTY store's `starting` is a fact about a pane
+  // coming up and other surfaces read it as one — the rail's own creating
+  // state, the session-create pipeline — so a chat write there would be a lie
+  // about a terminal that does not exist. The "+" is disabled by either flag:
+  // one control mints both kinds, and only one of them at a time.
+  const [creatingChat, setCreatingChat] = React.useState(false);
+  const createChat = React.useCallback(async () => {
+    if (creatingChat) return;
+    setCreatingChat(true);
+    try {
+      const chat = useChatSessionsStore.getState();
+      const sessionId = await chat.createChatSession({
+        projectId,
+        ticketId: ticket.id,
+        // The terminal path's own convention — the count that exists, plus one.
+        title: `Chat ${nextChatOrdinal(durableChatIds?.length ?? 0, openChatIds.length)}`,
+      });
+      // A failed `session.create` has already toasted and left no Session to
+      // open a tab onto; a failed *attach* resolves the id and the tab carries
+      // its own Retry.
+      if (sessionId === null) return;
+      chat.openChatTab(ticket.id, sessionId);
+      setActiveTab(chatTabId(sessionId));
+      // So the rail's row for it appears without waiting on a terminal event.
+      void useTicketSessionRecordsStore.getState().refresh(ticket.id);
+    } finally {
+      setCreatingChat(false);
+    }
+  }, [
+    creatingChat,
+    durableChatIds?.length,
+    openChatIds.length,
+    projectId,
+    setActiveTab,
+    ticket.id,
+  ]);
+
+  // A rail row for a Session with no live client adopts it; one already open
+  // just comes to the front. `adoptChatSession` is idempotent, so this is the
+  // single path both cases take.
+  const activateChat = React.useCallback(
+    (sessionId: string) => {
+      const chat = useChatSessionsStore.getState();
+      chat.adoptChatSession(sessionId);
+      chat.openChatTab(ticket.id, sessionId);
+      setActiveTab(chatTabId(sessionId));
+    },
+    [setActiveTab, ticket.id],
+  );
+
   const enterTerminalFocus = React.useCallback(() => {
     if (activeSessionTab === undefined) return;
     setTerminalFocusTarget({
@@ -753,7 +901,7 @@ export function TicketDetail({
           <TicketTabStrip
             tabs={tabs}
             activeTabId={activeTab.id}
-            creating={creating}
+            creating={creating || creatingChat}
             onSelectTab={setActiveTab}
             onPinFileTab={(relPath) => pinTicketFile(projectId, ticket.id, relPath)}
             onCloseTab={(tab) => {
@@ -765,6 +913,18 @@ export function TicketDetail({
               }
               if (tab.kind === "diff" && tab.relPath !== undefined) {
                 requestCloseDiffTab(tab.relPath);
+                return;
+              }
+              if (tab.kind === "chat") {
+                const chatId = parseChatTabId(tab.id);
+                if (chatId === null) return;
+                // No busy guard and no confirm: the Session is durable, so
+                // closing the view loses nothing — reopening it from the rail
+                // adopts the same history. Standing the active tab down first,
+                // because the relaunch effect would otherwise read the persisted
+                // id, find the Session still on record, and put the tab back.
+                if (activeTabId === tab.id) setActiveTab(BODY_TAB_ID);
+                useChatSessionsStore.getState().closeChatTab(ticket.id, chatId);
                 return;
               }
               const sessionId = tab.id;
@@ -780,6 +940,7 @@ export function TicketDetail({
             }}
             onRenameSessionTab={(sessionId, title) => renameTerminalSession(sessionId, title)}
             onNewSession={() => void createSession()}
+            onNewChat={() => void createChat()}
             canFocusTerminal={activeSessionTab !== undefined}
             onEnterTerminalFocus={enterTerminalFocus}
           />
@@ -844,6 +1005,17 @@ export function TicketDetail({
                   onViewStateChange={handleDiffViewStateChange}
                 />
               ) : null}
+              {/* In flow, not on the resident overlay beside it: that host
+                  exists so a GPU-owning terminal is never unmounted, and a chat
+                  needs nothing of the sort — its stream, fold and queue live in
+                  the registry client, which outlives this view either way. */}
+              {activeChatSessionId !== null ? (
+                <ChatPlane
+                  key={activeChatSessionId}
+                  sessionId={activeChatSessionId}
+                  onOpenFile={openFile}
+                />
+              ) : null}
               <TicketSessionPlane
                 ticketId={ticket.id}
                 activeSessionId={activeTab.kind === "session" ? activeTab.id : null}
@@ -863,9 +1035,11 @@ export function TicketDetail({
               <TicketRail
                 projectId={projectId}
                 ticket={ticket}
-                creating={creating}
+                creating={creating || creatingChat}
                 onNewSession={() => void createSession()}
+                onNewChat={() => void createChat()}
                 onActivateSession={setActiveTab}
+                onActivateChat={activateChat}
                 activeTabId={activeTabId}
                 changesContent={
                   <TicketChangesPanel

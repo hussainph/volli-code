@@ -2,9 +2,11 @@ import {
   canResumeHarness,
   effectiveHarnessId,
   harnessLabel,
+  type ChatSessionRecord,
   type HarnessAdapterLookup,
   type SessionActivityState,
   type SessionHarnessState,
+  type SessionListingRow,
   type SessionRecord,
 } from "@volli/shared";
 
@@ -38,8 +40,14 @@ export interface TicketSessionRow {
  * a pane whose agent was quit and replaced reads as what is in it now. A shell
  * launch that later ran an agent still reads as "Shell" — `launchKind` is a
  * fact about the pane's origin and no announce changes it.
+ *
+ * A chat row has none of that — no PTY, no launch — so it names the adapter
+ * it attached instead and, the one thing worth saying about it, whether that
+ * attachment is still open.
  */
-export function sessionSourceLabel(record: SessionRecord): string {
+export function sessionSourceLabel(row: SessionListingRow): string {
+  if (row.kind === "chat") return row.record.live ? "Chat · Live" : "Chat";
+  const record = row.record;
   const source =
     record.launchKind === "agent"
       ? harnessLabel(effectiveHarnessId(record))
@@ -136,13 +144,14 @@ export function groupSessionRows(rows: readonly TicketSessionRow[]): {
 }
 
 /**
- * Whether `record` can be resumed (interrupt/resume, issue #78). A record
- * qualifies only when it actually launched an agent (a bare shell or
- * pre-metadata `unknown` record has no harness session to resume), has
- * actually ended (a still-live session has nothing to resume INTO — it's
- * already running), and its harness knows how to resume at all — an
- * unrecognized/generic harness id makes {@link canResumeHarness} false for both
- * its by-id and latest-in-cwd fallbacks.
+ * Whether `row` can be resumed (interrupt/resume, issue #78). A chat row never
+ * qualifies — there is no terminal to resume as, only a future deep-activation
+ * path this is not it. A terminal row qualifies only when it actually launched
+ * an agent (a bare shell or pre-metadata `unknown` record has no harness
+ * session to resume), has actually ended (a still-live session has nothing to
+ * resume INTO — it's already running), and its harness knows how to resume at
+ * all — an unrecognized/generic harness id makes {@link canResumeHarness} false
+ * for both its by-id and latest-in-cwd fallbacks.
  *
  * Capability, not a command line: the resume line names the generated wrapper
  * by absolute path, and those paths are main's alone.
@@ -156,7 +165,9 @@ export function groupSessionRows(rows: readonly TicketSessionRow[]): {
  * exists so a test can say what this process knows instead of inheriting it
  * from a module singleton.
  */
-export function canResumeSession(record: SessionRecord, lookup: HarnessAdapterLookup): boolean {
+export function canResumeSession(row: SessionListingRow, lookup: HarnessAdapterLookup): boolean {
+  if (row.kind === "chat") return false;
+  const record = row.record;
   return (
     record.launchKind === "agent" &&
     record.endedAt !== null &&
@@ -169,20 +180,21 @@ export function canResumeSession(record: SessionRecord, lookup: HarnessAdapterLo
 }
 
 /**
- * The newest resumable record among `records`, or `null` if none qualify.
- * Compares `createdAt` directly rather than trusting input order — the store
- * (`listTicketSessions`, `created_at DESC`) already hands these back
+ * The newest resumable record among `rows`, or `null` if none qualify — a chat
+ * row is filtered out by {@link canResumeSession} before it ever reaches the
+ * comparison. Compares `createdAt` directly rather than trusting input order —
+ * the store (`listTicketSessions`, `created_at DESC`) already hands these back
  * newest-first, but this stays correct even if a caller passes an
  * unordered/filtered subset.
  */
 export function latestResumableSession(
-  records: readonly SessionRecord[],
+  rows: readonly SessionListingRow[],
   lookup: HarnessAdapterLookup,
 ): SessionRecord | null {
   let latest: SessionRecord | null = null;
-  for (const record of records) {
-    if (!canResumeSession(record, lookup)) continue;
-    if (latest === null || record.createdAt > latest.createdAt) latest = record;
+  for (const row of rows) {
+    if (row.kind !== "terminal" || !canResumeSession(row, lookup)) continue;
+    if (latest === null || row.record.createdAt > latest.createdAt) latest = row.record;
   }
   return latest;
 }
@@ -195,6 +207,70 @@ export function filterSessionHistory(
   const needle = query.trim().toLocaleLowerCase();
   if (needle === "") return [...rows];
   return rows.filter((row) =>
-    `${row.title}\n${sessionSourceLabel(row.record)}`.toLocaleLowerCase().includes(needle),
+    `${row.title}\n${sessionSourceLabel({ kind: "terminal", record: row.record })}`
+      .toLocaleLowerCase()
+      .includes(needle),
   );
+}
+
+/**
+ * A ticket-rail row for a chat Session. There is no PTY behind it, so there is
+ * nothing to activate, resume, or report a live status for beyond `isOpen` —
+ * deep chat activation (opening the actual transcript) is future UI work, not
+ * this. `isOpen` mirrors `groupSessionRows`'s current/history split off the
+ * one fact a chat row has: whether its structured attachment is still live.
+ */
+export interface TicketChatSessionRow {
+  record: ChatSessionRecord;
+  title: string;
+  isOpen: boolean;
+}
+
+/** Chat Sessions for a ticket, named and grouped the same way a terminal record's rail row is. */
+export function buildTicketChatSessionRows(
+  records: readonly ChatSessionRecord[],
+): TicketChatSessionRow[] {
+  return records.map((record) => ({ record, title: record.title, isOpen: record.live }));
+}
+
+/** {@link filterSessionHistory}'s title+source match, over chat rows instead of durable records. */
+export function filterChatSessionHistory(
+  rows: readonly TicketChatSessionRow[],
+  query: string,
+): TicketChatSessionRow[] {
+  const needle = query.trim().toLocaleLowerCase();
+  if (needle === "") return [...rows];
+  return rows.filter((row) =>
+    `${row.title}\n${sessionSourceLabel({ kind: "chat", record: row.record })}`
+      .toLocaleLowerCase()
+      .includes(needle),
+  );
+}
+
+/**
+ * One rendered row of the rail: a terminal row (rename, resume, activate) or a
+ * chat row (activate, and title and liveness — a chat Session is durable, so
+ * even a closed one opens onto its own history; rename waits for a live tab to
+ * keep in sync). Discriminated the same way `SessionListingRow` is, one layer up
+ * the view model.
+ */
+export type SessionRailRow =
+  | { kind: "terminal"; row: TicketSessionRow }
+  | { kind: "chat"; row: TicketChatSessionRow };
+
+/**
+ * The rail's two row kinds in one list, newest first. Ordering is by creation,
+ * across both kinds, rather than by concatenation: `listForTicket` hands its
+ * rows back newest-first already, and appending the chat ones would sink every
+ * chat Session below every terminal one however recent it is.
+ */
+export function mergeSessionRailRows(
+  terminal: readonly TicketSessionRow[],
+  chat: readonly TicketChatSessionRow[],
+): SessionRailRow[] {
+  const rows: SessionRailRow[] = [
+    ...terminal.map((row): SessionRailRow => ({ kind: "terminal", row })),
+    ...chat.map((row): SessionRailRow => ({ kind: "chat", row })),
+  ];
+  return rows.toSorted((a, b) => b.row.record.createdAt - a.row.record.createdAt);
 }

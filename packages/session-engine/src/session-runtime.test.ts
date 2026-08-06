@@ -17,6 +17,7 @@ import {
   type NativeProbeResult,
   type ObservationSink,
   type SessionEngine,
+  type SessionLocationResolver,
   type SessionRuntime,
   type SessionStreamEmission,
   type SessionStreamFrame,
@@ -26,6 +27,12 @@ import {
 } from "./index";
 
 const venue = { id: "machine-1", kind: "local" as const };
+
+/** A host with nothing to materialize: preparing a location is resolving it. */
+function fixedLocation(directory: string): SessionLocationResolver {
+  const at = async () => ({ directory, venue });
+  return { resolve: at, prepare: at };
+}
 
 function ids(): SessionLedgerIds {
   let sequence = 0;
@@ -83,6 +90,8 @@ class FakeAdapter implements NativeHarnessAdapter {
   dispatchReceipt: Awaited<ReturnType<BindingHandle["dispatch"]>> | null = null;
   dispatchGate: Promise<void> | null = null;
   commands: HarnessCommand[] = [];
+  /** What each attach was actually pointed at — the live half of the directory contract. */
+  specs: Parameters<NativeHarnessAdapter["attach"]>[0][] = [];
   attachObservation: HarnessObservation | null = null;
   releaseReasons: string[] = [];
 
@@ -117,10 +126,11 @@ class FakeAdapter implements NativeHarnessAdapter {
   }
 
   async attach(
-    _spec: Parameters<NativeHarnessAdapter["attach"]>[0],
+    spec: Parameters<NativeHarnessAdapter["attach"]>[0],
     sink: ObservationSink,
   ): Promise<BindingHandle> {
     this.attaches += 1;
+    this.specs.push(spec);
     this.attachStarted();
     await this.attachGate;
     this.sink = sink;
@@ -198,11 +208,7 @@ function composition(
       engine,
       adapters: createNativeAdapterRegistry([adapter]),
       artifacts: options.artifacts ?? createInMemoryTranscriptArtifactStore(),
-      locations:
-        options.locations ??
-        ({
-          resolve: async () => ({ directory: "/projects/fake", venue }),
-        } satisfies Parameters<typeof createSessionRuntime>[0]["locations"]),
+      locations: options.locations ?? fixedLocation("/projects/fake"),
       clock,
       ids: runtimeIds(options.runtimeIdPrefix),
       ...(options.onSubscriberFailure ? { onSubscriberFailure: options.onSubscriberFailure } : {}),
@@ -591,6 +597,71 @@ describe("SessionRuntime native adapter contract", () => {
     ).resolves.toMatchObject({ receipt: { detail: "socket disappeared" } });
   });
 
+  it("refuses the attach when the host cannot produce the directory", async () => {
+    // The adapter is never asked. A binding made against a directory that is
+    // not there is the failure the reader gets per prompt instead of once, and
+    // wearing the harness's name for a missing path rather than this one.
+    const detail = "Couldn't prepare the worktree at /w/VC-12 — fatal: invalid reference";
+    const { runtime, adapter } = composition({
+      locations: {
+        resolve: async () => ({ directory: "/w/VC-12", venue }),
+        prepare: async () => {
+          throw new Error(detail);
+        },
+      },
+    });
+    const session = await runtime.command({
+      commandId: "unprepared-create",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        title: null,
+      },
+    });
+
+    await expect(
+      runtime.command({
+        commandId: "unprepared-attach",
+        sessionId: session.sessionId,
+        command: {
+          kind: "adapter.attach",
+          adapterId: "fake",
+          profileId: "native",
+          continuity: "fresh",
+        },
+      }),
+    ).resolves.toMatchObject({
+      receipt: { status: "rejected", code: "location_unavailable", detail },
+    });
+    expect(adapter.probes).toBe(0);
+    expect((await runtime.snapshot({ sessionId: session.sessionId })).projection).toMatchObject({
+      liveExecutor: null,
+      attachments: [{ status: "failed", failure: { code: "location_unavailable", detail } }],
+    });
+  });
+
+  it("binds and records the directory it prepared, not the one it resolved", async () => {
+    // The case the split exists for: a worktree ticket with no stamp yet, where
+    // `resolve` can only name the main checkout and `prepare` is what makes the
+    // isolated one. Both halves have to say the prepared directory — the live
+    // spec, and the durable binding a later resume reads instead of re-reading.
+    const { runtime, adapter } = composition({
+      locations: {
+        resolve: async () => ({ directory: "/projects/fake", venue }),
+        prepare: async () => ({ directory: "/w/VC-12", venue }),
+      },
+    });
+    const sessionId = await createAndAttach(runtime);
+
+    expect(adapter.specs.at(-1)?.directory).toBe("/w/VC-12");
+    const { projection } = await runtime.snapshot({ sessionId });
+    expect(projection.attachments[0]?.native?.detail).toMatchObject({
+      kind: "volli.native-binding.v1",
+      directory: "/w/VC-12",
+    });
+  });
+
   it("dispatches interrupts and resolves durable interactions against their owning attachment", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);
@@ -921,17 +992,14 @@ describe("SessionRuntime native adapter contract", () => {
     const locationStarted = new Gate();
     const releaseLocation = new Gate();
     let delayLocation = false;
-    const { runtime, adapter } = composition({
-      locations: {
-        resolve: async () => {
-          if (delayLocation) {
-            locationStarted.resolve();
-            await releaseLocation.promise;
-          }
-          return { directory: "/projects/fake", venue };
-        },
-      },
-    });
+    const at = async () => {
+      if (delayLocation) {
+        locationStarted.resolve();
+        await releaseLocation.promise;
+      }
+      return { directory: "/projects/fake", venue };
+    };
+    const { runtime, adapter } = composition({ locations: { resolve: at, prepare: at } });
     const sessionId = await createAndAttach(runtime);
     const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
     delayLocation = true;

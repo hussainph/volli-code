@@ -17,15 +17,25 @@
  *
  * The consequence is load-bearing and easy to miss: every field below is a
  * terminal harness/process fact, so a Session with no terminal attachment — a
- * structured (chat) Session — has no honest record here at all. It used to get
- * a fabricated one, defaulting `harnessId` to `"claude-code"`, `launchKind` to
- * `"unknown"` and `endedAt` to `null`, and so read out of every listing as a
- * never-ending claude-code terminal (see
- * `docs/plans/session-ui-migration-readiness.md`, blocker B4). The projection
- * now returns `null` in that case, which is why callers of it deal in
- * `SessionRecord | null` and terminal listings are shorter than Session
- * listings. Do not add a field to this interface expecting the ledger to carry
- * it; add it to the attachment the projection reads.
+ * structured (chat) Session — has no honest record here at all, and
+ * `terminalSessionRecord` returns `null` for one rather than fabricating a
+ * `harnessId: "claude-code"` that read every structured Session out of a
+ * listing as a never-ending terminal (see
+ * `docs/plans/session-ui-migration-readiness.md`, blocker B4). Do not add a
+ * field to this interface expecting the ledger to carry it; add it to the
+ * attachment the projection reads.
+ *
+ * {@link ChatSessionRecord} is the honest record for the Session that null
+ * drops: title/identity plus the latest structured attachment's adapter and
+ * liveness, never terminal facts it does not have. {@link SessionListingRow}
+ * is what the renderer's Session listings (`volli:session-list`,
+ * `volli:session-list-for-ticket`) actually return — a discriminated union of
+ * the two — so a project's or a ticket's listing is complete: a terminal
+ * attachment renders as `"terminal"`, and everything else (no attachment yet,
+ * or a structured-only Session) renders as `"chat"`. Consumers that are
+ * genuinely terminal-only (the `volli` CLI socket, the terminal resume path)
+ * keep reading `SessionRecord | null` straight off `terminalSessionRecord`;
+ * they were never the surface that dropped chat Sessions.
  */
 
 import { declaresInputNeeded, expectsHarnessEvents } from "./harness/types";
@@ -103,6 +113,40 @@ export interface SessionRecord {
    */
   exitCode: number | null;
 }
+
+/**
+ * The honest record for a Session that {@link SessionRecord} cannot describe:
+ * one with no terminal attachment, because it either hasn't attached anything
+ * yet or has only ever attached a structured (chat) adapter. Identity plus the
+ * minimum a listing needs to name and to know is-this-still-going-on — nothing
+ * terminal-shaped, and nothing about the transcript itself (that is the
+ * structured adapter's own domain, read through the Session Engine directly).
+ */
+export interface ChatSessionRecord {
+  sessionId: string;
+  title: string;
+  projectId: string;
+  /** `null` means a project-scoped scratch session — no ticket, no board involvement. */
+  ticketId: string | null;
+  /** Epoch milliseconds. */
+  createdAt: number;
+  /** The latest structured attachment's adapter id; `null` before one has ever attached. */
+  adapterId: string | null;
+  /** Whether a structured attachment is currently open. */
+  live: boolean;
+}
+
+/**
+ * One row of a Session listing (`volli:session-list`,
+ * `volli:session-list-for-ticket`): a terminal attachment renders as
+ * `"terminal"`, everything else as `"chat"` — see the module doc comment for
+ * the precedence between them. Replaces the flat `SessionRecord[]` those
+ * endpoints used to return, which is where a structured-only Session used to
+ * disappear.
+ */
+export type SessionListingRow =
+  | { kind: "terminal"; record: SessionRecord }
+  | { kind: "chat"; record: ChatSessionRecord };
 
 /**
  * Which harness a session is to be JUDGED by: what announced itself, falling

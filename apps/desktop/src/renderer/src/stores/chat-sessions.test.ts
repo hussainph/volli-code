@@ -403,3 +403,81 @@ describe("the queue", () => {
     expect(slice()).toBe(before);
   });
 });
+
+describe("open chat tabs", () => {
+  it("records a ticket's tabs in the order they were opened, once each", () => {
+    const { store } = fixture();
+
+    store.getState().openChatTab("t1", "durable-1");
+    store.getState().openChatTab("t1", "durable-2");
+    store.getState().openChatTab("t1", "durable-1");
+
+    expect(store.getState().openTabs).toEqual({ t1: ["durable-1", "durable-2"] });
+  });
+
+  it("keeps its identity when the tab is already open", () => {
+    const { store } = fixture();
+    store.getState().openChatTab("t1", "durable-1");
+    const before = store.getState().openTabs;
+
+    store.getState().openChatTab("t1", "durable-1");
+
+    expect(store.getState().openTabs).toBe(before);
+  });
+
+  it("keeps one ticket's tabs out of another's", () => {
+    const { store } = fixture();
+
+    store.getState().openChatTab("t1", "durable-1");
+    store.getState().openChatTab("t2", "durable-2");
+
+    expect(store.getState().openTabs).toEqual({ t1: ["durable-1"], t2: ["durable-2"] });
+  });
+
+  /** Closing the view retires the client; the Session itself is untouched. */
+  it("drops the resident Session with the tab that held it", () => {
+    const { store } = fixture();
+    store.getState().adoptChatSession("durable-1");
+    store.getState().openChatTab("t1", "durable-1");
+
+    store.getState().closeChatTab("t1", "durable-1");
+
+    expect(store.getState().openTabs).toEqual({});
+    expect(store.getState().sessions["durable-1"]).toBeUndefined();
+    expect(getChatClient("durable-1")).toBeUndefined();
+  });
+
+  it("leaves the ticket's other tabs where they were", () => {
+    const { store } = fixture();
+    store.getState().openChatTab("t1", "durable-1");
+    store.getState().openChatTab("t1", "durable-2");
+
+    store.getState().closeChatTab("t1", "durable-1");
+
+    expect(store.getState().openTabs).toEqual({ t1: ["durable-2"] });
+  });
+
+  it("is a no-op for a tab that was never open", () => {
+    const { store } = fixture();
+    store.getState().openChatTab("t1", "durable-1");
+    const before = store.getState().openTabs;
+
+    store.getState().closeChatTab("t1", "durable-9");
+    store.getState().closeChatTab("t9", "durable-1");
+
+    expect(store.getState().openTabs).toBe(before);
+  });
+
+  /** The tab decides: a close aimed at a ticket that holds none must not retire
+   * the client the tab that DOES hold it is still drawing from. */
+  it("keeps the Session alive when the close named a ticket without its tab", () => {
+    const { store } = fixture();
+    store.getState().adoptChatSession("durable-1");
+    store.getState().openChatTab("t1", "durable-1");
+
+    store.getState().closeChatTab("t9", "durable-1");
+
+    expect(store.getState().sessions["durable-1"]).toBeDefined();
+    expect(getChatClient("durable-1")).toBeDefined();
+  });
+});

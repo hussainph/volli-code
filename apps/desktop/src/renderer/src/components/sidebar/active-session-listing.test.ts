@@ -2,6 +2,7 @@ import {
   createSessionHarnessState,
   HARNESS_EVENT_GRACE_MS,
   receiveHarnessEvent,
+  type ChatSessionRecord,
   type CreateSessionHarnessStateInput,
   type HarnessEvent,
   type HarnessEventNotice,
@@ -66,6 +67,20 @@ function record(overrides: Partial<SessionRecord> & { id: string }): SessionReco
     createdAt: overrides.createdAt ?? 1,
     endedAt: overrides.endedAt ?? null,
     exitCode: overrides.exitCode ?? null,
+  };
+}
+
+function chatSession(
+  overrides: Partial<ChatSessionRecord> & { ticketId: string },
+): ChatSessionRecord {
+  return {
+    sessionId: overrides.sessionId ?? "chat-1",
+    title: overrides.title ?? "Chat session",
+    projectId: overrides.projectId ?? "p1",
+    ticketId: overrides.ticketId,
+    createdAt: overrides.createdAt ?? 1,
+    adapterId: overrides.adapterId ?? "opencode",
+    live: overrides.live ?? true,
   };
 }
 
@@ -753,6 +768,214 @@ describe("buildActiveSessionListing", () => {
       "Done session",
       "Bare review",
     ]);
+  });
+});
+
+describe("buildActiveSessionListing — chat Sessions", () => {
+  it("names a Doing ticket's fallback row by its chat Session when nothing terminal ever ran", () => {
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: {},
+      signalsByTicket: {},
+      records: [],
+      chatSessions: [chatSession({ ticketId: "t1", title: "Plan the migration", live: true })],
+      lastOutputAt: {},
+      parkState: {},
+      harness: {},
+      now: 100_000,
+    });
+
+    expect(result.active).toMatchObject([
+      { title: "Plan the migration", source: "Chat · Live", lastRun: null, target: null },
+    ]);
+  });
+
+  it("prefers a terminal record over a chat Session when both exist for the same ticket", () => {
+    const now = 1_000_000;
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: {},
+      signalsByTicket: {},
+      records: [record({ id: "s1", ticketId: "t1", title: "Terminal run", endedAt: now - 1_000 })],
+      chatSessions: [chatSession({ ticketId: "t1", title: "Plan the migration", live: true })],
+      lastOutputAt: {},
+      parkState: {},
+      harness: {},
+      now,
+    });
+
+    expect(result.active).toMatchObject([{ title: "Terminal run" }]);
+  });
+
+  it("prefers a live chat Session over an ended one for the same ticket", () => {
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: {},
+      signalsByTicket: {},
+      records: [],
+      chatSessions: [
+        chatSession({
+          sessionId: "ended",
+          ticketId: "t1",
+          title: "Older",
+          live: false,
+          createdAt: 50,
+        }),
+        chatSession({
+          sessionId: "live",
+          ticketId: "t1",
+          title: "Newer, live",
+          live: true,
+          createdAt: 10,
+        }),
+      ],
+      lastOutputAt: {},
+      parkState: {},
+      harness: {},
+      now: 100_000,
+    });
+
+    expect(result.active).toMatchObject([{ title: "Newer, live" }]);
+  });
+
+  it("keeps a live chat Session over a newer ended one, array order reversed from the other case", () => {
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: {},
+      signalsByTicket: {},
+      records: [],
+      chatSessions: [
+        chatSession({
+          sessionId: "live",
+          ticketId: "t1",
+          title: "Older, live",
+          live: true,
+          createdAt: 10,
+        }),
+        chatSession({
+          sessionId: "ended",
+          ticketId: "t1",
+          title: "Newer, ended",
+          live: false,
+          createdAt: 50,
+        }),
+      ],
+      lastOutputAt: {},
+      parkState: {},
+      harness: {},
+      now: 100_000,
+    });
+
+    expect(result.active).toMatchObject([{ title: "Older, live" }]);
+  });
+
+  it("breaks a tie between two ended chat Sessions by recency, regardless of array order", () => {
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: {},
+      signalsByTicket: {},
+      records: [],
+      chatSessions: [
+        chatSession({
+          sessionId: "older",
+          ticketId: "t1",
+          title: "Older",
+          live: false,
+          createdAt: 10,
+        }),
+        chatSession({
+          sessionId: "newer",
+          ticketId: "t1",
+          title: "Newer",
+          live: false,
+          createdAt: 50,
+        }),
+      ],
+      lastOutputAt: {},
+      parkState: {},
+      harness: {},
+      now: 100_000,
+    });
+
+    expect(result.active).toMatchObject([{ title: "Newer" }]);
+  });
+
+  it("breaks a tie between two live chat Sessions by recency, regardless of array order", () => {
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: {},
+      signalsByTicket: {},
+      records: [],
+      chatSessions: [
+        chatSession({
+          sessionId: "newer",
+          ticketId: "t1",
+          title: "Newer",
+          live: true,
+          createdAt: 50,
+        }),
+        chatSession({
+          sessionId: "older",
+          ticketId: "t1",
+          title: "Older",
+          live: true,
+          createdAt: 10,
+        }),
+      ],
+      lastOutputAt: {},
+      parkState: {},
+      harness: {},
+      now: 100_000,
+    });
+
+    expect(result.active).toMatchObject([{ title: "Newer" }]);
+  });
+
+  it("falls back to No live session when a ticket has neither a terminal record nor a chat Session", () => {
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: {},
+      signalsByTicket: {},
+      records: [],
+      chatSessions: [chatSession({ ticketId: "t2", title: "Someone else's ticket" })],
+      lastOutputAt: {},
+      parkState: {},
+      harness: {},
+      now: 100_000,
+    });
+
+    expect(result.active).toMatchObject([{ title: "Ship the feature", source: "No live session" }]);
+  });
+
+  it("never reaches the chat fallback when a live terminal tab already covers the ticket", () => {
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: { t1: container("s1", [paneTab("s1", "Implement UI")]) },
+      signalsByTicket: {},
+      records: [],
+      chatSessions: [chatSession({ ticketId: "t1", title: "Should not show" })],
+      lastOutputAt: {},
+      parkState: {},
+      harness: {},
+      now: 100_000,
+    });
+
+    expect(result.active.map((row) => row.title)).toEqual(["Implement UI"]);
+  });
+
+  it("omits the chat fallback entirely when `chatSessions` is absent", () => {
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: {},
+      signalsByTicket: {},
+      records: [],
+      lastOutputAt: {},
+      parkState: {},
+      harness: {},
+      now: 100_000,
+    });
+
+    expect(result.active).toMatchObject([{ title: "Ship the feature", source: "No live session" }]);
   });
 });
 
