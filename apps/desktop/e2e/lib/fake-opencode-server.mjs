@@ -328,3 +328,19 @@ const server = createServer(async (req, res) => {
 server.listen(port, hostname, () => {
   log("listening", `${hostname}:${port}`);
 });
+
+// Nothing ever asks this to stop. The app spawns it and keeps its one server
+// lease for the rest of the process's life (deliberately: "no dispose", see
+// runtime-catalog-hub.ts), so `stop()` is never called and closing the app
+// leaves the child reparented to init — a fake still holding a loopback port,
+// one more after every smoke run. Retire on reparenting instead: `process.ppid`
+// stops being the pid that spawned this the moment that process is gone.
+const spawnedBy = process.ppid;
+const orphanWatch = setInterval(() => {
+  if (process.ppid === spawnedBy) return;
+  log("orphaned", `parent ${spawnedBy} is gone`);
+  process.exit(0);
+}, 500);
+// The HTTP server is what keeps this process alive, and this watch must never
+// be what does.
+orphanWatch.unref();
