@@ -358,9 +358,10 @@ function chat(
  * Chat Sessions across the demo project — the kind the sidebar's two bands had
  * no fixture for at all until now.
  *
- * Spread across the axes the bands actually branch on: activity × live, and a
+ * Spread across the axes the bands actually branch on: activity × live, a
  * recency ladder (2m / 20m / 45m / 3h) that straddles the 30-minute quiet
- * window from both sides. Three of them are ticketless, which is three
+ * window from both sides, and both kinds of title a Session can have — the
+ * ordinal it is born with, and the one a user typed. Three of them are ticketless, which is three
  * different things and not one: `chat-scratch-*` were BORN without a ticket
  * (project scratch work, cleanup-exempt forever), while `chat-orphan` had a
  * ticket that has since left the board — the case `bornTicketless` exists to
@@ -382,10 +383,17 @@ export const chatSessions: ChatSessionRecord[] = [
     live: false,
     lastActivityAt: NOW - 3 * HOUR,
   }),
+  // Two of these keep the title the app ACTUALLY gives a new Session. Both
+  // kinds are named by an ordinal at birth ("Session 3", "Chat 2") and only a
+  // manual rename ever makes one descriptive — nothing derives a title from the
+  // first prompt or the launched command. A fixture set where every row had
+  // been helpfully renamed would flatter the design into looking scannable when
+  // the shipped default is a column of ordinals, so the bands are shown carrying
+  // both.
   chat({
     sessionId: "chat-12a",
     ticketId: "tkt-12",
-    title: "Draft the park/wake state machine",
+    title: "Chat 2",
     lastActivityAt: NOW - 20 * MINUTE,
   }),
   chat({
@@ -423,10 +431,13 @@ export const chatSessions: ChatSessionRecord[] = [
     activity: "working",
     lastActivityAt: NOW - 2 * MINUTE,
   }),
+  // The worst case the bands can produce, and it is the default one: a
+  // ticketless Session never renamed. No ticket chip, no descriptive title —
+  // the row is a globe, an ordinal and an age.
   chat({
     sessionId: "chat-scratch-b",
     ticketId: null,
-    title: "Read through the ACP handshake",
+    title: "Chat 1",
     live: false,
     lastActivityAt: NOW - 3 * HOUR,
   }),
