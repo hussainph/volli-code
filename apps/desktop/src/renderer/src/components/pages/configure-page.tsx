@@ -1,3 +1,4 @@
+import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { SlidersHorizontalIcon } from "@phosphor-icons/react/dist/csr/SlidersHorizontal";
@@ -6,6 +7,7 @@ import { useEffect, useState } from "react";
 import { type Project } from "@volli/shared";
 
 import { ProjectAppearanceSettings } from "@renderer/components/pages/project-appearance-settings";
+import { ProjectRuntimeSettings } from "@renderer/components/pages/project-runtime-settings";
 import {
   SettingsRow,
   SettingsSection,
@@ -63,6 +65,14 @@ export function ConfigurePage() {
       description:
         "Theming for this project only. Every surface inherits the app-wide choice until you say otherwise.",
       content: <ProjectAppearanceSettings project={project} />,
+    },
+    {
+      key: "runtime",
+      label: "Runtime",
+      icon: CpuIcon,
+      description:
+        "Models for this project only. The app-wide choice applies until you say otherwise.",
+      content: <ProjectRuntimeSettings project={project} />,
     },
     {
       key: "worktrees",

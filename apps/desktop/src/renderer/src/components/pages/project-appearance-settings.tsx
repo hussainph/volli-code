@@ -17,7 +17,11 @@ import {
   revealPath,
   terminalThemeItems,
 } from "@renderer/components/theme/appearance-catalog";
-import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
+import {
+  InheritNote,
+  SettingsRow,
+  SettingsSection,
+} from "@renderer/components/pages/settings-shell";
 import { AppearanceModeChoice, CanvasEditor } from "@renderer/components/theme/canvas-editor";
 import {
   describeAppearance,
@@ -136,11 +140,6 @@ function projectScope(project: Project) {
     canvas: project.themeCanvas ?? null,
     appearance: project.themeAppearance ?? null,
   };
-}
-
-/** The quiet one-liner an inheriting surface shows instead of a control it isn't using. */
-function InheritNote({ children }: { children: React.ReactNode }) {
-  return <p className="text-xs leading-5 text-muted-foreground">{children}</p>;
 }
 
 /**

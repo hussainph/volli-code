@@ -1,17 +1,21 @@
-import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import * as React from "react";
-import { errorMessage, type HarnessAdapter, type HarnessCommandFailureReason } from "@volli/shared";
+import { errorMessage, type HarnessCommandFailureReason } from "@volli/shared";
 
 import {
   activeHarness,
   harnessCommandFailureLine,
-  harnessListings,
   isHarnessCommandFailureReason,
   type HarnessListing,
-  type HarnessOrigin,
 } from "@renderer/components/pages/harness-catalog";
+import {
+  HarnessIdentitySection,
+  HarnessSelector,
+  MODEL_CATALOG_HARNESS_ID,
+  preloadApi,
+  useHarnessListings,
+} from "@renderer/components/pages/harness-picker";
 import { RuntimeCatalogSettings } from "@renderer/components/pages/runtime-catalog-settings";
-import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
+import { SettingsRow } from "@renderer/components/pages/settings-shell";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { toastError } from "@renderer/lib/toast";
@@ -27,89 +31,22 @@ import { cn } from "@renderer/lib/utils";
 const OVERRIDABLE_BINARY_HARNESS_ID = "opencode";
 
 /**
- * `window.api` where there is one. The settings surfaces render under
- * `renderToStaticMarkup` in unit tests, where there is no `window` at all and
- * no preload bridge — the built-in half of the list is compiled in, so the pane
- * still renders every first-class harness with nothing to fetch.
- */
-function preloadApi(): Window["api"] | undefined {
-  return typeof window === "undefined" ? undefined : window.api;
-}
-
-/**
  * The Harness Runtimes category: every harness this host can launch, and what
- * there is to configure about the selected one.
+ * there is to configure about the selected one, app-wide.
  *
- * Master-detail INSIDE the pane, with the selector above the detail rather than
- * beside it. The settings pane is one 608px reading column and the OpenCode
- * detail already spends it on a provider/model master-detail of its own; a
- * second vertical rail in front of that leaves the model rows too narrow to
- * read their own ids. Above, the selector costs one row and the detail keeps
- * the full width.
- *
- * The panes are deliberately spare. Only OpenCode has anything to change today,
- * so the others state the two facts that are true and knowable — the executable
- * a launch resolves and where the harness came from — instead of padding out to
- * a matching size.
+ * Master-detail INSIDE the pane — see {@link HarnessSelector} for why the
+ * selector sits above the detail rather than beside it. Configure's Runtime
+ * category is the same shape at project scope, minus the binary row below,
+ * which stays global: exactly one launch path reads the stored value.
  */
 export function HarnessSettings() {
-  const [registered, setRegistered] = React.useState<readonly HarnessAdapter[]>([]);
+  const listings = useHarnessListings();
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
-
-  React.useEffect(() => {
-    const api = preloadApi();
-    if (api === undefined) return;
-    let cancelled = false;
-    api.harness
-      .registered()
-      .then((result) => {
-        if (cancelled) return;
-        if (!result.ok) {
-          toastError(`Couldn't load registered harnesses: ${result.error}`);
-          return;
-        }
-        setRegistered(result.harnesses);
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        toastError(`Couldn't load registered harnesses: ${errorMessage(error)}`);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const listings = React.useMemo(() => harnessListings(registered), [registered]);
   const active = activeHarness(listings, selectedId);
 
   return (
     <div className="flex flex-col gap-3">
-      <div
-        role="group"
-        aria-label="Harnesses"
-        className="flex w-fit flex-wrap gap-1 rounded-lg border border-border bg-card/50 p-1"
-      >
-        {listings.map((listing) => {
-          const isActive = listing.id === active?.id;
-          return (
-            <button
-              key={listing.id}
-              type="button"
-              aria-current={isActive ? true : undefined}
-              onClick={() => setSelectedId(listing.id)}
-              className={cn(
-                "h-7 rounded-md px-3 text-ui transition-colors",
-                isActive
-                  ? "bg-accent text-foreground"
-                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-              )}
-            >
-              {listing.label}
-            </button>
-          );
-        })}
-      </div>
-
+      <HarnessSelector listings={listings} activeId={active?.id ?? null} onSelect={setSelectedId} />
       {active ? <HarnessDetail listing={active} /> : null}
     </div>
   );
@@ -117,32 +54,15 @@ export function HarnessSettings() {
 
 /** The selected harness's pane: its identity card, plus whatever it alone can configure. */
 function HarnessDetail({ listing }: { listing: HarnessListing }) {
-  const overridable = listing.id === OVERRIDABLE_BINARY_HARNESS_ID;
   return (
     <div className="flex flex-col gap-6">
-      <SettingsSection
-        title={listing.label}
-        icon={CpuIcon}
-        action={<OriginChip origin={listing.origin} />}
-      >
-        <SettingsRow label="Command">
-          <code className="rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-xs text-foreground">
-            {listing.command}
-          </code>
-        </SettingsRow>
-        {overridable ? <BinaryRow harnessId={listing.id} /> : null}
-      </SettingsSection>
-      {overridable ? <RuntimeCatalogSettings /> : null}
+      <HarnessIdentitySection listing={listing}>
+        {listing.id === OVERRIDABLE_BINARY_HARNESS_ID ? <BinaryRow harnessId={listing.id} /> : null}
+      </HarnessIdentitySection>
+      {listing.id === MODEL_CATALOG_HARNESS_ID ? (
+        <RuntimeCatalogSettings adapterId={listing.id} />
+      ) : null}
     </div>
-  );
-}
-
-/** Built-in or registered, stated where the harness's other identity facts are. */
-function OriginChip({ origin }: { origin: HarnessOrigin }) {
-  return (
-    <span className="rounded-full border border-border px-2 py-0.5 text-label uppercase text-muted-foreground">
-      {origin === "built-in" ? "Built-in" : "Registered"}
-    </span>
   );
 }
 
