@@ -57,6 +57,22 @@ export interface SessionLocationResolver {
    * substituting one, so the attach fails instead of binding somewhere else.
    */
   prepare(session: Session): Promise<SessionLocation>;
+  /**
+   * The directory a binding already holds, still there — put back if it is not.
+   *
+   * `prepare` runs once, at attach. Nothing has ever re-asked afterwards, so a
+   * checkout deleted under an open attachment stayed bound: the adapter kept
+   * being pointed at a path that no longer existed and every prompt died inside
+   * the harness on whatever name it gives a missing directory. This is the
+   * re-ask, and it is deliberately narrow — it must be cheap enough to run
+   * before a turn, which `prepare` is not.
+   *
+   * Returns nothing on purpose. The answer is always the same directory, never
+   * a substitute: a live binding cannot be re-pointed, and a rehydrated one
+   * resumes from the immutable directory its attachment recorded. A host that
+   * cannot put that directory back throws, naming it.
+   */
+  reaffirm(session: Session, directory: string): Promise<void>;
 }
 
 export interface SessionRuntimeClock {
@@ -769,6 +785,14 @@ class DefaultSessionRuntime implements SessionRuntime {
     const binding = await this.#bindingForCommand(submitted.command, projection, location);
     const recovered = await this.#recoverAdapterDelivery({ request, submitted, binding, existed });
     if (recovered) return recovered;
+
+    // Here and not in `#command`, which every verb passes through: a turn is the
+    // only thing that sends a harness back into the directory to do new work, so
+    // it is the only thing that has to know the directory is still there. An
+    // interrupt needs no directory, and an interaction answer belongs to a turn
+    // this check already cleared. `resolve` above stays the cheap read it is
+    // documented to be; this is the one stat, on the one command that earns it.
+    await this.ports.locations.reaffirm(projection.session, binding.spec.directory);
 
     const receipt = await binding.handle.dispatch({
       kind: "message.submit",
@@ -1553,11 +1577,19 @@ class DefaultSessionRuntime implements SessionRuntime {
     }
     const binding = unwrapNativeBinding(attachment.native);
     const adapter = this.#requireAdapter(attachment.adapterId);
+    // The other half of the same guarantee, for the attach that never runs
+    // `prepare`: a binding rebuilt from history — a replayed attach command, or
+    // the first command after a relaunch — takes its directory from the durable
+    // attachment and hands it straight to the adapter. That directory was real
+    // when it was written down and may not be now, and re-affirming it here
+    // covers every caller of `#bindingForAttachment` at once.
+    const directory = binding.directory ?? location.directory;
+    await this.ports.locations.reaffirm(projection.session, directory);
     const spec: NativeAttachmentSpec = {
       sessionId: projection.session.id,
       attachmentId,
       profileId: binding.profileId,
-      directory: binding.directory ?? location.directory,
+      directory,
       // A persisted binding is always a resume operation. A malformed empty
       // provider id fails honestly in the adapter; it must never create fresh.
       continuity: "native_resume",

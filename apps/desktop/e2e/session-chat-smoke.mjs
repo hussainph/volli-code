@@ -252,6 +252,13 @@ function dotIsWorking(classes) {
  * actually run", independent of anything the UI claims — mirrors the same
  * helper in worktree-smoke.mjs.
  */
+async function exists(path) {
+  return fs
+    .access(path)
+    .then(() => true)
+    .catch(() => false);
+}
+
 async function findWorktreeDir(root, needle) {
   let entries;
   try {
@@ -280,6 +287,9 @@ async function main() {
   proc.stderr?.on("data", (chunk) => mainStderr.push(chunk.toString()));
 
   let chatTabLabel = null;
+  // The directory the attach bound, kept for check 13.5 — the only way to
+  // delete exactly what the live attachment is holding.
+  let boundWorktreeDir = null;
   try {
     const page = await app.firstWindow();
     await page.waitForLoadState("domcontentloaded");
@@ -395,6 +405,7 @@ async function main() {
           (boot.data.ticketsByProject?.[pid] ?? []).find((t) => t.worktreePath !== null) ?? null
         );
       }, projectId);
+      boundWorktreeDir = worktreeDir;
       // Stamped, not merely created: the same row the terminal path writes.
       return {
         ok: row !== null && row.worktreePath === worktreeDir,
@@ -518,6 +529,46 @@ async function main() {
         detail: `settled=${settled} dotClasses=${classes}`,
       };
     });
+
+    // The bug this check exists for, and the only place the real git recreate
+    // runs: a worktree deleted out from under an attachment that stays OPEN
+    // across the deletion. `prepare` ran once, at attach; nothing re-asked
+    // afterwards, so the adapter kept being handed a path that was no longer
+    // there and every prompt came back about a second later as the harness's
+    // own NotFound. The fake server does not care what its cwd is — so, as in
+    // check 7, the prompt surviving proves nothing and the directory being
+    // back on disk is the whole assertion.
+    await attempt(
+      13.5,
+      "a worktree deleted under the live Session comes back before the next turn",
+      async () => {
+        await fs.rm(boundWorktreeDir, { recursive: true, force: true });
+        const deleted = !(await exists(boundWorktreeDir));
+        await submitPrompt(page, promptText(3));
+        await waitUntil(
+          "the third answer to render",
+          async () => (await page.getByText(answerText(3), { exact: false }).count()) > 0,
+          { timeout: 15000 },
+        ).catch(async (error) => {
+          await captureFailureEvidence(page, mainStdout, mainStderr, fakeLog, "third-turn-lost");
+          throw error;
+        });
+        await waitUntil(
+          "the third turn to settle",
+          async () => (await stopButton(page).count()) === 0,
+          {
+            timeout: 15000,
+          },
+        );
+        // The SAME path, and a real linked worktree — git leaves a `.git` FILE
+        // there, which an empty directory made to quiet an error would not have.
+        const recreated = await exists(join(boundWorktreeDir, ".git"));
+        return {
+          ok: deleted && recreated,
+          detail: `deleted=${deleted} recreated=${recreated} dir=${boundWorktreeDir}`,
+        };
+      },
+    );
 
     // ---- stretch: relaunch on the same profile, adopt (no live attach), and
     // assert the DURABLE transcript (not the fake server) is what renders it.

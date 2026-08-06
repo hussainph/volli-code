@@ -268,7 +268,11 @@ async function labLocation() {
 }
 
 /** A host with nothing to materialize: preparing a location is resolving it. */
-const LAB_LOCATION = { resolve: labLocation, prepare: labLocation };
+const LAB_LOCATION = {
+  resolve: labLocation,
+  prepare: labLocation,
+  reaffirm: async () => undefined,
+};
 
 function composition(network: ScriptedNetwork): SessionRuntime {
   let now = 1000;

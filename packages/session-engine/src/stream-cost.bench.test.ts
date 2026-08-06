@@ -134,7 +134,7 @@ const venue = { id: "machine-1", kind: "local" as const };
 /** A host with nothing to materialize: preparing a location is resolving it. */
 function fixedLocation(directory: string): SessionLocationResolver {
   const at = async () => ({ directory, venue });
-  return { resolve: at, prepare: at };
+  return { resolve: at, prepare: at, reaffirm: async () => undefined };
 }
 
 function ids(): SessionLedgerIds {

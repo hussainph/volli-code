@@ -28,10 +28,13 @@ import {
 
 const venue = { id: "machine-1", kind: "local" as const };
 
+/** Nothing was ever materialized, so nothing a binding holds can have gone missing. */
+const stillThere = async () => undefined;
+
 /** A host with nothing to materialize: preparing a location is resolving it. */
 function fixedLocation(directory: string): SessionLocationResolver {
   const at = async () => ({ directory, venue });
-  return { resolve: at, prepare: at };
+  return { resolve: at, prepare: at, reaffirm: stillThere };
 }
 
 function ids(): SessionLedgerIds {
@@ -608,6 +611,7 @@ describe("SessionRuntime native adapter contract", () => {
         prepare: async () => {
           throw new Error(detail);
         },
+        reaffirm: stillThere,
       },
     });
     const session = await runtime.command({
@@ -650,6 +654,7 @@ describe("SessionRuntime native adapter contract", () => {
       locations: {
         resolve: async () => ({ directory: "/projects/fake", venue }),
         prepare: async () => ({ directory: "/w/VC-12", venue }),
+        reaffirm: stillThere,
       },
     });
     const sessionId = await createAndAttach(runtime);
@@ -999,7 +1004,9 @@ describe("SessionRuntime native adapter contract", () => {
       }
       return { directory: "/projects/fake", venue };
     };
-    const { runtime, adapter } = composition({ locations: { resolve: at, prepare: at } });
+    const { runtime, adapter } = composition({
+      locations: { resolve: at, prepare: at, reaffirm: stillThere },
+    });
     const sessionId = await createAndAttach(runtime);
     const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
     delayLocation = true;

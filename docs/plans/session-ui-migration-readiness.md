@@ -49,7 +49,9 @@ Hardening that landed with the move, found by live use and a hands-on drive:
 the ticket worktree is materialized at attach through the same `ensure`
 pipeline the terminal uses (`SessionLocationResolver.prepare`, attach-only —
 `resolve` stays cheap for every other command, and the binding persists the
-directory `prepare` returned, never the pre-materialization read); the
+directory `prepare` returned, never the pre-materialization read; a third
+verb, `reaffirm`, later closed the gap that left — a checkout deleted under an
+open attachment is put back at the same path before the next turn); the
 adapter repeats OpenCode's `error.data.message` in attention detail while
 keeping bodies and headers redacted; the blocker renders the cause, not just
 the headline; a new assistant message id counts as turn-start evidence, so a

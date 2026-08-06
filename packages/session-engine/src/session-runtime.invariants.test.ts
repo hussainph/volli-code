@@ -21,9 +21,12 @@ import {
 const venue = { id: "invariant-machine", kind: "local" as const };
 
 /** A host with nothing to materialize: preparing a location is resolving it. */
-function fixedLocation(directory: () => string): SessionLocationResolver {
+function fixedLocation(
+  directory: () => string,
+  reaffirm: SessionLocationResolver["reaffirm"] = async () => undefined,
+): SessionLocationResolver {
   const at = async () => ({ directory: directory(), venue });
-  return { resolve: at, prepare: at };
+  return { resolve: at, prepare: at, reaffirm };
 }
 
 function ledgerIds(): SessionLedgerIds {
@@ -115,6 +118,7 @@ function composition(
     adapter?: Adapter;
     engine?: SessionEngine;
     directory?: () => string;
+    reaffirm?: SessionLocationResolver["reaffirm"];
     runtimeIdPrefix?: string;
     onSubscriberFailure?: (error: unknown) => void | Promise<void>;
     probeTimeoutMs?: number;
@@ -136,7 +140,7 @@ function composition(
       engine,
       adapters: createNativeAdapterRegistry([adapter]),
       artifacts: createInMemoryTranscriptArtifactStore(),
-      locations: fixedLocation(() => input.directory?.() ?? "/ticket/original"),
+      locations: fixedLocation(() => input.directory?.() ?? "/ticket/original", input.reaffirm),
       clock: { now: () => now++ },
       ids: runtimeIds(input.runtimeIdPrefix),
       ...(input.onSubscriberFailure ? { onSubscriberFailure: input.onSubscriberFailure } : {}),
@@ -324,6 +328,77 @@ describe("SessionRuntime durable boundary invariants", () => {
         }),
       ]),
     );
+  });
+
+  // A worktree deleted out from under an OPEN attachment, which is how it
+  // happened: one binding spanned the deletion, `prepare` had run hours earlier
+  // and nothing re-asked, and every prompt after that came back a second later
+  // as the harness's own NotFound on a path that was no longer there.
+  it("re-affirms a live binding's directory before a turn and refuses one it cannot put back", async () => {
+    const affirmed: string[] = [];
+    let gone: Error | null = null;
+    const { runtime, adapter } = composition({
+      directory: () => "/w/VC-3",
+      reaffirm: async (_session, directory) => {
+        affirmed.push(directory);
+        if (gone) throw gone;
+      },
+    });
+    const created = await create(runtime);
+    await attach(runtime, created.sessionId);
+
+    const prompt = (commandId: string) =>
+      runtime.command({
+        commandId,
+        sessionId: created.sessionId,
+        command: { kind: "message.submit", message: message(commandId) },
+      });
+
+    await expect(prompt("prompt-recreated")).resolves.toMatchObject({
+      receipt: { status: "accepted" },
+    });
+    // The bound directory, not a fresh read of where the Session would go now.
+    expect(affirmed).toEqual(["/w/VC-3"]);
+    expect(adapter.dispatches).toBe(1);
+
+    gone = new Error("The Session's directory /w/VC-3 is gone and couldn't be recreated.");
+    await expect(prompt("prompt-refused")).rejects.toThrow(
+      "The Session's directory /w/VC-3 is gone and couldn't be recreated.",
+    );
+    // Volli's sentence, and the harness was never handed the missing path.
+    expect(adapter.dispatches).toBe(1);
+  });
+
+  // The other half: a binding rebuilt from history — a replayed attach, or the
+  // first command after a relaunch — never runs `prepare` at all.
+  it("re-affirms the directory a rehydrated binding takes from its attachment", async () => {
+    const first = composition({ directory: () => "/ticket/original" });
+    const created = await create(first.runtime);
+    await attach(first.runtime, created.sessionId);
+    const attachmentId = (await first.runtime.snapshot({ sessionId: created.sessionId })).projection
+      .liveExecutor!.id;
+    await first.runtime.close();
+
+    const rebuilt = new Adapter();
+    const affirmed: string[] = [];
+    const recovered = composition({
+      engine: first.engine,
+      adapter: rebuilt,
+      directory: () => "/ticket/rerouted",
+      reaffirm: async (_session, directory) => {
+        affirmed.push(directory);
+        throw new Error(`The Session's directory ${directory} is gone and couldn't be recreated.`);
+      },
+      runtimeIdPrefix: "recovered-",
+    });
+
+    await expect(
+      recovered.runtime.refreshCapabilities({ sessionId: created.sessionId, attachmentId }),
+    ).rejects.toThrow(
+      "The Session's directory /ticket/original is gone and couldn't be recreated.",
+    );
+    expect(affirmed).toEqual(["/ticket/original"]);
+    expect(rebuilt.attaches).toBe(0);
   });
 
   it("reconciles replayed unreconciled work without dispatching it again", async () => {
