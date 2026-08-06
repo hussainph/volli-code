@@ -86,6 +86,7 @@ import type {
   TicketCreateInput,
   TicketEventsResult,
   TicketLatestSignalsResult,
+  TicketStatusEntriesResult,
   TicketIdInput,
   TicketMoveInput,
   TicketResult,
@@ -326,6 +327,9 @@ const api = {
     /** The latest durable Session outcome per ticket — one batched read backing the sidebar's attention tiers. */
     latestSignals: (input: ProjectIdInput): Promise<TicketLatestSignalsResult> =>
       invoke("volli:ticket-latest-signals", input),
+    /** When each non-archived ticket entered its current status — one batched read backing the sidebar. */
+    statusEntries: (input: ProjectIdInput): Promise<TicketStatusEntriesResult> =>
+      invoke("volli:ticket-status-entries", input),
   },
   comments: {
     /** A ticket's comments, chronological — the work-log feed. */

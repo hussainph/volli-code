@@ -200,3 +200,17 @@ export interface LatestSessionSignal {
   /** Epoch milliseconds. */
   createdAt: number;
 }
+
+/**
+ * When one of a project's non-archived tickets entered its CURRENT status —
+ * one batched read backing the sidebar. `enteredAt` is the `created_at` of
+ * the ticket's newest `status_changed` event; a same-column reorder writes no
+ * event, so this stays stable across reorders. Falls back to the ticket's own
+ * `createdAt` when it has never changed status (born into its current column).
+ */
+export interface TicketStatusEntry {
+  ticketId: string;
+  status: TicketStatus;
+  /** Epoch milliseconds. */
+  enteredAt: number;
+}

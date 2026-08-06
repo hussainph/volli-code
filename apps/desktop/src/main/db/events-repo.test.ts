@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, it } from "vite-plus/test";
-import { listTicketEvents, recordTicketEvent } from "./events-repo";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { listTicketEvents, listTicketStatusEntries, recordTicketEvent } from "./events-repo";
 import { insertProject } from "./projects-repo";
 import { openTestDb, testProject, testTicket } from "./test-helpers";
 import type { TestDb } from "./test-helpers";
-import { insertTicket } from "./tickets-repo";
+import { archiveTicket, insertTicket } from "./tickets-repo";
 
 let ctx: TestDb;
 
@@ -171,5 +171,125 @@ describe("recordTicketEvent — body_edited coalescing", () => {
 
     expect(listTicketEvents(ctx.db, ticketA.id)).toHaveLength(1);
     expect(listTicketEvents(ctx.db, ticketB.id)).toHaveLength(1);
+  });
+});
+
+describe("listTicketStatusEntries", () => {
+  it("uses the ticket's newest status_changed event as enteredAt", () => {
+    ctx = openTestDb();
+    const project = testProject();
+    insertProject(ctx.db, project);
+    const ticket = testTicket(project.id, { id: "ticket-a", status: "backlog" });
+    insertTicket(ctx.db, ticket);
+    recordTicketEvent(
+      ctx.db,
+      ticket.id,
+      { kind: "status_changed", from: "backlog", to: "todo" },
+      100,
+    );
+    recordTicketEvent(
+      ctx.db,
+      ticket.id,
+      { kind: "status_changed", from: "todo", to: "doing" },
+      300,
+    );
+    // An older status_changed event must not win over the newer one, even
+    // though it's inserted last (out-of-order created_at).
+    recordTicketEvent(
+      ctx.db,
+      ticket.id,
+      { kind: "status_changed", from: "backlog", to: "todo" },
+      50,
+    );
+
+    const entries = listTicketStatusEntries(ctx.db, project.id);
+    expect(entries).toEqual([{ ticketId: ticket.id, status: "backlog", enteredAt: 300 }]);
+  });
+
+  it("falls back to the ticket's own createdAt when it has never changed status", () => {
+    ctx = openTestDb();
+    const project = testProject();
+    insertProject(ctx.db, project);
+    const ticket = testTicket(project.id, { id: "born-backlog", createdAt: 42 });
+    insertTicket(ctx.db, ticket);
+
+    const entries = listTicketStatusEntries(ctx.db, project.id);
+    expect(entries).toEqual([{ ticketId: ticket.id, status: "backlog", enteredAt: 42 }]);
+  });
+
+  it("breaks ties for equal-timestamp status_changed events using insertion order (rowid)", () => {
+    ctx = openTestDb();
+    const project = testProject();
+    insertProject(ctx.db, project);
+    const ticket = testTicket(project.id, { id: "ticket-a", status: "backlog" });
+    insertTicket(ctx.db, ticket);
+    recordTicketEvent(
+      ctx.db,
+      ticket.id,
+      { kind: "status_changed", from: "backlog", to: "todo" },
+      100,
+    );
+    recordTicketEvent(
+      ctx.db,
+      ticket.id,
+      { kind: "status_changed", from: "todo", to: "doing" },
+      100,
+    );
+
+    const entries = listTicketStatusEntries(ctx.db, project.id);
+    expect(entries).toEqual([{ ticketId: ticket.id, status: "backlog", enteredAt: 100 }]);
+  });
+
+  it("excludes archived tickets", () => {
+    ctx = openTestDb();
+    const project = testProject();
+    insertProject(ctx.db, project);
+    const live = testTicket(project.id, { id: "live", createdAt: 10 });
+    const archived = testTicket(project.id, { id: "archived", createdAt: 20 });
+    insertTicket(ctx.db, live);
+    insertTicket(ctx.db, archived);
+    archiveTicket(ctx.db, archived.id, 999);
+
+    const entries = listTicketStatusEntries(ctx.db, project.id);
+    expect(entries.map((e) => e.ticketId)).toEqual([live.id]);
+  });
+
+  it("scopes strictly to the requested project", () => {
+    ctx = openTestDb();
+    const projectA = testProject();
+    const projectB = testProject();
+    insertProject(ctx.db, projectA);
+    insertProject(ctx.db, projectB);
+    const ticketA = testTicket(projectA.id, { id: "ticket-a", createdAt: 1 });
+    const ticketB = testTicket(projectB.id, { id: "ticket-b", createdAt: 2 });
+    insertTicket(ctx.db, ticketA);
+    insertTicket(ctx.db, ticketB);
+
+    const entries = listTicketStatusEntries(ctx.db, projectA.id);
+    expect(entries.map((e) => e.ticketId)).toEqual([ticketA.id]);
+  });
+
+  it("issues one batched query regardless of ticket count", () => {
+    ctx = openTestDb();
+    const project = testProject();
+    insertProject(ctx.db, project);
+    const tickets = Array.from({ length: 5 }, (_, i) =>
+      testTicket(project.id, { id: `ticket-${i}`, createdAt: i }),
+    );
+    for (const ticket of tickets) {
+      insertTicket(ctx.db, ticket);
+    }
+    recordTicketEvent(
+      ctx.db,
+      tickets[2]?.id ?? "",
+      { kind: "status_changed", from: "backlog", to: "todo" },
+      500,
+    );
+
+    const prepareSpy = vi.spyOn(ctx.db, "prepare");
+    const entries = listTicketStatusEntries(ctx.db, project.id);
+
+    expect(entries).toHaveLength(5);
+    expect(prepareSpy).toHaveBeenCalledTimes(1);
   });
 });

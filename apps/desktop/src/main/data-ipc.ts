@@ -55,6 +55,7 @@ import type {
   TicketCreateInput,
   TicketEventsResult,
   TicketLatestSignalsResult,
+  TicketStatusEntriesResult,
   TicketIdInput,
   TicketMoveInput,
   TicketResult,
@@ -81,7 +82,7 @@ import type {
 } from "@volli/shared";
 import { getAllAppState, setAppState } from "./db/app-state-repo";
 import { deleteComment, getComment, listComments, updateComment } from "./db/comments-repo";
-import { listTicketEvents } from "./db/events-repo";
+import { listTicketEvents, listTicketStatusEntries } from "./db/events-repo";
 import { listAllLabels, setLabelColor } from "./db/labels-repo";
 import {
   countProjects,
@@ -458,6 +459,10 @@ export function registerDataIpcHandlers(
         ok: true,
         signals: [...(await sessionEngine.listLatestTicketSignals({ projectId: input.projectId }))],
       };
+    },
+
+    "volli:ticket-status-entries": (input: ProjectIdInput): TicketStatusEntriesResult => {
+      return { ok: true, entries: listTicketStatusEntries(db, input.projectId) };
     },
 
     "volli:comment-list": (input: TicketIdInput): TicketCommentsResult => {
