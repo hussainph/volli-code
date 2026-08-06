@@ -20,7 +20,10 @@ import { FileSaveGuardDialog } from "@renderer/components/files/save-guard-dialo
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import type { DocumentFileRefs } from "@renderer/components/editor/monaco-document-editor";
 import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
-import { createTerminalSession } from "@renderer/components/sessions/session-create";
+import {
+  bootChatSession,
+  createTerminalSession,
+} from "@renderer/components/sessions/session-create";
 import { FileView } from "@renderer/components/ticket/file-view";
 import { DiffView } from "@renderer/components/ticket/diff-view";
 import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
@@ -53,6 +56,7 @@ import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
+import { useBoardStore } from "@renderer/stores/board";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { sessionPanes, ticketScope, useSessionsStore } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
@@ -151,6 +155,10 @@ export function TicketDetail({
   );
   const sessionTabs = useSessionsStore((state) => state.byOwner[ticket.id]?.tabs);
   const creating = useSessionsStore((state) => state.starting[ticket.id] ?? false);
+  // The chat store's own in-flight flag, ORed with the terminal one wherever a
+  // single control mints both kinds: the "+" is disabled while EITHER is
+  // starting, because only one of them starts at a time.
+  const creatingChat = useChatSessionsStore((state) => state.starting[ticket.id] ?? false);
   /**
    * The ticket's open chat tabs, and the two facts the strip draws for each.
    *
@@ -807,43 +815,28 @@ export function TicketDetail({
     if (sessionId !== null) setActiveTab(sessionId);
   }, [projectId, ticket.id, setActiveTab]);
 
-  // Mints one durable chat Session on this ticket and opens its tab. Its own
-  // in-flight flag, because the PTY store's `starting` is a fact about a pane
-  // coming up and other surfaces read it as one — the rail's own creating
-  // state, the session-create pipeline — so a chat write there would be a lie
-  // about a terminal that does not exist. The "+" is disabled by either flag:
-  // one control mints both kinds, and only one of them at a time.
-  const [creatingChat, setCreatingChat] = React.useState(false);
+  // Mints one durable chat Session on this ticket and opens its tab, through
+  // the same boot guard the terminal path uses: one create per ticket at a
+  // time, none at all into a project the renderer has stopped tracking, and the
+  // landing below re-checked against fresh state after the await.
   const createChat = React.useCallback(async () => {
-    if (creatingChat) return;
-    setCreatingChat(true);
-    try {
-      const chat = useChatSessionsStore.getState();
-      const sessionId = await chat.createChatSession({
-        projectId,
-        ticketId: ticket.id,
-        // The terminal path's own convention — the count that exists, plus one.
-        title: `Chat ${nextChatOrdinal(durableChatIds?.length ?? 0, openChatIds.length)}`,
-      });
-      // A failed `session.create` has already toasted and left no Session to
-      // open a tab onto; a failed *attach* resolves the id and the tab carries
-      // its own Retry.
-      if (sessionId === null) return;
-      chat.openChatTab(ticket.id, sessionId);
-      setActiveTab(chatTabId(sessionId));
-      // So the rail's row for it appears without waiting on a terminal event.
-      void useTicketSessionRecordsStore.getState().refresh(ticket.id);
-    } finally {
-      setCreatingChat(false);
-    }
-  }, [
-    creatingChat,
-    durableChatIds?.length,
-    openChatIds.length,
-    projectId,
-    setActiveTab,
-    ticket.id,
-  ]);
+    await bootChatSession(ticketScope(projectId, ticket.id), {
+      // The terminal path's own convention — the count that exists, plus one.
+      title: `Chat ${nextChatOrdinal(durableChatIds?.length ?? 0, openChatIds.length)}`,
+      land: (sessionId) => {
+        // The ticket itself may have been deleted while the create was in
+        // flight; a tab on a card that no longer exists is unreachable, so let
+        // the Session go (its durable row stands — see `bootChatSession`).
+        const tickets = useBoardStore.getState().ticketsByProject[projectId] ?? [];
+        if (!tickets.some((candidate) => candidate.id === ticket.id)) return false;
+        useChatSessionsStore.getState().openChatTab(ticket.id, sessionId);
+        setActiveTab(chatTabId(sessionId));
+        // So the rail's row for it appears without waiting on a terminal event.
+        void useTicketSessionRecordsStore.getState().refresh(ticket.id);
+        return true;
+      },
+    });
+  }, [durableChatIds?.length, openChatIds.length, projectId, setActiveTab, ticket.id]);
 
   // A rail row for a Session with no live client adopts it; one already open
   // just comes to the front. `adoptChatSession` is idempotent, so this is the
@@ -938,7 +931,16 @@ export function TicketDetail({
                 : [sessionId];
               closeGuard.guard(liveIds, () => closeTicketSession(ticket.id, sessionId));
             }}
-            onRenameSessionTab={(sessionId, title) => renameTerminalSession(sessionId, title)}
+            onRenameSessionTab={(tabId, title) => {
+              // Scaffolding, not behavior: the strip raises this for `session`
+              // tabs only, so the chat arm is unreachable until the rename wave
+              // gives a chat tab an editable label. It is here so that wave
+              // changes one branch rather than re-deriving which store owns a
+              // title — and so a chat tab id can never reach the PTY rename,
+              // which would address a terminal that does not exist.
+              if (parseChatTabId(tabId) !== null) return;
+              renameTerminalSession(tabId, title);
+            }}
             onNewSession={() => void createSession()}
             onNewChat={() => void createChat()}
             canFocusTerminal={activeSessionTab !== undefined}

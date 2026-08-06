@@ -1,14 +1,19 @@
 /**
- * Booting terminal sessions + splits, outside the React tree so both surfaces
- * (the Sessions page and the ticket overlay) share one code path. A create
- * boots a PTY in main (ticket scope injects VOLLI_TICKET env there), pre-creates
- * the renderer engine so output arriving before the view mounts is buffered, and
- * only then registers the tab/split in the unified store. Every failure toasts —
- * a mutation is never silently swallowed (CLAUDE.md).
+ * Booting Sessions outside the React tree, so every surface that can start one
+ * (the Sessions page, the ticket overlay's tab strip, the ticket rail) shares
+ * one code path per kind. A terminal create boots a PTY in main (ticket scope
+ * injects VOLLI_TICKET env there), pre-creates the renderer engine so output
+ * arriving before the view mounts is buffered, and only then registers the
+ * tab/split in the unified store. A chat create mints one durable Session over
+ * the Session edge and only then opens its tab. The two agree on nothing they
+ * DO and on every race guard, which is {@link underOwnerGuard}. Every failure
+ * toasts — a mutation is never silently swallowed (CLAUDE.md).
  */
-import { errorMessage, type HarnessId } from "@volli/shared";
+import { errorMessage, type HarnessId, type Project } from "@volli/shared";
 
+import type { ChatExecutorChoice } from "@renderer/chat/client";
 import { toastError } from "@renderer/lib/toast";
+import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import {
   findSessionPane,
@@ -75,6 +80,60 @@ function trackedProject(projectId: string) {
   return useProjectsStore.getState().projects.find((candidate) => candidate.id === projectId);
 }
 
+/**
+ * Where a surface keeps its per-owner in-flight flag, so {@link underOwnerGuard}
+ * can hold one create at a time without deciding whose flag that is.
+ *
+ * Deliberately NOT one shared flag. The PTY store's `starting` is a fact about
+ * a pane coming up, and everything that reads it reads it as one — the rail's
+ * New-session button, this module's own re-entry check — so a chat create
+ * latching it would be a lie about a terminal that does not exist. The two are
+ * ORed only where one control mints both kinds (the ticket detail's "+"), which
+ * is exactly where "something is starting here" is the honest reading.
+ */
+interface StartingFlag {
+  isStarting(ownerId: string): boolean;
+  setStarting(ownerId: string, starting: boolean): void;
+}
+
+const terminalStarting: StartingFlag = {
+  isStarting: (ownerId) => useSessionsStore.getState().starting[ownerId] === true,
+  setStarting: (ownerId, starting) => useSessionsStore.getState().setStarting(ownerId, starting),
+};
+
+const chatStarting: StartingFlag = {
+  isStarting: (ownerId) => useChatSessionsStore.getState().starting[ownerId] === true,
+  setStarting: (ownerId, starting) =>
+    useChatSessionsStore.getState().setStarting(ownerId, starting),
+};
+
+/**
+ * The race guards every Session boot shares, whatever it is booting: one create
+ * per owner at a time (keyed by {@link ownerKey} — a projectId for a scratch
+ * scope, a ticketId for a ticket one, so the flag names exactly the surface
+ * whose "+" goes quiet), no boot at all into a project the renderer has stopped
+ * tracking, and a `finally` that clears the flag against FRESH state however
+ * the boot ended. `boot` is handed the tracked project because a terminal needs
+ * its path for the PTY's cwd; a guard hit resolves null without running it.
+ */
+async function underOwnerGuard<T>(
+  scope: SessionScope,
+  flag: StartingFlag,
+  boot: (project: Project) => Promise<T | null>,
+): Promise<T | null> {
+  const ownerId = ownerKey(scope);
+  if (flag.isStarting(ownerId)) return null;
+  const project = trackedProject(scope.projectId);
+  if (project === undefined) return null;
+
+  flag.setStarting(ownerId, true);
+  try {
+    return await boot(project);
+  } finally {
+    flag.setStarting(ownerId, false);
+  }
+}
+
 /** Dispose the pre-created engine and kill the orphaned PTY when a create can't land its tab. */
 function abandon(sessionId: string): void {
   disposeEngine(sessionId);
@@ -89,18 +148,17 @@ function abandon(sessionId: string): void {
 }
 
 /**
- * The shared boot pipeline behind {@link createTerminalSession} and
+ * The shared terminal boot pipeline behind {@link createTerminalSession} and
  * {@link createTerminalSplit}: the two differ only in how the booted PTY LANDS
- * (a fresh tab vs a split sibling) and in the failure wording, so every race
- * guard — the per-owner starting flag, the tracked-project check, the engine
- * pre-create, the stale-owner revalidation after the await, `abandon()` when it
- * can't land, and the `finally` that clears `starting` — lives here exactly
- * once. `land` performs the surface-specific placement against FRESH store
- * state and returns whether it landed (false ⇒ the tab/source pane vanished
- * mid-flight, so abandon the orphaned PTY). `verb` fills `Couldn't ${verb}:`.
- * `kickoff`/`resume` are mutually exclusive launch intents (only ticket
- * scopes ever pass either). Resolves the booted sessionId, or null on any
- * guard/failure.
+ * (a fresh tab vs a split sibling) and in the failure wording, so everything
+ * else — {@link underOwnerGuard}'s entry checks, the engine pre-create, the
+ * stale-owner revalidation after the await, and `abandon()` when it can't land
+ * — lives here exactly once. `land` performs the surface-specific placement
+ * against FRESH store state and returns whether it landed (false ⇒ the
+ * tab/source pane vanished mid-flight, so abandon the orphaned PTY). `verb`
+ * fills `Couldn't ${verb}:`. `kickoff`/`resume` are mutually exclusive launch
+ * intents (only ticket scopes ever pass either). Resolves the booted sessionId,
+ * or null on any guard/failure.
  *
  * `land` receives the whole durable record main persisted, not just its title:
  * only main knows whether a harness command line was actually written into the
@@ -115,36 +173,32 @@ async function bootSession(
   kickoff?: SessionKickoff,
   resume?: SessionResume,
 ): Promise<string | null> {
-  const store = useSessionsStore.getState();
-  const id = ownerKey(scope);
-  if (store.starting[id]) return null;
-  const project = trackedProject(scope.projectId);
-  if (project === undefined) return null;
-
-  store.setStarting(id, true);
-  try {
-    const result = await window.api.terminal.create(
-      createRequest(scope, project.path, placement, kickoff, resume),
-    );
-    if (!result.ok) {
-      toastError(`Couldn't ${verb}: ${result.error}`);
+  return underOwnerGuard(scope, terminalStarting, async (project) => {
+    try {
+      const result = await window.api.terminal.create(
+        createRequest(scope, project.path, placement, kickoff, resume),
+      );
+      if (!result.ok) {
+        toastError(`Couldn't ${verb}: ${result.error}`);
+        return null;
+      }
+      getOrCreateEngine(result.sessionId);
+      // The owner may have been removed while create was in flight; landing the
+      // tab would resurrect a session record with a PTY no UI can reach. `land`
+      // does any further revalidation (a split's source pane must still exist).
+      if (
+        trackedProject(scope.projectId) === undefined ||
+        !land(result.sessionId, result.session)
+      ) {
+        abandon(result.sessionId);
+        return null;
+      }
+      return result.sessionId;
+    } catch (error) {
+      toastError(`Couldn't ${verb}: ${errorMessage(error)}`);
       return null;
     }
-    getOrCreateEngine(result.sessionId);
-    // The owner may have been removed while create was in flight; landing the
-    // tab would resurrect a session record with a PTY no UI can reach. `land`
-    // does any further revalidation (a split's source pane must still exist).
-    if (trackedProject(scope.projectId) === undefined || !land(result.sessionId, result.session)) {
-      abandon(result.sessionId);
-      return null;
-    }
-    return result.sessionId;
-  } catch (error) {
-    toastError(`Couldn't ${verb}: ${errorMessage(error)}`);
-    return null;
-  } finally {
-    useSessionsStore.getState().setStarting(id, false);
-  }
+  });
 }
 
 /**
@@ -221,5 +275,69 @@ export async function createTerminalSplit(
     if (tab === undefined || findSessionPane(tab.layout, sourcePaneId) === null) return false;
     useSessionsStore.getState().addSplit(id, tabId, sourcePaneId, sessionId, direction);
     return true;
+  });
+}
+
+/** How a chat create lands once the Session is durable. */
+export interface ChatBoot {
+  title: string;
+  /** Which executor to attach; the store's default when omitted. */
+  executor?: ChatExecutorChoice;
+  /**
+   * Registers the tab against FRESH store state, returning whether it landed —
+   * false ⇒ the owner vanished mid-flight, so this surface lets the Session go.
+   */
+  land(sessionId: string): boolean;
+}
+
+/**
+ * Let go of a chat Session this surface created but could not land.
+ *
+ * Byte-identical to closing a chat tab, and that is the point: "this surface
+ * let go" has exactly one meaning, so the client is disposed and the slice
+ * dropped and nothing else happens. The durable row is NOT deleted — no delete
+ * channel exists, by design — and the attachment is NOT released. A Session was
+ * created, so the row staying visible in the rail and in history is the honest
+ * account of what happened; the alternative would be a Session the ledger
+ * remembers and no surface admits to.
+ */
+function abandonChat(sessionId: string): void {
+  useChatSessionsStore.getState().closeChatSession(sessionId);
+}
+
+/**
+ * Boot one durable chat Session under `scope` and land its tab, with the same
+ * guarantees the terminal path has always had: one create per owner in flight,
+ * no create into an untracked project, and a stale-owner revalidation against
+ * FRESH store state after the await. Resolves the Session's id, or null on any
+ * guard/failure. Ticket scopes carry their ticketId onto the Session; a scratch
+ * scope mints a ticketless chat, which the Session edge already accepts.
+ *
+ * Landing is gated on the CREATE and never on the attach: `createChatSession`
+ * resolves the id even when the executor refuses to start, because the Session
+ * exists either way and the tab it opens carries its own Retry. Only a failed
+ * `session.create` — which has already toasted, and left nothing durable behind
+ * — resolves null, and only that skips the tab.
+ */
+export async function bootChatSession(
+  scope: SessionScope,
+  { title, executor, land }: ChatBoot,
+): Promise<string | null> {
+  return underOwnerGuard(scope, chatStarting, async () => {
+    const sessionId = await useChatSessionsStore.getState().createChatSession({
+      projectId: scope.projectId,
+      ticketId: scope.kind === "ticket" ? scope.ticketId : null,
+      title,
+      ...(executor === undefined ? {} : { executor }),
+    });
+    if (sessionId === null) return null;
+    // The owner may have been removed while `session.create` was in flight;
+    // `land` re-checks its own owner (a ticket must still be on the board) the
+    // way a split re-checks its source pane.
+    if (trackedProject(scope.projectId) === undefined || !land(sessionId)) {
+      abandonChat(sessionId);
+      return null;
+    }
+    return sessionId;
   });
 }
