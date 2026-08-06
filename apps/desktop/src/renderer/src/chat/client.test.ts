@@ -906,6 +906,115 @@ describe("submit", () => {
   });
 });
 
+/* ---------------------------------------------------------- auto-titling */
+
+describe("auto-title on delivery", () => {
+  function projectionWithTitle(title: string | null): SessionProjection {
+    return { ...projectionFor("attach-1"), session: { ...SESSION, title } };
+  }
+
+  async function readyWithTitle(title: string | null) {
+    const session = await adopted((fake) => {
+      fake.snapshotProjection = projectionWithTitle(title);
+    });
+    session.store.getState().setSelection(session.sessionId, {
+      providerId: "anthropic",
+      modelId: "claude",
+      variant: "",
+      agent: "",
+    });
+    return session;
+  }
+
+  it("renames a Session still on its creation default once a message delivers", async () => {
+    const { client, sessionId } = await readyWithTitle("Chat 1");
+    const renameMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
+
+    await expect(client.submit("Fix the parser\nmore detail", "steer")).resolves.toBe(true);
+    await settle();
+
+    expect(renameMock).toHaveBeenCalledWith({ sessionId, title: "Fix the parser" });
+    vi.unstubAllGlobals();
+  });
+
+  it("fires through a queue release too — the one choke point both paths share", async () => {
+    const renameMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
+    // No live executor yet, so the message queues; setProjection below is what
+    // the queue's release rule reacts to, exactly as it would off a stream
+    // frame that just brought one up.
+    const { store, sessionId } = await adopted((fake) => {
+      fake.snapshotProjection = {
+        ...projectionFor(null),
+        session: { ...SESSION, title: "Chat 1" },
+      };
+    });
+    store.getState().setSelection(sessionId, {
+      providerId: "anthropic",
+      modelId: "claude",
+      variant: "",
+      agent: "",
+    });
+
+    store.getState().enqueue(sessionId, { id: "q1", text: "Fix the parser" });
+    expect(renameMock).not.toHaveBeenCalled();
+
+    store.getState().setProjection(sessionId, projectionWithTitle("Chat 1"));
+    await settle();
+
+    expect(renameMock).toHaveBeenCalledWith({ sessionId, title: "Fix the parser" });
+    vi.unstubAllGlobals();
+  });
+
+  it("leaves a title a person (or an earlier delivery) already gave it alone", async () => {
+    const { client } = await readyWithTitle("Migration plan");
+    const renameMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
+
+    await expect(client.submit("Fix the parser", "steer")).resolves.toBe(true);
+    await settle();
+
+    expect(renameMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("has no title to read from a Session whose projection carries none, and renames nothing", async () => {
+    const { client } = await readyWithTitle(null);
+    const renameMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
+
+    await expect(client.submit("Fix the parser", "steer")).resolves.toBe(true);
+    await settle();
+
+    expect(renameMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("never delivers, and never renames, a blank message", async () => {
+    const { client } = await readyWithTitle("Chat 1");
+    const renameMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
+
+    await expect(client.submit("   ", "steer")).resolves.toBe(false);
+
+    expect(renameMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("does not fail the submit when the rename itself fails", async () => {
+    const { client } = await readyWithTitle("Chat 1");
+    const renameMock = vi.fn().mockRejectedValue(new Error("ipc down"));
+    vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
+
+    await expect(client.submit("Fix the parser", "steer")).resolves.toBe(true);
+    await settle();
+
+    expect(renameMock).toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+});
+
 /* --------------------------------------------------------------- the harness */
 
 describe("commands addressed to an attachment", () => {
