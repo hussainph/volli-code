@@ -31,6 +31,7 @@ export function chatSessionRecord(projection: SessionProjection): ChatSessionRec
     live: attachment?.status === "open",
     activity: chatActivity(projection, attachment),
     lastActivityAt: projection.lastActivityAt,
+    bornTicketless: projection.bornTicketless,
   };
 }
 

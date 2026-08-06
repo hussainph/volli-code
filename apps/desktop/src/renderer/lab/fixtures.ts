@@ -240,6 +240,7 @@ export function ticketById(id: string): Ticket {
 function session(
   overrides: Partial<SessionRecord> & Pick<SessionRecord, "id" | "ticketId" | "title">,
 ): SessionRecord {
+  const createdAt = overrides.createdAt ?? NOW - 2 * HOUR;
   return {
     projectId: project.id,
     harnessId: "claude-code",
@@ -248,9 +249,11 @@ function session(
     launchKind: "agent",
     placement: "tab",
     cwd: project.path,
-    createdAt: NOW - 2 * HOUR,
+    createdAt,
     endedAt: null,
     exitCode: null,
+    lastActivityAt: createdAt,
+    bornTicketless: overrides.ticketId === null,
     ...overrides,
   };
 }

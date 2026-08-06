@@ -21,6 +21,8 @@ function record(overrides: Partial<SessionRecord> = {}): SessionRecord {
     createdAt: 1,
     endedAt: null,
     exitCode: null,
+    lastActivityAt: 1,
+    bornTicketless: false,
     ...overrides,
   };
 }
@@ -42,6 +44,7 @@ function chatRow(overrides: Partial<ChatSessionRecord> = {}): SessionListingRow 
       live: true,
       activity: "idle",
       lastActivityAt: 1,
+      bornTicketless: false,
       ...overrides,
     },
   };

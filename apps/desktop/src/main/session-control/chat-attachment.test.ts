@@ -32,6 +32,7 @@ function projectionWith(
     signal: null,
     turnActive: false,
     lastActivityAt: 1,
+    bornTicketless: true,
     ...overrides,
   };
 }
@@ -94,6 +95,7 @@ describe("chatSessionRecord", () => {
       live: false,
       activity: "idle",
       lastActivityAt: 1,
+      bornTicketless: true,
     });
   });
 
@@ -108,6 +110,7 @@ describe("chatSessionRecord", () => {
       live: true,
       activity: "idle",
       lastActivityAt: 1,
+      bornTicketless: true,
     });
   });
 
@@ -211,6 +214,12 @@ describe("chatSessionRecord activity", () => {
   it("passes the projection's recency through untouched", () => {
     expect(chatSessionRecord(projectionWith([], { lastActivityAt: 4242 }))).toMatchObject({
       lastActivityAt: 4242,
+    });
+  });
+
+  it("passes the projection's bornTicketless through untouched", () => {
+    expect(chatSessionRecord(projectionWith([], { bornTicketless: false }))).toMatchObject({
+      bornTicketless: false,
     });
   });
 });

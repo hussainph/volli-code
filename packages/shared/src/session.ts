@@ -112,6 +112,24 @@ export interface SessionRecord {
    * observed), and for rows predating the column — outcome labels never guess.
    */
   exitCode: number | null;
+  /**
+   * Epoch milliseconds of the newest fact in this Session's durable ledger —
+   * the same recency field {@link ChatSessionRecord.lastActivityAt} carries.
+   * For a terminal this tracks LEDGER events (attach/close/commands), NOT raw
+   * shell output: a live terminal's value reads as "when it attached", not
+   * "what it's doing right now". The renderer's volatile `lastOutputAt` (PTY
+   * byte stream, never persisted) is the better live signal where present;
+   * this field is the honest fallback once that in-memory signal is gone.
+   */
+  lastActivityAt: number;
+  /**
+   * Whether this Session was ticketless AT BIRTH, never later orphaned into
+   * it: `sessions.ticket_id` is `ON DELETE SET NULL`, so deleting a ticket
+   * leaves `ticketId: null` behind too. `ticketId === null && !bornTicketless`
+   * is exactly that orphan case — a scratch session earns the sidebar's
+   * cleanup exemption; an orphan should not silently inherit it.
+   */
+  bornTicketless: boolean;
 }
 
 /**
@@ -143,6 +161,11 @@ export interface ChatSessionRecord {
   activity: Extract<SessionActivityState, "working" | "waiting" | "idle">;
   /** Epoch milliseconds of the newest fact in this Session — a listing's recency sort key. */
   lastActivityAt: number;
+  /**
+   * Whether this Session was ticketless AT BIRTH, never later orphaned into
+   * it — see {@link SessionRecord.bornTicketless}, the terminal-row sibling.
+   */
+  bornTicketless: boolean;
 }
 
 /**
@@ -238,6 +261,9 @@ export function createSessionRecord(input: CreateSessionInput): SessionRecord {
     createdAt: input.now,
     endedAt: null,
     exitCode: null,
+    // A freshly created session's newest ledger fact IS its creation.
+    lastActivityAt: input.now,
+    bornTicketless: (input.ticketId ?? null) === null,
   };
 }
 

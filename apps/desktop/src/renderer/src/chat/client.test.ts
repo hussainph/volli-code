@@ -70,6 +70,7 @@ function projectionFor(attachmentId: string | null): SessionProjection {
     signal: null,
     turnActive: false,
     lastActivityAt: SESSION.createdAt,
+    bornTicketless: SESSION.ticketId === null,
   };
 }
 

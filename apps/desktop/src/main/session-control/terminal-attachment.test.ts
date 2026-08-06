@@ -27,6 +27,7 @@ function projectionWith(attachments: SessionAttachmentProjection[]): SessionProj
     signal: null,
     turnActive: false,
     lastActivityAt: 1,
+    bornTicketless: true,
   };
 }
 
@@ -87,6 +88,8 @@ describe("readTerminalAttachmentDetail", () => {
       createdAt: 1,
       endedAt: 42,
       exitCode: null,
+      lastActivityAt: 1,
+      bornTicketless: true,
     });
   });
 
@@ -125,6 +128,17 @@ describe("readTerminalAttachmentDetail", () => {
       createdAt: 1,
       endedAt: 42,
       exitCode: null,
+      lastActivityAt: 1,
+      bornTicketless: true,
     });
+  });
+
+  it("passes the projection's bornTicketless through untouched", () => {
+    expect(
+      terminalSessionRecord({
+        ...projectionWith([terminalAttachment]),
+        bornTicketless: false,
+      }),
+    ).toMatchObject({ bornTicketless: false });
   });
 });

@@ -64,6 +64,7 @@ function snapshot(): SessionRuntimeSnapshot {
       signal: null,
       turnActive: false,
       lastActivityAt: 10,
+      bornTicketless: true,
     },
     throughSequence: 4,
     frames: [frame(4)],

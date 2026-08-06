@@ -74,6 +74,8 @@ function record(overrides: Partial<SessionRecord> & { id: string }): SessionReco
     createdAt: overrides.createdAt ?? 1,
     endedAt: overrides.endedAt ?? null,
     exitCode: overrides.exitCode ?? null,
+    lastActivityAt: overrides.lastActivityAt ?? 1,
+    bornTicketless: overrides.bornTicketless ?? (overrides.ticketId ?? null) === null,
   };
 }
 
@@ -90,6 +92,7 @@ function chatSession(
     live: overrides.live ?? true,
     activity: overrides.activity ?? "idle",
     lastActivityAt: overrides.lastActivityAt ?? 1,
+    bornTicketless: overrides.bornTicketless ?? overrides.ticketId === null,
   };
 }
 

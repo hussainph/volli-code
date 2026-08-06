@@ -224,6 +224,11 @@ export function getSession(db: Database.Database, sessionId: string): SessionRec
     signal: null,
     turnActive: false,
     lastActivityAt: session.created_at,
+    // This helper reads the ledger tables directly rather than replaying
+    // `session.created` (see the module doc comment) — the live `ticket_id`
+    // is the best available stand-in for the immutable birth fact here, same
+    // simplification `lastActivityAt` above already makes.
+    bornTicketless: session.ticket_id === null,
   });
   return record ?? undefined;
 }

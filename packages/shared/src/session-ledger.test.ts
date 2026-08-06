@@ -1043,6 +1043,32 @@ describe("projectSession recency", () => {
   });
 });
 
+describe("projectSession bornTicketless", () => {
+  it("seeds from the live session row when no session.created event is present", () => {
+    expect(projectSession(session, []).bornTicketless).toBe(false);
+    expect(projectSession({ ...session, ticketId: null }, []).bornTicketless).toBe(true);
+  });
+
+  // The immutable birth fact, not the live row: a session.created event's own
+  // ticketId is what a later ticket delete (ON DELETE SET NULL) cannot touch.
+  it("reads bornTicketless off the session.created event's ticketId, ignoring the live row", () => {
+    const projection = projectSession(session, [
+      event(1, { kind: "session.created", session: { ...session, ticketId: null } }),
+    ]);
+    expect(projection.bornTicketless).toBe(true);
+    // The live `session` param passed in still says ticketed — proving the
+    // fold read the event's snapshot, not the param.
+    expect(session.ticketId).toBe("ticket-1");
+  });
+
+  it("reads false for a Session born with a ticket", () => {
+    const projection = projectSession({ ...session, ticketId: null }, [
+      event(1, { kind: "session.created", session: { ...session, ticketId: "ticket-1" } }),
+    ]);
+    expect(projection.bornTicketless).toBe(false);
+  });
+});
+
 function raised(
   kind: Exclude<SessionAttentionKind, "rate_limited" | "quota_exhausted">,
 ): SessionAttention {

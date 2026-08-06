@@ -35,6 +35,7 @@ const projection: SessionProjection = {
   signal: null,
   turnActive: false,
   lastActivityAt: SESSION.createdAt,
+  bornTicketless: SESSION.ticketId === null,
 };
 
 interface CommandAnswer {

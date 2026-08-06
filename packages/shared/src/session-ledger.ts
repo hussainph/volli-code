@@ -758,6 +758,16 @@ export interface SessionProjection {
   turnActive: boolean;
   /** Epoch milliseconds of the newest thing that happened here; seeded from the Session's creation. */
   lastActivityAt: number;
+  /**
+   * Whether this Session was ticketless AT BIRTH — from the immutable
+   * `session.created` event's own `ticketId`, not the live `session.ticketId`
+   * a later fact can change. `sessions.ticket_id` is `ON DELETE SET NULL`
+   * (deleting a ticket orphans its sessions into `session.ticketId === null`
+   * ones), so `session.ticketId === null && !bornTicketless` is exactly an
+   * orphan: a scratch session and an orphaned one both read `ticketId: null`
+   * today, but only the scratch one was ever meant to.
+   */
+  bornTicketless: boolean;
 }
 
 /**
@@ -782,6 +792,11 @@ export function projectSession(
   let signal: SessionProjection["signal"] = null;
   let turnActive = false;
   let lastActivityAt = session.createdAt;
+  // Seeded from the live session row so a fold given no `session.created`
+  // event (a degenerate/partial event list) still has an honest answer;
+  // every real Session's `session.created` immediately overrides it with the
+  // immutable birth fact below.
+  let bornTicketless = session.ticketId === null;
 
   const ordered = [...events]
     .filter((event) => event.sessionId === session.id)
@@ -929,14 +944,20 @@ export function projectSession(
       case "turn.completed":
         turnActive = false;
         break;
-      // Facts this projection deliberately holds no state for. They are listed
-      // rather than swept up by a `default`, so that adding a payload kind is a
-      // compile error here and someone has to decide whether Session state
-      // moves. `session.created` is the Session row itself, already the seed of
-      // this fold; runs and transcript references are the transcript's shape,
-      // read from the event stream directly; `adapter.observed` is adapter
-      // evidence that no projected field is derived from.
+      // `session.created` carries the Session row as it was at birth — the
+      // one immutable read of `ticketId` a later ticket deletion (`ON DELETE
+      // SET NULL`) cannot touch, because it lives in this event's JSON
+      // payload, not the `sessions` row's live column.
       case "session.created":
+        bornTicketless = event.payload.session.ticketId === null;
+        break;
+      // Facts this projection deliberately holds no further state for. They
+      // are listed rather than swept up by a `default`, so that adding a
+      // payload kind is a compile error here and someone has to decide
+      // whether Session state moves. Runs and transcript references are the
+      // transcript's shape, read from the event stream directly;
+      // `adapter.observed` is adapter evidence that no projected field is
+      // derived from.
       case "run.started":
       case "run.completed":
       case "transcript.referenced":
@@ -972,6 +993,7 @@ export function projectSession(
     signal,
     turnActive,
     lastActivityAt,
+    bornTicketless,
   };
 }
 

@@ -27,6 +27,7 @@ const projection: SessionProjection = {
   signal: null,
   turnActive: false,
   lastActivityAt: 0,
+  bornTicketless: false,
 };
 
 const slice: ChatSessionSlice = {
@@ -51,6 +52,7 @@ function chatRow(overrides: Partial<ChatSessionRecord> = {}): SessionListingRow 
       live: true,
       activity: "idle",
       lastActivityAt: 1,
+      bornTicketless: false,
       ...overrides,
     },
   };
@@ -73,6 +75,8 @@ const terminalRow: SessionListingRow = {
     createdAt: 1,
     endedAt: null,
     exitCode: null,
+    lastActivityAt: 1,
+    bornTicketless: false,
   },
 };
 

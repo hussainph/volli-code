@@ -95,6 +95,8 @@ export function terminalSessionRecord(projection: SessionProjection): SessionRec
     createdAt: projection.session.createdAt,
     endedAt: attachment.status === "open" ? null : attachment.closedAt,
     exitCode: detail?.exitCode ?? null,
+    lastActivityAt: projection.lastActivityAt,
+    bornTicketless: projection.bornTicketless,
   };
 }
 
