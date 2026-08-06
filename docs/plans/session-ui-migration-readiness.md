@@ -112,9 +112,14 @@ Settled 2026-08-04/05; do not reopen.
   Session: the rule that guaranteed one row per Doing/Needs-Review ticket is
   gone, because it filled Active with ticket titles while the real Sessions sat
   below in Previous — the board is where a ticket's status lives, and Active
-  showing nothing is the honest answer to nothing running. Chats auto-title
-  from their first delivered message. The lab scratch imports the shipped band
-  components, so the prototype cannot drift.
+  showing nothing is the honest answer to nothing running. A row is selected
+  only when its own tab is the one in front of you: selection used to fall back
+  to "its ticket is open", which lit every row a ticket had at once. That
+  fallback existed because chat rows carried no target at all — they carry their
+  `chat:<sessionId>` tab id now, so the chat you are in is the one that lights,
+  and clicking a chat row opens the conversation instead of the Ticket Body.
+  Chats auto-title from their first delivered message. The lab scratch imports
+  the shipped band components, so the prototype cannot drift.
 
 ## Session 5 owns
 

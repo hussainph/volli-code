@@ -175,8 +175,8 @@ describe("buildActiveSessionListing — the Active band", () => {
 
     expect(result.previous).toEqual([]);
     expect(result.active.map((row) => ({ title: row.title, target: row.target }))).toEqual([
-      { title: "Implement UI", target: { tabId: "s1", paneId: "s1" } },
-      { title: "Run checks", target: { tabId: "s2", paneId: "s2" } },
+      { title: "Implement UI", target: { kind: "terminal", tabId: "s1", paneId: "s1" } },
+      { title: "Run checks", target: { kind: "terminal", tabId: "s2", paneId: "s2" } },
     ]);
   });
 
@@ -289,7 +289,11 @@ describe("buildActiveSessionListing — the Active band", () => {
     // The ticket has live work, so the exited tab is not its board row — it is
     // an ended Session, and ended Sessions live in Previous.
     expect(result.previous).toMatchObject([
-      { title: "Exited", kind: "terminal", target: { tabId: "exited", paneId: "exited" } },
+      {
+        title: "Exited",
+        kind: "terminal",
+        target: { kind: "terminal", tabId: "exited", paneId: "exited" },
+      },
     ]);
   });
 
@@ -393,7 +397,7 @@ describe("buildActiveSessionListing — the Active band", () => {
       {
         title: "Agent review",
         attention: { signal: "blocked", reason: "Approve access" },
-        target: { tabId: "s2", paneId: "s2" },
+        target: { kind: "terminal", tabId: "s2", paneId: "s2" },
       },
       { title: "Keep building", attention: null },
     ]);
@@ -443,8 +447,8 @@ describe("buildActiveSessionListing — the Active band", () => {
     // attention; the promoted tab still leads its ticket's rows, and t2 —
     // Needs Review with nothing ever run for it — contributes no row at all.
     expect(result.active.map((row) => ({ title: row.title, target: row.target }))).toEqual([
-      { title: "Current tab", target: { tabId: "s2", paneId: "s2" } },
-      { title: "Earlier tab", target: { tabId: "s1", paneId: "s1" } },
+      { title: "Current tab", target: { kind: "terminal", tabId: "s2", paneId: "s2" } },
+      { title: "Earlier tab", target: { kind: "terminal", tabId: "s1", paneId: "s1" } },
     ]);
   });
 
@@ -483,7 +487,7 @@ describe("buildActiveSessionListing — the Active band", () => {
 
     expect(result.active[0]).toMatchObject({
       attention: { signal: "blocked", reason: "Choose an option" },
-      target: { tabId: "root", paneId: "split" },
+      target: { kind: "terminal", tabId: "root", paneId: "split" },
     });
   });
 
@@ -583,9 +587,46 @@ describe("buildActiveSessionListing — chat Sessions", () => {
     });
 
     expect(result.active).toMatchObject([
-      { title: "Plan the migration", source: "Chat · Live", target: null },
+      {
+        title: "Plan the migration",
+        source: "Chat · Live",
+        // Derived from the Session, not from an open tab: the row can say where
+        // it belongs before anything has been adopted on it.
+        target: { kind: "chat", tabId: "chat:chat-1", sessionId: "chat-1" },
+      },
     ]);
     expect(result.previous).toEqual([]);
+  });
+
+  it("keeps a chat's target when it falls to Previous, so the row still reaches its tab", () => {
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: {},
+      signalsByTicket: {},
+      records: [],
+      chatSessions: [
+        chatSession({
+          ticketId: "t1",
+          sessionId: "chat-9",
+          title: "Old thread",
+          live: false,
+          lastActivityAt: 1_000,
+        }),
+      ],
+      lastOutputAt: {},
+      parkState: {},
+      harness: {},
+      now: 1_000 + ACTIVE_QUIET_WINDOW_MS + 1,
+    });
+
+    expect(result.active).toEqual([]);
+    expect(result.previous).toMatchObject([
+      {
+        title: "Old thread",
+        kind: "chat",
+        target: { kind: "chat", tabId: "chat:chat-9", sessionId: "chat-9" },
+      },
+    ]);
   });
 
   it("lets a chat Session's own activity decide its group", () => {
@@ -737,7 +778,11 @@ describe("buildActiveSessionListing — the scratch container", () => {
 
     expect(titles(result.active)).toEqual(["Poke at the repo"]);
     expect(result.active[0]?.ticket).toBeNull();
-    expect(result.active[0]?.target).toEqual({ tabId: "scratch-1", paneId: "scratch-1" });
+    expect(result.active[0]?.target).toEqual({
+      kind: "terminal",
+      tabId: "scratch-1",
+      paneId: "scratch-1",
+    });
     expect(result.previous).toEqual([]);
   });
 
@@ -824,7 +869,11 @@ describe("buildActiveSessionListing — the scratch container", () => {
     expect(titles(result.active)).toEqual(["Still going"]);
     expect(titles(result.previous)).toEqual(["Poke at the repo"]);
     expect(result.previous[0]?.cleaned).toBe(false);
-    expect(result.previous[0]?.target).toEqual({ tabId: "scratch-1", paneId: "scratch-1" });
+    expect(result.previous[0]?.target).toEqual({
+      kind: "terminal",
+      tabId: "scratch-1",
+      paneId: "scratch-1",
+    });
   });
 
   // The mounted pane wins: a live scratch tab and its own durable record are
@@ -997,7 +1046,11 @@ describe("buildActiveSessionListing — the Previous band", () => {
     });
 
     expect(result.previous).toMatchObject([
-      { title: "Live tab title", endedOrQuietAt: now - 1_000, target: { tabId: "s1" } },
+      {
+        title: "Live tab title",
+        endedOrQuietAt: now - 1_000,
+        target: { kind: "terminal", tabId: "s1" },
+      },
     ]);
   });
 
@@ -1697,7 +1750,7 @@ describe("buildActiveSessionListing — harness-reported attention", () => {
         // a harness-declared wait and denied that anything was reporting.
         activitySource: "reported",
         source: "Claude Code",
-        target: { tabId: "s1", paneId: "s2" },
+        target: { kind: "terminal", tabId: "s1", paneId: "s2" },
       },
     ]);
     expect(result.previous).toEqual([]);

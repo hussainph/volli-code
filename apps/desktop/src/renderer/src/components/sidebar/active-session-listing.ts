@@ -43,6 +43,7 @@ import {
 } from "@volli/shared";
 
 import { sessionSourceLabel } from "../ticket/session-history";
+import { chatTabId } from "../ticket/ticket-chat-tab";
 import {
   sessionActivityState,
   sessionPanes,
@@ -68,10 +69,22 @@ export const DONE_LINGER_MS = 60 * 60_000;
 /** How old a Previous row gets before it counts as concluded business. */
 export const PREVIOUS_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
 
-export interface ActiveSessionTarget {
-  tabId: string;
-  paneId: string;
-}
+/**
+ * Where a row's click lands — and, because a row is selected exactly when its
+ * target is the tab in front of you, the only thing that makes a row look
+ * current.
+ *
+ * The two kinds are different doors, not one door with an optional field. A
+ * terminal tab can be split, so the row names the pane it speaks for and the
+ * sessions store has to be told which pane is in front; a chat tab is one
+ * surface, and reaching it means adopting the Session through the chat store
+ * before the tab has anything behind it. A row with no target at all is a
+ * Session whose tab is gone — an ended terminal — and it can only offer its
+ * ticket.
+ */
+export type ActiveSessionTarget =
+  | { kind: "terminal"; tabId: string; paneId: string }
+  | { kind: "chat"; tabId: string; sessionId: string };
 
 /** Which execution surface a row speaks for — the axis the Previous band filters on. */
 export type SessionRowKind = "terminal" | "chat";
@@ -306,7 +319,7 @@ function sessionRow(
     activitySource: paneActivitySource(subject.paneId, input),
     attention,
     waitingOn: null,
-    target: { tabId: tab.sessionId, paneId: subject.paneId },
+    target: { kind: "terminal", tabId: tab.sessionId, paneId: subject.paneId },
   };
 }
 
@@ -323,7 +336,10 @@ function chatRow(record: ChatSessionRecord, ticket: Ticket | null): ActiveSessio
     // The record's two waiting fields move together by construction in main, so
     // this rides along with the attention above rather than being re-decided.
     waitingOn: record.waitingOn,
-    target: null,
+    // A chat Session's tab id is derivable from the Session — it exists whether
+    // or not a tab is open on it right now, which is what lets a chat that has
+    // never been adopted still say where it belongs.
+    target: { kind: "chat", tabId: chatTabId(record.sessionId), sessionId: record.sessionId },
   };
 }
 
@@ -523,7 +539,7 @@ export function buildActiveSessionListing(
         title: tab.title,
         kind: "terminal",
         endedOrQuietAt: quietStamp(tab.sessionId) ?? recencyFallback(ticket, tab.sessionId),
-        target: { tabId: tab.sessionId, paneId: tab.activePaneId },
+        target: { kind: "terminal", tabId: tab.sessionId, paneId: tab.activePaneId },
         cleaned: false,
       },
       ticketId: ticket?.id ?? null,
@@ -683,7 +699,7 @@ export function buildActiveSessionListing(
         title: record.title,
         kind: "chat",
         endedOrQuietAt: record.lastActivityAt,
-        target: null,
+        target: row.target,
         cleaned: false,
       },
       ticketId: record.ticketId,

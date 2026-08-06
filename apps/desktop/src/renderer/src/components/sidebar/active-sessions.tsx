@@ -63,15 +63,13 @@ function indexSignalsByTicket(
  * The project's sessions, in two bands.
  *
  * **Active** is what is happening: Sessions waiting on a human first, then work
- * running now, then what has gone quiet recently, then one guaranteed row per
- * Doing/Needs-Review ticket — so the band always mirrors the board's claim,
- * even right after a relaunch has killed every PTY. **Previous** is everything
+ * running now, then what has gone quiet recently. **Previous** is everything
  * else, one line each, with its own filter.
  *
  * Which band a Session is in, in what order, and when that changes on its own
- * all belong to `buildActiveSessionListing`. This component owns only the three
- * things that model deliberately refuses: fetching, the clock, and where a row
- * navigates to.
+ * all belong to `buildActiveSessionListing`. This component owns only the four
+ * things that model deliberately refuses: fetching, the clock, where a row
+ * navigates to, and which row is the one you are looking at.
  */
 export function ActiveSessions({ project, visible }: { project: Project; visible: boolean }) {
   const tickets = useBoardStore((state) => state.ticketsByProject[project.id]) ?? EMPTY_TICKETS;
@@ -81,6 +79,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   const lastOutputAt = useSessionsStore((state) => state.lastOutputAt);
   const parkState = useSessionsStore((state) => state.parkState);
   const harness = useSessionsStore((state) => state.harness);
+  const nav = useWorkspaceStore((state) => state.byProject[project.id]?.nav ?? "board");
   const openTicketId = useWorkspaceStore(
     (state) => state.byProject[project.id]?.openTicketId ?? null,
   );
@@ -347,13 +346,28 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
     return () => window.clearTimeout(timer);
   }, [nextBoundaryAt]);
 
+  // Which ticket the main view is actually SHOWING. Ticket detail renders only
+  // under the Board nav, and leaving for Sessions or Files deliberately keeps
+  // `openTicketId` set so returning lands where you were — so a remembered
+  // ticket is not a ticket on screen, and only one of those can light a row.
+  const shownTicketId = nav === "board" ? openTicketId : null;
   const activeTabId =
-    openTicketId === null ? null : (ticketTabs[openTicketId]?.active ?? TICKET_BODY_TAB_ID);
+    shownTicketId === null ? null : (ticketTabs[shownTicketId]?.active ?? TICKET_BODY_TAB_ID);
 
+  /**
+   * Selected means one thing: this row's Session is the tab in front of you.
+   *
+   * Not "its ticket is open". That was the rule, via a fallback for rows with
+   * no tab to name, and it lit every row a ticket had at once — open a ticket
+   * with three past Sessions and all three claimed to be where you are, which
+   * is worse than no highlight at all. A row with no target is a Session whose
+   * tab is gone; it is never the tab in front of you.
+   */
   const isSelected = (row: ActiveSessionRow | PreviousSessionRow): boolean =>
     row.ticket !== null &&
-    openTicketId === row.ticket.id &&
-    (row.target === null || activeTabId === row.target.tabId);
+    shownTicketId === row.ticket.id &&
+    row.target !== null &&
+    activeTabId === row.target.tabId;
 
   /**
    * Where a row goes. A ticketed row reopens its exact session, or failing that
@@ -372,11 +386,23 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
       setNav(project.id, "sessions");
       return;
     }
-    if (row.target !== null) {
-      openTicketSession(project.id, ticket.id, row.target.tabId, row.target.paneId);
+    const target = row.target;
+    if (target === null) {
+      openTicketWorkspace(project.id, ticket.id);
       return;
     }
-    openTicketWorkspace(project.id, ticket.id);
+    if (target.kind === "chat") {
+      // The two store calls the ticket rail's own chat row makes, for the same
+      // reason: a chat the strip has no tab for is not reachable by activating
+      // its id — the activation falls back to the Ticket Body. `adoptChatSession`
+      // is idempotent, so a chat already in front takes this path too.
+      const chat = useChatSessionsStore.getState();
+      chat.adoptChatSession(target.sessionId);
+      chat.openChatTab(ticket.id, target.sessionId);
+      openTicketWorkspace(project.id, ticket.id, { tabId: target.tabId });
+      return;
+    }
+    openTicketSession(project.id, ticket.id, target.tabId, target.paneId);
   };
 
   return (
