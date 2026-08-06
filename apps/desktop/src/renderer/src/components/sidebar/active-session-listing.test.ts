@@ -1404,19 +1404,39 @@ describe("buildActiveSessionListing — cleanup", () => {
     createdAt: 1_000,
     endedOrQuietAt: 2_000,
     attached: false,
+    bornTicketless: false,
     statusEnteredAt: new Map<string, number>(),
     now: 3_000,
   };
 
-  it("exempts a ticketless Session and a still-attached one", () => {
-    expect(isCleanupExempt({ ticketId: null, attached: false })).toBe(true);
-    expect(isCleanupExempt({ ticketId: "t1", attached: true })).toBe(true);
-    expect(isCleanupExempt({ ticketId: "t1", attached: false })).toBe(false);
+  it("exempts a born-ticketless Session and a still-attached one, not an orphan", () => {
+    expect(isCleanupExempt({ ticketId: null, attached: false, bornTicketless: true })).toBe(true);
+    expect(isCleanupExempt({ ticketId: "t1", attached: true, bornTicketless: false })).toBe(true);
+    expect(isCleanupExempt({ ticketId: "t1", attached: false, bornTicketless: false })).toBe(false);
+    // Ticketless by deletion, not by birth: the exemption does not apply.
+    expect(isCleanupExempt({ ticketId: null, attached: false, bornTicketless: false })).toBe(false);
   });
 
   it("(a) cleans a Session whose ticket has left the board", () => {
     expect(isConcludedBusiness({ ...cleanupFacts, ticket: null })).toBe(true);
-    expect(isConcludedBusiness({ ...cleanupFacts, ticketId: null, ticket: null })).toBe(false);
+    // A born-scratch Session never had a board row to lose.
+    expect(
+      isConcludedBusiness({
+        ...cleanupFacts,
+        ticketId: null,
+        ticket: null,
+        bornTicketless: true,
+      }),
+    ).toBe(false);
+    // An orphan did: its ticket is gone, which is exactly what rule (a) cleans.
+    expect(
+      isConcludedBusiness({
+        ...cleanupFacts,
+        ticketId: null,
+        ticket: null,
+        bornTicketless: false,
+      }),
+    ).toBe(true);
   });
 
   it("(b) cleans a Done ticket's Sessions once it has lingered, and not a moment sooner", () => {

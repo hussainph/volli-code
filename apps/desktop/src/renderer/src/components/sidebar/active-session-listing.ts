@@ -485,6 +485,8 @@ export interface SessionCleanupFacts {
   endedOrQuietAt: number;
   /** Whether the Session's execution surface is still attached — a live PTY, an open chat. */
   attached: boolean;
+  /** Whether the Session was created without a ticket, per the immutable creation event. */
+  bornTicketless: boolean;
   statusEnteredAt: ReadonlyMap<string, number>;
   now: number;
 }
@@ -492,21 +494,20 @@ export interface SessionCleanupFacts {
 /**
  * Sessions cleanup must never touch, whatever the rules say.
  *
- * A ticketless Session has no ticket to fall back to: clean it and there is no
- * board row, no ticket rail, no second surface it can be reached from — it is
- * simply stranded. An attached Session is not concluded business by definition;
- * a live pane vanishing out of the sidebar is the one outcome no cleanup rule
- * is worth.
- *
- * (Ticketless covers two situations today — a Session born as a project
- * scratch, and one orphaned when its ticket left the board. Telling them apart
- * belongs to a later wave; exempting both belongs to this one, and it lands
- * here so that wave changes one predicate.)
+ * A Session BORN ticketless has no ticket to fall back to: clean it and there
+ * is no board row, no ticket rail, no second surface it can be reached from —
+ * it is simply stranded. A Session that merely BECAME ticketless (its ticket
+ * was deleted, `ON DELETE SET NULL`) is not exempt: its birth ticket is gone
+ * from the board, which is exactly the situation rule (a) cleans, and
+ * `bornTicketless` — folded from the immutable `session.created` event — is
+ * what tells the two apart. An attached Session is not concluded business by
+ * definition; a live pane vanishing out of the sidebar is the one outcome no
+ * cleanup rule is worth.
  */
 export function isCleanupExempt(
-  facts: Pick<SessionCleanupFacts, "ticketId" | "attached">,
+  facts: Pick<SessionCleanupFacts, "ticketId" | "attached" | "bornTicketless">,
 ): boolean {
-  return facts.ticketId === null || facts.attached;
+  return (facts.ticketId === null && facts.bornTicketless) || facts.attached;
 }
 
 /**
@@ -551,6 +552,7 @@ interface PreviousCandidate {
   ticketId: string | null;
   createdAt: number | null;
   attached: boolean;
+  bornTicketless: boolean;
 }
 
 /**
@@ -631,6 +633,7 @@ export function buildActiveSessionListing(
       ticketId: ticket.id,
       createdAt: recordsById.get(subject.paneId)?.createdAt ?? null,
       attached,
+      bornTicketless: recordsById.get(subject.paneId)?.bornTicketless ?? false,
     });
   };
 
@@ -722,6 +725,7 @@ export function buildActiveSessionListing(
         ticketId: ticket.id,
         createdAt: record?.createdAt ?? null,
         attached: false,
+        bornTicketless: record?.bornTicketless ?? false,
       });
     }
   }
@@ -746,6 +750,7 @@ export function buildActiveSessionListing(
       ticketId: record.ticketId,
       createdAt: record.createdAt,
       attached: false,
+      bornTicketless: record.bornTicketless,
     });
   }
 
@@ -777,6 +782,7 @@ export function buildActiveSessionListing(
       ticketId: record.ticketId,
       createdAt: record.createdAt,
       attached: record.live,
+      bornTicketless: record.bornTicketless,
     });
   }
 
@@ -818,6 +824,7 @@ export function buildActiveSessionListing(
       createdAt: candidate.createdAt,
       endedOrQuietAt: candidate.row.endedOrQuietAt,
       attached: candidate.attached,
+      bornTicketless: candidate.bornTicketless,
       statusEnteredAt,
       now,
     });
