@@ -19,9 +19,12 @@ second adapter on that identity, not a second notion of session.
    Catalog over IPC, `projectId` routing through a per-directory hub,
    `api.sessionRpc` preload door, multi-harness settings with a validated
    per-harness binary override, login-shell PATH proven under a bare-PATH
-   launch. Named seam for session 4's per-project pickers: **discovery is
-   per-project, persistence stayed global** — a second writer of
-   `volli:runtime-preferences:<adapterId>` must scope the row or the save.
+   launch. The named seam for session 4's per-project pickers — **discovery is
+   per-project, persistence stayed global** — is now closed on the storage
+   side: migration 019 adds `projects.runtime_preferences`, an adapter-keyed
+   JSON override of `volli:runtime-preferences:<adapterId>` where `NULL` means
+   inherit, and `projectId` travels into `inspect`/`save`/`resolve` as the
+   scope (presence IS the scope) beside `clear`. What remains is the UI.
 2. **Delta frames — shipped** (`docs/plans/delta-frames.md` is the record).
    Streaming is a transient overlay over durable settle-point snapshots;
    wire 19.63× → 2.55×, artifact writes and ledger events per answer
@@ -101,5 +104,6 @@ owner guard, per-Session drafts persist (`stores/chat-drafts.ts`), and chat
 Sessions rename from the tab strip and the rail (`chat/rename.ts`). Still
 outstanding: the sidebar goes chat-first with a chat/terminal filter (including
 the live-chat dot semantics above — `ChatSessionRecord.activity` now carries
-the fact, and nothing reads it yet); per-project runtime pickers (scope the
-preferences row or the save — see the named seam above).
+the fact, and nothing reads it yet); the per-project runtime pickers themselves
+— storage, catalog and RPC are in place (see the seam above), so what is left
+is the Configure surface that reads `preferencesOrigin` and sends `clear`.

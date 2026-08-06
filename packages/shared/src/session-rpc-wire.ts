@@ -37,6 +37,7 @@ export const SESSION_RPC_IPC_PROCEDURES = Object.freeze([
   "session.reconcile",
   "runtimeCatalog.inspect",
   "runtimeCatalog.save",
+  "runtimeCatalog.clear",
   "runtimeCatalog.resolve",
 ] as const);
 

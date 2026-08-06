@@ -10,7 +10,9 @@ import {
   type RuntimeSelection,
 } from "@volli/shared";
 
-import { getAllAppState, setAppState } from "./db/app-state-repo";
+import { setAppState } from "./db/app-state-repo";
+import { prepared } from "./db/prepared";
+import { getProjectRuntimeRecord, setProjectRuntimeRecord } from "./db/projects-repo";
 
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 100;
@@ -42,9 +44,23 @@ interface StoredRuntimeRecord {
   agents: readonly RuntimeCatalogAgent[];
 }
 
+/** A stored record plus WHICH scope produced it — the view's `preferencesOrigin`. */
+interface LoadedRuntimeRecord {
+  record: StoredRuntimeRecord;
+  origin: "global" | "project";
+}
+
 /**
  * Owns exhaustive provider discovery, bounded Settings browsing, and compact
  * runtime preferences. Callers never receive the adapter's raw catalog.
+ *
+ * SCOPE IS A PARAMETER, not construction. A `projectId` on a request selects
+ * which stored record answers it; the catalog INSTANCE is still keyed by
+ * project directory alone (`runtime-catalog-hub.ts`), so two projects sharing a
+ * checkout share one instance — and one instance answers for whichever project
+ * is asking. Injecting the scope at construction instead would give those two
+ * projects one preferences store between them, which is precisely the collision
+ * the per-project column exists to end.
  */
 export function createRuntimeCatalog(options: RuntimeCatalogOptions): RuntimeCatalog {
   const now = options.now ?? Date.now;
@@ -80,10 +96,8 @@ export function createRuntimeCatalog(options: RuntimeCatalogOptions): RuntimeCat
     async inspect(input) {
       const snapshot = await discover(input.adapterId, input.refresh);
       const catalog = capabilityCatalog(snapshot.result);
-      const preferences = effectivePreferences(
-        loadStoredRecord(options.db, input.adapterId)?.preferences ?? null,
-        catalog.agents,
-      );
+      const stored = loadStoredRecord(options.db, input.adapterId, input.projectId);
+      const preferences = effectivePreferences(stored?.record.preferences ?? null, catalog.agents);
       const providers = providerSummaries(catalog.models, preferences.enabledModels);
       const query = input.query?.trim().toLocaleLowerCase() ?? "";
       const matching = input.providerId
@@ -108,6 +122,7 @@ export function createRuntimeCatalog(options: RuntimeCatalogOptions): RuntimeCat
         models: matching.slice(offset, offset + limit),
         modelTotal: matching.length,
         preferences,
+        preferencesOrigin: stored?.origin ?? "global",
       };
     },
 
@@ -128,30 +143,46 @@ export function createRuntimeCatalog(options: RuntimeCatalogOptions): RuntimeCat
           .map(compactStoredModel),
         agents: discovered.agents.slice(0, MAX_CURATED_AGENTS).map(compactStoredAgent),
       };
-      setAppState(
-        options.db,
-        preferenceKey(input.adapterId),
-        JSON.stringify({ recordVersion: 1, ...record }),
-        now(),
-      );
+      const payload = JSON.stringify({ recordVersion: 1, ...record });
+      // Presence of `projectId` IS the scope. The two writes store the identical
+      // payload, so a project override is answerable on its own rather than
+      // against whatever the global record happens to hold (see migration 019).
+      if (input.projectId === undefined) {
+        setAppState(options.db, preferenceKey(input.adapterId), payload, now());
+      } else {
+        setProjectRuntimeRecord(options.db, input.projectId, input.adapterId, payload, now());
+      }
       return normalized;
     },
 
+    /**
+     * Deliberately WITHOUT `save`'s "inspect first" precondition. That rule
+     * exists because a save persists models out of the discovery snapshot this
+     * instance is holding, and there is nothing to persist from if it never
+     * discovered. A clear persists nothing — it drops the project's key and the
+     * global record answers again — so requiring a probe first would refuse
+     * "stop overriding this" for want of evidence it does not use.
+     */
+    async clear(input) {
+      setProjectRuntimeRecord(options.db, input.projectId, input.adapterId, null, now());
+    },
+
     async resolve(input) {
-      const stored = loadStoredRecord(options.db, input.adapterId);
+      const stored = loadStoredRecord(options.db, input.adapterId, input.projectId);
       if (!stored) return emptyResolvedCatalog(input.adapterId);
-      const enabled = new Set(stored.preferences.enabledModels.map(modelRefKey));
-      const models = stored.models.filter(
+      const { record } = stored;
+      const enabled = new Set(record.preferences.enabledModels.map(modelRefKey));
+      const models = record.models.filter(
         (model) => model.state === "available" && enabled.has(modelRefKey(model)),
       );
-      const selection = repairSelection(stored.preferences.defaults, models, stored.agents);
+      const selection = repairSelection(record.preferences.defaults, models, record.agents);
       return {
         adapterId: input.adapterId,
-        observedAt: stored.observedAt,
+        observedAt: record.observedAt,
         catalog: {
           providers: [...new Set(models.map((model) => model.providerId))],
           models,
-          agents: stored.agents,
+          agents: record.agents,
         },
         selection,
       };
@@ -321,8 +352,37 @@ function normalizePreferences(value: RuntimePreferences): RuntimePreferences {
   };
 }
 
-function loadStoredRecord(db: Database.Database, adapterId: string): StoredRuntimeRecord | null {
-  const raw = getAllAppState(db)[preferenceKey(adapterId)];
+/**
+ * The record that answers for one adapter at one scope, and which scope that
+ * was. A project's own record wins; ANY reason it cannot serve — the project
+ * overrides nothing for this adapter, or the row is there but no longer parses
+ * — falls through to the global record rather than throwing. Both are read at
+ * boot-adjacent moments with no UI to surface a failure in, and inheriting the
+ * global record is survivable and visible where an exception is neither.
+ */
+function loadStoredRecord(
+  db: Database.Database,
+  adapterId: string,
+  projectId?: string,
+): LoadedRuntimeRecord | null {
+  if (projectId !== undefined) {
+    const record = parseStoredRecord(getProjectRuntimeRecord(db, projectId, adapterId));
+    if (record) return { record, origin: "project" };
+  }
+  const record = parseStoredRecord(globalStoredRecord(db, adapterId));
+  return record ? { record, origin: "global" } : null;
+}
+
+/** The global record's raw JSON — one keyed row, not the whole `app_state` table. */
+function globalStoredRecord(db: Database.Database, adapterId: string): string | null {
+  const row = prepared<[string], { value: string }>(
+    db,
+    "SELECT value FROM app_state WHERE key = ?",
+  ).get(preferenceKey(adapterId));
+  return row?.value ?? null;
+}
+
+function parseStoredRecord(raw: string | null): StoredRuntimeRecord | null {
   if (!raw) return null;
   try {
     const value: unknown = JSON.parse(raw);

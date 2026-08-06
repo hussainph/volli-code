@@ -334,23 +334,33 @@ const instrumentedProcedure = t.procedure.use(async ({ ctx, path, next }) => {
 export function createSessionRouter() {
   return t.router({
     /**
-     * `projectId` picks WHICH catalog answers — the host keeps one per project
-     * directory — so it decides which checkout gets probed for models. Omitting
-     * it asks the host's fallback directory, which is what a Session with no
-     * project yet wants and what a project-scoped Settings screen never does.
+     * `projectId` says WHICH PROJECT is asking, and it decides two separate
+     * things at once. It picks the catalog INSTANCE — the host keeps one per
+     * project directory — so it decides which checkout gets probed for models;
+     * and it travels into the call as the SCOPE, so it decides whether the
+     * project's own stored preferences answer or the global ones do. Omitting it
+     * asks the host's fallback directory against the global record, which is
+     * what a Session with no project yet wants and what a project-scoped
+     * Settings screen never does.
      *
      * **Send `save` the same `projectId` the preceding `inspect` used.** A
      * catalog persists models out of the discovery snapshot it is holding, and
      * that snapshot belongs to the one instance that produced it — so a save
      * routed to a different (or omitted) `projectId` reaches an instance that
      * has discovered nothing and is refused, however recently the user
-     * inspected. Nothing here can enforce it: the two are independent requests
-     * and `resolveRuntimeCatalog` is free to answer each with a different
-     * instance. A client that lets a form default one and drop the other earns a
-     * refusal whose message ("inspect before saving") describes a state the user
-     * cannot see they are in. Both renderer clients dodge it by sending no
-     * `projectId` at all, which pairs them on the fallback catalog; a client
-     * that does scope itself owns keeping the pair.
+     * inspected. This holds at BOTH scopes and for the same reason: a
+     * project-scoped inspect and save carrying the same `projectId` route
+     * through `resolveRuntimeCatalog` to the same instance, so the pairing is
+     * kept by sending the same id twice — and broken by sending it once.
+     * Nothing here can enforce it: the two are independent requests and
+     * `resolveRuntimeCatalog` is free to answer each with a different instance.
+     * A client that lets a form default one and drop the other earns a refusal
+     * whose message ("inspect before saving") describes a state the user cannot
+     * see they are in.
+     *
+     * `clear` pairs with nothing — it drops a project's override and requires no
+     * snapshot at all — so it takes a required `projectId` and may be sent on
+     * its own.
      */
     runtimeCatalog: t.router({
       inspect: instrumentedProcedure
@@ -366,9 +376,8 @@ export function createSessionRouter() {
           }),
         )
         .query(async ({ ctx, input }) => {
-          const { projectId, ...rest } = input;
-          const catalog = await requireRuntimeCatalog(ctx, projectId);
-          return catalog.inspect(rest);
+          const catalog = await requireRuntimeCatalog(ctx, input.projectId);
+          return catalog.inspect(input);
         }),
       save: instrumentedProcedure
         .input(
@@ -379,14 +388,19 @@ export function createSessionRouter() {
           }),
         )
         .mutation(async ({ ctx, input }) => {
-          const { projectId, ...rest } = input;
-          const catalog = await requireRuntimeCatalog(ctx, projectId);
-          return catalog.save(rest);
+          const catalog = await requireRuntimeCatalog(ctx, input.projectId);
+          return catalog.save(input);
+        }),
+      clear: instrumentedProcedure
+        .input(z.object({ projectId: nonEmptyString, adapterId: nonEmptyString }))
+        .mutation(async ({ ctx, input }) => {
+          const catalog = await requireRuntimeCatalog(ctx, input.projectId);
+          await catalog.clear(input);
         }),
       resolve: instrumentedProcedure
-        .input(z.object({ adapterId: nonEmptyString }))
+        .input(z.object({ projectId: nonEmptyString.optional(), adapterId: nonEmptyString }))
         .query(async ({ ctx, input }) => {
-          const catalog = await requireRuntimeCatalog(ctx, undefined);
+          const catalog = await requireRuntimeCatalog(ctx, input.projectId);
           return catalog.resolve(input);
         }),
     }),

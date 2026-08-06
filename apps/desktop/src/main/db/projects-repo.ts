@@ -310,7 +310,7 @@ export function setProjectRuntimeRecord(
       "SELECT runtime_preferences FROM projects WHERE id = ?",
     ).get(projectId);
     if (!row) return;
-    const records = { ...(parseRuntimeRecords(row.runtime_preferences) ?? {}) };
+    const records = { ...parseRuntimeRecords(row.runtime_preferences) };
     if (json === null) {
       delete records[adapterId];
     } else {

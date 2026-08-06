@@ -157,6 +157,7 @@ function runtimeCatalogFixture(): {
     resolvedFor: (string | undefined)[];
     inspected: unknown[];
     saved: unknown[];
+    cleared: unknown[];
     resolved: unknown[];
   };
 } {
@@ -164,6 +165,7 @@ function runtimeCatalogFixture(): {
     resolvedFor: [] as (string | undefined)[],
     inspected: [] as unknown[],
     saved: [] as unknown[],
+    cleared: [] as unknown[],
     resolved: [] as unknown[],
   };
   const catalog: RuntimeCatalog = {
@@ -174,6 +176,9 @@ function runtimeCatalogFixture(): {
     save: async (input) => {
       calls.saved.push(input);
       return input.preferences;
+    },
+    clear: async (input) => {
+      calls.cleared.push(input);
     },
     resolve: async (input) => {
       calls.resolved.push(input);
@@ -569,7 +574,9 @@ describe("registerSessionRpcIpcHandlers", () => {
     ).resolves.toEqual({ ok: true, data: { providers: [], models: [], modelTotal: 0 } });
 
     expect(catalog.calls.resolvedFor).toEqual(["project-1"]);
-    expect(catalog.calls.inspected).toEqual([{ adapterId: "opencode" }]);
+    // `projectId` reaches the catalog too: it picks the instance AND scopes the
+    // stored preferences that instance answers with.
+    expect(catalog.calls.inspected).toEqual([{ projectId: "project-1", adapterId: "opencode" }]);
     await registration.close();
   });
 
@@ -596,6 +603,30 @@ describe("registerSessionRpcIpcHandlers", () => {
     // No `projectId` on this request — the router resolves against `undefined`.
     expect(catalog.calls.resolvedFor).toEqual([undefined]);
     expect(catalog.calls.saved).toEqual([{ adapterId: "opencode", preferences }]);
+    await registration.close();
+  });
+
+  it("routes runtimeCatalog.clear over IPC, which requires a projectId", async () => {
+    const fixture = runtimeFixture();
+    const catalog = runtimeCatalogFixture();
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: fixture.runtime,
+      resolveRuntimeCatalog: catalog.resolveRuntimeCatalog,
+    });
+
+    await expect(
+      invoke(sender(), {
+        procedure: "runtimeCatalog.clear",
+        input: { projectId: "project-1", adapterId: "opencode" },
+      }),
+    ).resolves.toEqual({ ok: true, data: undefined });
+    // A clear drops a project's override; there is nothing to drop globally.
+    await expect(
+      invoke(sender(), { procedure: "runtimeCatalog.clear", input: { adapterId: "opencode" } }),
+    ).resolves.toMatchObject({ ok: false });
+
+    expect(catalog.calls.resolvedFor).toEqual(["project-1"]);
+    expect(catalog.calls.cleared).toEqual([{ projectId: "project-1", adapterId: "opencode" }]);
     await registration.close();
   });
 

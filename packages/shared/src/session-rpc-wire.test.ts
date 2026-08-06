@@ -29,6 +29,7 @@ describe("Session RPC wire protocol", () => {
       "session.reconcile",
       "runtimeCatalog.inspect",
       "runtimeCatalog.save",
+      "runtimeCatalog.clear",
       "runtimeCatalog.resolve",
     ]);
   });
