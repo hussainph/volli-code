@@ -66,8 +66,9 @@ describe("clearSentDraft", () => {
   it("removes a session's draft once the message it holds is away", () => {
     const store = createChatDraftsStore(createMemoryStorage());
     store.getState().setDraft("s1", "hello");
+    const revision = store.getState().drafts.s1!.touchedAt;
 
-    store.getState().clearSentDraft("s1", "hello");
+    store.getState().clearSentDraft("s1", "hello", revision);
 
     expect(store.getState().drafts).not.toHaveProperty("s1");
   });
@@ -75,8 +76,9 @@ describe("clearSentDraft", () => {
   it("clears a draft whose only difference from the sent text is whitespace", () => {
     const store = createChatDraftsStore(createMemoryStorage());
     store.getState().setDraft("s1", "hello\n");
+    const revision = store.getState().drafts.s1!.touchedAt;
 
-    store.getState().clearSentDraft("s1", "hello");
+    store.getState().clearSentDraft("s1", "hello", revision);
 
     expect(store.getState().drafts).not.toHaveProperty("s1");
   });
@@ -86,18 +88,35 @@ describe("clearSentDraft", () => {
   it("keeps a draft typed while the send was in flight", () => {
     const store = createChatDraftsStore(createMemoryStorage());
     store.getState().setDraft("s1", "hello");
+    const revision = store.getState().drafts.s1!.touchedAt;
     store.getState().setDraft("s1", "and one more thing");
 
-    store.getState().clearSentDraft("s1", "hello");
+    store.getState().clearSentDraft("s1", "hello", revision);
 
     expect(store.getState().drafts.s1?.text).toBe("and one more thing");
+  });
+
+  // Same words, new keystrokes: text alone would wipe the retyped draft.
+  it("keeps a draft retyped as the same text before the original delivery resolves", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().setDraft("s1", "hello");
+    const revision = store.getState().drafts.s1!.touchedAt;
+
+    vi.setSystemTime(2000);
+    store.getState().setDraft("s1", "hello");
+
+    store.getState().clearSentDraft("s1", "hello", revision);
+
+    expect(store.getState().drafts.s1).toEqual({ text: "hello", touchedAt: 2000 });
   });
 
   it("is a no-op for a session with no draft", () => {
     const store = createChatDraftsStore(createMemoryStorage());
     const before = store.getState().drafts;
 
-    store.getState().clearSentDraft("missing", "hello");
+    store.getState().clearSentDraft("missing", "hello", 1);
 
     expect(store.getState().drafts).toBe(before);
   });
@@ -187,5 +206,39 @@ describe("persistence", () => {
     storage.setItem("volli:chat-drafts", JSON.stringify({ state: { drafts: null }, version: 1 }));
 
     expect(createChatDraftsStore(storage).getState().drafts).toEqual({});
+  });
+
+  it("falls back to an empty draft set when persisted `drafts` is an array", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:chat-drafts",
+      JSON.stringify({ state: { drafts: [{ text: "hello", touchedAt: 1 }] }, version: 1 }),
+    );
+
+    expect(createChatDraftsStore(storage).getState().drafts).toEqual({});
+  });
+
+  it("discards malformed draft entries and keeps well-shaped ones", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:chat-drafts",
+      JSON.stringify({
+        state: {
+          drafts: {
+            good: { text: "hello", touchedAt: 1000 },
+            nullText: { text: null, touchedAt: 1000 },
+            badTouchedAt: { text: "x", touchedAt: Number.NaN },
+            missingText: { touchedAt: 1000 },
+            arrayEntry: ["hello", 1000],
+            nullEntry: null,
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    expect(createChatDraftsStore(storage).getState().drafts).toEqual({
+      good: { text: "hello", touchedAt: 1000 },
+    });
   });
 });

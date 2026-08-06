@@ -1032,6 +1032,15 @@ describe("projectSession recency", () => {
     expect(projection.lastActivityAt).toBe(200);
     expect(projection.commands).toEqual([command]);
   });
+
+  it("ignores session.retitled after real activity", () => {
+    const projection = projectSession(session, [
+      event(20, { kind: "turn.started", attachmentId: "attachment-recency", turnId: "turn-1" }),
+      event(50, { kind: "session.retitled", title: "Renamed" }),
+    ]);
+    expect(projection.lastActivityAt).toBe(200);
+    expect(projection.session.title).toBe("Renamed");
+  });
 });
 
 function raised(

@@ -38,17 +38,19 @@ interface ChatDraftsState {
   setDraft(sessionId: string, text: string): void;
   /**
    * Drops a session's draft once its message is safely away — but only if the
-   * box still holds that message.
+   * box still holds that same draft revision.
    *
    * Delivery is a round trip to main and the composer stays editable across it,
    * so whatever is in the box when the reply lands is not necessarily what was
    * sent: anything typed in between is a NEW draft, and clearing on the reply
-   * regardless would delete keystrokes the user watched themselves type. `sent`
-   * is the composer's already-trimmed value (see `composer-ui.tsx`), so the
-   * comparison trims too — trailing whitespace is not a keystroke worth keeping
-   * a draft alive for.
+   * regardless would delete keystrokes the user watched themselves type.
+   * `revision` is the draft's `touchedAt` captured at submit; text alone is not
+   * enough, because retyping the same words stamps a new revision that must
+   * survive. `sent` is the composer's already-trimmed value (see
+   * `composer-ui.tsx`), so the comparison trims too — trailing whitespace is
+   * not a keystroke worth keeping a draft alive for.
    */
-  clearSentDraft(sessionId: string, sent: string): void;
+  clearSentDraft(sessionId: string, sent: string, revision: number): void;
 }
 
 type PersistedChatDraftsState = Pick<ChatDraftsState, "drafts">;
@@ -56,6 +58,35 @@ type PersistedChatDraftsState = Pick<ChatDraftsState, "drafts">;
 /** True for a draft whose text is empty or whitespace-only — never worth persisting. */
 function isBlankDraft(draft: ChatDraft): boolean {
   return draft.text.trim().length === 0;
+}
+
+/** True for a value that is a plain object (not null, not an array). */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** True for a hydrated draft entry with the fields this store actually reads. */
+function isChatDraft(value: unknown): value is ChatDraft {
+  if (!isPlainRecord(value)) return false;
+  return (
+    typeof value.text === "string" &&
+    typeof value.touchedAt === "number" &&
+    Number.isFinite(value.touchedAt)
+  );
+}
+
+/**
+ * Accept only well-shaped draft entries from storage. A bad blob must not
+ * poison live state — `sanitizeDrafts` later calls `.trim()` on `text`, and a
+ * `null` text would throw on the next persist.
+ */
+function readPersistedDrafts(value: unknown): Record<string, ChatDraft> {
+  if (!isPlainRecord(value)) return {};
+  const drafts: Record<string, ChatDraft> = {};
+  for (const [sessionId, entry] of Object.entries(value)) {
+    if (isChatDraft(entry)) drafts[sessionId] = { text: entry.text, touchedAt: entry.touchedAt };
+  }
+  return drafts;
 }
 
 /**
@@ -88,10 +119,12 @@ export function createChatDraftsStore(storage?: StateStorage) {
           set((state) => ({
             drafts: { ...state.drafts, [sessionId]: { text, touchedAt: Date.now() } },
           })),
-        clearSentDraft: (sessionId, sent) =>
+        clearSentDraft: (sessionId, sent, revision) =>
           set((state) => {
             const draft = state.drafts[sessionId];
-            if (draft === undefined || draft.text.trim() !== sent) return {};
+            if (draft === undefined || draft.touchedAt !== revision || draft.text.trim() !== sent) {
+              return {};
+            }
             const next = { ...state.drafts };
             delete next[sessionId];
             return { drafts: next };
@@ -106,14 +139,10 @@ export function createChatDraftsStore(storage?: StateStorage) {
           drafts: sanitizeDrafts(state.drafts),
         }),
         merge: (persisted, current) => {
-          const stored =
-            typeof persisted === "object" && persisted !== null
-              ? (persisted as Partial<PersistedChatDraftsState>)
-              : {};
+          const stored = isPlainRecord(persisted) ? persisted : {};
           return {
             ...current,
-            drafts:
-              typeof stored.drafts === "object" && stored.drafts !== null ? stored.drafts : {},
+            drafts: readPersistedDrafts(stored.drafts),
           };
         },
       },

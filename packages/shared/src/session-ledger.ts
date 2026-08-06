@@ -788,15 +788,17 @@ export function projectSession(
     .toSorted((left, right) => left.sequence - right.sequence);
 
   for (const event of ordered) {
-    // Recency is about the agent's work, so the two facts that are pure Volli
-    // bookkeeping do not move it: a `command.recorded` fires for a retitle, and
-    // floating a Session to the top of a recency-sorted list because someone
-    // renamed it is a lie about what is happening in it. Nothing is lost by
-    // skipping them — a `message.submit` command is followed immediately by the
+    // Recency is about the agent's work, so pure Volli bookkeeping does not
+    // move it: `command.recorded` / `command.receipt.recorded` fire for a
+    // retitle, and `session.retitled` is the rename fact itself. Floating a
+    // Session to the top of a recency-sorted list because someone renamed it
+    // is a lie about what is happening in it. Nothing is lost by skipping
+    // them — a `message.submit` command is followed immediately by the
     // `turn.started` it caused, which does count.
     if (
       event.payload.kind !== "command.recorded" &&
-      event.payload.kind !== "command.receipt.recorded"
+      event.payload.kind !== "command.receipt.recorded" &&
+      event.payload.kind !== "session.retitled"
     ) {
       lastActivityAt = event.occurredAt;
     }

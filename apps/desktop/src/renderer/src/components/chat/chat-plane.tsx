@@ -192,11 +192,12 @@ export function ChatPlane({ sessionId, onOpenFile, store }: ChatPlaneProps) {
 
   const send = React.useCallback(
     (text: string, intent: ComposerIntent) => {
+      // Capture the draft revision at submit. Text alone is not enough: if the
+      // user clears and retypes the same words while delivery is in flight,
+      // that is a new draft with a new `touchedAt` and must survive.
+      const revision = useChatDraftsStore.getState().drafts[sessionId]?.touchedAt;
       void deliver(text, intent).then((kept) => {
-        // `text`, not a blind clear: the composer is still editable while the
-        // delivery is in flight, so anything typed in the meantime is a new
-        // draft and must outlive the message that just left.
-        if (kept) clearSentDraft(sessionId, text);
+        if (kept && revision !== undefined) clearSentDraft(sessionId, text, revision);
       });
     },
     [clearSentDraft, deliver, sessionId],
