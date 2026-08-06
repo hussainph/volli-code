@@ -109,6 +109,20 @@ function toolRows(observations: readonly HarnessObservation[]) {
   return statedParts(observations).flatMap((part) => (part.type === "dynamic-tool" ? [part] : []));
 }
 
+/** The turn transitions a stream produced, in order, named by the event that made each. */
+function turnFacts(observations: readonly HarnessObservation[]) {
+  return observations
+    .filter(({ kind }) => kind === "turn.started" || kind === "turn.completed")
+    .map(({ id, kind }) => ({ id, kind }));
+}
+
+/** The messages a stream wrote down durably, in order. */
+function settledMessageIds(observations: readonly HarnessObservation[]) {
+  return observations.flatMap((observation) =>
+    observation.kind === "transcript.message" ? [observation.message.id] : [],
+  );
+}
+
 /** The transient ops one message's stream carried, in order. */
 function deltaOps(
   observations: readonly HarnessObservation[],
@@ -852,8 +866,11 @@ describe("OpenCodeNativeAdapter", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(observations).toEqual([
+      // The assistant message is the first thing that says a turn is running, so
+      // the busy behind it restates a transition already made rather than making
+      // a second one.
       expect.objectContaining({
-        id: "e-busy",
+        id: "e-message",
         kind: "turn.started",
       }),
       expect.objectContaining({
@@ -1603,6 +1620,39 @@ describe("OpenCodeNativeAdapter", () => {
     await handle.release("requested");
   });
 
+  it("appends a thought that grows while it is still streaming", async () => {
+    const hold = new Deferred<void>();
+    const network = tickedStream(
+      new FakeNetwork(),
+      [
+        [assistantOpened, partUpdated("think", { id: "r1", type: "reasoning", text: "Weighing" })],
+        [textDelta("think-more", "r1", " the trade-offs")],
+      ],
+      hold,
+    );
+    const adapter = createAdapter({ process: new FakeProcess(), network });
+    const observations: HarnessObservation[] = [];
+    const handle = await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // A thought that is still live between two ticks changed only by growing, so
+    // it costs its new words rather than the whole thought again.
+    expect(deltaOps(observations).slice(1)).toEqual([
+      { op: "part.append", key: "r1", text: " the trade-offs" },
+    ]);
+    expect(transcriptStates(observations).at(-1)).toEqual({
+      id: "provider-assistant",
+      role: "assistant",
+      parts: [{ type: "reasoning", text: "Weighing the trade-offs", state: "streaming" }],
+    });
+    hold.resolve(undefined);
+    await handle.release("requested");
+  });
+
   it("gates a tool row on a permission that writes nothing to the buffer", async () => {
     const hold = new Deferred<void>();
     const network = tickedStream(
@@ -1770,7 +1820,8 @@ describe("OpenCodeNativeAdapter", () => {
     expect(new Set(transient.map(({ id }) => id)).size).toBe(transient.length);
     const { observations: reconciled, cursor } = await handle.reconcile(null);
     expect(reconciled).toEqual([]);
-    expect(cursor).toEqual({ eventId: null });
+    // The turn the assistant message opened, not the delta that followed it.
+    expect(cursor).toEqual({ eventId: "assistant" });
     hold.resolve(undefined);
     await handle.release("requested");
   });
@@ -1806,13 +1857,147 @@ describe("OpenCodeNativeAdapter", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(
-      observations
-        .filter(({ kind }) => kind === "turn.started" || kind === "turn.completed")
-        .map(({ id, kind }) => ({ id, kind })),
-    ).toEqual([
+    expect(turnFacts(observations)).toEqual([
       { id: "busy-first", kind: "turn.started" },
       { id: "idle-first", kind: "turn.completed" },
+    ]);
+  });
+
+  it("settles every turn on a stream that never says busy", async () => {
+    const { adapter } = composition([
+      {
+        id: "first-answer",
+        type: "message.updated",
+        properties: {
+          sessionID: "native-session-1",
+          info: { id: "answer-1", role: "assistant" },
+          parts: [{ id: "p1", type: "text", text: "One" }],
+        },
+      },
+      { id: "first-idle", type: "session.idle", properties: { sessionID: "native-session-1" } },
+      {
+        id: "second-answer",
+        type: "message.updated",
+        properties: {
+          sessionID: "native-session-1",
+          info: { id: "answer-2", role: "assistant" },
+          parts: [{ id: "p2", type: "text", text: "Two" }],
+        },
+      },
+      { id: "second-idle", type: "session.idle", properties: { sessionID: "native-session-1" } },
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Without a busy to open the second turn, the second idle used to read as a
+    // repeat of the first and be dropped — leaving the turn permanently running.
+    expect(turnFacts(observations)).toEqual([
+      { id: "first-answer", kind: "turn.started" },
+      { id: "first-idle", kind: "turn.completed" },
+      { id: "second-answer", kind: "turn.started" },
+      { id: "second-idle", kind: "turn.completed" },
+    ]);
+    // The settle each idle carries is what writes the answer down, so a dropped
+    // idle is a reply that exists only until the app is relaunched.
+    expect(settledMessageIds(observations)).toEqual(["answer-1", "answer-2"]);
+  });
+
+  it("keeps OpenCode's busy event as the turn start when it leads", async () => {
+    const { adapter } = composition([
+      {
+        id: "busy-one",
+        type: "session.status",
+        properties: { sessionID: "native-session-1", status: { type: "busy" } },
+      },
+      {
+        id: "answer-one",
+        type: "message.updated",
+        properties: {
+          sessionID: "native-session-1",
+          info: { id: "answer-1", role: "assistant" },
+        },
+      },
+      { id: "idle-one", type: "session.idle", properties: { sessionID: "native-session-1" } },
+      {
+        id: "busy-two",
+        type: "session.status",
+        properties: { sessionID: "native-session-1", status: { type: "busy" } },
+      },
+      {
+        id: "answer-two",
+        type: "message.updated",
+        properties: {
+          sessionID: "native-session-1",
+          info: { id: "answer-2", role: "assistant" },
+        },
+      },
+      { id: "idle-two", type: "session.idle", properties: { sessionID: "native-session-1" } },
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Each turn is still attributed to the busy that opened it, and the message
+    // arriving behind one adds nothing.
+    expect(turnFacts(observations)).toEqual([
+      { id: "busy-one", kind: "turn.started" },
+      { id: "idle-one", kind: "turn.completed" },
+      { id: "busy-two", kind: "turn.started" },
+      { id: "idle-two", kind: "turn.completed" },
+    ]);
+  });
+
+  it("counts one turn per assistant message however often OpenCode restates it", async () => {
+    const { adapter } = composition([
+      {
+        id: "answer-opened",
+        type: "message.updated",
+        properties: {
+          sessionID: "native-session-1",
+          info: { id: "answer-1", role: "assistant" },
+          parts: [{ id: "p1", type: "text", text: "One" }],
+        },
+      },
+      {
+        id: "answer-usage",
+        type: "message.updated",
+        properties: {
+          sessionID: "native-session-1",
+          info: { id: "answer-1", role: "assistant", tokens: { input: 12, output: 3 } },
+        },
+      },
+      { id: "answer-idle", type: "session.idle", properties: { sessionID: "native-session-1" } },
+      {
+        id: "answer-final",
+        type: "message.updated",
+        properties: {
+          sessionID: "native-session-1",
+          info: { id: "answer-1", role: "assistant", tokens: { input: 12, output: 9 } },
+        },
+      },
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The last restatement arrives after the settle emptied the message buffer,
+    // which is exactly the case a "still buffered?" test would have got wrong.
+    expect(turnFacts(observations)).toEqual([
+      { id: "answer-opened", kind: "turn.started" },
+      { id: "answer-idle", kind: "turn.completed" },
     ]);
   });
 
@@ -4864,9 +5049,13 @@ describe("OpenCodeNativeAdapter", () => {
     });
     const committed: HarnessObservation[] = [];
     const handle = await adapter.attach(spec(), {
+      // The settled snapshot is the emit this test holds in flight; the turn the
+      // message opened ahead of it is not what release has to wait for.
       emit: async (observation) => {
-        emitEntered.resolve();
-        await allowEmit.promise;
+        if (observation.kind === "transcript.message") {
+          emitEntered.resolve();
+          await allowEmit.promise;
+        }
         committed.push(observation);
       },
     });
@@ -4883,10 +5072,18 @@ describe("OpenCodeNativeAdapter", () => {
     await release;
     // Release settles before it drops the sink, so the disconnect fact queued
     // behind the in-flight snapshot still lands rather than being cut off.
-    expect(committed.map(({ kind }) => kind)).toEqual(["transcript.message", "attention.raised"]);
+    expect(committed.map(({ kind }) => kind)).toEqual([
+      "turn.started",
+      "transcript.message",
+      "attention.raised",
+    ]);
     await handle.release("requested");
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(committed.map(({ kind }) => kind)).toEqual(["transcript.message", "attention.raised"]);
+    expect(committed.map(({ kind }) => kind)).toEqual([
+      "turn.started",
+      "transcript.message",
+      "attention.raised",
+    ]);
   });
 
   it("keeps malformed catalog responses out while reporting successful safe metadata", async () => {
@@ -6232,7 +6429,7 @@ describe("OpenCodeNativeAdapter", () => {
     await expect(handle.release("requested")).resolves.toBeUndefined();
   });
 
-  it("snapshots a settled turn and tolerates removing a message with no pending snapshot", async () => {
+  it("opens the next turn on a fresh message and tolerates removing one it never held", async () => {
     const network = new FakeNetwork();
     const hold = new Deferred<void>();
     network.subscribe = async (input) => {
@@ -6268,11 +6465,15 @@ describe("OpenCodeNativeAdapter", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    // The turn already settled, so nothing in the frame is still thinking.
+    // An assistant message the binding has not met before belongs to a turn that
+    // has not ended, whatever the last status said — so its thought is live.
+    expect(observations.filter(({ kind }) => kind === "turn.started")).toEqual([
+      expect.objectContaining({ id: "late-assistant" }),
+    ]);
     expect(transcriptStates(observations, "late").at(-1)).toEqual({
       id: "late",
       role: "assistant",
-      parts: [{ type: "reasoning", text: "Late thought", state: "done" }],
+      parts: [{ type: "reasoning", text: "Late thought", state: "streaming" }],
     });
     // A message this binding never claimed is removed without a word about it.
     expect(deltaOps(observations, "ghost")).toEqual([]);
