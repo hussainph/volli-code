@@ -69,10 +69,10 @@ import {
   ConversationScrollButton,
 } from "@ai-elements/conversation";
 import { FileMentionProvider } from "@ai-elements/chat-markdown";
+import { groupTurns } from "@renderer/chat/activity";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { cn } from "@renderer/lib/utils";
 
-import { groupTurns } from "../chat/activity";
 import { ChatTurn, holdList, sameMessages, type TurnContext } from "./chat-session";
 
 export const title = "Chat transcript · performance";

@@ -16,7 +16,8 @@ import type { SessionAttention, SessionInteractionResolution } from "@volli/shar
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
-import { type SessionTodo } from "../chat/activity";
+import { type SessionTodo } from "@renderer/chat/activity";
+
 import {
   answerInteraction,
   holdList,

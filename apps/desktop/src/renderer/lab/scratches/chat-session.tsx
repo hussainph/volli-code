@@ -22,15 +22,6 @@ import {
 import { FileMentionProvider } from "@ai-elements/chat-markdown";
 import { Message, MessageContent } from "@ai-elements/message";
 import { ReasoningLine } from "@ai-elements/reasoning";
-import { AppShell } from "@renderer/components/app-shell";
-import { ContentColumn } from "@renderer/components/layout/content-column";
-import { SettingsPage } from "@renderer/components/pages/settings-page";
-import { RailDrawer } from "@renderer/components/ticket/rail-drawer";
-import { TicketTabStrip, type TicketTabDescriptor } from "@renderer/components/ticket/ticket-tabs";
-import { Button } from "@renderer/components/ui/button";
-import { cn } from "@renderer/lib/utils";
-import { useUiStore } from "@renderer/stores/ui";
-
 import {
   approvalId,
   gatedApprovalIds,
@@ -40,25 +31,34 @@ import {
   segmentTurn,
   type ChatSegment,
   type SessionTodo,
-} from "../chat/activity";
-import { ActivityBundle, SessionTodoDock, SessionTodoList, ToolRow } from "../chat/activity-ui";
-import { SessionComposer } from "../chat/composer-ui";
-import { GuardedResponse } from "../chat/markdown-boundary";
+} from "@renderer/chat/activity";
 import {
   footInteraction,
   interactionForApproval,
   readInteractionResolutionMessage,
   type InteractionSubmission,
-} from "../chat/interaction";
-import { InteractionCard, InteractionReceiptLine } from "../chat/interaction-ui";
-import { LabScenarioPicker } from "../chat/scenario-picker";
-import { useLabSessionController, type LabSessionController } from "../chat/session-controller";
+} from "@renderer/chat/interaction";
 import {
   enqueueMessage,
   nextRelease,
   type ComposerIntent,
   type QueuedMessage,
-} from "../chat/session-model";
+} from "@renderer/chat/session-model";
+import { AppShell } from "@renderer/components/app-shell";
+import { ContentColumn } from "@renderer/components/layout/content-column";
+import { SettingsPage } from "@renderer/components/pages/settings-page";
+import { RailDrawer } from "@renderer/components/ticket/rail-drawer";
+import { TicketTabStrip, type TicketTabDescriptor } from "@renderer/components/ticket/ticket-tabs";
+import { Button } from "@renderer/components/ui/button";
+import { cn } from "@renderer/lib/utils";
+import { useUiStore } from "@renderer/stores/ui";
+
+import { ActivityBundle, SessionTodoDock, SessionTodoList, ToolRow } from "../chat/activity-ui";
+import { SessionComposer } from "../chat/composer-ui";
+import { GuardedResponse } from "../chat/markdown-boundary";
+import { InteractionCard, InteractionReceiptLine } from "../chat/interaction-ui";
+import { LabScenarioPicker } from "../chat/scenario-picker";
+import { useLabSessionController, type LabSessionController } from "../chat/session-controller";
 import { LabRuntimeCatalogProvider } from "../runtime-catalog-client";
 import { appApi, seedApp } from "../seed";
 

@@ -90,6 +90,13 @@ export default defineConfig(({ mode }) => ({
       // lifecycle bootstrap: excluded on purpose, never add ../main/**.
       include: [
         "src/stores/**",
+        "src/chat/activity.ts",
+        "src/chat/interaction.ts",
+        "src/chat/markdown-source.ts",
+        "src/chat/message-projection.ts",
+        "src/chat/session-model.ts",
+        "src/chat/transcript.ts",
+        "src/chat/wire.ts",
         "src/components/board/board-dnd.ts",
         "src/components/board/new-ticket/draft.ts",
         "src/components/board/new-ticket/submit.ts",

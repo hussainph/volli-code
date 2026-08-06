@@ -255,6 +255,35 @@ describe("what the primary control says", () => {
       interactionSubmitLabel(asked, setPromptResponse({}, "prompt:0", "neither — rebase first")),
     ).toBe("Send");
   });
+
+  it("waits to be answered rather than chosen when the only question has no options", () => {
+    const freeform = question([prompt({ custom: true, options: [] })]);
+    expect(interactionSubmitLabel(freeform, {})).toBe("Answer");
+  });
+
+  it("keeps the neutral word for a multi-question submission with nothing else to name", () => {
+    const first = prompt({ id: "prompt:0" });
+    const second = prompt({ id: "prompt:1" });
+    const interaction = question([first, second]);
+    const draft = selectOption(
+      selectOption({}, first, "question:0:bWFpbg"),
+      second,
+      "question:0:bWFpbg",
+    );
+    expect(interactionSubmitLabel(interaction, draft)).toBe("Submit");
+  });
+
+  it("keeps the neutral word once more than one option is chosen on a multi-select prompt", () => {
+    // `chosen` names a single declared verdict; two picks are an answer, not one.
+    const multi = prompt({ multiple: true });
+    const interaction = question([multi]);
+    const draft = selectOption(
+      selectOption({}, multi, "question:0:bWFpbg"),
+      multi,
+      "question:0:ZGV2",
+    );
+    expect(interactionSubmitLabel(interaction, draft)).toBe("Submit");
+  });
 });
 
 describe("none of these work", () => {
@@ -716,6 +745,31 @@ describe("receipt", () => {
       }).trailer,
     ).toBeNull();
   });
+
+  it("reads an answer against the interaction's flat options once its own prompt is gone", () => {
+    // An answer naming a prompt id the interaction no longer declares — a record
+    // outlived a prompt list that shrank. The interaction's own options are what
+    // is left to name the choice from.
+    const interaction = question([prompt({ id: "prompt:0" })]);
+    expect(
+      describeInteractionResolution(interaction, {
+        optionIds: ["question:0:bWFpbg"],
+        response: null,
+        answers: [{ promptId: "prompt:9", optionIds: ["question:0:bWFpbg"], response: null }],
+      }).trailer,
+    ).toBe("main");
+  });
+
+  it("names nothing when a flat option id with no answers to read matches no declared option", () => {
+    const opaque = permission({ prompts: [] });
+    expect(
+      describeInteractionResolution(opaque, {
+        optionIds: ["not-a-declared-option"],
+        response: null,
+        answers: [],
+      }).trailer,
+    ).toBeNull();
+  });
 });
 
 describe("interactionQuestions", () => {
@@ -833,6 +887,21 @@ describe("the durable answer in scrollback", () => {
     });
   });
 
+  it("skips a part that is not the resolution to reach the one that is", () => {
+    expect(
+      readInteractionResolutionMessage({
+        metadata: { interactionId: "permission:p1" },
+        parts: [
+          { type: "text", text: "some other part" },
+          { type: "data-interaction-resolution", data: { optionIds: ["once"], response: null } },
+        ],
+      }),
+    ).toEqual({
+      interactionId: "permission:p1",
+      resolution: { optionIds: ["once"], response: null },
+    });
+  });
+
   it("reads an ordinary message as not one", () => {
     // This crosses the RPC edge as JSON, so a shape we do not recognize reads
     // as "not a resolution" rather than throwing inside a render.
@@ -909,6 +978,24 @@ describe("the durable answer in scrollback", () => {
         ],
       })?.resolution.answers,
     ).toEqual([{ promptId: "prompt:0", optionIds: ["a"], response: null }]);
+  });
+
+  it("keeps a stored answer's own free text, not just its selections", () => {
+    expect(
+      readInteractionResolutionMessage({
+        metadata: { interactionId: "question:q1" },
+        parts: [
+          {
+            type: "data-interaction-resolution",
+            data: {
+              optionIds: [],
+              response: null,
+              answers: [{ promptId: "prompt:0", optionIds: [], response: "the release branch" }],
+            },
+          },
+        ],
+      })?.resolution.answers,
+    ).toEqual([{ promptId: "prompt:0", optionIds: [], response: "the release branch" }]);
   });
 
   it("leaves a resolution stored before answers existed reading flat", () => {

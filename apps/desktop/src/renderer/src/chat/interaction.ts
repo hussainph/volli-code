@@ -432,6 +432,7 @@ export function interactionSubmitLabel(
   draft: InteractionDraft,
 ): string {
   const prompts = readInteractionPrompts(interaction);
+  /* v8 ignore next -- a length-1 array's index 0 is never undefined; the fallback is for the wider element type. */
   const only = prompts.length === 1 ? (prompts[0] ?? null) : null;
   const submission = interactionSubmission(interaction, draft);
   if (submission === null) {
@@ -786,6 +787,7 @@ function readStoredAnswers(value: unknown): readonly SessionInteractionAnswer[] 
 }
 
 function objectField(value: unknown, key: string): Record<string, unknown> | null {
+  /* v8 ignore next -- the sole call site already narrowed `value` to a record via `stringField`'s own match. */
   const nested = isRecord(value) ? value[key] : undefined;
   return isRecord(nested) ? nested : null;
 }

@@ -42,9 +42,6 @@ import type { DynamicToolUIPart, ReasoningUIPart } from "ai";
 import * as React from "react";
 
 import { ReasoningBody, useElapsed } from "@ai-elements/reasoning";
-import { Button } from "@renderer/components/ui/button";
-import { cn } from "@renderer/lib/utils";
-
 import {
   bundleNeedsAttention,
   bundleSummary,
@@ -59,7 +56,9 @@ import {
   type SessionTodo,
   type SummarySegment,
   type SummaryTone,
-} from "./activity";
+} from "@renderer/chat/activity";
+import { Button } from "@renderer/components/ui/button";
+import { cn } from "@renderer/lib/utils";
 
 /* ------------------------------------------------------------------- motion */
 

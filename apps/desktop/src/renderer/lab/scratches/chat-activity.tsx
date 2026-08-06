@@ -33,14 +33,18 @@ import {
 } from "@volli/shared";
 import type { DynamicToolUIPart, ReasoningUIPart } from "ai";
 
+import { type BundleRow, type SessionTodo } from "@renderer/chat/activity";
+import {
+  enqueueMessage,
+  type ComposerAgent,
+  type QueuedMessage,
+} from "@renderer/chat/session-model";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Button } from "@renderer/components/ui/button";
 
-import { type BundleRow, type SessionTodo } from "../chat/activity";
 import { ActivityBundle, AttentionReceipt, SessionTodoDock, ToolRow } from "../chat/activity-ui";
 import { SessionComposer } from "../chat/composer-ui";
 import { InteractionCard, InteractionReceiptLine } from "../chat/interaction-ui";
-import { enqueueMessage, type ComposerAgent, type QueuedMessage } from "../chat/session-model";
 
 export const title = "Chat activity · fixtures";
 export const note = "Every transcript row, state and composer mode without a live Session";
