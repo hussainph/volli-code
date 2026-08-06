@@ -871,9 +871,12 @@ async function main() {
         const shellSource = (await aside.getByText("Shell", { exact: true }).count()) === 1;
         const noFalseClaude = (await aside.getByText("Claude Code", { exact: true }).count()) === 0;
 
-        // The ACTIVE band intentionally indexes Doing/Needs Review work only.
         // Put this live shell ticket into Doing through the real property UI
-        // (Properties icon mode replaces the retired Details drawer).
+        // (Properties icon mode replaces the retired Details drawer). A live
+        // pane reaches the ACTIVE band from any column now — the board
+        // guarantee is only the fourth of its four groups — so this is what
+        // makes the next scenario's row the GUARANTEED one either way, and it
+        // exercises the property UI on the way past.
         await aside.getByTestId("ticket-rail-mode-properties").click();
         await aside.getByRole("button", { name: "Todo", exact: true }).click();
         await page.getByRole("menuitemradio", { name: "Doing", exact: true }).click();
