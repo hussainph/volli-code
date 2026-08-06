@@ -28,6 +28,7 @@ import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
+import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { sessionPanes, useSessionsStore } from "@renderer/stores/sessions";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
@@ -212,6 +213,7 @@ export function ActiveSessions({ project }: { project: Project }) {
   const tickets = useBoardStore((state) => state.ticketsByProject[project.id]) ?? EMPTY_TICKETS;
   const planningChange = useBoardStore((state) => state.lastPlanningChange);
   const containers = useSessionsStore((state) => state.byOwner);
+  const openChatTabs = useChatSessionsStore((state) => state.openTabs);
   const lastOutputAt = useSessionsStore((state) => state.lastOutputAt);
   const parkState = useSessionsStore((state) => state.parkState);
   const harness = useSessionsStore((state) => state.harness);
@@ -234,10 +236,14 @@ export function ActiveSessions({ project }: { project: Project }) {
     () => new Set(tickets.map((ticket) => ticket.id)),
     [tickets],
   );
+  // Which of this project's Sessions are live on this surface — the key the one
+  // fetch below re-reads the durable listing on. Both kinds count: a chat has no
+  // PTY pane to name, so a signature made of panes alone left a Doing ticket
+  // reading "No live session" while a chat streamed inside it.
   const liveSignature = React.useMemo(
     () =>
-      Object.values(containers)
-        .flatMap((container) =>
+      [
+        ...Object.values(containers).flatMap((container) =>
           container.tabs
             .filter(
               (tab) =>
@@ -246,9 +252,12 @@ export function ActiveSessions({ project }: { project: Project }) {
                 projectTicketIds.has(tab.scope.ticketId),
             )
             .flatMap((tab) => sessionPanes(tab.layout).map((pane) => pane.sessionId)),
-        )
-        .join(","),
-    [containers, project.id, projectTicketIds],
+        ),
+        ...Object.entries(openChatTabs)
+          .filter(([ticketId]) => projectTicketIds.has(ticketId))
+          .flatMap(([, sessionIds]) => sessionIds),
+      ].join(","),
+    [containers, openChatTabs, project.id, projectTicketIds],
   );
   const needsReviewIds = React.useMemo(
     () => tickets.filter((ticket) => ticket.status === "needs_review").map((ticket) => ticket.id),
