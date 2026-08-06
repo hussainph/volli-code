@@ -364,8 +364,11 @@ async function main() {
         );
         const classes = await tabDotClasses(page, chatTabLabel);
         const stillRendered = (await page.getByText(ANSWER_TEXT, { exact: false }).count()) > 0;
+        // The dot has to BE there for the absence of a halo on it to mean
+        // anything: a tab that vanished has no working dot either, and
+        // `dotIsWorking(null)` is false.
         return {
-          ok: !dotIsWorking(classes) && stillRendered,
+          ok: classes !== null && !dotIsWorking(classes) && stillRendered,
           detail: `dotClasses=${classes} answerStillRendered=${stillRendered}`,
         };
       },
@@ -381,6 +384,14 @@ async function main() {
       userDataDir,
       extraEnv: { VOLLI_FAKE_OPENCODE_LOG: fakeLog },
     });
+    // Its own buffers: the first app's are closed, and the relaunch is the one
+    // check whose failure mode (a boot that adopted nothing) is only legible
+    // from what THIS process said on its way up.
+    const relaunchStdout = [];
+    const relaunchStderr = [];
+    const proc2 = app2.process();
+    proc2.stdout?.on("data", (chunk) => relaunchStdout.push(chunk.toString()));
+    proc2.stderr?.on("data", (chunk) => relaunchStderr.push(chunk.toString()));
     try {
       const page2 = await app2.firstWindow();
       await page2.waitForLoadState("domcontentloaded");
@@ -420,12 +431,39 @@ async function main() {
           )
             .then(() => true)
             .catch(() => false);
+          if (!rendered) {
+            await captureFailureEvidence(
+              page2,
+              relaunchStdout,
+              relaunchStderr,
+              fakeLog,
+              "relaunch-transcript-missing",
+            );
+          }
           return {
             ok: rendered,
             detail: rendered ? "durable transcript rendered" : "answer did not reappear",
           };
         },
       );
+
+      // The close trap, on the one app instance where it is loaded: this tab is
+      // the persisted active one AND its Session is still on the ticket's
+      // durable listing, which is exactly the pair the relaunch effect adopts
+      // from. Standing the active tab down before the close is the whole of
+      // what stops it — and a reordering that lost it would leave a chat tab
+      // nobody can close, with every check above still green.
+      await attempt(12, "closing the chat tab retires it, and nothing puts it back", async () => {
+        const chatTab = page2.getByRole("tab", { name: chatTabLabel, exact: true });
+        await page2.getByRole("button", { name: `Close ${chatTabLabel}`, exact: true }).click();
+        await waitUntil("the chat tab to go", async () => (await chatTab.count()) === 0);
+        // A fixed wait, because what is being asserted is that nothing happens:
+        // the resurrection would land on the effect after the close commits,
+        // and there is no state to poll for its absence.
+        await sleep(1500);
+        const back = await chatTab.count();
+        return { ok: back === 0, detail: back === 0 ? "stayed closed" : "the tab came back" };
+      });
     } finally {
       await app2.close().catch(() => {});
     }
