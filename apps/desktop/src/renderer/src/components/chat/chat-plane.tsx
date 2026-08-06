@@ -481,16 +481,23 @@ function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
         <ClockIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" weight="fill" />
       ) : null}
       <div className="min-w-0 flex-1">
-        <p className="truncate text-muted-foreground">{blocker.message}</p>
+        {/* Both lines are clipped by CSS, so both keep the hover that is the
+            only way to read the rest of one. A headline is not automatically
+            short: `sessionError` is a transport failure's own words. */}
+        <p className="truncate text-muted-foreground" title={blocker.message}>
+          {blocker.message}
+        </p>
         {/* The cause, under the headline it qualifies. "Session stopped" alone
             names the state and not one thing about why, and the harness's own
             wording is the only place the reason is ever written down — so it is
-            read on sight, not hidden behind a hover a pointer has to find. */}
-        {blocker.detail === null ? null : (
+            read on sight, not hidden behind a hover a pointer has to find.
+            Empty counts as absent: an error carrying no text would otherwise
+            draw a blank line under the headline. */}
+        {blocker.detail ? (
           <p className="truncate text-muted-foreground/70" title={blocker.detail}>
             {blocker.detail}
           </p>
-        )}
+        ) : null}
       </div>
       {blocker.action ? (
         <Button size="xs" variant="ghost" className="shrink-0" onClick={blocker.action.act}>
