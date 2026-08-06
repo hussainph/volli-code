@@ -40,6 +40,8 @@ function chatRow(overrides: Partial<ChatSessionRecord> = {}): SessionListingRow 
       createdAt: 1,
       adapterId: "opencode",
       live: true,
+      activity: "idle",
+      lastActivityAt: 1,
       ...overrides,
     },
   };

@@ -890,6 +890,8 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
         createdAt: 500,
         adapterId: null,
         live: false,
+        activity: "idle",
+        lastActivityAt: 500,
       },
     });
     expect(

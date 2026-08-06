@@ -81,6 +81,8 @@ function chatSession(
     createdAt: overrides.createdAt ?? 1,
     adapterId: overrides.adapterId ?? "opencode",
     live: overrides.live ?? true,
+    activity: overrides.activity ?? "idle",
+    lastActivityAt: overrides.lastActivityAt ?? 1,
   };
 }
 

@@ -1,3 +1,4 @@
+import { sessionAwaitsUser } from "@volli/shared";
 import type {
   ChatSessionRecord,
   SessionAttachmentProjection,
@@ -28,7 +29,27 @@ export function chatSessionRecord(projection: SessionProjection): ChatSessionRec
     createdAt: projection.session.createdAt,
     adapterId: attachment?.adapterId ?? null,
     live: attachment?.status === "open",
+    activity: chatActivity(projection, attachment),
+    lastActivityAt: projection.lastActivityAt,
   };
+}
+
+/**
+ * Waiting outranks working, because an agent that has asked a question is still
+ * inside an open turn: a row that said "working" there would hide the one thing
+ * the user could actually do about it.
+ *
+ * Working then needs the attachment open as well as the turn, so a durable turn
+ * that outlived its executor reads as what it is — nothing running — instead of
+ * a Session that spins forever.
+ */
+function chatActivity(
+  projection: SessionProjection,
+  attachment: SessionAttachmentProjection | null,
+): ChatSessionRecord["activity"] {
+  if (sessionAwaitsUser(projection)) return "waiting";
+  if (projection.turnActive && attachment?.status === "open") return "working";
+  return "idle";
 }
 
 /** The newest attachment that is not the terminal adapter, or `null` if none has ever attached. */

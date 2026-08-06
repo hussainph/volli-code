@@ -134,6 +134,15 @@ export interface ChatSessionRecord {
   adapterId: string | null;
   /** Whether a structured attachment is currently open. */
   live: boolean;
+  /**
+   * What is happening in this Session right now, in the honest subset of
+   * {@link SessionActivityState} a chat row can be in: there is no PTY to
+   * SIGSTOP, so never "parked", and a Session outlives every attachment it has
+   * ever had, so never "exited" — a chat row that stops is "idle".
+   */
+  activity: Extract<SessionActivityState, "working" | "waiting" | "idle">;
+  /** Epoch milliseconds of the newest fact in this Session — a listing's recency sort key. */
+  lastActivityAt: number;
 }
 
 /**

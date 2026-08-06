@@ -67,6 +67,8 @@ function chatRecord(overrides: Partial<ChatSessionRecord> = {}): ChatSessionReco
     createdAt: 1,
     adapterId: "opencode",
     live: true,
+    activity: "idle",
+    lastActivityAt: 1,
     ...overrides,
   };
 }
