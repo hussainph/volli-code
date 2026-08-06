@@ -563,12 +563,12 @@ class DefaultSessionRuntime implements SessionRuntime {
         adapterId: adapter.manifest.id,
         venue: location.venue,
         continuity: request.command.continuity,
-        native: wrapNativeBinding(
-          request.command.profileId,
-          location.directory,
-          probe,
-          handle.native,
-        ),
+        // The directory that was PREPARED, never the one that was resolved. On a
+        // worktree ticket with no stamp yet the two differ, and `resolve` names
+        // the main checkout — writing that down would hand every later resume
+        // the fallback this attach exists to refuse (#38), because
+        // `#rehydrateBinding` trusts the persisted directory over a fresh read.
+        native: wrapNativeBinding(request.command.profileId, site.directory, probe, handle.native),
       };
       const opened = await this.ports.engine.observe({
         id: this.#id("event"),

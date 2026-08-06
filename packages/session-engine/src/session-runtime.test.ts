@@ -90,6 +90,8 @@ class FakeAdapter implements NativeHarnessAdapter {
   dispatchReceipt: Awaited<ReturnType<BindingHandle["dispatch"]>> | null = null;
   dispatchGate: Promise<void> | null = null;
   commands: HarnessCommand[] = [];
+  /** What each attach was actually pointed at — the live half of the directory contract. */
+  specs: Parameters<NativeHarnessAdapter["attach"]>[0][] = [];
   attachObservation: HarnessObservation | null = null;
   releaseReasons: string[] = [];
 
@@ -124,10 +126,11 @@ class FakeAdapter implements NativeHarnessAdapter {
   }
 
   async attach(
-    _spec: Parameters<NativeHarnessAdapter["attach"]>[0],
+    spec: Parameters<NativeHarnessAdapter["attach"]>[0],
     sink: ObservationSink,
   ): Promise<BindingHandle> {
     this.attaches += 1;
+    this.specs.push(spec);
     this.attachStarted();
     await this.attachGate;
     this.sink = sink;
@@ -635,6 +638,27 @@ describe("SessionRuntime native adapter contract", () => {
     expect((await runtime.snapshot({ sessionId: session.sessionId })).projection).toMatchObject({
       liveExecutor: null,
       attachments: [{ status: "failed", failure: { code: "location_unavailable", detail } }],
+    });
+  });
+
+  it("binds and records the directory it prepared, not the one it resolved", async () => {
+    // The case the split exists for: a worktree ticket with no stamp yet, where
+    // `resolve` can only name the main checkout and `prepare` is what makes the
+    // isolated one. Both halves have to say the prepared directory — the live
+    // spec, and the durable binding a later resume reads instead of re-reading.
+    const { runtime, adapter } = composition({
+      locations: {
+        resolve: async () => ({ directory: "/projects/fake", venue }),
+        prepare: async () => ({ directory: "/w/VC-12", venue }),
+      },
+    });
+    const sessionId = await createAndAttach(runtime);
+
+    expect(adapter.specs.at(-1)?.directory).toBe("/w/VC-12");
+    const { projection } = await runtime.snapshot({ sessionId });
+    expect(projection.attachments[0]?.native?.detail).toMatchObject({
+      kind: "volli.native-binding.v1",
+      directory: "/w/VC-12",
     });
   });
 
