@@ -402,7 +402,7 @@ async function main() {
     // out in the MAIN checkout — no fallback, session creation must error.
     await attempt(
       3,
-      "Hard-fail (no main-checkout fallback): branch collision with the main checkout surfaces an error and creates no worktree dir / no session",
+      "Hard-fail (no main-checkout fallback): branch collision with the main checkout surfaces an error, creates no worktree dir, and leaves no terminal running",
       async () => {
         const title = "Worktree branch-collision ticket";
         const { ticketId, displayId } = await createTicketViaBridge(page, PROJECT.name, {
@@ -423,16 +423,32 @@ async function main() {
 
         const noWorktreeDir = !(await anyPathContains(worktreesRoot, displayId));
 
+        // The Session itself is DURABLE before any worktree or PTY attempt
+        // (pty/manager.ts) — that is what carries the failure somewhere a
+        // person can see it, so "no session" was never the guarantee here and
+        // asserting it only held while the listing silently dropped rows with
+        // no open attachment. What #38 guarantees is that nothing STARTED: no
+        // worktree, and no terminal left running in the main checkout.
         const sessions = await page.evaluate(
           (tid) => window.api.sessions.listForTicket({ ticketId: tid }),
           ticketId,
         );
-        const noSession = sessions.ok && sessions.sessions.length === 0;
+        const rows = sessions.ok ? sessions.sessions : [];
+        const live = rows.filter((row) =>
+          row.kind === "terminal" ? row.record.endedAt === null : row.record.live,
+        );
+        const noLiveSession = sessions.ok && live.length === 0;
 
-        const ok = surfacedError && noWorktreeDir && noSession;
+        const ok = surfacedError && noWorktreeDir && noLiveSession;
         return {
           ok,
-          detail: `error=${JSON.stringify(created.ok ? null : created.error)} noWorktreeDir=${noWorktreeDir} noSession=${noSession}`,
+          detail: `error=${JSON.stringify(created.ok ? null : created.error)} noWorktreeDir=${noWorktreeDir} noLiveSession=${noLiveSession} rows=${JSON.stringify(
+            rows.map((row) =>
+              row.kind === "terminal"
+                ? `terminal:${row.record.endedAt === null ? "live" : "ended"}`
+                : `chat:${row.record.live ? "live" : "ended"}`,
+            ),
+          )}`,
         };
       },
     );
