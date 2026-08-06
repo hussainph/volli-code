@@ -163,3 +163,59 @@ describe("renameChatSession", () => {
     expect(toast.error).toHaveBeenCalledWith("Rename failed: ipc down", expect.anything());
   });
 });
+
+/**
+ * Nothing else moves these labels — the durable rename never reaches a live
+ * chat subscriber — so a refused write that left the optimistic title standing
+ * would leave every chat surface asserting a title the ledger does not have.
+ */
+describe("renameChatSession rollback", () => {
+  it("puts the old title back on every surface it moved", async () => {
+    renameMock.mockResolvedValue({ ok: false, error: "Unknown session" });
+
+    await renameChatSession("chat-1", "Migration plan");
+
+    expect(useChatSessionsStore.getState().sessions["chat-1"]?.projection?.session.title).toBe(
+      "Plan",
+    );
+    expect(cachedTitle("chat-1")).toBe("Plan");
+  });
+
+  it("rolls back the rail row for a Session no chat client is resident for", async () => {
+    useChatSessionsStore.setState({ sessions: {} });
+    renameMock.mockResolvedValue({ ok: false, error: "Unknown session" });
+
+    await renameChatSession("chat-1", "Migration plan");
+
+    expect(cachedTitle("chat-1")).toBe("Plan");
+  });
+
+  // A rename that landed while this one was in flight already replaced the
+  // optimistic title, and putting `previous` back would undo a rename that
+  // succeeded.
+  it("leaves a newer rename alone rather than clobbering it", async () => {
+    renameMock.mockImplementation(async () => {
+      useChatSessionsStore.getState().retitle("chat-1", "Newer");
+      useTicketSessionRecordsStore.getState().renameLocally("t1", "chat-1", "Newer");
+      return { ok: false, error: "Unknown session" };
+    });
+
+    await renameChatSession("chat-1", "Migration plan");
+
+    expect(useChatSessionsStore.getState().sessions["chat-1"]?.projection?.session.title).toBe(
+      "Newer",
+    );
+    expect(cachedTitle("chat-1")).toBe("Newer");
+  });
+
+  it("skips a cached list that stopped holding the row mid-flight", async () => {
+    renameMock.mockImplementation(async () => {
+      useTicketSessionRecordsStore.setState({ byTicket: {} });
+      return { ok: false, error: "Unknown session" };
+    });
+
+    await renameChatSession("chat-1", "Migration plan");
+
+    expect(useTicketSessionRecordsStore.getState().byTicket).toEqual({});
+  });
+});
