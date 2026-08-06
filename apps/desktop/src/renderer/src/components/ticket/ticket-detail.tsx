@@ -808,8 +808,11 @@ export function TicketDetail({
   }, [projectId, ticket.id, setActiveTab]);
 
   // Mints one durable chat Session on this ticket and opens its tab. Its own
-  // in-flight flag: a chat create never touches the PTY store's `starting`, and
-  // sharing that flag would let a booting terminal disable the whole control.
+  // in-flight flag, because the PTY store's `starting` is a fact about a pane
+  // coming up and other surfaces read it as one — the rail's own creating
+  // state, the session-create pipeline — so a chat write there would be a lie
+  // about a terminal that does not exist. The "+" is disabled by either flag:
+  // one control mints both kinds, and only one of them at a time.
   const [creatingChat, setCreatingChat] = React.useState(false);
   const createChat = React.useCallback(async () => {
     if (creatingChat) return;

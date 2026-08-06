@@ -369,9 +369,9 @@ export function todosSettled(todos: readonly SessionTodo[]): boolean {
  *
  * The catalog answers again whenever an executor appears or a preference is
  * saved, and it almost always resolves to the pick already held. Writing it back
- * regardless replaces the slice, which re-renders the plane, which is what the
- * catalog effect watches — so the guard is what keeps a re-ask from becoming a
- * loop.
+ * regardless replaces the Session's slice, and everything reading that slice
+ * repaints with it — the plane, and the tab's own title and liveness dot — to
+ * say what was already on screen.
  */
 export function sameSelection(left: RuntimeSelection, right: RuntimeSelection): boolean {
   return (
