@@ -21,6 +21,7 @@ export function LabRuntimeCatalogProvider({ children }: React.PropsWithChildren)
             enabledModels: input.preferences.enabledModels.map((model) => ({ ...model })),
           },
         }),
+      clear: (input) => client.runtimeCatalog.clear.mutate(input),
       resolve: (input) => client.runtimeCatalog.resolve.query(input),
     }),
     [client],

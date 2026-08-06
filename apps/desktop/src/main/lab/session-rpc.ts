@@ -394,8 +394,10 @@ export class LabSessionRpcServer {
  * and the code learns the difference only once it is running over Electron IPC
  * with no lab around it.
  *
- * So `undefined` resolves — a Session with no project yet, and what
- * `runtimeCatalog.resolve` always sends — the Lab's own project id resolves,
+ * So `undefined` resolves — app-wide Settings' scope, which still omits
+ * `projectId` — the Lab's own project id resolves — what every chat's
+ * `runtimeCatalog.resolve` now sends, since `ChatPlane`'s `projectId` prop is
+ * required, not the "Session with no project yet" case this used to name —
  * and anything else throws. `requireRuntimeCatalog` in `@volli/session-rpc`
  * already maps a throw from here to `NOT_FOUND`, exactly as it does the hub's,
  * so the Lab needs no error machinery of its own to refuse the same way.

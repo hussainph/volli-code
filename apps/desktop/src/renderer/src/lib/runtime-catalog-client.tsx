@@ -2,6 +2,7 @@ import * as React from "react";
 import type {
   ResolvedRuntimeCatalog,
   RuntimeCatalogBrowseInput,
+  RuntimeCatalogClearInput,
   RuntimeCatalogSaveInput,
   RuntimeCatalogView,
   RuntimePreferences,
@@ -11,7 +12,8 @@ import type {
 export interface RuntimeCatalogClient {
   inspect(input: RuntimeCatalogBrowseInput): Promise<RuntimeCatalogView>;
   save(input: RuntimeCatalogSaveInput): Promise<RuntimePreferences>;
-  resolve(input: { adapterId: string }): Promise<ResolvedRuntimeCatalog>;
+  clear(input: RuntimeCatalogClearInput): Promise<void>;
+  resolve(input: { adapterId: string; projectId?: string }): Promise<ResolvedRuntimeCatalog>;
 }
 
 export interface RuntimeCatalogContextValue extends RuntimeCatalogClient {
@@ -34,6 +36,10 @@ export function RuntimeCatalogProvider({
         const saved = await client.save(input);
         setPreferenceRevision((revision) => revision + 1);
         return saved;
+      },
+      clear: async (input) => {
+        await client.clear(input);
+        setPreferenceRevision((revision) => revision + 1);
       },
       preferenceRevision,
     }),

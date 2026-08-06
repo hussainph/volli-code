@@ -106,12 +106,14 @@ const EMPTY_RESOLVING: ReadonlySet<string> = new Set();
 
 export interface ChatPlaneProps {
   sessionId: string;
+  /** Which project's runtime preferences this chat resolves against (see `useRuntimeCatalog`). */
+  projectId: string;
   onOpenFile(path: string): void;
   /** The UI lab's own store, which owns its own transport. Omitted in the app. */
   store?: ChatSessionsStore;
 }
 
-export function ChatPlane({ sessionId, onOpenFile, store }: ChatPlaneProps) {
+export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlaneProps) {
   const controller = useSessionController(sessionId, store);
   const { enqueue, dequeue, cancelInteraction, interrupt, recover, resolveInteraction, submit } =
     controller;
@@ -148,6 +150,7 @@ export function ChatPlane({ sessionId, onOpenFile, store }: ChatPlaneProps) {
   const composable = selection.modelId.length > 0;
 
   const { catalog, catalogState, catalogError } = useRuntimeCatalog(
+    projectId,
     liveExecutorId,
     selection,
     setSelection,
@@ -432,8 +435,15 @@ export function ChatPlane({ sessionId, onOpenFile, store }: ChatPlaneProps) {
  * The selection lives in the Session's slice, not here: it is a choice about
  * this Session and it has to outlive the view. The current one is read through
  * a ref so re-resolving does not depend on the value it is about to write.
+ *
+ * `projectId` arrives as a prop from `ChatPlane`, not read off
+ * `slice.projection.session.projectId`: the projection is null until the
+ * first snapshot lands, so the first resolve would fire globally before it —
+ * briefly offering models the project disabled, a wrong-model send window,
+ * not a flicker.
  */
 function useRuntimeCatalog(
+  projectId: string,
   liveExecutorId: string | null,
   selection: RuntimeSelection,
   setSelection: (next: RuntimeSelection) => void,
@@ -451,7 +461,7 @@ function useRuntimeCatalog(
   React.useEffect(() => {
     if (resolve === undefined) return;
     let active = true;
-    void resolve({ adapterId: CATALOG_ADAPTER_ID })
+    void resolve({ adapterId: CATALOG_ADAPTER_ID, projectId })
       .then((resolved) => {
         if (!active) return;
         setCatalog(resolved.catalog);
@@ -474,7 +484,7 @@ function useRuntimeCatalog(
     return () => {
       active = false;
     };
-  }, [liveExecutorId, preferenceRevision, resolve, setSelection]);
+  }, [liveExecutorId, preferenceRevision, projectId, resolve, setSelection]);
 
   return { catalog, catalogState, catalogError };
 }

@@ -1018,6 +1018,7 @@ export function TicketDetail({
                 <ChatPlane
                   key={activeChatSessionId}
                   sessionId={activeChatSessionId}
+                  projectId={ticket.projectId}
                   onOpenFile={openFile}
                 />
               ) : null}
