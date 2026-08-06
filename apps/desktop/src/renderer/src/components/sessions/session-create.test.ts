@@ -20,7 +20,16 @@ vi.mock("@renderer/terminal/registry", () => ({
   getOrCreateEngine: vi.fn(),
 }));
 
-const PROJECT: Project = { id: "p1", name: "Volli", path: "/tmp/volli", ticketPrefix: "VC" };
+const PROJECT: Project = {
+  id: "p1",
+  name: "Volli",
+  path: "/tmp/volli",
+  ticketPrefix: "VC",
+  colorIndex: 0,
+  sortOrder: 0,
+  createdAt: 0,
+  updatedAt: 0,
+};
 const SCOPE = ticketScope("p1", "t1");
 
 function stubChatStore(createChatSession: () => Promise<string | null>) {
