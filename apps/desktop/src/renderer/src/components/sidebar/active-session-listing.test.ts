@@ -316,6 +316,29 @@ describe("buildActiveSessionListing — the Active band", () => {
     expect(listing(quietAt + ACTIVE_QUIET_WINDOW_MS + 1).active).toEqual([]);
   });
 
+  it("keeps a Session waiting on a human in Active however long it has been quiet", () => {
+    // The window is asked LAST, after the attention: an agent blocked on a
+    // permission prompt overnight is exactly what the band exists to surface,
+    // and ageing it out would hide the only row anyone had to act on.
+    const now = 10_000_000;
+    const quietAt = now - 4 * ACTIVE_QUIET_WINDOW_MS;
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "needs_review" })],
+      containers: { t1: container("s1", [paneTab("s1", "Blocked run")]) },
+      signalsByTicket: { t1: signal("t1", "s1", "blocked", "Approve access", quietAt) },
+      records: [],
+      lastOutputAt: { s1: quietAt },
+      parkState: {},
+      harness: {},
+      now,
+    });
+
+    expect(result.active).toMatchObject([
+      { title: "Blocked run", attention: { signal: "blocked", reason: "Approve access" } },
+    ]);
+    expect(result.previous).toEqual([]);
+  });
+
   it("keeps a live terminal nothing can date in Active rather than letting it vanish", () => {
     // The post-relaunch shape: `lastOutputAt` lives in the renderer store and
     // died with the last window, so a genuinely busy terminal has no stamp.
@@ -586,13 +609,10 @@ describe("buildActiveSessionListing — the board guarantee", () => {
     });
 
     // The newest ended tab-placement record wins: split panes never stand alone
-    // and a not-yet-ended record is not a concluded run.
-    //
-    // `resumable` is true here with no `harnessSessionId`, and that is the fix:
-    // the badge used to test the seed alone, so it hid Resume for every claude
-    // session that had never reported an id — while the rail, asking
-    // `canResumeSession`, offered it. Claude resumes latest-in-cwd without a
-    // seed. Both surfaces now ask the one predicate.
+    // and a not-yet-ended record is not a concluded run. `resumable` reads
+    // `canResumeSession` — the same predicate the rail asks — rather than the
+    // seed alone; the seed-less half of that is pinned by the mounted-tab tests
+    // below, whose records carry no `harnessSessionId` at all.
     expect(result.active).toMatchObject([
       {
         title: "Claude run",
@@ -950,8 +970,9 @@ describe("buildActiveSessionListing — the board guarantee", () => {
       now: 1_000_000,
     });
 
-    // Neither the (unresolvable) pane nor a durable record has an exit code to
-    // offer, so the row says "ended" rather than guessing it finished cleanly.
+    // The pane says the run is over; nothing says WHEN. `activePaneId` names a
+    // pane the layout does not hold and no durable record was fetched, so the
+    // row reports an end it cannot date rather than inventing one.
     expect(result.active).toMatchObject([
       { source: "Terminal", lastRun: { endedAt: null, resumable: false } },
     ]);
@@ -1329,7 +1350,7 @@ describe("buildActiveSessionListing — the scratch container", () => {
   // The regression this whole pass exists for: `containers` is walked by
   // ticket, so before the scratch container arrived on its own key a live
   // scratch terminal reached neither band.
-  it("keeps a live scratch terminal that no ticket loop would ever visit", () => {
+  it("reaches no band for a live scratch terminal handed over only under the project key", () => {
     const now = 10_000_000;
     const withoutScratch = buildActiveSessionListing({
       tickets: [],
@@ -1650,6 +1671,10 @@ describe("buildActiveSessionListing — cleanup", () => {
     expect(isCleanupExempt({ ticketId: "t1", attached: false, bornTicketless: false })).toBe(false);
     // Ticketless by deletion, not by birth: the exemption does not apply.
     expect(isCleanupExempt({ ticketId: null, attached: false, bornTicketless: false })).toBe(false);
+    // Nor does birth alone earn it. The exemption is about a Session having
+    // nowhere else to be reached from; one sitting on a ticket has a board card
+    // and a rail, whatever it was born as.
+    expect(isCleanupExempt({ ticketId: "t1", attached: false, bornTicketless: true })).toBe(false);
   });
 
   it("(a) cleans a Session whose ticket has left the board", () => {
@@ -1831,7 +1856,7 @@ describe("buildActiveSessionListing — cleanup", () => {
     expect(listing(0).previous).toEqual([]);
   });
 
-  it("cleans a demoted tab that has no durable record only when a rule can reach it", () => {
+  it("keeps a demoted tab that has no durable record, because no rule can date it", () => {
     const now = 10_000_000;
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "todo" })],
@@ -1901,6 +1926,31 @@ describe("buildActiveSessionListing — the Previous filter", () => {
         }).previous,
       ),
     ).toEqual(["Ended terminal"]);
+  });
+
+  it("narrows Previous without narrowing Active, which is deliberately unfilterable", () => {
+    const result = buildActiveSessionListing({
+      ...input,
+      containers: { t1: container("s-live", [paneTab("s-live", "Live terminal")]) },
+      lastOutputAt: { "s-live": now - 60_000 },
+      chatSessions: [
+        ...input.chatSessions,
+        chatSession({
+          sessionId: "c-live",
+          ticketId: "t1",
+          title: "Live chat",
+          activity: "working",
+          live: true,
+          lastActivityAt: now - 1_000,
+        }),
+      ],
+      filter: { kinds: new Set(["chat" as const]), showCleaned: false },
+    });
+
+    // Terminals are filtered out of Previous and stay in Active: you do not get
+    // to hide what is running, only what is over.
+    expect(titles(result.active)).toEqual(["Live chat", "Live terminal"]);
+    expect(titles(result.previous)).toEqual(["Quiet chat"]);
   });
 
   it("brings cleaned rows back, marked, when asked", () => {
@@ -1978,6 +2028,26 @@ describe("buildActiveSessionListing — nextBoundaryAt", () => {
     });
 
     expect(titles(result.active)).toEqual(["Long turn"]);
+    expect(result.nextBoundaryAt).toBeNull();
+  });
+
+  it("does not name a waiting row's quiet window, which cannot expire it", () => {
+    const now = 5_000_000;
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "needs_review" })],
+      containers: { t1: container("s1", [paneTab("s1", "Blocked run")]) },
+      signalsByTicket: { t1: signal("t1", "s1", "blocked", "Approve access", now - 60_000) },
+      records: [],
+      lastOutputAt: { s1: now - 60_000 },
+      parkState: {},
+      harness: {},
+      now,
+    });
+
+    // The row has a stamp inside the window, so there IS a `quietAt + window`
+    // instant to offer — and offering it would wake the caller for a change
+    // that cannot happen, because an attention row leaves when its agent moves.
+    expect(result.active).toMatchObject([{ attention: { signal: "blocked" } }]);
     expect(result.nextBoundaryAt).toBeNull();
   });
 

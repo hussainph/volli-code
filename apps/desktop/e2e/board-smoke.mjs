@@ -319,6 +319,23 @@ async function sidebarSessionIds(page, band = "active") {
 }
 
 /**
+ * The count a session band's header prints — the built listing's own row count,
+ * read back off the rendered heading. `null` when that band is not on screen.
+ *
+ * Worth asserting separately from the ids above because the two come from
+ * different halves of the seam: the count is `listing.<band>.length` straight
+ * from the model, the ids are what the rows actually drew. A band that rendered
+ * a subset of what it counted would read as truthful on either one alone.
+ */
+async function sidebarBandCount(page, band) {
+  return page.evaluate((name) => {
+    const header = document.querySelector(`[data-session-band="${name}"]`)?.firstElementChild;
+    const raw = header?.children[1]?.textContent?.trim();
+    return raw === undefined ? null : Number(raw);
+  }, band);
+}
+
+/**
  * A session row's meta line (`VC-10 · Ready for review`).
  *
  * Everything dimmed in the row promotes together under decision #74's vibrancy
@@ -982,8 +999,10 @@ async function main() {
       async () => {
         // The board guarantee is an ACTIVE-band promise: every Doing and Needs
         // Review ticket gets a presence there (bare rows here — no PTY ever
-        // ran). Scoping the id list to that band is what keeps this an exact
-        // equality; PREVIOUS is a different question and has its own filter.
+        // ran). Scoping the id list to that band is what makes this an equality
+        // over TICKETED rows; PREVIOUS is a different question, and a ticketless
+        // row draws a globe rather than an id, so it contributes nothing here.
+        // The band COUNTS below are what close that gap.
         const doingIds = await columnCardIds(page, "Doing");
         const ids = await sidebarSessionIds(page, "active");
         const expectedIds = ["VC-10", "VC-11", ...doingIds];
@@ -992,14 +1011,19 @@ async function main() {
           doingIds.length > 0 &&
           ids.length === expectedIds.length &&
           expectedIds.every((id) => ids.includes(id));
-        // Both bands are drawn, each header exactly once. The strings are
-        // sentence case in the DOM — globals.css does the uppercasing.
-        const bandHeaders =
-          (await page.getByText("Active", { exact: true }).count()) === 1 &&
-          (await page.getByText("Previous", { exact: true }).count()) === 1;
-        const bareDoingRows =
-          (await page.getByText("No live session", { exact: false }).count()) >= doingIds.length;
-        const noInProgress = (await page.getByText("In progress", { exact: true }).count()) === 0;
+        // Both bands are drawn, and each reports the model's own row count:
+        // exactly the guaranteed rows in ACTIVE, and — no Session has ever run
+        // in this fixture — nothing at all in PREVIOUS. An exact count is what
+        // makes "without inventing live sessions" an assertion rather than a
+        // title: a ticketless row nobody asked for would show up here.
+        const bandCounts =
+          (await sidebarBandCount(page, "active")) === expectedIds.length &&
+          (await sidebarBandCount(page, "previous")) === 0;
+        // And every one of those rows is BARE. A floor here could not tell a
+        // truthful guarantee row from one that had invented something live.
+        const bareRows =
+          (await page.getByText("No live session", { exact: false }).count()) ===
+          expectedIds.length;
         // Scoped to the band under test: PREVIOUS draws mono id chips too, so a
         // page-wide locator would stop naming one row the day this ticket has
         // an ended session as well as its bare guarantee row.
@@ -1029,16 +1053,10 @@ async function main() {
           subtextHighlight.subtextColor !== subtextBefore;
         await page.keyboard.press("Escape");
         await sleep(300);
-        const ok =
-          idsMatch &&
-          bandHeaders &&
-          bareDoingRows &&
-          noInProgress &&
-          ticketOpened &&
-          subtextHighlighted;
+        const ok = idsMatch && bandCounts && bareRows && ticketOpened && subtextHighlighted;
         return {
           ok,
-          detail: `ids=${JSON.stringify(ids)} doing=${JSON.stringify(doingIds)} bandHeaders=${bandHeaders} bareDoingRows=${bareDoingRows} noInProgress=${noInProgress} ticketOpened=${ticketOpened} subtext=${JSON.stringify(subtextHighlight)}`,
+          detail: `ids=${JSON.stringify(ids)} doing=${JSON.stringify(doingIds)} bandCounts=${bandCounts} bareRows=${bareRows} ticketOpened=${ticketOpened} subtext=${JSON.stringify(subtextHighlight)}`,
         };
       },
     );
