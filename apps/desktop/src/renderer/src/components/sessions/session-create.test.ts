@@ -6,6 +6,7 @@
  */
 import type { Project } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { toast } from "sonner";
 
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
@@ -160,15 +161,17 @@ describe("bootChatSession", () => {
     expect(closeChatSession).toHaveBeenCalledWith("durable-1");
   });
 
-  it("clears the flag when the create throws, rather than latching the surface shut", async () => {
+  it("toasts and clears the flag when the create throws, rather than latching the surface shut", async () => {
     stubChatStore(async () => {
       throw new Error("socket hang up");
     });
 
-    await expect(bootChatSession(SCOPE, { title: "Chat 1", land: () => true })).rejects.toThrow(
-      "socket hang up",
-    );
+    await expect(bootChatSession(SCOPE, { title: "Chat 1", land: () => true })).resolves.toBeNull();
 
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't start chat: socket hang up",
+      expect.anything(),
+    );
     expect(useChatSessionsStore.getState().starting).toEqual({});
   });
 });

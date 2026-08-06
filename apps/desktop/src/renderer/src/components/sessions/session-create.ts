@@ -324,20 +324,25 @@ export async function bootChatSession(
   { title, executor, land }: ChatBoot,
 ): Promise<string | null> {
   return underOwnerGuard(scope, chatStarting, async () => {
-    const sessionId = await useChatSessionsStore.getState().createChatSession({
-      projectId: scope.projectId,
-      ticketId: scope.kind === "ticket" ? scope.ticketId : null,
-      title,
-      ...(executor === undefined ? {} : { executor }),
-    });
-    if (sessionId === null) return null;
-    // The owner may have been removed while `session.create` was in flight;
-    // `land` re-checks its own owner (a ticket must still be on the board) the
-    // way a split re-checks its source pane.
-    if (trackedProject(scope.projectId) === undefined || !land(sessionId)) {
-      abandonChat(sessionId);
+    try {
+      const sessionId = await useChatSessionsStore.getState().createChatSession({
+        projectId: scope.projectId,
+        ticketId: scope.kind === "ticket" ? scope.ticketId : null,
+        title,
+        ...(executor === undefined ? {} : { executor }),
+      });
+      if (sessionId === null) return null;
+      // The owner may have been removed while `session.create` was in flight;
+      // `land` re-checks its own owner (a ticket must still be on the board) the
+      // way a split re-checks its source pane.
+      if (trackedProject(scope.projectId) === undefined || !land(sessionId)) {
+        abandonChat(sessionId);
+        return null;
+      }
+      return sessionId;
+    } catch (error) {
+      toastError(`Couldn't start chat: ${errorMessage(error)}`);
       return null;
     }
-    return sessionId;
   });
 }
