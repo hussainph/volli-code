@@ -822,7 +822,10 @@ async function main() {
         await fs.rm(PROBE_ALIVE, { force: true });
 
         const aside = page.locator("aside");
+        // "New session" is a menu since the chat surface landed (PR #179):
+        // Terminal / Chat. This flow boots the terminal kind.
         await aside.getByRole("button", { name: "New session" }).click();
+        await page.getByRole("menuitem", { name: "Terminal" }).click();
 
         const sessionTab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
         await waitUntil("session tab to appear", async () => (await sessionTab.count()) === 1);
