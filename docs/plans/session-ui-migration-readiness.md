@@ -80,10 +80,6 @@ Settled 2026-08-04/05; do not reopen.
 ## Not blockers — recorded so they are not re-filed
 
 - **Virtualization.** Measured clean to 500 turns. A "when", not an "if".
-- **Drafts don't survive tab switches.** The Session, queue, and stream do
-  (registry-resident); the half-typed composer text is component state.
-  Per-Session draft persistence belongs to session 4's composer work.
-- **Chat tabs are non-renamable** until session 4.
 - **A live-but-idle chat sorts and dots as concluded** in Active Sessions
   while its label reads "Chat · Live" — a sidebar-semantics call that
   belongs to session 4's chat-first sidebar, not a data bug.
@@ -100,8 +96,10 @@ Settled 2026-08-04/05; do not reopen.
 
 ## The remaining plan
 
-Session 4: creation surfaces funnel through `bootSession`
-(`session-create.ts`) — one seam to redesign; the sidebar goes chat-first
-with a chat/terminal filter (including the live-chat dot semantics above);
-per-project runtime pickers (scope the preferences row or the save — see the
-named seam above); per-Session drafts and chat rename ride along.
+Session 4 has started: chat creation now funnels through `session-create.ts`'s
+owner guard, per-Session drafts persist (`stores/chat-drafts.ts`), and chat
+Sessions rename from the tab strip and the rail (`chat/rename.ts`). Still
+outstanding: the sidebar goes chat-first with a chat/terminal filter (including
+the live-chat dot semantics above — `ChatSessionRecord.activity` now carries
+the fact, and nothing reads it yet); per-project runtime pickers (scope the
+preferences row or the save — see the named seam above).

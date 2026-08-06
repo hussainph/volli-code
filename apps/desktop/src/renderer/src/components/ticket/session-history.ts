@@ -215,10 +215,11 @@ export function filterSessionHistory(
 
 /**
  * A ticket-rail row for a chat Session. There is no PTY behind it, so there is
- * nothing to resume or report a live status for beyond `isOpen` — opening the
- * Session is already everything a resume would buy. `isOpen` mirrors
- * `groupSessionRows`'s current/history split off the one fact a chat row has:
- * whether its structured attachment is still live.
+ * nothing to resume — opening the Session is already everything a resume would
+ * buy. `isOpen` mirrors `groupSessionRows`'s current/history split off whether
+ * the Session's structured attachment is still live; the finer state the record
+ * also carries (`activity`, `lastActivityAt`) is the sidebar's to draw, and no
+ * rail row reads it yet.
  */
 export interface TicketChatSessionRow {
   record: ChatSessionRecord;
