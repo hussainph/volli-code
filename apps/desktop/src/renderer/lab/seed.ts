@@ -36,7 +36,7 @@ import { useUiStore } from "@renderer/stores/ui";
 import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
 
 import type { ApiOverrides } from "./fake-api";
-import { labels, project, projects, sessions, signals, tickets } from "./fixtures";
+import { chatSessions, labels, project, projects, sessions, signals, tickets } from "./fixtures";
 
 /**
  * A ticket whose worktree is safe to reclaim — the one row that renders the
@@ -45,11 +45,16 @@ import { labels, project, projects, sessions, signals, tickets } from "./fixture
 const ARCHIVE_READY_TICKET_ID = "tkt-11";
 let retentionTtlDays = 14;
 
-/** `fixtures.ts`'s durable session records, wrapped into the discriminated listing shape `sessions.list`/`listForTicket` actually return. Every fixture is terminal-shaped — there is no chat scenario in the lab yet. */
-const sessionRows: SessionListingRow[] = sessions.map((record) => ({
-  kind: "terminal",
-  record,
-}));
+/**
+ * `fixtures.ts`'s durable Sessions, wrapped into the discriminated listing shape
+ * `sessions.list`/`listForTicket` actually return — both kinds, because a
+ * listing that returned only terminals is exactly the shape that used to make a
+ * structured-only Session disappear.
+ */
+const sessionRows: SessionListingRow[] = [
+  ...sessions.map((record): SessionListingRow => ({ kind: "terminal", record })),
+  ...chatSessions.map((record): SessionListingRow => ({ kind: "chat", record })),
+];
 
 function retentionState(ticketId: string): TicketRetentionState {
   const archiveReady = ticketId === ARCHIVE_READY_TICKET_ID;
