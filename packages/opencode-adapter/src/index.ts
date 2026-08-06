@@ -2444,21 +2444,48 @@ function safeOpenCodeError(
   const name = safeOpenCodeErrorName(objectString(error, "name"));
   const statusCode = objectFiniteNumber(data, "statusCode");
   const isRetryable = objectBoolean(data, "isRetryable");
+  const message = errorMessage(objectString(data, "message"));
   if (name) diagnostic.name = name;
   if (statusCode !== null) diagnostic.statusCode = statusCode;
   if (isRetryable !== null) diagnostic.isRetryable = isRetryable;
+  if (message !== null) diagnostic.message = message;
   const hasDiagnostic = Object.keys(diagnostic).length > 0;
   const attention = openCodeAttentionKind(name, statusCode);
   return {
     attention,
     retryAt: attention === "rate_limited" ? retryAfter(data, now) : null,
-    detail: name
-      ? `OpenCode ${name}${statusCode === null ? "" : ` (status ${statusCode})`}`
-      : statusCode === null
-        ? null
-        : `OpenCode session error (status ${statusCode})`,
+    detail: openCodeErrorDetail(name, statusCode, message),
     diagnostic: hasDiagnostic ? diagnostic : null,
   };
+}
+
+/**
+ * The one line a blocked Session shows.
+ *
+ * The union member alone is not a cause: a chat pointed at a worktree that is
+ * not on disk and a provider that fell over both arrive as `UnknownError`, and
+ * the ENOENT that separates them is only ever in OpenCode's own text. So
+ * `data.message` is the one field promoted out of `data` — `responseBody` and
+ * `responseHeaders` stay unread, the latter because it carries `authorization`.
+ */
+function openCodeErrorDetail(
+  name: string | null,
+  statusCode: number | null,
+  message: string | null,
+): string | null {
+  if (name === null && statusCode === null && message === null) return null;
+  const status = statusCode === null ? "" : ` (status ${statusCode})`;
+  const cause = message === null ? "" : `: ${message}`;
+  return `OpenCode ${name ?? "session error"}${status}${cause}`;
+}
+
+/** Provider text is unbounded; a ledger entry is a line, not a log. */
+const MAX_ERROR_MESSAGE = 300;
+
+function errorMessage(message: string | null): string | null {
+  const trimmed = message === null ? "" : message.trim();
+  if (trimmed.length === 0) return null;
+  return trimmed.length > MAX_ERROR_MESSAGE ? `${trimmed.slice(0, MAX_ERROR_MESSAGE)}…` : trimmed;
 }
 
 /**

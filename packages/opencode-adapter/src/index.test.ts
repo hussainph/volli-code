@@ -551,6 +551,15 @@ function messageCommand(): Extract<HarnessCommand, { kind: "message.submit" }> {
   };
 }
 
+/** An `UnknownError` `session.error` carrying whatever `data` the provider sent. */
+function unknownFailure(id: string, data: unknown): OpenCodeSseEvent {
+  return {
+    id,
+    type: "session.error",
+    properties: { sessionID: "native-session-1", error: { name: "UnknownError", data } },
+  };
+}
+
 /** A 429 `session.error` carrying whatever header bag the provider sent. */
 function rateLimited(id: string, responseHeaders: unknown): OpenCodeSseEvent {
   return {
@@ -4226,10 +4235,12 @@ describe("OpenCodeNativeAdapter", () => {
         type: "session.error",
         properties: {
           sessionID: "native-session-1",
+          // `message` is the one field promoted out of `data` — it is the only
+          // place the cause is ever written. Its neighbours stay unread.
           error: {
             name: "APIError",
             data: {
-              message: "must-not-leak",
+              message: "Upstream provider returned 502",
               statusCode: 502,
               isRetryable: false,
               responseHeaders: { authorization: "must-not-leak" },
@@ -4264,7 +4275,7 @@ describe("OpenCodeNativeAdapter", () => {
         type: "session.error",
         properties: {
           sessionID: "native-session-1",
-          error: { name: "ProviderAuthError", data: { message: "must-not-leak" } },
+          error: { name: "ProviderAuthError", data: { message: "  API key expired  " } },
         },
       },
       {
@@ -4337,8 +4348,13 @@ describe("OpenCodeNativeAdapter", () => {
       kind: "attention.raised",
       attention: {
         kind: "adapter_unrecoverable",
-        detail: "OpenCode APIError (status 502)",
-        diagnostic: { name: "APIError", statusCode: 502, isRetryable: false },
+        detail: "OpenCode APIError (status 502): Upstream provider returned 502",
+        diagnostic: {
+          name: "APIError",
+          statusCode: 502,
+          isRetryable: false,
+          message: "Upstream provider returned 502",
+        },
       },
     });
     expect(observations[4]).toMatchObject({
@@ -4363,7 +4379,7 @@ describe("OpenCodeNativeAdapter", () => {
     // Each of these used to arrive as `adapter_unrecoverable`, which is why an
     // expired token and a context overflow offered the same recovery: none.
     expect(observations[7]).toMatchObject({
-      attention: { kind: "auth_required", detail: "OpenCode ProviderAuthError" },
+      attention: { kind: "auth_required", detail: "OpenCode ProviderAuthError: API key expired" },
     });
     expect(observations[8]).toMatchObject({
       attention: { kind: "context_limit_reached", detail: "OpenCode ContextOverflowError" },
@@ -4378,6 +4394,78 @@ describe("OpenCodeNativeAdapter", () => {
     // declined to make — and a 403 covers entitlement and policy blocks that
     // re-authenticating cannot fix.
     expect(observations[10]).toMatchObject({ attention: { kind: "adapter_unrecoverable" } });
+    // Promoting `message` promoted nothing else: the response body and the
+    // header bag carrying `authorization` are still never read.
+    expect(JSON.stringify(observations)).not.toContain("must-not-leak");
+  });
+
+  it("says what OpenCode said went wrong, bounded, and only when it said something", async () => {
+    // What the original bug looked like on the wire: a chat pointed at a
+    // worktree nobody had created yet. The member is the same `UnknownError` a
+    // dead provider raises, so the path is the entire diagnosis.
+    const enoent =
+      "ENOENT: no such file or directory, realpath '/Users/x/.volli/worktrees/demo/VC-12-chat'";
+    const { adapter } = composition([
+      unknownFailure("enoent", { message: enoent }),
+      unknownFailure("blank", { message: "   " }),
+      unknownFailure("wrong-type", { message: 42 }),
+      unknownFailure("long", { message: "y".repeat(400) }),
+      unknownFailure("none", {}),
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const details = observations
+      .filter((observation) => observation.kind === "attention.raised")
+      .map((observation) =>
+        observation.kind === "attention.raised" ? observation.attention.detail : undefined,
+      );
+    expect(details).toEqual([
+      `OpenCode UnknownError: ${enoent}`,
+      // Whitespace and a non-string are both "OpenCode said nothing", and a
+      // headline with an empty clause hanging off it reads as truncation.
+      "OpenCode UnknownError",
+      "OpenCode UnknownError",
+      `OpenCode UnknownError: ${"y".repeat(300)}…`,
+      "OpenCode UnknownError",
+      // The SSE stream dropping, which is not a `session.error` at all.
+      "OpenCode event stream ended",
+    ]);
+  });
+
+  it("states a cause with no member and no status to hang it on", async () => {
+    const { adapter } = composition([
+      {
+        id: "bare",
+        type: "session.error",
+        properties: {
+          sessionID: "native-session-1",
+          error: { name: "FutureError", data: { message: "the daemon is not running" } },
+        },
+      },
+    ]);
+    const observations: HarnessObservation[] = [];
+    await adapter.attach(spec(), {
+      emit: async (observation) => {
+        observations.push(observation);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // An unrecognized name is redacted, so the headline falls back — but the
+    // text is what the reader needed, and it used to be dropped with the name.
+    expect(observations[0]).toMatchObject({
+      attention: {
+        kind: "adapter_unrecoverable",
+        detail: "OpenCode session error: the daemon is not running",
+        diagnostic: { message: "the daemon is not running" },
+      },
+    });
   });
 
   it("states when a rate limit lifts only when the provider sent a Retry-After it can read", async () => {
