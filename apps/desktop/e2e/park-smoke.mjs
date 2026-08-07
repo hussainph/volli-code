@@ -183,7 +183,7 @@ async function main() {
     await sleep(1500);
 
     // === Setup: two scratch tabs, each writing its shell pid to a marker ======
-    await page.getByText("Terminals", { exact: true }).click();
+    await page.getByText("Sessions", { exact: true }).click();
     await waitForLiveCanvas(page); // first visit auto-creates tab 1
 
     const marker1 = join(SCRATCH, "tab-1.pid");
@@ -192,7 +192,10 @@ async function main() {
     await page.keyboard.press("Enter");
     const pid1 = await shellPidFromMarker(marker1);
 
+    // The scratch strip's "+" is a menu since chat tabs landed beside terminals
+    // (Terminal / Chat); parking is a terminal-only tier, so this boots one.
     await page.getByLabel("New session").click();
+    await page.getByRole("menuitem", { name: "Terminal", exact: true }).click();
     await page.waitForFunction(
       () => document.querySelectorAll('[aria-label^="Close Terminal"]').length === 2,
       undefined,

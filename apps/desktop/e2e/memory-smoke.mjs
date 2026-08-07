@@ -245,12 +245,15 @@ async function main() {
     await snap("baseline (Board, 0 tabs)");
 
     // === Phase 2: N idle claude sessions =====================================
-    await page.getByText("Terminals", { exact: true }).click();
+    await page.getByText("Sessions", { exact: true }).click();
     await waitForLiveCanvas(page); // first visit auto-creates session 1
 
     for (let i = 1; i <= N_SESSIONS; i++) {
       if (i > 1) {
+        // The scratch strip's "+" is a menu since chat tabs landed beside
+        // terminals (Terminal / Chat); this benchmark measures PTYs.
         await page.getByLabel("New session").click();
+        await page.getByRole("menuitem", { name: "Terminal", exact: true }).click();
         await page.waitForFunction(
           (n) => document.querySelectorAll('[aria-label^="Close Terminal"]').length === n,
           i,
@@ -275,6 +278,7 @@ async function main() {
 
     // === Phase 3: scrollback fill in a plain shell tab ========================
     await page.getByLabel("New session").click();
+    await page.getByRole("menuitem", { name: "Terminal", exact: true }).click();
     await page.waitForFunction(
       (n) => document.querySelectorAll('[aria-label^="Close Terminal"]').length === n,
       N_SESSIONS + 1,

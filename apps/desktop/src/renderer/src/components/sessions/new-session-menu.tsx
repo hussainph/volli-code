@@ -1,10 +1,15 @@
 /**
- * The "+" that starts a Session, wherever a ticket offers one.
+ * The "+" that starts a Session, wherever one is offered.
  *
- * One control and two mounts — the tab strip and the rail's Sessions header —
- * because two identically-drawn buttons 300px apart must not mean two different
- * things. A ticket rarely gains a second Session, so the press the menu costs is
- * almost never paid; what it buys is that neither kind is the hidden one.
+ * One control and several mounts — a ticket's tab strip and its rail's Sessions
+ * header, the project's scratch strip and that surface's empty state — because
+ * two identically-drawn buttons 300px apart must not mean two different things.
+ * A surface rarely gains a second Session, so the press the menu costs is almost
+ * never paid; what it buys is that neither kind is the hidden one.
+ *
+ * `label` is the one draw that differs: a strip's "+" is one control among tabs
+ * that already name what exists, while an empty surface's is the only thing on
+ * screen and has to say what it does.
  */
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
@@ -22,6 +27,7 @@ export function NewSessionMenu({
   disabled,
   align = "start",
   className,
+  label,
   onNewSession,
   onNewChat,
 }: {
@@ -29,21 +35,30 @@ export function NewSessionMenu({
   disabled: boolean;
   align?: "start" | "end";
   className?: string;
+  /** Draws a labeled button instead of the bare "+", for a mount that is the only affordance on screen. */
+  label?: string;
   onNewSession(): void;
   onNewChat(): void;
 }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
-          size="icon-xs"
-          variant="ghost"
-          disabled={disabled}
-          aria-label="New session"
-          className={className}
-        >
-          <PlusIcon className="size-3.5" />
-        </Button>
+        {label === undefined ? (
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            disabled={disabled}
+            aria-label="New session"
+            className={className}
+          >
+            <PlusIcon className="size-3.5" />
+          </Button>
+        ) : (
+          <Button size="sm" disabled={disabled} className={className}>
+            <PlusIcon />
+            {label}
+          </Button>
+        )}
       </DropdownMenuTrigger>
       <DropdownMenuContent align={align}>
         <DropdownMenuItem onSelect={onNewSession}>
