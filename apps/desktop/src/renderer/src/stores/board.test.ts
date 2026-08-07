@@ -10,6 +10,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 import { type BoardGateway, createBoardStore, planningChangeAffects } from "./board";
+import { useChatSessionsStore } from "./chat-sessions";
 import { ticketScope, useSessionsStore, type SessionLaunch } from "./sessions";
 
 /** A bare shell launch: no harness command line was written, so no expectation. */
@@ -1302,10 +1303,15 @@ describe("deleteArchivedTicket", () => {
     });
     const store = createBoardStore(gateway);
     store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
+    useChatSessionsStore.setState({
+      openTabs: { p1: ["c1"] },
+      rehomedTicketBySession: { c1: "a" },
+    });
 
     await store.getState().deleteArchivedTicket("p1", "a");
 
     expect(store.getState().archivedByProject.p1!.map((t) => t.id)).toEqual(["a"]);
+    expect(useChatSessionsStore.getState().rehomedTicketBySession).toEqual({ c1: "a" });
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't delete ticket: db locked", {
       duration: 8000,
       closeButton: true,
@@ -1373,6 +1379,255 @@ describe("archive/delete session teardown", () => {
 
     expect(kill).toHaveBeenCalledWith("s1");
     expect(useSessionsStore.getState().byOwner["tk"]).toBeUndefined();
+  });
+});
+
+const resetChatTabs = () =>
+  useChatSessionsStore.setState({ openTabs: {}, rehomedTicketBySession: {} });
+
+describe("chat tab re-homing", () => {
+  it("moves a departed ticket's open chat tabs onto the project when archived", async () => {
+    resetChatTabs();
+    const a = ticket({ id: "a", status: "doing" });
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [a] }, {});
+    useChatSessionsStore.setState({ openTabs: { a: ["c1", "c2"] } });
+
+    await store.getState().archiveTicket("p1", "a");
+
+    expect(useChatSessionsStore.getState().openTabs).toEqual({ p1: ["c1", "c2"] });
+  });
+
+  it("does not touch the chat store when the archived ticket had no open chat tabs", async () => {
+    resetChatTabs();
+    const a = ticket({ id: "a", status: "doing" });
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [a] }, {});
+    const before = useChatSessionsStore.getState().openTabs;
+
+    await store.getState().archiveTicket("p1", "a");
+
+    expect(useChatSessionsStore.getState().openTabs).toBe(before);
+  });
+
+  it("restores a ticket's exact tabs when its optimistic archive fails", async () => {
+    resetChatTabs();
+    const a = ticket({ id: "a", status: "doing" });
+    const gateway = fakeGateway({
+      archiveTicket: vi.fn<BoardGateway["archiveTicket"]>(async () => ({
+        ok: false,
+        error: "conflict",
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a] }, {});
+    useChatSessionsStore.setState({ openTabs: { p1: ["ticketless"], a: ["c1"] } });
+
+    await store.getState().archiveTicket("p1", "a");
+
+    expect(store.getState().ticketsByProject.p1).toEqual([a]);
+    expect(useChatSessionsStore.getState().openTabs).toEqual({
+      p1: ["ticketless"],
+      a: ["c1"],
+    });
+    expect(useChatSessionsStore.getState().rehomedTicketBySession).toEqual({});
+  });
+
+  it("still re-homes on the belt-and-suspenders re-drop after a concurrent authoritative merge resurrected the ticket mid-flight", async () => {
+    resetChatTabs();
+    const a = ticket({ id: "a", status: "doing" });
+    const b = ticket({ id: "b", status: "doing", order: 1 });
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a, b] }, {});
+    useChatSessionsStore.setState({ openTabs: { a: ["c1"] } });
+    // Same race as "re-drops the card..." above: a concurrent move's
+    // authoritative list resurrects `a` between the optimistic drop and the
+    // archive ack.
+    vi.mocked(gateway.archiveTicket).mockImplementation(async () => {
+      store.setState({ ticketsByProject: { p1: [a, b] } });
+      return { ok: true };
+    });
+
+    await store.getState().archiveTicket("p1", "a");
+
+    expect(store.getState().ticketsByProject.p1!.map((t) => t.id)).toEqual(["b"]);
+    expect(useChatSessionsStore.getState().openTabs).toEqual({ p1: ["c1"] });
+  });
+
+  it("does not re-home a ticket moveTicket's authoritative merge never actually drops", async () => {
+    resetChatTabs();
+    const a = ticket({ id: "a", status: "backlog", order: 0 });
+    const b = ticket({ id: "b", status: "backlog", order: 1 });
+    const gateway = fakeGateway({
+      // `mergeAuthoritative` only ever unions ids — `b`, absent from this
+      // authoritative snapshot, is preserved as an "extra" rather than
+      // dropped, so it never becomes a departure.
+      moveTicket: vi.fn<BoardGateway["moveTicket"]>(async () => ({
+        ok: true,
+        tickets: [{ ...a, status: "doing" as const, order: 0 }],
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a, b] }, {});
+    useChatSessionsStore.setState({ openTabs: { b: ["c1"] } });
+
+    await store.getState().moveTicket("p1", "a", "doing", 0);
+
+    expect(
+      store
+        .getState()
+        .ticketsByProject.p1!.map((t) => t.id)
+        .toSorted(),
+    ).toEqual(["a", "b"]);
+    expect(useChatSessionsStore.getState().openTabs).toEqual({ b: ["c1"] });
+  });
+
+  it("restores only an unarchived ticket's own rehomed chats", async () => {
+    resetChatTabs();
+    const revived = ticket({ id: "a", status: "done" });
+    const gateway = fakeGateway({
+      unarchiveTicket: vi.fn<BoardGateway["unarchiveTicket"]>(async () => ({
+        ok: true,
+        ticket: revived,
+      })),
+    });
+    const store = createBoardStore(gateway);
+    const a = ticket({ id: "a", status: "done" });
+    const b = ticket({ id: "b", status: "done", order: 1 });
+    store.getState().hydrate({ p1: [a, b] }, {});
+    useChatSessionsStore.setState({
+      openTabs: { p1: ["ticketless"], a: ["c1"], b: ["c2"] },
+    });
+    // Model the authoritative snapshot received after both cards left the
+    // board. It records each tab's exact source without requiring a chat
+    // projection to have arrived.
+    store.getState().hydrate({ p1: [] }, {});
+    store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
+
+    await store.getState().unarchiveTicket("p1", "a");
+
+    expect(useChatSessionsStore.getState().openTabs).toEqual({
+      p1: ["ticketless", "c2"],
+      a: ["c1"],
+    });
+    expect(useChatSessionsStore.getState().rehomedTicketBySession).toEqual({ c2: "b" });
+  });
+
+  it("keeps project-hosted chats but clears only the deleted ticket's restoration provenance", async () => {
+    resetChatTabs();
+    const store = createBoardStore(fakeGateway());
+    store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
+    useChatSessionsStore.setState({
+      openTabs: { p1: ["c1", "c2"] },
+      rehomedTicketBySession: { c1: "a", c2: "b" },
+    });
+
+    await store.getState().deleteArchivedTicket("p1", "a");
+
+    expect(useChatSessionsStore.getState().openTabs).toEqual({ p1: ["c1", "c2"] });
+    expect(useChatSessionsStore.getState().rehomedTicketBySession).toEqual({ c2: "b" });
+  });
+
+  it("drops the project's and its live tickets' chat tabs when the project is forgotten", () => {
+    resetChatTabs();
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
+    useChatSessionsStore.setState({ openTabs: { p1: ["c1"], a: ["c2"], other: ["c3"] } });
+
+    store.getState().forget("p1");
+
+    expect(useChatSessionsStore.getState().openTabs).toEqual({ other: ["c3"] });
+  });
+
+  it("forgets a project-owned chat tab even when the board has no slice for that project", () => {
+    resetChatTabs();
+    const store = createBoardStore(fakeGateway());
+    useChatSessionsStore.setState({
+      openTabs: { p1: ["c1"], other: ["c2"] },
+      rehomedTicketBySession: { c1: "a" },
+    });
+
+    store.getState().forget("p1");
+
+    expect(useChatSessionsStore.getState().openTabs).toEqual({ other: ["c2"] });
+    expect(useChatSessionsStore.getState().rehomedTicketBySession).toEqual({});
+  });
+
+  it("leaves the chat store untouched when forgetting a project with no open chat tabs", () => {
+    resetChatTabs();
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
+    const before = useChatSessionsStore.getState().openTabs;
+
+    store.getState().forget("p1");
+
+    expect(useChatSessionsStore.getState().openTabs).toBe(before);
+  });
+
+  // The removal path no local mutation reconciles: `refreshPlanningData`
+  // (lib/boot.ts) re-hydrates wholesale after a `volli:data-changed` broadcast,
+  // so a `volli ticket archive`, a retention sweep, or another window's archive
+  // drops the ticket here with no `reconcileSlice` call to hang the re-home off.
+  it("re-homes a ticket an authoritative re-hydrate no longer names", () => {
+    resetChatTabs();
+    const a = ticket({ id: "a", status: "doing" });
+    const b = ticket({ id: "b", status: "doing", order: 1 });
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [a, b] }, {});
+    useChatSessionsStore.setState({ openTabs: { a: ["c1"], b: ["c2"] } });
+
+    store.getState().hydrate({ p1: [b] }, {});
+
+    expect(useChatSessionsStore.getState().openTabs).toEqual({ b: ["c2"], p1: ["c1"] });
+  });
+
+  it("restores only the matching owner when an authoritative re-hydrate removes and re-adds tickets", () => {
+    resetChatTabs();
+    const a = ticket({ id: "a", status: "doing" });
+    const b = ticket({ id: "b", status: "doing", order: 1 });
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [a, b] }, {});
+    useChatSessionsStore.setState({
+      openTabs: { p1: ["ticketless"], a: ["c1"], b: ["c2"] },
+    });
+
+    store.getState().hydrate({ p1: [] }, {});
+    store.getState().hydrate({ p1: [a] }, {});
+
+    expect(useChatSessionsStore.getState().openTabs).toEqual({
+      p1: ["ticketless", "c2"],
+      a: ["c1"],
+    });
+    expect(useChatSessionsStore.getState().rehomedTicketBySession).toEqual({ c2: "b" });
+  });
+
+  it("drops the chat tabs of a project an authoritative re-hydrate no longer names at all", () => {
+    resetChatTabs();
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })], p2: [] }, {});
+    useChatSessionsStore.setState({
+      openTabs: { p1: ["c1"], a: ["c2"], p2: ["c3"] },
+      rehomedTicketBySession: { c1: "a", c2: "a" },
+    });
+
+    store.getState().hydrate({ p2: [] }, {});
+
+    expect(useChatSessionsStore.getState().openTabs).toEqual({ p2: ["c3"] });
+    expect(useChatSessionsStore.getState().rehomedTicketBySession).toEqual({});
+  });
+
+  it("leaves the chat store untouched when a re-hydrate drops no ticket", () => {
+    resetChatTabs();
+    const a = ticket({ id: "a", status: "doing" });
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [a] }, {});
+    useChatSessionsStore.setState({ openTabs: { a: ["c1"] } });
+    const before = useChatSessionsStore.getState().openTabs;
+
+    store.getState().hydrate({ p1: [{ ...a, status: "done" }] }, {});
+
+    expect(useChatSessionsStore.getState().openTabs).toBe(before);
   });
 });
 

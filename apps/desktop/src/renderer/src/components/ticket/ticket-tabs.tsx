@@ -62,7 +62,8 @@ export type TicketTabKind = "body" | "session" | "file" | "diff" | "chat";
  */
 export type TicketTabStatus = "idle" | "starting" | "ready" | "working" | "error";
 
-const TAB_STATUS_CLASS: Record<TicketTabStatus, string> = {
+/** One vocabulary for a Session's dot, shared with the scratch strip (`session-tabs.tsx`). */
+export const TAB_STATUS_CLASS: Record<TicketTabStatus, string> = {
   // The halo only rides `working`, so a live turn is legible from the strip
   // without the resting states competing for the same attention.
   working: "bg-primary shadow-[0_0_0_3px_color-mix(in_oklab,var(--primary)_18%,transparent)]",

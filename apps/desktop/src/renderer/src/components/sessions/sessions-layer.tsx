@@ -1,16 +1,28 @@
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import * as React from "react";
+import { useShallow } from "zustand/react/shallow";
 
+import { renameChatSession } from "@renderer/chat/rename";
+import { ChatPlane } from "@renderer/components/chat/chat-plane";
 import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
-import { SessionTabs } from "@renderer/components/sessions/session-tabs";
+import { NewSessionMenu } from "@renderer/components/sessions/new-session-menu";
+import { SessionTabs, type SessionTabDescriptor } from "@renderer/components/sessions/session-tabs";
 import { SessionSplitLayout } from "@renderer/components/sessions/session-split-layout";
 import { TicketTerminalOverlay } from "@renderer/components/sessions/ticket-terminal-host";
 import {
+  bootChatSession,
   createTerminalSession,
   createTerminalSplit,
 } from "@renderer/components/sessions/session-create";
-import { Button } from "@renderer/components/ui/button";
+import {
+  chatTabId,
+  chatTabStatus,
+  nextChatOrdinal,
+  parseChatTabId,
+  CHAT_TAB_FALLBACK_LABEL,
+} from "@renderer/components/ticket/ticket-chat-tab";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
+import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import {
   hydrateHarnessCatalog,
   scratchScope,
@@ -18,9 +30,11 @@ import {
   subscribeHarnessEvents,
   subscribeSessionHarness,
   useSessionsStore,
+  type SessionTab,
   type TerminalSplitDirection,
 } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { subscribeWorktreePhases } from "@renderer/stores/worktree";
 import { cn } from "@renderer/lib/utils";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
@@ -32,6 +46,34 @@ import {
   renameTerminalSession,
 } from "@renderer/terminal/session-lifecycle";
 import type { Project } from "@volli/shared";
+
+const NO_TERMINAL_TABS: readonly SessionTab[] = [];
+const NO_OPEN_CHATS: readonly string[] = [];
+
+/**
+ * Which merged tab is in front, decided at render rather than stored.
+ *
+ * The recorded id wins while it still names a tab — it is what the sidebar
+ * writes to put a Session in front, and what a project switch comes back to.
+ * (Only that: `sessionsActiveTab` is session-only, since the open tabs it
+ * points at do not survive a relaunch either.) Failing that, the terminal
+ * container's own active session, so closing the chat that was covering a
+ * terminal puts that terminal back rather than jumping to the head of the
+ * strip. Failing that, the first tab.
+ *
+ * Deriving beats storing here because both maps behind it are resident: a tab
+ * that closes simply stops being named, and the write-back that follows records
+ * what was derived instead of repairing what was stored.
+ */
+function resolveActiveTabId(
+  tabIds: readonly string[],
+  recorded: string | null,
+  containerActive: string | null,
+): string | null {
+  if (recorded !== null && tabIds.includes(recorded)) return recorded;
+  if (containerActive !== null && tabIds.includes(containerActive)) return containerActive;
+  return tabIds[0] ?? null;
+}
 
 interface SessionsLayerProps {
   /** Sessions is the active page. The layer stays MOUNTED regardless; this only
@@ -142,25 +184,121 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
     void createTerminalSession(scratchScope(project.id));
   }, []);
 
-  // Zero-friction first visit: auto-open a scratch session when Sessions is
-  // revealed for a project that has never had one — once per project.
-  const scratch = selected ? byOwner[selected.id] : undefined;
-  const scratchTabCount = scratch?.tabs.length ?? 0;
-  const creatingSelected = useSessionsStore((state) =>
-    selected ? (state.starting[selected.id] ?? false) : false,
+  const selectedId = selected?.id ?? null;
+  const scratch = selectedId === null ? undefined : byOwner[selectedId];
+  const terminalTabs = scratch?.tabs ?? NO_TERMINAL_TABS;
+  /**
+   * The selected project's open chat tabs — ids only.
+   *
+   * A chat's slice is replaced on every folded frame batch, and this layer hosts
+   * every live terminal in the app, so it subscribes to what a tab OPENING or
+   * CLOSING changes and nothing else. The title and lifecycle that move per
+   * token are read one level down, in {@link ScratchTabs}, so a streamed word
+   * repaints the strip and no terminal.
+   */
+  const openChatIds = useChatSessionsStore(
+    useShallow((state) =>
+      selectedId === null ? NO_OPEN_CHATS : (state.openTabs[selectedId] ?? NO_OPEN_CHATS),
+    ),
   );
+  const startingTerminal = useSessionsStore((state) =>
+    selectedId === null ? false : (state.starting[selectedId] ?? false),
+  );
+  const startingChat = useChatSessionsStore((state) =>
+    selectedId === null ? false : (state.starting[selectedId] ?? false),
+  );
+  // One control mints both kinds, so it goes quiet while EITHER is starting —
+  // the one place ORing the two flags is the honest reading (session-create.ts).
+  const creating = startingTerminal || startingChat;
+
+  const recordedActiveTab = useWorkspaceStore((state) =>
+    selectedId === null ? null : (state.byProject[selectedId]?.sessionsActiveTab ?? null),
+  );
+  const setSessionsActiveTab = useWorkspaceStore((state) => state.setSessionsActiveTab);
+  const setNav = useWorkspaceStore((state) => state.setNav);
+  const previewProjectFile = useWorkspaceStore((state) => state.previewProjectFile);
+
+  // Terminals first, then chats, each in the order it was opened: the strip is
+  // stable under everything except opening and closing a tab.
+  const tabIds = React.useMemo(
+    () => [...terminalTabs.map((tab) => tab.sessionId), ...openChatIds.map(chatTabId)],
+    [openChatIds, terminalTabs],
+  );
+  const activeTabId = resolveActiveTabId(
+    tabIds,
+    recordedActiveTab,
+    scratch?.activeSessionId ?? null,
+  );
+  // A chat in front covers the plane, so the terminals under it stand down.
+  // They stay mounted — only their visibility flips (see the keep-alive below).
+  const activeChatSessionId = activeTabId === null ? null : parseChatTabId(activeTabId);
+
+  // The receipt for what was derived, and the only write of it: a tab that
+  // closed under the recorded id is answered by re-deriving, never by repairing
+  // what was stored.
+  React.useEffect(() => {
+    if (selectedId === null || activeTabId === recordedActiveTab) return;
+    setSessionsActiveTab(selectedId, activeTabId);
+  }, [activeTabId, recordedActiveTab, selectedId, setSessionsActiveTab]);
+
+  // Zero-friction first visit: auto-open a scratch terminal when Sessions is
+  // revealed for a project that has never had a Session here — once per project.
+  // A chat counts as one: the surface is not empty, and a terminal nobody asked
+  // for would be an odd thing to find beside it.
+  const emptySurface = terminalTabs.length === 0 && openChatIds.length === 0;
   React.useEffect(() => {
     if (
       visible &&
       selected &&
-      scratchTabCount === 0 &&
+      emptySurface &&
       !autoOpenedRef.current.has(selected.id) &&
-      !creatingSelected
+      !creating
     ) {
       autoOpenedRef.current.add(selected.id);
       createScratch(selected);
     }
-  }, [visible, selected, scratchTabCount, creatingSelected, createScratch]);
+  }, [visible, selected, emptySurface, creating, createScratch]);
+
+  /**
+   * Mints one durable, ticketless chat Session on `project` and puts its tab in
+   * front, through the same boot guard the terminal path uses: one create per
+   * project at a time, none at all into a project the renderer has stopped
+   * tracking. No executor is passed — the plane resolves the project's own
+   * runtime preferences when it mounts.
+   *
+   * The ordinal counts only what is open, because that is all this surface has:
+   * a project's ticketless chats have no durable listing here the way a
+   * ticket's do.
+   */
+  const createChat = React.useCallback(
+    (project: Project, openChats: number) => {
+      void bootChatSession(scratchScope(project.id), {
+        title: `Chat ${nextChatOrdinal(0, openChats)}`,
+        land: (sessionId) => {
+          useChatSessionsStore.getState().openChatTab(project.id, sessionId);
+          setSessionsActiveTab(project.id, chatTabId(sessionId));
+          return true;
+        },
+      });
+    },
+    [setSessionsActiveTab],
+  );
+
+  /**
+   * Where a file a chat names opens. A ticketless chat has no worktree, so
+   * there is no ticket workspace to route it to — Project Files reads the same
+   * path out of the project's main checkout, which is where this chat is
+   * running. Held across renders because {@link ChatPlane} hands it to every
+   * turn on screen: a fresh function here re-renders the whole transcript.
+   */
+  const openProjectFile = React.useCallback(
+    (path: string) => {
+      if (selectedId === null) return;
+      previewProjectFile(selectedId, path);
+      setNav(selectedId, "files");
+    },
+    [previewProjectFile, selectedId, setNav],
+  );
 
   // ⌘D split, ⌘⌥arrow pane nav, ⌘+/-/0 font size — resolved off the focused
   // pane's data-* attributes, so it is surface-agnostic: the same handler drives
@@ -232,22 +370,49 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
           isn't the active page. */}
       <div className={cn("flex min-h-0 flex-1 flex-col bg-background", !visible && "hidden")}>
         {selected && (
-          <SessionTabs
-            tabs={scratch?.tabs ?? []}
-            activeSessionId={scratch?.activeSessionId ?? null}
-            onSelect={(sessionId) => setActiveSession(selected.id, sessionId)}
-            onClose={(sessionId) => {
-              const tab = scratch?.tabs.find((candidate) => candidate.sessionId === sessionId);
-              const liveIds = tab
-                ? sessionPanes(tab.layout)
-                    .filter((pane) => pane.exitCode === null)
-                    .map((pane) => pane.sessionId)
-                : [sessionId];
-              closeGuard.guard(liveIds, () => closeTerminalSession(selected.id, sessionId));
+          <ScratchTabs
+            terminalTabs={terminalTabs}
+            chatIds={openChatIds}
+            activeTabId={activeTabId}
+            creating={creating}
+            onSelect={(descriptor) => {
+              setSessionsActiveTab(selected.id, descriptor.id);
+              // A terminal tab is in front on two ledgers: this surface's
+              // (recorded) and the terminal container's own, which is what the
+              // keep-alive render and pane focus read. A chat has nothing in the
+              // second, and never writes it.
+              if (descriptor.kind === "terminal") {
+                setActiveSession(selected.id, descriptor.tab.sessionId);
+              }
             }}
-            onRename={renameTerminalSession}
-            onNew={() => createScratch(selected)}
-            creating={creatingSelected}
+            onClose={(descriptor) => {
+              if (descriptor.kind === "chat") {
+                // No busy guard and no confirm: the Session is durable, so
+                // closing the view loses nothing — reopening it from the sidebar
+                // adopts the same history, and the next render re-derives which
+                // tab comes forward.
+                useChatSessionsStore.getState().closeChatTab(selected.id, descriptor.sessionId);
+                return;
+              }
+              const liveIds = sessionPanes(descriptor.tab.layout)
+                .filter((pane) => pane.exitCode === null)
+                .map((pane) => pane.sessionId);
+              closeGuard.guard(liveIds, () =>
+                closeTerminalSession(selected.id, descriptor.tab.sessionId),
+              );
+            }}
+            onRename={(descriptor, title) => {
+              // Each kind has its own optimistic surface to move before the
+              // durable write — a chat must never reach the PTY rename, which
+              // would address a terminal that does not exist.
+              if (descriptor.kind === "chat") {
+                void renameChatSession(descriptor.sessionId, title);
+                return;
+              }
+              renameTerminalSession(descriptor.tab.sessionId, title);
+            }}
+            onNewSession={() => createScratch(selected)}
+            onNewChat={() => createChat(selected, openChatIds.length)}
           />
         )}
 
@@ -265,7 +430,11 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
                   visible={
                     visible &&
                     ownerId === selected?.id &&
-                    tab.sessionId === container.activeSessionId
+                    tab.sessionId === container.activeSessionId &&
+                    // A chat plane is `absolute inset-0` over this same box, and
+                    // so is every split tree — a terminal left visible under one
+                    // would paint straight through it.
+                    activeChatSessionId === null
                   }
                   onActivate={(sessionId) => setActivePane(ownerId, tab.sessionId, sessionId)}
                   onSplit={(sessionId, direction) =>
@@ -283,13 +452,35 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
               )),
           )}
 
-          {selected && scratchTabCount === 0 && (
+          {/* The chat in front, in a column of its own: the box above is
+              positioned, not a flex column, so the plane needs one to fill it.
+              Keyed by Session — the client, the fold and the queue are resident
+              (chat/registry.ts), so a remount costs nothing and carries
+              nothing over. */}
+          {selected && activeChatSessionId !== null && (
+            <div className="absolute inset-0 flex min-h-0 flex-col">
+              <ChatPlane
+                key={activeChatSessionId}
+                sessionId={activeChatSessionId}
+                projectId={selected.id}
+                onOpenFile={openProjectFile}
+              />
+            </div>
+          )}
+
+          {selected && emptySurface && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center">
               <TerminalWindowIcon weight="fill" className="size-8 text-muted-foreground" />
               <p className="text-sm text-muted-foreground">No open sessions.</p>
-              <Button size="sm" onClick={() => createScratch(selected)} disabled={creatingSelected}>
-                {creatingSelected ? "Starting…" : "New session"}
-              </Button>
+              {/* The same menu the strip carries — the only control on screen,
+                  so it is drawn as one rather than as a bare "+". */}
+              <NewSessionMenu
+                disabled={creating}
+                align="start"
+                label={creating ? "Starting…" : "New session"}
+                onNewSession={() => createScratch(selected)}
+                onNewChat={() => createChat(selected, openChatIds.length)}
+              />
             </div>
           )}
         </div>
@@ -305,5 +496,79 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
         onCancel={closeGuard.cancel}
       />
     </>
+  );
+}
+
+/**
+ * The strip, and the only place the per-token chat reads live.
+ *
+ * {@link SessionsLayer} hosts every live terminal in the app and must not
+ * re-render on a streamed word; a chat's title and lifecycle move on exactly
+ * that. So they are subscribed here, as two primitive-valued reads rather than
+ * one that builds descriptors — the same split `ticket-detail.tsx` makes, for
+ * the same reason: a selector returning a fresh array of objects re-renders on
+ * every folded batch, while shallow equality over strings costs nothing when
+ * neither moved.
+ */
+function ScratchTabs({
+  terminalTabs,
+  chatIds,
+  activeTabId,
+  creating,
+  onSelect,
+  onClose,
+  onRename,
+  onNewSession,
+  onNewChat,
+}: {
+  terminalTabs: readonly SessionTab[];
+  chatIds: readonly string[];
+  activeTabId: string | null;
+  creating: boolean;
+  onSelect(tab: SessionTabDescriptor): void;
+  onClose(tab: SessionTabDescriptor): void;
+  onRename(tab: SessionTabDescriptor, title: string): void;
+  onNewSession(): void;
+  onNewChat(): void;
+}) {
+  const chatTitles = useChatSessionsStore(
+    useShallow((state) =>
+      chatIds.map(
+        (sessionId) =>
+          state.sessions[sessionId]?.projection?.session.title ?? CHAT_TAB_FALLBACK_LABEL,
+      ),
+    ),
+  );
+  const chatStatuses = useChatSessionsStore(
+    useShallow((state) =>
+      chatIds.map((sessionId) => chatTabStatus(state.sessions[sessionId]?.lifecycle)),
+    ),
+  );
+  const tabs: SessionTabDescriptor[] = [
+    ...terminalTabs.map(
+      (tab): SessionTabDescriptor => ({ kind: "terminal", id: tab.sessionId, tab }),
+    ),
+    ...chatIds.map(
+      (sessionId, index): SessionTabDescriptor => ({
+        kind: "chat",
+        id: chatTabId(sessionId),
+        sessionId,
+        title: chatTitles[index] ?? CHAT_TAB_FALLBACK_LABEL,
+        status: chatStatuses[index] ?? "idle",
+      }),
+    ),
+  ];
+
+  return (
+    <SessionTabs
+      tabs={tabs}
+      activeTabId={activeTabId}
+      creating={creating}
+      onSelect={onSelect}
+      onClose={onClose}
+      onRename={onRename}
+      onNewSession={onNewSession}
+      onNewChat={onNewChat}
+    />
   );
 }

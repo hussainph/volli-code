@@ -164,6 +164,66 @@ describe("setBoardSort", () => {
   });
 });
 
+describe("setSessionsActiveTab", () => {
+  it("defaults to null for an untouched project", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+
+    expect(store.getState().byProject["project-a"]?.sessionsActiveTab ?? null).toBeNull();
+  });
+
+  it("tracks the active tab independently per project", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setSessionsActiveTab("project-a", "s1");
+    store.getState().setSessionsActiveTab("project-b", "chat:c1");
+
+    expect(store.getState().byProject["project-a"]?.sessionsActiveTab).toBe("s1");
+    expect(store.getState().byProject["project-b"]?.sessionsActiveTab).toBe("chat:c1");
+  });
+
+  it("clears via null", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setSessionsActiveTab("project-a", "s1");
+
+    store.getState().setSessionsActiveTab("project-a", null);
+
+    expect(store.getState().byProject["project-a"]?.sessionsActiveTab).toBeNull();
+  });
+
+  it("is a no-op (unchanged identity) when re-setting the same tab", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setSessionsActiveTab("project-a", "s1");
+    const before = store.getState();
+
+    store.getState().setSessionsActiveTab("project-a", "s1");
+
+    expect(store.getState()).toBe(before);
+  });
+
+  it("is a no-op (unchanged identity) clearing an already-null tab on an untouched project", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    const before = store.getState();
+
+    store.getState().setSessionsActiveTab("project-a", null);
+
+    expect(store.getState()).toBe(before);
+  });
+
+  it("is never included in persisted output, even for a project with nothing else worth persisting", () => {
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage);
+    store.getState().setBoardView("project-a", "list"); // earns project-a a spot in persisted output
+    store.getState().setSessionsActiveTab("project-a", "s1");
+    store.getState().setSessionsActiveTab("project-b", "s2"); // nothing else persisted for project-b
+
+    const raw = storage.getItem("volli:workspace");
+    const parsed = JSON.parse(raw!) as {
+      state: { byProject: Record<string, Record<string, unknown>> };
+    };
+    expect(Object.keys(parsed.state.byProject)).toEqual(["project-a"]);
+    expect(parsed.state.byProject["project-a"]).not.toHaveProperty("sessionsActiveTab");
+  });
+});
+
 describe("openTicket", () => {
   // openTicket also selects the ticket in the REAL board-store singleton (see
   // workspace.ts's module doc: cross-store orchestration lives in the action,
@@ -1572,6 +1632,7 @@ describe("forget", () => {
       ticketDiffViewStates: {},
       projectFiles: EMPTY_FILE_WORKSPACE,
       projectFileViewStates: {},
+      sessionsActiveTab: null,
     });
   });
 

@@ -11,7 +11,7 @@ import {
 import { SidebarGroup, SidebarMenu } from "@renderer/components/ui/sidebar";
 import {
   buildActiveSessionListing,
-  isScratchTerminalRowSelected,
+  isScratchRowSelected,
   type ActiveSessionRow,
   type PreviousSessionRow,
   type SessionRowKind,
@@ -90,6 +90,10 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   const openTicketWorkspace = useWorkspaceStore((state) => state.openTicketWorkspace);
   const openTicketSession = useWorkspaceStore((state) => state.openTicketSession);
   const setNav = useWorkspaceStore((state) => state.setNav);
+  const setSessionsActiveTab = useWorkspaceStore((state) => state.setSessionsActiveTab);
+  const sessionsActiveTab = useWorkspaceStore(
+    (state) => state.byProject[project.id]?.sessionsActiveTab ?? null,
+  );
   const [records, setRecords] = React.useState<SessionRecord[]>([]);
   const [chatSessions, setChatSessions] = React.useState<ChatSessionRecord[]>([]);
   const [signalsByTicket, setSignalsByTicket] = React.useState<Record<string, LatestSessionSignal>>(
@@ -133,9 +137,6 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
             )
             .flatMap((tab) => sessionPanes(tab.layout).map((pane) => pane.sessionId)),
         ),
-        // Keyed by ticket id today. The next wave rekeys this store by owner —
-        // project id for a ticketless chat — so accept that key now rather than
-        // silently dropping every scratch chat the day it lands.
         ...Object.entries(openChatTabs)
           .filter(([ownerId]) => ownerId === project.id || projectTicketIds.has(ownerId))
           .flatMap(([, sessionIds]) => sessionIds),
@@ -365,7 +366,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
    * tab is gone; it is never the tab in front of you.
    */
   const isSelected = (row: ActiveSessionRow | PreviousSessionRow): boolean =>
-    isScratchTerminalRowSelected(row, nav === "sessions", scratchContainer) ||
+    isScratchRowSelected(row, nav === "sessions", scratchContainer, sessionsActiveTab) ||
     (row.ticket !== null &&
       shownTicketId === row.ticket.id &&
       row.target !== null &&
@@ -375,20 +376,29 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
    * Where a row goes. A ticketed row reopens its exact session, or failing that
    * its ticket workspace.
    *
-   * A TICKETLESS row has no ticket workspace to open. Scratch terminals already
-   * have a real host on Sessions, so select their exact tab and pane there. A
-   * ticketless CHAT still only has the page as a destination until that page
-   * grows its chat host.
+   * A TICKETLESS row has no ticket workspace to open — both terminal and chat
+   * targets land on the project's Sessions page instead, naming their tab in
+   * `sessionsActiveTab` (workspace.ts), which that page's strip reads to bring
+   * it forward. A ticketless chat is additionally adopted and given a tab under
+   * the project's owner key, the same two calls the ticketed chat case below
+   * makes — the tab has to exist before the strip can put it in front.
    */
   const activate = (row: ActiveSessionRow | PreviousSessionRow) => {
     const ticket = row.ticket;
     if (ticket === null) {
-      setNav(project.id, "sessions");
-      if (row.target?.kind === "terminal") {
+      const target = row.target;
+      if (target?.kind === "terminal") {
         const sessions = useSessionsStore.getState();
-        sessions.setActiveSession(project.id, row.target.tabId);
-        sessions.setActivePane(project.id, row.target.tabId, row.target.paneId);
+        sessions.setActiveSession(project.id, target.tabId);
+        sessions.setActivePane(project.id, target.tabId, target.paneId);
+        setSessionsActiveTab(project.id, target.tabId);
+      } else if (target?.kind === "chat") {
+        const chat = useChatSessionsStore.getState();
+        chat.adoptChatSession(target.sessionId);
+        chat.openChatTab(project.id, target.sessionId);
+        setSessionsActiveTab(project.id, target.tabId);
       }
+      setNav(project.id, "sessions");
       return;
     }
     const target = row.target;

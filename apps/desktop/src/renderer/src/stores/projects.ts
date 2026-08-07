@@ -327,6 +327,9 @@ export function createProjectsStore(
       // archived ticket's sessions are torn down too, not just live ones.
       killProjectTicketSessions(id);
       useWorkspaceStore.getState().forget(id);
+      // `board.forget` owns chat teardown as well as its owner-key bookkeeping,
+      // so a local removal and an authoritative board hydration that loses the
+      // same project share one disposal path.
       useBoardStore.getState().forget(id);
       killProjectSessions(id);
 

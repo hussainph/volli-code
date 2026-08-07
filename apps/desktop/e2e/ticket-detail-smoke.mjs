@@ -940,6 +940,14 @@ async function main() {
         // real live row. Everything dimmed in the row promotes TOGETHER on
         // selection — the row's fill is a veil, so the meta line measures under
         // the contrast floor un-promoted and over it promoted.
+        //
+        // The promotion rule fires on `:hover` too, not just `data-active`, and
+        // Playwright's virtual cursor is left wherever the last `.click()`
+        // landed it — which the earlier checks put inside the sidebar's own
+        // column. Parking it over neutral chrome first is what makes the
+        // "before" sample honestly unpromoted instead of an intermittent hover.
+        await page.mouse.move(0, 0);
+        await sleep(200);
         const subtextBefore = await activeSessionRow
           .locator(SESSION_ROW_META)
           .evaluate((element) => getComputedStyle(element).color);
@@ -988,7 +996,7 @@ async function main() {
           marked && !!exactTabSelected && !!nodeSurvived && !!shellAlive && subtextHighlighted;
         return {
           ok,
-          detail: `marked=${marked} exactTab=${!!exactTabSelected} nodeSurvived=${!!nodeSurvived} shellAlive=${!!shellAlive} subtext=${JSON.stringify(subtextHighlight)}`,
+          detail: `marked=${marked} exactTab=${!!exactTabSelected} nodeSurvived=${!!nodeSurvived} shellAlive=${!!shellAlive} subtextBefore=${subtextBefore} subtext=${JSON.stringify(subtextHighlight)}`,
         };
       },
     );
