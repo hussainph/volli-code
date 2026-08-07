@@ -436,8 +436,11 @@ async function main() {
     await runInTerminal(page, `echo tab2-$PWD > ${probeA2}`);
     const a2Text = await waitForFileContains(probeA2, alphaDir);
 
-    // Switch back to tab 1 and confirm ITS shell still responds.
-    await page.getByText("Terminal 1", { exact: true }).click();
+    // Switch back to tab 1 and confirm ITS shell still responds. Scoped to
+    // role="tab" — the sidebar's Active band now carries its own "Terminal 1"
+    // row (a plain button) beside the strip's tab, and a bare text match
+    // resolves to both.
+    await page.getByRole("tab", { name: "Terminal 1", exact: true }).click();
     await sleep(600);
     await focusTerminal(page);
     await runInTerminal(page, `echo tab1again-$PWD >> ${probeA}`);
