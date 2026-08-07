@@ -85,9 +85,10 @@ export interface ChatSessionsState extends ChatSessionWrites {
    * chat, or one whose ticket left the board), the same owner-id convention
    * `starting` above uses. A Session's tab lives under exactly one owner at a
    * time: `openChatTab` enforces that by stripping the id from every other
-   * key before recording it under the new one, and `rehomeChatTabs` moves a
-   * whole owner's tabs onto another key (board.ts, when a ticket leaves the
-   * board) without ever violating it.
+   * key before recording it under the new one. `reconcileTicketChatTabs`
+   * moves a ticket's tabs onto its project when that ticket leaves the board,
+   * then moves only those same tabs back if it returns, without ever violating
+   * the invariant.
    *
    * Resident for the reason the client is: a chat view mounts and unmounts
    * freely, and the tabs a person left open are not a fact about whether the
@@ -96,6 +97,14 @@ export interface ChatSessionsState extends ChatSessionWrites {
    * is the only thing that has to survive a restart.
    */
   openTabs: Readonly<Record<string, readonly string[]>>;
+  /**
+   * The ticket a project-hosted tab left with while that ticket was absent from
+   * the board. This is deliberately renderer-local: it is only the temporary
+   * owner transition needed to restore an already-open tab. Durable Session
+   * ownership remains its own `ticketId`; this map disappears with `openTabs`
+   * on restart and never determines durable history.
+   */
+  rehomedTicketBySession: Readonly<Record<string, string>>;
   /**
    * Records a tab for `sessionId` under `ownerId`, appending at the end of its
    * strip. First strips the id from every OTHER owner's strip (deleting a
@@ -109,19 +118,29 @@ export interface ChatSessionsState extends ChatSessionWrites {
    */
   closeChatTab(ownerId: string, sessionId: string): void;
   /**
-   * Moves every tab under each of `fromOwnerIds` onto `toOwnerId` — preserving
-   * order, skipping a session id `toOwnerId` already has — and deletes each
-   * from-key once emptied. The board's escape hatch for a ticket leaving the
-   * board (archived, or deleted): the ticket id no longer names a live
-   * surface, so its open chat tabs move to the project instead of vanishing.
+   * Reconciles ticket-tab owners across one board transition. Departed tickets
+   * donate their tabs to `projectId` and stamp their exact ticket origin;
+   * returned tickets receive only project-hosted tabs carrying their matching
+   * stamp. Ticketless tabs and tabs from other absent tickets remain put.
    * Tab bookkeeping only — no client is attached, retired, or disposed.
    */
-  rehomeChatTabs(fromOwnerIds: readonly string[], toOwnerId: string): void;
+  reconcileTicketChatTabs(
+    projectId: string,
+    departedTicketIds: readonly string[],
+    returnedTicketIds: readonly string[],
+  ): void;
+  /**
+   * Clears the temporary origins for a ticket that was permanently deleted.
+   * The project-hosted tabs and their resident clients stay open; only their
+   * now-impossible restoration path is retired.
+   */
+  clearRehomedTicketProvenance(ticketId: string): void;
   /**
    * Deletes each of `ownerIds`' tab entries outright. Used when a project
    * itself is forgotten — there is no surface left, not even the project, for
-   * `rehomeChatTabs` to have moved those tabs onto. Tab bookkeeping only, same
-   * as `rehomeChatTabs`.
+   * a tab to remain on. Retires every resident client named by the removed
+   * owner strips and clears matching transient origin records in the same
+   * synchronous teardown.
    */
   dropChatTabs(ownerIds: readonly string[]): void;
 }
@@ -157,6 +176,7 @@ export function createChatSessionsStore(
     return {
       sessions: {},
       openTabs: {},
+      rehomedTicketBySession: {},
       starting: {},
 
       async createChatSession(input) {
@@ -331,45 +351,123 @@ export function createChatSessionsStore(
         get().closeChatSession(sessionId);
         const remaining = tabs.filter((candidate) => candidate !== sessionId);
         set((state) => {
+          const rehomedTicketBySession = { ...state.rehomedTicketBySession };
+          delete rehomedTicketBySession[sessionId];
           if (remaining.length > 0) {
-            return { openTabs: { ...state.openTabs, [ownerId]: remaining } };
+            return {
+              openTabs: { ...state.openTabs, [ownerId]: remaining },
+              rehomedTicketBySession,
+            };
           }
           const openTabs = { ...state.openTabs };
           delete openTabs[ownerId];
-          return { openTabs };
+          return { openTabs, rehomedTicketBySession };
         });
       },
 
-      rehomeChatTabs(fromOwnerIds, toOwnerId) {
+      reconcileTicketChatTabs(projectId, departedTicketIds, returnedTicketIds) {
         set((state) => {
           let changed = false;
-          const openTabs = { ...state.openTabs };
-          const toTabs = [...(openTabs[toOwnerId] ?? [])];
-          for (const fromOwnerId of fromOwnerIds) {
-            const fromTabs = openTabs[fromOwnerId];
+          const openTabs: Record<string, readonly string[]> = { ...state.openTabs };
+          let projectTabs: string[] = [...(openTabs[projectId] ?? [])];
+          let projectTabsChanged = false;
+          let nextRehomedTicketBySession: Record<string, string> | undefined;
+
+          const rehomedTicketBySession = (): Readonly<Record<string, string>> =>
+            nextRehomedTicketBySession ?? state.rehomedTicketBySession;
+          const mutableRehomedTicketBySession = (): Record<string, string> => {
+            if (nextRehomedTicketBySession === undefined) {
+              nextRehomedTicketBySession = { ...state.rehomedTicketBySession };
+            }
+            return nextRehomedTicketBySession;
+          };
+
+          const markRehomed = (sessionId: string, ticketId: string): void => {
+            if (rehomedTicketBySession()[sessionId] === ticketId) return;
+            mutableRehomedTicketBySession()[sessionId] = ticketId;
+          };
+
+          for (const ticketId of departedTicketIds) {
+            const fromTabs = openTabs[ticketId];
             if (fromTabs === undefined) continue;
             changed = true;
+            projectTabsChanged = true;
             for (const sessionId of fromTabs) {
-              if (!toTabs.includes(sessionId)) toTabs.push(sessionId);
+              if (!projectTabs.includes(sessionId)) projectTabs.push(sessionId);
+              markRehomed(sessionId, ticketId);
             }
-            delete openTabs[fromOwnerId];
+            delete openTabs[ticketId];
           }
-          if (!changed) return state;
-          openTabs[toOwnerId] = toTabs;
-          return { openTabs };
+
+          for (const ticketId of returnedTicketIds) {
+            const restored = projectTabs.filter(
+              (sessionId) => rehomedTicketBySession()[sessionId] === ticketId,
+            );
+            if (restored.length === 0) continue;
+
+            const restoring = new Set(restored);
+            projectTabs = projectTabs.filter((sessionId) => !restoring.has(sessionId));
+            projectTabsChanged = true;
+            const ticketTabs = [...(openTabs[ticketId] ?? [])];
+            for (const sessionId of restored) {
+              if (!ticketTabs.includes(sessionId)) ticketTabs.push(sessionId);
+            }
+            openTabs[ticketId] = ticketTabs;
+            changed = true;
+
+            const provenance = mutableRehomedTicketBySession();
+            for (const sessionId of restored) delete provenance[sessionId];
+          }
+
+          if (projectTabsChanged) {
+            if (projectTabs.length > 0) openTabs[projectId] = projectTabs;
+            else delete openTabs[projectId];
+          }
+          if (!changed && nextRehomedTicketBySession === undefined) return state;
+          return nextRehomedTicketBySession === undefined
+            ? { openTabs }
+            : { openTabs, rehomedTicketBySession: nextRehomedTicketBySession };
+        });
+      },
+
+      clearRehomedTicketProvenance(ticketId) {
+        set((state) => {
+          const sessionIds = Object.entries(state.rehomedTicketBySession)
+            .filter(([, sourceTicketId]) => sourceTicketId === ticketId)
+            .map(([sessionId]) => sessionId);
+          if (sessionIds.length === 0) return state;
+
+          const rehomedTicketBySession = { ...state.rehomedTicketBySession };
+          for (const sessionId of sessionIds) delete rehomedTicketBySession[sessionId];
+          return { rehomedTicketBySession };
         });
       },
 
       dropChatTabs(ownerIds) {
+        const openTabs = get().openTabs;
+        const hasOwner = ownerIds.some((ownerId) => ownerId in openTabs);
+        if (!hasOwner) return;
+        const removedSessionIds = new Set<string>();
+        for (const ownerId of ownerIds) {
+          for (const sessionId of openTabs[ownerId] ?? []) removedSessionIds.add(sessionId);
+        }
+
+        // A project is leaving the renderer entirely, so its remaining tab
+        // owners cannot outlive their clients. Dispose before removing the
+        // slices; both loops are synchronous, with no await between them.
+        for (const sessionId of removedSessionIds) disposeChatClient(sessionId);
         set((state) => {
-          let changed = false;
-          const openTabs = { ...state.openTabs };
+          const nextOpenTabs = { ...state.openTabs };
           for (const ownerId of ownerIds) {
-            if (!(ownerId in openTabs)) continue;
-            delete openTabs[ownerId];
-            changed = true;
+            delete nextOpenTabs[ownerId];
           }
-          return changed ? { openTabs } : state;
+          const sessions = { ...state.sessions };
+          const rehomedTicketBySession = { ...state.rehomedTicketBySession };
+          for (const sessionId of removedSessionIds) {
+            delete sessions[sessionId];
+            delete rehomedTicketBySession[sessionId];
+          }
+          return { openTabs: nextOpenTabs, sessions, rehomedTicketBySession };
         });
       },
     };

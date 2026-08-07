@@ -512,9 +512,9 @@ describe("removeProject", () => {
   });
 
   it("disposes the removed project's own ticketless chat clients", async () => {
-    // No terminal view is mounted here either, and chat-tab bookkeeping
-    // (openTabs) is left for board.ts's `forget`, run right after — this
-    // covers only the client teardown that has to happen alongside it.
+    // Board ownership teardown is the one path local removal and a wholesale
+    // re-hydrate share, so it must retire the resident client as well as its
+    // tab without relying on a chat view unmounting.
     const only = project({ id: "only", path: "/a" });
     const { store } = freshStore();
     store.getState().hydrate([only], only.id);
@@ -526,6 +526,7 @@ describe("removeProject", () => {
     await store.getState().removeProject(only.id);
 
     expect(useChatSessionsStore.getState().sessions["chat-1"]).toBeUndefined();
+    expect(useChatSessionsStore.getState().openTabs[only.id]).toBeUndefined();
   });
 
   it("disposes the removed project's ticket-owned chat clients too", async () => {
@@ -533,7 +534,7 @@ describe("removeProject", () => {
     const { store } = freshStore();
     store.getState().hydrate([only], only.id);
     // tk1 holds an open chat tab; tk2 is a live ticket of the same project
-    // with none — the empty owner key killProjectChatSessions must pass over.
+    // with none — teardown must pass over an empty owner key safely.
     useBoardStore.setState({
       ticketsByProject: { only: [{ id: "tk1" } as Ticket, { id: "tk2" } as Ticket] },
       labelsByProject: {},
@@ -547,6 +548,8 @@ describe("removeProject", () => {
 
     expect(useChatSessionsStore.getState().sessions["chat-project"]).toBeUndefined();
     expect(useChatSessionsStore.getState().sessions["chat-ticket"]).toBeUndefined();
+    expect(useChatSessionsStore.getState().openTabs[only.id]).toBeUndefined();
+    expect(useChatSessionsStore.getState().openTabs.tk1).toBeUndefined();
   });
 
   it("is a no-op (no IPC call) for an unknown id", async () => {

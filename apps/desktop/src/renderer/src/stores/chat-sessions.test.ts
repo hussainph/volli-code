@@ -548,6 +548,19 @@ describe("open chat tabs", () => {
     expect(store.getState().openTabs).toEqual({ t1: ["durable-2"] });
   });
 
+  it("clears a rehomed tab's temporary ticket origin when the tab closes", () => {
+    const { store } = fixture();
+    store.setState({
+      openTabs: { p1: ["durable-1"] },
+      rehomedTicketBySession: { "durable-1": "t1" },
+    });
+
+    store.getState().closeChatTab("p1", "durable-1");
+
+    expect(store.getState().openTabs).toEqual({});
+    expect(store.getState().rehomedTicketBySession).toEqual({});
+  });
+
   it("is a no-op for a tab that was never open", () => {
     const { store } = fixture();
     store.getState().openChatTab("t1", "durable-1");
@@ -573,53 +586,202 @@ describe("open chat tabs", () => {
   });
 });
 
-describe("rehomeChatTabs", () => {
-  it("moves every from-owner's tabs onto the destination, in order, deleting the emptied keys", () => {
+describe("reconcileTicketChatTabs", () => {
+  it("moves departed ticket tabs onto the project and records their exact ticket origins", () => {
     const { store } = fixture();
-    store.setState({ openTabs: { t1: ["durable-1", "durable-2"], t2: ["durable-3"] } });
+    // No resident slices: ownership reconciliation cannot depend on an
+    // arriving projection, which is legitimately null while a chat attaches.
+    store.setState({
+      openTabs: {
+        p1: ["ticketless"],
+        t1: ["durable-1", "durable-2"],
+        t2: ["durable-3"],
+      },
+    });
 
-    store.getState().rehomeChatTabs(["t1", "t2"], "p1");
+    store.getState().reconcileTicketChatTabs("p1", ["t1", "t2"], []);
 
-    expect(store.getState().openTabs).toEqual({ p1: ["durable-1", "durable-2", "durable-3"] });
+    expect(store.getState().openTabs).toEqual({
+      p1: ["ticketless", "durable-1", "durable-2", "durable-3"],
+    });
+    expect(store.getState().rehomedTicketBySession).toEqual({
+      "durable-1": "t1",
+      "durable-2": "t1",
+      "durable-3": "t2",
+    });
   });
 
-  it("skips a session id the destination already has", () => {
-    const { store } = fixture();
-    store.setState({ openTabs: { t1: ["durable-1"], p1: ["durable-1", "durable-9"] } });
-
-    store.getState().rehomeChatTabs(["t1"], "p1");
-
-    expect(store.getState().openTabs).toEqual({ p1: ["durable-1", "durable-9"] });
-  });
-
-  it("ignores a from-owner with no entry among others that do", () => {
+  it("creates the project tab strip when a departed ticket is its first tab owner", () => {
     const { store } = fixture();
     store.setState({ openTabs: { t1: ["durable-1"] } });
 
-    store.getState().rehomeChatTabs(["t1", "t9"], "p1");
+    store.getState().reconcileTicketChatTabs("p1", ["t1"], []);
 
     expect(store.getState().openTabs).toEqual({ p1: ["durable-1"] });
+    expect(store.getState().rehomedTicketBySession).toEqual({ "durable-1": "t1" });
   });
 
-  it("is a no-op (unchanged identity) when none of the from-owners have any tabs", () => {
+  it("returns only the matching ticket's tabs, preserving unrelated project order and single ownership", () => {
+    const { store } = fixture();
+    store.setState({
+      openTabs: {
+        p1: ["ticketless", "from-t1", "from-t2"],
+        t2: ["already-open"],
+      },
+      rehomedTicketBySession: { "from-t1": "t1", "from-t2": "t2" },
+    });
+
+    store.getState().reconcileTicketChatTabs("p1", [], ["t1"]);
+
+    expect(store.getState().openTabs).toEqual({
+      p1: ["ticketless", "from-t2"],
+      t2: ["already-open"],
+      t1: ["from-t1"],
+    });
+    expect(store.getState().rehomedTicketBySession).toEqual({ "from-t2": "t2" });
+  });
+
+  it("deduplicates a stale project copy as it restores the tab to its stamped ticket", () => {
+    const { store } = fixture();
+    store.setState({
+      openTabs: { p1: ["ticketless", "returning"], t1: ["already-open", "returning"] },
+      rehomedTicketBySession: { returning: "t1" },
+    });
+
+    store.getState().reconcileTicketChatTabs("p1", [], ["t1"]);
+
+    expect(store.getState().openTabs).toEqual({
+      p1: ["ticketless"],
+      t1: ["already-open", "returning"],
+    });
+    expect(store.getState().rehomedTicketBySession).toEqual({});
+  });
+
+  it("removes an empty project tab owner when its last rehomed tab returns", () => {
+    const { store } = fixture();
+    store.setState({
+      openTabs: { p1: ["returning"] },
+      rehomedTicketBySession: { returning: "t1" },
+    });
+
+    store.getState().reconcileTicketChatTabs("p1", [], ["t1"]);
+
+    expect(store.getState().openTabs).toEqual({ t1: ["returning"] });
+    expect(store.getState().rehomedTicketBySession).toEqual({});
+  });
+
+  it("deduplicates an already-stamped departure without replacing its provenance", () => {
+    const { store } = fixture();
+    store.setState({
+      openTabs: { p1: ["ticketless", "shared"], t1: ["shared", "from-t1"] },
+      rehomedTicketBySession: { shared: "t1", "from-t1": "t1" },
+    });
+    const provenance = store.getState().rehomedTicketBySession;
+
+    store.getState().reconcileTicketChatTabs("p1", ["t1"], []);
+
+    expect(store.getState().openTabs).toEqual({ p1: ["ticketless", "shared", "from-t1"] });
+    expect(store.getState().rehomedTicketBySession).toBe(provenance);
+  });
+
+  it("restores each returned ticket independently after a multi-ticket departure", () => {
+    const { store } = fixture();
+    store.setState({
+      openTabs: { p1: ["ticketless"], t1: ["durable-1", "durable-2"], t2: ["durable-3"] },
+    });
+
+    store.getState().reconcileTicketChatTabs("p1", ["t1", "t2"], []);
+    store.getState().reconcileTicketChatTabs("p1", [], ["t2"]);
+
+    expect(store.getState().openTabs).toEqual({
+      p1: ["ticketless", "durable-1", "durable-2"],
+      t2: ["durable-3"],
+    });
+    expect(store.getState().rehomedTicketBySession).toEqual({
+      "durable-1": "t1",
+      "durable-2": "t1",
+    });
+
+    store.getState().reconcileTicketChatTabs("p1", [], ["t1"]);
+
+    expect(store.getState().openTabs).toEqual({
+      p1: ["ticketless"],
+      t2: ["durable-3"],
+      t1: ["durable-1", "durable-2"],
+    });
+    expect(store.getState().rehomedTicketBySession).toEqual({});
+  });
+
+  it("is a no-op (unchanged identity) when no departure or return has a matching tab", () => {
     const { store } = fixture();
     store.setState({ openTabs: { p1: ["durable-1"] } });
     const before = store.getState().openTabs;
 
-    store.getState().rehomeChatTabs(["t1", "t2"], "p1");
+    store.getState().reconcileTicketChatTabs("p1", ["t1", "t2"], ["t3"]);
 
     expect(store.getState().openTabs).toBe(before);
+  });
+});
+
+describe("clearRehomedTicketProvenance", () => {
+  it("clears only the deleted ticket's transient origins without touching tabs or clients", () => {
+    const { store } = fixture();
+    store.getState().adoptChatSession("from-t1");
+    store.setState({
+      openTabs: { p1: ["from-t1", "from-t2"] },
+      rehomedTicketBySession: { "from-t1": "t1", "from-t2": "t2" },
+    });
+    const openTabs = store.getState().openTabs;
+    const sessions = store.getState().sessions;
+    const client = getChatClient("from-t1");
+
+    store.getState().clearRehomedTicketProvenance("t1");
+
+    expect(store.getState().openTabs).toBe(openTabs);
+    expect(store.getState().sessions).toBe(sessions);
+    expect(getChatClient("from-t1")).toBe(client);
+    expect(store.getState().rehomedTicketBySession).toEqual({ "from-t2": "t2" });
+  });
+
+  it("is a no-op when no tab was rehomed from the ticket", () => {
+    const { store } = fixture();
+    store.setState({ rehomedTicketBySession: { "from-t2": "t2" } });
+    const before = store.getState().rehomedTicketBySession;
+
+    store.getState().clearRehomedTicketProvenance("t1");
+
+    expect(store.getState().rehomedTicketBySession).toBe(before);
   });
 });
 
 describe("dropChatTabs", () => {
   it("deletes every named owner's entry", () => {
     const { store } = fixture();
-    store.setState({ openTabs: { p1: ["durable-1"], t1: ["durable-2"], t2: ["durable-3"] } });
+    store.setState({
+      openTabs: { p1: ["durable-1"], t1: ["durable-2"], t2: ["durable-3"] },
+      rehomedTicketBySession: { "durable-1": "t1", "durable-2": "t1", "durable-3": "t2" },
+    });
 
     store.getState().dropChatTabs(["p1", "t1"]);
 
     expect(store.getState().openTabs).toEqual({ t2: ["durable-3"] });
+    expect(store.getState().rehomedTicketBySession).toEqual({ "durable-3": "t2" });
+  });
+
+  it("retires resident clients as it drops their project owner tabs", () => {
+    const { store } = fixture();
+    store.getState().adoptChatSession("durable-1");
+    store.setState({
+      openTabs: { p1: ["durable-1"] },
+      rehomedTicketBySession: { "durable-1": "t1" },
+    });
+
+    store.getState().dropChatTabs(["p1", "missing-owner"]);
+
+    expect(store.getState().sessions["durable-1"]).toBeUndefined();
+    expect(getChatClient("durable-1")).toBeUndefined();
+    expect(store.getState().openTabs).toEqual({});
+    expect(store.getState().rehomedTicketBySession).toEqual({});
   });
 
   it("is a no-op (unchanged identity) when none of the ids have an entry", () => {

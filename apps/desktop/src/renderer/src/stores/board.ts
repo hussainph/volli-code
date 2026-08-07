@@ -283,37 +283,33 @@ function restoreAt<T extends { id: string }>(slice: T[], ticket: T, index: numbe
 }
 
 /**
- * Moves the open chat tabs of every ticket that was in `before` and is gone
- * from `after` onto the project's own key — a ticket off the board (archived,
- * or deleted elsewhere) has no surface left to host them, and the project is
- * the owner key a ticketless chat already uses (chat-sessions.ts). Arrivals are
- * deliberately NOT the mirror of this: `openChatTab`'s single-owner invariant
- * already pulls a tab back when a returning ticket's surface asks for it, and
- * pulling here would race that.
- *
- * `openTabs` is read first so the ordinary case — no chat tab open anywhere —
- * costs one property lookup per ticket and allocates nothing.
+ * Reconciles chat-tab owners with the live-ticket transition. A departure moves
+ * its tabs onto the project and records their exact ticket origin; an arrival
+ * restores only project-hosted tabs from that same ticket. The Chat Store owns
+ * the provenance and single-owner mutation, so ticketless tabs and tabs from
+ * other departed tickets cannot be swept into the returning ticket.
  */
-function rehomeDepartedChatTabs(
+function reconcileTicketChatTabOwners(
   projectId: string,
   before: readonly Ticket[],
   after: readonly Ticket[],
 ): void {
-  const openTabs = useChatSessionsStore.getState().openTabs;
-  const owners = before.filter((ticket) => ticket.id in openTabs);
-  if (owners.length === 0) return;
-  const remaining = new Set(after.map((ticket) => ticket.id));
-  const departed = owners.filter((ticket) => !remaining.has(ticket.id)).map((ticket) => ticket.id);
-  if (departed.length > 0) useChatSessionsStore.getState().rehomeChatTabs(departed, projectId);
+  const beforeIds = new Set(before.map((ticket) => ticket.id));
+  const afterIds = new Set(after.map((ticket) => ticket.id));
+  const departed = [...beforeIds].filter((ticketId) => !afterIds.has(ticketId));
+  const returned = [...afterIds].filter((ticketId) => !beforeIds.has(ticketId));
+  if (departed.length === 0 && returned.length === 0) return;
+  useChatSessionsStore.getState().reconcileTicketChatTabs(projectId, departed, returned);
 }
 
 /**
- * Drops the chat tabs a vanished project leaves behind: its own key, plus every
+ * Retires every chat a vanished project leaves behind: its own key, plus every
  * live ticket still holding one directly (a departed ticket's tabs already
- * moved onto the project key via {@link rehomeDepartedChatTabs}). Nothing is
- * left to re-home them onto once the project itself is gone.
+ * moved onto the project key via {@link reconcileTicketChatTabOwners}). This
+ * is shared by direct project removal and wholesale re-hydration so no client
+ * depends on a view unmount to be disposed.
  */
-function dropOrphanedChatTabs(projectId: string, slice: readonly Ticket[]): void {
+function teardownProjectChatTabs(projectId: string, slice: readonly Ticket[]): void {
   const openTabs = useChatSessionsStore.getState().openTabs;
   const orphaned = [projectId, ...slice.map((ticket) => ticket.id)].filter((id) => id in openTabs);
   if (orphaned.length > 0) useChatSessionsStore.getState().dropChatTabs(orphaned);
@@ -354,7 +350,7 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       if (!slice) return;
       const next = update(slice);
       set({ ticketsByProject: { ...byProject, [projectId]: next } });
-      rehomeDepartedChatTabs(projectId, slice, next);
+      reconcileTicketChatTabOwners(projectId, slice, next);
     }
 
     /**
@@ -479,14 +475,13 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         // The removal path `reconcileSlice` cannot see: a CLI archive, a
         // retention sweep, or another window's mutation reaches this renderer as
         // a wholesale re-hydrate, dropping the ticket without any local action
-        // to hang the re-home off. Same forward-only rule per project — plus the
-        // projects the snapshot no longer names at all, whose tabs go the way
-        // `forget` sends them. Boot hydrates into an empty map, so this walks
-        // nothing there.
+        // to hang owner reconciliation off. Projects the snapshot no longer
+        // names use the same client-disposing teardown as `forget`. Boot
+        // hydrates into an empty map, so this walks nothing there.
         for (const [projectId, slice] of Object.entries(previous)) {
           const next = ticketsByProject[projectId];
-          if (next === undefined) dropOrphanedChatTabs(projectId, slice);
-          else rehomeDepartedChatTabs(projectId, slice, next);
+          if (next === undefined) teardownProjectChatTabs(projectId, slice);
+          else reconcileTicketChatTabOwners(projectId, slice, next);
         }
       },
 
@@ -742,6 +737,9 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
           reconcileArchived(projectId, (slice) => restoreAt(slice, target, index));
           return;
         }
+        // Its project-hosted chats remain resident, but their temporary
+        // restoration path cannot outlive a permanent ticket deletion.
+        useChatSessionsStore.getState().clearRehomedTicketProvenance(ticketId);
         // Any live terminal sessions the ticket still owns must die with it —
         // belt-and-suspenders alongside archiveTicket's own teardown (a ticket
         // reachable here should already be sessionless, but never leak a PTY).
@@ -806,9 +804,23 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         const hasArchived = projectId in archivedByProject;
         const hasFilter = projectId in filterByProject;
         const hasSelection = projectId in selectedByProject;
-        if (!hasTickets && !hasLabels && !hasArchived && !hasFilter && !hasSelection) return;
+        const openTabs = useChatSessionsStore.getState().openTabs;
+        const chatOwnerIds = [
+          projectId,
+          ...(ticketsByProject[projectId] ?? []).map((ticket) => ticket.id),
+        ];
+        const hasChatTabs = chatOwnerIds.some((ownerId) => ownerId in openTabs);
+        if (
+          !hasTickets &&
+          !hasLabels &&
+          !hasArchived &&
+          !hasFilter &&
+          !hasSelection &&
+          !hasChatTabs
+        )
+          return;
 
-        dropOrphanedChatTabs(projectId, ticketsByProject[projectId] ?? []);
+        teardownProjectChatTabs(projectId, ticketsByProject[projectId] ?? []);
 
         const nextTickets = { ...ticketsByProject };
         delete nextTickets[projectId];
