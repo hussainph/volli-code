@@ -66,7 +66,7 @@ describe("clearSentDraft", () => {
   it("removes a session's draft once the message it holds is away", () => {
     const store = createChatDraftsStore(createMemoryStorage());
     store.getState().setDraft("s1", "hello");
-    const revision = store.getState().drafts.s1!.touchedAt;
+    const revision = store.getState().draftRevisions.s1!;
 
     store.getState().clearSentDraft("s1", "hello", revision);
 
@@ -76,7 +76,7 @@ describe("clearSentDraft", () => {
   it("clears a draft whose only difference from the sent text is whitespace", () => {
     const store = createChatDraftsStore(createMemoryStorage());
     store.getState().setDraft("s1", "hello\n");
-    const revision = store.getState().drafts.s1!.touchedAt;
+    const revision = store.getState().draftRevisions.s1!;
 
     store.getState().clearSentDraft("s1", "hello", revision);
 
@@ -88,7 +88,7 @@ describe("clearSentDraft", () => {
   it("keeps a draft typed while the send was in flight", () => {
     const store = createChatDraftsStore(createMemoryStorage());
     store.getState().setDraft("s1", "hello");
-    const revision = store.getState().drafts.s1!.touchedAt;
+    const revision = store.getState().draftRevisions.s1!;
     store.getState().setDraft("s1", "and one more thing");
 
     store.getState().clearSentDraft("s1", "hello", revision);
@@ -102,14 +102,16 @@ describe("clearSentDraft", () => {
     vi.setSystemTime(1000);
     const store = createChatDraftsStore(createMemoryStorage());
     store.getState().setDraft("s1", "hello");
-    const revision = store.getState().drafts.s1!.touchedAt;
+    const revision = store.getState().draftRevisions.s1!;
 
-    vi.setSystemTime(2000);
+    // Same clock tick on purpose: a timestamp is not a compare-and-swap token.
+    store.getState().setDraft("s1", "");
     store.getState().setDraft("s1", "hello");
 
     store.getState().clearSentDraft("s1", "hello", revision);
 
-    expect(store.getState().drafts.s1).toEqual({ text: "hello", touchedAt: 2000 });
+    expect(store.getState().drafts.s1).toEqual({ text: "hello", touchedAt: 1000 });
+    expect(store.getState().draftRevisions.s1).toBeGreaterThan(revision);
   });
 
   it("is a no-op for a session with no draft", () => {

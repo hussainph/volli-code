@@ -34,6 +34,10 @@ export interface ChatDraft {
 
 interface ChatDraftsState {
   drafts: Readonly<Record<string, ChatDraft>>;
+  /** Volatile compare-and-swap tokens; unlike `touchedAt`, these are strictly monotonic. */
+  draftRevisions: Readonly<Record<string, number>>;
+  /** The last revision handed out in this renderer lifetime. Never persisted. */
+  nextDraftRevision: number;
   /** Sets (or overwrites) a session's draft text, stamping `touchedAt` to now. */
   setDraft(sessionId: string, text: string): void;
   /**
@@ -44,9 +48,10 @@ interface ChatDraftsState {
    * so whatever is in the box when the reply lands is not necessarily what was
    * sent: anything typed in between is a NEW draft, and clearing on the reply
    * regardless would delete keystrokes the user watched themselves type.
-   * `revision` is the draft's `touchedAt` captured at submit; text alone is not
-   * enough, because retyping the same words stamps a new revision that must
-   * survive. `sent` is the composer's already-trimmed value (see
+   * `revision` is the draft's volatile token captured at submit; text alone is
+   * not enough, because retyping the same words must stamp a new revision even
+   * when both edits land inside one millisecond. `sent` is the composer's
+   * already-trimmed value (see
    * `composer-ui.tsx`), so the comparison trims too — trailing whitespace is
    * not a keystroke worth keeping a draft alive for.
    */
@@ -115,19 +120,32 @@ export function createChatDraftsStore(storage?: StateStorage) {
     persist(
       (set) => ({
         drafts: {},
+        draftRevisions: {},
+        nextDraftRevision: 0,
         setDraft: (sessionId, text) =>
-          set((state) => ({
-            drafts: { ...state.drafts, [sessionId]: { text, touchedAt: Date.now() } },
-          })),
+          set((state) => {
+            const revision = state.nextDraftRevision + 1;
+            return {
+              drafts: { ...state.drafts, [sessionId]: { text, touchedAt: Date.now() } },
+              draftRevisions: { ...state.draftRevisions, [sessionId]: revision },
+              nextDraftRevision: revision,
+            };
+          }),
         clearSentDraft: (sessionId, sent, revision) =>
           set((state) => {
             const draft = state.drafts[sessionId];
-            if (draft === undefined || draft.touchedAt !== revision || draft.text.trim() !== sent) {
+            if (
+              draft === undefined ||
+              state.draftRevisions[sessionId] !== revision ||
+              draft.text.trim() !== sent
+            ) {
               return {};
             }
             const next = { ...state.drafts };
+            const draftRevisions = { ...state.draftRevisions };
             delete next[sessionId];
-            return { drafts: next };
+            delete draftRevisions[sessionId];
+            return { drafts: next, draftRevisions };
           }),
       }),
       {
@@ -140,9 +158,19 @@ export function createChatDraftsStore(storage?: StateStorage) {
         }),
         merge: (persisted, current) => {
           const stored = isPlainRecord(persisted) ? persisted : {};
+          const drafts = readPersistedDrafts(stored.drafts);
+          let nextDraftRevision = current.nextDraftRevision;
+          const draftRevisions: Record<string, number> = {};
+          // No delivery survives a renderer relaunch, so hydrated drafts need
+          // fresh tokens only for comparisons made in this renderer lifetime.
+          for (const sessionId of Object.keys(drafts)) {
+            draftRevisions[sessionId] = ++nextDraftRevision;
+          }
           return {
             ...current,
-            drafts: readPersistedDrafts(stored.drafts),
+            drafts,
+            draftRevisions,
+            nextDraftRevision,
           };
         },
       },

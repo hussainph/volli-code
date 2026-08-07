@@ -194,8 +194,9 @@ export function ChatPlane({ sessionId, onOpenFile, store }: ChatPlaneProps) {
     (text: string, intent: ComposerIntent) => {
       // Capture the draft revision at submit. Text alone is not enough: if the
       // user clears and retypes the same words while delivery is in flight,
-      // that is a new draft with a new `touchedAt` and must survive.
-      const revision = useChatDraftsStore.getState().drafts[sessionId]?.touchedAt;
+      // that is a new draft with a new monotonic token and must survive — even
+      // if both edits land inside the same `Date.now()` millisecond.
+      const revision = useChatDraftsStore.getState().draftRevisions[sessionId];
       void deliver(text, intent).then((kept) => {
         if (kept && revision !== undefined) clearSentDraft(sessionId, text, revision);
       });
