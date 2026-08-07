@@ -10,6 +10,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 import { type BoardGateway, createBoardStore, planningChangeAffects } from "./board";
+import { useChatSessionsStore } from "./chat-sessions";
 import { ticketScope, useSessionsStore, type SessionLaunch } from "./sessions";
 
 /** A bare shell launch: no harness command line was written, so no expectation. */
@@ -1373,6 +1374,137 @@ describe("archive/delete session teardown", () => {
 
     expect(kill).toHaveBeenCalledWith("s1");
     expect(useSessionsStore.getState().byOwner["tk"]).toBeUndefined();
+  });
+});
+
+const resetChatTabs = () => useChatSessionsStore.setState({ openTabs: {} });
+
+describe("chat tab re-homing", () => {
+  it("moves a departed ticket's open chat tabs onto the project when archived", async () => {
+    resetChatTabs();
+    const a = ticket({ id: "a", status: "doing" });
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [a] }, {});
+    useChatSessionsStore.setState({ openTabs: { a: ["c1", "c2"] } });
+
+    await store.getState().archiveTicket("p1", "a");
+
+    expect(useChatSessionsStore.getState().openTabs).toEqual({ p1: ["c1", "c2"] });
+  });
+
+  it("does not touch the chat store when the archived ticket had no open chat tabs", async () => {
+    resetChatTabs();
+    const a = ticket({ id: "a", status: "doing" });
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [a] }, {});
+    const before = useChatSessionsStore.getState().openTabs;
+
+    await store.getState().archiveTicket("p1", "a");
+
+    expect(useChatSessionsStore.getState().openTabs).toBe(before);
+  });
+
+  it("still re-homes on the belt-and-suspenders re-drop after a concurrent authoritative merge resurrected the ticket mid-flight", async () => {
+    resetChatTabs();
+    const a = ticket({ id: "a", status: "doing" });
+    const b = ticket({ id: "b", status: "doing", order: 1 });
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a, b] }, {});
+    useChatSessionsStore.setState({ openTabs: { a: ["c1"] } });
+    // Same race as "re-drops the card..." above: a concurrent move's
+    // authoritative list resurrects `a` between the optimistic drop and the
+    // archive ack.
+    vi.mocked(gateway.archiveTicket).mockImplementation(async () => {
+      store.setState({ ticketsByProject: { p1: [a, b] } });
+      return { ok: true };
+    });
+
+    await store.getState().archiveTicket("p1", "a");
+
+    expect(store.getState().ticketsByProject.p1!.map((t) => t.id)).toEqual(["b"]);
+    expect(useChatSessionsStore.getState().openTabs).toEqual({ p1: ["c1"] });
+  });
+
+  it("does not re-home a ticket moveTicket's authoritative merge never actually drops", async () => {
+    resetChatTabs();
+    const a = ticket({ id: "a", status: "backlog", order: 0 });
+    const b = ticket({ id: "b", status: "backlog", order: 1 });
+    const gateway = fakeGateway({
+      // `mergeAuthoritative` only ever unions ids — `b`, absent from this
+      // authoritative snapshot, is preserved as an "extra" rather than
+      // dropped, so it never becomes a departure.
+      moveTicket: vi.fn<BoardGateway["moveTicket"]>(async () => ({
+        ok: true,
+        tickets: [{ ...a, status: "doing" as const, order: 0 }],
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a, b] }, {});
+    useChatSessionsStore.setState({ openTabs: { b: ["c1"] } });
+
+    await store.getState().moveTicket("p1", "a", "doing", 0);
+
+    expect(
+      store
+        .getState()
+        .ticketsByProject.p1!.map((t) => t.id)
+        .toSorted(),
+    ).toEqual(["a", "b"]);
+    expect(useChatSessionsStore.getState().openTabs).toEqual({ b: ["c1"] });
+  });
+
+  it("does not pull a ticket's chat tabs back onto its own key when unarchived", async () => {
+    resetChatTabs();
+    const revived = ticket({ id: "a", status: "done" });
+    const gateway = fakeGateway({
+      unarchiveTicket: vi.fn<BoardGateway["unarchiveTicket"]>(async () => ({
+        ok: true,
+        ticket: revived,
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [] }, {});
+    store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
+    // Already re-homed at archive time — the tabs live under the project now.
+    useChatSessionsStore.setState({ openTabs: { p1: ["c1"] } });
+
+    await store.getState().unarchiveTicket("p1", "a");
+
+    expect(useChatSessionsStore.getState().openTabs).toEqual({ p1: ["c1"] });
+  });
+
+  it("leaves already-rehomed chat tabs alone when the archived ticket is permanently deleted", async () => {
+    resetChatTabs();
+    const store = createBoardStore(fakeGateway());
+    store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
+    useChatSessionsStore.setState({ openTabs: { p1: ["c1"] } });
+
+    await store.getState().deleteArchivedTicket("p1", "a");
+
+    expect(useChatSessionsStore.getState().openTabs).toEqual({ p1: ["c1"] });
+  });
+
+  it("drops the project's and its live tickets' chat tabs when the project is forgotten", () => {
+    resetChatTabs();
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
+    useChatSessionsStore.setState({ openTabs: { p1: ["c1"], a: ["c2"], other: ["c3"] } });
+
+    store.getState().forget("p1");
+
+    expect(useChatSessionsStore.getState().openTabs).toEqual({ other: ["c3"] });
+  });
+
+  it("leaves the chat store untouched when forgetting a project with no open chat tabs", () => {
+    resetChatTabs();
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
+    const before = useChatSessionsStore.getState().openTabs;
+
+    store.getState().forget("p1");
+
+    expect(useChatSessionsStore.getState().openTabs).toBe(before);
   });
 });
 

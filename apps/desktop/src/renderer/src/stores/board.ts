@@ -33,6 +33,7 @@ import { create } from "zustand";
 
 import { killTicketSessions } from "@renderer/terminal/session-lifecycle";
 
+import { useChatSessionsStore } from "./chat-sessions";
 import { writeThrough } from "./mutate";
 
 /** The subset of the preload API the board store needs — narrow and fake-able for tests. */
@@ -307,7 +308,23 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       const byProject = get().ticketsByProject;
       const slice: Ticket[] | undefined = byProject[projectId];
       if (!slice) return;
-      set({ ticketsByProject: { ...byProject, [projectId]: update(slice) } });
+      const next = update(slice);
+      set({ ticketsByProject: { ...byProject, [projectId]: next } });
+
+      // A ticket that just left this slice (archived, or resurrected then
+      // re-dropped by a belt-and-suspenders re-filter) has no board surface left
+      // to host its open chat tabs — move them onto the project. Arrivals
+      // (unarchive, a failed archive's revert) are deliberately not the mirror
+      // of this: `openChatTab`'s single-owner invariant already handles a
+      // ticket's return, and pulling tabs back here would race it.
+      const nextIds = new Set(next.map((ticket) => ticket.id));
+      const openTabs = useChatSessionsStore.getState().openTabs;
+      const departed = slice
+        .map((ticket) => ticket.id)
+        .filter((id) => !nextIds.has(id) && id in openTabs);
+      if (departed.length > 0) {
+        useChatSessionsStore.getState().rehomeChatTabs(departed, projectId);
+      }
     }
 
     /**
@@ -747,6 +764,18 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         const hasFilter = projectId in filterByProject;
         const hasSelection = projectId in selectedByProject;
         if (!hasTickets && !hasLabels && !hasArchived && !hasFilter && !hasSelection) return;
+
+        // The project itself, plus every live ticket that still owns a chat-tab
+        // entry directly (an archived ticket's tabs already moved to the
+        // project's key via `reconcileSlice`, so only live ids can still be
+        // holding one of their own) — there is no surface left to host any of
+        // them once the project is gone.
+        const openTabs = useChatSessionsStore.getState().openTabs;
+        const orphaned = [
+          projectId,
+          ...(ticketsByProject[projectId]?.map((t) => t.id) ?? []),
+        ].filter((id) => id in openTabs);
+        if (orphaned.length > 0) useChatSessionsStore.getState().dropChatTabs(orphaned);
 
         const nextTickets = { ...ticketsByProject };
         delete nextTickets[projectId];

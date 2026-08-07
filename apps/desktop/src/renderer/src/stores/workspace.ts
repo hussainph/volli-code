@@ -150,6 +150,15 @@ export interface WorkspaceUiState {
    * `unknown` on purpose so this store stays editor-agnostic.
    */
   projectFileViewStates: Record<string, unknown>;
+  /**
+   * Which tab is in front on the project's Sessions scratch surface (Session
+   * 5 phase 1 — no host renders it yet). Holds a terminal session id or a
+   * `chat:<sessionId>` id, the same mixed id space `ticketTabs[].active`
+   * uses. Session-only: what it points at (chat-sessions.ts's `openTabs`)
+   * isn't persisted either, so there's nothing durable for this to survive
+   * relaunch alongside.
+   */
+  sessionsActiveTab: string | null;
 }
 
 export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
@@ -162,6 +171,7 @@ export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
   ticketDiffViewStates: {},
   projectFiles: EMPTY_FILE_WORKSPACE,
   projectFileViewStates: {},
+  sessionsActiveTab: null,
 };
 
 /** The active-tab id of the always-present Ticket Body tab — the fallback when a
@@ -259,6 +269,9 @@ interface WorkspaceState {
   setDirExpanded(projectId: string, dirPath: string, expanded: boolean): void;
   setBoardView(projectId: string, view: BoardView): void;
   setBoardSort(projectId: string, sort: TicketSort): void;
+  /** Sets which tab is in front on the project's Sessions surface (Session 5
+   * phase 1 — no host renders it yet); `null` clears the selection. */
+  setSessionsActiveTab(projectId: string, tabId: string | null): void;
   /**
    * Opens `ticketId`'s full-page detail view for `projectId` (rendered in
    * place of the board — see components/ticket/ticket-detail.tsx) and selects
@@ -696,6 +709,14 @@ export function createWorkspaceStore(storage?: StateStorage) {
 
         setBoardSort(projectId, sort) {
           set((state) => patchWorkspace(state, projectId, { boardSort: sort }));
+        },
+
+        setSessionsActiveTab(projectId, tabId) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            if (current.sessionsActiveTab === tabId) return state;
+            return patchWorkspace(state, projectId, { sessionsActiveTab: tabId });
+          });
         },
 
         openTicket(projectId, ticketId) {

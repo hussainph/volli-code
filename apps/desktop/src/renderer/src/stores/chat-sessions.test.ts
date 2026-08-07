@@ -495,6 +495,36 @@ describe("open chat tabs", () => {
     expect(store.getState().openTabs).toEqual({ t1: ["durable-1"], t2: ["durable-2"] });
   });
 
+  /** The single-owner invariant: a session's tab lives under exactly one
+   * owner, so opening it under a new one forgets the old. */
+  it("moves the tab to a new owner, stripping it from the old one", () => {
+    const { store } = fixture();
+    store.getState().openChatTab("t1", "durable-1");
+
+    store.getState().openChatTab("p1", "durable-1");
+
+    expect(store.getState().openTabs).toEqual({ p1: ["durable-1"] });
+  });
+
+  it("keeps the old owner's other tabs when only one of them moves", () => {
+    const { store } = fixture();
+    store.getState().openChatTab("t1", "durable-1");
+    store.getState().openChatTab("t1", "durable-2");
+
+    store.getState().openChatTab("p1", "durable-1");
+
+    expect(store.getState().openTabs).toEqual({ t1: ["durable-2"], p1: ["durable-1"] });
+  });
+
+  it("repairs a broken invariant by dropping a duplicate elsewhere, even when the owner already has it", () => {
+    const { store } = fixture();
+    store.setState({ openTabs: { t1: ["durable-1"], p1: ["durable-1"] } });
+
+    store.getState().openChatTab("p1", "durable-1");
+
+    expect(store.getState().openTabs).toEqual({ p1: ["durable-1"] });
+  });
+
   /** Closing the view retires the client; the Session itself is untouched. */
   it("drops the resident Session with the tab that held it", () => {
     const { store } = fixture();
@@ -540,5 +570,65 @@ describe("open chat tabs", () => {
 
     expect(store.getState().sessions["durable-1"]).toBeDefined();
     expect(getChatClient("durable-1")).toBeDefined();
+  });
+});
+
+describe("rehomeChatTabs", () => {
+  it("moves every from-owner's tabs onto the destination, in order, deleting the emptied keys", () => {
+    const { store } = fixture();
+    store.setState({ openTabs: { t1: ["durable-1", "durable-2"], t2: ["durable-3"] } });
+
+    store.getState().rehomeChatTabs(["t1", "t2"], "p1");
+
+    expect(store.getState().openTabs).toEqual({ p1: ["durable-1", "durable-2", "durable-3"] });
+  });
+
+  it("skips a session id the destination already has", () => {
+    const { store } = fixture();
+    store.setState({ openTabs: { t1: ["durable-1"], p1: ["durable-1", "durable-9"] } });
+
+    store.getState().rehomeChatTabs(["t1"], "p1");
+
+    expect(store.getState().openTabs).toEqual({ p1: ["durable-1", "durable-9"] });
+  });
+
+  it("ignores a from-owner with no entry among others that do", () => {
+    const { store } = fixture();
+    store.setState({ openTabs: { t1: ["durable-1"] } });
+
+    store.getState().rehomeChatTabs(["t1", "t9"], "p1");
+
+    expect(store.getState().openTabs).toEqual({ p1: ["durable-1"] });
+  });
+
+  it("is a no-op (unchanged identity) when none of the from-owners have any tabs", () => {
+    const { store } = fixture();
+    store.setState({ openTabs: { p1: ["durable-1"] } });
+    const before = store.getState().openTabs;
+
+    store.getState().rehomeChatTabs(["t1", "t2"], "p1");
+
+    expect(store.getState().openTabs).toBe(before);
+  });
+});
+
+describe("dropChatTabs", () => {
+  it("deletes every named owner's entry", () => {
+    const { store } = fixture();
+    store.setState({ openTabs: { p1: ["durable-1"], t1: ["durable-2"], t2: ["durable-3"] } });
+
+    store.getState().dropChatTabs(["p1", "t1"]);
+
+    expect(store.getState().openTabs).toEqual({ t2: ["durable-3"] });
+  });
+
+  it("is a no-op (unchanged identity) when none of the ids have an entry", () => {
+    const { store } = fixture();
+    store.setState({ openTabs: { t2: ["durable-3"] } });
+    const before = store.getState().openTabs;
+
+    store.getState().dropChatTabs(["p1", "t1"]);
+
+    expect(store.getState().openTabs).toBe(before);
   });
 });

@@ -80,7 +80,14 @@ export interface ChatSessionsState extends ChatSessionWrites {
   setStarting(ownerId: string, starting: boolean): void;
 
   /**
-   * Which chat Sessions have a tab open, per ticket.
+   * Which chat Sessions have a tab open, per surface owner — a ticketId
+   * while its ticket is on the board, the projectId otherwise (a ticketless
+   * chat, or one whose ticket left the board), the same owner-id convention
+   * `starting` above uses. A Session's tab lives under exactly one owner at a
+   * time: `openChatTab` enforces that by stripping the id from every other
+   * key before recording it under the new one, and `rehomeChatTabs` moves a
+   * whole owner's tabs onto another key (board.ts, when a ticket leaves the
+   * board) without ever violating it.
    *
    * Resident for the reason the client is: a chat view mounts and unmounts
    * freely, and the tabs a person left open are not a fact about whether the
@@ -89,14 +96,34 @@ export interface ChatSessionsState extends ChatSessionWrites {
    * is the only thing that has to survive a restart.
    */
   openTabs: Readonly<Record<string, readonly string[]>>;
-  /** Records a tab for `sessionId`, appending at the end of the ticket's strip. */
-  openChatTab(ticketId: string, sessionId: string): void;
+  /**
+   * Records a tab for `sessionId` under `ownerId`, appending at the end of its
+   * strip. First strips the id from every OTHER owner's strip (deleting a
+   * strip that empties) — the single-owner invariant `openTabs` documents.
+   */
+  openChatTab(ownerId: string, sessionId: string): void;
   /**
    * Drops the tab and retires the Session's resident state with it. Closing a
    * chat view loses nothing — the Session is durable, and reopening it adopts
    * the same history.
    */
   closeChatTab(ticketId: string, sessionId: string): void;
+  /**
+   * Moves every tab under each of `fromOwnerIds` onto `toOwnerId` — preserving
+   * order, skipping a session id `toOwnerId` already has — and deletes each
+   * from-key once emptied. The board's escape hatch for a ticket leaving the
+   * board (archived, or deleted): the ticket id no longer names a live
+   * surface, so its open chat tabs move to the project instead of vanishing.
+   * Tab bookkeeping only — no client is attached, retired, or disposed.
+   */
+  rehomeChatTabs(fromOwnerIds: readonly string[], toOwnerId: string): void;
+  /**
+   * Deletes each of `ownerIds`' tab entries outright. Used when a project
+   * itself is forgotten — there is no surface left, not even the project, for
+   * `rehomeChatTabs` to have moved those tabs onto. Tab bookkeeping only, same
+   * as `rehomeChatTabs`.
+   */
+  dropChatTabs(ownerIds: readonly string[]): void;
 }
 
 /** Factory so tests get isolated instances (sessions.ts's convention). */
@@ -270,11 +297,27 @@ export function createChatSessionsStore(
         });
       },
 
-      openChatTab(ticketId, sessionId) {
+      openChatTab(ownerId, sessionId) {
         set((state) => {
-          const tabs = state.openTabs[ticketId] ?? [];
-          if (tabs.includes(sessionId)) return state;
-          return { openTabs: { ...state.openTabs, [ticketId]: [...tabs, sessionId] } };
+          let strippedElsewhere = false;
+          const openTabs: Record<string, readonly string[]> = {};
+          for (const [key, tabs] of Object.entries(state.openTabs)) {
+            if (key === ownerId || !tabs.includes(sessionId)) {
+              openTabs[key] = tabs;
+              continue;
+            }
+            // The single-owner invariant `openTabs` documents: forget the tab
+            // everywhere else before it lives here.
+            strippedElsewhere = true;
+            const remaining = tabs.filter((candidate) => candidate !== sessionId);
+            if (remaining.length > 0) openTabs[key] = remaining;
+          }
+          const ownerTabs = openTabs[ownerId] ?? [];
+          if (ownerTabs.includes(sessionId)) {
+            return strippedElsewhere ? { openTabs } : state;
+          }
+          openTabs[ownerId] = [...ownerTabs, sessionId];
+          return { openTabs };
         });
       },
 
@@ -294,6 +337,39 @@ export function createChatSessionsStore(
           const openTabs = { ...state.openTabs };
           delete openTabs[ticketId];
           return { openTabs };
+        });
+      },
+
+      rehomeChatTabs(fromOwnerIds, toOwnerId) {
+        set((state) => {
+          let changed = false;
+          const openTabs = { ...state.openTabs };
+          const toTabs = [...(openTabs[toOwnerId] ?? [])];
+          for (const fromOwnerId of fromOwnerIds) {
+            const fromTabs = openTabs[fromOwnerId];
+            if (fromTabs === undefined) continue;
+            changed = true;
+            for (const sessionId of fromTabs) {
+              if (!toTabs.includes(sessionId)) toTabs.push(sessionId);
+            }
+            delete openTabs[fromOwnerId];
+          }
+          if (!changed) return state;
+          openTabs[toOwnerId] = toTabs;
+          return { openTabs };
+        });
+      },
+
+      dropChatTabs(ownerIds) {
+        set((state) => {
+          let changed = false;
+          const openTabs = { ...state.openTabs };
+          for (const ownerId of ownerIds) {
+            if (!(ownerId in openTabs)) continue;
+            delete openTabs[ownerId];
+            changed = true;
+          }
+          return changed ? { openTabs } : state;
         });
       },
     };
