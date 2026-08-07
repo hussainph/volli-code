@@ -1506,6 +1506,47 @@ describe("chat tab re-homing", () => {
 
     expect(useChatSessionsStore.getState().openTabs).toBe(before);
   });
+
+  // The removal path no local mutation reconciles: `refreshPlanningData`
+  // (lib/boot.ts) re-hydrates wholesale after a `volli:data-changed` broadcast,
+  // so a `volli ticket archive`, a retention sweep, or another window's archive
+  // drops the ticket here with no `reconcileSlice` call to hang the re-home off.
+  it("re-homes a ticket an authoritative re-hydrate no longer names", () => {
+    resetChatTabs();
+    const a = ticket({ id: "a", status: "doing" });
+    const b = ticket({ id: "b", status: "doing", order: 1 });
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [a, b] }, {});
+    useChatSessionsStore.setState({ openTabs: { a: ["c1"], b: ["c2"] } });
+
+    store.getState().hydrate({ p1: [b] }, {});
+
+    expect(useChatSessionsStore.getState().openTabs).toEqual({ b: ["c2"], p1: ["c1"] });
+  });
+
+  it("drops the chat tabs of a project an authoritative re-hydrate no longer names at all", () => {
+    resetChatTabs();
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })], p2: [] }, {});
+    useChatSessionsStore.setState({ openTabs: { p1: ["c1"], a: ["c2"], p2: ["c3"] } });
+
+    store.getState().hydrate({ p2: [] }, {});
+
+    expect(useChatSessionsStore.getState().openTabs).toEqual({ p2: ["c3"] });
+  });
+
+  it("leaves the chat store untouched when a re-hydrate drops no ticket", () => {
+    resetChatTabs();
+    const a = ticket({ id: "a", status: "doing" });
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [a] }, {});
+    useChatSessionsStore.setState({ openTabs: { a: ["c1"] } });
+    const before = useChatSessionsStore.getState().openTabs;
+
+    store.getState().hydrate({ p1: [{ ...a, status: "done" }] }, {});
+
+    expect(useChatSessionsStore.getState().openTabs).toBe(before);
+  });
 });
 
 describe("archive lifecycle on a project with no loaded state", () => {
