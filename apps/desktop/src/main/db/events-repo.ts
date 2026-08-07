@@ -5,12 +5,14 @@
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import type {
-  TicketEvent,
-  TicketEventActor,
-  TicketEventActorContext,
-  TicketEventActorKind,
-  TicketEventPayload,
+import {
+  isTicketStatus,
+  type TicketEvent,
+  type TicketEventActor,
+  type TicketEventActorContext,
+  type TicketEventActorKind,
+  type TicketEventPayload,
+  type TicketStatusEntry,
 } from "@volli/shared";
 import { prepared } from "./prepared";
 
@@ -131,4 +133,61 @@ export function listTicketEvents(db: Database.Database, ticketId: string): Ticke
     "SELECT * FROM ticket_events WHERE ticket_id = ? ORDER BY created_at ASC, rowid ASC",
   ).all(ticketId);
   return rows.map(mapTicketEvent);
+}
+
+interface TicketStatusEntryRow {
+  ticket_id: string;
+  status: string;
+  entered_at: number;
+}
+
+/**
+ * When each of a project's non-archived tickets entered its CURRENT status —
+ * one batched read backing the sidebar (`volli:ticket-status-entries`).
+ * `enteredAt` is the `created_at` of the ticket's newest `status_changed`
+ * event (a same-column reorder writes no event, so this is stable across
+ * reorders), falling back to the ticket's own `created_at` when it has never
+ * changed status (born into its current column). One query — the per-ticket
+ * "latest status_changed" lookup is a windowed rank inside the SQL, not a
+ * per-ticket round trip from JS.
+ */
+export function listTicketStatusEntries(
+  db: Database.Database,
+  projectId: string,
+): TicketStatusEntry[] {
+  const rows = prepared<[string], TicketStatusEntryRow>(
+    db,
+    `WITH project_tickets AS (
+       SELECT id, status, created_at FROM tickets
+        WHERE project_id = ? AND archived_at IS NULL
+     ), latest_status_change AS (
+       SELECT e.ticket_id AS ticket_id,
+              e.created_at AS created_at,
+              ROW_NUMBER() OVER (
+                PARTITION BY e.ticket_id ORDER BY e.created_at DESC, e.rowid DESC
+              ) AS rn
+         FROM ticket_events e
+         JOIN project_tickets pt ON pt.id = e.ticket_id
+        WHERE e.kind = 'status_changed'
+     )
+     SELECT pt.id AS ticket_id,
+            pt.status AS status,
+            COALESCE(ls.created_at, pt.created_at) AS entered_at
+       FROM project_tickets pt
+       LEFT JOIN latest_status_change ls ON ls.ticket_id = pt.id AND ls.rn = 1
+      ORDER BY pt.id COLLATE BINARY ASC`,
+  ).all(projectId);
+  const entries: TicketStatusEntry[] = [];
+  for (const row of rows) {
+    if (!isTicketStatus(row.status)) {
+      console.warn(`[volli] dropping ticket ${row.ticket_id} with unknown status "${row.status}"`);
+      continue;
+    }
+    entries.push({
+      ticketId: row.ticket_id,
+      status: row.status,
+      enteredAt: row.entered_at,
+    });
+  }
+  return entries;
 }

@@ -294,6 +294,37 @@ export function isSessionAttentionKind(value: unknown): value is SessionAttentio
   );
 }
 
+/**
+ * The Attention kinds that mean the agent is blocked on a *person*, not on the
+ * world. A rate limit or a dead transport is also a stop, but nobody is being
+ * asked anything; only these three are cleared by the user doing something.
+ */
+export const SESSION_USER_BLOCKING_ATTENTION_KINDS = [
+  "input_required",
+  "permission_required",
+  "auth_required",
+] as const satisfies readonly SessionAttentionKind[];
+
+/**
+ * Whether this Session is currently waiting on its user: an Interaction it has
+ * opened and not had answered, or an active Attention only a human can clear.
+ *
+ * Written once and exported because "waiting" is about to be read by more than
+ * one surface — the chat listing row and the sidebar's Active band — and two
+ * hand-copies of this rule is how one of them comes to show a question the
+ * other has already stopped believing in.
+ */
+export function sessionAwaitsUser(
+  projection: Pick<SessionProjection, "interactions" | "attention">,
+): boolean {
+  if (projection.interactions.active.length > 0) return true;
+  return projection.attention.active.some((attention) =>
+    (SESSION_USER_BLOCKING_ATTENTION_KINDS as readonly SessionAttentionKind[]).includes(
+      attention.kind,
+    ),
+  );
+}
+
 interface SessionAttentionBase {
   id: string;
   attachmentId: string | null;
@@ -723,6 +754,20 @@ export interface SessionProjection {
   interactions: SessionInteractionProjection;
   /** Latest explicit generic outcome signal, independent of planner history. */
   signal: { signal: "done" | "blocked"; reason: string | null; occurredAt: number } | null;
+  /** Whether a turn is open right now — the durable half of "the agent is working". */
+  turnActive: boolean;
+  /** Epoch milliseconds of the newest thing that happened here; seeded from the Session's creation. */
+  lastActivityAt: number;
+  /**
+   * Whether this Session was ticketless AT BIRTH — from the immutable
+   * `session.created` event's own `ticketId`, not the live `session.ticketId`
+   * a later fact can change. `sessions.ticket_id` is `ON DELETE SET NULL`
+   * (deleting a ticket orphans its sessions into `session.ticketId === null`
+   * ones), so `session.ticketId === null && !bornTicketless` is exactly an
+   * orphan: a scratch session and an orphaned one both read `ticketId: null`
+   * today, but only the scratch one was ever meant to.
+   */
+  bornTicketless: boolean;
 }
 
 /**
@@ -745,12 +790,34 @@ export function projectSession(
   let status: SessionProjection["status"] = "open";
   let title = session.title;
   let signal: SessionProjection["signal"] = null;
+  let turnActive = false;
+  let lastActivityAt = session.createdAt;
+  // Seeded from the live session row so a fold given no `session.created`
+  // event (a degenerate/partial event list) still has an honest answer;
+  // every real Session's `session.created` immediately overrides it with the
+  // immutable birth fact below.
+  let bornTicketless = session.ticketId === null;
 
   const ordered = [...events]
     .filter((event) => event.sessionId === session.id)
     .toSorted((left, right) => left.sequence - right.sequence);
 
   for (const event of ordered) {
+    // Recency is about the agent's work, so pure Volli bookkeeping does not
+    // move it: `command.recorded` / `command.receipt.recorded` fire for a
+    // retitle, and `session.retitled` is the rename fact itself. Floating a
+    // Session to the top of a recency-sorted list because someone renamed it
+    // is a lie about what is happening in it. Nothing is lost by skipping
+    // them — a `message.submit` command is followed immediately by the
+    // `turn.started` it caused, which does count.
+    if (
+      event.payload.kind !== "command.recorded" &&
+      event.payload.kind !== "command.receipt.recorded" &&
+      event.payload.kind !== "session.retitled"
+    ) {
+      lastActivityAt = event.occurredAt;
+    }
+
     switch (event.payload.kind) {
       case "command.recorded":
         commands.push(event.payload.command);
@@ -801,6 +868,7 @@ export function projectSession(
           outcome: "failed",
           failure: event.payload.failure,
         });
+        turnActive = false;
         if (event.commandId) pendingExecutorStarts.delete(event.commandId);
         break;
       }
@@ -814,6 +882,7 @@ export function projectSession(
             outcome: event.payload.outcome,
           });
         }
+        turnActive = false;
         break;
       }
       case "attention.raised":
@@ -861,18 +930,36 @@ export function projectSession(
           pendingExecutorStarts.delete(event.payload.receipt.commandId);
         }
         break;
-      // Facts this projection deliberately holds no state for. They are listed
-      // rather than swept up by a `default`, so that adding a payload kind is a
-      // compile error here and someone has to decide whether Session state
-      // moves. `session.created` is the Session row itself, already the seed of
-      // this fold; runs, turns and transcript references are the transcript's
-      // shape, read from the event stream directly; `adapter.observed` is
-      // adapter evidence that no projected field is derived from.
+      // A turn is the durable half of "the agent is working", and a listing has
+      // to answer that without replaying a whole transcript — so unlike runs and
+      // transcript references, turns are folded here rather than read from the
+      // stream. The end of an attachment ends the turn too (see the attachment
+      // cases above): a crashed or interrupted executor leaves a `turn.started`
+      // with no `turn.completed` behind it, and without that a Session would
+      // latch "working" durably, forever, on the strength of a turn nobody is
+      // running any more.
+      case "turn.started":
+        turnActive = true;
+        break;
+      case "turn.completed":
+        turnActive = false;
+        break;
+      // `session.created` carries the Session row as it was at birth — the
+      // one immutable read of `ticketId` a later ticket deletion (`ON DELETE
+      // SET NULL`) cannot touch, because it lives in this event's JSON
+      // payload, not the `sessions` row's live column.
       case "session.created":
+        bornTicketless = event.payload.session.ticketId === null;
+        break;
+      // Facts this projection deliberately holds no further state for. They
+      // are listed rather than swept up by a `default`, so that adding a
+      // payload kind is a compile error here and someone has to decide
+      // whether Session state moves. Runs and transcript references are the
+      // transcript's shape, read from the event stream directly;
+      // `adapter.observed` is adapter evidence that no projected field is
+      // derived from.
       case "run.started":
       case "run.completed":
-      case "turn.started":
-      case "turn.completed":
       case "transcript.referenced":
       case "adapter.observed":
         break;
@@ -904,6 +991,9 @@ export function projectSession(
     capabilities: [...capabilities.values()],
     interactions: { active: [...interactions.values()], resolved: resolvedInteractions },
     signal,
+    turnActive,
+    lastActivityAt,
+    bornTicketless,
   };
 }
 

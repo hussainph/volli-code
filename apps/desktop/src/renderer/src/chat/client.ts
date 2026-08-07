@@ -27,6 +27,7 @@ import type {
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 
+import { autoTitleFromMessage, isDefaultChatTitle, renameChatSession } from "@renderer/chat/rename";
 import { nextRelease, type QueuedMessage } from "@renderer/chat/session-model";
 import {
   movesProjection,
@@ -483,6 +484,11 @@ export class ChatSessionClient {
         return false;
       }
       this.#writes().delivered(this.sessionId);
+      // The first accepted message — direct or released off the queue, this is
+      // the one choke point both go through — is the moment a Session gains a
+      // subject. Fire-and-forget: a failed rename costs a toast (renameChatSession
+      // already surfaces one), never the message that just landed.
+      this.#autoTitle(body);
       return true;
     } catch (failure) {
       this.#writes().settle(this.sessionId, `Message not delivered: ${errorMessage(failure)}`);
@@ -737,6 +743,20 @@ export class ChatSessionClient {
       this.#writes().settle(this.sessionId, `${label}: ${errorMessage(failure)}`);
       return false;
     }
+  }
+
+  /**
+   * Retitles this Session from a just-delivered message, if nothing has named
+   * it yet. A null projection has no title to read and skips; a title a
+   * person (or an earlier delivery) already gave it is left alone — the
+   * default predicate is the only guard this needs.
+   */
+  #autoTitle(body: string): void {
+    const title = this.#slice()?.projection?.session.title ?? null;
+    if (title === null || !isDefaultChatTitle(title)) return;
+    // `body` is `submit`'s own trimmed, non-empty text — at least one visible
+    // line survives it, so `autoTitleFromMessage` can never read null here.
+    void renameChatSession(this.sessionId, autoTitleFromMessage(body)!);
   }
 
   #writes(): ChatSessionWrites {

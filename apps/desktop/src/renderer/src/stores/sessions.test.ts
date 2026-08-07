@@ -1158,6 +1158,8 @@ const RECORD: SessionListingRow = {
     createdAt: 0,
     endedAt: null,
     exitCode: null,
+    lastActivityAt: 0,
+    bornTicketless: false,
   },
 };
 

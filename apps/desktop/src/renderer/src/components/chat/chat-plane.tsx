@@ -9,8 +9,10 @@
  * queue and the lifecycle belong to the resident client (`chat/client.ts`) and
  * the store beside it, both of which outlive every mount — so a chat left for
  * the board keeps folding and releases its queued message whether or not this is
- * on screen. What is local is what should be: the draft text, the measured
- * composer height, and which cards have a decision in flight.
+ * on screen. Nor does the half-typed message: it is part of the Session too, so
+ * it lives in `stores/chat-drafts.ts` and survives both a tab switch and a
+ * relaunch. What is local is what should be: the measured composer height, and
+ * which cards have a decision in flight.
  */
 import * as React from "react";
 import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
@@ -84,6 +86,7 @@ import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Button } from "@renderer/components/ui/button";
 import { useRuntimeCatalogClient } from "@renderer/lib/runtime-catalog-client";
 import { cn } from "@renderer/lib/utils";
+import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useUiStore } from "@renderer/stores/ui";
 
 /**
@@ -103,19 +106,30 @@ const EMPTY_RESOLVING: ReadonlySet<string> = new Set();
 
 export interface ChatPlaneProps {
   sessionId: string;
+  /** Which project's runtime preferences this chat resolves against (see `useRuntimeCatalog`). */
+  projectId: string;
   onOpenFile(path: string): void;
   /** The UI lab's own store, which owns its own transport. Omitted in the app. */
   store?: ChatSessionsStore;
 }
 
-export function ChatPlane({ sessionId, onOpenFile, store }: ChatPlaneProps) {
+export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlaneProps) {
   const controller = useSessionController(sessionId, store);
   const { enqueue, dequeue, cancelInteraction, interrupt, recover, resolveInteraction, submit } =
     controller;
   const setSelection = controller.setSelection;
   const slice = controller.session;
 
-  const [input, setInput] = React.useState("");
+  // The half-typed message is part of the Session, not this view: it has to
+  // survive both a tab switch (this component unmounts) and a relaunch, so it
+  // lives in the chat-drafts store rather than local state (see stores/chat-drafts.ts).
+  const input = useChatDraftsStore((state) => state.drafts[sessionId]?.text ?? "");
+  const setDraft = useChatDraftsStore((state) => state.setDraft);
+  const clearSentDraft = useChatDraftsStore((state) => state.clearSentDraft);
+  const onInputChange = React.useCallback(
+    (text: string) => setDraft(sessionId, text),
+    [sessionId, setDraft],
+  );
   // Per interaction, not per surface: a harness can have several cards open at
   // once, and one boolean disables every other card's controls while one of
   // them is in flight.
@@ -136,6 +150,7 @@ export function ChatPlane({ sessionId, onOpenFile, store }: ChatPlaneProps) {
   const composable = selection.modelId.length > 0;
 
   const { catalog, catalogState, catalogError } = useRuntimeCatalog(
+    projectId,
     liveExecutorId,
     selection,
     setSelection,
@@ -180,11 +195,16 @@ export function ChatPlane({ sessionId, onOpenFile, store }: ChatPlaneProps) {
 
   const send = React.useCallback(
     (text: string, intent: ComposerIntent) => {
+      // Capture the draft revision at submit. Text alone is not enough: if the
+      // user clears and retypes the same words while delivery is in flight,
+      // that is a new draft with a new monotonic token and must survive — even
+      // if both edits land inside the same `Date.now()` millisecond.
+      const revision = useChatDraftsStore.getState().draftRevisions[sessionId];
       void deliver(text, intent).then((kept) => {
-        if (kept) setInput("");
+        if (kept && revision !== undefined) clearSentDraft(sessionId, text, revision);
       });
     },
-    [deliver],
+    [clearSentDraft, deliver, sessionId],
   );
 
   // The composer only ever takes messages OUT of the queue — editing one puts
@@ -380,7 +400,7 @@ export function ChatPlane({ sessionId, onOpenFile, store }: ChatPlaneProps) {
               ) : null}
               <SessionComposer
                 value={input}
-                onValueChange={setInput}
+                onValueChange={onInputChange}
                 textareaRef={textareaRef}
                 models={catalog.models}
                 agents={catalog.agents}
@@ -415,8 +435,15 @@ export function ChatPlane({ sessionId, onOpenFile, store }: ChatPlaneProps) {
  * The selection lives in the Session's slice, not here: it is a choice about
  * this Session and it has to outlive the view. The current one is read through
  * a ref so re-resolving does not depend on the value it is about to write.
+ *
+ * `projectId` arrives as a prop from `ChatPlane`, not read off
+ * `slice.projection.session.projectId`: the projection is null until the
+ * first snapshot lands, so the first resolve would fire globally before it —
+ * briefly offering models the project disabled, a wrong-model send window,
+ * not a flicker.
  */
 function useRuntimeCatalog(
+  projectId: string,
   liveExecutorId: string | null,
   selection: RuntimeSelection,
   setSelection: (next: RuntimeSelection) => void,
@@ -434,7 +461,7 @@ function useRuntimeCatalog(
   React.useEffect(() => {
     if (resolve === undefined) return;
     let active = true;
-    void resolve({ adapterId: CATALOG_ADAPTER_ID })
+    void resolve({ adapterId: CATALOG_ADAPTER_ID, projectId })
       .then((resolved) => {
         if (!active) return;
         setCatalog(resolved.catalog);
@@ -457,7 +484,7 @@ function useRuntimeCatalog(
     return () => {
       active = false;
     };
-  }, [liveExecutorId, preferenceRevision, resolve, setSelection]);
+  }, [liveExecutorId, preferenceRevision, projectId, resolve, setSelection]);
 
   return { catalog, catalogState, catalogError };
 }

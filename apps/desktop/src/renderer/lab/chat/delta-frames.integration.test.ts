@@ -202,6 +202,64 @@ const IDLE: OpenCodeSseEvent = {
 };
 
 // ---------------------------------------------------------------------------
+// A second scripted turn, in the shape the real server states it: `session.status`
+// busy first, then the turn's own assistant message, then its own `session.idle`.
+// The events above skip the busy and share one message id, which is the recovery
+// path — it says nothing about the path the product actually runs on.
+// ---------------------------------------------------------------------------
+
+const turnMessageId = (turn: number) => `${MESSAGE_ID}-${turn}`;
+
+function busy(turn: number): OpenCodeSseEvent {
+  return {
+    id: `busy-${turn}`,
+    type: "session.status",
+    properties: { sessionID: NATIVE_SESSION_ID, status: { type: "busy" } },
+  };
+}
+
+function idle(turn: number): OpenCodeSseEvent {
+  return {
+    id: `idle-${turn}`,
+    type: "session.idle",
+    properties: { sessionID: NATIVE_SESSION_ID },
+  };
+}
+
+function openTurnAssistant(turn: number): OpenCodeSseEvent {
+  return {
+    id: `assistant-open-${turn}`,
+    type: "message.updated",
+    properties: {
+      info: { id: turnMessageId(turn), sessionID: NATIVE_SESSION_ID, role: "assistant" },
+    },
+  };
+}
+
+function turnDelta(turn: number, index: number): OpenCodeSseEvent {
+  return {
+    id: `turn-${turn}-delta-${index}`,
+    type: "message.part.delta",
+    properties: {
+      sessionID: NATIVE_SESSION_ID,
+      messageID: turnMessageId(turn),
+      partID: `${TEXT_PART}-${turn}`,
+      field: "text",
+      delta: `${turn === 1 ? "First" : "Second"} ${CHUNKS[index]}`,
+    },
+  };
+}
+
+/** One whole turn, batched the way the server paces it: open, write, settle. */
+function scriptedTurn(turn: number): ReadonlyArray<readonly OpenCodeSseEvent[]> {
+  return [
+    [busy(turn), openTurnAssistant(turn), turnDelta(turn, 0)],
+    [turnDelta(turn, 1)],
+    [idle(turn)],
+  ];
+}
+
+// ---------------------------------------------------------------------------
 // Composition: the real runtime hosting the real adapter.
 // ---------------------------------------------------------------------------
 
@@ -210,7 +268,11 @@ async function labLocation() {
 }
 
 /** A host with nothing to materialize: preparing a location is resolving it. */
-const LAB_LOCATION = { resolve: labLocation, prepare: labLocation };
+const LAB_LOCATION = {
+  resolve: labLocation,
+  prepare: labLocation,
+  reaffirm: async () => undefined,
+};
 
 function composition(network: ScriptedNetwork): SessionRuntime {
   let now = 1000;
@@ -493,5 +555,44 @@ describe("delta frames, adapter to renderer", () => {
     await resumed.open(runtime, sessionId, 0);
     expect(resumed.flush().lines()).toEqual(["assistant: Reading the runtime "]);
     resumed.close();
+  });
+
+  /**
+   * Two turns in the busy/idle shape the real server states them in, because a
+   * Session that cannot put its Stop button down is only visible across the
+   * boundary between one turn and the next: a settle the fold never applied
+   * looks identical to a turn still running, and one turn cannot tell them
+   * apart.
+   */
+  it("opens and settles each turn the server announces", async () => {
+    const network = new ScriptedNetwork();
+    network.batches = [...scriptedTurn(1), ...scriptedTurn(2)];
+    const runtime = composition(network);
+    const sessionId = await startSession(runtime);
+    const reader = new Reader();
+    await reader.open(runtime, sessionId, 0);
+
+    const active: boolean[] = [];
+    for (const index of [0, 1, 2, 3, 4, 5]) {
+      network.interludes.set(index, async () => {
+        active.push(reader.flush().state.turnActive);
+      });
+    }
+    await wait(TICK_MS * 10);
+    reader.flush();
+
+    // Busy opens a turn, the turn's own idle closes it, and the second turn is
+    // read as a turn of its own rather than a restatement of the first.
+    expect(active).toEqual([true, true, false, true, true, false]);
+    expect(reader.state.turnActive).toBe(false);
+
+    // And both replies were written down, not just the one that happened to be
+    // in flight when the Session stopped moving.
+    expect(reader.state.durableMessages).toHaveLength(2);
+    expect(reader.lines()).toEqual([
+      "assistant: First Reading First the runtime ",
+      "assistant: Second Reading Second the runtime ",
+    ]);
+    reader.close();
   });
 });

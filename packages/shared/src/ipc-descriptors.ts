@@ -250,6 +250,11 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       args.length === 1 && isProjectIdInput(args[0]),
     invalidError: "Invalid project",
   },
+  "volli:ticket-status-entries": {
+    guard: (args): args is IpcArgs<"volli:ticket-status-entries"> =>
+      args.length === 1 && isProjectIdInput(args[0]),
+    invalidError: "Invalid project",
+  },
 
   "volli:comment-list": {
     guard: (args): args is IpcArgs<"volli:comment-list"> =>

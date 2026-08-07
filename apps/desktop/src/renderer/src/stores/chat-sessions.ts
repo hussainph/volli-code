@@ -58,6 +58,26 @@ export interface ChatSessionsState extends ChatSessionWrites {
   closeChatSession(sessionId: string): void;
   setSelection(sessionId: string, selection: RuntimeSelection): void;
   enqueue(sessionId: string, message: QueuedMessage): void;
+  /**
+   * Retitles a Session on this surface ahead of its stream.
+   *
+   * Optimistic, and only that: the title lives on the durable record, so what
+   * this writes is overwritten by the next projection the Session commits. It
+   * exists so a rename reads instantly rather than at stream latency, exactly
+   * as the terminal store's `renameSession` does for a tab. A Session
+   * this surface no longer holds is a no-op, and so is one whose projection has
+   * not arrived — there is no title to correct yet, and inventing a projection
+   * around one would put a Session on screen that nothing has described.
+   */
+  retitle(sessionId: string, title: string): void;
+
+  /**
+   * Owner ids with a chat create in flight — a ticketId for a ticket chat, a
+   * projectId for a ticketless one. Its own flag rather than the PTY store's,
+   * which is a fact about a pane coming up (see `session-create.ts`).
+   */
+  starting: Readonly<Record<string, boolean>>;
+  setStarting(ownerId: string, starting: boolean): void;
 
   /**
    * Which chat Sessions have a tab open, per ticket.
@@ -110,6 +130,7 @@ export function createChatSessionsStore(
     return {
       sessions: {},
       openTabs: {},
+      starting: {},
 
       async createChatSession(input) {
         const edge = transport();
@@ -219,6 +240,33 @@ export function createChatSessionsStore(
         update(sessionId, (slice) => {
           const queue = removeQueued(slice.queue, id);
           return queue.length === slice.queue.length ? slice : { ...slice, queue };
+        });
+      },
+
+      retitle(sessionId, title) {
+        update(sessionId, (slice) =>
+          slice.projection === null
+            ? slice
+            : {
+                ...slice,
+                projection: {
+                  ...slice.projection,
+                  session: { ...slice.projection.session, title },
+                },
+              },
+        );
+      },
+
+      setStarting(ownerId, starting) {
+        set((state) => {
+          if ((state.starting[ownerId] ?? false) === starting) return state;
+          const next = { ...state.starting };
+          // Cleared by deletion rather than by a `false`, so the map holds only
+          // what is actually in flight and never grows a row per owner ever
+          // visited.
+          if (starting) next[ownerId] = true;
+          else delete next[ownerId];
+          return { starting: next };
         });
       },
 

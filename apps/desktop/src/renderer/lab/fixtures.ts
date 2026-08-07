@@ -18,7 +18,17 @@
  * renders identically on every reload — relative-time strings stay put, and
  * screenshots of two design variants differ only where the design differs.
  */
-import type { LatestSessionSignal, Label, Project, SessionRecord, Ticket } from "@volli/shared";
+import type {
+  ChatSessionRecord,
+  LatestSessionSignal,
+  Label,
+  Project,
+  SessionRecord,
+  Ticket,
+} from "@volli/shared";
+
+import type { BuildActiveSessionListingInput } from "@renderer/components/sidebar/active-session-listing";
+import type { SessionContainer } from "@renderer/stores/sessions";
 
 /** Frozen clock: 2026-01-15T10:00:00Z. See module doc for why it is not `Date.now()`. */
 export const NOW = 1_768_471_200_000;
@@ -240,6 +250,7 @@ export function ticketById(id: string): Ticket {
 function session(
   overrides: Partial<SessionRecord> & Pick<SessionRecord, "id" | "ticketId" | "title">,
 ): SessionRecord {
+  const createdAt = overrides.createdAt ?? NOW - 2 * HOUR;
   return {
     projectId: project.id,
     harnessId: "claude-code",
@@ -248,9 +259,11 @@ function session(
     launchKind: "agent",
     placement: "tab",
     cwd: project.path,
-    createdAt: NOW - 2 * HOUR,
+    createdAt,
     endedAt: null,
     exitCode: null,
+    lastActivityAt: createdAt,
+    bornTicketless: overrides.ticketId === null,
     ...overrides,
   };
 }
@@ -258,10 +271,10 @@ function session(
 /**
  * Durable session records, as `window.api.sessions.list` would return them.
  *
- * Chosen to cover what the sidebar's tiers actually branch on: a clean exit, a
+ * Chosen to cover what the sidebar's bands actually branch on: a clean exit, a
  * failure (non-zero `exitCode`), and a Doing ticket with NO record at all
- * (tkt-13) — the "bare row" case that guarantees every Doing ticket a presence
- * even when no PTY ever ran.
+ * (tkt-13) — which the bands are silent about, since a ticket nothing ever ran
+ * for has no Session to show.
  */
 export const sessions: SessionRecord[] = [
   session({
@@ -301,8 +314,8 @@ export const sessions: SessionRecord[] = [
 ];
 
 /**
- * The latest attention signal per Needs Review ticket — what promotes a row
- * into the "Needs you" tier and supplies its reason line. One `blocked` and one
+ * The latest attention signal per Needs Review ticket — what sorts a row to the
+ * top of the Active band and supplies its reason line. One `blocked` and one
  * `done` so both label paths render side by side.
  */
 export const signals: LatestSessionSignal[] = [
@@ -321,3 +334,292 @@ export const signals: LatestSessionSignal[] = [
     createdAt: NOW - 3 * HOUR,
   },
 ];
+
+/** Every field a chat Session row reads; per-session overrides supply only what differs. */
+function chat(
+  overrides: Partial<ChatSessionRecord> &
+    Pick<ChatSessionRecord, "sessionId" | "ticketId" | "title" | "lastActivityAt">,
+): ChatSessionRecord {
+  return {
+    projectId: project.id,
+    // A chat that has been talked to for a while, unless a scenario needs an
+    // exact birth (the cleanup rule that compares creation against a ticket's
+    // last column move is the whole reason this is overridable at all).
+    createdAt: overrides.lastActivityAt - 40 * MINUTE,
+    adapterId: "claude-code",
+    live: true,
+    activity: "idle",
+    // Idle by default, so nothing is waiting on anything. A scenario that wants
+    // a waiting row overrides BOTH — the record's two waiting fields move
+    // together in main, and a fixture that split them would be testing a state
+    // the app cannot produce.
+    waitingOn: null,
+    bornTicketless: overrides.ticketId === null,
+    ...overrides,
+  };
+}
+
+/**
+ * Chat Sessions across the demo project — the kind the sidebar's two bands had
+ * no fixture for at all until now.
+ *
+ * Spread across the axes the bands actually branch on: activity × live, a
+ * recency ladder (2m / 20m / 45m / 3h) that straddles the 30-minute quiet
+ * window from both sides, and both kinds of title a Session can have — the
+ * ordinal it is born with, and the one a user typed. Three of them are ticketless, which is three
+ * different things and not one: `chat-scratch-*` were BORN without a ticket
+ * (project scratch work, cleanup-exempt forever), while `chat-orphan` had a
+ * ticket that has since left the board — the case `bornTicketless` exists to
+ * tell apart, and the one cleanup rule (a) is for.
+ */
+export const chatSessions: ChatSessionRecord[] = [
+  chat({
+    sessionId: "chat-14a",
+    ticketId: "tkt-14",
+    title: "Trace the dropped decorations back to the debounce",
+    activity: "waiting",
+    waitingOn: "question",
+    lastActivityAt: NOW - 2 * MINUTE,
+  }),
+  // Waiting with its executor gone — producible, and the one waiting shape that
+  // is: the record's Interaction/Attention is what makes it waiting, and neither
+  // needs an open attachment. A different `waitingOn` from the row above so both
+  // errands the band can hand over are on screen at once.
+  chat({
+    sessionId: "chat-11a",
+    ticketId: "tkt-11",
+    title: "Pick the resume seed for a split pane",
+    activity: "waiting",
+    waitingOn: "permission",
+    live: false,
+    lastActivityAt: NOW - 3 * HOUR,
+  }),
+  // Two of these keep the title the app ACTUALLY leaves behind. Both kinds are
+  // named by an ordinal at birth ("Session 3", "Chat 2"); a chat then retitles
+  // itself off its first delivered message, but a TERMINAL never does, and no
+  // Session of either kind that was never talked to does either. A fixture set
+  // where every row had been helpfully renamed would flatter the design into
+  // looking scannable when a real band still carries ordinals, so both are here.
+  chat({
+    sessionId: "chat-12a",
+    ticketId: "tkt-12",
+    title: "Chat 2",
+    lastActivityAt: NOW - 20 * MINUTE,
+  }),
+  // A turn that outlived its executor. Main reports this as IDLE, not working —
+  // `working` needs the attachment open as well as the turn — so the honest
+  // fixture is the quiet one, and it is what puts a 45-minute row in Previous.
+  chat({
+    sessionId: "chat-10a",
+    ticketId: "tkt-10",
+    title: "Summarize the hover-state regression",
+    live: false,
+    lastActivityAt: NOW - 45 * MINUTE,
+  }),
+  chat({
+    sessionId: "chat-9a",
+    ticketId: "tkt-9",
+    title: "Compare per-project and global harness defaults",
+    live: false,
+    // Older than tkt-9's move back into Todo — the one session cleanup rule (c)
+    // is meant to catch here.
+    createdAt: NOW - 3 * HOUR,
+    lastActivityAt: NOW - 45 * MINUTE,
+  }),
+  chat({
+    sessionId: "chat-1a",
+    ticketId: "tkt-1",
+    title: "Confirm the migration path is unreferenced",
+    live: false,
+    // Born AFTER its ticket landed in Done, which is the only way a Done
+    // ticket's Session survives to see the Done linger at all.
+    createdAt: NOW - 8 * MINUTE,
+    lastActivityAt: NOW - 5 * MINUTE,
+  }),
+  chat({
+    sessionId: "chat-scratch-a",
+    ticketId: null,
+    title: "Rename the worktree branch scheme",
+    activity: "working",
+    lastActivityAt: NOW - 2 * MINUTE,
+  }),
+  // The worst case the bands can produce, and it is the default one: a
+  // ticketless Session never renamed. No ticket chip, no descriptive title —
+  // the row is a globe, an ordinal and an age.
+  chat({
+    sessionId: "chat-scratch-b",
+    ticketId: null,
+    title: "Chat 1",
+    live: false,
+    lastActivityAt: NOW - 3 * HOUR,
+  }),
+  chat({
+    sessionId: "chat-orphan",
+    ticketId: null,
+    bornTicketless: false,
+    title: "Sweep the leftovers from the archived board",
+    live: false,
+    // Past the quiet window on purpose: cleanup only ever runs on the Previous
+    // band, so an orphan younger than that sits in Active like any other recent
+    // Session and rule (a) has nothing to say about it yet.
+    lastActivityAt: NOW - 2 * HOUR,
+  }),
+];
+
+/**
+ * The second Done ticket the cleanup rules need, kept out of `tickets` on
+ * purpose: that board is tuned to be uneven with exactly one Done card, and
+ * cleanup needs two — one that entered the column long enough ago for the
+ * linger to have expired, one that landed a moment ago.
+ */
+const doneJustNow: Ticket = ticket({
+  id: "tkt-1",
+  ticketNumber: 1,
+  title: "Drop the pre-worktree session migration",
+  status: "done",
+  priority: "low",
+  order: 1,
+  createdAt: NOW - 2 * DAY,
+  updatedAt: NOW - 10 * MINUTE,
+});
+
+/**
+ * Durable records for the panes `sessionListingInput` mounts — `endedAt: null`
+ * is what makes one live — plus tkt-2's single concluded run, which is here
+ * rather than in `sessions` above because only this listing has the Done ticket
+ * whose linger it exists to expire.
+ */
+const liveSessions: SessionRecord[] = [
+  session({
+    id: "ses-14b",
+    ticketId: "tkt-14",
+    title: "Session 2",
+    cwd: "/Users/demo/code/voltaic-worktrees/VLT-14",
+    createdAt: NOW - 25 * MINUTE,
+  }),
+  session({
+    id: "ses-12b",
+    ticketId: "tkt-12",
+    title: "Session 2",
+    cwd: "/Users/demo/code/voltaic-worktrees/VLT-12",
+    createdAt: NOW - 2 * HOUR,
+  }),
+  session({ id: "ses-11b", ticketId: "tkt-11", title: "Session 3", createdAt: NOW - 55 * MINUTE }),
+  session({ id: "ses-10b", ticketId: "tkt-10", title: "Session 2", createdAt: NOW - 70 * MINUTE }),
+  session({
+    id: "ses-2a",
+    ticketId: "tkt-2",
+    title: "Session 1",
+    createdAt: NOW - 90 * MINUTE,
+    endedAt: NOW - 45 * MINUTE,
+    exitCode: 0,
+  }),
+];
+
+/** One live single-pane tab per ticket that has one, in the shape the sessions store holds. */
+function liveTab(ticketId: string, sessionId: string, title: string): SessionContainer {
+  return {
+    tabs: [
+      {
+        sessionId,
+        title,
+        scope: { kind: "ticket", projectId: project.id, ticketId },
+        layout: { kind: "pane", sessionId, exitCode: null },
+        activePaneId: sessionId,
+      },
+    ],
+    activeSessionId: sessionId,
+  };
+}
+
+/**
+ * Everything `buildActiveSessionListing` reads except the clock and the filter —
+ * the two the sidebar prototype drives from controls.
+ *
+ * Typed against the builder's own input so a change to what the bands are
+ * derived from breaks here at typecheck rather than silently rendering a band
+ * that no longer means what it says.
+ *
+ * The arrangement is chosen so every band and every cleanup rule is reachable
+ * at some point on an eight-hour clock scrub:
+ *
+ *   • `statusEnteredAt` covers most tickets and deliberately omits tkt-13 —
+ *     a ticket whose column history we do not have, where both rules that need
+ *     it must stay silent;
+ *   • tkt-9 sat in Todo for half an hour with a three-hour-old chat, which is
+ *     rule (c) — a Session that traces some earlier stretch of work — and it is
+ *     the ONLY row that rule fires for;
+ *   • tkt-2 has been Done for two hours (its linger is over) and tkt-1 for ten
+ *     minutes (its linger expires 50 minutes into the scrub);
+ *   • tkt-13 is Doing with nothing at all behind it, so it appears in NEITHER
+ *     band — the case that proves the list speaks for Sessions, not tickets;
+ *   • ses-12b's harness declares `working`, so it keeps working however far the
+ *     clock is scrubbed, while ses-14b's is the one that announced and then went
+ *     silent — the honest "not reporting" row.
+ */
+export const sessionListingInput: Omit<BuildActiveSessionListingInput, "now" | "filter"> = {
+  tickets: [...tickets, doneJustNow],
+  containers: {
+    "tkt-14": liveTab("tkt-14", "ses-14b", "Session 2"),
+    "tkt-12": liveTab("tkt-12", "ses-12b", "Session 2"),
+    "tkt-11": liveTab("tkt-11", "ses-11b", "Session 3"),
+    "tkt-10": liveTab("tkt-10", "ses-10b", "Session 2"),
+  },
+  // Pointed at the LIVE panes rather than `signals` above, because a signal the
+  // model cannot match to a mounted pane loses its reason line — and the reason
+  // is the whole thing an attention row has to say.
+  signalsByTicket: {
+    "tkt-11": {
+      ticketId: "tkt-11",
+      sessionId: "ses-11b",
+      signal: "done",
+      reason: "PR opened",
+      createdAt: NOW - 30 * MINUTE,
+    },
+    "tkt-10": {
+      ticketId: "tkt-10",
+      sessionId: "ses-10b",
+      signal: "blocked",
+      reason: "needs a design call",
+      createdAt: NOW - 35 * MINUTE,
+    },
+  },
+  records: [...sessions, ...liveSessions],
+  chatSessions,
+  lastOutputAt: {
+    "ses-14b": NOW - 8 * MINUTE,
+    "ses-12b": NOW - MINUTE,
+    "ses-11b": NOW - 5 * MINUTE,
+    "ses-10b": NOW - 35 * MINUTE,
+  },
+  parkState: {},
+  harness: {
+    "ses-12b": {
+      harnessId: "claude-code",
+      expectsEvents: true,
+      declaresInputNeeded: true,
+      startedAt: NOW - 2 * HOUR,
+      delivered: true,
+      declared: "working",
+      newestFiredAt: NOW - MINUTE,
+    },
+    "ses-14b": {
+      harnessId: "claude-code",
+      expectsEvents: true,
+      declaresInputNeeded: true,
+      startedAt: NOW - 25 * MINUTE,
+      delivered: false,
+      declared: null,
+      newestFiredAt: null,
+    },
+  },
+  statusEnteredAt: new Map([
+    ["tkt-14", NOW - 4 * HOUR],
+    ["tkt-12", NOW - 6 * HOUR],
+    ["tkt-11", NOW - 7 * HOUR],
+    ["tkt-10", NOW - 9 * HOUR],
+    ["tkt-9", NOW - 30 * MINUTE],
+    ["tkt-2", NOW - 2 * HOUR],
+    ["tkt-1", NOW - 10 * MINUTE],
+  ]),
+};

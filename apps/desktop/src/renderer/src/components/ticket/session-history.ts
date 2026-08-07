@@ -82,7 +82,7 @@ export interface TicketSessionRowsInput {
  * `active-session-listing`) — and, more to the point, so BOTH surfaces reach
  * `sessionActivityState` through the same argument list. A rail that fed it only
  * PTY facts was structurally unable to show a blocked agent while the sidebar,
- * reading the same store, filed that session under "Needs you".
+ * reading the same store, sorted that session to the top of its Active band.
  */
 export function buildTicketSessionRows(input: TicketSessionRowsInput): TicketSessionRow[] {
   // paneSessionId → its live state, for EVERY pane of every open tab (not just
@@ -215,10 +215,11 @@ export function filterSessionHistory(
 
 /**
  * A ticket-rail row for a chat Session. There is no PTY behind it, so there is
- * nothing to activate, resume, or report a live status for beyond `isOpen` —
- * deep chat activation (opening the actual transcript) is future UI work, not
- * this. `isOpen` mirrors `groupSessionRows`'s current/history split off the
- * one fact a chat row has: whether its structured attachment is still live.
+ * nothing to resume — opening the Session is already everything a resume would
+ * buy. `isOpen` mirrors `groupSessionRows`'s current/history split off whether
+ * the Session's structured attachment is still live; the finer state the record
+ * also carries (`activity`, `lastActivityAt`) is the sidebar's to draw, and no
+ * rail row reads it yet.
  */
 export interface TicketChatSessionRow {
   record: ChatSessionRecord;
@@ -249,10 +250,10 @@ export function filterChatSessionHistory(
 
 /**
  * One rendered row of the rail: a terminal row (rename, resume, activate) or a
- * chat row (activate, and title and liveness — a chat Session is durable, so
- * even a closed one opens onto its own history; rename waits for a live tab to
- * keep in sync). Discriminated the same way `SessionListingRow` is, one layer up
- * the view model.
+ * chat row (rename, activate, and title and liveness — a chat Session is
+ * durable, so even a closed one opens onto its own history, which is why it
+ * offers no resume). Discriminated the same way `SessionListingRow` is, one
+ * layer up the view model.
  */
 export type SessionRailRow =
   | { kind: "terminal"; row: TicketSessionRow }

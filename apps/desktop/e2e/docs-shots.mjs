@@ -273,7 +273,10 @@ try {
 
     const aside = page.locator("aside");
     await waitUntil("ticket rail", async () => (await aside.count()) === 1);
+    // "New session" is a menu since the chat surface landed (PR #179):
+    // Terminal / Chat. This shot wants the terminal kind.
     await aside.getByRole("button", { name: "New session" }).click();
+    await page.getByRole("menuitem", { name: "Terminal", exact: true }).click();
     // The session boots a worktree + PTY; the canvas is what says it is live.
     await waitUntil("terminal canvas", async () => {
       const rect = await visibleCanvas(page);

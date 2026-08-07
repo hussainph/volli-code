@@ -136,6 +136,47 @@ describe("createSessionRecord", () => {
     expect(session.endedAt).toBeNull();
     expect(session.exitCode).toBeNull();
   });
+
+  it("seeds lastActivityAt from now — a freshly created session's newest fact is its creation", () => {
+    const session = createSessionRecord({
+      id: "session-1",
+      projectId: "proj-1",
+      harnessId: "claude-code",
+      launchKind: "agent",
+      placement: "tab",
+      title: "Fix the bug",
+      cwd: "/Users/dev/project",
+      now: 1234,
+    });
+    expect(session.lastActivityAt).toBe(1234);
+  });
+
+  it("derives bornTicketless from whether a ticketId was supplied", () => {
+    const scratch = createSessionRecord({
+      id: "session-1",
+      projectId: "proj-1",
+      harnessId: "claude-code",
+      launchKind: "agent",
+      placement: "tab",
+      title: "Scratch",
+      cwd: "/Users/dev/project",
+      now: 0,
+    });
+    expect(scratch.bornTicketless).toBe(true);
+
+    const ticketed = createSessionRecord({
+      id: "session-2",
+      projectId: "proj-1",
+      ticketId: "ticket-1",
+      harnessId: "claude-code",
+      launchKind: "agent",
+      placement: "tab",
+      title: "Work",
+      cwd: "/Users/dev/project",
+      now: 0,
+    });
+    expect(ticketed.bornTicketless).toBe(false);
+  });
 });
 
 describe("SessionRecord", () => {
@@ -154,6 +195,8 @@ describe("SessionRecord", () => {
       createdAt: 0,
       endedAt: null,
       exitCode: null,
+      lastActivityAt: 0,
+      bornTicketless: true,
     };
     expect(record.ticketId).toBeNull();
   });

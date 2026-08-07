@@ -20,11 +20,11 @@ interface TicketSessionRecordsState {
   /** Re-fetches `ticketId`'s rows from main and replaces the cached list. Toasts on failure. */
   refresh(ticketId: string): Promise<void>;
   /**
-   * Optimistic local rename ahead of the persist round-trip (mirrors the
-   * rail's prior behavior). Terminal rows only: the rail's rename affordance
-   * is wired to live/ended PTYs, and a chat row this is ever called with
-   * (there is no such call site yet) passes through untouched rather than
-   * being silently coerced into a shape it isn't.
+   * Optimistic local rename ahead of the persist round-trip, for a row of
+   * either kind — `title` is the one field both records carry, and both kinds
+   * rename from the same surfaces (`renameTerminalSession`, `renameChatSession`).
+   * The rewrite stays inside the matched row's own kind: a chat row is retitled
+   * as a chat row, never coerced into the terminal shape beside it.
    */
   renameLocally(ticketId: string, sessionId: string, title: string): void;
   /**
@@ -63,13 +63,20 @@ export function createTicketSessionRecordsStore() {
         return {
           byTicket: {
             ...state.byTicket,
-            [ticketId]: rows.map((row) =>
-              // Object.assign, not spread: oxc(no-map-spread) bans spreads in
-              // map callbacks; a fresh target object keeps this copy-on-write.
-              row.kind === "terminal" && row.record.id === sessionId
+            // Object.assign, not spread: oxc(no-map-spread) bans spreads in map
+            // callbacks; a fresh target object keeps this copy-on-write. Each
+            // kind is rebuilt as itself — the id it answers to differs (`id` vs
+            // `sessionId`) and so does everything else on the record.
+            [ticketId]: rows.map((row) => {
+              if (row.kind === "chat") {
+                return row.record.sessionId === sessionId
+                  ? { kind: "chat" as const, record: Object.assign({}, row.record, { title }) }
+                  : row;
+              }
+              return row.record.id === sessionId
                 ? { kind: "terminal" as const, record: Object.assign({}, row.record, { title }) }
-                : row,
-            ),
+                : row;
+            }),
           },
         };
       });

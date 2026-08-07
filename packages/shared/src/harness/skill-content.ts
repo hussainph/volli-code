@@ -138,7 +138,7 @@ Each binding maps one harness-native signal to one Volli event:
 
 Volli sets the hook timeout itself, the same for every binding of every harness. A binding does not declare one.
 
-\`input.needed\` means a human is blocking the agent. It drives the sidebar's "Needs you" tier and the native notification.
+\`input.needed\` means a human is blocking the agent. It sorts the session to the top of the sidebar's Active band and drives the native notification.
 
 ## startupEvent
 

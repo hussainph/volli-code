@@ -273,6 +273,8 @@ async function callProcedure(
       return caller.runtimeCatalog.inspect(request.input as never);
     case "runtimeCatalog.save":
       return caller.runtimeCatalog.save(request.input as never);
+    case "runtimeCatalog.clear":
+      return caller.runtimeCatalog.clear(request.input as never);
     case "runtimeCatalog.resolve":
       return caller.runtimeCatalog.resolve(request.input as never);
     /* v8 ignore next 4 -- unreachable behind `isRequest`; it exists so a listed procedure this switch forgot fails to compile. */

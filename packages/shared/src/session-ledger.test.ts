@@ -17,9 +17,13 @@ import {
   SESSION_ATTACHMENT_CONTINUITIES,
   SESSION_ATTENTION_KINDS,
   SESSION_INTERACTION_CANCEL_REASONS,
+  SESSION_USER_BLOCKING_ATTENTION_KINDS,
+  sessionAwaitsUser,
 } from "./session-ledger";
 import type {
   Session,
+  SessionAttention,
+  SessionAttentionKind,
   SessionEvent,
   SessionInteraction,
   SessionInteractionPrompt,
@@ -924,6 +928,197 @@ describe("projectSession", () => {
       }),
     ]);
     expect(settled).toMatchObject({ pendingExecutorStart: null });
+  });
+});
+
+describe("projectSession turn activity", () => {
+  const attachment = {
+    id: "attachment-turn",
+    sessionId: session.id,
+    adapterId: "opencode",
+    venue: localVenue,
+    continuity: "fresh" as const,
+    native: null,
+  };
+
+  it("opens on a started turn and closes on the completed one", () => {
+    const started = projectSession(session, [
+      event(1, { kind: "attachment.opened", attachment }),
+      event(2, { kind: "turn.started", attachmentId: attachment.id, turnId: "turn-1" }),
+    ]);
+    expect(started.turnActive).toBe(true);
+
+    const completed = projectSession(session, [
+      event(1, { kind: "attachment.opened", attachment }),
+      event(2, { kind: "turn.started", attachmentId: attachment.id, turnId: "turn-1" }),
+      event(3, { kind: "turn.completed", attachmentId: attachment.id, turnId: "turn-1" }),
+    ]);
+    expect(completed.turnActive).toBe(false);
+  });
+
+  // The wedge: an executor that crashes or is interrupted mid-turn never writes
+  // the `turn.completed`. Without the attachment ending the turn too, the
+  // Session would read "working" durably, for as long as its history survives.
+  it("closes an unfinished turn when its attachment ends, however it ended", () => {
+    const crashed = projectSession(session, [
+      event(1, { kind: "attachment.opened", attachment }),
+      event(2, { kind: "turn.started", attachmentId: attachment.id, turnId: "turn-1" }),
+      event(3, { kind: "attachment.closed", attachmentId: attachment.id, outcome: "interrupted" }),
+    ]);
+    expect(crashed.turnActive).toBe(false);
+
+    const failed = projectSession(session, [
+      event(1, { kind: "attachment.opened", attachment }),
+      event(2, { kind: "turn.started", attachmentId: attachment.id, turnId: "turn-1" }),
+      event(3, {
+        kind: "attachment.failed",
+        attachment,
+        failure: { code: "spawn_failed", detail: null, diagnostic: null },
+      }),
+    ]);
+    expect(failed.turnActive).toBe(false);
+  });
+
+  it("tracks the live attachment's turn across a second attachment", () => {
+    const second = { ...attachment, id: "attachment-turn-2" };
+    const projection = projectSession(session, [
+      event(1, { kind: "attachment.opened", attachment }),
+      event(2, { kind: "turn.started", attachmentId: attachment.id, turnId: "turn-1" }),
+      event(3, { kind: "attachment.closed", attachmentId: attachment.id, outcome: "completed" }),
+      event(4, { kind: "attachment.opened", attachment: second }),
+      event(5, { kind: "turn.started", attachmentId: second.id, turnId: "turn-2" }),
+    ]);
+    expect(projection).toMatchObject({ turnActive: true, liveExecutor: { id: second.id } });
+  });
+});
+
+describe("projectSession recency", () => {
+  const command = {
+    id: "command-recency",
+    sessionId: session.id,
+    createdAt: 1,
+    route: null,
+    intent: { kind: "session.retitle" as const, title: "Renamed" },
+  };
+  const receipt = {
+    id: "receipt-recency",
+    commandId: command.id,
+    status: "completed" as const,
+    recordedAt: 400,
+    sequence: 40,
+    result: { kind: "session.retitled" as const, sessionId: session.id },
+  };
+
+  it("seeds from the Session's own creation when nothing has happened yet", () => {
+    expect(projectSession(session, []).lastActivityAt).toBe(session.createdAt);
+  });
+
+  it("advances to the newest ordinary fact", () => {
+    const projection = projectSession(session, [
+      event(30, { kind: "run.started", attachmentId: "attachment-recency", runId: "run-1" }),
+      event(20, { kind: "turn.started", attachmentId: "attachment-recency", turnId: "turn-1" }),
+    ]);
+    expect(projection.lastActivityAt).toBe(300);
+  });
+
+  // Renaming a Session is Volli bookkeeping, not the agent doing something, and
+  // a recency-sorted listing must not float it to the top for that.
+  it("ignores command and receipt bookkeeping", () => {
+    const projection = projectSession(session, [
+      event(20, { kind: "turn.started", attachmentId: "attachment-recency", turnId: "turn-1" }),
+      event(30, { kind: "command.recorded", command }),
+      event(40, { kind: "command.receipt.recorded", receipt }),
+    ]);
+    expect(projection.lastActivityAt).toBe(200);
+    expect(projection.commands).toEqual([command]);
+  });
+
+  it("ignores session.retitled after real activity", () => {
+    const projection = projectSession(session, [
+      event(20, { kind: "turn.started", attachmentId: "attachment-recency", turnId: "turn-1" }),
+      event(50, { kind: "session.retitled", title: "Renamed" }),
+    ]);
+    expect(projection.lastActivityAt).toBe(200);
+    expect(projection.session.title).toBe("Renamed");
+  });
+});
+
+describe("projectSession bornTicketless", () => {
+  it("seeds from the live session row when no session.created event is present", () => {
+    expect(projectSession(session, []).bornTicketless).toBe(false);
+    expect(projectSession({ ...session, ticketId: null }, []).bornTicketless).toBe(true);
+  });
+
+  // The immutable birth fact, not the live row: a session.created event's own
+  // ticketId is what a later ticket delete (ON DELETE SET NULL) cannot touch.
+  it("reads bornTicketless off the session.created event's ticketId, ignoring the live row", () => {
+    const projection = projectSession(session, [
+      event(1, { kind: "session.created", session: { ...session, ticketId: null } }),
+    ]);
+    expect(projection.bornTicketless).toBe(true);
+    // The live `session` param passed in still says ticketed — proving the
+    // fold read the event's snapshot, not the param.
+    expect(session.ticketId).toBe("ticket-1");
+  });
+
+  it("reads false for a Session born with a ticket", () => {
+    const projection = projectSession({ ...session, ticketId: null }, [
+      event(1, { kind: "session.created", session: { ...session, ticketId: "ticket-1" } }),
+    ]);
+    expect(projection.bornTicketless).toBe(false);
+  });
+});
+
+function raised(
+  kind: Exclude<SessionAttentionKind, "rate_limited" | "quota_exhausted">,
+): SessionAttention {
+  return { id: `attention-${kind}`, kind, attachmentId: null, detail: null, diagnostic: null };
+}
+
+describe("sessionAwaitsUser", () => {
+  const idle = {
+    interactions: { active: [], resolved: [] },
+    attention: { active: [], primary: null },
+  };
+
+  it("is false for a Session nobody is being asked about", () => {
+    expect(sessionAwaitsUser(idle)).toBe(false);
+  });
+
+  it("is true while an Interaction is unanswered", () => {
+    const interaction: SessionInteraction = {
+      id: "interaction-1",
+      attachmentId: "attachment-1",
+      kind: "question",
+      title: "Which branch?",
+      detail: null,
+      options: [],
+      multiple: false,
+      native: { id: null, detail: null },
+    };
+    expect(
+      sessionAwaitsUser({ ...idle, interactions: { active: [interaction], resolved: [] } }),
+    ).toBe(true);
+  });
+
+  it("separates the Attentions a person clears from the ones they cannot", () => {
+    for (const kind of SESSION_USER_BLOCKING_ATTENTION_KINDS) {
+      const attention = raised(kind);
+      expect(
+        sessionAwaitsUser({ ...idle, attention: { active: [attention], primary: attention } }),
+      ).toBe(true);
+    }
+    const limited: SessionAttention = {
+      id: "attention-rate-limited",
+      kind: "rate_limited",
+      attachmentId: null,
+      detail: null,
+      diagnostic: null,
+      retryAt: null,
+    };
+    expect(sessionAwaitsUser({ ...idle, attention: { active: [limited], primary: limited } })).toBe(
+      false,
+    );
   });
 });
 

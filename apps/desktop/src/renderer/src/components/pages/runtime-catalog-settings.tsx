@@ -9,7 +9,13 @@ import type {
   RuntimePreferences,
 } from "@volli/shared";
 
-import { SettingsSection } from "@renderer/components/pages/settings-shell";
+import { InheritNote, SettingsSection } from "@renderer/components/pages/settings-shell";
+import {
+  SegmentedChoice,
+  SURFACE_MODES,
+  type SurfaceMode,
+} from "@renderer/components/theme/segmented-choice";
+import { ThemeOriginPill } from "@renderer/components/theme/theme-combo-box";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
@@ -22,7 +28,6 @@ import {
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 
-const ADAPTER_ID = "opencode";
 const SEARCH_DELAY_MS = 180;
 
 type CatalogState =
@@ -33,14 +38,47 @@ type CatalogState =
   // is to say when no view came back at all.
   | { status: "error"; view: RuntimeCatalogView | null; reason: string };
 
-/** OpenCode discovery and the small app-wide model allowlist used by chat. */
-export function RuntimeCatalogSettings() {
+/**
+ * Runtime discovery and the small curated model allowlist chat picks from —
+ * app-wide, or for one project.
+ *
+ * `projectId` IS the scope, exactly as it is on the wire: absent, every read and
+ * write lands on the global record and this renders what app-wide Settings has
+ * always rendered; present, they land on that project's own column and the
+ * section grows the inherit/override control the rest of Configure uses. The
+ * copy still names OpenCode because {@link MODEL_CATALOG_HARNESS_ID} is still
+ * the only adapter with a catalog to browse — the id is a parameter so the two
+ * SCOPES can share one component, not because a second harness mounts it.
+ *
+ * The scope must be sent identically to `inspect` and the `save` that follows
+ * it (see the `runtimeCatalog` router): a save routed to a scope that never
+ * inspected reaches an instance holding no discovery snapshot and is refused.
+ * Threading one `projectId` through both calls here is what keeps that pair
+ * honest.
+ */
+export function RuntimeCatalogSettings({
+  adapterId,
+  projectId,
+}: {
+  adapterId: string;
+  projectId?: string;
+}) {
   const client = useRuntimeCatalogClient();
   if (!client) return null;
-  return <ConnectedRuntimeCatalogSettings client={client} />;
+  return (
+    <ConnectedRuntimeCatalogSettings client={client} adapterId={adapterId} projectId={projectId} />
+  );
 }
 
-function ConnectedRuntimeCatalogSettings({ client }: { client: RuntimeCatalogContextValue }) {
+function ConnectedRuntimeCatalogSettings({
+  client,
+  adapterId,
+  projectId,
+}: {
+  client: RuntimeCatalogContextValue;
+  adapterId: string;
+  projectId?: string;
+}) {
   const [state, setState] = React.useState<CatalogState>({ status: "loading", view: null });
   const [providerId, setProviderId] = React.useState("");
   const [query, setQuery] = React.useState("");
@@ -53,7 +91,8 @@ function ConnectedRuntimeCatalogSettings({ client }: { client: RuntimeCatalogCon
       setState((current) => ({ status: "loading", view: current.view }));
       try {
         const view = await client.inspect({
-          adapterId: ADAPTER_ID,
+          ...(projectId === undefined ? {} : { projectId }),
+          adapterId,
           ...(providerId ? { providerId } : {}),
           ...(query.trim() ? { query: query.trim() } : {}),
           refresh,
@@ -77,7 +116,7 @@ function ConnectedRuntimeCatalogSettings({ client }: { client: RuntimeCatalogCon
         toastError(`Couldn't load OpenCode models: ${errorMessage(error)}`);
       }
     },
-    [client, providerId, query],
+    [client, adapterId, projectId, providerId, query],
   );
 
   React.useEffect(() => {
@@ -86,12 +125,21 @@ function ConnectedRuntimeCatalogSettings({ client }: { client: RuntimeCatalogCon
   }, [load]);
 
   const view = state.view;
+  const scoped = projectId !== undefined;
+  // The view answers WHICH record it resolved, which is the whole state this
+  // control edits: an override that happens to equal what it inherited is the
+  // same bytes as inheriting, and only `preferencesOrigin` tells them apart.
+  const inheriting = scoped && view?.preferencesOrigin !== "project";
 
   async function save(preferences: RuntimePreferences): Promise<void> {
     if (saving) return;
     setSaving(true);
     try {
-      await client.save({ adapterId: ADAPTER_ID, preferences });
+      await client.save({
+        ...(projectId === undefined ? {} : { projectId }),
+        adapterId,
+        preferences,
+      });
       await load();
     } catch (error) {
       toastError(`Couldn't save OpenCode models: ${errorMessage(error)}`);
@@ -99,6 +147,49 @@ function ConnectedRuntimeCatalogSettings({ client }: { client: RuntimeCatalogCon
       setSaving(false);
     }
   }
+
+  /**
+   * Flip this project between following the app-wide list and owning one.
+   *
+   * **Custom pins what is currently inherited** — it saves the very preferences
+   * on screen into the project's column — so the switch changes what the choice
+   * MEANS without changing what it shows. **Inherit clears the column** rather
+   * than storing an "inherit" marker, so a project that has been reset reads
+   * exactly like one never touched.
+   */
+  async function setScope(mode: SurfaceMode): Promise<void> {
+    if (projectId === undefined || view === null) return;
+    if (mode === "custom") {
+      await save(view.preferences);
+      return;
+    }
+    if (saving) return;
+    setSaving(true);
+    try {
+      await client.clear({ projectId, adapterId });
+      await load();
+    } catch (error) {
+      toastError(`Couldn't follow the app-wide models: ${errorMessage(error)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const refresh = (
+    <Button
+      size="icon-sm"
+      variant="ghost"
+      aria-label="Refresh OpenCode models"
+      disabled={state.status === "loading"}
+      onClick={() => void load(true)}
+    >
+      {state.status === "loading" ? (
+        <Spinner className="size-3.5" />
+      ) : (
+        <ArrowClockwiseIcon className="size-3.5" />
+      )}
+    </Button>
+  );
 
   return (
     // "Models" rather than "OpenCode": this section now renders inside the
@@ -109,19 +200,33 @@ function ConnectedRuntimeCatalogSettings({ client }: { client: RuntimeCatalogCon
       title="Models"
       icon={CpuIcon}
       action={
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          aria-label="Refresh OpenCode models"
-          disabled={state.status === "loading"}
-          onClick={() => void load(true)}
-        >
-          {state.status === "loading" ? (
-            <Spinner className="size-3.5" />
-          ) : (
-            <ArrowClockwiseIcon className="size-3.5" />
-          )}
-        </Button>
+        scoped ? (
+          <div className="flex items-center gap-1">
+            <SegmentedChoice
+              ariaLabel="Model scope"
+              testId="project-runtime-models-mode"
+              value={inheriting ? "inherit" : "custom"}
+              options={SURFACE_MODES}
+              // An override is pinned OUT OF the discovery snapshot the catalog
+              // is holding, so choosing Custom while the runtime is unreachable
+              // would store a record with no models in it — a project pinned to
+              // nothing, which resolves worse than inheriting. The blocked state
+              // below says why, and its refresh is the way back.
+              //
+              // Only that DIRECTION is blocked. `clear` deliberately carries no
+              // "inspect first" precondition (see the catalog's `clear`), so a
+              // project that already overrides can always stop — and it must,
+              // because an uninstalled or signed-out runtime is exactly when
+              // someone wants to: disabling both arms would strand the override
+              // in the one state whose recovery needs no discovery at all.
+              disabled={saving || (inheriting && view?.status !== "available")}
+              onChange={(mode: SurfaceMode) => void setScope(mode)}
+            />
+            {refresh}
+          </div>
+        ) : (
+          refresh
+        )
       }
     >
       {view?.status !== "available" ? (
@@ -129,67 +234,78 @@ function ConnectedRuntimeCatalogSettings({ client }: { client: RuntimeCatalogCon
           <p className="font-medium text-foreground">OpenCode unavailable</p>
           <p className="mt-1 text-xs text-muted-foreground">{unavailableReason(state)}</p>
         </div>
-      ) : (
-        <div className="grid min-h-72 grid-cols-[12rem_minmax(0,1fr)] overflow-hidden rounded-lg border border-border">
-          <div className="border-r border-border bg-muted/20 p-2">
-            <p className="px-2 pb-2 pt-1 text-label uppercase text-muted-foreground">Providers</p>
-            <div className="space-y-0.5">
-              {view.providers.map((provider) => (
-                <button
-                  key={provider.id}
-                  type="button"
-                  onClick={() => {
-                    setQuery("");
-                    setProviderId(provider.id);
-                  }}
-                  className={cn(
-                    "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-ui transition-colors",
-                    provider.id === providerId
-                      ? "bg-accent text-foreground"
-                      : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-                  )}
-                >
-                  <span className="truncate">{provider.label}</span>
-                  <span className="shrink-0 font-mono text-label">
-                    {provider.enabledModelCount}/{provider.availableModelCount}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="min-w-0 p-3">
-            <Input
-              value={query}
-              onChange={(event) => setQuery(event.currentTarget.value)}
-              placeholder="Search models"
-              aria-label="Search OpenCode models"
-              className="h-8"
-            />
-            <div className="mt-2 max-h-80 overflow-y-auto [scrollbar-gutter:stable]">
-              {view.models.length === 0 ? (
-                <p className="px-2 py-8 text-center text-ui text-muted-foreground">
-                  {state.status === "loading" ? "Loading models…" : "No matching models"}
-                </p>
-              ) : (
-                view.models.map((model) => (
-                  <ModelPreferenceRow
-                    key={model.id}
-                    model={model}
-                    preferences={view.preferences}
-                    disabled={saving}
-                    onSave={save}
-                  />
-                ))
-              )}
-            </div>
-            {view.modelTotal > view.models.length ? (
-              <p className="border-t border-border px-2 pt-2 text-label text-muted-foreground">
-                {view.modelTotal - view.models.length} more · refine search
-              </p>
-            ) : null}
-          </div>
+      ) : inheriting ? (
+        <div data-testid="project-runtime-models-inherit">
+          <InheritNote>Following app-wide models.</InheritNote>
         </div>
+      ) : (
+        <>
+          {scoped ? (
+            <div className="pb-3">
+              <ThemeOriginPill emphasized>Set by this project</ThemeOriginPill>
+            </div>
+          ) : null}
+          <div className="grid min-h-72 grid-cols-[12rem_minmax(0,1fr)] overflow-hidden rounded-lg border border-border">
+            <div className="border-r border-border bg-muted/20 p-2">
+              <p className="px-2 pb-2 pt-1 text-label uppercase text-muted-foreground">Providers</p>
+              <div className="space-y-0.5">
+                {view.providers.map((provider) => (
+                  <button
+                    key={provider.id}
+                    type="button"
+                    onClick={() => {
+                      setQuery("");
+                      setProviderId(provider.id);
+                    }}
+                    className={cn(
+                      "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-ui transition-colors",
+                      provider.id === providerId
+                        ? "bg-accent text-foreground"
+                        : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                    )}
+                  >
+                    <span className="truncate">{provider.label}</span>
+                    <span className="shrink-0 font-mono text-label">
+                      {provider.enabledModelCount}/{provider.availableModelCount}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="min-w-0 p-3">
+              <Input
+                value={query}
+                onChange={(event) => setQuery(event.currentTarget.value)}
+                placeholder="Search models"
+                aria-label="Search OpenCode models"
+                className="h-8"
+              />
+              <div className="mt-2 max-h-80 overflow-y-auto [scrollbar-gutter:stable]">
+                {view.models.length === 0 ? (
+                  <p className="px-2 py-8 text-center text-ui text-muted-foreground">
+                    {state.status === "loading" ? "Loading models…" : "No matching models"}
+                  </p>
+                ) : (
+                  view.models.map((model) => (
+                    <ModelPreferenceRow
+                      key={model.id}
+                      model={model}
+                      preferences={view.preferences}
+                      disabled={saving}
+                      onSave={save}
+                    />
+                  ))
+                )}
+              </div>
+              {view.modelTotal > view.models.length ? (
+                <p className="border-t border-border px-2 pt-2 text-label text-muted-foreground">
+                  {view.modelTotal - view.models.length} more · refine search
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </>
       )}
     </SettingsSection>
   );

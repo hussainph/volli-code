@@ -548,7 +548,10 @@ app.whenReady().then(async () => {
   // Database needs `dbHandle`, which doesn't exist yet at that point.
   registerDataIpcHandlers(dbHandle, {
     sessionEngine: sessionEngine ?? undefined,
-    liveSessionCwds: () => ptyManagerRef?.liveSessionCwds() ?? [],
+    liveSessionCwds: () => [
+      ...(ptyManagerRef?.liveSessionCwds() ?? []),
+      ...(sessionRuntime?.liveNativeBindingDirectories() ?? []),
+    ],
     // Backward-move interrupt (issue #78): a user move that leaves the active
     // columns Esc's the ticket's live agent sessions, announced via toast.
     interruptTicketSessions: interruptTicketSessionsAnnounced,

@@ -96,6 +96,7 @@ export default defineConfig(({ mode }) => ({
         "src/chat/markdown-source.ts",
         "src/chat/message-projection.ts",
         "src/chat/registry.ts",
+        "src/chat/rename.ts",
         "src/chat/session-model.ts",
         "src/chat/transcript.ts",
         "src/chat/wire.ts",

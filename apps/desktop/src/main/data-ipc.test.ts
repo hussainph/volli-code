@@ -16,6 +16,7 @@ import type {
   TicketLatestSignalsResult,
   TicketResult,
   TicketsResult,
+  TicketStatusEntriesResult,
   VolliIpcChannel,
   WorktreeBranchesResult,
   WorktreeOrphanDeleteResult,
@@ -890,6 +891,10 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
         createdAt: 500,
         adapterId: null,
         live: false,
+        activity: "idle",
+        waitingOn: null,
+        lastActivityAt: 500,
+        bornTicketless: false,
       },
     });
     expect(
@@ -958,6 +963,52 @@ describe("volli:ticket-latest-signals", () => {
       ],
     });
     expect(listSessions).not.toHaveBeenCalled();
+  });
+});
+
+describe("volli:ticket-status-entries", () => {
+  it("dates a moved ticket by its latest status_changed event and a never-moved ticket by its own createdAt", () => {
+    const projectId = createProject();
+    const moved = createTicket(projectId);
+    const neverMoved = createTicket(projectId);
+
+    const before = Date.now();
+    const moveResult = invoke<TicketsResult>("volli:ticket-move", {
+      projectId,
+      ticketId: moved.id,
+      toStatus: "doing",
+      toIndex: 0,
+    });
+    const after = Date.now();
+    expect(moveResult.ok).toBe(true);
+
+    const result = invoke<TicketStatusEntriesResult>("volli:ticket-status-entries", { projectId });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
+
+    const movedEntry = result.entries.find((e) => e.ticketId === moved.id);
+    expect(movedEntry?.status).toBe("doing");
+    expect(movedEntry?.enteredAt).toBeGreaterThanOrEqual(before);
+    expect(movedEntry?.enteredAt).toBeLessThanOrEqual(after);
+
+    const neverMovedEntry = result.entries.find((e) => e.ticketId === neverMoved.id);
+    expect(neverMovedEntry).toEqual({
+      ticketId: neverMoved.id,
+      status: "backlog",
+      enteredAt: neverMoved.createdAt,
+    });
+  });
+
+  it("excludes archived tickets", () => {
+    const projectId = createProject();
+    const live = createTicket(projectId);
+    const archived = createTicket(projectId);
+    archiveTicket(archived.id);
+
+    const result = invoke<TicketStatusEntriesResult>("volli:ticket-status-entries", { projectId });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
+    expect(result.entries.map((e) => e.ticketId)).toEqual([live.id]);
   });
 });
 
@@ -1055,7 +1106,7 @@ describe("volli:worktree-remove", () => {
 
     expect(result).toEqual({
       ok: false,
-      error: "Close the terminal sessions running in this worktree before removing it.",
+      error: "Close the live sessions running in this worktree before removing it.",
     });
     expect(vi.mocked(removeWorktree)).not.toHaveBeenCalled();
   });
@@ -1201,7 +1252,7 @@ describe("volli:worktree-orphan-delete", () => {
 
     expect(result).toEqual({
       ok: false,
-      error: "Close the terminal sessions running in this worktree before deleting it.",
+      error: "Close the live sessions running in this worktree before deleting it.",
     });
     expect(existsSync(target)).toBe(true);
   });

@@ -21,8 +21,8 @@ export type InstallAction =
  * leave the adapter — the rest of the app consumes this union alone.
  *
  * `input.needed` is the one that earns the feature: it means a human is
- * blocking the agent's progress, and it drives the "Needs you" tier and the
- * native notification.
+ * blocking the agent's progress, and it drives the attention row at the top of
+ * the sidebar's Active band and the native notification.
  */
 export const HARNESS_EVENTS = [
   "session.started",

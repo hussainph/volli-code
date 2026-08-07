@@ -54,6 +54,8 @@ function record(overrides: Partial<SessionRecord> = {}): SessionRecord {
     createdAt: 1,
     endedAt: null,
     exitCode: null,
+    lastActivityAt: 1,
+    bornTicketless: false,
     ...overrides,
   };
 }
@@ -67,6 +69,10 @@ function chatRecord(overrides: Partial<ChatSessionRecord> = {}): ChatSessionReco
     createdAt: 1,
     adapterId: "opencode",
     live: true,
+    activity: "idle",
+    waitingOn: null,
+    lastActivityAt: 1,
+    bornTicketless: false,
     ...overrides,
   };
 }

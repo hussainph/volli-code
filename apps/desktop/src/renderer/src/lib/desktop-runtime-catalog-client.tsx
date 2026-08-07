@@ -10,11 +10,15 @@ import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
  * Adapts the app's Session RPC transport to the renderer Runtime Catalog
  * interface — the Lab's provider, with the IPC link where its HTTP client is.
  *
- * No `projectId` crosses here. These reads and writes come from app-wide
- * Settings, which is the fallback catalog's scope, and the router pairs an
- * inspect with the save that follows it by resolving both against the same
- * scope — so leaving the scope unspoken is what keeps them paired, rather than
- * something to remember to pass identically twice.
+ * `projectId` crosses here now: it rides on the input object each call
+ * already forwards, so a caller that sets it gets a project-scoped read or
+ * write and a caller that omits it gets the global one. App-wide Settings
+ * still omits it — those reads and writes are the fallback catalog's scope.
+ * The Configure page is the caller that sets it, resolving and saving against
+ * one project's override. The router pairs an inspect with the save that
+ * follows it by resolving both against the same scope, so a caller must send
+ * `save` the same `projectId` (or lack of one) that its preceding `inspect`
+ * used.
  */
 export function DesktopRuntimeCatalogProvider({ children }: React.PropsWithChildren) {
   const adapter = React.useMemo<RuntimeCatalogClient>(
@@ -30,6 +34,7 @@ export function DesktopRuntimeCatalogProvider({ children }: React.PropsWithChild
             enabledModels: [...input.preferences.enabledModels],
           },
         }),
+      clear: (input) => sessionRpcClient().runtimeCatalog.clear.mutate(input),
       resolve: (input) => sessionRpcClient().runtimeCatalog.resolve.query(input),
     }),
     [],

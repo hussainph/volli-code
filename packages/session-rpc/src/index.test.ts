@@ -62,6 +62,9 @@ function snapshot(): SessionRuntimeSnapshot {
       capabilities: [],
       interactions: { active: [], resolved: [] },
       signal: null,
+      turnActive: false,
+      lastActivityAt: 10,
+      bornTicketless: true,
     },
     throughSequence: 4,
     frames: [frame(4)],
@@ -430,9 +433,11 @@ describe("Session tRPC router", () => {
     const calls: string[] = [];
     const resolverCalls: (string | undefined)[] = [];
     const runtimeCatalog: RuntimeCatalog = {
+      // `projectId` reaches the catalog rather than being stripped at the edge:
+      // it is the SCOPE the stored preferences are read and written at, not just
+      // the key the host picks an instance with.
       inspect: async (input) => {
-        expect(input).not.toHaveProperty("projectId");
-        calls.push(`inspect:${input.providerId ?? "overview"}`);
+        calls.push(`inspect:${input.projectId ?? "global"}:${input.providerId ?? "overview"}`);
         return {
           adapterId: input.adapterId,
           status: "available",
@@ -447,15 +452,18 @@ describe("Session tRPC router", () => {
             enabledModels: [],
             defaults: { providerId: "", modelId: "", variant: "", agent: "" },
           },
+          preferencesOrigin: input.projectId === undefined ? "global" : "project",
         };
       },
       save: async (input) => {
-        expect(input).not.toHaveProperty("projectId");
-        calls.push(`save:${input.preferences.enabledModels.length}`);
+        calls.push(`save:${input.projectId ?? "global"}:${input.preferences.enabledModels.length}`);
         return input.preferences;
       },
+      clear: async (input) => {
+        calls.push(`clear:${input.projectId}:${input.adapterId}`);
+      },
       resolve: async (input) => {
-        calls.push(`resolve:${input.adapterId}`);
+        calls.push(`resolve:${input.projectId ?? "global"}:${input.adapterId}`);
         return {
           adapterId: input.adapterId,
           observedAt: 10,
@@ -488,6 +496,8 @@ describe("Session tRPC router", () => {
         defaults: { providerId: "openai", modelId: "codex", variant: "high", agent: "build" },
       },
     });
+    await caller.runtimeCatalog.clear({ adapterId: "opencode", projectId: "project-1" });
+    await caller.runtimeCatalog.resolve({ adapterId: "opencode", projectId: "project-1" });
     await caller.runtimeCatalog.resolve({ adapterId: "opencode" });
 
     await expect(
@@ -504,9 +514,16 @@ describe("Session tRPC router", () => {
       }),
     ).rejects.toThrow();
 
-    expect(calls).toEqual(["inspect:openai", "save:1", "resolve:opencode"]);
-    // `resolve` never reads the directory, so it never advertises project scope.
-    expect(resolverCalls).toEqual(["project-1", "project-1", undefined]);
+    expect(calls).toEqual([
+      "inspect:project-1:openai",
+      "save:project-1:1",
+      "clear:project-1:opencode",
+      "resolve:project-1:opencode",
+      "resolve:global:opencode",
+    ]);
+    // Every verb advertises the scope it was asked at — `resolve` included, so
+    // a project's chat resolves that project's own curated models.
+    expect(resolverCalls).toEqual(["project-1", "project-1", "project-1", "project-1", undefined]);
   });
 
   it("rejects Runtime Catalog procedures on a transport that carries no catalog", async () => {

@@ -29,7 +29,12 @@ import type { ShippedEditorThemeId } from "./theme/editor-themes";
 import type { ProjectThemeOverride } from "./theme/project-override";
 import type { ArchivedTicket, HarnessId, Ticket, TicketPriority, TicketStatus } from "./ticket";
 import type { TicketComment } from "./ticket-comment";
-import type { DiffStat, LatestSessionSignal, TicketEvent } from "./ticket-events";
+import type {
+  DiffStat,
+  LatestSessionSignal,
+  TicketEvent,
+  TicketStatusEntry,
+} from "./ticket-events";
 
 // ---- request contract (issue #98) ------------------------------------------
 // Each invoke request is declared ONCE here as `{ args, result }`; the runtime
@@ -254,10 +259,15 @@ export interface VolliDataIpcContract {
   "volli:ticket-list-archived": { args: [projectId: string]; result: ArchivedTicketsResult };
   /** A ticket's full event history, chronological — backs the Activity feed. */
   "volli:ticket-events": { args: [input: TicketIdInput]; result: TicketEventsResult };
-  /** The latest durable Session outcome per ticket — one batched read backing the sidebar's attention tiers. */
+  /** The latest durable Session outcome per ticket — one batched read backing the sidebar's attention rows. */
   "volli:ticket-latest-signals": {
     args: [input: ProjectIdInput];
     result: TicketLatestSignalsResult;
+  };
+  /** When each non-archived ticket entered its current status — one batched read backing the sidebar. */
+  "volli:ticket-status-entries": {
+    args: [input: ProjectIdInput];
+    result: TicketStatusEntriesResult;
   };
 
   /** A ticket's comments, chronological — the work-log feed. */
@@ -1084,6 +1094,9 @@ export type TicketEventsResult = Result<{ events: TicketEvent[] }>;
 
 /** The latest durable Session outcome per ticket — returned by `ticket-latest-signals` (the sidebar's batched attention read). */
 export type TicketLatestSignalsResult = Result<{ signals: LatestSessionSignal[] }>;
+
+/** When each ticket entered its current status — returned by `ticket-status-entries` (what the Previous band's cleanup rules date against). */
+export type TicketStatusEntriesResult = Result<{ entries: TicketStatusEntry[] }>;
 
 /** A single comment, returned by a mutation that affects only that one comment — create, update. */
 export type TicketCommentResult = Result<{ comment: TicketComment }>;

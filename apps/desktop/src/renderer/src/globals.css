@@ -411,12 +411,14 @@
  * redefining `--sidebar-foreground` on the element would only change what the
  * 70% is taken OF.
  *
- * `.uppercase` catches the second heading level, the `SessionTier` rows
- * ("NEEDS YOU", "ACTIVE") that are a plain div rather than a group label.
- * Counted in the running sidebar, that class matches three elements and all
- * three are headings — which is why one this generic is precise here. It is
- * also the rule that should survive a fourth: 11px letterspaced caps in a
- * sidebar IS a section heading, whatever component drew it.
+ * `.uppercase` catches the second heading level, the session-band headers
+ * ("ACTIVE", "PREVIOUS") that are a plain div rather than a group label.
+ * Counted in the running sidebar, that class matches two elements and both are
+ * headings — which is why one this generic is precise here. It is also the rule
+ * that should survive a third: 11px letterspaced caps in a sidebar IS a section
+ * heading, whatever component drew it. (The caps come from here, so the JSX
+ * writes "Active" and "Previous" — the string is sentence case, the treatment
+ * is not.)
  *
  * Each heading's COUNT rides with it rather than dropping to the mute. The two
  * bracket the row from opposite edges and read as one unit. */
@@ -440,11 +442,88 @@
  * touches; a `color` declaration here would have silently killed it.
  *
  * The class pair names "the row's first line" — the meta line beneath it wears
- * `session-row-dim` too, and `text-xs` against its `text-label` is what tells
- * them apart. */
-[data-slot="sidebar"] .session-row-dim.text-xs {
+ * `session-row-dim` too, and `text-ui` against its `text-label` is what tells
+ * them apart. The working row's sweeping title is the same line in a different
+ * costume, so it carries both classes and lands on the same rung. */
+[data-slot="sidebar"] .session-row-dim.text-ui {
   --sidebar-foreground: var(--canvas-ink);
   --muted-foreground: var(--canvas-ink);
+}
+
+/* The working row's signal: a slow highlight travelling along the title, with
+ * orbs and spinners left to chat-grade surfaces. A sidebar row is a label, and
+ * a label that spins is asking for attention it does not deserve — the amber
+ * dot is what asks for attention here.
+ *
+ * Two opaque layers rather than `background-clip: text`, so the truncating
+ * ellipsis never picks up the bright copy. Both read `--sidebar-foreground`,
+ * which the rule above has already remapped onto the title's ink tier, so the
+ * sweep survives the sidebar's token remap in either appearance.
+ *
+ * The peak is `aria-hidden` and duplicates the title, so it must never be
+ * reachable: `pointer-events: none` plus the parent's own truncation. Under
+ * reduced motion it is dropped outright rather than parked mid-sweep — a frozen
+ * highlight halfway along a word reads as a rendering bug, not as stillness. */
+@keyframes session-title-sweep {
+  from {
+    -webkit-mask-position: 0 center;
+    mask-position: 0 center;
+  }
+  to {
+    -webkit-mask-position: calc(-1 * var(--session-sweep-period)) center;
+    mask-position: calc(-1 * var(--session-sweep-period)) center;
+  }
+}
+
+.session-title-sweep {
+  --session-sweep-period: 7.5rem;
+  position: relative;
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: color-mix(in oklab, var(--sidebar-foreground) 68%, transparent);
+}
+
+.session-title-sweep > .session-title-peak {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--sidebar-foreground);
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 18%,
+    #000 30%,
+    #000 70%,
+    transparent 82%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 18%,
+    #000 30%,
+    #000 70%,
+    transparent 82%,
+    transparent 100%
+  );
+  -webkit-mask-size: var(--session-sweep-period) 100%;
+  mask-size: var(--session-sweep-period) 100%;
+  -webkit-mask-repeat: repeat-x;
+  mask-repeat: repeat-x;
+  animation: session-title-sweep 3.5s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-title-sweep > .session-title-peak {
+    animation: none;
+    opacity: 0;
+  }
 }
 
 /* ELEVATION — the lift overlays and the shadow set.

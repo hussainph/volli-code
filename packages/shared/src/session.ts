@@ -112,7 +112,39 @@ export interface SessionRecord {
    * observed), and for rows predating the column — outcome labels never guess.
    */
   exitCode: number | null;
+  /**
+   * Epoch milliseconds of the newest fact in this Session's durable ledger —
+   * the same recency field {@link ChatSessionRecord.lastActivityAt} carries.
+   * For a terminal this tracks LEDGER events (attach/close/commands), NOT raw
+   * shell output: a live terminal's value reads as "when it attached", not
+   * "what it's doing right now". The renderer's volatile `lastOutputAt` (PTY
+   * byte stream, never persisted) is the better live signal where present;
+   * this field is the honest fallback once that in-memory signal is gone.
+   */
+  lastActivityAt: number;
+  /**
+   * Whether this Session was ticketless AT BIRTH, never later orphaned into
+   * it: `sessions.ticket_id` is `ON DELETE SET NULL`, so deleting a ticket
+   * leaves `ticketId: null` behind too. `ticketId === null && !bornTicketless`
+   * is exactly that orphan case — a scratch session earns the sidebar's
+   * cleanup exemption; an orphan should not silently inherit it.
+   */
+  bornTicketless: boolean;
 }
+
+/**
+ * Why a chat Session is blocked on its user, in the vocabulary a one-line row
+ * can say out loud: it asked something (`question`), it wants a tool call
+ * approved (`permission`), or its credentials will not carry it further
+ * (`auth`).
+ *
+ * Deliberately coarser than {@link SessionAttentionKind}: that vocabulary
+ * covers everything a Session can be stopped by, including the stops nobody is
+ * being asked about (a rate limit, a dead transport). These three are the
+ * subset a person can clear by doing something, which is the only distinction a
+ * row prompting them to act needs to draw.
+ */
+export type ChatWaitingReason = "question" | "permission" | "auth";
 
 /**
  * The honest record for a Session that {@link SessionRecord} cannot describe:
@@ -134,6 +166,28 @@ export interface ChatSessionRecord {
   adapterId: string | null;
   /** Whether a structured attachment is currently open. */
   live: boolean;
+  /**
+   * What is happening in this Session right now, in the honest subset of
+   * {@link SessionActivityState} a chat row can be in: there is no PTY to
+   * SIGSTOP, so never "parked", and a Session outlives every attachment it has
+   * ever had, so never "exited" — a chat row that stops is "idle".
+   */
+  activity: Extract<SessionActivityState, "working" | "waiting" | "idle">;
+  /**
+   * What the Session is waiting on, when `activity` is `"waiting"`; `null` in
+   * every other state. The two move together by construction — a waiting row
+   * always has a reason and a non-waiting row never does — because "Waiting"
+   * with nothing after it tells the user to go look, which is the one thing a
+   * navigator row exists to save them.
+   */
+  waitingOn: ChatWaitingReason | null;
+  /** Epoch milliseconds of the newest fact in this Session — a listing's recency sort key. */
+  lastActivityAt: number;
+  /**
+   * Whether this Session was ticketless AT BIRTH, never later orphaned into
+   * it — see {@link SessionRecord.bornTicketless}, the terminal-row sibling.
+   */
+  bornTicketless: boolean;
 }
 
 /**
@@ -229,6 +283,9 @@ export function createSessionRecord(input: CreateSessionInput): SessionRecord {
     createdAt: input.now,
     endedAt: null,
     exitCode: null,
+    // A freshly created session's newest ledger fact IS its creation.
+    lastActivityAt: input.now,
+    bornTicketless: (input.ticketId ?? null) === null,
   };
 }
 
@@ -425,8 +482,8 @@ const TELEMETRY_EVENTS: ReadonlySet<HarnessEvent> = new Set(["subagent.completed
  * **How a stale `waiting` clears: the newest event wins.** There is no TTL and
  * no explicit acknowledgement, because both would lie. A permission prompt can
  * legitimately sit unanswered for an hour, so expiring `waiting` on a timer
- * would drop a genuinely blocked session out of "Needs you" while the human is
- * still the blocker; and no harness in the table emits a
+ * would drop a genuinely blocked session out of the sidebar's attention rows
+ * while the human is still the blocker; and no harness in the table emits a
  * `permission.replied`-shaped signal to acknowledge against — answering
  * permissions is explicitly out of scope for this landing. What every harness
  * DOES emit is proof of the agent moving again (`turn.started` on the next

@@ -127,7 +127,12 @@ function LabChatSession({ scenarioId }: { scenarioId: string | null }) {
       />
       <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         {sessionId === null ? null : (
-          <ChatPlane sessionId={sessionId} store={store} onOpenFile={() => undefined} />
+          <ChatPlane
+            sessionId={sessionId}
+            projectId={LAB_SESSION_PROJECT_ID}
+            store={store}
+            onOpenFile={() => undefined}
+          />
         )}
       </main>
     </div>

@@ -55,6 +55,13 @@ export interface RuntimeCatalogProvider {
 }
 
 export interface RuntimeCatalogBrowseInput {
+  /**
+   * Which scope answers. Present, the project's own stored record does — and
+   * falls back to the global one for any adapter it does not override; absent,
+   * the global record alone. Presence IS the scope: there is no separate
+   * "scope" field to disagree with it.
+   */
+  projectId?: string;
   adapterId: string;
   providerId?: string;
   query?: string;
@@ -74,6 +81,17 @@ export interface RuntimeCatalogView {
   models: readonly RuntimeCatalogModel[];
   modelTotal: number;
   preferences: RuntimePreferences;
+  /**
+   * WHICH scope the `preferences` above came out of. A project-scoped view
+   * answers `"project"` only when that project actually stores a record for
+   * this adapter — a project that overrides nothing, or whose stored record no
+   * longer parses, reads `"global"`, because that is what it is resolving.
+   *
+   * Without it an inherit/override control has nothing to read: the inherited
+   * preferences and an override that happens to equal them are the same bytes,
+   * and the difference between them is the whole state that control edits.
+   */
+  preferencesOrigin: "global" | "project";
 }
 
 export interface RuntimeCatalogChoices {
@@ -91,16 +109,31 @@ export interface ResolvedRuntimeCatalog {
 }
 
 export interface RuntimeCatalogSaveInput {
+  /** Present, this writes the project's override; absent, the global record. */
+  projectId?: string;
   adapterId: string;
   preferences: RuntimePreferences;
 }
 
-// The transport adds a `projectId` beside each of these to choose which catalog
-// instance answers, and the rule pairing an `inspect` with the `save` that
-// follows it lives on the `runtimeCatalog` router in `@volli/session-rpc` — the
-// one place every request is actually shaped and validated. It was written here
-// once as a pair of `…Request` aliases, but nothing could import them (this
+/**
+ * Drops a project's override for one adapter, so it inherits the global record
+ * again. `projectId` is required — there is nothing to clear at global scope,
+ * where "no preferences" is a save away and an empty record is a real answer.
+ */
+export interface RuntimeCatalogClearInput {
+  projectId: string;
+  adapterId: string;
+}
+
+// `projectId` sits ON the input types above rather than beside them. The
+// transport used to add it and strip it, which is why it was once written down
+// here as a pair of `…Request` aliases — but nothing could import those (this
 // package sits below the edge, and `@volli/session-rpc` reaches it only through
 // the handful of names `@volli/session-engine` re-exports), so the guidance sat
 // on types no call site could be bound by while the router hand-rolled the same
-// shapes in zod. Guidance a caller cannot reach is worse than none.
+// shapes in zod. Guidance a caller cannot reach is worse than none; an optional
+// field on the type every caller already holds is the reachable version of it.
+//
+// The rule pairing an `inspect` with the `save` that follows it still lives on
+// the `runtimeCatalog` router in `@volli/session-rpc` — the one place every
+// request is actually shaped and validated.

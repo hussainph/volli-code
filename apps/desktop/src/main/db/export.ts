@@ -71,6 +71,18 @@ export interface ExportProject {
    */
   themeCanvas: string | null;
   themeAppearance: string | null;
+  /**
+   * The per-project runtime-preferences override (migration 019) as its STORED
+   * JSON string, unparsed — `{[adapterId]: storedRuntimeRecord}`, or `null` when
+   * every adapter inherits the global record.
+   *
+   * Unparsed for `themeCanvas`'s reason above, and the pairing is the same one:
+   * the GLOBAL half rides `app_state` (`volli:runtime-preferences:<adapterId>`,
+   * carried raw by {@link ExportAppState}), so parsing only this half would make
+   * the two halves of one setting read differently in the document — and a
+   * hand-edited row would throw at the one moment a user is rescuing their data.
+   */
+  runtimePreferences: string | null;
   colorIndex: number;
   sortOrder: number;
   rowVersion: number;
@@ -245,6 +257,7 @@ interface ProjectRow {
   theme_seed: string | null;
   theme_canvas: string | null;
   theme_appearance: string | null;
+  runtime_preferences: string | null;
   color_index: number;
   sort_order: number;
   row_version: number;
@@ -274,6 +287,7 @@ function exportProjects(db: Database.Database): ExportProject[] {
     themeSeed: row.theme_seed,
     themeCanvas: row.theme_canvas,
     themeAppearance: row.theme_appearance,
+    runtimePreferences: row.runtime_preferences,
     colorIndex: row.color_index,
     sortOrder: row.sort_order,
     rowVersion: row.row_version,

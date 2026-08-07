@@ -1,0 +1,176 @@
+/**
+ * The harness master list, and the two spare views every surface that offers a
+ * per-harness choice draws it with.
+ *
+ * Lifted out of `harness-settings.tsx` when Configure gained a Runtime category:
+ * app-wide Settings and one project's Configure page now ask the same host the
+ * same question, and two copies of the fetch would be two places for its failure
+ * behaviour — and for the pill row's pressed-state contract — to drift.
+ *
+ * The pure union rule stays where it was, in `harness-catalog.ts`: that module
+ * is enrolled at 100% coverage precisely because it decides what a user sees,
+ * and an effect and some JSX are not decisions. This file is the view glue over
+ * it, and holds no rule of its own.
+ */
+import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
+import * as React from "react";
+import { errorMessage, type HarnessAdapter } from "@volli/shared";
+
+import {
+  harnessListings,
+  type HarnessListing,
+  type HarnessOrigin,
+} from "@renderer/components/pages/harness-catalog";
+import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
+import { toastError } from "@renderer/lib/toast";
+import { cn } from "@renderer/lib/utils";
+
+/**
+ * The only harness Volli can browse a model catalog for. OpenCode is the one
+ * adapter with native discovery behind it (`main/runtime-catalog-hub.ts`), so it
+ * is the only one whose pane has models to offer — at either scope.
+ *
+ * Deliberately NOT `harness-settings.tsx`'s `OVERRIDABLE_BINARY_HARNESS_ID`,
+ * however equal the two strings are today. That one answers "whose executable
+ * path will Volli store?", which is a global-only question; this one answers
+ * "whose models can be listed?", which Configure asks per project. Folding them
+ * into one constant would weld the two facts together exactly where the surfaces
+ * diverge — Configure offers the models and never the binary.
+ */
+export const MODEL_CATALOG_HARNESS_ID = "opencode";
+
+/**
+ * `window.api` where there is one. The settings surfaces render under
+ * `renderToStaticMarkup` in unit tests, where there is no `window` at all and
+ * no preload bridge — the built-in half of the list is compiled in, so the pane
+ * still renders every first-class harness with nothing to fetch.
+ */
+export function preloadApi(): Window["api"] | undefined {
+  return typeof window === "undefined" ? undefined : window.api;
+}
+
+/**
+ * Every harness this host can launch: the compiled-in first-class adapters, plus
+ * whatever manifests main reports registered.
+ *
+ * Per HOST, not per scope — a project cannot register or revoke a harness — so
+ * both callers get the identical list and only the detail beneath it is scoped.
+ */
+export function useHarnessListings(): readonly HarnessListing[] {
+  const [registered, setRegistered] = React.useState<readonly HarnessAdapter[]>([]);
+
+  React.useEffect(() => {
+    const api = preloadApi();
+    if (api === undefined) return;
+    let cancelled = false;
+    api.harness
+      .registered()
+      .then((result) => {
+        if (cancelled) return;
+        if (!result.ok) {
+          toastError(`Couldn't load registered harnesses: ${result.error}`);
+          return;
+        }
+        setRegistered(result.harnesses);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        toastError(`Couldn't load registered harnesses: ${errorMessage(error)}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return React.useMemo(() => harnessListings(registered), [registered]);
+}
+
+/**
+ * The master list, as one row of pills above the detail it selects.
+ *
+ * Above rather than beside: a settings pane is one 608px reading column, and the
+ * OpenCode detail already spends it on a provider/model master-detail of its
+ * own — a second vertical rail in front of that leaves the model rows too narrow
+ * to read their own ids. Above, the selector costs one row and the detail keeps
+ * the full width.
+ *
+ * Every harness is listed, including the ones with nothing to configure. A list
+ * pruned to the configurable one would quietly claim this host can launch
+ * exactly one harness.
+ */
+export function HarnessSelector({
+  listings,
+  activeId,
+  onSelect,
+}: {
+  listings: readonly HarnessListing[];
+  activeId: string | null;
+  onSelect(harnessId: string): void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Harnesses"
+      className="flex w-fit flex-wrap gap-1 rounded-lg border border-border bg-card/50 p-1"
+    >
+      {listings.map((listing) => {
+        const isActive = listing.id === activeId;
+        return (
+          <button
+            key={listing.id}
+            type="button"
+            aria-current={isActive ? true : undefined}
+            onClick={() => onSelect(listing.id)}
+            className={cn(
+              "h-7 rounded-md px-3 text-ui transition-colors",
+              isActive
+                ? "bg-accent text-foreground"
+                : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+            )}
+          >
+            {listing.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The selected harness's identity card: the executable a launch resolves, and
+ * where the harness came from.
+ *
+ * Deliberately spare, and the same two facts at both scopes — they are what is
+ * true and knowable about a harness Volli has nothing else to change about, and
+ * padding a pane out to a matching size would state things nobody can act on.
+ * `children` is where a scope adds the rows it alone owns (Settings puts the
+ * binary override here; Configure has none to add).
+ */
+export function HarnessIdentitySection({
+  listing,
+  children,
+}: React.PropsWithChildren<{ listing: HarnessListing }>) {
+  return (
+    <SettingsSection
+      title={listing.label}
+      icon={CpuIcon}
+      action={<OriginChip origin={listing.origin} />}
+    >
+      <SettingsRow label="Command">
+        <code className="rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-xs text-foreground">
+          {listing.command}
+        </code>
+      </SettingsRow>
+      {children}
+    </SettingsSection>
+  );
+}
+
+/** Built-in or registered, stated where the harness's other identity facts are. */
+function OriginChip({ origin }: { origin: HarnessOrigin }) {
+  return (
+    <span className="rounded-full border border-border px-2 py-0.5 text-label uppercase text-muted-foreground">
+      {origin === "built-in" ? "Built-in" : "Registered"}
+    </span>
+  );
+}

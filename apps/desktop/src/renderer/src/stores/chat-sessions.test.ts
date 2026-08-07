@@ -33,6 +33,9 @@ const projection: SessionProjection = {
   capabilities: [],
   interactions: { active: [], resolved: [] },
   signal: null,
+  turnActive: false,
+  lastActivityAt: SESSION.createdAt,
+  bornTicketless: SESSION.ticketId === null,
 };
 
 interface CommandAnswer {
@@ -252,8 +255,66 @@ describe("writes addressed to a Session that is gone", () => {
     });
     store.getState().enqueue("ghost", { id: "q1", text: "hello" });
     store.getState().dequeue("ghost", "q1");
+    store.getState().retitle("ghost", "Parser");
 
     expect(store.getState().sessions).toEqual({});
+  });
+});
+
+describe("retitle", () => {
+  function seeded() {
+    const edge = fixture();
+    edge.store.getState().adoptChatSession("durable-9");
+    return { ...edge, slice: () => edge.store.getState().sessions["durable-9"]! };
+  }
+
+  it("moves the title the surface reads, ahead of the stream", () => {
+    const { store, slice } = seeded();
+    store.getState().setProjection("durable-9", projection);
+
+    store.getState().retitle("durable-9", "Parser");
+
+    expect(slice().projection?.session).toMatchObject({ id: SESSION.id, title: "Parser" });
+  });
+
+  /** No projection is no title to correct — inventing one would put a Session
+   * on screen that nothing has described yet. */
+  it("keeps its identity for a Session the stream has not described", () => {
+    const { store, slice } = seeded();
+    const before = slice();
+
+    store.getState().retitle("durable-9", "Parser");
+
+    expect(slice()).toBe(before);
+    expect(slice().projection).toBeNull();
+  });
+});
+
+describe("the in-flight flag", () => {
+  it("names the owners with a create in flight, and forgets them once cleared", () => {
+    const { store } = fixture();
+
+    store.getState().setStarting("t1", true);
+    expect(store.getState().starting).toEqual({ t1: true });
+
+    store.getState().setStarting("t2", true);
+    store.getState().setStarting("t1", false);
+
+    expect(store.getState().starting).toEqual({ t2: true });
+  });
+
+  it("keeps its identity when the flag already says what it was told", () => {
+    const { store } = fixture();
+    const empty = store.getState().starting;
+
+    store.getState().setStarting("t1", false);
+    expect(store.getState().starting).toBe(empty);
+
+    store.getState().setStarting("t1", true);
+    const raised = store.getState().starting;
+    store.getState().setStarting("t1", true);
+
+    expect(store.getState().starting).toBe(raised);
   });
 });
 

@@ -1,107 +1,64 @@
 # Session UI migration readiness
 
-Whether the lab chat surface is mature enough to become the app's real Session
-UI, and what stands between here and there. The answer is now: it was, and it
-did — sessions 1–3 of the approved four-session order are landed, and the chat
-surface lives in the app. The audit trail that produced this plan lives in this
-file's git history.
+Sessions 1–4 are landed. Chat is part of the production Session UI. Session 5
+completes the remaining navigation seam. A chat that has no ticket must open
+its own conversation from Sessions.
 
-Not the OpenCode-parity backlog; `opencode-surface-audit.md` owns that, and
-the answer there is deliberately no.
+OpenCode surface parity is outside this plan. See
+`docs/plans/opencode-surface-audit.md` for that work.
 
-## Where it stands
+## Current model
 
-Migration 018 settled the foundation before the audit began: terminal and
-structured paths are one Session identity in one ledger. A chat Session is a
-second adapter on that identity, not a second notion of session.
+- Terminal and chat adapters share one durable Session identity and ledger.
+- Local durable history is canonical. Streaming state is a transient overlay
+  that settles into the ledger and transcript artifacts.
+- Chat subscriptions survive view unmounts. Durable Sessions and drafts
+  rehydrate after app relaunches.
+- A chat stays in its ticket tabs while that ticket remains on the board. A chat
+  is ticket-independent when it was born without a ticket or its former ticket
+  is no longer present. Ticket-independent chats are durable and listed, but
+  Sessions cannot host their conversation yet.
 
-1. **Transport + harness settings — shipped** (PRs #170/#171). Runtime
-   Catalog over IPC, `projectId` routing through a per-directory hub,
-   `api.sessionRpc` preload door, multi-harness settings with a validated
-   per-harness binary override, login-shell PATH proven under a bare-PATH
-   launch. Named seam for session 4's per-project pickers: **discovery is
-   per-project, persistence stayed global** — a second writer of
-   `volli:runtime-preferences:<adapterId>` must scope the row or the save.
-2. **Delta frames — shipped** (`docs/plans/delta-frames.md` is the record).
-   Streaming is a transient overlay over durable settle-point snapshots;
-   wire 19.63× → 2.55×, artifact writes and ledger events per answer
-   397 → 1, fence churn 33,309 → 689.
-3. **The move — shipped** (`session/chat-move`). The chat surface is the
-   app's: pure core in `src/renderer/src/chat/` and components in
-   `components/chat/`, all pure `.ts` coverage-enrolled at 100%. The
-   resident core replaces the lab controller: a per-sessionId store
-   (`stores/chat-sessions.ts`) plus a client registry
-   (`chat/registry.ts` / `chat/client.ts`) that owns the subscription, so
-   streaming survives view unmounts; reconnect hands the tracked id back as
-   `lastEventId` alongside `afterSequence` (both, deliberately — each covers
-   a gap the other has); re-attach after failure keeps the durable id with
-   `continuity: "fresh"`. A chat Session is a ticket tab
-   (`kind: "chat"`, tab id `chat:<sessionId>`), opened from the tab
-   strip's "+" menu (Terminal / Chat), adopted lazily on activation and
-   after relaunch. The Session listing is a discriminated
-   `SessionListingRow` union — terminal rows byte-identical to before, chat
-   rows honest about what they are — decided once in `data-ipc.ts`; the
-   sidebar and ticket rail name chat Sessions and count them live. The lab
-   scratch survives as a thin shell over the app's own components; scenarios
-   stay lab-only, passed through the executor parameter.
+## Landed
 
-Hardening that landed with the move, found by live use and a hands-on drive:
-the ticket worktree is materialized at attach through the same `ensure`
-pipeline the terminal uses (`SessionLocationResolver.prepare`, attach-only —
-`resolve` stays cheap for every other command, and the binding persists the
-directory `prepare` returned, never the pre-materialization read); the
-adapter repeats OpenCode's `error.data.message` in attention detail while
-keeping bodies and headers redacted; the blocker renders the cause, not just
-the headline; a new assistant message id counts as turn-start evidence, so a
-missed `busy` event (an SSE reconnect gap) can no longer wedge a Session
-working and silently drop a turn's durable settle.
+- Runtime discovery and settings are project-aware, with explicit native
+  adapter selection and no silent terminal fallback.
+- Delta frames keep streaming transient while preserving durable settle points.
+- Chat creation uses the owner-keyed boot guard and persists the Session before
+  adapter attachment.
+- Drafts and chat titles persist across relaunch.
+- The sidebar lists durable Sessions and does not infer placeholder rows from
+  ticket status. A row is selected only when its own tab or pane is in front.
+- Destructive worktree actions account for live terminal and native bindings.
 
-Proof: `e2e/session-chat-smoke.mjs` drives the built app through binary
-override → model enable → "+" → Chat → prompt → streamed answer → settle →
-second turn → relaunch, asserting both answers come back from the durable
-transcript with no live adapter, and the worktree exists on disk. The fake
-OpenCode server (`e2e/lib/fake-opencode-server.mjs`) speaks the adapter's
-real wire contract, including `session.status` busy.
+The implementation and proof for the first four sessions live in PRs
+#170–#182 and `docs/plans/delta-frames.md`. Git history retains the audit trail
+removed from this status page.
 
-## Settled decisions
+## Session 5
 
-Settled 2026-08-04/05; do not reopen.
+Session 5 owns ticket-independent chat hosting:
 
-1. **Coverage: the pure `.ts` chat modules enrolled with the move — done.**
-   `.tsx` stays excluded; the correctness core (store, client, registry,
-   transcript fold, wire validators) is where transport, lifecycle and
-   delivery live, and all of it is behind the 100% gate.
-2. **Mermaid stays; math is gone.** The remaining bundle lever is the
-   duplicated Shiki grammar/theme set (82 chunk names in two copies);
-   the +192 KiB gzip on the eager boot chunk is the number that matters.
-3. **The frame shape landed inside migration prep — done.** See
-   `delta-frames.md`.
+- Rename the Terminals navigation label to Sessions. Keep the `sessions` route
+  key unchanged.
+- Host chat tabs on Sessions using the ticket tab-strip interaction model.
+- Key `useChatSessionsStore.openTabs` by surface owner id. Use the ticket id
+  while the ticket remains on the board; otherwise use the project id. This UI
+  host key does not rewrite the Session's durable ticket history.
+- Offer Terminal and Chat from the scratch Sessions creation menu.
+- Open the exact conversation when a sidebar row represents either a chat born
+  without a ticket or a chat whose former ticket is gone. This includes rows
+  shown by the Cleaned up filter.
+- Update the affected navigation smokes, screenshots, accessibility text, and
+  active-band menu locator.
 
-## Not blockers — recorded so they are not re-filed
+Until this lands, ticket-independent chat rows remain durable and visible.
+Selecting one opens Sessions without opening its conversation. In Session 4,
+the Cleaned up filter controls visibility. Session 5 adds conversation hosting.
 
-- **Virtualization.** Measured clean to 500 turns. A "when", not an "if".
-- **Drafts don't survive tab switches.** The Session, queue, and stream do
-  (registry-resident); the half-typed composer text is component state.
-  Per-Session draft persistence belongs to session 4's composer work.
-- **Chat tabs are non-renamable** until session 4.
-- **A live-but-idle chat sorts and dots as concluded** in Active Sessions
-  while its label reads "Chat · Live" — a sidebar-semantics call that
-  belongs to session 4's chat-first sidebar, not a data bug.
-- **`prepare` skips the terminal path's containment guard** (defense-in-depth
-  against a hand-edited `worktree_path`); the module comment doesn't
-  overclaim it.
-- **The CLI socket lists terminal sessions only** — deliberate; its verbs
-  are terminal-shaped.
-- Deferred and genuinely post-migration: dead vendored `ai-elements`
-  exports (~1,500 lines, `code-block.tsx` 522 of them); `lucide-react`
-  drift; a shared segmented-pill primitive; duration tokens; a crashed
-  `opencode serve` stranding live bindings; `PROJECTION_CACHE_LIMIT = 8`
-  thrashing past 8 live sessions.
+## Remaining risks
 
-## The remaining plan
-
-Session 4: creation surfaces funnel through `bootSession`
-(`session-create.ts`) — one seam to redesign; the sidebar goes chat-first
-with a chat/terminal filter (including the live-chat dot semantics above);
-per-project runtime pickers (scope the preferences row or the save — see the
-named seam above); per-Session drafts and chat rename ride along.
+- `sessions.list` refolds every event for every Session behind a 10-second poll.
+  Replace it with a cache or push projection before the cost becomes visible.
+- Previous is unbounded, and exempt scratch Sessions can accumulate forever.
+- A crashed adapter server can strand a live native binding.

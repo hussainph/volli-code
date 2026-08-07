@@ -21,7 +21,7 @@
  *      column composer, the non-destructive context menu, priority mutation
  *      reconcile + persistence, the Ordering dropdown, the board/list view
  *      toggle (list-view add + drag parity),
- *      the sidebar's Active Sessions, the chrome-static UI zoom (uiScale now
+ *      the sidebar's ACTIVE session band, the chrome-static UI zoom (uiScale now
  *      read back from SQLite `app_state`, not localStorage), and the global
  *      New-ticket dialog ("c" hotkey, chrome-search guard, header button),
  *      plus the persisted workspace-switcher visibility toggle.
@@ -298,30 +298,42 @@ async function columnCardIds(page, label) {
   }, label);
 }
 
-/** The ticket ids listed in the sidebar's "Active Sessions" group, in DOM order. */
-async function sidebarSessionIds(page) {
-  return page.evaluate(() => {
-    const groups = Array.from(document.querySelectorAll('[data-sidebar="group"]'));
-    const group = groups.find((g) =>
-      Array.from(g.querySelectorAll('[data-sidebar="group-label"]')).some(
-        (label) => label.textContent?.trim() === "Active Sessions",
-      ),
-    );
+/**
+ * The ticket ids listed in one of the sidebar's session bands, in DOM order.
+ * `null` when that band is not on screen at all.
+ *
+ * Anchored on `data-session-band` rather than on heading text. The bands' own
+ * labels are uppercased by CSS from sentence-case strings, so matching them
+ * would be matching a typographic treatment; and a ticketless row prints a
+ * globe instead of an id, so a row is not guaranteed to contribute an entry
+ * here at all — which is exactly why the attribute exists.
+ */
+async function sidebarSessionIds(page, band = "active") {
+  return page.evaluate((name) => {
+    const group = document.querySelector(`[data-session-band="${name}"]`);
     if (!group) return null;
     return Array.from(group.querySelectorAll('[data-sidebar="menu-button"] span.font-mono')).map(
       (span) => span.textContent?.trim(),
     );
-  });
+  }, band);
 }
 
 /**
- * A session row's meta line (`VC-10 · Ready for review`).
+ * The count a session band's header prints — the built listing's own row count,
+ * read back off the rendered heading. `null` when that band is not on screen.
  *
- * Everything dimmed in the row promotes together under decision #74's vibrancy
- * rule, so the hook class is `session-row-dim` and the title carries it too —
- * pin the selector to the one span that holds the mono ticket id.
+ * Worth asserting separately from the ids above because the two come from
+ * different halves of the seam: the count is `listing.<band>.length` straight
+ * from the model, the ids are what the rows actually drew. A band that rendered
+ * a subset of what it counted would read as truthful on either one alone.
  */
-const SESSION_ROW_META = "span.session-row-dim:has(> span.font-mono)";
+async function sidebarBandCount(page, band) {
+  return page.evaluate((name) => {
+    const header = document.querySelector(`[data-session-band="${name}"]`)?.firstElementChild;
+    const raw = header?.children[1]?.textContent?.trim();
+    return raw === undefined ? null : Number(raw);
+  }, band);
+}
 
 // ---- main ------------------------------------------------------------------
 
@@ -971,63 +983,43 @@ async function main() {
       },
     );
 
-    // === 16. Sidebar attention tier is truthful without a live terminal =====
+    // === 16. The session bands speak for Sessions, never for tickets ========
     await attempt(
       16,
-      "Active Sessions promotes Needs Review to Needs you and mirrors Doing under Active without inventing live sessions",
+      "a board full of Doing and Needs Review tickets with no Session produces no session rows",
       async () => {
-        // The Active tier guarantees every Doing ticket a presence (bare rows
-        // here — no PTY ever ran), alongside the promoted Needs Review rows.
+        // This fixture has never run a Session, and the board is full of work
+        // in flight — the exact state an earlier rule filled ACTIVE with one
+        // synthetic row per Doing/Needs-Review ticket, pushing real Sessions
+        // below them. Both bands must now be empty: a ticket is not a Session,
+        // and the board is where a ticket's status lives.
         const doingIds = await columnCardIds(page, "Doing");
-        const ids = await sidebarSessionIds(page);
-        const expectedIds = ["VC-10", "VC-11", ...doingIds];
-        const idsMatch =
-          Array.isArray(ids) &&
+        const activeIds = await sidebarSessionIds(page, "active");
+        const previousIds = await sidebarSessionIds(page, "previous");
+        // Non-vacuous: there really is in-flight work for a ticket row to have
+        // been invented from.
+        const boardHasWork =
           doingIds.length > 0 &&
-          ids.length === expectedIds.length &&
-          expectedIds.every((id) => ids.includes(id));
-        const needsYou = (await page.getByText("Needs you", { exact: true }).count()) === 1;
-        const activeTier = (await page.getByText("Active", { exact: true }).count()) === 1;
-        const bareDoingRows =
-          (await page.getByText("No live session", { exact: false }).count()) >= doingIds.length;
-        const noInProgress = (await page.getByText("In progress", { exact: true }).count()) === 0;
-        const needsYouRow = page
-          .locator('[data-sidebar="menu-button"]')
-          .filter({ has: page.locator("span.font-mono", { hasText: /^VC-10$/ }) })
-          .first();
-        const subtextBefore = await needsYouRow
-          .locator(SESSION_ROW_META)
-          .evaluate((element) => getComputedStyle(element).color);
-        await needsYouRow.click();
-        await sleep(400);
-        const ticketOpened =
-          (await page.getByRole("tab", { name: "VC-10", exact: true }).count()) === 1;
-        const subtextHighlight = await needsYouRow.evaluate((button, metaSelector) => {
-          const subtext = button.querySelector(metaSelector);
-          if (!(subtext instanceof HTMLElement)) return null;
-          return {
-            active: button.getAttribute("data-active"),
-            buttonColor: getComputedStyle(button).color,
-            subtextColor: getComputedStyle(subtext).color,
-          };
-        }, SESSION_ROW_META);
-        const subtextHighlighted =
-          subtextHighlight?.active === "true" &&
-          subtextHighlight.subtextColor === subtextHighlight.buttonColor &&
-          subtextHighlight.subtextColor !== subtextBefore;
-        await page.keyboard.press("Escape");
-        await sleep(300);
-        const ok =
-          idsMatch &&
-          needsYou &&
-          activeTier &&
-          bareDoingRows &&
-          noInProgress &&
-          ticketOpened &&
-          subtextHighlighted;
+          (await columnCardIds(page, "Needs Review")).length > 0 &&
+          Array.isArray(activeIds) &&
+          Array.isArray(previousIds);
+        const noTicketRows = activeIds?.length === 0 && previousIds?.length === 0;
+        // The counts come from the model, the ids from what rendered — a band
+        // that counted rows it never drew would read as truthful on either
+        // one alone.
+        const bandCounts =
+          (await sidebarBandCount(page, "active")) === 0 &&
+          (await sidebarBandCount(page, "previous")) === 0;
+        // The retired bare row's own words, gone from the app entirely.
+        const noBareRows =
+          (await page.getByText("No live session", { exact: false }).count()) === 0;
+        const emptyCopy =
+          (await page.getByText("No active sessions", { exact: true }).count()) === 1 &&
+          (await page.getByText("Nothing yet", { exact: true }).count()) === 1;
+        const ok = boardHasWork && noTicketRows && bandCounts && noBareRows && emptyCopy;
         return {
           ok,
-          detail: `ids=${JSON.stringify(ids)} doing=${JSON.stringify(doingIds)} needsYou=${needsYou} activeTier=${activeTier} bareDoingRows=${bareDoingRows} noInProgress=${noInProgress} ticketOpened=${ticketOpened} subtext=${JSON.stringify(subtextHighlight)}`,
+          detail: `doing=${JSON.stringify(doingIds)} activeIds=${JSON.stringify(activeIds)} previousIds=${JSON.stringify(previousIds)} bandCounts=${bandCounts} noBareRows=${noBareRows} emptyCopy=${emptyCopy}`,
         };
       },
     );

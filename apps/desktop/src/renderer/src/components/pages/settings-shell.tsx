@@ -154,6 +154,19 @@ export function SettingsSection({
 }
 
 /**
+ * The quiet one-liner an inheriting surface shows instead of a control it isn't
+ * using — what a section whose scope is set to Inherit says in place of the
+ * picker it has handed back to the app-wide choice.
+ *
+ * Here rather than beside any one caller: Configure's Appearance and Runtime
+ * categories both draw it, and the whole point of the idiom is that every
+ * inheriting section looks the same.
+ */
+export function InheritNote({ children }: { children: ReactNode }) {
+  return <p className="text-xs leading-5 text-muted-foreground">{children}</p>;
+}
+
+/**
  * A single setting: label + optional description on the left, its control on
  * the right. Rows stacked inside a {@link SettingsSection} are separated by a
  * hairline divider (suppressed on the first row). `align="start"` top-aligns
