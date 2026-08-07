@@ -170,6 +170,30 @@ describe("volli:retention-archive-clean", () => {
     expect(getTicketRow(ctx.db, "t1")!.archived_at).not.toBeNull();
     expect(dataChangedSends.some((s) => s.channel === "volli:data-changed")).toBe(true);
   });
+
+  it("refuses to archive a worktree that still holds a live Session", async () => {
+    const worktreePath = "/worktrees/VC-1";
+    seedTicket({
+      usesWorktree: true,
+      worktreePath,
+      branch: "volli/VC-1-live-session",
+      baseBranch: "main",
+    });
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { liveSessionCwds: () => [`${worktreePath}/packages/app`] },
+    );
+
+    const result = await invoke<Promise<Result>>("volli:retention-archive-clean", {
+      ticketId: "t1",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "Close the live sessions running in this worktree before archiving it.",
+    });
+    expect(getTicketRow(ctx.db, "t1")!.archived_at).toBeNull();
+  });
 });
 
 describe("volli:retention-poll", () => {

@@ -361,12 +361,96 @@ describe("SessionRuntime durable boundary invariants", () => {
     expect(affirmed).toEqual(["/w/VC-3"]);
     expect(adapter.dispatches).toBe(1);
 
-    gone = new Error("The Session's directory /w/VC-3 is gone and couldn't be recreated.");
-    await expect(prompt("prompt-refused")).rejects.toThrow(
-      "The Session's directory /w/VC-3 is gone and couldn't be recreated.",
-    );
+    const detail = "The Session's directory /w/VC-3 is gone and couldn't be recreated.";
+    gone = new Error(detail);
+    await expect(prompt("prompt-refused")).resolves.toMatchObject({
+      receipt: { status: "rejected", code: "location_unavailable", detail },
+    });
     // Volli's sentence, and the harness was never handed the missing path.
     expect(adapter.dispatches).toBe(1);
+    expect(affirmed).toEqual(["/w/VC-3", "/w/VC-3"]);
+    expect((await runtime.snapshot({ sessionId: created.sessionId })).projection.receipts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          commandId: "prompt-refused",
+          status: "rejected",
+          code: "location_unavailable",
+          detail,
+        }),
+      ]),
+    );
+
+    // The terminal receipt closes the idempotency loop: replaying the same
+    // intent neither asks the host again nor reaches the adapter.
+    await expect(prompt("prompt-refused")).resolves.toMatchObject({
+      receipt: { status: "rejected", code: "location_unavailable", detail },
+    });
+    expect(affirmed).toEqual(["/w/VC-3", "/w/VC-3"]);
+    expect(adapter.dispatches).toBe(1);
+  });
+
+  it("re-affirms before resolving an interaction and keeps a refused one open", async () => {
+    const detail = "The Session's directory /w/VC-4 is gone and couldn't be recreated.";
+    let gone = false;
+    const { runtime, adapter } = composition({
+      directory: () => "/w/VC-4",
+      reaffirm: async () => {
+        if (gone) throw new Error(detail);
+      },
+    });
+    const created = await create(runtime);
+    await attach(runtime, created.sessionId);
+    await adapter.emit({
+      id: "permission-1",
+      kind: "interaction.opened",
+      occurredAt: 300,
+      interaction: {
+        id: "permission-1",
+        kind: "permission",
+        title: "Write file",
+        detail: null,
+        options: [{ id: "allow", label: "Allow", description: null }],
+        multiple: false,
+        native: { id: "native-permission-1", detail: { request: 1 } },
+      },
+    });
+    gone = true;
+
+    await expect(
+      runtime.command({
+        commandId: "resolve-missing-location",
+        sessionId: created.sessionId,
+        command: {
+          kind: "interaction.resolve",
+          interactionId: "permission-1",
+          resolution: { optionIds: ["allow"], response: null },
+        },
+      }),
+    ).resolves.toMatchObject({
+      receipt: { status: "rejected", code: "location_unavailable", detail },
+    });
+    expect(adapter.dispatches).toBe(0);
+    expect(
+      (await runtime.snapshot({ sessionId: created.sessionId })).projection.interactions.active,
+    ).toEqual([expect.objectContaining({ id: "permission-1" })]);
+  });
+
+  it("reports only the directories held by live native bindings", async () => {
+    const { runtime } = composition({ directory: () => "/w/VC-5" });
+    expect(runtime.liveNativeBindingDirectories()).toEqual([]);
+    const created = await create(runtime);
+    await attach(runtime, created.sessionId);
+    const attachmentId = (await runtime.snapshot({ sessionId: created.sessionId })).projection
+      .liveExecutor!.id;
+
+    expect(runtime.liveNativeBindingDirectories()).toEqual(["/w/VC-5"]);
+
+    await runtime.command({
+      commandId: "release-live-directory",
+      sessionId: created.sessionId,
+      command: { kind: "adapter.release", attachmentId },
+    });
+    expect(runtime.liveNativeBindingDirectories()).toEqual([]);
   });
 
   // The other half: a binding rebuilt from history — a replayed attach, or the
@@ -399,6 +483,81 @@ describe("SessionRuntime durable boundary invariants", () => {
     );
     expect(affirmed).toEqual(["/ticket/original"]);
     expect(rebuilt.attaches).toBe(0);
+  });
+
+  it("records a location rejection before a command can rehydrate a missing binding", async () => {
+    const first = composition({ directory: () => "/ticket/original" });
+    const created = await create(first.runtime);
+    await attach(first.runtime, created.sessionId);
+    await first.runtime.close();
+
+    const rebuilt = new Adapter();
+    const detail = "The Session's directory /ticket/original is gone and couldn't be recreated.";
+    const recovered = composition({
+      engine: first.engine,
+      adapter: rebuilt,
+      directory: () => "/ticket/rerouted",
+      reaffirm: async () => {
+        throw new Error(detail);
+      },
+      runtimeIdPrefix: "recovered-command-",
+    });
+
+    await expect(
+      recovered.runtime.command({
+        commandId: "message-after-relaunch",
+        sessionId: created.sessionId,
+        command: { kind: "message.submit", message: message("message-after-relaunch") },
+      }),
+    ).resolves.toMatchObject({
+      receipt: { status: "rejected", code: "location_unavailable", detail },
+    });
+    expect(rebuilt.attaches).toBe(0);
+    expect(rebuilt.dispatches).toBe(0);
+  });
+
+  it("rejects legacy bindings at the resolved location before looking up a missing adapter", async () => {
+    const detail = "The resolved Session directory is unavailable.";
+    const { runtime, engine } = composition({
+      directory: () => "/ticket/resolved",
+      reaffirm: async (_session, directory) => {
+        expect(directory).toBe("/ticket/resolved");
+        throw new Error(detail);
+      },
+    });
+    const created = await create(runtime);
+    await engine.observe({
+      id: "legacy-binding-opened",
+      sessionId: created.sessionId,
+      occurredAt: 80,
+      provenance: { source: { kind: "adapter", id: "missing-adapter", detail: null }, venue },
+      kind: "attachment.opened",
+      attachment: {
+        id: "legacy-binding",
+        sessionId: created.sessionId,
+        adapterId: "missing-adapter",
+        venue,
+        continuity: "native_resume",
+        native: {
+          id: "legacy-native",
+          detail: {
+            kind: "volli.native-binding.v1",
+            profileId: "native",
+            locator: null,
+          },
+        },
+      },
+    });
+
+    await expect(
+      runtime.command({
+        commandId: "message-to-legacy-binding",
+        sessionId: created.sessionId,
+        command: { kind: "message.submit", message: message("message-to-legacy-binding") },
+      }),
+    ).resolves.toMatchObject({
+      receipt: { status: "rejected", code: "location_unavailable", detail },
+    });
   });
 
   it("reconciles replayed unreconciled work without dispatching it again", async () => {

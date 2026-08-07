@@ -217,10 +217,11 @@ export function registerDataIpcHandlers(
   options: {
     detectBaseBranch?: (projectPath: string) => string | null;
     /**
-     * The resolved cwds of every live PTY session (from the PtyManager). The
-     * worktree remove/orphan-delete guards refuse to touch a directory that
-     * still has a session running at or under it. Absent (tests, degraded boot)
-     * means "assume none" — the guard then relies on the git/dirtiness checks.
+     * The resolved directories of every live local execution surface: PTY cwds
+     * plus native binding directories. The worktree remove/orphan-delete guards
+     * refuse to touch a directory that still has a Session running at or under
+     * it. Absent (tests, degraded boot) means "assume none" — the guard then
+     * relies on the git/dirtiness checks.
      */
     liveSessionCwds?: () => string[];
     /**
@@ -553,7 +554,7 @@ export function registerDataIpcHandlers(
     "volli:worktree-remove": async (input: WorktreeRemoveInput): Promise<WorktreeRemoveResult> => {
       // Main-side liveness guard (the renderer context menu's disable is a
       // stale client-side hint only): never yank a worktree out from under a
-      // terminal still running in it. Canonicalized containment, same as the
+      // Session still running in it. Canonicalized containment, same as the
       // orphan-delete guard below.
       const ticket = getTicketRow(db, input.ticketId);
       const worktreePath = ticket?.worktree_path ?? null;
@@ -563,7 +564,7 @@ export function registerDataIpcHandlers(
       ) {
         return {
           ok: false,
-          error: "Close the terminal sessions running in this worktree before removing it.",
+          error: "Close the live sessions running in this worktree before removing it.",
         };
       }
       const result = await removeWorktree(worktreeDeps(db), input.ticketId, {
@@ -639,11 +640,11 @@ export function registerDataIpcHandlers(
           error: "This worktree is still linked to a ticket and can't be deleted here.",
         };
       }
-      //   (c) never delete out from under a terminal still running in it.
+      //   (c) never delete out from under a live Session still running in it.
       if (liveSessionWithin(target, options.liveSessionCwds?.() ?? [])) {
         return {
           ok: false,
-          error: "Close the terminal sessions running in this worktree before deleting it.",
+          error: "Close the live sessions running in this worktree before deleting it.",
         };
       }
       await rm(target, { recursive: true, force: true });
@@ -825,7 +826,7 @@ export function registerDataIpcHandlers(
       input: TicketIdInput,
     ): Promise<RetentionArchiveCleanResult> => {
       // Liveness guard, mirroring worktree-remove: never yank a worktree out
-      // from under a terminal still running in it.
+      // from under a live Session still running in it.
       const worktreePath = getTicketRow(db, input.ticketId)?.worktree_path ?? null;
       if (
         worktreePath !== null &&
@@ -833,7 +834,7 @@ export function registerDataIpcHandlers(
       ) {
         return {
           ok: false,
-          error: "Close the terminal sessions running in this worktree before archiving it.",
+          error: "Close the live sessions running in this worktree before archiving it.",
         };
       }
       const result = await archiveAndClean(worktreeDeps(db), input.ticketId);

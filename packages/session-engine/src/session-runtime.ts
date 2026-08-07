@@ -243,6 +243,12 @@ export interface SessionRuntime {
   close(): Promise<void>;
 }
 
+/** The host-owned runtime plus the live local bindings only its process can know about. */
+export interface HostedSessionRuntime extends SessionRuntime {
+  /** Read-only snapshot used to keep destructive worktree actions away from live native work. */
+  liveNativeBindingDirectories(): string[];
+}
+
 export class SessionRuntimeNotFoundError extends Error {
   constructor(message: string) {
     super(message);
@@ -392,6 +398,10 @@ class DefaultSessionRuntime implements SessionRuntime {
   #closed = false;
 
   constructor(private readonly ports: SessionRuntimePorts) {}
+
+  liveNativeBindingDirectories(): string[] {
+    return [...new Set([...this.#bindings.values()].map((binding) => binding.spec.directory))];
+  }
 
   command(request: SessionRuntimeCommandRequest): Promise<SessionRuntimeCommandResult> {
     this.#assertOpen();
@@ -782,17 +792,30 @@ class DefaultSessionRuntime implements SessionRuntime {
     if (submitted.receipt && submitted.receipt.status !== "unreconciled")
       return this.#result(request.sessionId, submitted.command, submitted.receipt);
 
+    // A fresh command has definitely not reached the adapter yet. Validate the
+    // immutable binding directory before binding/reconciliation can throw past
+    // the durable intent, and turn a local preflight failure into the terminal
+    // receipt that intent is owed.
+    if (!existed) {
+      const unavailable = await this.#rejectUnavailableLocation(
+        request.sessionId,
+        submitted.command,
+        projection,
+        location,
+      );
+      if (unavailable) return this.#result(request.sessionId, submitted.command, unavailable);
+    }
+
     const binding = await this.#bindingForCommand(submitted.command, projection, location);
     const recovered = await this.#recoverAdapterDelivery({ request, submitted, binding, existed });
     if (recovered) return recovered;
 
-    // Here and not in `#command`, which every verb passes through: a turn is the
-    // only thing that sends a harness back into the directory to do new work, so
-    // it is the only thing that has to know the directory is still there. An
-    // interrupt needs no directory, and an interaction answer belongs to a turn
-    // this check already cleared. `resolve` above stays the cheap read it is
-    // documented to be; this is the one stat, on the one command that earns it.
-    await this.ports.locations.reaffirm(projection.session, binding.spec.directory);
+    // A replay reconciles before it attempts delivery: the earlier invocation
+    // may already have reached the adapter. Only when reconciliation finds no
+    // terminal receipt do we re-ask before dispatching. Fresh commands took the
+    // rejection-producing preflight above; `resolve` stays the cheap read it is
+    // documented to be.
+    if (existed) await this.ports.locations.reaffirm(projection.session, binding.spec.directory);
 
     const receipt = await binding.handle.dispatch({
       kind: "message.submit",
@@ -900,6 +923,18 @@ class DefaultSessionRuntime implements SessionRuntime {
     await this.#publishSubmit(submitted, existed);
     if (submitted.receipt && submitted.receipt.status !== "unreconciled")
       return this.#result(request.sessionId, submitted.command, submitted.receipt);
+
+    // An interaction can wait on a person indefinitely, so the turn's earlier
+    // directory check is not evidence that the reply still has somewhere to go.
+    if (!existed) {
+      const unavailable = await this.#rejectUnavailableLocation(
+        request.sessionId,
+        submitted.command,
+        projection,
+        location,
+      );
+      if (unavailable) return this.#result(request.sessionId, submitted.command, unavailable);
+    }
     const binding = await this.#bindingForAttachment(
       interaction.attachmentId,
       projection,
@@ -907,6 +942,9 @@ class DefaultSessionRuntime implements SessionRuntime {
     );
     const recovered = await this.#recoverAdapterDelivery({ request, submitted, binding, existed });
     if (recovered) return recovered;
+    // Same replay rule as message delivery. A fresh interaction resolution was
+    // checked before binding; an older ambiguous attempt reconciles first.
+    if (existed) await this.ports.locations.reaffirm(projection.session, binding.spec.directory);
     const receipt = await binding.handle.dispatch({
       kind: "interaction.resolve",
       commandId: request.commandId,
@@ -1727,6 +1765,57 @@ class DefaultSessionRuntime implements SessionRuntime {
     return event.payload.receipt;
   }
 
+  /**
+   * Re-validate the immutable directory a routed command is about to use.
+   *
+   * This runs after intent is durable and before any adapter call. A failure is
+   * therefore an ordinary local rejection, not a thrown transport error and not
+   * an attachment failure: the open binding remains retryable once its directory
+   * can be restored.
+   */
+  async #rejectUnavailableLocation(
+    sessionId: string,
+    command: SessionCommand,
+    projection: SessionProjection,
+    location: SessionLocation,
+  ): Promise<CommandReceipt | null> {
+    const attachmentId = command.route?.attachmentId;
+    /* v8 ignore next 3 -- routed adapter commands are enforced by SessionEngine. */
+    if (!attachmentId) {
+      throw new SessionRuntimeConflictError(`Command ${command.id} has no attachment route`);
+    }
+    const attachment = projection.attachments.find(({ id }) => id === attachmentId);
+    /* v8 ignore next 3 -- SessionEngine only routes commands to an open attachment. */
+    if (!attachment || attachment.status !== "open") {
+      throw new SessionRuntimeNotFoundError(`Attachment ${attachmentId} is not open`);
+    }
+    const binding = unwrapNativeBinding(attachment.native);
+    try {
+      await this.ports.locations.reaffirm(
+        projection.session,
+        binding.directory ?? location.directory,
+      );
+      return null;
+    } catch (error) {
+      const adapter =
+        this.ports.adapters.get(attachment.adapterId) ?? adapterIdentity(attachment.adapterId);
+      return this.#recordDelivery(
+        sessionId,
+        attachmentId,
+        adapter,
+        attachment.venue,
+        {
+          commandId: command.id,
+          status: "rejected",
+          code: "location_unavailable",
+          detail: errorMessage(error),
+          native: null,
+        },
+        resultKindFor(command),
+      );
+    }
+  }
+
   async #publishSubmit(result: SubmitSessionCommandResult, replayed: boolean): Promise<void> {
     if (!replayed)
       await this.#publish([
@@ -2057,7 +2146,7 @@ class DefaultSessionRuntime implements SessionRuntime {
   }
 }
 
-export function createSessionRuntime(ports: SessionRuntimePorts): SessionRuntime {
+export function createSessionRuntime(ports: SessionRuntimePorts): HostedSessionRuntime {
   return new DefaultSessionRuntime(ports);
 }
 

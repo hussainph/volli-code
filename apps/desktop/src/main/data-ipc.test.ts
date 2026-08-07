@@ -1106,7 +1106,7 @@ describe("volli:worktree-remove", () => {
 
     expect(result).toEqual({
       ok: false,
-      error: "Close the terminal sessions running in this worktree before removing it.",
+      error: "Close the live sessions running in this worktree before removing it.",
     });
     expect(vi.mocked(removeWorktree)).not.toHaveBeenCalled();
   });
@@ -1252,7 +1252,7 @@ describe("volli:worktree-orphan-delete", () => {
 
     expect(result).toEqual({
       ok: false,
-      error: "Close the terminal sessions running in this worktree before deleting it.",
+      error: "Close the live sessions running in this worktree before deleting it.",
     });
     expect(existsSync(target)).toBe(true);
   });

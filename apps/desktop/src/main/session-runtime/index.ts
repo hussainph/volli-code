@@ -3,9 +3,9 @@ import type Database from "better-sqlite3";
 import {
   createNativeAdapterRegistry,
   createSessionRuntime,
+  type HostedSessionRuntime,
   type NativeHarnessAdapter,
   type SessionEngine,
-  type SessionRuntime,
 } from "@volli/session-engine";
 import { createDesktopSessionEngine } from "../session-control";
 import { createDesktopSessionLocationResolver } from "./location";
@@ -21,7 +21,9 @@ export interface DesktopSessionRuntimeOptions {
 }
 
 /** Composes the transport-neutral Session runtime with the desktop's durable adapters. */
-export function createDesktopSessionRuntime(options: DesktopSessionRuntimeOptions): SessionRuntime {
+export function createDesktopSessionRuntime(
+  options: DesktopSessionRuntimeOptions,
+): HostedSessionRuntime {
   const now = options.now ?? Date.now;
   const nextId = options.nextId ?? randomUUID;
   return createSessionRuntime({
