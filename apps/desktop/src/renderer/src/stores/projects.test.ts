@@ -2,7 +2,10 @@ import type { Canvas, Project, Ticket } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 import { flushPendingAppState } from "@renderer/lib/app-state-storage";
+import { EMPTY_CHAT_SELECTION, type ChatSessionSlice } from "@renderer/chat/client";
+import { EMPTY_TRANSCRIPT } from "@renderer/chat/transcript";
 import { useBoardStore } from "./board";
+import { useChatSessionsStore } from "./chat-sessions";
 import {
   PROJECTS_UI_APP_STATE_KEY,
   type ProjectsGateway,
@@ -42,6 +45,7 @@ beforeEach(() => {
   useBoardStore.setState({ ticketsByProject: {}, labelsByProject: {} });
   useWorkspaceStore.setState({ byProject: {} });
   useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, lastOutputAt: {}, starting: {} });
+  useChatSessionsStore.setState({ sessions: {}, openTabs: {} });
 });
 
 afterEach(() => {
@@ -70,6 +74,18 @@ function project(overrides: Partial<Project> & { id: string; path: string }): Pr
     createdAt: overrides.createdAt ?? 0,
     updatedAt: overrides.updatedAt ?? 0,
     ...overrides,
+  };
+}
+
+/** A resident chat slice, nothing about its content under test — only that it disappears. */
+function chatSlice(): ChatSessionSlice {
+  return {
+    projection: null,
+    transcript: EMPTY_TRANSCRIPT,
+    lifecycle: "ready",
+    sessionError: null,
+    queue: [],
+    selection: EMPTY_CHAT_SELECTION,
   };
 }
 
@@ -493,6 +509,44 @@ describe("removeProject", () => {
 
     expect(useSessionsStore.getState().byOwner["tk1"]).toBeUndefined();
     expect(kill).toHaveBeenCalledWith("ts1");
+  });
+
+  it("disposes the removed project's own ticketless chat clients", async () => {
+    // No terminal view is mounted here either, and chat-tab bookkeeping
+    // (openTabs) is left for board.ts's `forget`, run right after — this
+    // covers only the client teardown that has to happen alongside it.
+    const only = project({ id: "only", path: "/a" });
+    const { store } = freshStore();
+    store.getState().hydrate([only], only.id);
+    useChatSessionsStore.setState({
+      sessions: { "chat-1": chatSlice() },
+      openTabs: { only: ["chat-1"] },
+    });
+
+    await store.getState().removeProject(only.id);
+
+    expect(useChatSessionsStore.getState().sessions["chat-1"]).toBeUndefined();
+  });
+
+  it("disposes the removed project's ticket-owned chat clients too", async () => {
+    const only = project({ id: "only", path: "/a" });
+    const { store } = freshStore();
+    store.getState().hydrate([only], only.id);
+    // tk1 holds an open chat tab; tk2 is a live ticket of the same project
+    // with none — the empty owner key killProjectChatSessions must pass over.
+    useBoardStore.setState({
+      ticketsByProject: { only: [{ id: "tk1" } as Ticket, { id: "tk2" } as Ticket] },
+      labelsByProject: {},
+    });
+    useChatSessionsStore.setState({
+      sessions: { "chat-project": chatSlice(), "chat-ticket": chatSlice() },
+      openTabs: { only: ["chat-project"], tk1: ["chat-ticket"] },
+    });
+
+    await store.getState().removeProject(only.id);
+
+    expect(useChatSessionsStore.getState().sessions["chat-project"]).toBeUndefined();
+    expect(useChatSessionsStore.getState().sessions["chat-ticket"]).toBeUndefined();
   });
 
   it("is a no-op (no IPC call) for an unknown id", async () => {

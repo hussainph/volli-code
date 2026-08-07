@@ -11,7 +11,7 @@ import {
 import { SidebarGroup, SidebarMenu } from "@renderer/components/ui/sidebar";
 import {
   buildActiveSessionListing,
-  isScratchTerminalRowSelected,
+  isScratchRowSelected,
   type ActiveSessionRow,
   type PreviousSessionRow,
   type SessionRowKind,
@@ -91,6 +91,9 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   const openTicketSession = useWorkspaceStore((state) => state.openTicketSession);
   const setNav = useWorkspaceStore((state) => state.setNav);
   const setSessionsActiveTab = useWorkspaceStore((state) => state.setSessionsActiveTab);
+  const sessionsActiveTab = useWorkspaceStore(
+    (state) => state.byProject[project.id]?.sessionsActiveTab ?? null,
+  );
   const [records, setRecords] = React.useState<SessionRecord[]>([]);
   const [chatSessions, setChatSessions] = React.useState<ChatSessionRecord[]>([]);
   const [signalsByTicket, setSignalsByTicket] = React.useState<Record<string, LatestSessionSignal>>(
@@ -363,7 +366,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
    * tab is gone; it is never the tab in front of you.
    */
   const isSelected = (row: ActiveSessionRow | PreviousSessionRow): boolean =>
-    isScratchTerminalRowSelected(row, nav === "sessions", scratchContainer) ||
+    isScratchRowSelected(row, nav === "sessions", scratchContainer, sessionsActiveTab) ||
     (row.ticket !== null &&
       shownTicketId === row.ticket.id &&
       row.target !== null &&

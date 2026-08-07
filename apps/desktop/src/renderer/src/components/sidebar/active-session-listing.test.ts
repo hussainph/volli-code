@@ -23,7 +23,7 @@ import {
 import {
   ACTIVE_QUIET_WINDOW_MS,
   buildActiveSessionListing,
-  isScratchTerminalRowSelected,
+  isScratchRowSelected,
   DONE_LINGER_MS,
   isCleanupExempt,
   isConcludedBusiness,
@@ -794,22 +794,50 @@ describe("buildActiveSessionListing — the scratch container", () => {
       target: { kind: "terminal", tabId: "scratch-2", paneId: "scratch-2" },
     } satisfies ActiveSessionRow;
 
-    expect(isScratchTerminalRowSelected(row, true, scratchState)).toBe(true);
-    expect(isScratchTerminalRowSelected(row, false, scratchState)).toBe(false);
+    expect(isScratchRowSelected(row, true, scratchState, null)).toBe(true);
+    expect(isScratchRowSelected(row, false, scratchState, null)).toBe(false);
     expect(
-      isScratchTerminalRowSelected(
+      isScratchRowSelected(
         { ...row, target: { kind: "terminal", tabId: "scratch-1", paneId: "scratch-1" } },
         true,
         scratchState,
+        null,
       ),
     ).toBe(false);
     expect(
-      isScratchTerminalRowSelected(
+      isScratchRowSelected(
         { ...row, target: { kind: "chat", tabId: "chat:scratch-2", sessionId: "scratch-2" } },
         true,
         scratchState,
+        null,
       ),
     ).toBe(false);
+    // A row with no target at all — a Session whose tab is gone — is never
+    // the tab in front of you, whatever else is true.
+    expect(isScratchRowSelected({ ...row, target: null }, true, scratchState, null)).toBe(false);
+  });
+
+  it("selects a ticketless chat row only when its tab is the one in front on Sessions", () => {
+    const chatRow = {
+      id: "chat:chat-1",
+      ticket: null,
+      title: "Scratch chat",
+      source: "Chat",
+      activity: "idle",
+      activitySource: "reported",
+      attention: null,
+      waitingOn: null,
+      target: { kind: "chat", tabId: "chat:chat-1", sessionId: "chat-1" },
+    } satisfies ActiveSessionRow;
+
+    // Its own tab is the one activated from Sessions.
+    expect(isScratchRowSelected(chatRow, true, undefined, "chat:chat-1")).toBe(true);
+    // Sessions isn't the surface in front.
+    expect(isScratchRowSelected(chatRow, false, undefined, "chat:chat-1")).toBe(false);
+    // A different tab was last activated from Sessions.
+    expect(isScratchRowSelected(chatRow, true, undefined, "chat:chat-2")).toBe(false);
+    // Nothing has been activated from Sessions yet.
+    expect(isScratchRowSelected(chatRow, true, undefined, null)).toBe(false);
   });
 
   it("lists a live scratch terminal in Active, with no ticket", () => {

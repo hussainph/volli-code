@@ -28,6 +28,7 @@ import {
 } from "@renderer/terminal/session-lifecycle";
 
 import { useBoardStore } from "./board";
+import { useChatSessionsStore } from "./chat-sessions";
 import { writeThrough } from "./mutate";
 import { setProjectRowSink, useThemeStore } from "./theme";
 import { useWorkspaceStore } from "./workspace";
@@ -152,6 +153,26 @@ interface ProjectsState {
 /** Whether two orderings name the same ids in the same sequence. */
 function sameOrder(a: readonly Project[], b: readonly Project[]): boolean {
   return a.length === b.length && a.every((project, index) => project.id === b[index]?.id);
+}
+
+/**
+ * Chat parity for `killProjectTicketSessions`/`killProjectSessions`: disposes
+ * every chat client under the removed project's own owner key and each of its
+ * ticket owner keys, whether or not a chat view is mounted — the same
+ * "teardown does not depend on a view unmounting" invariant those two enforce
+ * for PTYs. `closeChatSession` is the disposal path (see `abandonChat` in
+ * components/sessions/session-create.ts); it drops the client and its resident
+ * slice but leaves `openTabs` alone, which is `board.ts`'s `forget` to clear —
+ * so this MUST run before it, while `openTabs` and `ticketsByProject` still
+ * name the keys to look under.
+ */
+function killProjectChatSessions(projectId: string): void {
+  const tickets = useBoardStore.getState().ticketsByProject[projectId] ?? [];
+  const ownerKeys = [projectId, ...tickets.map((ticket) => ticket.id)];
+  const { openTabs, closeChatSession } = useChatSessionsStore.getState();
+  for (const ownerKey of ownerKeys) {
+    for (const sessionId of openTabs[ownerKey] ?? []) closeChatSession(sessionId);
+  }
 }
 
 /** Factory so tests can inject a fake gateway (and scope listener) instead of the real seams. */
@@ -325,7 +346,11 @@ export function createProjectsStore(
       // Ticket sessions are keyed by ticketId; killProjectTicketSessions finds
       // them from the SESSIONS store (not the board's live ticket list), so an
       // archived ticket's sessions are torn down too, not just live ones.
+      // killProjectChatSessions reads `ticketsByProject`/`openTabs` to find this
+      // project's chat clients, so it MUST run before `useBoardStore`'s forget
+      // below clears both.
       killProjectTicketSessions(id);
+      killProjectChatSessions(id);
       useWorkspaceStore.getState().forget(id);
       useBoardStore.getState().forget(id);
       killProjectSessions(id);

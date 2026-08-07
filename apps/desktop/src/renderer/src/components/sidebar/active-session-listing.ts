@@ -135,14 +135,25 @@ export interface ActiveSessionRow {
   target: ActiveSessionTarget | null;
 }
 
-/** Whether a ticketless terminal row names the scratch pane currently in front. */
-export function isScratchTerminalRowSelected(
+/**
+ * Whether a ticketless row — a scratch terminal pane or a ticketless chat —
+ * names the tab currently in front on the Sessions surface.
+ *
+ * A terminal target additionally has to name the split pane in front, since a
+ * tab can hold several; a chat target is one surface, so naming its tab
+ * (`sessionsActiveTab`, the workspace store's record of the last chat/terminal
+ * tab activated from Sessions) is the whole answer.
+ */
+export function isScratchRowSelected(
   row: ActiveSessionRow | PreviousSessionRow,
   sessionsVisible: boolean,
   scratchContainer: SessionContainer | undefined,
+  sessionsActiveTab: string | null,
 ): boolean {
+  if (!sessionsVisible || row.ticket !== null) return false;
   const target = row.target;
-  if (!sessionsVisible || row.ticket !== null || target?.kind !== "terminal") return false;
+  if (target?.kind === "chat") return sessionsActiveTab === target.tabId;
+  if (target?.kind !== "terminal") return false;
   if (scratchContainer?.activeSessionId !== target.tabId) return false;
   const activeTab = scratchContainer.tabs.find(({ sessionId }) => sessionId === target.tabId);
   return activeTab?.activePaneId === target.paneId;
