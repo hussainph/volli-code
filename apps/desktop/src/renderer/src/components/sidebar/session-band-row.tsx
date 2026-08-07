@@ -59,9 +59,8 @@ function compactAge(at: number, now: number): string {
 
 /**
  * Identity, in the one slot both bands give it: the ticket, or a globe for a
- * Session that has none. The globe is not decoration — a ticketless row is the
- * one row with no board card, no ticket rail and no second surface to be
- * reached from, so this list is the only place it exists.
+ * Session that has none. The globe is not decoration: a ticketless row has no
+ * board card or ticket rail, so this list is its only Session 4 listing surface.
  */
 function RowIdentity({ ticket, ticketPrefix }: { ticket: Ticket | null; ticketPrefix: string }) {
   if (ticket === null) {

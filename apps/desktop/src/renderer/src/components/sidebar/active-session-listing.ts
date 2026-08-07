@@ -349,9 +349,9 @@ function chatRow(record: ChatSessionRecord, ticket: Ticket | null): ActiveSessio
     // The record's two waiting fields move together by construction in main, so
     // this rides along with the attention above rather than being re-decided.
     waitingOn: record.waitingOn,
-    // A chat Session's tab id is derivable from the Session — it exists whether
-    // or not a tab is open on it right now, which is what lets a chat that has
-    // never been adopted still say where it belongs.
+    // A chat Session's tab id is derivable from the Session, whether or not a
+    // tab is open. For a ticket-owned Session this names its ticket-tab
+    // destination; ticket-independent chat hosting belongs to Session 5.
     target: { kind: "chat", tabId: chatTabId(record.sessionId), sessionId: record.sessionId },
   };
 }
@@ -397,10 +397,11 @@ export function isCleanupExempt(
  * Whether a Previous-band Session is concluded business — over, and not worth a
  * row. Four rules, in the order they can be decided:
  *
- * (a) its ticket is gone from the board (archived), so the row navigates
- * nowhere; (b) the ticket has been in Done for {@link DONE_LINGER_MS}; (c) the
- * Session predates the ticket's entry into its CURRENT column, so it traces
- * some earlier stretch of work rather than this one; (d) it is
+ * (a) its ticket is gone from the board (archived), so Session 4 preserves it
+ * only behind Cleaned up and cannot reopen a ticket workspace; (b) the ticket
+ * has been in Done for {@link DONE_LINGER_MS}; (c) the Session predates the
+ * ticket's entry into its CURRENT column, so it traces some earlier stretch of
+ * work rather than this one; (d) it is
  * {@link PREVIOUS_MAX_AGE_MS} old.
  *
  * (b) and (c) both need `statusEnteredAt`, which is a fact this module is given

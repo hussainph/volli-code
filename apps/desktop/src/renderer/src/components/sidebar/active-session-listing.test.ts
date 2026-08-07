@@ -600,7 +600,7 @@ describe("buildActiveSessionListing — chat Sessions", () => {
     expect(result.previous).toEqual([]);
   });
 
-  it("keeps a chat's target when it falls to Previous, so the row still reaches its tab", () => {
+  it("keeps a ticketed chat's target when it falls to Previous", () => {
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
       containers: {},
@@ -752,14 +752,26 @@ describe("buildActiveSessionListing — chat Sessions", () => {
       now: 5_000_000,
     };
 
-    // Its ticket is not on this board, so the row can navigate nowhere.
+    // Its ticket is not on this board, so it has no ticket workspace or
+    // Session 4 chat host. The target identity survives for Session 5.
     expect(buildActiveSessionListing(input).previous).toEqual([]);
     expect(
       buildActiveSessionListing({
         ...input,
         filter: { kinds: null, showCleaned: true },
       }).previous,
-    ).toMatchObject([{ title: "Someone else's ticket", ticket: null, cleaned: true }]);
+    ).toMatchObject([
+      {
+        title: "Someone else's ticket",
+        ticket: null,
+        cleaned: true,
+        target: {
+          kind: "chat",
+          tabId: "chat:chat-1",
+          sessionId: "chat-1",
+        },
+      },
+    ]);
   });
 });
 
