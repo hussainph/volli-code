@@ -502,7 +502,7 @@ async function main() {
             const mine = recs.sessions.find(
               (s) => s.kind === "chat" && s.record.title === DEFAULT_CHAT_TITLE,
             );
-            return mine !== undefined && mine.record.live === false ? true : false;
+            return mine !== undefined && mine.record.live === false;
           },
           { timeout: 10000 },
         )
