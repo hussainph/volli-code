@@ -11,6 +11,7 @@ import {
 import { SidebarGroup, SidebarMenu } from "@renderer/components/ui/sidebar";
 import {
   buildActiveSessionListing,
+  isScratchTerminalRowSelected,
   type ActiveSessionRow,
   type PreviousSessionRow,
   type SessionRowKind,
@@ -364,26 +365,30 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
    * tab is gone; it is never the tab in front of you.
    */
   const isSelected = (row: ActiveSessionRow | PreviousSessionRow): boolean =>
-    row.ticket !== null &&
-    shownTicketId === row.ticket.id &&
-    row.target !== null &&
-    activeTabId === row.target.tabId;
+    isScratchTerminalRowSelected(row, nav === "sessions", scratchContainer) ||
+    (row.ticket !== null &&
+      shownTicketId === row.ticket.id &&
+      row.target !== null &&
+      activeTabId === row.target.tabId);
 
   /**
    * Where a row goes. A ticketed row reopens its exact session, or failing that
    * its ticket workspace.
    *
-   * A TICKETLESS row has no ticket workspace to open, so it goes to the Sessions
-   * nav — which is the right destination and, for a scratch terminal, already
-   * the surface that hosts it. For a ticketless CHAT that page cannot yet host
-   * the conversation, so the row lands on the page rather than in the Session:
-   * this is the seam the Sessions-page chat hosting fills, and the only thing
-   * that changes then is what happens after this call.
+   * A TICKETLESS row has no ticket workspace to open. Scratch terminals already
+   * have a real host on Sessions, so select their exact tab and pane there. A
+   * ticketless CHAT still only has the page as a destination until that page
+   * grows its chat host.
    */
   const activate = (row: ActiveSessionRow | PreviousSessionRow) => {
     const ticket = row.ticket;
     if (ticket === null) {
       setNav(project.id, "sessions");
+      if (row.target?.kind === "terminal") {
+        const sessions = useSessionsStore.getState();
+        sessions.setActiveSession(project.id, row.target.tabId);
+        sessions.setActivePane(project.id, row.target.tabId, row.target.paneId);
+      }
       return;
     }
     const target = row.target;

@@ -516,6 +516,121 @@ describe("SessionRuntime durable boundary invariants", () => {
     expect(rebuilt.dispatches).toBe(0);
   });
 
+  it("does not re-affirm twice while a fresh command rehydrates its binding", async () => {
+    const first = composition({ directory: () => "/ticket/original" });
+    const created = await create(first.runtime);
+    await attach(first.runtime, created.sessionId);
+    await first.runtime.close();
+
+    let affirmations = 0;
+    const rebuilt = new Adapter();
+    const recovered = composition({
+      engine: first.engine,
+      adapter: rebuilt,
+      directory: () => "/ticket/rerouted",
+      reaffirm: async () => {
+        affirmations += 1;
+        if (affirmations > 1) throw new Error("directory vanished between duplicate checks");
+      },
+      runtimeIdPrefix: "single-reaffirm-",
+    });
+
+    await expect(
+      recovered.runtime.command({
+        commandId: "message-rehydrates-once",
+        sessionId: created.sessionId,
+        command: { kind: "message.submit", message: message("message-rehydrates-once") },
+      }),
+    ).resolves.toMatchObject({ receipt: { status: "accepted" } });
+    expect(affirmations).toBe(1);
+    expect(rebuilt.attaches).toBe(1);
+    expect(rebuilt.dispatches).toBe(1);
+  });
+
+  it("records cold interrupt and release location failures without touching an adapter", async () => {
+    for (const [suffix, command] of [
+      ["interrupt", { kind: "executor.interrupt" }],
+      ["release", { kind: "adapter.release", attachmentId: "replace-after-attach" }],
+    ] as const) {
+      const first = composition({ directory: () => `/ticket/${suffix}` });
+      const created = await create(first.runtime);
+      await attach(first.runtime, created.sessionId);
+      const attachmentId = (await first.runtime.snapshot({ sessionId: created.sessionId }))
+        .projection.liveExecutor!.id;
+      await first.runtime.close();
+
+      let affirmations = 0;
+      const rebuilt = new Adapter();
+      const detail = `The Session's directory /ticket/${suffix} is unavailable.`;
+      const recovered = composition({
+        engine: first.engine,
+        adapter: rebuilt,
+        reaffirm: async () => {
+          affirmations += 1;
+          throw new Error(detail);
+        },
+        runtimeIdPrefix: `cold-${suffix}-`,
+      });
+      const routedCommand =
+        command.kind === "adapter.release" ? { ...command, attachmentId } : command;
+      const request = {
+        commandId: `cold-${suffix}`,
+        sessionId: created.sessionId,
+        command: routedCommand,
+      } as const;
+
+      await expect(recovered.runtime.command(request)).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "location_unavailable", detail },
+      });
+      await expect(recovered.runtime.command(request)).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "location_unavailable", detail },
+      });
+      expect(affirmations).toBe(1);
+      expect(rebuilt.attaches).toBe(0);
+      expect(rebuilt.dispatches).toBe(0);
+      expect(rebuilt.releases).toBe(0);
+    }
+  });
+
+  it("rehydrates cold interrupt and release commands after one successful affirmation", async () => {
+    for (const [suffix, command] of [
+      ["interrupt", { kind: "executor.interrupt" }],
+      ["release", { kind: "adapter.release", attachmentId: "replace-after-attach" }],
+    ] as const) {
+      const first = composition({ directory: () => `/ticket/${suffix}` });
+      const created = await create(first.runtime);
+      await attach(first.runtime, created.sessionId);
+      const attachmentId = (await first.runtime.snapshot({ sessionId: created.sessionId }))
+        .projection.liveExecutor!.id;
+      await first.runtime.close();
+
+      let affirmations = 0;
+      const rebuilt = new Adapter();
+      const recovered = composition({
+        engine: first.engine,
+        adapter: rebuilt,
+        reaffirm: async () => {
+          affirmations += 1;
+        },
+        runtimeIdPrefix: `cold-${suffix}-accepted-`,
+      });
+      const routedCommand =
+        command.kind === "adapter.release" ? { ...command, attachmentId } : command;
+
+      await expect(
+        recovered.runtime.command({
+          commandId: `cold-${suffix}-accepted`,
+          sessionId: created.sessionId,
+          command: routedCommand,
+        }),
+      ).resolves.toMatchObject({ receipt: { status: "accepted" } });
+      expect(affirmations).toBe(1);
+      expect(rebuilt.attaches).toBe(1);
+      expect(rebuilt.dispatches).toBe(command.kind === "executor.interrupt" ? 1 : 0);
+      expect(rebuilt.releases).toBe(command.kind === "adapter.release" ? 1 : 0);
+    }
+  });
+
   it("rejects legacy bindings at the resolved location before looking up a missing adapter", async () => {
     const detail = "The resolved Session directory is unavailable.";
     const { runtime, engine } = composition({

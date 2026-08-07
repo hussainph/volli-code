@@ -135,6 +135,19 @@ export interface ActiveSessionRow {
   target: ActiveSessionTarget | null;
 }
 
+/** Whether a ticketless terminal row names the scratch pane currently in front. */
+export function isScratchTerminalRowSelected(
+  row: ActiveSessionRow | PreviousSessionRow,
+  sessionsVisible: boolean,
+  scratchContainer: SessionContainer | undefined,
+): boolean {
+  const target = row.target;
+  if (!sessionsVisible || row.ticket !== null || target?.kind !== "terminal") return false;
+  if (scratchContainer?.activeSessionId !== target.tabId) return false;
+  const activeTab = scratchContainer.tabs.find(({ sessionId }) => sessionId === target.tabId);
+  return activeTab?.activePaneId === target.paneId;
+}
+
 /**
  * A Previous-band row. Deliberately smaller than {@link ActiveSessionRow}: this
  * band renders one line per Session, so it carries identity, when the Session

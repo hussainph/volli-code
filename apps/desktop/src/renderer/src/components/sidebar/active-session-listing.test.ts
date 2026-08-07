@@ -23,10 +23,12 @@ import {
 import {
   ACTIVE_QUIET_WINDOW_MS,
   buildActiveSessionListing,
+  isScratchTerminalRowSelected,
   DONE_LINGER_MS,
   isCleanupExempt,
   isConcludedBusiness,
   PREVIOUS_MAX_AGE_MS,
+  type ActiveSessionRow,
 } from "./active-session-listing";
 
 /** A bare shell launch: no harness command line was written, so no expectation. */
@@ -762,6 +764,42 @@ describe("buildActiveSessionListing — chat Sessions", () => {
 });
 
 describe("buildActiveSessionListing — the scratch container", () => {
+  it("selects only the scratch terminal pane that is actually in front", () => {
+    const scratchState = scratchOf([
+      scratchTab("scratch-1", "First"),
+      scratchTab("scratch-2", "Second"),
+    ]);
+    scratchState.activeSessionId = "scratch-2";
+    const row = {
+      id: "terminal:scratch-2",
+      ticket: null,
+      title: "Second",
+      source: "Terminal",
+      activity: "idle",
+      activitySource: "inferred",
+      attention: null,
+      waitingOn: null,
+      target: { kind: "terminal", tabId: "scratch-2", paneId: "scratch-2" },
+    } satisfies ActiveSessionRow;
+
+    expect(isScratchTerminalRowSelected(row, true, scratchState)).toBe(true);
+    expect(isScratchTerminalRowSelected(row, false, scratchState)).toBe(false);
+    expect(
+      isScratchTerminalRowSelected(
+        { ...row, target: { kind: "terminal", tabId: "scratch-1", paneId: "scratch-1" } },
+        true,
+        scratchState,
+      ),
+    ).toBe(false);
+    expect(
+      isScratchTerminalRowSelected(
+        { ...row, target: { kind: "chat", tabId: "chat:scratch-2", sessionId: "scratch-2" } },
+        true,
+        scratchState,
+      ),
+    ).toBe(false);
+  });
+
   it("lists a live scratch terminal in Active, with no ticket", () => {
     const now = 10_000_000;
     const result = buildActiveSessionListing({

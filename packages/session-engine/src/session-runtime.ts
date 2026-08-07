@@ -806,7 +806,12 @@ class DefaultSessionRuntime implements SessionRuntime {
       if (unavailable) return this.#result(request.sessionId, submitted.command, unavailable);
     }
 
-    const binding = await this.#bindingForCommand(submitted.command, projection, location);
+    const binding = await this.#bindingForCommand(
+      submitted.command,
+      projection,
+      location,
+      !existed,
+    );
     const recovered = await this.#recoverAdapterDelivery({ request, submitted, binding, existed });
     if (recovered) return recovered;
 
@@ -856,7 +861,25 @@ class DefaultSessionRuntime implements SessionRuntime {
     await this.#publishSubmit(submitted, existed);
     if (submitted.receipt && submitted.receipt.status !== "unreconciled")
       return this.#result(request.sessionId, submitted.command, submitted.receipt);
-    const binding = await this.#bindingForCommand(submitted.command, projection, location);
+    // A live binding can always be interrupted without consulting its old cwd.
+    // A cold one must first be resumed, so give that location failure the same
+    // durable outcome as every other post-intent delivery preflight.
+    const needsRehydration = !this.#bindings.has(attachmentId);
+    if (!existed && needsRehydration) {
+      const unavailable = await this.#rejectUnavailableLocation(
+        request.sessionId,
+        submitted.command,
+        projection,
+        location,
+      );
+      if (unavailable) return this.#result(request.sessionId, submitted.command, unavailable);
+    }
+    const binding = await this.#bindingForCommand(
+      submitted.command,
+      projection,
+      location,
+      !existed && needsRehydration,
+    );
     const recovered = await this.#recoverAdapterDelivery({ request, submitted, binding, existed });
     if (recovered) return recovered;
     const receipt = await binding.handle.dispatch({
@@ -939,6 +962,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       interaction.attachmentId,
       projection,
       location,
+      !existed,
     );
     const recovered = await this.#recoverAdapterDelivery({ request, submitted, binding, existed });
     if (recovered) return recovered;
@@ -1028,10 +1052,24 @@ class DefaultSessionRuntime implements SessionRuntime {
     await this.#publishSubmit(submitted, existed);
     if (submitted.receipt && submitted.receipt.status !== "unreconciled")
       return this.#result(request.sessionId, submitted.command, submitted.receipt);
+    // Do not recreate or validate a checkout merely to stop an already-live
+    // binding. A relaunch has no handle to release, however, and must rehydrate;
+    // that cold location check is owed a receipt if it cannot succeed.
+    const needsRehydration = !this.#bindings.has(request.command.attachmentId);
+    if (!existed && needsRehydration) {
+      const unavailable = await this.#rejectUnavailableLocation(
+        request.sessionId,
+        submitted.command,
+        projection,
+        location,
+      );
+      if (unavailable) return this.#result(request.sessionId, submitted.command, unavailable);
+    }
     const binding = await this.#bindingForAttachment(
       request.command.attachmentId,
       projection,
       location,
+      !existed && needsRehydration,
     );
     const recovered = await this.#recoverAdapterDelivery({ request, submitted, binding, existed });
     if (recovered) return recovered;
@@ -1574,25 +1612,27 @@ class DefaultSessionRuntime implements SessionRuntime {
     command: SessionCommand,
     projection: SessionProjection,
     location: SessionLocation,
+    locationReaffirmed = false,
   ): Promise<BindingRecord> {
     const attachmentId = command.route?.attachmentId;
     /* v8 ignore next 3 -- SessionEngine returns a durable no_live_executor receipt before an un-routed command can reach delivery. */
     if (!attachmentId) {
       throw new SessionRuntimeConflictError(`Command ${command.id} has no attachment route`);
     }
-    return this.#bindingForAttachment(attachmentId, projection, location);
+    return this.#bindingForAttachment(attachmentId, projection, location, locationReaffirmed);
   }
 
   async #bindingForAttachment(
     attachmentId: string,
     projection: SessionProjection,
     location: SessionLocation,
+    locationReaffirmed = false,
   ): Promise<BindingRecord> {
     const existing = this.#bindings.get(attachmentId);
     if (existing) return existing;
     const rehydrating = this.#rehydratingBindings.get(attachmentId);
     if (rehydrating) return rehydrating;
-    const promise = this.#rehydrateBinding(attachmentId, projection, location);
+    const promise = this.#rehydrateBinding(attachmentId, projection, location, locationReaffirmed);
     this.#rehydratingBindings.set(attachmentId, promise);
     try {
       return await promise;
@@ -1608,6 +1648,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     attachmentId: string,
     projection: SessionProjection,
     location: SessionLocation,
+    locationReaffirmed: boolean,
   ): Promise<BindingRecord> {
     const attachment = projection.attachments.find(({ id }) => id === attachmentId);
     if (!attachment || attachment.status !== "open") {
@@ -1622,7 +1663,11 @@ class DefaultSessionRuntime implements SessionRuntime {
     // when it was written down and may not be now, and re-affirming it here
     // covers every caller of `#bindingForAttachment` at once.
     const directory = binding.directory ?? location.directory;
-    await this.ports.locations.reaffirm(projection.session, directory);
+    // Delivery commands perform their own rejection-producing preflight after
+    // persisting intent. Do not repeat that check here: a second failure would
+    // escape after persistence and recreate the receipt-less command hole. All
+    // other cold-binding callers still receive the rehydration guarantee here.
+    if (!locationReaffirmed) await this.ports.locations.reaffirm(projection.session, directory);
     const spec: NativeAttachmentSpec = {
       sessionId: projection.session.id,
       attachmentId,
