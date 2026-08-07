@@ -103,11 +103,11 @@ export interface ChatSessionsState extends ChatSessionWrites {
    */
   openChatTab(ownerId: string, sessionId: string): void;
   /**
-   * Drops the tab and retires the Session's resident state with it. Closing a
-   * chat view loses nothing — the Session is durable, and reopening it adopts
-   * the same history.
+   * Drops the tab from `ownerId`'s strip and retires the Session's resident
+   * state with it. Closing a chat view loses nothing — the Session is durable,
+   * and reopening it adopts the same history.
    */
-  closeChatTab(ticketId: string, sessionId: string): void;
+  closeChatTab(ownerId: string, sessionId: string): void;
   /**
    * Moves every tab under each of `fromOwnerIds` onto `toOwnerId` — preserving
    * order, skipping a session id `toOwnerId` already has — and deletes each
@@ -321,21 +321,21 @@ export function createChatSessionsStore(
         });
       },
 
-      closeChatTab(ticketId, sessionId) {
+      closeChatTab(ownerId, sessionId) {
         // The tab decides, and it decides first: retiring the Session before
-        // knowing whether this ticket held a tab for it would dispose the
-        // client another ticket's open tab is still drawing from, leaving a tab
-        // on screen with nothing behind it.
-        const tabs = get().openTabs[ticketId];
+        // knowing whether this owner held a tab for it would dispose the client
+        // another owner's open tab is still drawing from, leaving a tab on
+        // screen with nothing behind it.
+        const tabs = get().openTabs[ownerId];
         if (tabs === undefined || !tabs.includes(sessionId)) return;
         get().closeChatSession(sessionId);
         const remaining = tabs.filter((candidate) => candidate !== sessionId);
         set((state) => {
           if (remaining.length > 0) {
-            return { openTabs: { ...state.openTabs, [ticketId]: remaining } };
+            return { openTabs: { ...state.openTabs, [ownerId]: remaining } };
           }
           const openTabs = { ...state.openTabs };
-          delete openTabs[ticketId];
+          delete openTabs[ownerId];
           return { openTabs };
         });
       },
