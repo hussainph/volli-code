@@ -226,7 +226,10 @@ async function main() {
     await page.screenshot({ path: join(SCRATCH, "parked.png") });
 
     // === 3: selecting the parked tab wakes it =================================
-    await page.getByText("Terminal 1", { exact: true }).click();
+    // Scoped to role="tab" — the sidebar's Active band carries its own
+    // same-named "Terminal 1" row (a plain button) beside the strip's tab, and
+    // a bare text match resolves to both.
+    await page.getByRole("tab", { name: "Terminal 1", exact: true }).click();
     const woken = await waitForState(pid1, "running", 3000);
     check("selecting the parked tab wakes it within ~2s", woken !== "T", `state=${woken}`);
 
@@ -250,12 +253,12 @@ async function main() {
     // listener — the dev-server stand-in that must never be frozen.
     const shell2Was = processState(pid2);
     check("tab 2 alive before listener phase", shell2Was !== null && shell2Was !== "T");
-    await page.getByText("Terminal 2", { exact: true }).click();
+    await page.getByRole("tab", { name: "Terminal 2", exact: true }).click();
     await focusTerminal(page);
     await page.keyboard.type("nc -l 39217");
     await page.keyboard.press("Enter");
     await sleep(500);
-    await page.getByText("Terminal 1", { exact: true }).click(); // hide tab 2
+    await page.getByRole("tab", { name: "Terminal 1", exact: true }).click(); // hide tab 2
     console.log(`waiting ${PARK_SETTLE_MS}ms with a LISTEN socket in the hidden tree…`);
     await sleep(PARK_SETTLE_MS);
     check(
@@ -280,7 +283,7 @@ async function main() {
     await focusTerminal(page);
     await page.keyboard.type(`(sleep 12 && echo done > ${marker4}) &`);
     await page.keyboard.press("Enter");
-    await page.getByText("Terminal 2", { exact: true }).click(); // hide tab 1
+    await page.getByRole("tab", { name: "Terminal 2", exact: true }).click(); // hide tab 1
     const parkedAgain = await waitForState(pid1, "stopped", PARK_SETTLE_MS + 5000);
     check(
       "hidden session with a pending background timer parks (state T)",
