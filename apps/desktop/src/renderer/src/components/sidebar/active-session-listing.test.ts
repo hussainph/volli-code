@@ -840,6 +840,31 @@ describe("buildActiveSessionListing — the scratch container", () => {
     expect(isScratchRowSelected(chatRow, true, undefined, null)).toBe(false);
   });
 
+  it("darkens the terminal row a chat tab is covering", () => {
+    // Selecting a chat tab leaves the terminal container's activeSessionId
+    // where it was, so both ledgers still name scratch-1 — only the chat is
+    // actually on screen.
+    const scratchState = scratchOf([scratchTab("scratch-1", "First")]);
+    scratchState.activeSessionId = "scratch-1";
+    const terminalRow = {
+      id: "terminal:scratch-1",
+      ticket: null,
+      title: "First",
+      source: "Terminal",
+      activity: "idle",
+      activitySource: "inferred",
+      attention: null,
+      waitingOn: null,
+      target: { kind: "terminal", tabId: "scratch-1", paneId: "scratch-1" },
+    } satisfies ActiveSessionRow;
+
+    expect(isScratchRowSelected(terminalRow, true, scratchState, "chat:chat-1")).toBe(false);
+    // The terminal tab back in front lights it again.
+    expect(isScratchRowSelected(terminalRow, true, scratchState, "scratch-1")).toBe(true);
+    // A malformed `chat:` id names no Session, so it covers nothing.
+    expect(isScratchRowSelected(terminalRow, true, scratchState, "chat:")).toBe(true);
+  });
+
   it("lists a live scratch terminal in Active, with no ticket", () => {
     const now = 10_000_000;
     const result = buildActiveSessionListing({

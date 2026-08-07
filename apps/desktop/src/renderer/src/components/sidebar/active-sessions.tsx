@@ -378,10 +378,10 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
    *
    * A TICKETLESS row has no ticket workspace to open — both terminal and chat
    * targets land on the project's Sessions page instead, naming their tab in
-   * `sessionsActiveTab` (workspace.ts) for whenever that page grows a host to
-   * read it. A ticketless chat is additionally adopted and given a tab under
+   * `sessionsActiveTab` (workspace.ts), which that page's strip reads to bring
+   * it forward. A ticketless chat is additionally adopted and given a tab under
    * the project's owner key, the same two calls the ticketed chat case below
-   * makes.
+   * makes — the tab has to exist before the strip can put it in front.
    */
   const activate = (row: ActiveSessionRow | PreviousSessionRow) => {
     const ticket = row.ticket;

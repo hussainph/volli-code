@@ -53,11 +53,13 @@ const NO_OPEN_CHATS: readonly string[] = [];
 /**
  * Which merged tab is in front, decided at render rather than stored.
  *
- * The persisted id wins while it still names a tab — it is what the sidebar
- * writes to put a Session in front, and what a relaunch remembers. Failing
- * that, the terminal container's own active session, so closing the chat that
- * was covering a terminal puts that terminal back rather than jumping to the
- * head of the strip. Failing that, the first tab.
+ * The recorded id wins while it still names a tab — it is what the sidebar
+ * writes to put a Session in front, and what a project switch comes back to.
+ * (Only that: `sessionsActiveTab` is session-only, since the open tabs it
+ * points at do not survive a relaunch either.) Failing that, the terminal
+ * container's own active session, so closing the chat that was covering a
+ * terminal puts that terminal back rather than jumping to the head of the
+ * strip. Failing that, the first tab.
  *
  * Deriving beats storing here because both maps behind it are resident: a tab
  * that closes simply stops being named, and the write-back that follows records
@@ -65,10 +67,10 @@ const NO_OPEN_CHATS: readonly string[] = [];
  */
 function resolveActiveTabId(
   tabIds: readonly string[],
-  persisted: string | null,
+  recorded: string | null,
   containerActive: string | null,
 ): string | null {
-  if (persisted !== null && tabIds.includes(persisted)) return persisted;
+  if (recorded !== null && tabIds.includes(recorded)) return recorded;
   if (containerActive !== null && tabIds.includes(containerActive)) return containerActive;
   return tabIds[0] ?? null;
 }
@@ -209,7 +211,7 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
   // the one place ORing the two flags is the honest reading (session-create.ts).
   const creating = startingTerminal || startingChat;
 
-  const persistedActiveTab = useWorkspaceStore((state) =>
+  const recordedActiveTab = useWorkspaceStore((state) =>
     selectedId === null ? null : (state.byProject[selectedId]?.sessionsActiveTab ?? null),
   );
   const setSessionsActiveTab = useWorkspaceStore((state) => state.setSessionsActiveTab);
@@ -224,7 +226,7 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
   );
   const activeTabId = resolveActiveTabId(
     tabIds,
-    persistedActiveTab,
+    recordedActiveTab,
     scratch?.activeSessionId ?? null,
   );
   // A chat in front covers the plane, so the terminals under it stand down.
@@ -232,12 +234,12 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
   const activeChatSessionId = activeTabId === null ? null : parseChatTabId(activeTabId);
 
   // The receipt for what was derived, and the only write of it: a tab that
-  // closed under the persisted id is answered by re-deriving, never by repairing
+  // closed under the recorded id is answered by re-deriving, never by repairing
   // what was stored.
   React.useEffect(() => {
-    if (selectedId === null || activeTabId === persistedActiveTab) return;
+    if (selectedId === null || activeTabId === recordedActiveTab) return;
     setSessionsActiveTab(selectedId, activeTabId);
-  }, [activeTabId, persistedActiveTab, selectedId, setSessionsActiveTab]);
+  }, [activeTabId, recordedActiveTab, selectedId, setSessionsActiveTab]);
 
   // Zero-friction first visit: auto-open a scratch terminal when Sessions is
   // revealed for a project that has never had a Session here — once per project.
@@ -376,7 +378,7 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
             onSelect={(descriptor) => {
               setSessionsActiveTab(selected.id, descriptor.id);
               // A terminal tab is in front on two ledgers: this surface's
-              // (persisted) and the terminal container's own, which is what the
+              // (recorded) and the terminal container's own, which is what the
               // keep-alive render and pane focus read. A chat has nothing in the
               // second, and never writes it.
               if (descriptor.kind === "terminal") {

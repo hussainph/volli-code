@@ -151,12 +151,13 @@ export interface WorkspaceUiState {
    */
   projectFileViewStates: Record<string, unknown>;
   /**
-   * Which tab is in front on the project's Sessions scratch surface (Session
-   * 5 phase 1 — no host renders it yet). Holds a terminal session id or a
-   * `chat:<sessionId>` id, the same mixed id space `ticketTabs[].active`
-   * uses. Session-only: what it points at (chat-sessions.ts's `openTabs`)
-   * isn't persisted either, so there's nothing durable for this to survive
-   * relaunch alongside.
+   * Which tab is in front on the project's Sessions scratch surface. Holds a
+   * terminal session id or a `chat:<sessionId>` id, the same mixed id space
+   * `ticketTabs[].active` uses. Session-only: what it points at
+   * (chat-sessions.ts's `openTabs`) isn't persisted either, so there's nothing
+   * durable for this to survive relaunch alongside — `sessions-layer.tsx`
+   * re-derives it from the merged strip on every render and writes back what
+   * it derived.
    */
   sessionsActiveTab: string | null;
 }
@@ -269,8 +270,8 @@ interface WorkspaceState {
   setDirExpanded(projectId: string, dirPath: string, expanded: boolean): void;
   setBoardView(projectId: string, view: BoardView): void;
   setBoardSort(projectId: string, sort: TicketSort): void;
-  /** Sets which tab is in front on the project's Sessions surface (Session 5
-   * phase 1 — no host renders it yet); `null` clears the selection. */
+  /** Sets which tab is in front on the project's Sessions surface; `null`
+   * clears the selection. */
   setSessionsActiveTab(projectId: string, tabId: string | null): void;
   /**
    * Opens `ticketId`'s full-page detail view for `projectId` (rendered in
