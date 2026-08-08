@@ -13,13 +13,12 @@ Pi, consumed from npm.
 
 Direct dependencies, all pinned to exactly `0.84.1`:
 
-- `@earendil-works/pi-coding-agent` — `createAgentSession`, `AgentSession`,
-  `ModelRuntime`, `SessionManager`, `SettingsManager`, `ResourceLoader`
-- `@earendil-works/pi-agent-core` — `StreamFn`, `ThinkingLevel`, agent events
-- `@earendil-works/pi-ai` — model catalog, credential store, message types
+- `@earendil-works/pi-agent-core` — `Agent`, JSONL Session persistence,
+  context-injected coding tools, and the Node execution environment
+- `@earendil-works/pi-ai` — model catalog, provider streams, and message types
 
-`@earendil-works/pi-client`, `pi-protocol`, `pi-telemetry`, and `pi-tui` arrive
-transitively and are not imported here.
+`@earendil-works/pi-telemetry` arrives transitively and is not imported here.
+The coding-agent TUI, client, and protocol packages are intentionally absent.
 
 ## Local patches
 
@@ -32,13 +31,12 @@ that makes them, together with the tag and commit hash above. Forking or
 vendoring Pi requires a concrete, documented need per
 `docs/plans/pi-native-ticket-session.md`.
 
-## Known follow-ups
+## Deliberate Session 1 boundary
 
-- Pi's bash tool injects `PI_*` environment variables into spawned commands.
-  `exposeSessionEnvironment: false` turns that off, but it is an option of
-  `createBashToolDefinition` and `createAgentSession` exposes no way to reach it.
-  Turning it off needs either an upstream option or building the tool set
-  ourselves.
+Only Pi core's `read`, `edit`, and `write` tools are loaded, each with a
+Volli-owned execution environment that rejects paths outside the Ticket
+worktree and rejects symlinks. Process execution remains unavailable until a
+later migration slice supplies an equally enforceable containment boundary.
 
 ## License
 

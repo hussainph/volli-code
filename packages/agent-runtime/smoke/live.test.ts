@@ -2,7 +2,7 @@
  * Manual live smoke: one real turn against a real provider.
  *
  * This is the only test that spends money and the only one that touches the
- * developer's own `~/.pi` credentials. It never runs by default — CI does not
+ * configured Pi provider credentials. It never runs by default — CI does not
  * run it, and `pnpm test` does not discover it.
  *
  *   PI_LIVE_SMOKE=1 pnpm -C packages/agent-runtime run smoke
@@ -13,7 +13,6 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vite-plus/test";
 import { createPiAgentRuntime, type RuntimeObservation } from "../src";
 
@@ -34,10 +33,7 @@ describe.skipIf(process.env.PI_LIVE_SMOKE !== "1")("live Pi turn", () => {
     writeFileSync(join(worktreePath, "TOKEN.txt"), `${token}\n`);
 
     const observations: RuntimeObservation[] = [];
-    const runtime = createPiAgentRuntime({
-      sessionDataDir,
-      modelRuntime: await ModelRuntime.create(),
-    });
+    const runtime = createPiAgentRuntime({ sessionDataDir });
 
     const handle = await runtime.startTicketSession({
       identity: {
@@ -54,7 +50,9 @@ describe.skipIf(process.env.PI_LIVE_SMOKE !== "1")("live Pi turn", () => {
       authority: { mode: "auto" },
       brief: { text: "Smoke test: TOKEN.txt holds a single opaque token." },
       tools: { tools: ["read"] },
-      observer: (observation) => observations.push(observation),
+      observer: async (observation) => {
+        observations.push(observation);
+      },
     });
 
     const outcome = await handle.submitUserMessage(

@@ -1,5 +1,5 @@
 /**
- * Pure projection of Pi session entries into Volli observation payloads.
+ * Pure projection of settled Pi assistant messages into Volli observations.
  *
  * Pi's durable history is the JSONL session tree, so a settled message is
  * identified by its session entry — not by its position in a live message
@@ -8,7 +8,7 @@
  * model.
  */
 
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type {
   AttentionObservation,
   RuntimeFailure,
@@ -17,7 +17,7 @@ import type {
   SettledAssistantMessage,
 } from "../contracts";
 
-export type SessionEntryOutcome =
+export type AssistantMessageOutcome =
   | { kind: "settled"; message: SettledAssistantMessage }
   | { kind: "failed"; failure: RuntimeFailure };
 
@@ -27,7 +27,7 @@ const MAX_DIAGNOSTIC_LENGTH = 300;
 const OPAQUE_SECRET = /[A-Za-z0-9_-]{24,}/g;
 const PREFIXED_SECRET = /\b(?:sk|pk|ghp|gho|xox[a-z])[-_][A-Za-z0-9_-]+/gi;
 const AUTH_SIGNAL =
-  /(api[ _-]?key|auth|credential|unauthorized|forbidden|login|sign[ _-]?in|401|403)/i;
+  /(api[ _-]?key|auth|credential|unauthorized|forbidden|login|sign[ _-]?in|not configured|401|403)/i;
 
 const ATTENTION_REASON: Record<RuntimeFailure["reason"], AttentionObservation["reason"]> = {
   auth: "auth",
@@ -81,18 +81,13 @@ function usageOf(usage: {
 }
 
 /**
- * Project one durable entry. Returns nothing for entries that are not assistant
- * messages — user turns, tool results, and Pi's own bookkeeping entries.
+ * Project one assistant message after Pi core has appended it to the JSONL
+ * sidecar and supplied its stable entry identity.
  */
-export function classifySessionEntry(entry: SessionEntry): SessionEntryOutcome | undefined {
-  if (entry.type !== "message") {
-    return undefined;
-  }
-  const message = entry.message;
-  if (message.role !== "assistant") {
-    return undefined;
-  }
-
+export function classifyAssistantMessage(
+  entryId: string,
+  message: AssistantMessage,
+): AssistantMessageOutcome {
   if (message.stopReason === "aborted") {
     return {
       kind: "failed",
@@ -122,7 +117,7 @@ export function classifySessionEntry(entry: SessionEntry): SessionEntryOutcome |
   return {
     kind: "settled",
     message: {
-      entryId: entry.id,
+      entryId,
       role: "assistant",
       text,
       reasoning: reasoning.length > 0 ? reasoning : undefined,

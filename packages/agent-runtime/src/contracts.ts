@@ -8,10 +8,11 @@
  * the Session Attachment, and sanitized diagnostic strings. Nothing above the
  * runtime may dispatch on Pi tool or event names.
  *
- * Activity and interaction observations are declared here so the boundary
- * vocabulary is complete, but their emission lands in later migration
- * sessions (reasoning/coding activity, then interrupt/recovery).
+ * Later migration sessions add activity and interaction observations only
+ * after their canonical vocabulary exists in `@volli/shared`.
  */
+
+import type { AuthoritySnapshot, ModelSelection, SessionRole } from "@volli/shared";
 
 /** Volli identities for one Ticket Session runtime attachment. All opaque. */
 export interface TicketRuntimeIdentity {
@@ -23,30 +24,16 @@ export interface TicketRuntimeIdentity {
 }
 
 /** Only the Ticket Role ships in this migration. */
-export type RuntimeSessionRole = "ticket";
+export type RuntimeSessionRole = Extract<SessionRole, "ticket">;
 
 /** Where execution happens. Local is the only venue built today. */
 export type ExecutionVenue = "local";
-
-/** Durable per-Session execution authority. v1 persists Auto only. */
-export interface AuthoritySnapshot {
-  mode: "auto";
-}
-
-/** Product reasoning ladder for the selected model. */
-export type ReasoningLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-
-export interface ModelSelection {
-  providerId: string;
-  modelId: string;
-  reasoningLevel: ReasoningLevel;
-}
 
 /**
  * Explicit coding tools the runtime may load. Ambient user/project extensions
  * never load. Product names, mapped to concrete runtime tools internally.
  */
-export type CodingToolId = "read" | "edit" | "write" | "execute" | "grep" | "find" | "list";
+export type CodingToolId = "read" | "edit" | "write";
 
 export interface RuntimeToolBundle {
   tools: readonly CodingToolId[];
@@ -89,7 +76,8 @@ export interface TicketRuntimeSpec {
   /** Present when reopening an existing attachment after process loss. */
   recovery?: RuntimeRecoveryRef;
   signal?: AbortSignal;
-  observer: (observation: RuntimeObservation) => void;
+  /** Resolves only after the observation reaches its required consumer boundary. */
+  observer: (observation: RuntimeObservation) => Promise<void>;
 }
 
 /** Sanitized failure surfaced through observations. Never contains secrets. */
@@ -114,24 +102,11 @@ export interface SettledAssistantMessage {
   usage?: SanitizedUsage;
 }
 
-/** Closed Volli activity vocabulary. Mapping lands in the activity session. */
-export type ActivityKind =
-  | "inspect"
-  | "read"
-  | "edit"
-  | "execute"
-  | "network"
-  | "volli-action"
-  | "delegated"
-  | "unknown";
-
 export type RuntimeObservation =
   | AttachmentObservation
   | TurnObservation
   | TranscriptDeltaObservation
   | SettledMessageObservation
-  | ActivityObservation
-  | InteractionObservation
   | AttentionObservation;
 
 export interface AttachmentObservation {
@@ -160,25 +135,6 @@ export interface SettledMessageObservation {
   kind: "message-settled";
   turnId: string;
   message: SettledAssistantMessage;
-}
-
-/** Declared now; emitted from the activity migration session onward. */
-export interface ActivityObservation {
-  kind: "activity";
-  turnId: string;
-  activityId: string;
-  activity: ActivityKind;
-  state: "started" | "updated" | "completed" | "failed";
-  /** Sanitized presentation detail (filename, command, summary). */
-  detail?: string;
-}
-
-/** Declared now; emitted from the interrupt/recovery migration session onward. */
-export interface InteractionObservation {
-  kind: "interaction";
-  interactionId: string;
-  state: "opened" | "resolved" | "withdrawn";
-  prompt?: string;
 }
 
 export interface AttentionObservation {

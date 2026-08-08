@@ -1,84 +1,55 @@
-/**
- * The singular Agent Runtime, backed by Pi.
- *
- * One `AgentSession.prompt()` run is one Volli turn: Pi may take several
- * provider turns and tool executions inside it, but the product sees exactly
- * one turn started and one terminal turn observation. Live stream deltas are
- * transient; durable truth is drained from Pi's session entries at run end, so
- * every settled message carries the stable entry id that deduplicates replay
- * after a restart.
- *
- * Discovery is off: no ambient extensions, skills, prompts, themes, or context
- * files, an explicit tool allowlist, and in-memory settings. The only ambient
- * state Pi keeps is its own credential store, which is a deliberate product
- * decision rather than an accident of the host.
- */
+/** The singular, Node-hostable Agent Runtime backed by Pi core. */
 
 import { randomUUID } from "node:crypto";
-import type { StreamFn, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import {
-  createAgentSession,
-  ModelRuntime,
-  SessionManager,
-  SettingsManager,
-} from "@earendil-works/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { Agent, JsonlSessionRepo, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import type { AssistantMessage, Models } from "@earendil-works/pi-ai";
+import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import type {
   AgentRuntime,
   DeliveryOutcome,
-  ReasoningLevel,
   RuntimeAttachmentHandle,
   RuntimeFailure,
   TicketRuntimeSpec,
 } from "../contracts";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
-import { createEmptyResourceLoader } from "./resource-loader";
-import { toPiToolNames } from "./tools";
-import {
-  attentionReasonFor,
-  classifyDiagnostic,
-  classifySessionEntry,
-  errorText,
-  recoveryRefFor,
-  sanitizeDiagnostic,
-} from "./transcript";
-
-/** The product ladder and Pi's thinking ladder currently coincide, name for name. */
-const THINKING_LEVEL: Record<ReasoningLevel, ThinkingLevel> = {
-  off: "off",
-  minimal: "minimal",
-  low: "low",
-  medium: "medium",
-  high: "high",
-  xhigh: "xhigh",
-  max: "max",
-};
+import { ScopedExecutionEnv } from "./scoped-execution-env";
+import { createPiTools } from "./tools";
+import { attentionReasonFor, classifyAssistantMessage, recoveryRefFor } from "./transcript";
 
 export interface PiRuntimeHostOptions {
-  /** Directory that owns every attachment's JSONL session sidecar. */
+  /** Directory that owns every attachment's Pi JSONL recovery sidecar. */
   sessionDataDir: string;
-  /**
-   * Deterministic model seam. Replaces the created session's stream function,
-   * so no request ever reaches a provider. Test-only: a production host must
-   * leave this unset and let Pi own the provider call.
-   */
-  modelStream?: StreamFn;
-  /**
-   * Model and credential runtime. Test-only override; production omits it so Pi
-   * resolves its own credential store.
-   */
-  modelRuntime?: ModelRuntime;
+  /** Injectable Pi model collection for deterministic tests and host-owned credentials. */
+  models?: Models;
 }
 
-/** Build the runtime port. There is exactly one executor; this is not a registry. */
+/** Build the one structured executor port. */
 export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntime {
   return {
     startTicketSession: (spec) => attachTicketSession(options, spec),
   };
 }
 
-function failUnavailableModel(spec: TicketRuntimeSpec): never {
+/** Pi messages are persisted as JSON; omit optional properties Pi represents as undefined. */
+function durableMessage(message: AgentMessage): AgentMessage {
+  return JSON.parse(JSON.stringify(message)) as AgentMessage;
+}
+
+async function rejectUnavailableModel(spec: TicketRuntimeSpec): Promise<never> {
   const message = `Model ${spec.model.providerId}/${spec.model.modelId} is not available.`;
-  spec.observer({
+  await spec.observer({
+    kind: "attachment",
+    state: "failed",
+    failure: { reason: "configuration", message },
+  });
+  throw new Error(message);
+}
+
+async function rejectRecoveryUntilSessionFour(spec: TicketRuntimeSpec): Promise<never> {
+  const message =
+    "Pi recovery is not available until migration Session 4 lands ledger reconciliation.";
+  await spec.observer({
     kind: "attachment",
     state: "failed",
     failure: { reason: "configuration", message },
@@ -90,89 +61,114 @@ async function attachTicketSession(
   host: PiRuntimeHostOptions,
   spec: TicketRuntimeSpec,
 ): Promise<RuntimeAttachmentHandle> {
-  const observe = spec.observer;
-  const modelRuntime = host.modelRuntime ?? (await ModelRuntime.create());
-  const model =
-    modelRuntime.getModel(spec.model.providerId, spec.model.modelId) ?? failUnavailableModel(spec);
-
-  const reopening = spec.recovery;
-  const sessionManager = reopening
-    ? SessionManager.open(reopening.sessionFilePath, host.sessionDataDir)
-    : SessionManager.create(spec.worktreePath, host.sessionDataDir);
-
-  const { session } = await createAgentSession({
-    cwd: spec.worktreePath,
-    model,
-    thinkingLevel: THINKING_LEVEL[spec.model.reasoningLevel],
-    modelRuntime,
-    resourceLoader: createEmptyResourceLoader(composeSystemPrompt(spec)),
-    tools: toPiToolNames(spec.tools),
-    sessionManager,
-    settingsManager: SettingsManager.inMemory(),
-  });
-  if (host.modelStream) {
-    session.agent.streamFunction = host.modelStream;
+  if (spec.recovery !== undefined) {
+    return rejectRecoveryUntilSessionFour(spec);
   }
 
-  // Entries already on disk are durable history the product has seen; only
-  // entries appended from here on settle into new observations.
-  const observedEntryIds = new Set(sessionManager.getEntries().map((entry) => entry.id));
-  // Replaced at every run start; seeded so no observation can carry an empty turn.
+  const observe = spec.observer;
+  const models = host.models ?? builtinModels();
+  const model = models.getModel(spec.model.providerId, spec.model.modelId);
+  if (model === undefined) {
+    return rejectUnavailableModel(spec);
+  }
+
+  const sidecarEnv = new NodeExecutionEnv({ cwd: host.sessionDataDir });
+  const sidecars = new JsonlSessionRepo({ fs: sidecarEnv, sessionsRoot: host.sessionDataDir });
+  const sidecar = await sidecars.create({
+    cwd: spec.worktreePath,
+    metadata: {
+      volliSessionId: spec.identity.sessionId,
+      volliThreadId: spec.identity.rootThreadId,
+      volliAttachmentId: spec.identity.attachmentId,
+    },
+  });
+  const sidecarMetadata = await sidecar.getMetadata();
+  const recovery = recoveryRefFor(sidecarMetadata.id, sidecarMetadata.path);
+  const toolEnv = await ScopedExecutionEnv.create(spec.worktreePath);
+  const tools = createPiTools(spec.tools, toolEnv);
+
   let turnId = randomUUID();
+  let failure: RuntimeFailure | undefined;
+  let observationFailure: unknown;
   let closed = false;
 
-  function drainRunEntries(): void {
-    let failure: RuntimeFailure | undefined;
-    for (const entry of sessionManager.getEntries()) {
-      if (observedEntryIds.has(entry.id)) {
-        continue;
-      }
-      observedEntryIds.add(entry.id);
-      const outcome = classifySessionEntry(entry);
-      if (outcome === undefined) {
-        continue;
-      }
-      if (outcome.kind === "settled") {
-        observe({ kind: "message-settled", turnId, message: outcome.message });
-        continue;
-      }
-      failure = outcome.failure;
+  const commitObservation = async (
+    observation: Parameters<TicketRuntimeSpec["observer"]>[0],
+  ): Promise<void> => {
+    try {
+      await observe(observation);
+    } catch (error) {
+      observationFailure ??= error;
+      throw error;
+    }
+  };
+
+  const agent = new Agent({
+    initialState: {
+      systemPrompt: composeSystemPrompt(spec),
+      model,
+      thinkingLevel: spec.model.reasoningLevel,
+      tools,
+    },
+    streamFn: models.streamSimple.bind(models),
+    sessionId: sidecarMetadata.id,
+    toolExecution: "sequential",
+  });
+
+  const unsubscribe = agent.subscribe(async (event) => {
+    if (event.type === "agent_start") {
+      turnId = randomUUID();
+      failure = undefined;
+      await commitObservation({ kind: "turn", state: "started", turnId });
+      return;
     }
 
+    if (event.type === "message_update") {
+      const streamed = event.assistantMessageEvent;
+      if (streamed.type === "text_delta") {
+        await commitObservation({ kind: "delta", turnId, channel: "text", text: streamed.delta });
+      }
+      if (streamed.type === "thinking_delta") {
+        await commitObservation({
+          kind: "delta",
+          turnId,
+          channel: "reasoning",
+          text: streamed.delta,
+        });
+      }
+      return;
+    }
+
+    if (event.type === "message_end") {
+      const entryId = await sidecar.appendMessage(durableMessage(event.message));
+      if (event.message.role !== "assistant") {
+        return;
+      }
+      const outcome = classifyAssistantMessage(entryId, event.message as AssistantMessage);
+      if (outcome.kind === "settled") {
+        await commitObservation({ kind: "message-settled", turnId, message: outcome.message });
+      } else {
+        failure = outcome.failure;
+      }
+      return;
+    }
+
+    if (event.type !== "agent_end") {
+      return;
+    }
     if (failure === undefined) {
-      observe({ kind: "turn", state: "completed", turnId });
+      await commitObservation({ kind: "turn", state: "completed", turnId });
       return;
     }
     if (failure.reason !== "aborted") {
-      observe({
+      await commitObservation({
         kind: "attention",
         state: "raised",
         reason: attentionReasonFor(failure),
         message: failure.message,
       });
     }
-    observe({ kind: "turn", state: "interrupted", turnId });
-  }
-
-  const unsubscribe = session.subscribe((event) => {
-    if (event.type === "agent_start") {
-      turnId = randomUUID();
-      observe({ kind: "turn", state: "started", turnId });
-      return;
-    }
-    if (event.type === "message_update") {
-      const streamed = event.assistantMessageEvent;
-      if (streamed.type === "text_delta") {
-        observe({ kind: "delta", turnId, channel: "text", text: streamed.delta });
-      }
-      if (streamed.type === "thinking_delta") {
-        observe({ kind: "delta", turnId, channel: "reasoning", text: streamed.delta });
-      }
-      return;
-    }
-    if (event.type === "agent_end") {
-      drainRunEntries();
-    }
+    await commitObservation({ kind: "turn", state: "interrupted", turnId });
   });
 
   const handle: RuntimeAttachmentHandle = {
@@ -180,62 +176,49 @@ async function attachTicketSession(
       if (closed) {
         return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
       }
-      if (session.isStreaming) {
+      if (agent.state.isStreaming) {
         return {
           kind: "rejected",
           reason: "busy-unsupported",
           message: "The agent is still working on the previous message.",
         };
       }
-      // The Runtime Brief rides the first delivery of a Session and never again;
-      // a reopened session already carries it in durable history.
       const delivered =
-        session.messages.length === 0 ? composeFirstUserMessage(spec.brief, text) : text;
-      try {
-        await session.prompt(delivered);
-      } catch (error) {
-        const message = sanitizeDiagnostic(errorText(error));
-        observe({
-          kind: "attention",
-          state: "raised",
-          reason: attentionReasonFor({ reason: classifyDiagnostic(message), message }),
-          message,
-        });
-        throw new Error(message, { cause: error });
+        agent.state.messages.length === 0 ? composeFirstUserMessage(spec.brief, text) : text;
+      await agent.prompt(delivered);
+      if (observationFailure !== undefined) {
+        throw observationFailure;
       }
       return { kind: "delivered", delivery: "prompt" };
     },
 
     async interrupt(): Promise<void> {
-      await session.abort();
+      agent.abort();
+      await agent.waitForIdle();
     },
 
     async close(): Promise<void> {
-      if (closed) {
-        return;
-      }
+      if (closed) return;
       closed = true;
       spec.signal?.removeEventListener("abort", abortListener);
+      agent.abort();
+      await agent.waitForIdle();
       unsubscribe();
-      session.dispose();
-      observe({ kind: "attachment", state: "closed" });
+      await toolEnv.cleanup();
+      await sidecarEnv.cleanup();
+      await observe({ kind: "attachment", state: "closed" });
     },
 
-    get recovery() {
-      return recoveryRefFor(session.sessionId, session.sessionFile);
-    },
+    recovery,
   };
 
   const abortListener = (): void => {
-    void handle.interrupt();
+    // The active submit promise owns any observer failure from this same run.
+    /* v8 ignore next -- interrupt failures are intentionally suppressed in a DOM callback */
+    void handle.interrupt().catch(() => undefined);
   };
   spec.signal?.addEventListener("abort", abortListener);
 
-  observe({
-    kind: "attachment",
-    state: reopening ? "recovered" : "started",
-    recovery: recoveryRefFor(session.sessionId, session.sessionFile),
-  });
-
+  await observe({ kind: "attachment", state: "started", recovery });
   return handle;
 }

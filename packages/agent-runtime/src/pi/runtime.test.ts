@@ -1,35 +1,25 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import {
   createAssistantMessageEventStream,
-  InMemoryCredentialStore,
+  createModels,
+  fauxProvider,
   type AssistantMessage,
   type Context,
   type Model,
+  type Models,
   type ToolCall,
 } from "@earendil-works/pi-ai";
-import { ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
-import { beforeAll, describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 import type { RuntimeObservation, TicketRuntimeSpec } from "../contracts";
-import { toPiToolNames } from "./tools";
+import { ScopedExecutionEnv } from "./scoped-execution-env";
+import { createPiTools } from "./tools";
 import { createPiAgentRuntime } from "./runtime";
 
 const MODEL_ID = "claude-haiku-4-5";
 const PROVIDER_ID = "anthropic";
-
-let credentialedRuntime: ModelRuntime;
-
-beforeAll(async () => {
-  const root = mkdtempSync(join(tmpdir(), "volli-pi-runtime-"));
-  credentialedRuntime = await ModelRuntime.create({
-    credentials: new InMemoryCredentialStore(),
-    authPath: join(root, "auth.json"),
-    modelsPath: join(root, "models.json"),
-  });
-  await credentialedRuntime.setRuntimeApiKey(PROVIDER_ID, "test-key");
-});
 
 // --- scripted model stream -------------------------------------------------
 //
@@ -140,6 +130,20 @@ function scriptedStream(steps: ScriptStep[]): StreamFn {
   };
 }
 
+function modelsWithStream(stream: StreamFn): Models {
+  const faux = fauxProvider({
+    api: "anthropic-messages",
+    provider: PROVIDER_ID,
+    models: [{ id: MODEL_ID, reasoning: true }],
+  });
+  const models = createModels();
+  models.setProvider({
+    ...faux.provider,
+    streamSimple: stream as typeof faux.provider.streamSimple,
+  });
+  return models;
+}
+
 /** A step that streams one delta, then settles as aborted once the run is cancelled. */
 function haltOnAbort(delta: string, onStreaming: () => void): ScriptStep {
   return async (emit, _context, signal) => {
@@ -189,7 +193,9 @@ function fixture(overrides: Partial<TicketRuntimeSpec> = {}): Attachment {
       authority: { mode: "auto" },
       brief: { text: "VC-12 — read the marker." },
       tools: { tools: ["read"] },
-      observer: (observation) => observations.push(observation),
+      observer: async (observation) => {
+        observations.push(observation);
+      },
       ...overrides,
     },
   };
@@ -206,10 +212,15 @@ function kinds(observations: RuntimeObservation[]): string[] {
 // --- tests -----------------------------------------------------------------
 
 describe("tool mapping", () => {
-  it("names every product tool the way Pi does", () => {
+  it("binds only the contained file tools from the product bundle", async () => {
+    const { worktreePath } = fixture();
+    const env = await ScopedExecutionEnv.create(worktreePath);
+
     expect(
-      toPiToolNames({ tools: ["read", "edit", "write", "execute", "grep", "find", "list"] }),
-    ).toEqual(["read", "edit", "write", "bash", "grep", "find", "ls"]);
+      createPiTools({ tools: ["read", "edit", "write"] }, env).map((tool) => tool.name),
+    ).toEqual(["read", "edit", "write"]);
+
+    await env.cleanup();
   });
 });
 
@@ -220,20 +231,21 @@ describe("startTicketSession", () => {
 
     const runtime = createPiAgentRuntime({
       sessionDataDir,
-      modelRuntime: credentialedRuntime,
-      modelStream: scriptedStream([
-        (emit) => {
-          emit.thinking("check the marker");
-          emit.text("Reading the file.");
-          emit.toolCall("read", { path: "MARKER.txt" });
-          emit.finish();
-        },
-        (emit, context) => {
-          secondCallContext = context;
-          emit.text("The token is volli-marker-42.");
-          emit.finish();
-        },
-      ]),
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.thinking("check the marker");
+            emit.text("Reading the file.");
+            emit.toolCall("read", { path: "MARKER.txt" });
+            emit.finish();
+          },
+          (emit, context) => {
+            secondCallContext = context;
+            emit.text("The token is volli-marker-42.");
+            emit.finish();
+          },
+        ]),
+      ),
     });
 
     const handle = await runtime.startTicketSession(spec);
@@ -245,8 +257,8 @@ describe("startTicketSession", () => {
       "turn:started",
       "delta",
       "delta",
-      "delta",
       "message-settled",
+      "delta",
       "message-settled",
       "turn:completed",
     ]);
@@ -293,19 +305,111 @@ describe("startTicketSession", () => {
 
     // The JSONL sidecar lives under the host's session directory, and the entry
     // ids the product settled survive a reopen.
-    const files = readdirSync(sessionDataDir);
-    expect(files).toHaveLength(1);
     const ref = handle.recovery;
-    expect(ref?.sessionFilePath).toBe(join(sessionDataDir, files[0] as string));
     expect(existsSync(ref?.sessionFilePath as string)).toBe(true);
 
     await handle.close();
 
-    const reopened = SessionManager.open(ref?.sessionFilePath as string, sessionDataDir);
-    const reopenedIds = reopened.getEntries().map((entry) => entry.id);
+    const sidecar = readFileSync(ref?.sessionFilePath as string, "utf8");
     for (const observation of settled) {
-      expect(reopenedIds).toContain(observation.message.entryId);
+      expect(sidecar).toContain(observation.message.entryId);
     }
+  });
+
+  it("keeps an actual Pi read turn inside the Ticket worktree", async () => {
+    const { spec, worktreePath, sessionDataDir } = fixture();
+    const outsidePath = join(worktreePath, "..", "SECRET.txt");
+    writeFileSync(outsidePath, "outside-secret-value\n");
+    let toolResultContext: Context | undefined;
+
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("read", { path: outsidePath });
+            emit.finish();
+          },
+          (emit, context) => {
+            toolResultContext = context;
+            emit.text("The read was refused.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startTicketSession(spec);
+
+    await handle.submitUserMessage("Read the file outside this worktree.");
+    await handle.close();
+
+    const serialized = JSON.stringify(toolResultContext?.messages);
+    expect(serialized).toContain("outside the Ticket worktree");
+    expect(serialized).not.toContain("outside-secret-value");
+  });
+
+  it("does not complete delivery before durable observation commits", async () => {
+    const committed = Promise.withResolvers<void>();
+    const observed = Promise.withResolvers<void>();
+    const attachment = fixture();
+    attachment.spec.observer = async (observation) => {
+      attachment.observations.push(observation);
+      if (observation.kind === "message-settled") {
+        observed.resolve();
+        await committed.promise;
+      }
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("durable answer");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startTicketSession(attachment.spec);
+    let delivered = false;
+
+    const delivery = handle.submitUserMessage("go").then((outcome) => {
+      delivered = true;
+      return outcome;
+    });
+    await observed.promise;
+    await Promise.resolve();
+    expect(delivered).toBe(false);
+
+    committed.resolve();
+    await expect(delivery).resolves.toEqual({ kind: "delivered", delivery: "prompt" });
+    expect(kinds(attachment.observations)).toContain("turn:completed");
+    await handle.close();
+  });
+
+  it("propagates a durable observation failure to the delivery caller", async () => {
+    const attachment = fixture();
+    attachment.spec.observer = async (observation) => {
+      attachment.observations.push(observation);
+      if (observation.kind === "message-settled") {
+        throw new Error("durable commit failed");
+      }
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("answer");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startTicketSession(attachment.spec);
+
+    await expect(handle.submitUserMessage("go")).rejects.toThrow("durable commit failed");
+    await handle.close();
   });
 
   it("delivers the brief once and plain text afterwards", async () => {
@@ -319,8 +423,7 @@ describe("startTicketSession", () => {
 
     const runtime = createPiAgentRuntime({
       sessionDataDir,
-      modelRuntime: credentialedRuntime,
-      modelStream: scriptedStream([reply, reply]),
+      models: modelsWithStream(scriptedStream([reply, reply])),
     });
     const handle = await runtime.startTicketSession(spec);
 
@@ -340,8 +443,7 @@ describe("startTicketSession", () => {
 
     const runtime = createPiAgentRuntime({
       sessionDataDir,
-      modelRuntime: credentialedRuntime,
-      modelStream: scriptedStream([haltOnAbort("working", streaming.resolve)]),
+      models: modelsWithStream(scriptedStream([haltOnAbort("working", streaming.resolve)])),
     });
     const handle = await runtime.startTicketSession(spec);
 
@@ -364,8 +466,7 @@ describe("startTicketSession", () => {
 
     const runtime = createPiAgentRuntime({
       sessionDataDir,
-      modelRuntime: credentialedRuntime,
-      modelStream: scriptedStream([haltOnAbort("half a thought", streaming.resolve)]),
+      models: modelsWithStream(scriptedStream([haltOnAbort("half a thought", streaming.resolve)])),
     });
     const handle = await runtime.startTicketSession(spec);
 
@@ -392,8 +493,7 @@ describe("startTicketSession", () => {
 
     const runtime = createPiAgentRuntime({
       sessionDataDir,
-      modelRuntime: credentialedRuntime,
-      modelStream: scriptedStream([haltOnAbort("half a thought", streaming.resolve)]),
+      models: modelsWithStream(scriptedStream([haltOnAbort("half a thought", streaming.resolve)])),
     });
     const handle = await runtime.startTicketSession({ ...spec, signal: controller.signal });
 
@@ -410,8 +510,7 @@ describe("startTicketSession", () => {
     const { spec, observations, sessionDataDir } = fixture();
     const runtime = createPiAgentRuntime({
       sessionDataDir,
-      modelRuntime: credentialedRuntime,
-      modelStream: scriptedStream([]),
+      models: modelsWithStream(scriptedStream([])),
     });
     const handle = await runtime.startTicketSession(spec);
 
@@ -432,8 +531,7 @@ describe("startTicketSession", () => {
     });
     const runtime = createPiAgentRuntime({
       sessionDataDir,
-      modelRuntime: credentialedRuntime,
-      modelStream: scriptedStream([]),
+      models: modelsWithStream(scriptedStream([])),
     });
 
     await expect(runtime.startTicketSession(spec)).rejects.toThrow(
@@ -451,49 +549,32 @@ describe("startTicketSession", () => {
     ]);
   });
 
-  it("reopens a recovered session without re-sending the brief", async () => {
-    const { spec, sessionDataDir } = fixture();
-    const seen: Context["messages"][] = [];
-    const reply: ScriptStep = (emit, context) => {
-      seen.push([...context.messages]);
-      emit.text("ok");
-      emit.finish();
-    };
-
+  it("refuses recovery before Session 4 can reconcile the Pi sidecar", async () => {
+    const { spec, observations, sessionDataDir } = fixture({
+      recovery: {
+        runtime: "pi",
+        sessionId: "pi-session-previous",
+        sessionFilePath: join(tmpdir(), "previous-session.jsonl"),
+      },
+    });
     const runtime = createPiAgentRuntime({
       sessionDataDir,
-      modelRuntime: credentialedRuntime,
-      modelStream: scriptedStream([reply, reply]),
-    });
-    const first = await runtime.startTicketSession(spec);
-    await first.submitUserMessage("first");
-    const ref = first.recovery;
-    await first.close();
-
-    const resumedObservations: RuntimeObservation[] = [];
-    const resumed = await runtime.startTicketSession({
-      ...spec,
-      recovery: ref,
-      observer: (observation) => resumedObservations.push(observation),
+      models: modelsWithStream(scriptedStream([])),
     });
 
-    expect(kinds(resumedObservations)).toEqual(["attachment:recovered"]);
-    expect(resumed.recovery).toEqual(ref);
-
-    await resumed.submitUserMessage("second");
-    await resumed.close();
-
-    // Two prior messages were replayed from durable history, so only the new
-    // plain-text message was appended — the brief did not ride along again.
-    expect(seen[1]).toHaveLength(3);
-    expect(JSON.stringify(seen[1]?.slice(2))).not.toContain("BEGIN TICKET BRIEF");
-    expect(kinds(resumedObservations)).toEqual([
-      "attachment:recovered",
-      "turn:started",
-      "delta",
-      "message-settled",
-      "turn:completed",
-      "attachment:closed",
+    await expect(runtime.startTicketSession(spec)).rejects.toThrow(
+      "Pi recovery is not available until migration Session 4 lands ledger reconciliation.",
+    );
+    expect(observations).toEqual([
+      {
+        kind: "attachment",
+        state: "failed",
+        failure: {
+          reason: "configuration",
+          message:
+            "Pi recovery is not available until migration Session 4 lands ledger reconciliation.",
+        },
+      },
     ]);
   });
 
@@ -501,10 +582,9 @@ describe("startTicketSession", () => {
     const { spec, observations, sessionDataDir } = fixture();
     const runtime = createPiAgentRuntime({
       sessionDataDir,
-      modelRuntime: credentialedRuntime,
-      modelStream: scriptedStream([
-        (emit) => emit.fail("invalid x-api-key sk-ant-0123456789abcdef"),
-      ]),
+      models: modelsWithStream(
+        scriptedStream([(emit) => emit.fail("invalid x-api-key sk-ant-0123456789abcdef")]),
+      ),
     });
     const handle = await runtime.startTicketSession(spec);
 
@@ -529,8 +609,7 @@ describe("startTicketSession", () => {
     const { spec, observations, sessionDataDir } = fixture();
     const runtime = createPiAgentRuntime({
       sessionDataDir,
-      modelRuntime: credentialedRuntime,
-      modelStream: scriptedStream([(emit) => emit.fail("malformed provider payload")]),
+      models: modelsWithStream(scriptedStream([(emit) => emit.fail("malformed provider payload")])),
     });
     const handle = await runtime.startTicketSession(spec);
 
@@ -547,14 +626,17 @@ describe("startTicketSession", () => {
     await handle.close();
   });
 
-  it("raises attention and rejects when Pi refuses the prompt outright", async () => {
-    // No injected runtime and no scripted stream: this is the production wiring,
-    // running against the hermetic empty agent dir, so Pi has no credentials.
+  it("raises attention when production provider wiring has no credentials", async () => {
+    // No injected model collection: this is the production wiring. The Pi
+    // Agent represents provider refusal as a failed assistant turn.
     const { spec, observations, sessionDataDir } = fixture();
     const runtime = createPiAgentRuntime({ sessionDataDir });
     const handle = await runtime.startTicketSession(spec);
 
-    await expect(handle.submitUserMessage("go")).rejects.toThrow(/anthropic/);
+    await expect(handle.submitUserMessage("go")).resolves.toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+    });
 
     expect(observations.filter((observation) => observation.kind === "attention")).toEqual([
       { kind: "attention", state: "raised", reason: "auth", message: expect.any(String) },
