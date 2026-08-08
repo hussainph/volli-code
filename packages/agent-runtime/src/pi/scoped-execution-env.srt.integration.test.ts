@@ -99,7 +99,7 @@ describe.skipIf(!enabled)(
 
         // The ambient process is intentionally poisoned. The wrapped child must
         // receive neither credentials nor a non-interactive-shell hook.
-        const environment = await env.exec(`test -z \"\${${credentialName}-}\"`);
+        const environment = await env.exec(`test -z "\${${credentialName}-}"`);
         expect(environment).toMatchObject({ ok: true, value: { exitCode: 0 } });
         expect(outputOf(environment)).not.toContain(credential);
         expect(existsSync(hookMarker)).toBe(false);

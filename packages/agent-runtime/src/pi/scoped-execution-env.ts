@@ -38,6 +38,11 @@ interface SandboxRuntime {
 
 type Spawn = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
 type ProcessKill = (pid: number, signal: NodeJS.Signals) => void;
+interface FileOperations {
+  mkdtemp(prefix: string): Promise<string>;
+  writeFile(path: string, content: string): Promise<void>;
+  rm(path: string, options: { recursive: boolean; force: boolean }): Promise<void>;
+}
 
 export interface ScopedExecutionEnvOptions {
   /** Internal test seam for SRT's process-global manager. */
@@ -48,6 +53,8 @@ export interface ScopedExecutionEnvOptions {
   homeDir?: string;
   /** Internal test seam for process-group signals. */
   processKill?: ProcessKill;
+  /** Internal test seam for owned temporary output spools. */
+  fileOperations?: FileOperations;
 }
 
 /** The contained Ticket execution capability Pi's coding tools receive. */
@@ -126,27 +133,24 @@ function sanitizedPath(pathValue: string | undefined): string {
   return [...new Set(safe)].join(":") || "/usr/bin:/bin:/usr/sbin:/sbin";
 }
 
-function isOuterSpawnHook(name: string): boolean {
-  return (
-    name === "BASH_ENV" ||
-    name === "ENV" ||
-    name === "NODE_OPTIONS" ||
-    name === "RUBYOPT" ||
-    /^DYLD_|^LD_|^PERL|^PYTHON|^GIT_CONFIG/i.test(name)
-  );
-}
-
 function sanitizedEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = { PATH: sanitizedPath(source.PATH) };
   for (const name of ["LANG", "LC_ALL", "LC_CTYPE", "TERM", "COLORTERM", "TZ", "CI", "NO_COLOR"]) {
     const value = source[name];
-    if (value && !isOuterSpawnHook(name)) environment[name] = value;
+    if (value) environment[name] = value;
   }
   return environment;
 }
 
 function isSafeTempFragment(value: string): boolean {
-  return !isAbsolute(value) && !value.includes("..") && !/[\\/\0\x00-\x1F\x7F]/.test(value);
+  if (isAbsolute(value) || value.includes("..") || value.includes("\\") || value.includes("/")) {
+    return false;
+  }
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f)) return false;
+  }
+  return true;
 }
 
 function perCommandSandboxConfig(worktree: string, homeDir: string): Partial<SandboxRuntimeConfig> {
@@ -231,6 +235,7 @@ export class ScopedExecutionEnv implements TicketExecutionEnv {
   readonly #spawn: Spawn;
   readonly #homeDir: string;
   readonly #processKill: ProcessKill;
+  readonly #fileOperations: FileOperations;
   readonly #activeChildren = new Set<ChildProcess>();
   readonly #tempDirectories = new Set<string>();
 
@@ -241,6 +246,7 @@ export class ScopedExecutionEnv implements TicketExecutionEnv {
     this.#spawn = options.spawn ?? spawn;
     this.#homeDir = options.homeDir ?? homedir();
     this.#processKill = options.processKill ?? process.kill;
+    this.#fileOperations = options.fileOperations ?? { mkdtemp, rm, writeFile };
   }
 
   static async create(
@@ -285,10 +291,9 @@ export class ScopedExecutionEnv implements TicketExecutionEnv {
           );
         }
       } catch (error) {
-        /* v8 ignore next 3 -- Node filesystem promises reject with Error instances */
-        if (!(error instanceof Error)) return err(new FileError("unknown", String(error), current));
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") break;
-        return err(new FileError("unknown", error.message, current, error));
+        const cause = asError(error);
+        if ((cause as NodeJS.ErrnoException).code === "ENOENT") break;
+        return err(new FileError("unknown", cause.message, current, cause));
       }
     }
     return { ok: true, value: target };
@@ -407,16 +412,13 @@ export class ScopedExecutionEnv implements TicketExecutionEnv {
     let directory: string | undefined;
     let created = false;
     try {
-      directory = await mkdtemp(join(this.cwd, ".volli-bash-"));
+      directory = await this.#fileOperations.mkdtemp(join(this.cwd, ".volli-bash-"));
       this.#tempDirectories.add(directory);
       const path = resolve(directory, `${prefix}output${suffix}`);
-      if (!isInside(directory, path)) {
-        throw new Error("Temporary file path escaped its owned directory.");
-      }
       if (options?.abortSignal?.aborted) {
         return { ok: false, error: new FileError("aborted", "Operation aborted.") };
       }
-      await writeFile(path, "");
+      await this.#fileOperations.writeFile(path, "");
       created = true;
       return { ok: true, value: path };
     } catch (error) {
@@ -429,7 +431,7 @@ export class ScopedExecutionEnv implements TicketExecutionEnv {
       if (directory && !created) {
         this.#tempDirectories.delete(directory);
         try {
-          await rm(directory, { recursive: true, force: true });
+          await this.#fileOperations.rm(directory, { recursive: true, force: true });
         } catch {
           /* best effort */
         }
@@ -452,9 +454,9 @@ export class ScopedExecutionEnv implements TicketExecutionEnv {
 
   async #terminateDuringCleanup(child: ChildProcess): Promise<void> {
     this.#signalChildGroup(child, "SIGTERM");
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((complete) => {
       let closed = false;
-      const done = () => resolve();
+      const done = () => complete();
       child.once("close", () => {
         closed = true;
       });
@@ -504,7 +506,6 @@ export class ScopedExecutionEnv implements TicketExecutionEnv {
       let stdout: Buffer = Buffer.alloc(0);
       let stderr: Buffer = Buffer.alloc(0);
       let settled = false;
-      let cleaned = false;
       let closeObserved = false;
       let killEscalated = false;
       let timeout: NodeJS.Timeout | undefined;
@@ -515,8 +516,6 @@ export class ScopedExecutionEnv implements TicketExecutionEnv {
       let terminationDeadline: NodeJS.Timeout | undefined;
 
       const cleanup = () => {
-        if (cleaned) return;
-        cleaned = true;
         if (timeout) clearTimeout(timeout);
         if (killEscalation) clearTimeout(killEscalation);
         if (terminationDeadline) clearTimeout(terminationDeadline);
@@ -540,12 +539,11 @@ export class ScopedExecutionEnv implements TicketExecutionEnv {
         if (terminationResult && closeObserved && killEscalated) finish(terminationResult);
       };
       const terminate = () => {
-        if (!child) return;
-        this.#signalChildGroup(child, "SIGTERM");
+        this.#signalChildGroup(launchedChild, "SIGTERM");
         killEscalation = setTimeout(() => {
           // Do not key this on the leader's liveness. A background child can
           // outlive the shell after it has emitted close.
-          if (child) this.#signalChildGroup(child, "SIGKILL");
+          this.#signalChildGroup(launchedChild, "SIGKILL");
           killEscalated = true;
           finishTerminationIfReady();
         }, KILL_GRACE_MS);
@@ -590,15 +588,16 @@ export class ScopedExecutionEnv implements TicketExecutionEnv {
         return;
       }
 
+      const launchedChild = child;
       child.stdout?.on("data", (data: Buffer | string) => {
         const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data);
-        stdout = boundedAppend(stdout, bytes);
+        stdout = boundedAppend(stdout, data);
         const chunk = bytes.toString();
         callback(options.onStdout, chunk);
       });
       child.stderr?.on("data", (data: Buffer | string) => {
         const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data);
-        stderr = boundedAppend(stderr, bytes);
+        stderr = boundedAppend(stderr, data);
         const chunk = bytes.toString();
         callback(options.onStderr, chunk);
       });

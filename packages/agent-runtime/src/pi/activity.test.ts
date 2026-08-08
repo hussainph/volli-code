@@ -201,7 +201,7 @@ describe("mapPiActivity", () => {
     const tooManyNodes = Array.from({ length: nodeGroups }, (_, group) =>
       Array.from(
         { length: MAX_ACTIVITY_VALUE_ARRAY_LENGTH },
-        (_, index) => `node-${group * MAX_ACTIVITY_VALUE_ARRAY_LENGTH + index}`,
+        (_item, index) => `node-${group * MAX_ACTIVITY_VALUE_ARRAY_LENGTH + index}`,
       ),
     );
     const cycle: { self?: unknown } = {};
@@ -374,5 +374,315 @@ describe("mapPiActivity", () => {
     ).toEqual(generic);
     expect(mapPiActivity(throwingGetter, activityContext({ observedAt: 600 }))).toEqual(generic);
     expect(mapPiActivity(hostileProxy, activityContext({ observedAt: 600 }))).toEqual(generic);
+  });
+
+  it("keeps incomplete provider payloads meaningful without inventing paths, ranges, or failures", () => {
+    const cases = [
+      {
+        event: {
+          type: "tool_execution_start",
+          toolCallId: "call-other",
+          toolName: "extension_tool",
+          args: null,
+        },
+        expected: {
+          state: "started",
+          input: null,
+          descriptor: {
+            kind: "other",
+            subject: { label: "extension_tool", path: null, lineRange: null },
+          },
+        },
+      },
+      {
+        event: {
+          type: "tool_execution_start",
+          toolCallId: "call-write-no-path",
+          toolName: "write",
+          args: {},
+        },
+        expected: {
+          state: "started",
+          descriptor: {
+            kind: "write-file",
+            subject: { label: null, path: null, lineRange: null },
+          },
+        },
+      },
+      {
+        event: {
+          type: "tool_execution_start",
+          toolCallId: "call-read-no-range",
+          toolName: "read",
+          args: { filePath: " src/alternate.ts ", offset: 0, limit: 2.5 },
+        },
+        expected: {
+          state: "started",
+          input: { filePath: "src/alternate.ts", offset: 0, limit: 2.5 },
+          descriptor: {
+            kind: "read-file",
+            subject: { label: "src/alternate.ts", path: "src/alternate.ts", lineRange: null },
+          },
+        },
+      },
+      {
+        event: {
+          type: "tool_execution_start",
+          toolCallId: "call-bash-empty",
+          toolName: "bash",
+          args: { command: "   " },
+        },
+        expected: {
+          state: "started",
+          input: { command: "   " },
+          descriptor: {
+            kind: "run-command",
+            subject: { label: null, path: null, lineRange: null },
+          },
+        },
+      },
+    ] as const;
+
+    for (const { event, expected } of cases) {
+      expect(mapPiActivity(event, activityContext({ observedAt: 610 }))).toMatchObject(expected);
+    }
+  });
+
+  it("projects provider failure fallbacks and serializable primitive edge values", () => {
+    const fallbackOutput = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "call-string-error",
+        toolName: "bash",
+        result: "Bearer abc.def",
+        isError: true,
+      },
+      activityContext({ input: true, startedAt: 620, observedAt: 630 }),
+    );
+    const emptyFailure = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "call-empty-error",
+        toolName: "bash",
+        result: { summary: "  ", content: [{ type: "image", text: "ignored" }] },
+        isError: true,
+      },
+      activityContext({ input: false, startedAt: 620, observedAt: 630 }),
+    );
+    const primitiveInput = mapPiActivity(
+      {
+        type: "tool_execution_start",
+        toolCallId: "call-primitives",
+        toolName: "extension_tool",
+        args: [true, false, Number.POSITIVE_INFINITY, undefined, Symbol("not-json")],
+      },
+      activityContext({ observedAt: 640 }),
+    );
+
+    expect(fallbackOutput).toMatchObject({
+      state: "failed",
+      input: true,
+      output: "Bearer [redacted]",
+      error: "Bearer [redacted]",
+      descriptor: { outcome: { summary: null } },
+    });
+    expect(emptyFailure).toMatchObject({
+      state: "failed",
+      input: false,
+      error: "Tool execution failed.",
+      descriptor: { outcome: { summary: null } },
+    });
+    expect(primitiveInput.input).toEqual([true, false, null, null, null]);
+  });
+
+  it("falls back when the caller's turn context becomes hostile", () => {
+    const context = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("turn context unavailable");
+        },
+      },
+    ) as PiActivityContext;
+
+    expect(
+      mapPiActivity(
+        { type: "tool_execution_start", toolCallId: "call", toolName: "read", args: {} },
+        context,
+      ),
+    ).toMatchObject({ turnId: "unknown", activityId: "unknown", state: "progress" });
+  });
+
+  it("retains only the serializable prefix when aggregate payload capacity is exhausted", () => {
+    const duplicateKeyPrefix = "k".repeat(MAX_ACTIVITY_VALUE_KEY_LENGTH);
+    const activity = mapPiActivity(
+      {
+        type: "tool_execution_start",
+        toolCallId: "   ",
+        toolName: "extension_tool",
+        args: {
+          first: Array.from({ length: MAX_ACTIVITY_VALUE_ARRAY_LENGTH }, () =>
+            "a".repeat(MAX_ACTIVITY_PAYLOAD_STRING_LENGTH),
+          ),
+          arrayAfterBudget: ["not retained"],
+          objectAfterBudget: { notRetained: true },
+          falseValue: false,
+          numberAfterBudget: 12,
+          nullAfterBudget: null,
+        },
+      },
+      activityContext({ observedAt: 650 }),
+    );
+    const input = activity.input as Record<string, unknown>;
+
+    expect(activity.activityId).toBe("unknown");
+    expect(JSON.stringify(input.first)).toContain("…");
+    expect(JSON.stringify(input).length).toBeLessThanOrEqual(MAX_ACTIVITY_VALUE_TOTAL_LENGTH);
+    expect(input).not.toHaveProperty("arrayAfterBudget");
+    expect(input).not.toHaveProperty("objectAfterBudget");
+    expect(input).not.toHaveProperty("numberAfterBudget");
+    expect(input).not.toHaveProperty("nullAfterBudget");
+
+    const duplicateKeys = mapPiActivity(
+      {
+        type: "tool_execution_start",
+        toolCallId: "call-duplicate-key",
+        toolName: "extension_tool",
+        args: {
+          [`${duplicateKeyPrefix}-one`]: "first duplicate key wins",
+          [`${duplicateKeyPrefix}-two`]: "second duplicate key is omitted",
+        },
+      },
+      activityContext({ observedAt: 650 }),
+    );
+    expect(duplicateKeys.input).toEqual({ [duplicateKeyPrefix]: "first duplicate key wins" });
+
+    expect(
+      mapPiActivity(
+        {
+          type: "tool_execution_start",
+          toolCallId: "call-false",
+          toolName: "extension_tool",
+          args: false,
+        },
+        activityContext({ observedAt: 650 }),
+      ).input,
+    ).toBe(false);
+  });
+
+  it("drops incomplete aggregate children without exceeding the activity payload budget", () => {
+    const long = "x".repeat(MAX_ACTIVITY_PAYLOAD_STRING_LENGTH);
+    const common = { type: "tool_execution_start", toolName: "extension_tool" } as const;
+    const arrayWithoutRoomForStructure = mapPiActivity(
+      {
+        ...common,
+        toolCallId: "array-structure",
+        args: [long, "y".repeat(MAX_ACTIVITY_PAYLOAD_STRING_LENGTH - 9), []],
+      },
+      activityContext({ observedAt: 651 }),
+    );
+    const arrayWithoutRoomForValue = mapPiActivity(
+      {
+        ...common,
+        toolCallId: "array-value",
+        args: [long, "y".repeat(MAX_ACTIVITY_PAYLOAD_STRING_LENGTH - 9), ""],
+      },
+      activityContext({ observedAt: 651 }),
+    );
+    const objectWithoutRoomForKey = mapPiActivity(
+      {
+        ...common,
+        toolCallId: "object-key",
+        args: {
+          a: long,
+          b: "y".repeat(MAX_ACTIVITY_PAYLOAD_STRING_LENGTH - 66),
+          ["k".repeat(MAX_ACTIVITY_VALUE_KEY_LENGTH)]: "omitted",
+        },
+      },
+      activityContext({ observedAt: 651 }),
+    );
+    const objectWithoutRoomForValue = mapPiActivity(
+      {
+        ...common,
+        toolCallId: "object-value",
+        args: {
+          a: long,
+          b: "y".repeat(MAX_ACTIVITY_PAYLOAD_STRING_LENGTH - 21),
+          c: true,
+        },
+      },
+      activityContext({ observedAt: 651 }),
+    );
+    const objectWithoutRoomForStructure = mapPiActivity(
+      {
+        ...common,
+        toolCallId: "object-structure",
+        args: { a: [long, "y".repeat(MAX_ACTIVITY_PAYLOAD_STRING_LENGTH - 19)], b: {} },
+      },
+      activityContext({ observedAt: 651 }),
+    );
+    const arrayWithoutRoomForScalars = [null, 10].map((value) =>
+      mapPiActivity(
+        {
+          ...common,
+          toolCallId: `array-${String(value)}`,
+          args: [long, "y".repeat(MAX_ACTIVITY_PAYLOAD_STRING_LENGTH - 9), value],
+        },
+        activityContext({ observedAt: 651 }),
+      ),
+    );
+
+    for (const activity of [
+      arrayWithoutRoomForStructure,
+      arrayWithoutRoomForValue,
+      objectWithoutRoomForKey,
+      objectWithoutRoomForValue,
+      objectWithoutRoomForStructure,
+      ...arrayWithoutRoomForScalars,
+    ]) {
+      expect(JSON.stringify(activity.input).length).toBeLessThanOrEqual(
+        MAX_ACTIVITY_VALUE_TOTAL_LENGTH,
+      );
+    }
+    expect(arrayWithoutRoomForStructure.input).toHaveLength(2);
+    expect(arrayWithoutRoomForValue.input).toHaveLength(2);
+    expect(objectWithoutRoomForKey.input).toMatchObject({ a: long });
+    expect(objectWithoutRoomForValue.input).toMatchObject({ a: long });
+    expect(objectWithoutRoomForValue.input).not.toHaveProperty("c");
+    expect(objectWithoutRoomForStructure.input).not.toHaveProperty("b");
+  });
+
+  it("keeps a nonempty provider summary when no text content is present", () => {
+    expect(
+      mapPiActivity(
+        {
+          type: "tool_execution_end",
+          toolCallId: "summary",
+          toolName: "bash",
+          result: { summary: "completed normally" },
+          isError: false,
+        },
+        activityContext({ observedAt: 652 }),
+      ).descriptor.outcome,
+    ).toMatchObject({ summary: "completed normally" });
+  });
+
+  it("uses a path as the subject label for otherwise unknown tools", () => {
+    expect(
+      mapPiActivity(
+        {
+          type: "tool_execution_start",
+          toolCallId: "call-unknown-path",
+          toolName: "extension_tool",
+          args: { path: "plugin/data.json" },
+        },
+        activityContext({ observedAt: 660 }),
+      ),
+    ).toMatchObject({
+      descriptor: {
+        kind: "other",
+        subject: { label: "plugin/data.json", path: "plugin/data.json", lineRange: null },
+      },
+    });
   });
 });

@@ -329,11 +329,20 @@ async function attachTicketSession(
       spec.signal?.removeEventListener("abort", abortListener);
     }
     unsubscribe?.();
-    await toolEnv?.cleanup().catch(() => undefined);
+    await toolEnv?.cleanup().catch(
+      /* v8 ignore next -- owned-environment cleanup is best effort after a failed attach. */
+      () => undefined,
+    );
     if (sidecarPath !== undefined) {
-      await sidecarEnv.remove(sidecarPath, { force: true }).catch(() => undefined);
+      await sidecarEnv.remove(sidecarPath, { force: true }).catch(
+        /* v8 ignore next -- sidecar deletion is best effort after a failed attach. */
+        () => undefined,
+      );
     }
-    await sidecarEnv.cleanup().catch(() => undefined);
+    await sidecarEnv.cleanup().catch(
+      /* v8 ignore next -- sidecar cleanup is best effort after a failed attach. */
+      () => undefined,
+    );
     throw error;
   }
 }

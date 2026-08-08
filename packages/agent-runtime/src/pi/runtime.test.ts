@@ -381,6 +381,35 @@ describe("startTicketSession", () => {
     expect(stream).not.toHaveBeenCalled();
   });
 
+  it("does not replace an attachment-start failure with contained cleanup failure", async () => {
+    const attachment = fixture();
+    const cleanup = vi.fn(async () => {
+      throw new Error("contained cleanup failed");
+    });
+    const containedEnv = {
+      cwd: attachment.worktreePath,
+      prepareProcessExecution: vi.fn(async () => ({ ok: true as const, value: undefined })),
+      cleanup,
+    } as unknown as TicketExecutionEnv;
+    attachment.spec.observer = async (observation) => {
+      attachment.observations.push(observation);
+      if (observation.kind === "attachment" && observation.state === "started") {
+        throw new Error("durable attachment start failed");
+      }
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+      executionEnvFactory: async () => containedEnv,
+    });
+
+    await expect(runtime.startTicketSession(attachment.spec)).rejects.toThrow(
+      "durable attachment start failed",
+    );
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(jsonlFiles(attachment.sessionDataDir)).toEqual([]);
+  });
+
   it("runs Pi bash through the prepared contained environment and maps its lifecycle", async () => {
     const attachment = fixture({ tools: { tools: ["execute"] } });
     const cleanup = vi.fn(async () => undefined);

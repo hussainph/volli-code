@@ -50,6 +50,7 @@ function sandbox(overrides: Partial<Record<string, unknown>> = {}) {
         argv: ["/usr/bin/true"],
         env: {
           PATH: "/Users/me/bin:/usr/bin:/bin",
+          LANG: "C.UTF-8",
           HOME: "/Users/me",
           GITHUB_TOKEN: "host-secret",
           BASH_ENV: "/tmp/hook",
@@ -138,9 +139,13 @@ describe("ScopedExecutionEnv", () => {
     });
   });
 
-  it("does not expose unused filesystem or process capabilities", async () => {
+  it("keeps unused filesystem capabilities unavailable and fails closed without a process boundary", async () => {
     const { worktree } = roots();
-    const env = await ScopedExecutionEnv.create(worktree);
+    const env = await ScopedExecutionEnv.create(worktree, {
+      // The ordinary unit suite must not depend on whether its host can run
+      // SRT. The live integration gate proves the available-boundary path.
+      sandbox: sandbox({ isSupportedPlatform: () => false }),
+    });
     const unsupported = await Promise.all([
       env.joinPath(["a", "b"]),
       env.readTextLines("inside.txt"),
@@ -322,6 +327,7 @@ describe("ScopedExecutionEnv", () => {
       options: { cwd: env.cwd, shell: false },
     });
     expect(spawns[0]!.options.env).toMatchObject({ PATH: "/usr/bin:/bin" });
+    expect(spawns[0]!.options.env).toMatchObject({ LANG: "C.UTF-8" });
     expect(spawns[0]!.options.env).not.toHaveProperty("VOLLI_TEST_FLAG");
     expect(spawns[0]!.options.env).not.toHaveProperty("HOME");
     expect(spawns[0]!.options.env).not.toHaveProperty("GITHUB_TOKEN");
@@ -475,6 +481,7 @@ describe("ScopedExecutionEnv", () => {
     await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
     const oversized = Buffer.concat([Buffer.alloc(999_999, 0x61), Buffer.from("€extra")]);
     running.stdout.write(oversized);
+    running.stdout.emit("data", "not captured after the stream cap");
     running.stderr.write(oversized);
     running.emit("close", 0);
 
@@ -514,5 +521,228 @@ describe("ScopedExecutionEnv", () => {
 
     expect(append).toHaveBeenCalledWith(join(env.cwd, "inside.txt"), "x", controller.signal);
     await env.cleanup();
+  });
+
+  it("cleans owned output spools after a late abort, write failure, or cleanup fault", async () => {
+    const { worktree } = roots();
+    const controller = new AbortController();
+    const lateDirectory = join(worktree, ".volli-bash-late");
+    mkdirSync(lateDirectory);
+    const lateRemove = vi.fn(async () => undefined);
+    const lateAbort = await ScopedExecutionEnv.create(worktree, {
+      fileOperations: {
+        mkdtemp: async () => {
+          controller.abort();
+          return lateDirectory;
+        },
+        writeFile: async () => undefined,
+        rm: lateRemove,
+      },
+    });
+    expect(await lateAbort.createTempFile({ abortSignal: controller.signal })).toMatchObject({
+      ok: false,
+      error: { code: "aborted" },
+    });
+    expect(lateRemove).toHaveBeenCalledWith(lateDirectory, { recursive: true, force: true });
+
+    const failedDirectory = join(worktree, ".volli-bash-failed");
+    mkdirSync(failedDirectory);
+    const writeFailure = await ScopedExecutionEnv.create(worktree, {
+      fileOperations: {
+        mkdtemp: async () => failedDirectory,
+        writeFile: async () => Promise.reject("disk full"),
+        rm: async () => Promise.reject(new Error("already removed")),
+      },
+    });
+    expect(await writeFailure.createTempFile()).toMatchObject({
+      ok: false,
+      error: { code: "unknown", message: "disk full" },
+    });
+  });
+
+  it("falls back to the child signal method and a minimal trusted PATH", async () => {
+    const { worktree } = roots();
+    const running = child();
+    const processKill = vi.fn(() => {
+      throw new Error("group already gone");
+    });
+    const spawns: SpawnOptions[] = [];
+    const srt = sandbox({
+      wrapWithSandboxArgv: async () => ({ argv: ["/usr/bin/true"], env: {} }),
+    });
+    const env = await ScopedExecutionEnv.create(worktree, {
+      sandbox: srt,
+      spawn: ((_command: string, _args: readonly string[], options: SpawnOptions) => {
+        spawns.push(options);
+        return running;
+      }) as never,
+      processKill,
+    });
+    const controller = new AbortController();
+    const run = env.exec("echo", {
+      abortSignal: controller.signal,
+      onStdout: () => {
+        throw new Error("stop");
+      },
+    });
+    await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
+    running.stdout.write("output");
+    await vi.waitFor(() => expect(running.kill).toHaveBeenCalledWith("SIGTERM"));
+    controller.abort();
+    running.emit("close", 0);
+    await expect(run).resolves.toMatchObject({ ok: false, error: { code: "callback_error" } });
+    running.emit("error", new Error("late process event"));
+    expect(processKill).toHaveBeenCalledWith(-1234, "SIGTERM");
+    expect(running.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(spawns[0]!.env).toMatchObject({ PATH: "/usr/bin:/bin:/usr/sbin:/sbin" });
+  });
+
+  it("returns bounded errors for preflight, cwd, temporary-file, and wrapper failures", async () => {
+    const { worktree, outside } = roots();
+    const dependencyEnv = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox({
+        checkDependenciesAsync: async () => ({ errors: ["missing runtime"], warnings: [] }),
+      }),
+    });
+    expect(await dependencyEnv.prepareProcessExecution()).toMatchObject({
+      ok: false,
+      error: { code: "shell_unavailable", message: expect.stringContaining("missing runtime") },
+    });
+
+    const enabledWithoutConfig = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox({ isSandboxingEnabled: () => true, getConfig: () => undefined }),
+    });
+    expect(await enabledWithoutConfig.prepareProcessExecution()).toMatchObject({
+      ok: false,
+      error: { code: "shell_unavailable", message: expect.stringContaining("incompatible") },
+    });
+    const discardedConfig = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox({ getConfig: () => undefined }),
+    });
+    expect(await discardedConfig.prepareProcessExecution()).toMatchObject({
+      ok: false,
+      error: { code: "shell_unavailable", message: expect.stringContaining("did not retain") },
+    });
+
+    const configured = sandbox();
+    const configuredEnv = await ScopedExecutionEnv.create(worktree, { sandbox: configured });
+    await configuredEnv.prepareProcessExecution();
+    const enabled = sandbox({
+      isSandboxingEnabled: () => true,
+      getConfig: () => configured.getConfig(),
+    });
+    const enabledEnv = await ScopedExecutionEnv.create(worktree, { sandbox: enabled });
+    expect(await enabledEnv.prepareProcessExecution()).toEqual({ ok: true, value: undefined });
+
+    const abort = new AbortController();
+    abort.abort();
+    expect(await enabledEnv.exec("echo never", { abortSignal: abort.signal })).toMatchObject({
+      ok: false,
+      error: { code: "aborted" },
+    });
+    expect(await enabledEnv.exec("pwd", { cwd: outside })).toMatchObject({
+      ok: false,
+      error: { code: "spawn_error", message: expect.stringContaining("outside") },
+    });
+    expect(await enabledEnv.exec("pwd", { cwd: "missing-directory" })).toMatchObject({
+      ok: false,
+      error: { code: "spawn_error", message: expect.stringContaining("unavailable") },
+    });
+    expect(await enabledEnv.appendFile("../outside.txt", "no")).toMatchObject({
+      ok: false,
+      error: { code: "permission_denied" },
+    });
+    expect(await enabledEnv.createTempFile({ abortSignal: abort.signal })).toMatchObject({
+      ok: false,
+      error: { code: "aborted" },
+    });
+
+    const wrapFailure = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox({
+        wrapWithSandboxArgv: async () => Promise.reject(new Error("cannot wrap")),
+      }),
+    });
+    expect(await wrapFailure.exec("pwd")).toMatchObject({
+      ok: false,
+      error: { code: "shell_unavailable", message: expect.stringContaining("cannot wrap") },
+    });
+    const noArgv = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox({ wrapWithSandboxArgv: async () => ({ argv: [], env: {} }) }),
+    });
+    expect(await noArgv.exec("pwd")).toMatchObject({
+      ok: false,
+      error: { code: "spawn_error", message: expect.stringContaining("no command argv") },
+    });
+  });
+
+  it("handles child launch errors, text chunks, default exits, timeouts, and kill fallbacks", async () => {
+    const { worktree } = roots();
+    const running = child();
+    const fallbackKill = vi.fn(() => {
+      throw new Error("group already gone");
+    });
+    const env = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => running) as never,
+      processKill: fallbackKill,
+    });
+    const output = env.exec("output");
+    await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
+    running.stdout.emit("data", "text stdout");
+    running.stderr.emit("data", "text stderr");
+    running.emit("close", null);
+    await expect(output).resolves.toEqual({
+      ok: true,
+      value: { stdout: "text stdout", stderr: "text stderr", exitCode: 1 },
+    });
+
+    const launchError = child();
+    const launchEnv = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => launchError) as never,
+    });
+    const failed = launchEnv.exec("fails-after-launch");
+    await vi.waitFor(() => expect(launchError.listenerCount("error")).toBeGreaterThan(0));
+    launchError.emit("error", new Error("child launch failure"));
+    await expect(failed).resolves.toMatchObject({ ok: false, error: { code: "spawn_error" } });
+
+    const timeoutChild = child();
+    timeoutChild.pid = 0;
+    const timeoutEnv = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => timeoutChild) as never,
+      processKill: fallbackKill,
+    });
+    await timeoutEnv.prepareProcessExecution();
+    const timedOut = timeoutEnv.exec("sleep 10", { timeout: 0.001 });
+    await vi.waitFor(() => expect(timeoutChild.listenerCount("close")).toBeGreaterThan(0));
+    await expect(timedOut).resolves.toMatchObject({ ok: false, error: { code: "timeout" } });
+    expect(timeoutChild.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(timeoutChild.kill).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("finishes attachment cleanup when a process-group leader never reports close", async () => {
+    const { worktree } = roots();
+    const running = child();
+    const processKill = vi.fn();
+    const env = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => running) as never,
+      processKill,
+    });
+    void env.exec("sleep 10");
+    await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
+
+    vi.useFakeTimers();
+    try {
+      const cleaning = env.cleanup();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(500);
+      await cleaning;
+      expect(processKill).toHaveBeenCalledWith(-1234, "SIGTERM");
+      expect(processKill).toHaveBeenCalledWith(-1234, "SIGKILL");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

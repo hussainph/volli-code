@@ -264,7 +264,7 @@ function normalizeActivityValue(value: unknown): RuntimeActivityValue {
     { nodes: 0, seen: new WeakSet<object>(), remaining: MAX_ACTIVITY_VALUE_TOTAL_LENGTH },
     0,
   );
-  return normalized === OMITTED ? null : normalized;
+  return normalized as RuntimeActivityValue;
 }
 
 const OMITTED = Symbol("activity-value-omitted");
@@ -366,7 +366,6 @@ function normalizedString(value: string, state: { remaining: number }): string |
   }
   const truncated = `${bounded.slice(0, low)}…`;
   const length = JSON.stringify(truncated).length;
-  if (length > state.remaining) return OMITTED;
   state.remaining -= length;
   return truncated;
 }
