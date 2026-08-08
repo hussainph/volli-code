@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSyn
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import lockfile from "proper-lockfile";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createPiAgentRuntime } from "./runtime";
 import { PiFileCredentialStore, piAuthFilePath, piOwnedModels } from "./models";
 
@@ -33,6 +33,7 @@ function storeIn(dir: string): PiFileCredentialStore {
 const held = { agentDir: process.env.PI_CODING_AGENT_DIR };
 
 afterEach(() => {
+  vi.restoreAllMocks();
   if (held.agentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = held.agentDir;
 });
@@ -155,6 +156,18 @@ describe("PiFileCredentialStore writes", () => {
     });
   });
 
+  it("reports a credential-file initialization failure by path", async () => {
+    const dir = join(scratch(), "read-only-agent");
+    mkdirSync(dir, { recursive: true });
+    chmodSync(dir, 0o500);
+
+    await expect(storeIn(dir).modify("openai-codex", async () => OAUTH)).rejects.toThrow(
+      /Could not initialize Pi credentials/,
+    );
+
+    chmodSync(dir, 0o700);
+  });
+
   it("leaves the file untouched when the refresh decides nothing changed", async () => {
     const dir = agentDirWith(JSON.stringify({ "openai-codex": OAUTH }));
     const before = readFileSync(join(dir, "auth.json"), "utf8");
@@ -211,6 +224,58 @@ describe("PiFileCredentialStore writes", () => {
       "openai-codex": volliRefreshed,
       anthropic: { type: "api_key", key: "k" },
     });
+  });
+
+  it("reports an acquisition failure without exposing lock internals", async () => {
+    vi.spyOn(lockfile, "lock").mockRejectedValueOnce(
+      Object.assign(new Error("lock detail"), { code: 7 }),
+    );
+    const dir = agentDirWith("{}");
+
+    await expect(storeIn(dir).modify("openai-codex", async () => OAUTH)).rejects.toThrow(
+      /Could not lock Pi credentials/,
+    );
+  });
+
+  it("stops before mutation when the acquired lock is already compromised", async () => {
+    const compromised = new Error("lock compromised");
+    vi.spyOn(lockfile, "lock").mockImplementationOnce(async (_path, options) => {
+      options?.onCompromised?.(compromised);
+      return async () => undefined;
+    });
+    const modify = vi.fn(async () => OAUTH);
+
+    await expect(storeIn(agentDirWith("{}")).modify("openai-codex", modify)).rejects.toThrow(
+      compromised,
+    );
+    expect(modify).not.toHaveBeenCalled();
+  });
+
+  it("rejects a mutation if the lock becomes compromised while it runs", async () => {
+    let compromise: ((error: Error) => unknown) | undefined;
+    vi.spyOn(lockfile, "lock").mockImplementationOnce(async (_path, options) => {
+      compromise = options?.onCompromised;
+      return async () => Promise.reject(new Error("unlock follows compromise"));
+    });
+    const compromised = new Error("lock compromised");
+
+    await expect(
+      storeIn(agentDirWith("{}")).modify("openai-codex", async () => {
+        compromise?.(compromised);
+        return OAUTH;
+      }),
+    ).rejects.toThrow(compromised);
+  });
+
+  it("reports a lock that remains busy past Pi's stale deadline", async () => {
+    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(30_001);
+    vi.spyOn(lockfile, "lock").mockRejectedValueOnce(
+      Object.assign(new Error("still locked"), { code: "ELOCKED" }),
+    );
+
+    await expect(
+      storeIn(agentDirWith("{}")).modify("openai-codex", async () => OAUTH),
+    ).rejects.toThrow(/Could not lock Pi credentials/);
   });
 
   it("hands a failure to its caller and still serves the write behind it", async () => {
