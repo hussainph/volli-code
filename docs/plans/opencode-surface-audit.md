@@ -1,5 +1,9 @@
 # OpenCode surface audit
 
+> **Historical evidence as of 2026-08-08.** Do not implement the remaining
+> parity plan. Structured OpenCode execution is frozen pending replacement and
+> removal by [`pi-native-ticket-session.md`](pi-native-ticket-session.md).
+
 What OpenCode can do that our Session UI cannot show or answer, and the order to close it in.
 
 Measured against a live `opencode serve` (1.17.18) `/doc`: 188 endpoints, 89 `Event` variants, 12 `Part` variants, read alongside `/agent`, `/skill` and `/experimental/capabilities`. Every claim below is cited to a file and line rather than to the spec alone — the gap is usually not that OpenCode reports something we cannot see, but that we already model it and render nothing.

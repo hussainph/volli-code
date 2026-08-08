@@ -32,8 +32,33 @@ The ticket-workspace view of files in that ticket's worktree.
 _Avoid_: Project Files, artifact files
 
 **Session**:
-The durable identity and locally ordered history of an agentic conversation. A Session is created before any executor attaches and outlives terminal panes, processes, adapters, UI surfaces, and execution venues. It remains openable after an attachment, turn, or Run completes; only explicit archival changes its availability. A Session may belong to one Ticket or be ticketless.
+The durable identity and locally ordered history of an agentic conversation. A
+Session is created before any executor attaches and outlives terminal panes,
+processes, the Agent Runtime, UI surfaces, and execution venues. It remains
+openable after an attachment, turn, or Run completes; only explicit archival
+changes its availability. A Session may belong to one Ticket or be
+project-scoped.
+Each Session has a Role, an Authority Snapshot, and a model policy. Reconnect,
+restart, and recovery may replace its live executor attachment without changing
+that identity. A model change is an explicit recorded action, never a silent
+fallback.
 _Avoid_: pane session, split session, harness process, terminal pane, UI tab
+
+**Session Role**:
+The product scope a Session acts within: `project`, `ticket`, or `subagent`.
+Project Sessions orchestrate project work; Ticket Sessions execute with explicit
+Ticket and worktree context; Subagent Sessions perform a bounded delegation and
+remain durable children of the Session that created them. Role determines the
+default context, tool bundle, and authority policy, not a separate Session type.
+_Avoid_: harness mode, agent mode, plan mode
+
+**Authority Snapshot**:
+The durable policy granted to one Session when it starts: which actions are
+automatic, which require a decision, which are forbidden, and the classifier
+model allowed to help within deterministic boundaries. A Settings change does
+not silently change a running Session's authority; changing authority is an
+explicit Session action.
+_Avoid_: permission preset (when meaning live authority), auto-approve flag
 
 **Session Event**:
 An immutable fact in a Session's locally ordered ledger: an attachment outcome,
@@ -44,9 +69,10 @@ cite a Session as provenance.
 _Avoid_: session state, hook state, terminal state
 
 **Agent Thread**:
-A durable conversation lane inside a Session. The first native-adapter slice owns
-one root Agent Thread; a later slice may observe native depth-one child Threads
-without making a provider process or UI view own their lifetime.
+A durable conversation lane inside a Session. Every Session begins with one root
+Agent Thread. Disposable runtime reasoning may use internal branches, but
+delegated work whose output matters becomes a durable child Session rather than
+an invisible provider-owned Thread.
 _Avoid_: provider session, subagent pane, terminal split
 
 **Conversation Branch**:
@@ -59,45 +85,82 @@ One model response attempt on a Conversation Branch. Regeneration creates a
 sibling Attempt and retains the earlier result.
 _Avoid_: retry count, overwritten response
 
-**Harness Profile**:
-One execution surface exposed by a harness identity, such as a structured native
-profile or a terminal `liveBestEffort` profile. Profile selection is explicit;
-failure never silently switches profiles.
-_Avoid_: fallback mode, harness type
+**Agent Runtime**:
+The product-aware execution package that hosts Volli's agent loop. It receives a
+Session Role, work location, model policy, Authority Snapshot, prompt resources,
+and scoped tools; it emits runtime observations and tool requests without owning
+durable Session or Ticket state. Pi is its initial acknowledged substrate, but
+Pi types and events never become renderer or Session contracts. The package may
+depend on Node but never Electron or DOM APIs, so Electron main can host it
+locally and a future worker can host the same package elsewhere.
+_Avoid_: harness adapter, provider runtime, Electron service, renderer client
+
+**Model Access**:
+One sanitized view of the provider accounts, subscriptions, API credentials,
+gateways, local inference, and models the Agent Runtime can truthfully use. The
+credential owner never exposes secrets to the renderer, prompt, transcript, or
+Session ledger. Availability and billing source are explicit; Volli never
+silently falls back to another model or account.
+_Avoid_: harness profile, provider picker (when meaning the complete access model)
+
+**Session Semantic Fact**:
+A product-owned fact produced at the Agent Runtime boundary and committed to the
+Session: message content, an interaction, activity, Thread lineage, attachment
+selection, or another identity, lifecycle, control, or historical meaning.
+Presentation labels, icons, grouping, and layout are not semantic facts. Pi or
+model-provider detail that Volli has not adopted remains bounded diagnostic
+metadata until the product deliberately promotes it into this vocabulary.
+_Avoid_: UI state, provider payload, component props
+
+**Session Presentation Contract**:
+The portable consumer boundary that projects Session Semantic Facts, Role, and
+Authority Snapshot into a surface model for a Volli client. It determines which
+shared affordances are meaningful and progressively discloses active product
+state, but does not parse Pi or provider protocols or require Electron or React.
+Presentation dispatch follows Volli semantic kind and state, never runtime tool
+identity.
+_Avoid_: harness-specific screen, provider renderer, component registry
+
+**Session Surface Model**:
+The framework-neutral output of the Session Presentation Contract. It describes
+the meaningful transcript, attention, active ephemeral affordances, available
+controls, and historical summaries that a client may render; each Volli client
+maps it to its own components without reinterpreting runtime-native data.
+_Avoid_: React tree, Electron view model, provider payload
 
 **Thread Binding**:
 The live or historical binding from an Agent Thread to a Session Attachment and
 its native conversation locator. Each Agent Thread has at most one live Binding;
-the first native-adapter slice has one root Thread, so it retains the existing
-single-live-executor behavior until child Threads land.
+the first Agent Runtime slice has one root Thread and retains the existing
+single-live-executor behavior.
 _Avoid_: Session, provider session, terminal pane
 
 **Session Attachment**:
 One historical association between an existing Session and an executor or
-transport: its adapter identity, native conversation identity where available,
+transport: its runtime identity, native recovery reference where available,
 venue, and attach/detach outcome. A Session keeps many historical attachments
-but has at most one live executor attachment. A terminal pane is a view of an
-attachment, not the attachment itself.
+but has at most one live executor attachment. A terminal companion is a workspace
+view, not an alternate structured attachment.
 _Avoid_: Session, terminal, harness state
 
 **Command**:
-Durable, explicit user intent directed at a Session, recorded before an adapter
-is asked to act. A Command does not imply that a transport accepted or completed
-the work; ambiguous delivery is reconciled before it is retried.
+Durable, explicit user intent directed at a Session, recorded before the Agent
+Runtime is asked to act. A Command does not imply that a transport accepted or
+completed the work; ambiguous delivery is reconciled before it is retried.
 _Avoid_: action, keystroke, request (when referring to accepted work)
 
 **Receipt**:
-The durable adapter-boundary record of a Command's observed outcome: accepted,
+The durable runtime-boundary record of a Command's observed outcome: accepted,
 rejected, completed, or unreconciled. A Receipt makes delivery observable
 without claiming an unsupported native guarantee.
 _Avoid_: event, acknowledgement (when no durable outcome exists)
 
 **Session Engine**:
-The UI- and adapter-agnostic interface that owns Session commands, facts,
-projections, and their durable storage contract. Electron main is its only
-SQLite writer in the initial local deployment; the interface is deliberately
-portable to a future daemon, cloud sandbox, or mobile client.
-_Avoid_: Electron main, adapter host, renderer store
+The UI- and runtime-implementation-agnostic interface that owns Session
+commands, facts, projections, and their durable storage contract. Electron main
+is its only SQLite writer in the initial local deployment; the interface is
+deliberately portable to a future daemon, cloud sandbox, or mobile client.
+_Avoid_: Electron main, Agent Runtime, renderer store
 
 **Attention**:
 A reconstructible projection of committed Session facts that tells the user
@@ -106,15 +169,26 @@ turns silence alone into an agent lifecycle fact.
 _Avoid_: waiting flag, notification state
 
 **SessionInteraction**:
-A decision a Session is waiting on — a permission or a question — held provider-neutral: a title, optional detail, the options the harness declared, and an opaque native reference the adapter correlates its reply by. It is durable ledger content, so it survives a reload and outlives the turn that raised it; only an answer or a cancellation ends the wait.
+A decision a Session is waiting on — a permission or a question — held in Volli
+terms: a title, optional detail, declared options, and an opaque runtime
+reference used to correlate its reply. It is durable ledger content, so it
+survives a reload and outlives the turn that raised it; only an answer or a
+cancellation ends the wait.
 _Avoid_: approval, prompt (that is one question inside it), Attention
 
 **SessionInteractionPrompt**:
-One question inside a SessionInteraction, with its own options, whether several may be chosen, and whether the harness accepts free text beside them. A permission is one prompt; a harness that asks several things at once declares one prompt per question. Records written before interactions carried questions project as a single prompt.
+One question inside a SessionInteraction, with its own options, whether several
+may be chosen, and whether the runtime accepts free text beside them. A
+permission is one prompt; a grouped decision declares one prompt per question.
+Records written before interactions carried questions project as a single
+prompt.
 _Avoid_: prompt (the model's input), field, form
 
 **SessionInteractionOption**:
-One declared choice on a prompt: an id, a label, and an optional description. Ids are the harness's own values, except for the permission vocabulary Volli mints (`once`, `always`, `reject`); an unrecognized id is an ordinary answer and never inferred to mean consent or refusal.
+One declared choice on a prompt: an id, a label, and an optional description.
+Ids are runtime-correlated values, except for the permission vocabulary Volli
+mints (`once`, `always`, `reject`); an unrecognized id is an ordinary answer and
+never inferred to mean consent or refusal.
 _Avoid_: button, action, permission mode
 
 **SessionInteractionAnswer**:
@@ -126,7 +200,10 @@ The user's whole decision on one SessionInteraction, carried as the answers it g
 _Avoid_: Receipt, outcome, answer (that is one prompt's)
 
 **SessionInteractionCancelReason**:
-Why an interaction stopped waiting without a decision: `abandoned` (the user left it unanswered), `superseded` (a newer interaction replaced it), or `withdrawn` (the harness stopped asking). None of them is an answer, and none may be read downstream as a refusal.
+Why an interaction stopped waiting without a decision: `abandoned` (the user
+left it unanswered), `superseded` (a newer interaction replaced it), or
+`withdrawn` (the runtime stopped asking). None of them is an answer, and none may
+be read downstream as a refusal.
 _Avoid_: rejection, denial, timeout
 
 **SessionInteractionProjection**:
@@ -189,15 +266,24 @@ A human drag or explicit `volli` move, as opposed to a lifecycle-driven auto-mov
 _Avoid_: manual move (too narrow — implies human-only)
 
 **Automation**:
-A saved, named way of starting work on a ticket, made of four parts: the Trigger (which columns it applies to, and whether it may fire unattended), its Instructions, its Runtime, and its Outcome. An Automation removes the repetitive setup of composing a prompt and picking a harness, model, and effort — it does not remove the person. Running one always opens a Session the user is expected to work inside, watch, and interrupt; it is never a silent background job.
+A saved, named way of starting work on a ticket, made of four parts: the Trigger
+(which columns it applies to, and whether it may fire unattended), its
+Instructions, its Runtime, and its Outcome. An Automation removes the repetitive
+setup of composing a prompt and choosing model, reasoning, and authority
+defaults — it does not remove the person. Running one always opens a Session the
+user is expected to work inside, watch, and interrupt; it is never a silent
+background job.
 _Avoid_: recipe, preset, workflow, template, pipeline
 
 **Armed automation**:
 The single Automation a column fires on its own when a ticket arrives there by Deliberate move. A column has at most one, or none — in which case an arriving ticket is a pure status change and any Automation must be chosen by hand. Arming a column is not retroactive: it governs tickets that arrive afterward, never those already sitting there.
-_Avoid_: default automation (collides with the project's default harness and default base branch)
+_Avoid_: default automation (collides with project defaults and the default base branch)
 
 **Instructions**:
-The prompt an Automation sends when it opens its Session: authored prose, Context Chips, and commands belonging to its pinned harness. Every Automation starts from an opinionated default that already carries the ticket's own context, so composing it by hand is optional.
+The prompt an Automation sends when it opens its Session: authored prose,
+Context Chips, and Volli capabilities such as skills or slash commands. Every
+Automation starts from an opinionated default that already carries the ticket's
+own context, so composing it by hand is optional.
 _Avoid_: prompt template, Ticket Body, Runtime Brief
 
 **Context chip**:
@@ -205,8 +291,11 @@ A placeholder in an Automation's Instructions that resolves at launch to live ti
 _Avoid_: variable, macro, Attachment
 
 **Runtime**:
-An Automation's execution setting: one pinned harness plus that harness's own model and effort expression. The harness is pinned because Instructions are written in its dialect and do not port; model and effort are defaults that may be overridden at the moment the Automation is invoked.
-_Avoid_: agent, harness (alone), model (alone)
+An Automation's execution setting: its model policy, reasoning policy, Session
+Role, and Authority Snapshot defaults. Model and reasoning may be overridden at
+invocation within the user's configured policy; the Agent Runtime is a product
+constant rather than an Automation choice.
+_Avoid_: agent, harness, model (alone)
 
 **Run**:
 One invocation of an Automation against one ticket, and the record of which Automation and Runtime produced a given Session. A Run owns exactly one Session and carries that Automation's Outcome if it has one; only that Session finishing can resolve it. A ticket has at most one Run in flight at a time. Runs outlive the app: one whose Session died is interrupted, never lost, and only a human restarts it. Sessions a user starts by hand belong to no Run and never move the board.
