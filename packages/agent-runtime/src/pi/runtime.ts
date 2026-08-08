@@ -8,12 +8,15 @@ import type {
   AgentRuntime,
   DeliveryOutcome,
   RuntimeAttachmentHandle,
+  RuntimeActivityValue,
   RuntimeFailure,
   TicketRuntimeSpec,
 } from "../contracts";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
+import { mapPiActivity } from "./activity";
 import { piOwnedModels } from "./models";
-import { ScopedExecutionEnv } from "./scoped-execution-env";
+import { OrderedObservationDelivery } from "./ordered-observation-delivery";
+import { ScopedExecutionEnv, type TicketExecutionEnv } from "./scoped-execution-env";
 import { createPiTools } from "./tools";
 import { attentionReasonFor, classifyAssistantMessage, recoveryRefFor } from "./transcript";
 
@@ -26,12 +29,18 @@ export interface PiRuntimeHostOptions {
    * refresh behavior, and {@link piOwnedModels} is what reaches them.
    */
   models?: Models;
+  /** Host clock for runtime observations; injectable for deterministic tests. */
+  now?: () => number;
+  /** Internal contained-environment factory for deterministic Node runtime tests. */
+  executionEnvFactory?: (worktreePath: string) => Promise<TicketExecutionEnv>;
 }
 
 /** Everything {@link attachTicketSession} needs, with the default already chosen. */
 interface PiRuntimeHost {
   sessionDataDir: string;
   models: Models;
+  now: () => number;
+  executionEnvFactory: (worktreePath: string) => Promise<TicketExecutionEnv>;
 }
 
 /**
@@ -45,6 +54,8 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
   const host: PiRuntimeHost = {
     sessionDataDir: options.sessionDataDir,
     models: options.models ?? piOwnedModels(),
+    now: options.now ?? Date.now,
+    executionEnvFactory: options.executionEnvFactory ?? ScopedExecutionEnv.create,
   };
   return {
     startTicketSession: (spec) => attachTicketSession(host, spec),
@@ -80,6 +91,8 @@ async function rejectCancelledAttachment(spec: TicketRuntimeSpec): Promise<never
   throw new Error(message);
 }
 
+const CONTAINED_EXECUTION_UNAVAILABLE = "Contained process execution is unavailable.";
+
 async function attachTicketSession(
   host: PiRuntimeHost,
   spec: TicketRuntimeSpec,
@@ -97,7 +110,7 @@ async function attachTicketSession(
 
   const sidecarEnv = new NodeExecutionEnv({ cwd: host.sessionDataDir });
   let sidecarPath: string | undefined;
-  let toolEnv: ScopedExecutionEnv | undefined;
+  let toolEnv: TicketExecutionEnv | undefined;
   let unsubscribe: (() => void) | undefined;
   let abortListener: (() => void) | undefined;
 
@@ -114,26 +127,40 @@ async function attachTicketSession(
     const sidecarMetadata = await sidecar.getMetadata();
     sidecarPath = sidecarMetadata.path;
     const recovery = recoveryRefFor(sidecarMetadata.id, sidecarPath);
-    toolEnv = await ScopedExecutionEnv.create(spec.worktreePath);
+    try {
+      toolEnv = await host.executionEnvFactory(spec.worktreePath);
+      if (spec.tools.tools.includes("execute")) {
+        const prepared = await toolEnv.prepareProcessExecution();
+        if (!prepared.ok) {
+          throw prepared.error;
+        }
+      }
+    } catch {
+      await observe({
+        kind: "attachment",
+        state: "failed",
+        failure: {
+          reason: "configuration",
+          message: CONTAINED_EXECUTION_UNAVAILABLE,
+        },
+      });
+      throw new Error(CONTAINED_EXECUTION_UNAVAILABLE);
+    }
     const containedToolEnv = toolEnv;
     const tools = createPiTools(spec.tools, containedToolEnv);
 
     let turnId = randomUUID();
     let failure: RuntimeFailure | undefined;
-    let observationFailure: unknown;
     let closed = false;
     let cancelled = false;
+    const activityByToolCallId = new Map<
+      string,
+      { input: RuntimeActivityValue; startedAt: number }
+    >();
 
-    const commitObservation = async (
-      observation: Parameters<TicketRuntimeSpec["observer"]>[0],
-    ): Promise<void> => {
-      try {
-        await observe(observation);
-      } catch (error) {
-        observationFailure ??= error;
-        throw error;
-      }
-    };
+    const observationDelivery = new OrderedObservationDelivery(observe);
+    const commitObservation = (observation: Parameters<TicketRuntimeSpec["observer"]>[0]) =>
+      observationDelivery.deliver(observation);
 
     const agent = new Agent({
       initialState: {
@@ -151,7 +178,39 @@ async function attachTicketSession(
       if (event.type === "agent_start") {
         turnId = randomUUID();
         failure = undefined;
+        activityByToolCallId.clear();
         await commitObservation({ kind: "turn", state: "started", turnId });
+        return;
+      }
+
+      if (
+        event.type === "tool_execution_start" ||
+        event.type === "tool_execution_update" ||
+        event.type === "tool_execution_end"
+      ) {
+        const observedAt = host.now();
+        const retained = activityByToolCallId.get(event.toolCallId);
+        const startedAt = retained?.startedAt ?? observedAt;
+        const activity = mapPiActivity(
+          event,
+          event.type === "tool_execution_end"
+            ? { turnId, input: retained?.input, startedAt: retained?.startedAt, observedAt }
+            : event.type === "tool_execution_start"
+              ? { turnId, observedAt }
+              : { turnId, startedAt, observedAt },
+        );
+
+        if (event.type !== "tool_execution_end") {
+          activityByToolCallId.set(event.toolCallId, { input: activity.input, startedAt });
+          await commitObservation(activity);
+          return;
+        }
+
+        try {
+          await commitObservation(activity);
+        } finally {
+          activityByToolCallId.delete(event.toolCallId);
+        }
         return;
       }
 
@@ -188,6 +247,7 @@ async function attachTicketSession(
       if (event.type !== "agent_end") {
         return;
       }
+      activityByToolCallId.clear();
       if (failure === undefined) {
         await commitObservation({ kind: "turn", state: "completed", turnId });
         return;
@@ -226,11 +286,10 @@ async function attachTicketSession(
         }
         const delivered =
           agent.state.messages.length === 0 ? composeFirstUserMessage(spec.brief, text) : text;
-        observationFailure = undefined;
+        observationDelivery.consumeFailure();
         await agent.prompt(delivered);
-        if (observationFailure !== undefined) {
-          const failed = observationFailure;
-          observationFailure = undefined;
+        const failed = observationDelivery.consumeFailure();
+        if (failed !== undefined) {
           throw failed;
         }
         return { kind: "delivered", delivery: "prompt" };
@@ -270,11 +329,20 @@ async function attachTicketSession(
       spec.signal?.removeEventListener("abort", abortListener);
     }
     unsubscribe?.();
-    await toolEnv?.cleanup();
+    await toolEnv?.cleanup().catch(
+      /* v8 ignore next -- owned-environment cleanup is best effort after a failed attach. */
+      () => undefined,
+    );
     if (sidecarPath !== undefined) {
-      await sidecarEnv.remove(sidecarPath, { force: true });
+      await sidecarEnv.remove(sidecarPath, { force: true }).catch(
+        /* v8 ignore next -- sidecar deletion is best effort after a failed attach. */
+        () => undefined,
+      );
     }
-    await sidecarEnv.cleanup();
+    await sidecarEnv.cleanup().catch(
+      /* v8 ignore next -- sidecar cleanup is best effort after a failed attach. */
+      () => undefined,
+    );
     throw error;
   }
 }

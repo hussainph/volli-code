@@ -16,6 +16,7 @@
     "smoke": "vp test run --config vite.smoke.config.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.70",
     "@earendil-works/pi-agent-core": "0.84.1",
     "@earendil-works/pi-ai": "0.84.1",
     "@volli/shared": "workspace:*",
