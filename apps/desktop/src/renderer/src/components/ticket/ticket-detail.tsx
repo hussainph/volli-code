@@ -20,6 +20,7 @@ import {
 import { FileSaveGuardDialog } from "@renderer/components/files/save-guard-dialog";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import type { DocumentFileRefs } from "@renderer/components/editor/monaco-document-editor";
+import { PI_TICKET_EXECUTOR } from "@renderer/chat/client";
 import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
 import {
   bootChatSession,
@@ -824,6 +825,7 @@ export function TicketDetail({
     await bootChatSession(ticketScope(projectId, ticket.id), {
       // The terminal path's own convention — the count that exists, plus one.
       title: `Chat ${nextChatOrdinal(durableChatIds?.length ?? 0, openChatIds.length)}`,
+      executor: PI_TICKET_EXECUTOR,
       land: (sessionId) => {
         // The ticket itself may have been deleted while the create was in
         // flight; a tab on a card that no longer exists is unreachable, so let

@@ -63,6 +63,13 @@ export const DEFAULT_CHAT_EXECUTOR: ChatExecutorChoice = {
   profileId: "native",
 };
 
+// Ticket Sessions attach the singular Pi-backed Agent Runtime; scratch/project
+// chats stay on the OpenCode default until their own migration slice.
+export const PI_TICKET_EXECUTOR: ChatExecutorChoice = {
+  adapterId: "pi",
+  profileId: "native",
+};
+
 export const EMPTY_CHAT_SELECTION: RuntimeSelection = {
   providerId: "",
   modelId: "",
