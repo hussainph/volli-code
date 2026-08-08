@@ -83,11 +83,11 @@ const PI_RUNTIME_VERSION = "0.84.1";
  * probe, so a submitted `command.model` names a provider Pi has never heard of.
  * Ignoring it and pinning here is the honest reading: one executor, one model,
  * until the picker is Pi's. `openai-codex` is the provider this machine holds
- * OAuth for; Terra is its mid-tier coding model at the full 272k context.
+ * OAuth for; Luna is its lightweight coding model at the full 272k context.
  */
 export const PI_MODEL: ModelSelection = {
   providerId: "openai-codex",
-  modelId: "gpt-5.6-terra",
+  modelId: "gpt-5.6-luna",
   reasoningLevel: "medium",
 };
 
