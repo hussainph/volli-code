@@ -599,14 +599,17 @@ function rendererFrame(frame: SessionStreamFrame): SessionStreamFrame {
 function rendererProjection(
   snapshot: SessionRuntimeProjectionSnapshot,
 ): SessionRuntimeProjectionSnapshot {
+  const attachments = snapshot.projection.attachments;
+  const liveExecutor = snapshot.projection.liveExecutor;
   return {
     projection: {
       ...snapshot.projection,
-      attachments: snapshot.projection.attachments.map(rendererAttachment),
-      liveExecutor:
-        snapshot.projection.liveExecutor === null
-          ? null
-          : rendererAttachment(snapshot.projection.liveExecutor),
+      ...(Array.isArray(attachments) ? { attachments: attachments.map(rendererAttachment) } : {}),
+      ...(liveExecutor === undefined
+        ? {}
+        : {
+            liveExecutor: liveExecutor === null ? null : rendererAttachment(liveExecutor),
+          }),
       capabilities: snapshot.projection.capabilities.map(rendererCapabilitySnapshot),
     },
     throughSequence: snapshot.throughSequence,
