@@ -1,4 +1,11 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
@@ -124,8 +131,13 @@ function scriptedStream(steps: ScriptStep[]): StreamFn {
 
     void (async () => {
       stream.push({ type: "start", partial: message });
+      if (step === undefined) {
+        throw new Error(`scriptedStream: no step for provider call ${call}`);
+      }
       await step(emit, context, options?.signal);
-    })();
+    })().catch((error: unknown) => {
+      emit.fail(error instanceof Error ? error.message : String(error));
+    });
     return stream;
   };
 }
@@ -207,6 +219,12 @@ function kinds(observations: RuntimeObservation[]): string[] {
       ? `${observation.kind}:${observation.state}`
       : observation.kind,
   );
+}
+
+function jsonlFiles(root: string): string[] {
+  return readdirSync(root, { recursive: true })
+    .map(String)
+    .filter((path) => path.endsWith(".jsonl"));
 }
 
 // --- tests -----------------------------------------------------------------
@@ -317,7 +335,7 @@ describe("startTicketSession", () => {
   });
 
   it("keeps an actual Pi read turn inside the Ticket worktree", async () => {
-    const { spec, worktreePath, sessionDataDir } = fixture();
+    const { spec, observations, worktreePath, sessionDataDir } = fixture();
     const outsidePath = join(worktreePath, "..", "SECRET.txt");
     writeFileSync(outsidePath, "outside-secret-value\n");
     let toolResultContext: Context | undefined;
@@ -346,6 +364,11 @@ describe("startTicketSession", () => {
     const serialized = JSON.stringify(toolResultContext?.messages);
     expect(serialized).toContain("outside the Ticket worktree");
     expect(serialized).not.toContain("outside-secret-value");
+    expect(observations.filter((observation) => observation.kind === "message-settled")).toEqual([
+      expect.objectContaining({
+        message: expect.objectContaining({ text: "The read was refused." }),
+      }),
+    ]);
   });
 
   it("does not complete delivery before durable observation commits", async () => {
@@ -387,29 +410,97 @@ describe("startTicketSession", () => {
     await handle.close();
   });
 
-  it("propagates a durable observation failure to the delivery caller", async () => {
+  it("propagates a durable observation failure without poisoning the next delivery", async () => {
     const attachment = fixture();
+    let shouldFail = true;
     attachment.spec.observer = async (observation) => {
       attachment.observations.push(observation);
-      if (observation.kind === "message-settled") {
+      if (observation.kind === "message-settled" && shouldFail) {
+        shouldFail = false;
         throw new Error("durable commit failed");
       }
     };
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(
-        scriptedStream([
-          (emit) => {
-            emit.text("answer");
-            emit.finish();
-          },
-        ]),
+        scriptedStream(
+          ["first answer", "second answer"].map(
+            (answer): ScriptStep =>
+              (emit) => {
+                emit.text(answer);
+                emit.finish();
+              },
+          ),
+        ),
       ),
     });
     const handle = await runtime.startTicketSession(attachment.spec);
 
     await expect(handle.submitUserMessage("go")).rejects.toThrow("durable commit failed");
+    await expect(handle.submitUserMessage("retry after repair")).resolves.toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+    });
     await handle.close();
+  });
+
+  it("turns scripted model exhaustion and rejected steps into settled failures", async () => {
+    for (const steps of [
+      [],
+      [async () => Promise.reject(new Error("scripted provider rejected"))],
+    ] satisfies ScriptStep[][]) {
+      const attachment = fixture();
+      const runtime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        models: modelsWithStream(scriptedStream(steps)),
+      });
+      const handle = await runtime.startTicketSession(attachment.spec);
+
+      await expect(handle.submitUserMessage("go")).resolves.toEqual({
+        kind: "delivered",
+        delivery: "prompt",
+      });
+      expect(kinds(attachment.observations)).toContain("attention");
+      await handle.close();
+    }
+  });
+
+  it("cleans partial sidecars when attachment initialization fails", async () => {
+    const unusableHost = fixture();
+    const sessionDataFile = join(unusableHost.worktreePath, "not-a-directory");
+    writeFileSync(sessionDataFile, "blocked\n");
+    const unusableRuntime = createPiAgentRuntime({
+      sessionDataDir: sessionDataFile,
+      models: modelsWithStream(scriptedStream([])),
+    });
+
+    await expect(unusableRuntime.startTicketSession(unusableHost.spec)).rejects.toThrow();
+
+    const missingWorktree = fixture();
+    missingWorktree.spec.worktreePath = join(missingWorktree.worktreePath, "missing");
+    const missingRuntime = createPiAgentRuntime({
+      sessionDataDir: missingWorktree.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+
+    await expect(missingRuntime.startTicketSession(missingWorktree.spec)).rejects.toThrow();
+    expect(jsonlFiles(missingWorktree.sessionDataDir)).toEqual([]);
+
+    const rejectedObserver = fixture();
+    rejectedObserver.spec.observer = async (observation) => {
+      if (observation.kind === "attachment" && observation.state === "started") {
+        throw new Error("attachment commit failed");
+      }
+    };
+    const observerRuntime = createPiAgentRuntime({
+      sessionDataDir: rejectedObserver.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+
+    await expect(observerRuntime.startTicketSession(rejectedObserver.spec)).rejects.toThrow(
+      "attachment commit failed",
+    );
+    expect(jsonlFiles(rejectedObserver.sessionDataDir)).toEqual([]);
   });
 
   it("delivers the brief once and plain text afterwards", async () => {
@@ -503,6 +594,65 @@ describe("startTicketSession", () => {
     await delivery;
 
     expect(kinds(observations)).toContain("turn:interrupted");
+    expect(await handle.submitUserMessage("too late")).toEqual({
+      kind: "rejected",
+      reason: "closed",
+      message: "This attachment is closed.",
+    });
+    await handle.close();
+  });
+
+  it("fails before allocating resources when its signal is already aborted", async () => {
+    const attachment = fixture();
+    const controller = new AbortController();
+    controller.abort();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+
+    await expect(
+      runtime.startTicketSession({ ...attachment.spec, signal: controller.signal }),
+    ).rejects.toThrow("Runtime attachment was cancelled before it started.");
+    expect(attachment.observations).toEqual([
+      {
+        kind: "attachment",
+        state: "failed",
+        failure: {
+          reason: "aborted",
+          message: "Runtime attachment was cancelled before it started.",
+        },
+      },
+    ]);
+    expect(jsonlFiles(attachment.sessionDataDir)).toEqual([]);
+  });
+
+  it("catches cancellation that races attachment initialization", async () => {
+    let checks = 0;
+    const racingSignal = {
+      get aborted() {
+        checks += 1;
+        return checks > 1;
+      },
+      reason: undefined,
+      onabort: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      dispatchEvent: () => true,
+      throwIfAborted: () => undefined,
+    } as unknown as AbortSignal;
+    const attachment = fixture({ signal: racingSignal });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+    const handle = await runtime.startTicketSession(attachment.spec);
+
+    expect(await handle.submitUserMessage("too late")).toEqual({
+      kind: "rejected",
+      reason: "closed",
+      message: "This attachment is closed.",
+    });
     await handle.close();
   });
 
@@ -544,35 +694,6 @@ describe("startTicketSession", () => {
         failure: {
           reason: "configuration",
           message: "Model anthropic/claude-not-a-model is not available.",
-        },
-      },
-    ]);
-  });
-
-  it("refuses recovery before Session 4 can reconcile the Pi sidecar", async () => {
-    const { spec, observations, sessionDataDir } = fixture({
-      recovery: {
-        runtime: "pi",
-        sessionId: "pi-session-previous",
-        sessionFilePath: join(tmpdir(), "previous-session.jsonl"),
-      },
-    });
-    const runtime = createPiAgentRuntime({
-      sessionDataDir,
-      models: modelsWithStream(scriptedStream([])),
-    });
-
-    await expect(runtime.startTicketSession(spec)).rejects.toThrow(
-      "Pi recovery is not available until migration Session 4 lands ledger reconciliation.",
-    );
-    expect(observations).toEqual([
-      {
-        kind: "attachment",
-        state: "failed",
-        failure: {
-          reason: "configuration",
-          message:
-            "Pi recovery is not available until migration Session 4 lands ledger reconciliation.",
         },
       },
     ]);

@@ -61,7 +61,7 @@ export interface RuntimeRecoveryRef {
   sessionFilePath: string;
 }
 
-/** Everything the Agent Runtime needs to start or reopen one Ticket Session. */
+/** Everything the Agent Runtime needs to start one Ticket Session. */
 export interface TicketRuntimeSpec {
   identity: TicketRuntimeIdentity;
   role: RuntimeSessionRole;
@@ -73,8 +73,6 @@ export interface TicketRuntimeSpec {
   brief: RuntimeBrief;
   promptResources?: readonly PromptResource[];
   tools: RuntimeToolBundle;
-  /** Present when reopening an existing attachment after process loss. */
-  recovery?: RuntimeRecoveryRef;
   signal?: AbortSignal;
   /** Resolves only after the observation reaches its required consumer boundary. */
   observer: (observation: RuntimeObservation) => Promise<void>;
@@ -160,6 +158,7 @@ export interface RuntimeAttachmentHandle {
   interrupt(): Promise<void>;
   /** Release local resources; the Session and its history remain. */
   close(): Promise<void>;
+  /** Recovery metadata persisted for Session 4; this slice does not reopen it. */
   readonly recovery: RuntimeRecoveryRef | undefined;
 }
 

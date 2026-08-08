@@ -19,6 +19,7 @@ import type {
 
 export type AssistantMessageOutcome =
   | { kind: "settled"; message: SettledAssistantMessage }
+  | { kind: "ignored" }
   | { kind: "failed"; failure: RuntimeFailure };
 
 const MAX_DIAGNOSTIC_LENGTH = 300;
@@ -112,6 +113,10 @@ export function classifyAssistantMessage(
     if (block.type === "thinking") {
       reasoning += block.thinking;
     }
+  }
+
+  if (text.length === 0 && reasoning.length === 0) {
+    return { kind: "ignored" };
   }
 
   return {

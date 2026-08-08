@@ -61,7 +61,7 @@ describe("ScopedExecutionEnv", () => {
       error: { code: "aborted" },
     });
     expect(await env.exists("missing.txt")).toEqual({ ok: true, value: false });
-    expect(await env.absolutePath("x".repeat(300))).toMatchObject({
+    expect(await env.absolutePath("inside.txt/child")).toMatchObject({
       ok: false,
       error: { code: "unknown" },
     });

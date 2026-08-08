@@ -37,12 +37,16 @@ Only Pi core's `read`, `edit`, and `write` tools are loaded, each with a
 Volli-owned execution environment that rejects paths outside the Ticket
 worktree and rejects symlinks. Process execution remains unavailable until a
 later migration slice supplies an equally enforceable containment boundary.
+The current name-based guard has a TOCTOU limit: an external process with write
+access to the worktree could replace a validated component with a symlink before
+Pi's delegated filesystem operation opens it. Descriptor-based `O_NOFOLLOW`
+operations are required to close that host-level race completely.
 
 ## License
 
 Pi is MIT licensed.
 
-```
+```text
 MIT License
 
 Copyright (c) 2025 Mario Zechner

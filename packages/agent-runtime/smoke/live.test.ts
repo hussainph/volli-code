@@ -55,23 +55,25 @@ describe.skipIf(process.env.PI_LIVE_SMOKE !== "1")("live Pi turn", () => {
       },
     });
 
-    const outcome = await handle.submitUserMessage(
-      "Read TOKEN.txt in the worktree and reply with the token verbatim and nothing else.",
-    );
-    expect(outcome).toEqual({ kind: "delivered", delivery: "prompt" });
+    try {
+      const outcome = await handle.submitUserMessage(
+        "Read TOKEN.txt in the worktree and reply with the token verbatim and nothing else.",
+      );
+      expect(outcome).toEqual({ kind: "delivered", delivery: "prompt" });
 
-    const settled = observations.flatMap((observation) =>
-      observation.kind === "message-settled" ? [observation.message] : [],
-    );
-    const last = settled.at(-1);
-    expect(settled.map((message) => message.text).join("\n")).toContain(token);
+      const settled = observations.flatMap((observation) =>
+        observation.kind === "message-settled" ? [observation.message] : [],
+      );
+      const last = settled.at(-1);
+      expect(settled.map((message) => message.text).join("\n")).toContain(token);
 
-    console.log(
-      `[live smoke] model=${last?.model?.providerId}/${last?.model?.modelId} ` +
-        `input=${last?.usage?.inputTokens} output=${last?.usage?.outputTokens} ` +
-        `cost=$${settled.reduce((total, message) => total + (message.usage?.costUsd ?? 0), 0)}`,
-    );
-
-    await handle.close();
+      console.log(
+        `[live smoke] model=${last?.model?.providerId}/${last?.model?.modelId} ` +
+          `input=${last?.usage?.inputTokens} output=${last?.usage?.outputTokens} ` +
+          `cost=$${settled.reduce((total, message) => total + (message.usage?.costUsd ?? 0), 0)}`,
+      );
+    } finally {
+      await handle.close();
+    }
   });
 });

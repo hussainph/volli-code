@@ -132,6 +132,25 @@ describe("classifyAssistantMessage", () => {
     expect(outcome.kind === "settled" && outcome.message.reasoning).toBeUndefined();
   });
 
+  it("does not settle a tool-call-only assistant message as an empty bubble", () => {
+    expect(
+      classifyAssistantMessage(
+        "entry",
+        assistant({
+          stopReason: "toolUse",
+          content: [
+            {
+              type: "toolCall",
+              id: "tool-1",
+              name: "read",
+              arguments: { path: "MARKER.txt" },
+            },
+          ],
+        }),
+      ),
+    ).toEqual({ kind: "ignored" });
+  });
+
   it("reports an aborted run with and without provider detail", () => {
     expect(
       classifyAssistantMessage(
