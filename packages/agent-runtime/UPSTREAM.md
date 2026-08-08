@@ -22,7 +22,7 @@ The coding-agent TUI, client, and protocol packages are intentionally absent.
 
 ## Process sandbox runtime
 
-Direct dependency, pinned exactly to `0.0.70` when Session 3 enables Pi bash:
+Direct dependency, pinned exactly to `0.0.70`, required before Pi bash runs:
 
 - `@anthropic-ai/sandbox-runtime` — https://github.com/anthropic-experimental/sandbox-runtime,
   Apache-2.0, maintained macOS Seatbelt process boundary used by Claude Code.
@@ -94,12 +94,15 @@ vendoring Pi requires a concrete, documented need per
 
 ## Deliberate Session 3 boundary
 
-Only Pi core's `read`, `edit`, and `write` tools are loaded until the pinned SRT
-boundary enables bash. The filesystem tools retain Volli's worktree and symlink
-guard. That name-based guard has a TOCTOU limit: an external process with write
-access to the worktree could replace a validated component with a symlink before
-Pi's delegated filesystem operation opens it. Descriptor-based `O_NOFOLLOW`
-operations are required to close that host-level race completely.
+Session 3 loads Pi core's `read`, `edit`, and `write` as guarded host-native
+operations, and adds Bash only after the pinned SRT boundary preflights. This
+matches Claude Code's Bash-only containment scope: SRT protects Bash and its
+subprocesses, not the native file tools. Those tools retain Volli's component
+name-check and direct-symlink guard. Direct-symlink rejection tests compensate
+for, but do not eliminate, its accepted TOCTOU limit: an external process with
+write access to the worktree could replace a validated component with a symlink
+before Pi's delegated filesystem operation opens it. Descriptor-relative
+`O_NOFOLLOW` operations are deferred hardening to close that host-level race.
 
 ## License
 

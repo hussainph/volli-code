@@ -111,13 +111,12 @@ function isInside(root: string, path: string): boolean {
   return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
-function boundedAppend(current: Buffer, chunk: Buffer | string): Buffer {
+function boundedAppend(current: Buffer, chunk: Buffer): Buffer {
   const remaining = MAX_CAPTURED_OUTPUT_BYTES - current.length;
   if (remaining <= 0) return current;
-  const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-  return bytes.length <= remaining
-    ? Buffer.concat([current, bytes])
-    : Buffer.concat([current, bytes.subarray(0, remaining)]);
+  return chunk.length <= remaining
+    ? Buffer.concat([current, chunk])
+    : Buffer.concat([current, chunk.subarray(0, remaining)]);
 }
 
 /** Keep the per-stream byte cap without emitting a replacement character for a cut UTF-8 sequence. */
@@ -185,7 +184,8 @@ function perCommandSandboxConfig(worktree: string, homeDir: string): Partial<San
 }
 
 async function prepareSandbox(sandbox: SandboxRuntime): Promise<void> {
-  const cached = processPreflights.get(sandbox as object);
+  const key = sandbox as object;
+  const cached = processPreflights.get(key);
   if (cached) return cached;
 
   const preflight = (async () => {
@@ -220,8 +220,15 @@ async function prepareSandbox(sandbox: SandboxRuntime): Promise<void> {
       }
     }
   })();
-  processPreflights.set(sandbox as object, preflight);
-  return preflight;
+  let cachedPreflight: Promise<void>;
+  cachedPreflight = preflight.catch((error: unknown) => {
+    // Every concurrent caller shares this cached promise, so a retry cannot
+    // replace it until its rejection has cleared the cache.
+    processPreflights.delete(key);
+    throw error;
+  });
+  processPreflights.set(key, cachedPreflight);
+  return cachedPreflight;
 }
 
 /**
@@ -558,7 +565,7 @@ export class ScopedExecutionEnv implements TicketExecutionEnv {
       };
       const abort = () => requestTermination(executionError("aborted", "Command aborted."));
       const callback = (handler: ((chunk: string) => void) | undefined, chunk: string) => {
-        if (!handler || settled) return;
+        if (!handler || settled || chunk.length === 0) return;
         try {
           handler(chunk);
         } catch (error) {
@@ -589,20 +596,22 @@ export class ScopedExecutionEnv implements TicketExecutionEnv {
       }
 
       const launchedChild = child;
+      const stdoutDecoder = new StringDecoder("utf8");
+      const stderrDecoder = new StringDecoder("utf8");
       child.stdout?.on("data", (data: Buffer | string) => {
         const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data);
-        stdout = boundedAppend(stdout, data);
-        const chunk = bytes.toString();
-        callback(options.onStdout, chunk);
+        stdout = boundedAppend(stdout, bytes);
+        callback(options.onStdout, stdoutDecoder.write(bytes));
       });
       child.stderr?.on("data", (data: Buffer | string) => {
         const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data);
-        stderr = boundedAppend(stderr, data);
-        const chunk = bytes.toString();
-        callback(options.onStderr, chunk);
+        stderr = boundedAppend(stderr, bytes);
+        callback(options.onStderr, stderrDecoder.write(bytes));
       });
       child.once("error", (error) => finish(executionError("spawn_error", error.message, error)));
       child.once("close", (exitCode) => {
+        callback(options.onStdout, stdoutDecoder.end());
+        callback(options.onStderr, stderrDecoder.end());
         closeObserved = true;
         if (terminationResult) {
           finishTerminationIfReady();
@@ -643,7 +652,7 @@ export class ScopedExecutionEnv implements TicketExecutionEnv {
     await Promise.all(
       [...this.#tempDirectories].map(async (directory) => {
         try {
-          await rm(directory, { recursive: true, force: true });
+          await this.#fileOperations.rm(directory, { recursive: true, force: true });
         } catch {
           /* best-effort temp cleanup */
         }

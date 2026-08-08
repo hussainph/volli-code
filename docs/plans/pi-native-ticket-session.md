@@ -511,6 +511,13 @@ durable and visible after leaving and reopening the tab.
 - Abort, timeout, and close use host process-group termination as best-effort
   lifecycle hygiene. They do not claim to contain or reliably clean up a
   daemonized or reparented descendant.
+- Match Claude Code's scope deliberately: SRT contains Pi `execute` (Bash)
+  and its subprocesses only. Pi's native `read`, `edit`, and `write` tools
+  remain host-side product operations with the existing component name-check
+  and direct-symlink guard. That guard is not equivalent containment: a writer
+  with worktree access can still swap a checked component before it is opened.
+  Direct-symlink rejection tests are compensating coverage; descriptor-relative
+  no-follow operations are deferred hardening for that accepted TOCTOU residual.
 - Map Pi reasoning and built-in coding tools to Volli observations.
 - Introduce the closed activity vocabulary in shared/product semantics.
 - Stamp structured activity descriptors before renderer projection.

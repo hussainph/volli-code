@@ -14,7 +14,9 @@ import { PassThrough } from "node:stream";
 import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { ScopedExecutionEnv } from "./scoped-execution-env";
+import { ScopedExecutionEnv, type ScopedExecutionEnvOptions } from "./scoped-execution-env";
+
+type SandboxOverrides = Partial<NonNullable<ScopedExecutionEnvOptions["sandbox"]>>;
 
 function roots() {
   const parent = mkdtempSync(join(tmpdir(), "volli-scoped-env-"));
@@ -26,7 +28,7 @@ function roots() {
   return { worktree, outside };
 }
 
-function sandbox(overrides: Partial<Record<string, unknown>> = {}) {
+function sandbox(overrides: SandboxOverrides = {}) {
   const calls = { checks: 0, initializes: 0, wraps: [] as unknown[], cleanups: 0 };
   let enabled = false;
   let config: SandboxRuntimeConfig | undefined;
@@ -202,7 +204,7 @@ describe("ScopedExecutionEnv", () => {
     expect(srt.calls).toMatchObject({ checks: 1, initializes: 1 });
   });
 
-  it("fails closed and caches an unavailable sandbox without resetting process state", async () => {
+  it("fails closed when the sandbox is unavailable", async () => {
     const { worktree } = roots();
     const srt = sandbox({ isSupportedPlatform: () => false });
     const env = await ScopedExecutionEnv.create(worktree, { sandbox: srt });
@@ -218,6 +220,23 @@ describe("ScopedExecutionEnv", () => {
     await env.cleanup();
 
     expect(srt.calls).toMatchObject({ checks: 0, initializes: 0, cleanups: 0 });
+  });
+
+  it("retries a rejected process preflight when the same sandbox later becomes available", async () => {
+    const { worktree } = roots();
+    let available = false;
+    const srt = sandbox({ isSupportedPlatform: () => available });
+    const env = await ScopedExecutionEnv.create(worktree, { sandbox: srt });
+
+    await expect(env.prepareProcessExecution()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "shell_unavailable" },
+    });
+
+    available = true;
+
+    await expect(env.prepareProcessExecution()).resolves.toEqual({ ok: true, value: undefined });
+    expect(srt.calls).toMatchObject({ checks: 1, initializes: 1 });
   });
 
   it("fails closed when another caller initialized the process-global sandbox differently", async () => {
@@ -463,7 +482,10 @@ describe("ScopedExecutionEnv", () => {
       spawn: (() => children.shift()!) as never,
     });
     const executions = [concurrent.exec("true"), concurrent.exec("true")];
-    await vi.waitFor(() => expect(first.listenerCount("close")).toBeGreaterThan(0));
+    await vi.waitFor(() => {
+      expect(first.listenerCount("close")).toBeGreaterThan(0);
+      expect(second.listenerCount("close")).toBeGreaterThan(0);
+    });
     first.emit("close", 0);
     second.emit("close", 0);
     await expect(Promise.all(executions)).resolves.toHaveLength(2);
@@ -511,6 +533,36 @@ describe("ScopedExecutionEnv", () => {
     });
   });
 
+  it("streams split UTF-8 separately to stdout and stderr callbacks and flushes them at close", async () => {
+    const { worktree } = roots();
+    const running = child();
+    const env = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => running) as never,
+    });
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const run = env.exec("output", {
+      onStdout: (chunk) => stdout.push(chunk),
+      onStderr: (chunk) => stderr.push(chunk),
+    });
+    await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
+    running.stdout.write(Buffer.from([0xe2]));
+    running.stderr.write(Buffer.from([0xe2]));
+    running.stdout.write(Buffer.from([0x82, 0xac]));
+    running.stderr.write(Buffer.from([0x82, 0xac]));
+    running.stdout.write(Buffer.from([0xe2]));
+    running.stderr.write(Buffer.from([0xe2]));
+    running.emit("close", 0);
+
+    await expect(run).resolves.toEqual({
+      ok: true,
+      value: { stdout: "€", stderr: "€", exitCode: 0 },
+    });
+    expect(stdout).toEqual(["€", "�"]);
+    expect(stderr).toEqual(["€", "�"]);
+  });
+
   it("forwards append-file cancellation to the underlying environment", async () => {
     const { worktree } = roots();
     const append = vi.spyOn(NodeExecutionEnv.prototype, "appendFile");
@@ -521,6 +573,7 @@ describe("ScopedExecutionEnv", () => {
 
     expect(append).toHaveBeenCalledWith(join(env.cwd, "inside.txt"), "x", controller.signal);
     await env.cleanup();
+    append.mockRestore();
   });
 
   it("cleans owned output spools after a late abort, write failure, or cleanup fault", async () => {
@@ -558,6 +611,19 @@ describe("ScopedExecutionEnv", () => {
       ok: false,
       error: { code: "unknown", message: "disk full" },
     });
+
+    const ownedDirectory = join(worktree, ".volli-bash-owned");
+    const ownedRemove = vi.fn(async () => undefined);
+    const owned = await ScopedExecutionEnv.create(worktree, {
+      fileOperations: {
+        mkdtemp: async () => ownedDirectory,
+        writeFile: async () => undefined,
+        rm: ownedRemove,
+      },
+    });
+    await expect(owned.createTempFile()).resolves.toMatchObject({ ok: true });
+    await owned.cleanup();
+    expect(ownedRemove).toHaveBeenCalledWith(ownedDirectory, { recursive: true, force: true });
   });
 
   it("falls back to the child signal method and a minimal trusted PATH", async () => {
