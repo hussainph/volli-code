@@ -391,6 +391,17 @@ describe("persistence", () => {
     );
     expect(createUiStore(legacy).getState().railMode).toBe("properties");
 
+    // The removed Session rail mode restores the safe default on rehydrate.
+    const removedSessionMode = createMemoryStorage();
+    removedSessionMode.setItem(
+      "volli:ui",
+      JSON.stringify({
+        state: { sidebarWidth: 320, uiScale: 1, railMode: "session" },
+        version: 1,
+      }),
+    );
+    expect(createUiStore(removedSessionMode).getState().railMode).toBe("sessions");
+
     // Missing/corrupt railMode with Details closed defaults to sessions.
     const missing = createMemoryStorage();
     missing.setItem(

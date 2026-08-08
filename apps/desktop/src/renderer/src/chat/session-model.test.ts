@@ -1,9 +1,7 @@
-import type { SessionCapabilitySnapshot } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   composerIntent,
-  deriveRuntimeCatalog,
   enqueueMessage,
   isPrimaryAgent,
   nextRelease,
@@ -16,162 +14,25 @@ import {
   type AgentVisibility,
 } from "./session-model";
 
-const snapshot: SessionCapabilitySnapshot = {
-  id: "caps-1",
-  adapterId: "opencode",
-  attachmentId: "attachment-1",
-  profileId: "native",
-  revision: 3,
-  observedAt: 10,
-  expiresAt: null,
-  features: [],
-  catalog: [
-    {
-      kind: "model",
-      id: "anthropic/disabled",
-      label: "Disabled model",
-      state: "unavailable",
-      evidence: "reported",
-      detail: { providerId: "anthropic", modelId: "disabled", variants: ["high"] },
-    },
-    {
-      kind: "model",
-      id: "openai/codex",
-      label: "Codex",
-      state: "available",
-      evidence: "reported",
-      detail: { providerId: "openai", modelId: "codex", variants: ["low", "high"] },
-    },
-    {
-      kind: "agent",
-      id: "plan",
-      label: "Plan",
-      state: "available",
-      evidence: "reported",
-      detail: { mode: "primary", description: "Read-only planning" },
-    },
-  ],
-};
-
 describe("native Session runtime picker", () => {
-  it("derives provider, model, effort, and agent mode from reported capabilities", () => {
-    expect(deriveRuntimeCatalog(snapshot)).toEqual({
-      providers: ["openai"],
+  it("keeps a valid choice and otherwise prefers an available runtime", () => {
+    const catalog = {
       models: [
         {
-          id: "anthropic/disabled",
-          label: "Disabled model",
-          state: "unavailable",
           providerId: "anthropic",
           modelId: "disabled",
+          state: "unavailable" as const,
           variants: ["high"],
         },
         {
-          id: "openai/codex",
-          label: "Codex",
-          state: "available",
           providerId: "openai",
           modelId: "codex",
+          state: "available" as const,
           variants: ["low", "high"],
         },
       ],
-      agents: [
-        {
-          id: "plan",
-          label: "Plan",
-          state: "available",
-          mode: "primary",
-          hidden: null,
-          description: "Read-only planning",
-        },
-      ],
-    });
-  });
-
-  it("reads no snapshot as no catalog at all", () => {
-    expect(deriveRuntimeCatalog(null)).toEqual({ providers: [], models: [], agents: [] });
-  });
-
-  it("drops a model whose detail is missing a provider or model id", () => {
-    const catalog = deriveRuntimeCatalog({
-      ...snapshot,
-      catalog: [
-        {
-          kind: "model",
-          id: "broken",
-          label: "Broken",
-          state: "available",
-          evidence: "reported",
-          detail: { providerId: "anthropic" },
-        },
-      ],
-    });
-    expect(catalog.models).toEqual([]);
-  });
-
-  it("reads an agent with no detail as one with no mode, hidden flag, or description", () => {
-    const catalog = deriveRuntimeCatalog({
-      ...snapshot,
-      catalog: [
-        {
-          kind: "agent",
-          id: "bare",
-          label: "Bare",
-          state: "available",
-          evidence: "reported",
-          detail: null,
-        },
-      ],
-    });
-    expect(catalog.agents).toEqual([
-      {
-        id: "bare",
-        label: "Bare",
-        state: "available",
-        mode: null,
-        hidden: null,
-        description: null,
-      },
-    ]);
-  });
-
-  it("reads a model with no declared variants as offering none", () => {
-    const catalog = deriveRuntimeCatalog({
-      ...snapshot,
-      catalog: [
-        {
-          kind: "model",
-          id: "anthropic/opus",
-          label: "Opus",
-          state: "available",
-          evidence: "reported",
-          detail: { providerId: "anthropic", modelId: "opus" },
-        },
-      ],
-    });
-    expect(catalog.models[0]?.variants).toEqual([]);
-  });
-
-  it("carries the harness's own hidden flag through to the picker", () => {
-    const catalog = deriveRuntimeCatalog({
-      ...snapshot,
-      catalog: [
-        {
-          kind: "agent",
-          id: "compaction",
-          label: "Compaction",
-          state: "available",
-          evidence: "reported",
-          detail: { mode: "primary", hidden: true },
-        },
-      ],
-    });
-    expect(catalog.agents[0]?.hidden).toBe(true);
-    expect(primaryAgents(catalog.agents)).toEqual([]);
-  });
-
-  it("keeps a valid choice and otherwise prefers an available runtime", () => {
-    const catalog = deriveRuntimeCatalog(snapshot);
+      agents: [{ id: "plan", state: "available" as const, mode: "primary" }],
+    };
     expect(
       resolveRuntimeSelection(catalog, {
         providerId: "missing",
@@ -191,12 +52,17 @@ describe("native Session runtime picker", () => {
   });
 
   it("does not submit through catalog entries the adapter reports as unavailable", () => {
-    const catalog = deriveRuntimeCatalog({
-      ...snapshot,
-      catalog: snapshot.catalog.map((item) =>
-        Object.assign({}, item, { state: "unavailable" as const }),
-      ),
-    });
+    const catalog = {
+      models: [
+        {
+          providerId: "openai",
+          modelId: "codex",
+          state: "unavailable" as const,
+          variants: ["low", "high"],
+        },
+      ],
+      agents: [{ id: "plan", state: "unavailable" as const, mode: "primary" }],
+    };
 
     expect(
       resolveRuntimeSelection(catalog, {

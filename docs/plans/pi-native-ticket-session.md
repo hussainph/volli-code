@@ -170,6 +170,18 @@ It does not expose manifests, profiles, arbitrary adapters, provider-shaped agen
 modes, or UI components. Pi-specific identities live inside a bounded runtime
 reference stored on the Session Attachment.
 
+### Audited landing constraint
+
+The first desktop Pi slice may use a private facade around the current Session
+coordinator only where that shortens delivery. That facade is a fixed internal
+bridge to the sole structured runtime; it must not create a new registry,
+manifest, profile, catalog, selection, or capability-parity surface. Runtime
+Brief, Authority Snapshot, tool policy, delivery outcomes, and recovery
+references are product-owned `agent-runtime` inputs and outputs, never extra
+fields smuggled through the OpenCode-shaped `HarnessCommand`. The renderer
+stops issuing `adapter.attach` when the singular runtime host lands; the host
+attaches its one structured runtime automatically.
+
 ### Canonical history and recovery
 
 Volli's ledger and transcript artifacts are canonical. Pi's JSONL/session data is
@@ -260,6 +272,10 @@ Pi owns provider credentials and refresh behavior in v1.
   fallback, or arbitrary provider plugin system.
 - A Volli-owned `ModelAccess` service is deferred until graphical auth, expanded
   provider coverage, or cloud credential hosting makes it necessary.
+- The first authentication recovery is an explicit Pi-owned external or terminal
+  handoff plus Retry. It is not a hidden fallback and it never reveals secrets.
+  An in-app connect flow is a near-term follow-up: scope it immediately after
+  the handoff is working, rather than treating the handoff as the final product.
 
 ### Tool boundary
 
@@ -350,8 +366,10 @@ runtime migration.
   being silently reinterpreted.
 - Preserve a slash-command surface, but commands are Volli-owned or installed
   capabilities. OpenCode commands do not migrate by name.
-- Expose the current authority policy through one compact control. Detailed
-  defaults belong in Settings; the full Auto/Manage design is later work.
+- Ticket Sessions initially persist a durable `Auto` Authority Snapshot. Do not
+  render a fake one-option authority control; expose a composer control only
+  when the user can inspect or explicitly change a real policy. Detailed
+  defaults and the full Auto/Manage design are later work.
 
 ### Contextual Environment inspector
 
@@ -439,6 +457,13 @@ behavior unless the cleanup is required to expose that behavior.
 **Exit:** a checked implementation inventory and no active work targeting
 OpenCode feature parity.
 
+**Recorded decisions:** Project and ticketless Sessions remain durable product
+surfaces; they are not disabled during this Ticket-first migration. Their later
+product slice points them at the same singular Agent Runtime. Ticket authority
+starts as durable `Auto` without fake composer chrome. Pi authentication starts
+with an explicit external/terminal handoff plus Retry, followed as soon as
+practical by a scoped in-app connect flow.
+
 ### Session 1 — Agent Runtime package and pinned Pi
 
 - Create `@volli/agent-runtime` with no Electron or renderer dependency.
@@ -489,7 +514,9 @@ stable.
 - Persist and reopen Pi recovery sidecars.
 - Reconcile completed entries exactly once after relaunch.
 - Surface auth, configuration, context, and unrecoverable runtime failure through
-  durable Attention and recovery actions.
+  durable Attention and recovery actions. The first auth recovery offers the
+  Pi-owned external/terminal handoff plus Retry; separately scope in-app connect
+  immediately after that handoff is proven.
 
 **Exit:** Stop works; a settled turn survives app relaunch without duplication;
 an interrupted streaming tail never masquerades as committed history.

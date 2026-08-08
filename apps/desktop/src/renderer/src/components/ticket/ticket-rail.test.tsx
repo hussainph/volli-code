@@ -2,18 +2,16 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
 import { TicketRailModeStrip } from "./ticket-rail";
-import { availableRailModes, type TicketRailMode } from "./ticket-rail-model";
+import { TICKET_RAIL_MODES, type TicketRailMode } from "./ticket-rail-model";
 
 const noop = (_mode: TicketRailMode): void => {};
 
-/** The strip only ever renders what the gate offers — see `availableRailModes`. */
-const onDoc = availableRailModes({});
-const onSessionTab = availableRailModes({ activeTabKind: "session" });
+const modes = TICKET_RAIL_MODES;
 
 describe("TicketRailModeStrip", () => {
   it("renders four icon-mode buttons with Sessions active by default", () => {
     const html = renderToStaticMarkup(
-      <TicketRailModeStrip mode="sessions" modes={onDoc} onSelectMode={noop} />,
+      <TicketRailModeStrip mode="sessions" modes={modes} onSelectMode={noop} />,
     );
 
     expect(html).toContain('aria-label="Sessions"');
@@ -29,22 +27,17 @@ describe("TicketRailModeStrip", () => {
     expect(html).toContain('data-testid="ticket-rail-mode-properties"');
   });
 
-  it("offers the Session mode only once a session tab is active", () => {
-    const doc = renderToStaticMarkup(
-      <TicketRailModeStrip mode="sessions" modes={onDoc} onSelectMode={noop} />,
+  it("does not render the removed Session navigator", () => {
+    const html = renderToStaticMarkup(
+      <TicketRailModeStrip mode="sessions" modes={modes} onSelectMode={noop} />,
     );
-    expect(doc).not.toContain('data-testid="ticket-rail-mode-session"');
-
-    const session = renderToStaticMarkup(
-      <TicketRailModeStrip mode="session" modes={onSessionTab} onSelectMode={noop} />,
-    );
-    expect(session).toContain('data-testid="ticket-rail-mode-session"');
-    expect(session).toContain('aria-label="Session"');
+    expect(html).not.toContain('data-testid="ticket-rail-mode-session"');
+    expect(html).not.toContain('aria-label="Session"');
   });
 
   it("marks the active mode with a primary-tint affordance distinct from idle icons", () => {
     const html = renderToStaticMarkup(
-      <TicketRailModeStrip mode="changes" modes={onDoc} onSelectMode={noop} />,
+      <TicketRailModeStrip mode="changes" modes={modes} onSelectMode={noop} />,
     );
     const activeIdx = html.indexOf('data-testid="ticket-rail-mode-changes"');
     const idleIdx = html.indexOf('data-testid="ticket-rail-mode-files"');

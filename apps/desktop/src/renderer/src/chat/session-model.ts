@@ -1,35 +1,9 @@
 /**
- * The pure half of the chat session surface: what the runtime catalog offers,
- * which of its agents a person may pick, and what the composer's keystrokes
- * mean right now. No React, no transport — every rule here is a function of its
- * arguments so it is testable without mounting a session.
+ * Pure chat-session rules for model selection, agent visibility, and composer
+ * keystrokes. No React or transport — every rule is testable without mounting
+ * a session.
  */
-import type { SessionCapabilitySnapshot, SessionCapabilityState } from "@volli/shared";
-
-export interface RuntimeModel {
-  id: string;
-  label: string;
-  state: SessionCapabilityState;
-  providerId: string;
-  modelId: string;
-  variants: readonly string[];
-}
-
-export interface RuntimeAgent {
-  id: string;
-  label: string;
-  state: SessionCapabilityState;
-  mode: string | null;
-  /** Declared by the harness for agents it runs but never offers. */
-  hidden: boolean | null;
-  description: string | null;
-}
-
-export interface RuntimeCatalog {
-  providers: readonly string[];
-  models: readonly RuntimeModel[];
-  agents: readonly RuntimeAgent[];
-}
+import type { SessionCapabilityState } from "@volli/shared";
 
 export interface RuntimeSelection {
   providerId: string;
@@ -38,52 +12,9 @@ export interface RuntimeSelection {
   agent: string;
 }
 
-export function deriveRuntimeCatalog(snapshot: SessionCapabilitySnapshot | null): RuntimeCatalog {
-  const models = (snapshot?.catalog ?? []).flatMap((item): RuntimeModel[] => {
-    if (item.kind !== "model" || !isRecord(item.detail)) return [];
-    const providerId = recordString(item.detail, "providerId");
-    const modelId = recordString(item.detail, "modelId");
-    if (!providerId || !modelId) return [];
-    return [
-      {
-        id: item.id,
-        label: item.label,
-        state: item.state,
-        providerId,
-        modelId,
-        variants: recordStrings(item.detail, "variants"),
-      },
-    ];
-  });
-  const agents = (snapshot?.catalog ?? []).flatMap((item): RuntimeAgent[] => {
-    if (item.kind !== "agent") return [];
-    const detail = isRecord(item.detail) ? item.detail : null;
-    return [
-      {
-        id: item.id,
-        label: item.label,
-        state: item.state,
-        mode: detail ? recordString(detail, "mode") : null,
-        hidden: detail ? recordBoolean(detail, "hidden") : null,
-        description: detail ? recordString(detail, "description") : null,
-      },
-    ];
-  });
-  return {
-    providers: [
-      ...new Set(
-        models.filter((model) => model.state === "available").map((model) => model.providerId),
-      ),
-    ],
-    models,
-    agents,
-  };
-}
-
 /**
- * Structural on purpose: the same rule resolves a catalog derived here from a
- * capability snapshot and the server-side `RuntimeCatalogChoices` the live
- * session receives. Neither is the authority on the other's shape.
+ * Structural on purpose: the live session owns the catalog shape while this
+ * rule needs only the fields required to settle an available selection.
  */
 interface SelectableModel {
   providerId: string;
@@ -248,27 +179,4 @@ export function nextRelease(
 ): QueuedMessage | null {
   if (state.working || !state.ready) return null;
   return queue[0] ?? null;
-}
-
-/* ------------------------------------------------------------------ shared */
-
-function recordString(record: Record<string, unknown>, key: string): string | null {
-  const value = record[key];
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function recordBoolean(record: Record<string, unknown>, key: string): boolean | null {
-  const value = record[key];
-  return typeof value === "boolean" ? value : null;
-}
-
-function recordStrings(record: Record<string, unknown>, key: string): readonly string[] {
-  const value = record[key];
-  return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
-    : [];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }

@@ -19,14 +19,12 @@ import * as React from "react";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
 import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
-import { PulseIcon } from "@phosphor-icons/react/dist/csr/Pulse";
 import { SlidersHorizontalIcon } from "@phosphor-icons/react/dist/csr/SlidersHorizontal";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import type { Ticket } from "@volli/shared";
 
 import { TicketProperties } from "@renderer/components/ticket/ticket-properties";
 import { TicketSessionsPanel } from "@renderer/components/ticket/ticket-sessions-panel";
-import type { TicketTabKind } from "@renderer/components/ticket/ticket-tabs";
 import {
   TICKET_RAIL_MODE_LABELS,
   availableRailModes,
@@ -43,7 +41,6 @@ const MODE_ICONS: Record<TicketRailMode, PhosphorIcon> = {
   files: FoldersIcon,
   changes: GitDiffIcon,
   properties: SlidersHorizontalIcon,
-  session: PulseIcon,
 };
 
 /** Compact vertical icon strip — presentational; mode state lives in the UI store. */
@@ -112,10 +109,8 @@ export function TicketRail({
   onActivateSession,
   onActivateChat,
   activeTabId,
-  activeTabKind,
   filesContent,
   changesContent,
-  sessionContent,
 }: {
   projectId: string;
   ticket: Ticket;
@@ -132,8 +127,6 @@ export function TicketRail({
    * `onSelectMode`), not only in tests.
    */
   activeTabId: string;
-  /** Kind of that tab. Gates the conditional `session` mode; absent hides it. */
-  activeTabKind?: TicketTabKind;
   /**
    * Optional Files navigator. When omitted, a quiet placeholder renders so the
    * shell stays usable until the Files agent lands.
@@ -141,16 +134,12 @@ export function TicketRail({
   filesContent?: React.ReactNode;
   /** Optional Changes navigator — same seam as `filesContent`. */
   changesContent?: React.ReactNode;
-  /** The live Session's rail (Plan / Subagents / Background processes). */
-  sessionContent?: React.ReactNode;
 }) {
   const storedMode = useUiStore((state) => state.railMode);
   const setRailMode = useUiStore((state) => state.setRailMode);
-  const chrome = { mode: storedMode, activeTabId, activeTabKind };
-  // Resolved, not written back: a stored `session` mode survives a trip to the
-  // doc tab and comes back with it, rather than being erased on arrival.
+  const chrome = { mode: storedMode, activeTabId };
   const mode = resolveRailMode(chrome);
-  const modes = availableRailModes(chrome);
+  const modes = availableRailModes();
 
   // Decision #46: switching navigator must not open, close, or retarget a
   // main-view tab. The chrome transition is computed by the pure contract and
@@ -159,9 +148,9 @@ export function TicketRail({
   // code the app runs, rather than a parallel description of it.
   const onSelectMode = React.useCallback(
     (next: TicketRailMode) => {
-      setRailMode(selectRailMode({ mode, activeTabId, activeTabKind }, next).mode);
+      setRailMode(selectRailMode({ mode, activeTabId }, next).mode);
     },
-    [mode, activeTabId, activeTabKind, setRailMode],
+    [mode, activeTabId, setRailMode],
   );
 
   return (
@@ -179,7 +168,6 @@ export function TicketRail({
         ) : null}
         {mode === "files" ? (filesContent ?? <RailModePlaceholder label="Files" />) : null}
         {mode === "changes" ? (changesContent ?? <RailModePlaceholder label="Changes" />) : null}
-        {mode === "session" ? (sessionContent ?? <RailModePlaceholder label="Session" />) : null}
         {mode === "properties" ? (
           <div
             data-testid="ticket-rail-properties"
