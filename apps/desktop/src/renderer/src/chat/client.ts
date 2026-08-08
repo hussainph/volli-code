@@ -70,6 +70,41 @@ export const PI_TICKET_EXECUTOR: ChatExecutorChoice = {
   profileId: "native",
 };
 
+/**
+ * Whether this executor chooses its own model, leaving the Session none to make.
+ *
+ * Pi's adapter drops `command.model` outright and pins its own, so a model
+ * selection is not a thing a Pi Session is waiting for — not to be typed into,
+ * not to send, and not to draw a picker for. Naming that here rather than at
+ * each surface keeps the composer's readiness and the picker's presence one
+ * answer instead of two that can disagree.
+ */
+export function pinsOwnModel(adapterId: string): boolean {
+  return adapterId === PI_TICKET_EXECUTOR.adapterId;
+}
+
+/**
+ * Which executor a Session actually runs, across both ways a surface arrives at
+ * one.
+ *
+ * The durable attachment is the truth and it is asked first: reopening a Session
+ * adopts it without attaching anything, so the executor a *client* was
+ * constructed with is a guess on that path — `adoptChatSession` is called
+ * without one and would answer OpenCode for a Pi ticket chat. The newest
+ * attachment is read rather than the live one because a Session between
+ * attachments still has an executor; it just has no live binding right now.
+ *
+ * The client's own choice is the fallback, and it is the right one exactly
+ * where it applies: a Session created a moment ago, whose attach is still in
+ * flight, has no attachment record yet and is about to have that one.
+ */
+export function sessionAdapterId(
+  slice: ChatSessionSlice | undefined,
+  fallback: ChatExecutorChoice,
+): string {
+  return slice?.projection?.attachments.at(-1)?.adapterId ?? fallback.adapterId;
+}
+
 export const EMPTY_CHAT_SELECTION: RuntimeSelection = {
   providerId: "",
   modelId: "",
@@ -109,9 +144,17 @@ export function isWorking(slice: ChatSessionSlice): boolean {
  * Two questions live here that are easy to conflate: a model is what you need to
  * *write* a message, a live executor is what you need to *deliver* one. Anything
  * written before both hold joins the queue instead of being dropped.
+ *
+ * The model half is the live executor's own question to answer, and it is asked
+ * of the binding rather than of {@link sessionAdapterId} because there is
+ * nothing to guess here: a Session with no live executor is not deliverable
+ * whatever it would attach, and one with a live executor is holding the record
+ * that names it.
  */
 export function isDeliverable(slice: ChatSessionSlice): boolean {
-  return (slice.projection?.liveExecutor ?? null) !== null && slice.selection.modelId.length > 0;
+  const live = slice.projection?.liveExecutor ?? null;
+  if (live === null) return false;
+  return pinsOwnModel(live.adapterId) || slice.selection.modelId.length > 0;
 }
 
 /**
@@ -200,7 +243,8 @@ type ChatCommand =
       kind: "message.submit";
       message: UIMessage;
       delivery: ChatMessageDelivery;
-      model: { providerId: string; modelId: string };
+      /** Null when the Session's executor pins its own — the edge rejects empty ids. */
+      model: { providerId: string; modelId: string } | null;
       variant: string | null;
       agent: string | null;
     }
@@ -335,12 +379,16 @@ export function browserChatTransport(): ChatSessionTransport {
 
 export class ChatSessionClient {
   readonly sessionId: string;
+  /**
+   * What this client attaches, and what a surface falls back to when the
+   * Session has no attachment record yet — see {@link sessionAdapterId}.
+   */
+  readonly executor: ChatExecutorChoice;
 
   readonly #rpc: ChatSessionRpc;
   readonly #store: ChatSessionStore;
   readonly #scheduler: FlushScheduler;
   readonly #newCommandId: () => string;
-  readonly #executor: ChatExecutorChoice;
   readonly #detachStore: () => void;
 
   #subscription: { unsubscribe(): void } | null = null;
@@ -369,7 +417,7 @@ export class ChatSessionClient {
     this.#store = deps.store;
     this.#scheduler = deps.scheduler;
     this.#newCommandId = deps.newCommandId;
-    this.#executor = deps.executor;
+    this.executor = deps.executor;
     // The queue's release rule reads lifecycle, projection and selection, and
     // any of the three can move without this client having touched it — a person
     // picking a model is enough. Watching the store is what makes one rule
@@ -404,8 +452,8 @@ export class ChatSessionClient {
         sessionId: this.sessionId,
         command: {
           kind: "adapter.attach",
-          adapterId: this.#executor.adapterId,
-          profileId: this.#executor.profileId,
+          adapterId: this.executor.adapterId,
+          profileId: this.executor.profileId,
           continuity: "fresh",
         },
       });
@@ -475,10 +523,12 @@ export class ChatSessionClient {
             parts: [{ type: "text", text: body }],
           },
           delivery,
-          model: {
-            providerId: slice.selection.providerId,
-            modelId: slice.selection.modelId,
-          },
+          // Null rather than a pair of empty strings: the Session edge requires
+          // non-empty ids and would reject the message outright, and an executor
+          // that pins its own model has no selection to name.
+          model: slice.selection.modelId
+            ? { providerId: slice.selection.providerId, modelId: slice.selection.modelId }
+            : null,
           variant: slice.selection.variant || null,
           agent: slice.selection.agent || null,
         },

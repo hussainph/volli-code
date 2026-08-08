@@ -17,13 +17,23 @@ import type { RuntimeSelection, SessionInteractionResolution } from "@volli/shar
 import { useStore, type StoreApi } from "zustand";
 
 import { getChatClient } from "@renderer/chat/registry";
-import type { ChatMessageDelivery, ChatSessionSlice } from "@renderer/chat/client";
+import {
+  DEFAULT_CHAT_EXECUTOR,
+  sessionAdapterId,
+  type ChatMessageDelivery,
+  type ChatSessionSlice,
+} from "@renderer/chat/client";
 import type { QueuedMessage } from "@renderer/chat/session-model";
 import { useChatSessionsStore, type ChatSessionsState } from "@renderer/stores/chat-sessions";
 
 export interface SessionController {
   /** `undefined` until the Session is durable, and again once it is closed. */
   session: ChatSessionSlice | undefined;
+  /**
+   * Which executor this Session runs — the one thing about a Session a surface
+   * has to know before it can say what the composer is even waiting for.
+   */
+  adapterId: string;
   setSelection(selection: RuntimeSelection): void;
   enqueue(message: QueuedMessage): void;
   dequeue(id: string): void;
@@ -54,10 +64,19 @@ export function useSessionController(
 ): SessionController {
   const session = useStore(store, (state) => state.sessions[sessionId]);
   const actions = React.useMemo(() => bind(sessionId, store), [sessionId, store]);
-  return { session, ...actions };
+  // Read per render rather than memoized: the durable answer arrives with the
+  // first snapshot, and until then the client's own choice is standing in for it.
+  const adapterId = sessionAdapterId(
+    session,
+    getChatClient(sessionId)?.executor ?? DEFAULT_CHAT_EXECUTOR,
+  );
+  return { session, adapterId, ...actions };
 }
 
-function bind(sessionId: string, store: ChatSessionsStore): Omit<SessionController, "session"> {
+function bind(
+  sessionId: string,
+  store: ChatSessionsStore,
+): Omit<SessionController, "session" | "adapterId"> {
   const refused = Promise.resolve(false);
   return {
     setSelection: (selection) => {

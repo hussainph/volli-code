@@ -15,8 +15,12 @@ import {
   browserChatTransport,
   isDeliverable,
   isWorking,
+  pinsOwnModel,
   racingFlushScheduler,
+  sessionAdapterId,
   settledLifecycle,
+  DEFAULT_CHAT_EXECUTOR,
+  PI_TICKET_EXECUTOR,
   type ChatCommandRequest,
   type ChatSessionRpc,
   type ChatSessionSlice,
@@ -39,11 +43,11 @@ const REFUSED = {
   receipt: { status: "rejected", code: "adapter_unavailable", detail: "OpenCode is unavailable" },
 };
 
-function attachmentFor(id: string): SessionAttachmentProjection {
+function attachmentFor(id: string, adapterId = "opencode"): SessionAttachmentProjection {
   return {
     id,
     sessionId: SESSION.id,
-    adapterId: "opencode",
+    adapterId,
     venue: { id: "local", kind: "local" },
     continuity: "fresh",
     native: null,
@@ -55,15 +59,16 @@ function attachmentFor(id: string): SessionAttachmentProjection {
   };
 }
 
-function projectionFor(attachmentId: string | null): SessionProjection {
+function projectionFor(attachmentId: string | null, adapterId = "opencode"): SessionProjection {
+  const attachment = attachmentId === null ? null : attachmentFor(attachmentId, adapterId);
   return {
     session: SESSION,
     status: "open",
     commands: [],
     receipts: [],
     pendingExecutorStart: null,
-    attachments: [],
-    liveExecutor: attachmentId === null ? null : attachmentFor(attachmentId),
+    attachments: attachment === null ? [] : [attachment],
+    liveExecutor: attachment,
     attention: { active: [], primary: null },
     capabilities: [],
     interactions: { active: [], resolved: [] },
@@ -431,6 +436,31 @@ describe("session derivations", () => {
     expect(isDeliverable(sliceOf({ projection: live, selection: picked }))).toBe(true);
     expect(isDeliverable(sliceOf({ projection: live }))).toBe(false);
     expect(isDeliverable(sliceOf({ selection: picked }))).toBe(false);
+  });
+
+  it("is deliverable with no model at all under an executor that pins its own", () => {
+    const pi = projectionFor("attach-1", "pi");
+
+    expect(isDeliverable(sliceOf({ projection: pi }))).toBe(true);
+    // Still nowhere to deliver to, whatever the Session would attach.
+    expect(isDeliverable(sliceOf({ projection: projectionFor(null) }))).toBe(false);
+  });
+
+  it("names the executor a Session runs, durable record first", () => {
+    expect(pinsOwnModel(PI_TICKET_EXECUTOR.adapterId)).toBe(true);
+    expect(pinsOwnModel(DEFAULT_CHAT_EXECUTOR.adapterId)).toBe(false);
+
+    // The reopen path: adopted with no executor named, so only the attachment
+    // the ledger already holds can say this is a Pi Session.
+    const reopened = sliceOf({ projection: projectionFor("attach-1", "pi") });
+    expect(sessionAdapterId(reopened, DEFAULT_CHAT_EXECUTOR)).toBe("pi");
+
+    // The fresh-create path: the attach is still in flight, so the client's own
+    // choice is all there is — and it is about to be the record.
+    const attaching = sliceOf({ projection: projectionFor(null) });
+    expect(sessionAdapterId(attaching, PI_TICKET_EXECUTOR)).toBe("pi");
+    expect(sessionAdapterId(sliceOf(), PI_TICKET_EXECUTOR)).toBe("pi");
+    expect(sessionAdapterId(undefined, DEFAULT_CHAT_EXECUTOR)).toBe("opencode");
   });
 
   it("holds starting and error against anything the stream says", () => {
@@ -853,6 +883,23 @@ describe("submit", () => {
 
     const command = rpc.submissions()[0]!.command;
     expect(command).toMatchObject({ variant: null, agent: null });
+  });
+
+  it("sends a null model for an executor that pins its own", async () => {
+    // No `setSelection` at all: a Pi Session never picks one, and the Session
+    // edge requires non-empty ids — a pair of empty strings is rejected before
+    // the engine ever sees the message.
+    const { client, rpc } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1", "pi");
+    });
+
+    await expect(client.submit("go", "queue")).resolves.toBe(true);
+
+    expect(rpc.submissions()[0]!.command).toMatchObject({
+      model: null,
+      variant: null,
+      agent: null,
+    });
   });
 
   it("marks the Session working once the harness took it", async () => {
