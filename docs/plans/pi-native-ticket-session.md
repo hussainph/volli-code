@@ -511,12 +511,17 @@ stable.
 - Wire interrupt to Pi abort and settle the resulting state honestly.
 - Preserve queue and steer only where Pi supports them; reject unsupported
   replace behavior explicitly.
+- Persist the generated Runtime Brief once as Session input before first
+  delivery. Reattach and relaunch reuse that exact input instead of recomputing
+  it from mutable Ticket state.
 - Persist and reopen Pi recovery sidecars.
 - Reconcile completed entries exactly once after relaunch.
 - Surface auth, configuration, context, and unrecoverable runtime failure through
   durable Attention and recovery actions. The first auth recovery offers the
   Pi-owned external/terminal handoff plus Retry; separately scope in-app connect
   immediately after that handoff is proven.
+- Clear resolved runtime Attention through an observable durable transition;
+  successful retry must not leave stale auth or runtime blockers projected.
 
 **Exit:** Stop works; a settled turn survives app relaunch without duplication;
 an interrupted streaming tail never masquerades as committed history.
@@ -524,6 +529,9 @@ an interrupted streaming tail never masquerades as committed history.
 ### Session 5 — Model access and structured UI reset
 
 - Replace OpenCode Runtime Catalog consumption with sanitized Pi Model Access.
+- Move structured-runtime attachment behind the main-owned singular runtime
+  host; renderer commands and state no longer carry adapter, profile, or Pi
+  identities.
 - Let Pi own credentials; expose only model/account availability and actionable
   recovery.
 - Remove Chat harness/profile and agent-mode selection.
