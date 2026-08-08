@@ -107,8 +107,8 @@ const PI_MANIFEST: NativeHarnessManifest = {
   profiles: [{ id: PI_PROFILE_ID, label: "Native", transport: "native" }],
 };
 
-/** The coding tools this slice loads. Process execution has no containment boundary yet. */
-const PI_TOOLS = { tools: ["read", "edit", "write"] } as const;
+/** The explicitly contained coding tools this slice loads. */
+const PI_TOOLS = { tools: ["read", "edit", "write", "execute"] } as const;
 
 /**
  * The root Thread id for a Session, and the one place the convention is written.

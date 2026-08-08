@@ -50,6 +50,14 @@ export interface ScopedExecutionEnvOptions {
   processKill?: ProcessKill;
 }
 
+/** The contained Ticket execution capability Pi's coding tools receive. */
+export interface TicketExecutionEnv extends ExecutionEnv {
+  /** Proves the process boundary before Pi's bash tool is advertised. */
+  prepareProcessExecution(): Promise<Result<void, ExecutionError>>;
+  /** Releases active commands and owned output spools when an attachment ends. */
+  cleanup(): Promise<void>;
+}
+
 const processPreflights = new WeakMap<object, Promise<void>>();
 
 function deepFreeze<T>(value: T): T {
@@ -216,7 +224,7 @@ async function prepareSandbox(sandbox: SandboxRuntime): Promise<void> {
  * The filesystem capability supplied to Pi's contained Ticket coding tools.
  * Process execution is fail-closed until SRT's process-global boundary is ready.
  */
-export class ScopedExecutionEnv implements ExecutionEnv {
+export class ScopedExecutionEnv implements TicketExecutionEnv {
   readonly cwd: string;
   readonly #delegate: NodeExecutionEnv;
   readonly #sandbox: SandboxRuntime;

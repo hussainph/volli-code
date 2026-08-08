@@ -16,7 +16,7 @@ import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
 import { mapPiActivity } from "./activity";
 import { piOwnedModels } from "./models";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
-import { ScopedExecutionEnv } from "./scoped-execution-env";
+import { ScopedExecutionEnv, type TicketExecutionEnv } from "./scoped-execution-env";
 import { createPiTools } from "./tools";
 import { attentionReasonFor, classifyAssistantMessage, recoveryRefFor } from "./transcript";
 
@@ -31,6 +31,8 @@ export interface PiRuntimeHostOptions {
   models?: Models;
   /** Host clock for runtime observations; injectable for deterministic tests. */
   now?: () => number;
+  /** Internal contained-environment factory for deterministic Node runtime tests. */
+  executionEnvFactory?: (worktreePath: string) => Promise<TicketExecutionEnv>;
 }
 
 /** Everything {@link attachTicketSession} needs, with the default already chosen. */
@@ -38,6 +40,7 @@ interface PiRuntimeHost {
   sessionDataDir: string;
   models: Models;
   now: () => number;
+  executionEnvFactory: (worktreePath: string) => Promise<TicketExecutionEnv>;
 }
 
 /**
@@ -52,6 +55,7 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
     sessionDataDir: options.sessionDataDir,
     models: options.models ?? piOwnedModels(),
     now: options.now ?? Date.now,
+    executionEnvFactory: options.executionEnvFactory ?? ScopedExecutionEnv.create,
   };
   return {
     startTicketSession: (spec) => attachTicketSession(host, spec),
@@ -87,6 +91,8 @@ async function rejectCancelledAttachment(spec: TicketRuntimeSpec): Promise<never
   throw new Error(message);
 }
 
+const CONTAINED_EXECUTION_UNAVAILABLE = "Contained process execution is unavailable.";
+
 async function attachTicketSession(
   host: PiRuntimeHost,
   spec: TicketRuntimeSpec,
@@ -104,7 +110,7 @@ async function attachTicketSession(
 
   const sidecarEnv = new NodeExecutionEnv({ cwd: host.sessionDataDir });
   let sidecarPath: string | undefined;
-  let toolEnv: ScopedExecutionEnv | undefined;
+  let toolEnv: TicketExecutionEnv | undefined;
   let unsubscribe: (() => void) | undefined;
   let abortListener: (() => void) | undefined;
 
@@ -121,7 +127,25 @@ async function attachTicketSession(
     const sidecarMetadata = await sidecar.getMetadata();
     sidecarPath = sidecarMetadata.path;
     const recovery = recoveryRefFor(sidecarMetadata.id, sidecarPath);
-    toolEnv = await ScopedExecutionEnv.create(spec.worktreePath);
+    try {
+      toolEnv = await host.executionEnvFactory(spec.worktreePath);
+      if (spec.tools.tools.includes("execute")) {
+        const prepared = await toolEnv.prepareProcessExecution();
+        if (!prepared.ok) {
+          throw prepared.error;
+        }
+      }
+    } catch {
+      await observe({
+        kind: "attachment",
+        state: "failed",
+        failure: {
+          reason: "configuration",
+          message: CONTAINED_EXECUTION_UNAVAILABLE,
+        },
+      });
+      throw new Error(CONTAINED_EXECUTION_UNAVAILABLE);
+    }
     const containedToolEnv = toolEnv;
     const tools = createPiTools(spec.tools, containedToolEnv);
 
@@ -305,11 +329,11 @@ async function attachTicketSession(
       spec.signal?.removeEventListener("abort", abortListener);
     }
     unsubscribe?.();
-    await toolEnv?.cleanup();
+    await toolEnv?.cleanup().catch(() => undefined);
     if (sidecarPath !== undefined) {
-      await sidecarEnv.remove(sidecarPath, { force: true });
+      await sidecarEnv.remove(sidecarPath, { force: true }).catch(() => undefined);
     }
-    await sidecarEnv.cleanup();
+    await sidecarEnv.cleanup().catch(() => undefined);
     throw error;
   }
 }

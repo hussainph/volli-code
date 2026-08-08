@@ -226,7 +226,7 @@ describe("Pi native adapter attach", () => {
     expect(spec.worktreePath).toBe("/work/volli/.worktrees/VC-12");
     expect(spec.model).toEqual(PI_MODEL);
     expect(spec.authority).toEqual({ mode: "auto" });
-    expect(spec.tools).toEqual({ tools: ["read", "edit", "write"] });
+    expect(spec.tools).toEqual({ tools: ["read", "edit", "write", "execute"] });
     expect(spec.brief).toEqual({ text: "VC-12: Host the Pi runtime" });
     expect(spec.signal?.aborted).toBe(false);
     // Session 4 reopens the sidecar from exactly these three fields.
@@ -402,7 +402,7 @@ describe("Pi native adapter observation translation", () => {
     ]);
   });
 
-  it("projects a runtime activity as a generic stamped tool without disturbing surrounding output", async () => {
+  it("projects execute lifecycle into a generic stamped tool and durable result", async () => {
     const { runtime, sink } = await attached();
 
     await runtime.observe({ kind: "turn", state: "started", turnId: "turn-1" });
@@ -418,14 +418,14 @@ describe("Pi native adapter observation translation", () => {
       activityId: "call-7",
       state: "started",
       descriptor: {
-        kind: "read-file",
-        nativeToolName: "read",
-        subject: { label: "src/runtime.ts", path: "src/runtime.ts", lineRange: null },
+        kind: "run-command",
+        nativeToolName: "bash",
+        subject: { label: "vp test", path: null, lineRange: null },
         outcome: null,
         startedAt: 10,
         endedAt: null,
       },
-      input: { path: "src/runtime.ts" },
+      input: { command: "vp test" },
       output: null,
     });
     await runtime.observe({
@@ -434,14 +434,14 @@ describe("Pi native adapter observation translation", () => {
       activityId: "call-7",
       state: "progress",
       descriptor: {
-        kind: "read-file",
-        nativeToolName: "read",
-        subject: { label: "src/runtime.ts", path: "src/runtime.ts", lineRange: null },
+        kind: "run-command",
+        nativeToolName: "bash",
+        subject: { label: "vp test", path: null, lineRange: null },
         outcome: null,
         startedAt: 10,
         endedAt: null,
       },
-      input: { path: "src/runtime.ts" },
+      input: { command: "vp test" },
       output: { content: "partial" },
     });
     await runtime.observe({
@@ -450,11 +450,11 @@ describe("Pi native adapter observation translation", () => {
       activityId: "call-7",
       state: "completed",
       descriptor: {
-        kind: "read-file",
-        nativeToolName: "read",
-        subject: { label: "src/runtime.ts", path: "src/runtime.ts", lineRange: null },
+        kind: "run-command",
+        nativeToolName: "bash",
+        subject: { label: "vp test", path: null, lineRange: null },
         outcome: {
-          exitCode: null,
+          exitCode: 0,
           matchCount: null,
           fileCount: null,
           lineCount: 1,
@@ -467,7 +467,7 @@ describe("Pi native adapter observation translation", () => {
         startedAt: 10,
         endedAt: 20,
       },
-      input: { path: "src/runtime.ts" },
+      input: { command: "vp test" },
       output: { content: "complete" },
     });
     await runtime.observe({ kind: "delta", turnId: "turn-1", channel: "text", text: "Done." });
@@ -487,7 +487,7 @@ describe("Pi native adapter observation translation", () => {
           toolName: "volli.activity",
           toolCallId: "call-7",
           state: "input-available",
-          input: { path: "src/runtime.ts" },
+          input: { command: "vp test" },
         }),
       }),
       expect.objectContaining({
@@ -499,7 +499,7 @@ describe("Pi native adapter observation translation", () => {
           toolName: "volli.activity",
           toolCallId: "call-7",
           state: "output-available",
-          input: { path: "src/runtime.ts" },
+          input: { command: "vp test" },
           output: { content: "partial" },
           preliminary: true,
         }),
@@ -522,12 +522,12 @@ describe("Pi native adapter observation translation", () => {
             toolName: "volli.activity",
             toolCallId: "call-7",
             state: "output-available",
-            input: { path: "src/runtime.ts" },
+            input: { command: "vp test" },
             output: { content: "complete" },
             toolMetadata: {
               [ACTIVITY_METADATA_KEY]: expect.objectContaining({
-                kind: "read-file",
-                nativeToolName: "read",
+                kind: "run-command",
+                nativeToolName: "bash",
               }),
             },
           },

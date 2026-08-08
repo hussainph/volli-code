@@ -19,9 +19,9 @@ import {
   type Models,
   type ToolCall,
 } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import type { RuntimeObservation, TicketRuntimeSpec } from "../contracts";
-import { ScopedExecutionEnv } from "./scoped-execution-env";
+import { ScopedExecutionEnv, type TicketExecutionEnv } from "./scoped-execution-env";
 import { createPiTools } from "./tools";
 import { createPiAgentRuntime } from "./runtime";
 
@@ -230,19 +230,247 @@ function jsonlFiles(root: string): string[] {
 // --- tests -----------------------------------------------------------------
 
 describe("tool mapping", () => {
-  it("binds only the contained file tools from the product bundle", async () => {
+  it("binds only the declared contained coding tools from the product bundle", async () => {
     const { worktreePath } = fixture();
     const env = await ScopedExecutionEnv.create(worktreePath);
 
     expect(
-      createPiTools({ tools: ["read", "edit", "write"] }, env).map((tool) => tool.name),
-    ).toEqual(["read", "edit", "write"]);
+      createPiTools({ tools: ["read", "edit", "write", "execute"] }, env).map((tool) => tool.name),
+    ).toEqual(["read", "edit", "write", "bash"]);
 
     await env.cleanup();
   });
 });
 
 describe("startTicketSession", () => {
+  it("fails attachment before advertising bash when contained execution cannot prepare", async () => {
+    const attachment = fixture({ tools: { tools: ["execute"] } });
+    const cleanup = vi.fn(async () => undefined);
+    const unavailableEnv = {
+      cwd: attachment.worktreePath,
+      prepareProcessExecution: async () => ({
+        ok: false as const,
+        error: new Error("host-specific sandbox failure"),
+      }),
+      cleanup,
+    } as unknown as TicketExecutionEnv;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+      executionEnvFactory: async () => unavailableEnv,
+    });
+
+    await expect(runtime.startTicketSession(attachment.spec)).rejects.toThrow(
+      "Contained process execution is unavailable.",
+    );
+    expect(attachment.observations).toEqual([
+      {
+        kind: "attachment",
+        state: "failed",
+        failure: {
+          reason: "configuration",
+          message: "Contained process execution is unavailable.",
+        },
+      },
+    ]);
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(jsonlFiles(attachment.sessionDataDir)).toEqual([]);
+  });
+
+  it("sanitizes a contained-environment factory rejection before Pi starts", async () => {
+    const attachment = fixture({ tools: { tools: ["execute"] } });
+    const stream = vi.fn(scriptedStream([]));
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream),
+      executionEnvFactory: async () => {
+        throw new Error("host secret must not reach the attachment observer");
+      },
+    });
+
+    await expect(runtime.startTicketSession(attachment.spec)).rejects.toThrow(
+      "Contained process execution is unavailable.",
+    );
+    expect(attachment.observations).toEqual([
+      {
+        kind: "attachment",
+        state: "failed",
+        failure: {
+          reason: "configuration",
+          message: "Contained process execution is unavailable.",
+        },
+      },
+    ]);
+    expect(jsonlFiles(attachment.sessionDataDir)).toEqual([]);
+    expect(stream).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes a thrown containment preflight and still cleans the partial attachment", async () => {
+    const attachment = fixture({ tools: { tools: ["execute"] } });
+    const cleanup = vi.fn(async () => undefined);
+    const prepareProcessExecution = vi.fn(async () => {
+      throw new Error("host sandbox implementation detail");
+    });
+    const containedEnv = {
+      cwd: attachment.worktreePath,
+      prepareProcessExecution,
+      cleanup,
+    } as unknown as TicketExecutionEnv;
+    const stream = vi.fn(scriptedStream([]));
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream),
+      executionEnvFactory: async () => containedEnv,
+    });
+
+    await expect(runtime.startTicketSession(attachment.spec)).rejects.toThrow(
+      "Contained process execution is unavailable.",
+    );
+    expect(prepareProcessExecution).toHaveBeenCalledOnce();
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(attachment.observations).toEqual([
+      {
+        kind: "attachment",
+        state: "failed",
+        failure: {
+          reason: "configuration",
+          message: "Contained process execution is unavailable.",
+        },
+      },
+    ]);
+    expect(jsonlFiles(attachment.sessionDataDir)).toEqual([]);
+    expect(stream).not.toHaveBeenCalled();
+  });
+
+  it("cleans a partial contained attachment when its failure observation rejects", async () => {
+    const attachment = fixture({ tools: { tools: ["execute"] } });
+    const cleanup = vi.fn(async () => undefined);
+    const containedEnv = {
+      cwd: attachment.worktreePath,
+      prepareProcessExecution: async () => {
+        throw new Error("host sandbox implementation detail");
+      },
+      cleanup,
+    } as unknown as TicketExecutionEnv;
+    const stream = vi.fn(scriptedStream([]));
+    attachment.spec.observer = async (observation) => {
+      attachment.observations.push(observation);
+      throw new Error("attachment failure persistence rejected");
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream),
+      executionEnvFactory: async () => containedEnv,
+    });
+
+    await expect(runtime.startTicketSession(attachment.spec)).rejects.toThrow(
+      "attachment failure persistence rejected",
+    );
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(attachment.observations).toEqual([
+      {
+        kind: "attachment",
+        state: "failed",
+        failure: {
+          reason: "configuration",
+          message: "Contained process execution is unavailable.",
+        },
+      },
+    ]);
+    expect(jsonlFiles(attachment.sessionDataDir)).toEqual([]);
+    expect(stream).not.toHaveBeenCalled();
+  });
+
+  it("runs Pi bash through the prepared contained environment and maps its lifecycle", async () => {
+    const attachment = fixture({ tools: { tools: ["execute"] } });
+    const cleanup = vi.fn(async () => undefined);
+    const exec = vi.fn(
+      async (_command: string, options: { onStdout?: (chunk: string) => void }) => {
+        options.onStdout?.("execution-marker");
+        return {
+          ok: true as const,
+          value: { stdout: "execution-marker", stderr: "", exitCode: 0 },
+        };
+      },
+    );
+    const containedEnv = {
+      cwd: attachment.worktreePath,
+      prepareProcessExecution: vi.fn(async () => ({ ok: true as const, value: undefined })),
+      exec,
+      cleanup,
+    } as unknown as TicketExecutionEnv;
+    let secondCallContext: Context | undefined;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      executionEnvFactory: async () => containedEnv,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("bash", { command: "printf execution-marker" });
+            emit.finish();
+          },
+          (emit, context) => {
+            secondCallContext = context;
+            emit.text("Execution completed.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+
+    const handle = await runtime.startTicketSession(attachment.spec);
+    await expect(handle.submitUserMessage("Run the marker command.")).resolves.toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+    });
+
+    expect(containedEnv.prepareProcessExecution).toHaveBeenCalledOnce();
+    expect(exec).toHaveBeenCalledWith(
+      "printf execution-marker",
+      expect.objectContaining({ cwd: attachment.worktreePath, inheritEnv: true }),
+    );
+    expect(JSON.stringify(secondCallContext?.messages)).toContain("execution-marker");
+    expect(
+      attachment.observations.filter((observation) => observation.kind === "activity"),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          state: "started",
+          input: { command: "printf execution-marker" },
+          descriptor: expect.objectContaining({ kind: "run-command", nativeToolName: "bash" }),
+        }),
+        expect.objectContaining({
+          state: "progress",
+          input: { command: "printf execution-marker" },
+          descriptor: expect.objectContaining({ kind: "run-command", nativeToolName: "bash" }),
+        }),
+        expect.objectContaining({
+          state: "completed",
+          input: { command: "printf execution-marker" },
+          output: expect.objectContaining({
+            content: [{ type: "text", text: "execution-marker" }],
+          }),
+          descriptor: expect.objectContaining({
+            kind: "run-command",
+            nativeToolName: "bash",
+            outcome: expect.objectContaining({ exitCode: null, summary: "execution-marker" }),
+          }),
+        }),
+      ]),
+    );
+    expect(attachment.observations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "message-settled",
+          message: expect.objectContaining({ text: "Execution completed." }),
+        }),
+      ]),
+    );
+
+    await handle.close();
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
   it("runs the real Pi loop against the worktree and settles durable history", async () => {
     const { spec, observations, sessionDataDir } = fixture();
     let secondCallContext: Context | undefined;

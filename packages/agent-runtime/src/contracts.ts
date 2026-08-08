@@ -38,7 +38,7 @@ export type ExecutionVenue = "local";
  * Explicit coding tools the runtime may load. Ambient user/project extensions
  * never load. Product names, mapped to concrete runtime tools internally.
  */
-export type CodingToolId = "read" | "edit" | "write";
+export type CodingToolId = "read" | "edit" | "write" | "execute";
 
 export interface RuntimeToolBundle {
   tools: readonly CodingToolId[];
