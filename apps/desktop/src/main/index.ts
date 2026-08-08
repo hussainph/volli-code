@@ -34,9 +34,12 @@ import { isInternalNavigationTarget } from "./navigation";
 import type { DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
-import { listProjects } from "./db/projects-repo";
+import { getProjectById, listProjects } from "./db/projects-repo";
+import { getTicket } from "./db/tickets-repo";
+import { listAttachments } from "./db/attachments-repo";
 import { createDesktopSessionEngine } from "./session-control";
 import { createDesktopSessionRuntime } from "./session-runtime";
+import { createPiNativeAdapter, piRootThreadId } from "./session-runtime/pi-adapter";
 import { registerSessionRpcIpcHandlers } from "./session-rpc-ipc";
 import { createOpenCodeNativeAdapter } from "@volli/opencode-adapter";
 import { listRegisteredHarnesses } from "./db/harness-registry-repo";
@@ -60,7 +63,7 @@ import {
 import { startOrphanSweep } from "./orphan-sweep";
 import { worktreeDeps } from "./worktree-runtime";
 import { getRetentionWatcher } from "./retention-runtime";
-import { createAgentCommandService } from "./agent-commands";
+import { composeTicketBrief, createAgentCommandService } from "./agent-commands";
 import { acquireVolliAppProfile, ensureVolliCliShim, volliRuntimePaths } from "./agent-runtime";
 import {
   decideRegisteredHarnesses,
@@ -418,12 +421,44 @@ app.whenReady().then(async () => {
         },
       })
     : null;
+  // The Pi-backed Agent Runtime, hosted beside OpenCode rather than instead of
+  // it: the structured product's one target executor, reached by attaching the
+  // `pi` adapter. Deliberately NOT registered with the Runtime Catalog hub
+  // below — the composer's model picker stays OpenCode-fed this slice, and Pi
+  // ignores whatever model a command names.
+  const piAdapter = dbHandle.ok
+    ? createPiNativeAdapter({
+        sessionDataDir: join(app.getPath("userData"), "pi-sessions"),
+        // The runtime needs the Ticket a Session runs for, which a directory
+        // cannot say. Resolved per attach so a ticket edited between two
+        // attaches briefs the second one with what it says now.
+        resolveTicketContext: async (sessionId) => {
+          if (sessionEngine === null) return null;
+          const projection = await sessionEngine.getSession({ sessionId });
+          const attaching = projection?.session;
+          if (!attaching || attaching.ticketId === null) return null;
+          const project = getProjectById(dbHandle.db, attaching.projectId);
+          const ticket = getTicket(dbHandle.db, attaching.ticketId);
+          if (!project || !ticket || ticket.projectId !== project.id) return null;
+          return {
+            projectId: project.id,
+            ticketId: ticket.id,
+            rootThreadId: piRootThreadId(sessionId),
+            brief: composeTicketBrief({
+              project,
+              ticket,
+              attachments: listAttachments(dbHandle.db, ticket.id),
+            }),
+          };
+        },
+      })
+    : null;
   const sessionRuntime =
-    dbHandle.ok && sessionEngine !== null && nativeAdapter !== null
+    dbHandle.ok && sessionEngine !== null && nativeAdapter !== null && piAdapter !== null
       ? createDesktopSessionRuntime({
           db: dbHandle.db,
           transcriptDirectory: join(app.getPath("userData"), "session-transcripts"),
-          adapters: [nativeAdapter],
+          adapters: [nativeAdapter, piAdapter],
           sessionEngine,
         })
       : null;

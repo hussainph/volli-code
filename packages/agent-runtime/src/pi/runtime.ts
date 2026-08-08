@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { Agent, JsonlSessionRepo, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import type { AssistantMessage, Models } from "@earendil-works/pi-ai";
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import type {
   AgentRuntime,
   DeliveryOutcome,
@@ -13,6 +12,7 @@ import type {
   TicketRuntimeSpec,
 } from "../contracts";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
+import { piOwnedModels } from "./models";
 import { ScopedExecutionEnv } from "./scoped-execution-env";
 import { createPiTools } from "./tools";
 import { attentionReasonFor, classifyAssistantMessage, recoveryRefFor } from "./transcript";
@@ -20,14 +20,34 @@ import { attentionReasonFor, classifyAssistantMessage, recoveryRefFor } from "./
 export interface PiRuntimeHostOptions {
   /** Directory that owns every attachment's Pi JSONL recovery sidecar. */
   sessionDataDir: string;
-  /** Injectable Pi model collection for deterministic tests and host-owned credentials. */
+  /**
+   * Injectable Pi model collection, for deterministic tests that script the
+   * provider call. Omitted in the product: Pi owns provider credentials and
+   * refresh behavior, and {@link piOwnedModels} is what reaches them.
+   */
   models?: Models;
 }
 
-/** Build the one structured executor port. */
+/** Everything {@link attachTicketSession} needs, with the default already chosen. */
+interface PiRuntimeHost {
+  sessionDataDir: string;
+  models: Models;
+}
+
+/**
+ * Build the one structured executor port.
+ *
+ * The models are resolved once, here, rather than per attachment: the credential
+ * store behind them serializes this process's writes to Pi's `auth.json`, and a
+ * fresh store per attach would serialize nothing.
+ */
 export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntime {
+  const host: PiRuntimeHost = {
+    sessionDataDir: options.sessionDataDir,
+    models: options.models ?? piOwnedModels(),
+  };
   return {
-    startTicketSession: (spec) => attachTicketSession(options, spec),
+    startTicketSession: (spec) => attachTicketSession(host, spec),
   };
 }
 
@@ -61,7 +81,7 @@ async function rejectCancelledAttachment(spec: TicketRuntimeSpec): Promise<never
 }
 
 async function attachTicketSession(
-  host: PiRuntimeHostOptions,
+  host: PiRuntimeHost,
   spec: TicketRuntimeSpec,
 ): Promise<RuntimeAttachmentHandle> {
   if (isAborted(spec.signal)) {
@@ -69,7 +89,7 @@ async function attachTicketSession(
   }
 
   const observe = spec.observer;
-  const models = host.models ?? builtinModels();
+  const models = host.models;
   const model = models.getModel(spec.model.providerId, spec.model.modelId);
   if (model === undefined) {
     return rejectUnavailableModel(spec);

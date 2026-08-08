@@ -82,6 +82,52 @@ import {
   updateTicketFieldsCommand,
 } from "./ticket-commands";
 
+/**
+ * The Ticket Brief: everything an agent is told about why this Session exists,
+ * before it is told anything by a user.
+ *
+ * One composition with two callers by design. The `volli ticket brief` verb
+ * hands it to a terminal harness that asked for it; the Pi Agent Runtime is
+ * handed the same string as its Runtime Brief. A second composition would drift
+ * from this one the first time either side changed, and the difference would
+ * read as the two harnesses disagreeing about the ticket.
+ */
+export function composeTicketBrief(input: {
+  project: Pick<Project, "id" | "path" | "ticketPrefix">;
+  ticket: Pick<
+    Ticket,
+    "id" | "ticketNumber" | "title" | "body" | "worktreePath" | "branch" | "baseBranch"
+  >;
+  attachments: Parameters<typeof attachmentsSectionInput>[0];
+}): string {
+  const displayId = displayTicketId(input.project.ticketPrefix, input.ticket.ticketNumber);
+  const ticketPrompt = composeTicketPrompt({
+    displayId,
+    title: input.ticket.title,
+    body: input.ticket.body,
+  });
+  // Orientation preamble (worktree-support §6): agents must never infer their
+  // working directory — state it outright, same as main's own post-ensure
+  // prepend, whenever the ticket has an active worktree.
+  const orientation =
+    input.ticket.worktreePath !== null && input.ticket.branch !== null
+      ? worktreeOrientationPreamble({
+          worktreePath: input.ticket.worktreePath,
+          branch: input.ticket.branch,
+          baseBranch: input.ticket.baseBranch,
+          projectPath: input.project.path,
+        }) + "\n\n"
+      : "";
+  // Attachments (CONCEPT decision #19): the brief is read-only — it never
+  // materializes, only lists what session boot already did (or will do), via
+  // the same deterministic relPath mapping main's `ensure` pipeline uses.
+  // Relative paths are correct whether this session runs in the worktree or the
+  // main checkout (cwd is the session root either way).
+  const attachmentsSection = composeAttachmentsSection(attachmentsSectionInput(input.attachments));
+  const attachmentsSuffix = attachmentsSection.length > 0 ? `\n\n${attachmentsSection}` : "";
+  return `${orientation}Coordinate the board through the bundled \`volli\` CLI: run \`volli help\` for the full reference (and the volli skill, when installed, for norms).\n\n${ticketPrompt}${attachmentsSuffix}`;
+}
+
 export interface AgentCommandServiceOptions {
   db: Database.Database;
   /** The app composition root's one durable Session Engine. */
@@ -1581,41 +1627,15 @@ export function createAgentCommandService(
       if (request.cmd === "ticket.brief") {
         const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
         if (!resolved.ok) return resolved.response;
-        const displayId = displayTicketId(
-          resolved.project.ticketPrefix,
-          resolved.ticket.ticketNumber,
-        );
-        const ticketPrompt = composeTicketPrompt({
-          displayId,
-          title: resolved.ticket.title,
-          body: resolved.ticket.body,
-        });
-        // Orientation preamble (worktree-support §6): agents must never infer
-        // their working directory — state it outright, same as main's own
-        // post-ensure prepend, whenever the ticket has an active worktree.
-        const orientation =
-          resolved.ticket.worktreePath !== null && resolved.ticket.branch !== null
-            ? worktreeOrientationPreamble({
-                worktreePath: resolved.ticket.worktreePath,
-                branch: resolved.ticket.branch,
-                baseBranch: resolved.ticket.baseBranch,
-                projectPath: resolved.project.path,
-              }) + "\n\n"
-            : "";
-        // Attachments (CONCEPT decision #19): the brief is read-only — it never
-        // materializes, only lists what session boot already did (or will do),
-        // via the same deterministic relPath mapping main's `ensure` pipeline
-        // uses. Relative paths are correct whether this session runs in the
-        // worktree or the main checkout (cwd is the session root either way).
-        const attachmentsSection = composeAttachmentsSection(
-          attachmentsSectionInput(listAttachments(options.db, resolved.ticket.id)),
-        );
-        const attachmentsSuffix = attachmentsSection.length > 0 ? `\n\n${attachmentsSection}` : "";
         return {
           v: 1,
           ok: true,
           data: {
-            prompt: `${orientation}Coordinate the board through the bundled \`volli\` CLI: run \`volli help\` for the full reference (and the volli skill, when installed, for norms).\n\n${ticketPrompt}${attachmentsSuffix}`,
+            prompt: composeTicketBrief({
+              project: resolved.project,
+              ticket: resolved.ticket,
+              attachments: listAttachments(options.db, resolved.ticket.id),
+            }),
           },
         };
       }

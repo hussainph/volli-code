@@ -46,7 +46,12 @@ import {
   type ChatSegment,
   type SessionTodo,
 } from "@renderer/chat/activity";
-import { DEFAULT_CHAT_EXECUTOR, EMPTY_CHAT_SELECTION, isDeliverable } from "@renderer/chat/client";
+import {
+  DEFAULT_CHAT_EXECUTOR,
+  EMPTY_CHAT_SELECTION,
+  isDeliverable,
+  pinsOwnModel,
+} from "@renderer/chat/client";
 import {
   footInteraction,
   interactionForApproval,
@@ -90,9 +95,15 @@ import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useUiStore } from "@renderer/stores/ui";
 
 /**
- * Which harness answers "what models can I pick". Not the Session's own
- * executor: a scripted lab profile attaches under an adapter of its own and has
- * no catalog, and the pick a person makes is about the provider behind it.
+ * Which harness answers "what models can I pick" — for the Sessions that have
+ * the question.
+ *
+ * Not the Session's own executor: a scripted lab profile attaches under an
+ * adapter of its own and has no catalog, and the pick a person makes is about
+ * the provider behind it. What it must not do is answer for a Session whose
+ * executor pins its own model — see {@link pinsOwnModel}. Asking OpenCode what
+ * a Pi Session may run names models Pi will drop, and gating that Session's
+ * composer on the answer left it inert forever on a profile with no OpenCode.
  */
 const CATALOG_ADAPTER_ID = DEFAULT_CHAT_EXECUTOR.adapterId;
 
@@ -145,15 +156,20 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   const working = slice?.lifecycle === "working";
   const liveExecutorId = slice?.projection?.liveExecutor?.id ?? null;
   const deliverable = slice !== undefined && isDeliverable(slice);
-  // A model is what you need to *write* a message; a live executor is what you
-  // need to *deliver* one. Anything written before both hold joins the queue.
-  const composable = selection.modelId.length > 0;
+  // Which executor this Session attaches decides what "ready" even means: one
+  // that pins its own model is waiting for nothing, and one that does not needs
+  // a model picked before a message can be written. A model is what you need to
+  // *write* a message; a live executor is what you need to *deliver* one.
+  // Anything written before both hold joins the queue.
+  const pinned = pinsOwnModel(controller.adapterId);
+  const composable = pinned || selection.modelId.length > 0;
 
   const { catalog, catalogState, catalogError } = useRuntimeCatalog(
     projectId,
     liveExecutorId,
     selection,
     setSelection,
+    pinned,
   );
 
   // The projection is replaced wholesale on every refresh, so its open
@@ -404,6 +420,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
                 textareaRef={textareaRef}
                 models={catalog.models}
                 agents={catalog.agents}
+                offersModelChoice={!pinned}
                 selection={selection}
                 onSelectionChange={setSelection}
                 working={working}
@@ -441,12 +458,17 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
  * first snapshot lands, so the first resolve would fire globally before it —
  * briefly offering models the project disabled, a wrong-model send window,
  * not a flicker.
+ *
+ * `pinned` is the Session that has no such question. It is not asked, so it
+ * cannot be told there is nothing configured — which would be a blocked state
+ * drawn over a Session that is ready to take a message.
  */
 function useRuntimeCatalog(
   projectId: string,
   liveExecutorId: string | null,
   selection: RuntimeSelection,
   setSelection: (next: RuntimeSelection) => void,
+  pinned: boolean,
 ): { catalog: RuntimeCatalogChoices; catalogState: CatalogState; catalogError: string | null } {
   const runtimeCatalog = useRuntimeCatalogClient();
   const [catalog, setCatalog] = React.useState<RuntimeCatalogChoices>(EMPTY_CATALOG);
@@ -459,7 +481,7 @@ function useRuntimeCatalog(
   const resolve = runtimeCatalog?.resolve;
 
   React.useEffect(() => {
-    if (resolve === undefined) return;
+    if (pinned || resolve === undefined) return;
     let active = true;
     void resolve({ adapterId: CATALOG_ADAPTER_ID, projectId })
       .then((resolved) => {
@@ -484,10 +506,17 @@ function useRuntimeCatalog(
     return () => {
       active = false;
     };
-  }, [liveExecutorId, preferenceRevision, projectId, resolve, setSelection]);
+  }, [liveExecutorId, pinned, preferenceRevision, projectId, resolve, setSelection]);
 
-  return { catalog, catalogState, catalogError };
+  return pinned ? PINNED_CATALOG : { catalog, catalogState, catalogError };
 }
+
+/** No catalog, and nothing missing: the executor already chose. */
+const PINNED_CATALOG = {
+  catalog: EMPTY_CATALOG,
+  catalogState: "pinned" as const,
+  catalogError: null,
+};
 
 /* ---------------------------------------------------------------- blocked */
 

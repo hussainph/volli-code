@@ -3,10 +3,13 @@
  *
  * Three ideas, and the shape follows from them:
  *
- *  1. **One model pill.** Provider is a heading inside the popover and effort is
- *     a segment on the selected row, because neither is a decision you make on
- *     its own — you pick a model, and the other two qualify it. Codex's shape:
- *     two values, one caret.
+ *  1. **One model pill, and only where the model is yours to pick.** Provider is
+ *     a heading inside the popover and effort is a segment on the selected row,
+ *     because neither is a decision you make on its own — you pick a model, and
+ *     the other two qualify it. Codex's shape: two values, one caret. An
+ *     executor that pins its own model renders no pill at all rather than a
+ *     disabled one, on the same rule as the mode segment below: a control naming
+ *     models the harness will drop is worse than no control.
  *  2. **Mode is a segment, and only when there is a choice.** Which agents are
  *     a person's to pick is a harness-declared fact (`session-model.ts`), so a
  *     harness with one primary agent renders no control at all rather than a
@@ -67,6 +70,8 @@ export interface SessionComposerProps {
   textareaRef?: React.Ref<HTMLTextAreaElement>;
   models: readonly RuntimeCatalogModel[];
   agents: readonly ComposerAgent[];
+  /** False where the executor pins its own model, so no pill is drawn. */
+  offersModelChoice?: boolean;
   selection: RuntimeSelection;
   onSelectionChange(next: RuntimeSelection): void;
   /** A turn is live: submit becomes Queue and Stop joins it. */
@@ -86,6 +91,7 @@ export function SessionComposer({
   textareaRef,
   models,
   agents,
+  offersModelChoice = true,
   selection,
   onSelectionChange,
   working,
@@ -188,7 +194,9 @@ export function SessionComposer({
       <PromptInputFooter className="border-t border-border/70 pt-2">
         <PromptInputTools className="min-w-0">
           <AgentSegment agents={agents} selection={selection} onChange={onSelectionChange} />
-          <ModelPill models={models} selection={selection} onChange={onSelectionChange} />
+          {offersModelChoice ? (
+            <ModelPill models={models} selection={selection} onChange={onSelectionChange} />
+          ) : null}
         </PromptInputTools>
         <div className="ml-auto flex shrink-0 items-center gap-1">
           {working ? (

@@ -111,8 +111,13 @@ export function messageRoute(intent: ComposerIntent, deliverable: boolean): Mess
  * trip, so a surface reading `models.length === 0` as "nothing is configured"
  * tells the user to go choose models for as long as that takes. Only `empty` is
  * a blocked state, and only it earns a recovery action.
+ *
+ * `pinned` is the fourth reading and the one that is not about a round trip at
+ * all: the Session's executor chooses its own model, so there is no catalog to
+ * ask and no configuring left undone. It looks like `empty` from a distance and
+ * means the opposite of it.
  */
-export type CatalogState = "loading" | "ready" | "empty" | "error";
+export type CatalogState = "loading" | "ready" | "empty" | "error" | "pinned";
 
 export interface SessionBlockerAction {
   label: string;

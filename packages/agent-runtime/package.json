@@ -18,10 +18,12 @@
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.84.1",
     "@earendil-works/pi-ai": "0.84.1",
-    "@volli/shared": "workspace:*"
+    "@volli/shared": "workspace:*",
+    "proper-lockfile": "4.1.2"
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "@types/proper-lockfile": "4.1.4",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   }
