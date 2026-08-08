@@ -427,6 +427,23 @@ describe("AsyncQueue", () => {
 });
 
 describe("Session tRPC router", () => {
+  it("preserves a minimal runtime projection without inventing attachment state", async () => {
+    const fixture = runtimeFixture();
+    const runtime: SessionRuntime = {
+      ...fixture.runtime,
+      projection: async () => ({ projection: { capabilities: [] }, throughSequence: 4 }) as never,
+    };
+    const caller = createSessionRouter().createCaller({
+      runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await expect(caller.session.projection({ sessionId: "session-1" })).resolves.toEqual({
+      projection: { capabilities: [] },
+      throughSequence: 4,
+    });
+  });
+
   it("removes attachment recovery locators from projection reads without mutating runtime state", async () => {
     const fixture = runtimeFixture();
     const serverSnapshot = snapshotWithRecovery();
