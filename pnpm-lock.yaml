@@ -103,6 +103,9 @@ importers:
       '@trpc/server':
         specifier: ^11.18.0
         version: 11.18.0(typescript@7.0.2)
+      '@volli/agent-runtime':
+        specifier: workspace:*
+        version: link:../../packages/agent-runtime
       '@volli/opencode-adapter':
         specifier: workspace:*
         version: link:../../packages/opencode-adapter
