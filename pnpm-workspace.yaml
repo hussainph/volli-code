@@ -7,12 +7,16 @@ packages:
 # fetch), but pnpm 11 still hard-fails install (ERR_PNPM_IGNORED_BUILDS) without
 # this entry — do not remove it.
 allowBuilds:
+  # Transitive under @earendil-works/pi-ai (Google provider). Neither build
+  # script is needed for the SDK paths the Agent Runtime uses.
+  "@google/genai": false
   better-sqlite3: true
   electron: true
   esbuild: true
   # Native addons are initially compiled against the system Node ABI. The
   # desktop package's postinstall rebuilds them for Electron's ABI.
   node-pty: true
+  protobufjs: false
   sharp: true
   workerd: true
 
