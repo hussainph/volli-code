@@ -452,7 +452,13 @@ export class ChatSessionClient {
         sessionId: this.sessionId,
         command: {
           kind: "adapter.attach",
-          adapterId: this.executor.adapterId,
+          // The ledger's word over this client's: an adopted client was
+          // constructed with the default executor, so on a reopened Pi ticket
+          // chat Retry would otherwise attach OpenCode onto a Session whose
+          // history Pi wrote. The profile stays the client's own — the
+          // attachment record names no profile, and every executor here has
+          // exactly one.
+          adapterId: sessionAdapterId(this.#slice(), this.executor),
           profileId: this.executor.profileId,
           continuity: "fresh",
         },

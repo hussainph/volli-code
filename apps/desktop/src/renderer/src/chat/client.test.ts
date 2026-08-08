@@ -777,6 +777,23 @@ describe("retryAttach", () => {
     expect(slice()!.lifecycle).toBe("ready");
   });
 
+  it("attaches what the ledger names, not what this client guessed", async () => {
+    // The reopen path: adopted without an executor, so the client holds the
+    // OpenCode default while the Session's own history was written by Pi.
+    const { client, rpc } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1", "pi");
+    });
+
+    await expect(client.retryAttach()).resolves.toBe(true);
+
+    expect(rpc.commands).toHaveLength(1);
+    expect(rpc.commands[0]!.command).toMatchObject({
+      kind: "adapter.attach",
+      adapterId: "pi",
+      profileId: "native",
+    });
+  });
+
   it("refuses while an attempt is already in flight", async () => {
     const gate = deferred();
     const { client } = await adopted((fake) => {
