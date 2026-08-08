@@ -152,6 +152,8 @@ export type RuntimeActivityValue =
 
 interface RuntimeActivityObservationBase {
   kind: "activity";
+  /** The Volli turn that owns this activity lifecycle. */
+  turnId: string;
   activityId: string;
   descriptor: ActivityDescriptor;
   input: RuntimeActivityValue;

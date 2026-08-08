@@ -276,9 +276,25 @@ describe("startTicketSession", () => {
       "delta",
       "delta",
       "message-settled",
+      "activity",
+      "activity",
       "delta",
       "message-settled",
       "turn:completed",
+    ]);
+
+    expect(
+      observations.flatMap((observation) => {
+        if (observation.kind === "delta") return [`${observation.channel}:${observation.text}`];
+        if (observation.kind === "activity") return [`activity:${observation.state}`];
+        return [];
+      }),
+    ).toEqual([
+      "reasoning:check the marker",
+      "text:Reading the file.",
+      "activity:started",
+      "activity:completed",
+      "text:The token is volli-marker-42.",
     ]);
 
     // The read tool really executed against the worktree file.
@@ -303,6 +319,44 @@ describe("startTicketSession", () => {
       },
     ]);
 
+    const activities = observations.filter((observation) => observation.kind === "activity");
+    expect(activities).toEqual([
+      expect.objectContaining({
+        kind: "activity",
+        state: "started",
+        turnId: expect.any(String),
+        activityId: expect.any(String),
+        input: { path: "MARKER.txt" },
+        output: null,
+        descriptor: {
+          kind: "read-file",
+          nativeToolName: "read",
+          subject: { label: "MARKER.txt", path: "MARKER.txt", lineRange: null },
+          outcome: null,
+          startedAt: expect.any(Number),
+          endedAt: null,
+        },
+      }),
+      expect.objectContaining({
+        kind: "activity",
+        state: "completed",
+        turnId: expect.any(String),
+        activityId: expect.any(String),
+        input: { path: "MARKER.txt" },
+        output: expect.objectContaining({
+          content: [{ type: "text", text: "volli-marker-42\n" }],
+        }),
+        descriptor: expect.objectContaining({
+          kind: "read-file",
+          nativeToolName: "read",
+          subject: { label: "MARKER.txt", path: "MARKER.txt", lineRange: null },
+          outcome: expect.objectContaining({ summary: "volli-marker-42" }),
+          startedAt: expect.any(Number),
+          endedAt: expect.any(Number),
+        }),
+      }),
+    ]);
+
     const settled = observations.filter((observation) => observation.kind === "message-settled");
     expect(settled[0]?.message).toMatchObject({
       role: "assistant",
@@ -320,6 +374,7 @@ describe("startTicketSession", () => {
       ),
     );
     expect(turnIds.size).toBe(1);
+    expect(new Set(activities.map((observation) => observation.turnId))).toEqual(turnIds);
 
     // The JSONL sidecar lives under the host's session directory, and the entry
     // ids the product settled survive a reopen.

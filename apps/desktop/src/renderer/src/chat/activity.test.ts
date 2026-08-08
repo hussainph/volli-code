@@ -78,6 +78,7 @@ function tool(
     title?: string;
     toolName?: string;
     state?: DynamicToolUIPart["state"];
+    preliminary?: boolean;
     errorText?: string;
     approved?: boolean;
     descriptor?: Partial<ActivityDescriptor>;
@@ -134,6 +135,7 @@ function tool(
     state: "output-available",
     input: overrides.input ?? null,
     output: overrides.output ?? null,
+    ...(overrides.preliminary === undefined ? {} : { preliminary: overrides.preliminary }),
   };
 }
 
@@ -594,6 +596,19 @@ describe("activityStatus", () => {
     expect(
       activityStatus(tool("run-command", { state: "approval-responded", approved: false })),
     ).toBe("denied");
+  });
+
+  it("keeps a generic preliminary result running without inspecting its native name", () => {
+    expect(
+      activityStatus(
+        tool("read-file", {
+          state: "output-available",
+          preliminary: true,
+          toolName: "volli.activity",
+          descriptor: { nativeToolName: "read" },
+        }),
+      ),
+    ).toBe("running");
   });
 });
 

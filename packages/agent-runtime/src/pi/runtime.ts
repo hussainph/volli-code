@@ -8,11 +8,14 @@ import type {
   AgentRuntime,
   DeliveryOutcome,
   RuntimeAttachmentHandle,
+  RuntimeActivityValue,
   RuntimeFailure,
   TicketRuntimeSpec,
 } from "../contracts";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
+import { mapPiActivity } from "./activity";
 import { piOwnedModels } from "./models";
+import { OrderedObservationDelivery } from "./ordered-observation-delivery";
 import { ScopedExecutionEnv } from "./scoped-execution-env";
 import { createPiTools } from "./tools";
 import { attentionReasonFor, classifyAssistantMessage, recoveryRefFor } from "./transcript";
@@ -26,12 +29,15 @@ export interface PiRuntimeHostOptions {
    * refresh behavior, and {@link piOwnedModels} is what reaches them.
    */
   models?: Models;
+  /** Host clock for runtime observations; injectable for deterministic tests. */
+  now?: () => number;
 }
 
 /** Everything {@link attachTicketSession} needs, with the default already chosen. */
 interface PiRuntimeHost {
   sessionDataDir: string;
   models: Models;
+  now: () => number;
 }
 
 /**
@@ -45,6 +51,7 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
   const host: PiRuntimeHost = {
     sessionDataDir: options.sessionDataDir,
     models: options.models ?? piOwnedModels(),
+    now: options.now ?? Date.now,
   };
   return {
     startTicketSession: (spec) => attachTicketSession(host, spec),
@@ -120,20 +127,16 @@ async function attachTicketSession(
 
     let turnId = randomUUID();
     let failure: RuntimeFailure | undefined;
-    let observationFailure: unknown;
     let closed = false;
     let cancelled = false;
+    const activityByToolCallId = new Map<
+      string,
+      { input: RuntimeActivityValue; startedAt: number }
+    >();
 
-    const commitObservation = async (
-      observation: Parameters<TicketRuntimeSpec["observer"]>[0],
-    ): Promise<void> => {
-      try {
-        await observe(observation);
-      } catch (error) {
-        observationFailure ??= error;
-        throw error;
-      }
-    };
+    const observationDelivery = new OrderedObservationDelivery(observe);
+    const commitObservation = (observation: Parameters<TicketRuntimeSpec["observer"]>[0]) =>
+      observationDelivery.deliver(observation);
 
     const agent = new Agent({
       initialState: {
@@ -151,7 +154,39 @@ async function attachTicketSession(
       if (event.type === "agent_start") {
         turnId = randomUUID();
         failure = undefined;
+        activityByToolCallId.clear();
         await commitObservation({ kind: "turn", state: "started", turnId });
+        return;
+      }
+
+      if (
+        event.type === "tool_execution_start" ||
+        event.type === "tool_execution_update" ||
+        event.type === "tool_execution_end"
+      ) {
+        const observedAt = host.now();
+        const retained = activityByToolCallId.get(event.toolCallId);
+        const startedAt = retained?.startedAt ?? observedAt;
+        const activity = mapPiActivity(
+          event,
+          event.type === "tool_execution_end"
+            ? { turnId, input: retained?.input, startedAt: retained?.startedAt, observedAt }
+            : event.type === "tool_execution_start"
+              ? { turnId, observedAt }
+              : { turnId, startedAt, observedAt },
+        );
+
+        if (event.type !== "tool_execution_end") {
+          activityByToolCallId.set(event.toolCallId, { input: activity.input, startedAt });
+          await commitObservation(activity);
+          return;
+        }
+
+        try {
+          await commitObservation(activity);
+        } finally {
+          activityByToolCallId.delete(event.toolCallId);
+        }
         return;
       }
 
@@ -188,6 +223,7 @@ async function attachTicketSession(
       if (event.type !== "agent_end") {
         return;
       }
+      activityByToolCallId.clear();
       if (failure === undefined) {
         await commitObservation({ kind: "turn", state: "completed", turnId });
         return;
@@ -226,11 +262,10 @@ async function attachTicketSession(
         }
         const delivered =
           agent.state.messages.length === 0 ? composeFirstUserMessage(spec.brief, text) : text;
-        observationFailure = undefined;
+        observationDelivery.consumeFailure();
         await agent.prompt(delivered);
-        if (observationFailure !== undefined) {
-          const failed = observationFailure;
-          observationFailure = undefined;
+        const failed = observationDelivery.consumeFailure();
+        if (failed !== undefined) {
           throw failed;
         }
         return { kind: "delivered", delivery: "prompt" };

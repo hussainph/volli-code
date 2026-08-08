@@ -11,7 +11,12 @@ import {
   MAX_ACTIVITY_VALUE_TOTAL_LENGTH,
   MAX_ACTIVITY_IDENTIFIER_LENGTH,
   mapPiActivity,
+  type PiActivityContext,
 } from "./activity";
+
+function activityContext(context: Omit<PiActivityContext, "turnId">): PiActivityContext {
+  return { turnId: "turn-1", ...context };
+}
 
 describe("mapPiActivity", () => {
   it("maps exact Pi read lifecycle shapes and retains settled input context", () => {
@@ -36,15 +41,22 @@ describe("mapPiActivity", () => {
       isError: false,
     } satisfies Extract<AgentEvent, { type: "tool_execution_end" }>;
 
-    const started = mapPiActivity(startedEvent, { observedAt: 100 });
-    const progress = mapPiActivity(updatedEvent, { startedAt: 100, observedAt: 120 });
-    const completed = mapPiActivity(endedEvent, {
-      input: started.input,
-      startedAt: 100,
-      observedAt: 140,
-    });
+    const started = mapPiActivity(startedEvent, activityContext({ observedAt: 100 }));
+    const progress = mapPiActivity(
+      updatedEvent,
+      activityContext({ startedAt: 100, observedAt: 120 }),
+    );
+    const completed = mapPiActivity(
+      endedEvent,
+      activityContext({
+        input: started.input,
+        startedAt: 100,
+        observedAt: 140,
+      }),
+    );
 
     expect(started).toMatchObject({
+      turnId: "turn-1",
       state: "started",
       input: { path: "src/index.ts", offset: 4, limit: 3 },
       descriptor: {
@@ -54,11 +66,13 @@ describe("mapPiActivity", () => {
       },
     });
     expect(progress).toMatchObject({
+      turnId: "turn-1",
       state: "progress",
       input: { path: "src/index.ts", offset: 4, limit: 3 },
       output: { content: [{ type: "text", text: "partial" }] },
     });
     expect(completed).toMatchObject({
+      turnId: "turn-1",
       state: "completed",
       input: { path: "src/index.ts", offset: 4, limit: 3 },
       descriptor: {
@@ -97,7 +111,10 @@ describe("mapPiActivity", () => {
     } satisfies Extract<AgentEvent, { type: "tool_execution_end" }>;
 
     expect(
-      mapPiActivity(editEnd, { input: { path: "src/file.ts" }, startedAt: 300, observedAt: 350 }),
+      mapPiActivity(
+        editEnd,
+        activityContext({ input: { path: "src/file.ts" }, startedAt: 300, observedAt: 350 }),
+      ),
     ).toMatchObject({
       state: "completed",
       input: { path: "src/file.ts" },
@@ -114,7 +131,10 @@ describe("mapPiActivity", () => {
       },
     });
     expect(
-      mapPiActivity(bashEnd, { input: { command: "vp test" }, startedAt: 300, observedAt: 350 }),
+      mapPiActivity(
+        bashEnd,
+        activityContext({ input: { command: "vp test" }, startedAt: 300, observedAt: 350 }),
+      ),
     ).toMatchObject({
       state: "completed",
       input: { command: "vp test" },
@@ -135,11 +155,14 @@ describe("mapPiActivity", () => {
       isError: true,
     } satisfies Extract<AgentEvent, { type: "tool_execution_end" }>;
 
-    const activity = mapPiActivity(endedEvent, {
-      input: { command: "vp test" },
-      startedAt: 400,
-      observedAt: 450,
-    });
+    const activity = mapPiActivity(
+      endedEvent,
+      activityContext({
+        input: { command: "vp test" },
+        startedAt: 400,
+        observedAt: 450,
+      }),
+    );
     const text = (activity.output as { content: Array<{ text: string }> }).content[0]?.text;
 
     expect(text).toMatch(/password: \[redacted\]/);
@@ -190,7 +213,7 @@ describe("mapPiActivity", () => {
       toolName: "extension_tool",
       args: { tooDeep, tooManyKeys, tooManyItems, cycle },
     } satisfies Extract<AgentEvent, { type: "tool_execution_start" }>;
-    const activity = mapPiActivity(event, { observedAt: 500 });
+    const activity = mapPiActivity(event, activityContext({ observedAt: 500 }));
     const input = activity.input as {
       tooDeep: unknown;
       tooManyKeys: Record<string, unknown>;
@@ -210,7 +233,7 @@ describe("mapPiActivity", () => {
         toolName: "extension_tool",
         args: { tooManyNodes },
       },
-      { observedAt: 510 },
+      activityContext({ observedAt: 510 }),
     );
     expect(JSON.stringify(nodeActivity.input)).toContain("node-0");
     expect(JSON.stringify(nodeActivity.input)).not.toContain(
@@ -243,7 +266,7 @@ describe("mapPiActivity", () => {
           raw: "Authorization: Basic dXNlcjpwYXNz; Authorization: Bearer abc.def; token=visible-no-more",
         },
       } satisfies Extract<AgentEvent, { type: "tool_execution_start" }>,
-      { observedAt: 550 },
+      activityContext({ observedAt: 550 }),
     );
 
     expect(activity.input).toEqual({
@@ -274,7 +297,7 @@ describe("mapPiActivity", () => {
           })),
         },
       } satisfies Extract<AgentEvent, { type: "tool_execution_start" }>,
-      { observedAt: 560 },
+      activityContext({ observedAt: 560 }),
     );
     const input = activity.input as Record<string, unknown>;
 
@@ -301,7 +324,7 @@ describe("mapPiActivity", () => {
         },
         isError: false,
       } satisfies Extract<AgentEvent, { type: "tool_execution_end" }>,
-      { input: { path: "src/file.ts" }, startedAt: 570, observedAt: 580 },
+      activityContext({ input: { path: "src/file.ts" }, startedAt: 570, observedAt: 580 }),
     );
 
     expect(activity.descriptor.outcome?.addedLines).toBe(additions);
@@ -313,6 +336,7 @@ describe("mapPiActivity", () => {
   it("degrades unknown structural events and hostile getters or proxies to one bounded generic observation", () => {
     const generic = {
       kind: "activity",
+      turnId: "turn-1",
       activityId: "unknown",
       state: "progress",
       descriptor: {
@@ -343,12 +367,12 @@ describe("mapPiActivity", () => {
       },
     );
 
-    expect(() => mapPiActivity(throwingGetter, { observedAt: 600 })).not.toThrow();
-    expect(() => mapPiActivity(hostileProxy, { observedAt: 600 })).not.toThrow();
-    expect(mapPiActivity({ type: "unexpected", args: { invalid: Number.NaN } }, {})).toEqual(
-      generic,
-    );
-    expect(mapPiActivity(throwingGetter, { observedAt: 600 })).toEqual(generic);
-    expect(mapPiActivity(hostileProxy, { observedAt: 600 })).toEqual(generic);
+    expect(() => mapPiActivity(throwingGetter, activityContext({ observedAt: 600 }))).not.toThrow();
+    expect(() => mapPiActivity(hostileProxy, activityContext({ observedAt: 600 }))).not.toThrow();
+    expect(
+      mapPiActivity({ type: "unexpected", args: { invalid: Number.NaN } }, activityContext({})),
+    ).toEqual(generic);
+    expect(mapPiActivity(throwingGetter, activityContext({ observedAt: 600 }))).toEqual(generic);
+    expect(mapPiActivity(hostileProxy, activityContext({ observedAt: 600 }))).toEqual(generic);
   });
 });

@@ -44,6 +44,7 @@ import {
   type AttentionObservation,
   type PiRuntimeHostOptions,
   type RuntimeAttachmentHandle,
+  type RuntimeActivityObservation,
   type RuntimeObservation,
   type SettledAssistantMessage,
   type TicketRuntimeSpec,
@@ -64,13 +65,21 @@ import type {
   ReleaseReason,
   TranscriptDelta,
 } from "@volli/session-engine";
-import { errorMessage, type ModelSelection, type SessionNativeReference } from "@volli/shared";
+import {
+  ACTIVITY_METADATA_KEY,
+  errorMessage,
+  type ModelSelection,
+  type SessionNativeReference,
+} from "@volli/shared";
 import type { UIMessage } from "ai";
 
 /** The one adapter id. Pi is the structured product's single target executor. */
 export const PI_ADAPTER_ID = "pi";
 
 const PI_PROFILE_ID = "native";
+
+/** The one product tool identity for every runtime activity. */
+const ACTIVITY_TOOL_NAME = "volli.activity";
 
 /** Pi's npm home and pinned release; both are recorded in `packages/agent-runtime/UPSTREAM.md`. */
 const PI_RUNTIME_PACKAGE = "@earendil-works/pi-agent-core";
@@ -164,6 +173,12 @@ interface StreamingMessage {
   id: string;
   /** Projected key order, so a `part.upsert` can state where the key lands. */
   keys: TranscriptDeltaObservation["channel"][];
+}
+
+/** A transient activity awaiting its own durable activity message. */
+interface StreamingActivity {
+  turnId: string;
+  messageId: string;
 }
 
 export function createPiNativeAdapter(options: PiAdapterOptions): NativeHarnessAdapter {
@@ -274,6 +289,9 @@ class PiBinding implements BindingHandle {
   #native: SessionNativeReference = { id: null, detail: null };
   #released = false;
   #streaming: StreamingMessage | null = null;
+  #activityOverlays = new Map<string, StreamingActivity>();
+  /** Turns that closed before every transient activity removal reached the Session. */
+  #closedActivityTurns = new Set<string>();
   /** Assistant messages already opened in the current turn; the message id's last segment. */
   #messageSequence = 0;
   /** Transient and synthetic observations carry no native identity, so a counter is the whole of it. */
@@ -439,6 +457,8 @@ class PiBinding implements BindingHandle {
         return this.#translateDelta(observation);
       case "message-settled":
         return this.#translateSettled(observation);
+      case "activity":
+        return this.#translateActivity(observation);
       case "attention":
         return this.#translateAttention(observation);
     }
@@ -472,6 +492,7 @@ class PiBinding implements BindingHandle {
 
   async #translateTurn(observation: Extract<RuntimeObservation, { kind: "turn" }>): Promise<void> {
     if (observation.state === "started") {
+      await this.#retryClosedActivityWithdrawals();
       this.#messageSequence = 0;
       this.#streaming = null;
       await this.#emit({
@@ -486,7 +507,9 @@ class PiBinding implements BindingHandle {
     // by the attention Pi raises for a real failure, or by nothing at all when
     // the user asked for it — and inventing a second story here would only give
     // the two surfaces something to disagree about.
+    this.#closedActivityTurns.add(observation.turnId);
     await this.#withdrawStreaming();
+    await this.#retryClosedActivityWithdrawals();
     await this.#emit({
       id: `pi:turn:${observation.turnId}:completed`,
       kind: "turn.completed",
@@ -560,6 +583,47 @@ class PiBinding implements BindingHandle {
     });
   }
 
+  /**
+   * Activity is a standalone assistant message while it runs, then settles to
+   * that same id. The shared descriptor is the only native-specific context
+   * the renderer needs; the SDK tool name stays product-owned.
+   */
+  async #translateActivity(observation: RuntimeActivityObservation): Promise<void> {
+    const messageId = this.#activityMessageId(observation.turnId, observation.activityId);
+    if (observation.state === "started" || observation.state === "progress") {
+      if (!this.#activityOverlays.has(messageId)) {
+        await this.#emitDelta(messageId, {
+          op: "reset",
+          message: { id: messageId, role: "assistant", parts: [] },
+        });
+        this.#activityOverlays.set(messageId, { turnId: observation.turnId, messageId });
+      }
+      await this.#emitDelta(messageId, {
+        op: "part.upsert",
+        key: activityPartKey(observation.activityId),
+        index: 0,
+        part: activityPart(observation),
+      });
+      return;
+    }
+
+    await this.#emit({
+      id: `pi:activity:${this.#spec.attachmentId}:${observation.turnId}:${observation.activityId}:${observation.state}`,
+      kind: "transcript.message",
+      occurredAt: this.#now(),
+      threadId: this.#threadId,
+      branchId: this.#branchId,
+      attemptId: `attempt:${messageId}`,
+      turnId: observation.turnId,
+      message: {
+        id: messageId,
+        role: "assistant",
+        parts: [activityPart(observation)],
+      },
+    });
+    this.#activityOverlays.delete(messageId);
+  }
+
   #translateAttention(observation: AttentionObservation): Promise<void> {
     // Keyed by reason so a clear cancels the raise it belongs to; the runtime
     // names no id of its own, and the reason is the whole of what it can name.
@@ -593,10 +657,34 @@ class PiBinding implements BindingHandle {
     await this.#emitDelta(streaming.id, { op: "message.remove" });
   }
 
+  /**
+   * Retry only overlays from a turn Pi has closed. A rejected sink write leaves
+   * the row tracked, so the next lifecycle edge can retire it without deleting
+   * state before the Session observed the removal.
+   */
+  async #retryClosedActivityWithdrawals(): Promise<void> {
+    const active = [...this.#activityOverlays.values()].filter((activity) =>
+      this.#closedActivityTurns.has(activity.turnId),
+    );
+    for (const activity of active) {
+      await this.#emitDelta(activity.messageId, { op: "message.remove" });
+      this.#activityOverlays.delete(activity.messageId);
+    }
+    for (const turnId of this.#closedActivityTurns) {
+      if (![...this.#activityOverlays.values()].some((activity) => activity.turnId === turnId)) {
+        this.#closedActivityTurns.delete(turnId);
+      }
+    }
+  }
+
   #openMessage(turnId: string): string {
     const index = this.#messageSequence;
     this.#messageSequence += 1;
     return `pi:${this.#spec.attachmentId}:${turnId}:${index}`;
+  }
+
+  #activityMessageId(turnId: string, activityId: string): string {
+    return `pi:${this.#spec.attachmentId}:${turnId}:activity:${activityId}`;
   }
 
   #emitDelta(messageId: string, delta: TranscriptDelta): Promise<void> {
@@ -620,6 +708,47 @@ class PiBinding implements BindingHandle {
 }
 
 type TranscriptPart = UIMessage["parts"][number];
+type DynamicToolPart = Extract<TranscriptPart, { type: "dynamic-tool" }>;
+type ToolMetadata = NonNullable<DynamicToolPart["toolMetadata"]>;
+
+function activityPartKey(activityId: string): string {
+  return `activity:${activityId}`;
+}
+
+function activityPart(observation: RuntimeActivityObservation): DynamicToolPart {
+  const base = {
+    type: "dynamic-tool" as const,
+    toolName: ACTIVITY_TOOL_NAME,
+    toolCallId: observation.activityId,
+    toolMetadata: { [ACTIVITY_METADATA_KEY]: observation.descriptor } as ToolMetadata,
+  };
+  switch (observation.state) {
+    case "started":
+      return { ...base, state: "input-available", input: observation.input };
+    case "progress":
+      return {
+        ...base,
+        state: "output-available",
+        input: observation.input,
+        output: observation.output,
+        preliminary: true,
+      };
+    case "completed":
+      return {
+        ...base,
+        state: "output-available",
+        input: observation.input,
+        output: observation.output,
+      };
+    case "failed":
+      return {
+        ...base,
+        state: "output-error",
+        input: observation.input,
+        errorText: observation.error ?? "Activity failed.",
+      };
+  }
+}
 
 function streamingPart(
   channel: TranscriptDeltaObservation["channel"],

@@ -30,6 +30,8 @@ export const MAX_ACTIVITY_VALUE_OBJECT_KEYS = 32;
 export const MAX_ACTIVITY_VALUE_ARRAY_LENGTH = 64;
 
 export interface PiActivityContext {
+  /** The current Volli turn. Pi never owns this identity. */
+  turnId: string;
   /** Input retained from the start/update event; Pi end events intentionally omit args. */
   input?: unknown;
   startedAt?: unknown;
@@ -61,11 +63,12 @@ export function mapPiActivity(
   event: unknown,
   context: PiActivityContext,
 ): RuntimeActivityObservation {
+  const turnId = turnIdOf(context);
   try {
     const rawEvent = recordOf(event);
     const rawContext = recordOf(context);
     const type = stringOf(readField(rawEvent, "type"));
-    if (!isPiToolEvent(type)) return genericObservation();
+    if (!isPiToolEvent(type)) return genericObservation(turnId);
 
     const toolName = identifierOf(readField(rawEvent, "toolName"), "unknown");
     const sourceInput =
@@ -88,6 +91,7 @@ export function mapPiActivity(
     const state = activityState(type, readField(rawEvent, "isError"));
     const base = {
       kind: "activity" as const,
+      turnId,
       activityId: identifierOf(readField(rawEvent, "toolCallId"), "unknown"),
       state,
       descriptor,
@@ -99,13 +103,22 @@ export function mapPiActivity(
       ? { ...base, state, error: failureText(output, descriptor.outcome?.summary ?? null) }
       : base;
   } catch {
-    return genericObservation();
+    return genericObservation(turnId);
   }
 }
 
-function genericObservation(): RuntimeActivityObservation {
+function turnIdOf(context: PiActivityContext): string {
+  try {
+    return identifierOf(readField(recordOf(context), "turnId"), "unknown");
+  } catch {
+    return "unknown";
+  }
+}
+
+function genericObservation(turnId: string): RuntimeActivityObservation {
   return {
     kind: "activity",
+    turnId,
     activityId: "unknown",
     state: "progress",
     descriptor: {
