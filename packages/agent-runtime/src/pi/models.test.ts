@@ -1,6 +1,7 @@
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import lockfile from "proper-lockfile";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { createPiAgentRuntime } from "./runtime";
 import { PiFileCredentialStore, piAuthFilePath, piOwnedModels } from "./models";
@@ -174,6 +175,42 @@ describe("PiFileCredentialStore writes", () => {
       "openai-codex",
       "anthropic",
     ]);
+  });
+
+  it("preserves a Pi CLI update made while an async refresh is pending", async () => {
+    const dir = agentDirWith(JSON.stringify({ "openai-codex": OAUTH }));
+    const authPath = join(dir, "auth.json");
+    const store = storeIn(dir);
+    const piRefreshed = { ...OAUTH, access: "pi-refreshed", expires: 2 };
+    const volliRefreshed = { ...piRefreshed, access: "volli-refreshed", expires: 3 };
+    const piRelease = await lockfile.lock(authPath, { realpath: false });
+    let enteredModify = false;
+    const pending = store.modify("openai-codex", async (current) => {
+      enteredModify = true;
+      // Pi's write wins the read that begins this refresh; the refresh itself
+      // then deterministically produces the credential it persists.
+      expect(current).toEqual(piRefreshed);
+      return volliRefreshed;
+    });
+
+    // Pi's FileAuthStorageBackend takes this same advisory lock before it
+    // reads or writes. Volli must not enter its async modifier while that
+    // writer owns auth.json.
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(enteredModify).toBe(false);
+
+    writeFileSync(
+      authPath,
+      JSON.stringify({ "openai-codex": piRefreshed, anthropic: { type: "api_key", key: "k" } }),
+      "utf8",
+    );
+    await piRelease();
+
+    await expect(pending).resolves.toEqual(volliRefreshed);
+    expect(JSON.parse(readFileSync(authPath, "utf8"))).toEqual({
+      "openai-codex": volliRefreshed,
+      anthropic: { type: "api_key", key: "k" },
+    });
   });
 
   it("hands a failure to its caller and still serves the write behind it", async () => {

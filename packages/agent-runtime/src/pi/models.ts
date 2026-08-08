@@ -23,14 +23,11 @@
  * failed to parse, because V8's own `JSON.parse` message quotes the offending
  * source text and here that text is a token.
  *
- * One thing this deliberately does not do: take the `proper-lockfile` advisory
- * lock the `pi` CLI holds around its own writes. The CLI writes `auth.json` in
- * place, so a reader outside that lock can catch a refresh mid-write and see a
- * truncated file — reported here as an unreadable one, which the next turn
- * retries past. This store writes by rename instead, so the reverse can never
- * happen: `pi` never observes a half-written file from Volli. What is left is a
- * lost update if both refresh the same provider in the same second, and either
- * way each side is left holding one whole, valid credential file.
+ * Pi's `AuthStorage` takes an advisory `proper-lockfile` lock on this exact
+ * path for the entire async read-modify-write. This store does the same for
+ * `modify` and `delete`, so a Pi CLI refresh and a Volli refresh cannot each
+ * write a valid-but-stale credential map over the other. Writes remain whole-
+ * file atomic renames and errors remain free of credential bytes.
  */
 
 import { randomUUID } from "node:crypto";
@@ -40,12 +37,16 @@ import { dirname, join } from "node:path";
 import type { Credential, CredentialInfo, CredentialStore, Models } from "@earendil-works/pi-ai";
 import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import lockfile from "proper-lockfile";
 
 /** The file Pi keeps its credentials in, inside its agent directory. */
 const AUTH_FILE = "auth.json";
 
 /** Owner-only, matching what the `pi` CLI leaves on disk. */
 const AUTH_FILE_MODE = 0o600;
+
+/** Pi's `FileAuthStorageBackend` treats a stale auth lock as expired after 30s. */
+const AUTH_LOCK_STALE_MS = 30_000;
 
 export interface PiCredentialOptions {
   /**
@@ -140,26 +141,30 @@ export class PiFileCredentialStore implements CredentialStore {
     providerId: string,
     fn: (current: Credential | undefined) => Promise<Credential | undefined>,
   ): Promise<Credential | undefined> {
-    return this.#serialize(async () => {
-      const stored = await this.#load();
-      const current = stored[providerId];
-      const next = await fn(current);
-      // Undefined means "leave the entry alone", which is not the same as
-      // deleting it — an OAuth refresh that decided the held token is still
-      // good takes this path and must not rewrite the file.
-      if (next === undefined) return current;
-      await this.#save({ ...stored, [providerId]: next });
-      return next;
-    });
+    return this.#serialize(() =>
+      this.#withPiLock(async () => {
+        const stored = await this.#load();
+        const current = stored[providerId];
+        const next = await fn(current);
+        // Undefined means "leave the entry alone", which is not the same as
+        // deleting it — an OAuth refresh that decided the held token is still
+        // good takes this path and must not rewrite the file.
+        if (next === undefined) return current;
+        await this.#save({ ...stored, [providerId]: next });
+        return next;
+      }),
+    );
   }
 
   delete(providerId: string): Promise<void> {
-    return this.#serialize(async () => {
-      const stored = await this.#load();
-      if (stored[providerId] === undefined) return;
-      const { [providerId]: _removed, ...rest } = stored;
-      await this.#save(rest);
-    });
+    return this.#serialize(() =>
+      this.#withPiLock(async () => {
+        const stored = await this.#load();
+        if (stored[providerId] === undefined) return;
+        const { [providerId]: _removed, ...rest } = stored;
+        await this.#save(rest);
+      }),
+    );
   }
 
   #serialize<T>(work: () => Promise<T>): Promise<T> {
@@ -168,6 +173,63 @@ export class PiFileCredentialStore implements CredentialStore {
     const run = this.#chain.then(work, work);
     this.#chain = run.catch(() => undefined);
     return run;
+  }
+
+  /**
+   * Pi creates the `0600` file before locking it because `proper-lockfile`
+   * locks a path by creating its neighboring `.lock` directory. `realpath:
+   * false` is likewise Pi's option: the file may have just been created and
+   * must not be resolved through a symlink.
+   */
+  async #withPiLock<T>(work: () => Promise<T>): Promise<T> {
+    await mkdir(dirname(this.#path), { recursive: true, mode: 0o700 });
+    try {
+      await writeFile(this.#path, "{}", { encoding: "utf8", mode: AUTH_FILE_MODE, flag: "wx" });
+    } catch (error) {
+      if (!isAlreadyExists(error)) {
+        throw new Error(`Could not initialize Pi credentials at ${this.#path}.`, { cause: error });
+      }
+    }
+
+    let release: (() => Promise<void>) | undefined;
+    let compromised: Error | undefined;
+    try {
+      release = await this.#acquirePiLock((error) => {
+        compromised = error;
+      });
+      if (compromised) throw compromised;
+      const result = await work();
+      if (compromised) throw compromised;
+      return result;
+    } finally {
+      // Pi likewise ignores an unlock failure after a compromised lock. The
+      // original write/read error is more useful and cannot include file data.
+      await release?.().catch(() => undefined);
+    }
+  }
+
+  async #acquirePiLock(onCompromised: (error: Error) => void): Promise<() => Promise<void>> {
+    const deadline = Date.now() + AUTH_LOCK_STALE_MS;
+    let retry = 0;
+    while (true) {
+      try {
+        return await lockfile.lock(this.#path, {
+          realpath: false,
+          retries: 0,
+          stale: AUTH_LOCK_STALE_MS,
+          onCompromised,
+        });
+      } catch (error) {
+        const remaining = deadline - Date.now();
+        if (lockErrorCode(error) !== "ELOCKED" || remaining <= 0) {
+          throw new Error(`Could not lock Pi credentials at ${this.#path}.`, { cause: error });
+        }
+        const maximumDelay = Math.min(10 * 2 ** retry, 1_000);
+        retry++;
+        const delay = Math.min(Math.round(maximumDelay * (1 + Math.random())), remaining);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
   }
 
   async #load(): Promise<Record<string, Credential>> {
@@ -242,4 +304,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isMissing(error: unknown): boolean {
   return isRecord(error) && error.code === "ENOENT";
+}
+
+function isAlreadyExists(error: unknown): boolean {
+  return isRecord(error) && error.code === "EEXIST";
+}
+
+function lockErrorCode(error: unknown): string | undefined {
+  return isRecord(error) && typeof error.code === "string" ? error.code : undefined;
 }

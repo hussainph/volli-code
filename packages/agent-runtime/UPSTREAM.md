@@ -44,15 +44,20 @@ matches Pi's conventions rather than inventing any:
   then `auth.json` — Pi's `getAgentDir()`/`getAuthPath()`.
 - Format: `{ "<providerId>": Credential }`, `JSON.stringify(…, null, 2)`.
 - Mode: `0600`.
+- Lock: Pi 0.84.1's `FileAuthStorageBackend` creates the parent and an empty
+  `0600` file first, then locks `auth.json` itself with `proper-lockfile`
+  (`realpath: false`, `stale: 30_000`, retrying `ELOCKED` for up to 30 seconds)
+  across every async read-modify-write. This store follows that protocol for
+  `modify` and `delete`, while retaining its atomic temp-file rename.
 
 Refresh is still Pi's: `Models.getAuth()` runs the OAuth exchange inside
 `CredentialStore.modify()`, so a rotated token is written back through this
 store by Pi. Nothing here parses, mints, or refreshes a token.
 
-Divergence worth knowing: Pi's `AuthStorage` writes in place under a
-`proper-lockfile` advisory lock; this store writes by rename and takes no
-lock. See the module comment in `src/pi/models.ts` for what each choice
-costs.
+Divergence worth knowing: Pi writes in place while this store writes a `0600`
+temporary file and atomically renames it over `auth.json`. Both sides use the
+same advisory lock, so each mutation re-reads a settled map and preserves
+providers that were updated by the other process.
 
 ## Divergence policy
 
