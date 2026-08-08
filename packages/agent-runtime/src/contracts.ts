@@ -12,7 +12,12 @@
  * after their canonical vocabulary exists in `@volli/shared`.
  */
 
-import type { AuthoritySnapshot, ModelSelection, SessionRole } from "@volli/shared";
+import type {
+  ActivityDescriptor,
+  AuthoritySnapshot,
+  ModelSelection,
+  SessionRole,
+} from "@volli/shared";
 
 /** Volli identities for one Ticket Session runtime attachment. All opaque. */
 export interface TicketRuntimeIdentity {
@@ -105,6 +110,7 @@ export type RuntimeObservation =
   | TurnObservation
   | TranscriptDeltaObservation
   | SettledMessageObservation
+  | RuntimeActivityObservation
   | AttentionObservation;
 
 export interface AttachmentObservation {
@@ -134,6 +140,33 @@ export interface SettledMessageObservation {
   turnId: string;
   message: SettledAssistantMessage;
 }
+
+/** JSON-safe, runtime-normalized tool input and output. */
+export type RuntimeActivityValue =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly RuntimeActivityValue[]
+  | { readonly [key: string]: RuntimeActivityValue };
+
+interface RuntimeActivityObservationBase {
+  kind: "activity";
+  activityId: string;
+  descriptor: ActivityDescriptor;
+  input: RuntimeActivityValue;
+  output: RuntimeActivityValue;
+}
+
+export type RuntimeActivityObservation =
+  | (RuntimeActivityObservationBase & {
+      state: "started" | "progress" | "completed";
+      error?: never;
+    })
+  | (RuntimeActivityObservationBase & {
+      state: "failed";
+      error?: string;
+    });
 
 export interface AttentionObservation {
   kind: "attention";

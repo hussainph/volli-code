@@ -66,16 +66,20 @@ that makes them, together with the tag and commit hash above. Forking or
 vendoring Pi requires a concrete, documented need per
 `docs/plans/pi-native-ticket-session.md`.
 
-## Deliberate Session 1 boundary
+## Deliberate Session 3 boundary
 
 Only Pi core's `read`, `edit`, and `write` tools are loaded, each with a
 Volli-owned execution environment that rejects paths outside the Ticket
-worktree and rejects symlinks. Process execution remains unavailable until a
-later migration slice supplies an equally enforceable containment boundary.
-The current name-based guard has a TOCTOU limit: an external process with write
-access to the worktree could replace a validated component with a symlink before
-Pi's delegated filesystem operation opens it. Descriptor-based `O_NOFOLLOW`
-operations are required to close that host-level race completely.
+worktree and rejects symlinks. Before Pi bash or any process execution is
+exposed in Session 3, Volli must land a fail-closed process containment
+boundary: a `cwd`-only restriction is forbidden. It must prove outside-worktree
+reads and writes, traversal and symlink escapes, descendant-process escape, and
+abort/cleanup are contained; when the boundary is unavailable, execution stays
+unavailable. The final Auto/Manage permission and sandbox UX remains deferred.
+The current name-based filesystem guard has a TOCTOU limit: an external process
+with write access to the worktree could replace a validated component with a
+symlink before Pi's delegated filesystem operation opens it. Descriptor-based
+`O_NOFOLLOW` operations are required to close that host-level race completely.
 
 ## License
 

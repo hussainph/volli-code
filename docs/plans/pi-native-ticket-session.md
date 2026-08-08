@@ -496,11 +496,19 @@ durable and visible after leaving and reopening the tab.
 
 ### Session 3 — Reasoning and coding activity
 
+- **Strict prerequisite:** before exposing Pi bash or any process execution,
+  land a fail-closed process containment boundary. A `cwd`-only restriction is
+  forbidden. The boundary must prove it blocks outside-worktree reads and
+  writes, traversal and symlink escapes, descendant-process escape, and that
+  abort and cleanup terminate the contained process tree. If containment is
+  unavailable, process execution remains unavailable.
 - Map Pi reasoning and built-in coding tools to Volli observations.
 - Introduce the closed activity vocabulary in shared/product semantics.
 - Stamp structured activity descriptors before renderer projection.
 - Reuse the existing activity bundle and tool-detail UI.
 - Ensure project/user Pi extensions remain disabled.
+- Final Auto/Manage permission and sandbox UX remains deferred; this boundary
+  only establishes the non-negotiable containment required before execution.
 
 **Exit:** inspect/read/edit/execute activity streams and settles without any
 renderer dependence on Pi tool names; existing reasoning semantics remain
