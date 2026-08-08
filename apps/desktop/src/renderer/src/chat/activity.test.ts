@@ -610,6 +610,13 @@ describe("activityStatus", () => {
       ),
     ).toBe("running");
   });
+
+  it("settles a final result when preliminary is false or absent", () => {
+    expect(
+      activityStatus(tool("read-file", { state: "output-available", preliminary: false })),
+    ).toBe("done");
+    expect(activityStatus(tool("read-file", { state: "output-available" }))).toBe("done");
+  });
 });
 
 describe("presenters", () => {

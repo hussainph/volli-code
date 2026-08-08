@@ -433,8 +433,6 @@ export function activityStatus(part: DynamicToolUIPart): ActivityStatus {
       return "denied";
     case "output-available":
       return part.preliminary === true ? "running" : "done";
-    default:
-      return "done";
   }
 }
 
