@@ -1,32 +1,32 @@
 # Volli Code
 
-A local-first macOS workspace for planning and running coding sessions, built with Electron, React, and TypeScript. The current app combines a Linear-style board, isolated ticket worktrees, durable local history, and embedded terminal harnesses. The product direction is a chat-first Session UI backed by structured SDK/ACP adapters, with the terminal and bring-your-own TUI harnesses retained as secondary execution surfaces.
+A local-first macOS workspace for planning and running coding sessions, built with Electron, React, and TypeScript. The current app combines a Linear-style board, isolated ticket worktrees, durable local history, temporary OpenCode-backed structured chat, and embedded terminal harnesses. The product direction is one chat-first, Pi-backed Agent Runtime; external and bring-your-own TUI harnesses remain manual terminal companions, not structured execution surfaces.
 
 `CONTEXT.md` is the canonical domain glossary and `docs/DESIGN.md` is the living visual language. The code and tests are authoritative for current behavior. Treat future architecture described here as direction, not as already-implemented behavior.
 
 ## Structure
 
-- `apps/desktop/src/main/` — Electron main: SQLite, adapter hosting, node-pty, git/worktree exec, the `volli` CLI socket, notifications. **The only place Node APIs run.**
+- `apps/desktop/src/main/` — Electron main: SQLite, temporary OpenCode hosting, node-pty, git/worktree exec, the `volli` CLI socket, notifications. **The only place Electron APIs run.**
 - `apps/desktop/src/preload/` — the typed `contextBridge` API; the only door between renderer and main. Thin and explicit.
 - `apps/desktop/src/renderer/` — React UI + Zustand stores. UI state projects durable main-process state plus ephemeral view state. **No Node imports.**
-- `packages/shared/` (`@volli/shared`) — pure, unit-tested domain code (models, ticket rules, event types, adapter capabilities, branch/slug rules). **No Electron/Node/DOM imports.**
-- `packages/session-engine/` (`@volli/session-engine`) — plain TypeScript Session commands, durable projections, native-adapter contracts, committed streams, and AI SDK transcript vocabulary. **No transport/Node APIs.**
+- `packages/shared/` (`@volli/shared`) — pure, unit-tested domain code (models, ticket rules, event types, Session semantics, branch/slug rules). **No Electron/Node/DOM imports.**
+- `packages/session-engine/` (`@volli/session-engine`) — plain TypeScript Session commands, durable projections, temporary native-executor migration contracts, committed streams, and AI SDK transcript vocabulary. **No transport/Node APIs.**
 - `packages/session-rpc/` (`@volli/session-rpc`) — thin tRPC Session edge plus sanitized diagnostics.
-- `packages/opencode-adapter/` (`@volli/opencode-adapter`) — Node-hosted OpenCode HTTP/SSE mapping and loopback process supervision.
+- `packages/opencode-adapter/` (`@volli/opencode-adapter`) — temporary Node-hosted OpenCode HTTP/SSE mapping and loopback process supervision. Do not add structured OpenCode features; it is removed after the Pi runtime proves its replacement.
 - `packages/cli/` — the agent-facing `volli` CLI (built; Unix socket to main). App data lives under Electron's `userData` dir.
 - `apps/desktop/src/renderer/lab/` — the UI lab (`pnpm lab`): browser-only scratches for trying interactions against real components/tokens with fixture data, before they become app features. Dev-server only, never built; imports the app, never the reverse.
 
 ## Conventions
 
-- A Session is durable and owns identity and ordered local history before any adapter attaches. Adapters, processes, terminal panes, and UI views never own Session lifetime.
+- A Session is durable and owns identity and ordered local history before any live executor attaches. The temporary native-adapter contract, processes, terminal panes, and UI views never own Session lifetime.
 - Commands are explicit user intent. Persist intent before delivery; make acceptance idempotent and observable through durable receipts.
 - Events are immutable facts. Local durable history is canonical; renderer stores project it into UI state and structured attention.
-- Adapter capabilities are specific and may be negative. Do not force parity across SDK, ACP, or TUI harnesses.
+- The structured product has one target executor: `@volli/agent-runtime`, initially backed by Pi. Do not introduce SDK/ACP adapters, structured executor selection, capability parity work, or new provider-shaped product semantics.
 - Resume, terminal recreation, and history navigation are distinct semantics.
 - Retry transient transport failures without duplicating accepted work. Authentication, permissions, configuration, and quota failures require explicit user recovery.
 - Existing hooks and terminal markers are compatibility evidence for TUI adapters, not the canonical source of Session truth.
 - A Session starts with one root Agent Thread. Each Thread has at most one live Thread Binding; Conversation Branches and Generation Attempts preserve edits and regeneration without rewriting history.
-- Harness Profiles are explicit. Native is preferred when selected; terminal `liveBestEffort` is never a silent fallback.
+- Current OpenCode `adapterId` and profile fields are migration scaffolding, not product architecture. Terminals are explicit manual companions and never silent structured fallbacks.
 
 - Ticket rules + all auto-move logic: pure, tested TS in `@volli/shared`; the UI only observes it.
 - Terminal access goes through the `TerminalEngine` seam: node-pty never leaves `src/main`, restty (ghostty-derived WebGPU renderer, decision #26) never leaves the renderer's terminal components. Native modules (node-pty, better-sqlite3) need `pnpm -C apps/desktop run rebuild:native` after every install (Electron ABI).
@@ -52,7 +52,7 @@ A local-first macOS workspace for planning and running coding sessions, built wi
 ## Retained foundations
 
 - **Data**: local SQLite (better-sqlite3, WAL, main-process-owned); transcripts as indexed files on disk. Local-first, single-player.
-- **Adapters**: preserve the manifest registry, exact-hash trust, capability evidence, launch configuration, and honest resume support already used by Claude Code, Codex, OpenCode, and custom TUI harnesses. Structured SDK/ACP adapters will attach at the same Session seam later.
+- **Terminal companions**: preserve the manifest registry, exact-hash trust, launch configuration, wrappers, hooks, CLI correlation, and honest terminal resume where they continue to improve manual terminal use. Preserve no generic structured-adapter machinery merely for future plurality.
 - **Execution**: worktree-per-ticket. Terminal wrappers and hooks remain compatibility mechanisms for TUI harnesses.
 - **Board**: fixed columns Backlog · Todo · Doing · Needs Review · Done. Explicit moves win over stale lifecycle evidence; automation only de-escalates and never destroys data.
 
