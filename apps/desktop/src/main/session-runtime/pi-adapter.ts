@@ -232,6 +232,12 @@ export function createPiNativeAdapter(options: PiAdapterOptions): NativeHarnessA
 
     async attach(spec: NativeAttachmentSpec, sink: ObservationSink): Promise<BindingHandle> {
       if (spec.profileId !== PI_PROFILE_ID) throw new Error(`Unknown Pi profile ${spec.profileId}`);
+      // Session 2 can write a Pi sidecar but cannot reopen one. Starting a new
+      // sidecar for a persisted native binding would silently replace the
+      // recovery target the ledger named, so fail before constructing anything.
+      if (spec.continuity === "native_resume" && spec.native !== null) {
+        throw new Error("Pi recovery is not available yet. Start a new Ticket Chat instead.");
+      }
       const context = await options.resolveTicketContext(spec.sessionId);
       if (context === null) {
         // Thrown, not emitted: the runtime discards this attach's sink when the

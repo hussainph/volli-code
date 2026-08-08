@@ -259,6 +259,29 @@ describe("Pi native adapter attach", () => {
     expect(runtime.specs).toHaveLength(0);
   });
 
+  it("rejects a persisted native resume without starting a fresh Pi sidecar", async () => {
+    const { adapter, runtime } = composition();
+
+    await expect(
+      adapter.attach(
+        attachmentSpec({
+          continuity: "native_resume",
+          native: {
+            id: "pi-session-previous",
+            detail: {
+              runtime: "pi",
+              sessionId: "pi-session-previous",
+              sessionFilePath: "/data/pi-sessions/pi-session-previous.jsonl",
+            },
+          },
+        }),
+        new RecordingSink(),
+      ),
+    ).rejects.toThrow(/Pi recovery is not available yet/);
+
+    expect(runtime.specs).toHaveLength(0);
+  });
+
   it("refuses a profile it does not have", async () => {
     const { adapter } = composition();
 
