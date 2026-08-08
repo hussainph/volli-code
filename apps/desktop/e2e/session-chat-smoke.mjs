@@ -1,9 +1,22 @@
 /**
  * E2e proof of the chat Session seam, end to end, against the BUILT app: create
- * a chat Session through the real UI, stream two scripted answers through a
- * fake `opencode` binary (./lib/fake-opencode-server.mjs), and assert both
- * settle durably — then relaunch on the same profile and assert both come back
- * from the durable transcript without a live adapter.
+ * a SCRATCH chat Session (the global Sessions page, ticket-independent) through
+ * the real UI, stream two scripted answers through a fake `opencode` binary
+ * (./lib/fake-opencode-server.mjs), and assert both settle durably — then
+ * relaunch on the same profile and assert both come back from the durable
+ * transcript without a live adapter.
+ *
+ * This used to drive a TICKET chat. On this branch new ticket chats attach the
+ * Pi-backed native adapter instead of OpenCode (see
+ * `apps/desktop/src/main/session-runtime/pi-adapter.ts` and
+ * `pi-ticket-chat-smoke.mjs`, which now owns the ticket-worktree-attach
+ * regression this file used to carry), so a fake `opencode` binary here would
+ * never be dispatched to. Scratch/project chats — created from the Sessions
+ * page, never scoped to a ticket — are unaffected by that migration and still
+ * attach OpenCode, so this file now proves the SAME structured-chat seam
+ * (two-turn streaming, durable settle, relaunch-without-live-adapter) on that
+ * surface instead. It stays the OpenCode structured-path smoke until Sessions
+ * 5/7 retire the surface it drives.
  *
  * Two turns, not one, because turn state used to be derived from a single
  * `session.status` busy event: the second turn's `session.idle` deduped against
@@ -44,7 +57,7 @@
  * The chat tab is addressed by TWO different labels over this run, and mixing
  * them up reads as a vanished tab rather than a renamed one: it is created as
  * `Chat N`, and the first delivered message retitles it to {@link autoTitle}.
- * Check 11 is where the rebind happens, because that is the first assertion
+ * Check 9 is where the rebind happens, because that is the first assertion
  * after a message has been delivered — everything from there on, including the
  * relaunch and the close, uses the title.
  *
@@ -60,7 +73,6 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  cardById,
   createRunner,
   goToBoard,
   launch,
@@ -101,12 +113,6 @@ const MODEL_LABEL = "Fake Model";
 const PROJECT = { id: "chat-smoke-project", name: "Chat Smoke Project", prefix: "CS" };
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("session-chat-smoke-");
-// `tickets.create` defaults `usesWorktree` to true, so the chat attach below
-// materializes a real worktree. `VOLLI_WORKTREE_HOME_DIR` is what keeps that
-// out of the developer's own `~/.volli/worktrees` — same isolation
-// worktree-smoke.mjs relies on, and it is load-bearing here, not hygiene.
-const fakeHome = join(scratch, "home");
-const worktreesRoot = join(fakeHome, ".volli", "worktrees");
 const { attempt, summarize } = createRunner();
 
 const EVIDENCE_DIR = process.argv[2] ?? join(os.tmpdir(), "volli-session-chat-smoke-evidence");
@@ -195,12 +201,22 @@ async function enableFakeModel(page, label) {
   );
 }
 
-/** The tab strip's own "+" (there are two identical mounts — tab strip and rail; this scopes to the strip). */
+/** The nearest visible tablist's own "+" — the Sessions page mounts only one. */
 function tabStripNewSessionButton(page) {
   return page
     .locator('[role="tablist"]')
     .locator("xpath=..")
     .getByRole("button", { name: "New session", exact: true });
+}
+
+/** Navigate to the Sessions page and wait for its (auto-opened scratch terminal) tab strip to mount. */
+async function goToSessions(page) {
+  await page.getByRole("button", { name: "Sessions", exact: true }).click();
+  await waitUntil(
+    "the Sessions tab strip to mount",
+    async () => (await page.locator('[role="tab"]').count()) >= 1,
+    { timeout: 20000 },
+  );
 }
 
 async function openNewChatTab(page) {
@@ -247,39 +263,20 @@ function dotIsWorking(classes) {
 }
 
 /**
- * The absolute path of a directory named `<needle>-*` (or exactly `needle`)
- * anywhere under `root`, or null. Ground truth for "did the ensure pipeline
- * actually run", independent of anything the UI claims — mirrors the same
- * helper in worktree-smoke.mjs.
+ * A project sidebar row (either band) whose visible text includes `text` —
+ * the persistent Active/Previous rail beside Board/Sessions/Files/Configure,
+ * same reader `sessions-chat-host-smoke.mjs` uses. A scratch chat's OPEN tab
+ * does not survive a relaunch on its own (unlike a ticket's, which the
+ * adopt path restores from the recorded active tab) — reopening one is a
+ * sidebar-row click, the same path a person uses.
  */
-async function exists(path) {
-  return fs
-    .access(path)
-    .then(() => true)
-    .catch(() => false);
-}
-
-async function findWorktreeDir(root, needle) {
-  let entries;
-  try {
-    entries = await fs.readdir(root, { recursive: true, withFileTypes: true });
-  } catch {
-    return null;
-  }
-  const hit = entries.find(
-    (e) => e.isDirectory() && (e.name === needle || e.name.startsWith(`${needle}-`)),
-  );
-  return hit ? join(hit.parentPath ?? hit.path, hit.name) : null;
+function sidebarRow(page, text) {
+  return page.locator("[data-session-band] button", { hasText: text });
 }
 
 async function main() {
   const fakeLog = join(scratch, "fake-opencode.log");
-  await fs.mkdir(fakeHome, { recursive: true });
-  const app = await launch({
-    dbPath,
-    userDataDir,
-    extraEnv: { VOLLI_FAKE_OPENCODE_LOG: fakeLog, VOLLI_WORKTREE_HOME_DIR: fakeHome },
-  });
+  const app = await launch({ dbPath, userDataDir, extraEnv: { VOLLI_FAKE_OPENCODE_LOG: fakeLog } });
   const mainStdout = [];
   const mainStderr = [];
   const proc = app.process();
@@ -287,9 +284,6 @@ async function main() {
   proc.stderr?.on("data", (chunk) => mainStderr.push(chunk.toString()));
 
   let chatTabLabel = null;
-  // The directory the attach bound, kept for check 13.5 — the only way to
-  // delete exactly what the live attachment is holding.
-  let boundWorktreeDir = null;
   try {
     const page = await app.firstWindow();
     await page.waitForLoadState("domcontentloaded");
@@ -302,26 +296,8 @@ async function main() {
     const projectId = byName[PROJECT.name]?.id;
     if (!projectId) throw new Error("seeded project missing after import");
 
-    let displayId = null;
-    await attempt(1, "seed a ticket through the preload bridge", async () => {
-      const result = await page.evaluate((input) => window.api.tickets.create(input), {
-        projectId,
-        status: "todo",
-        title: "Chat smoke ticket",
-        priority: "medium",
-      });
-      if (!result.ok) return { ok: false, detail: result.error };
-      displayId = `${PROJECT.prefix}-${result.ticket.ticketNumber}`;
-      await page.reload();
-      await page.waitForLoadState("domcontentloaded");
-      await sleep(1000);
-      await goToBoard(page);
-      return { ok: (await cardById(page, displayId).count()) === 1, detail: displayId };
-    });
-    if (displayId === null) throw new Error("ticket seed failed — cannot continue");
-
     await attempt(
-      2,
+      1,
       "point the OpenCode harness binary override at the fake server before anything probes it",
       async () => {
         await setOpenCodeBinaryOverride(page, FAKE_SERVER_PATH);
@@ -330,7 +306,7 @@ async function main() {
     );
 
     await attempt(
-      3,
+      2,
       "Settings' model browser discovers exactly the fake provider's model",
       async () => {
         const settled = await openOpenCodeHarnessPane(page).catch((error) => error);
@@ -364,56 +340,18 @@ async function main() {
       },
     );
 
-    await attempt(4, "enable the fake model so the composer's catalog includes it", async () => {
+    await attempt(3, "enable the fake model so the composer's catalog includes it", async () => {
       await enableFakeModel(page, MODEL_LABEL);
       return { ok: true, detail: MODEL_LABEL };
     });
 
-    await attempt(5, "return to the board and open the seeded ticket", async () => {
-      await goToBoard(page);
-      await cardById(page, displayId).dblclick();
-      await waitUntil(
-        "the ticket detail to open",
-        async () => (await page.getByRole("tab", { name: displayId, exact: true }).count()) === 1,
-      );
-      return { ok: true };
-    });
-
-    await attempt(6, "the tab strip's + menu creates a chat tab", async () => {
+    await attempt(4, "the Sessions page's + menu creates a SCRATCH chat tab", async () => {
+      await goToSessions(page);
       chatTabLabel = await openNewChatTab(page);
       return { ok: chatTabLabel !== null, detail: chatTabLabel };
     });
 
-    // The regression this check exists for: a chat on a worktree ticket used to
-    // attach against `ticket.worktreePath ?? project.path` and provision
-    // nothing, so OpenCode got a directory that was not there and every prompt
-    // died server-side. The fake server does not care what its cwd is, so the
-    // prompt surviving proves nothing — the worktree being ON DISK does.
-    await attempt(7, "creating the chat materialized the ticket's worktree", async () => {
-      const worktreeDir = await waitUntil(
-        "the ticket's worktree to appear on disk",
-        async () => (await findWorktreeDir(worktreesRoot, displayId)) ?? false,
-        { timeout: 20000 },
-      ).catch(async (error) => {
-        await captureFailureEvidence(page, mainStdout, mainStderr, fakeLog, "worktree-absent");
-        throw error;
-      });
-      const row = await page.evaluate(async (pid) => {
-        const boot = await window.api.data.bootstrap();
-        if (!boot.ok) return null;
-        return (
-          (boot.data.ticketsByProject?.[pid] ?? []).find((t) => t.worktreePath !== null) ?? null
-        );
-      }, projectId);
-      boundWorktreeDir = worktreeDir;
-      // Stamped, not merely created: the same row the terminal path writes.
-      return {
-        ok: row !== null && row.worktreePath === worktreeDir,
-        detail: `dir=${worktreeDir} stamped=${row?.worktreePath ?? "none"}`,
-      };
-    });
-
-    await attempt(8, "the composer becomes ready once the model resolves", async () => {
+    await attempt(5, "the composer becomes ready once the model resolves", async () => {
       const textarea = page.getByPlaceholder("Ask, plan, or implement…");
       await waitUntil("the composer to mount", async () => (await textarea.count()) > 0);
       await waitUntil(
@@ -427,7 +365,7 @@ async function main() {
       return { ok: true };
     });
 
-    await attempt(9, "submitting a prompt starts a turn (Stop button appears)", async () => {
+    await attempt(6, "submitting a prompt starts a turn (Stop button appears)", async () => {
       await submitPrompt(page, promptText(1));
       await waitUntil("the turn to start", async () => (await stopButton(page).count()) > 0, {
         timeout: 10000,
@@ -435,7 +373,7 @@ async function main() {
       return { ok: true };
     });
 
-    await attempt(10, "the streamed answer renders", async () => {
+    await attempt(7, "the streamed answer renders", async () => {
       await waitUntil(
         "the streamed answer text",
         async () => (await page.getByText(answerText(1), { exact: false }).count()) > 0,
@@ -447,41 +385,37 @@ async function main() {
       return { ok: true };
     });
 
-    await attempt(
-      11,
-      "the turn settles: Stop clears and the tab's working dot clears",
-      async () => {
-        await waitUntil("the turn to settle", async () => (await stopButton(page).count()) === 0, {
-          timeout: 15000,
-        });
-        // The tab retitled itself off the first message while the turn ran, so
-        // the label it was created with names nothing now. Rebound here rather
-        // than by loosening the lookup below: the dot assertion only means
-        // something if it is addressed at a tab that must exist, and waiting for
-        // the exact expected title pins the auto-title on the way past.
-        chatTabLabel = await waitUntil(
-          "the chat tab to carry the title taken from its first message",
-          async () => {
-            const titled = autoTitle(1);
-            return (await page.getByRole("tab", { name: titled, exact: true }).count()) === 1
-              ? titled
-              : false;
-          },
-          { timeout: 10000 },
-        );
-        const classes = await tabDotClasses(page, chatTabLabel);
-        const stillRendered = (await page.getByText(answerText(1), { exact: false }).count()) > 0;
-        // The dot has to BE there for the absence of a halo on it to mean
-        // anything: a tab that vanished has no working dot either, and
-        // `dotIsWorking(null)` is false.
-        return {
-          ok: classes !== null && !dotIsWorking(classes) && stillRendered,
-          detail: `label=${chatTabLabel} dotClasses=${classes} answerStillRendered=${stillRendered}`,
-        };
-      },
-    );
+    await attempt(8, "the turn settles: Stop clears and the tab's working dot clears", async () => {
+      await waitUntil("the turn to settle", async () => (await stopButton(page).count()) === 0, {
+        timeout: 15000,
+      });
+      // The tab retitled itself off the first message while the turn ran, so
+      // the label it was created with names nothing now. Rebound here rather
+      // than by loosening the lookup below: the dot assertion only means
+      // something if it is addressed at a tab that must exist, and waiting for
+      // the exact expected title pins the auto-title on the way past.
+      chatTabLabel = await waitUntil(
+        "the chat tab to carry the title taken from its first message",
+        async () => {
+          const titled = autoTitle(1);
+          return (await page.getByRole("tab", { name: titled, exact: true }).count()) === 1
+            ? titled
+            : false;
+        },
+        { timeout: 10000 },
+      );
+      const classes = await tabDotClasses(page, chatTabLabel);
+      const stillRendered = (await page.getByText(answerText(1), { exact: false }).count()) > 0;
+      // The dot has to BE there for the absence of a halo on it to mean
+      // anything: a tab that vanished has no working dot either, and
+      // `dotIsWorking(null)` is false.
+      return {
+        ok: classes !== null && !dotIsWorking(classes) && stillRendered,
+        detail: `label=${chatTabLabel} dotClasses=${classes} answerStillRendered=${stillRendered}`,
+      };
+    });
 
-    await attempt(12, "a second prompt in the same Session starts its own turn", async () => {
+    await attempt(9, "a second prompt in the same Session starts its own turn", async () => {
       await submitPrompt(page, promptText(2));
       await waitUntil(
         "the second turn to start",
@@ -510,9 +444,9 @@ async function main() {
     // The check that pins the bug this smoke was extended for: a Session's turn
     // state used to be derived from a busy event alone, so the second turn's
     // idle read as a repeat of the first's and was dropped — Stop stayed lit,
-    // the dot kept spinning, and the reply was never written down (check 14 is
+    // the dot kept spinning, and the reply was never written down (check 11 is
     // where that last part shows).
-    await attempt(13, "the second turn settles too — Stop clears again", async () => {
+    await attempt(10, "the second turn settles too — Stop clears again", async () => {
       const settled = await waitUntil(
         "the second turn to settle",
         async () => (await stopButton(page).count()) === 0,
@@ -530,46 +464,6 @@ async function main() {
       };
     });
 
-    // The bug this check exists for, and the only place the real git recreate
-    // runs: a worktree deleted out from under an attachment that stays OPEN
-    // across the deletion. `prepare` ran once, at attach; nothing re-asked
-    // afterwards, so the adapter kept being handed a path that was no longer
-    // there and every prompt came back about a second later as the harness's
-    // own NotFound. The fake server does not care what its cwd is — so, as in
-    // check 7, the prompt surviving proves nothing and the directory being
-    // back on disk is the whole assertion.
-    await attempt(
-      13.5,
-      "a worktree deleted under the live Session comes back before the next turn",
-      async () => {
-        await fs.rm(boundWorktreeDir, { recursive: true, force: true });
-        const deleted = !(await exists(boundWorktreeDir));
-        await submitPrompt(page, promptText(3));
-        await waitUntil(
-          "the third answer to render",
-          async () => (await page.getByText(answerText(3), { exact: false }).count()) > 0,
-          { timeout: 15000 },
-        ).catch(async (error) => {
-          await captureFailureEvidence(page, mainStdout, mainStderr, fakeLog, "third-turn-lost");
-          throw error;
-        });
-        await waitUntil(
-          "the third turn to settle",
-          async () => (await stopButton(page).count()) === 0,
-          {
-            timeout: 15000,
-          },
-        );
-        // The SAME path, and a real linked worktree — git leaves a `.git` FILE
-        // there, which an empty directory made to quiet an error would not have.
-        const recreated = await exists(join(boundWorktreeDir, ".git"));
-        return {
-          ok: deleted && recreated,
-          detail: `deleted=${deleted} recreated=${recreated} dir=${boundWorktreeDir}`,
-        };
-      },
-    );
-
     // ---- stretch: relaunch on the same profile, adopt (no live attach), and
     // assert the DURABLE transcript (not the fake server) is what renders it.
     await sleep(500);
@@ -578,7 +472,7 @@ async function main() {
     const app2 = await launch({
       dbPath,
       userDataDir,
-      extraEnv: { VOLLI_FAKE_OPENCODE_LOG: fakeLog, VOLLI_WORKTREE_HOME_DIR: fakeHome },
+      extraEnv: { VOLLI_FAKE_OPENCODE_LOG: fakeLog },
     });
     // Its own buffers: the first app's are closed, and the relaunch is the one
     // check whose failure mode (a boot that adopted nothing) is only legible
@@ -591,34 +485,48 @@ async function main() {
     try {
       const page2 = await app2.firstWindow();
       await page2.waitForLoadState("domcontentloaded");
+      await sleep(1000);
 
       await attempt(
-        14,
-        "after relaunch, the chat tab reopens with BOTH answers from the durable transcript",
+        11,
+        "after relaunch, the sidebar reopens the scratch chat with BOTH answers from the durable transcript",
         async () => {
-          const detailOpen = await waitUntil(
-            "the ticket detail to reopen",
-            async () =>
-              (await page2.getByRole("tab", { name: displayId, exact: true }).count()) === 1,
-            { timeout: 10000 },
-          )
-            .then(() => true)
-            .catch(() => false);
-          if (!detailOpen) {
-            await cardById(page2, displayId)
-              .dblclick()
-              .catch(() => {});
-          }
-          const chatTab = page2.getByRole("tab", { name: chatTabLabel, exact: true });
-          if ((await chatTab.count()) === 0) {
-            // The adopt path restores the previously-active tab; fall back to
-            // selecting it explicitly if a different tab won the restore.
-            await waitUntil(
-              "the chat tab to be reachable",
-              async () => (await chatTab.count()) > 0,
-              { timeout: 10000 },
+          // A scratch chat's open tab is not itself durable — its Session
+          // (and transcript) is. The sidebar row is what a relaunch finds it
+          // through; clicking it is what opens the tab.
+          const row = sidebarRow(page2, chatTabLabel);
+          await waitUntil(
+            "the chat's sidebar row to reappear after relaunch",
+            async () => (await row.count()) >= 1,
+            {
+              timeout: 15000,
+            },
+          ).catch(async (error) => {
+            await captureFailureEvidence(
+              page2,
+              relaunchStdout,
+              relaunchStderr,
+              fakeLog,
+              "relaunch-sidebar-row-missing",
             );
-          }
+            throw error;
+          });
+          await row.first().click();
+          const chatTab = page2.getByRole("tab", { name: chatTabLabel, exact: true });
+          await waitUntil(
+            "the chat tab to open from the sidebar row",
+            async () => (await chatTab.count()) > 0,
+            { timeout: 10000 },
+          ).catch(async (error) => {
+            await captureFailureEvidence(
+              page2,
+              relaunchStdout,
+              relaunchStderr,
+              fakeLog,
+              "relaunch-chat-tab-not-opened",
+            );
+            throw error;
+          });
           await chatTab.click();
           // Both, not just the last: a turn whose settle never landed leaves its
           // reply in the transient overlay only, which a relaunch discards. The
@@ -653,12 +561,12 @@ async function main() {
       );
 
       // The close trap, on the one app instance where it is loaded: this tab is
-      // the persisted active one AND its Session is still on the ticket's
+      // the persisted active one AND its Session is still on the sidebar's
       // durable listing, which is exactly the pair the relaunch effect adopts
       // from. Standing the active tab down before the close is the whole of
       // what stops it — and a reordering that lost it would leave a chat tab
       // nobody can close, with every check above still green.
-      await attempt(15, "closing the chat tab retires it, and nothing puts it back", async () => {
+      await attempt(12, "closing the chat tab retires it, and nothing puts it back", async () => {
         const chatTab = page2.getByRole("tab", { name: chatTabLabel, exact: true });
         await page2.getByRole("button", { name: `Close ${chatTabLabel}`, exact: true }).click();
         await waitUntil("the chat tab to go", async () => (await chatTab.count()) === 0);
