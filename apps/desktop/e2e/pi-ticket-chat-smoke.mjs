@@ -8,29 +8,22 @@
  * turn against a real provider, billed to a ChatGPT subscription ($0
  * marginal — keep it to one short prompt, never loop turns speculatively).
  *
- * Two things make a real Pi turn possible at all, and both are set up before
- * the app ever launches:
+ * One thing makes a real Pi turn possible at all, and it is set up before the
+ * app ever launches: **credentials**. This smoke isolates `HOME` into a
+ * scratch dir (same posture as `VOLLI_WORKTREE_HOME_DIR` — never touch the
+ * developer's real profile), and Pi's credential store reads
+ * `$PI_CODING_AGENT_DIR` else `~/.pi/agent/auth.json` under that `HOME`
+ * (`packages/agent-runtime/src/pi/models.ts`), so the real
+ * `~/.pi/agent/auth.json` is copied into `<fakeHome>/.pi/agent/auth.json`
+ * first. Fails fast with a clear message if the real file is missing, and the
+ * copy is never read back or logged — this smoke does not print, log, or
+ * commit auth contents.
  *
- *   1. **Credentials.** This smoke isolates `HOME` into a scratch dir (same
- *      posture as `VOLLI_WORKTREE_HOME_DIR` — never touch the developer's
- *      real profile), so Pi's own credential loading — wherever it reads
- *      from under `HOME` — needs the real `~/.pi/agent/auth.json` copied
- *      into `<fakeHome>/.pi/agent/auth.json` first. Fails fast with a clear
- *      message if the real file is missing, and the copy is never read back
- *      or logged — this smoke does not print, log, or commit auth contents.
- *   2. **The composer's catalog.** The picker that decides whether the
- *      textarea is even typable (`SessionComposer`'s `ready`, driven by
- *      `chat-plane.tsx`'s `CATALOG_ADAPTER_ID`) is fixed to `"opencode"`
- *      regardless of a Session's own live executor — see that file's doc
- *      comment: "Which harness answers 'what models can I pick'. Not the
- *      Session's own executor." So a Pi ticket chat's composer only unlocks
- *      once SOME OpenCode model resolves, even though Pi ignores whatever
- *      `command.model` names (`pi-adapter.ts`'s `#submit`: "deliberately
- *      dropped ... The pinned model is the honest answer"). This smoke does
- *      NOT stand up a fake OpenCode server or override the binary — if this
- *      machine has no working OpenCode runtime configured, the composer
- *      check below is expected to time out, and that coupling is itself
- *      product evidence worth reporting, not a reason to add one.
+ * Deliberately NOT set up: OpenCode. There is no fake OpenCode server and no
+ * binary override, because a Pi Session no longer asks OpenCode anything — its
+ * composer is ready on its own executor's terms and draws no model picker
+ * (`chat-plane.tsx`'s `pinned`). A Pi ticket chat that needs OpenCode
+ * configured to become typable is the regression this smoke exists to catch.
  *
  * Run:
  *   pnpm run build
@@ -269,7 +262,7 @@ async function main() {
       };
     });
 
-    await attempt(5, "the composer becomes ready (a model resolves for the picker)", async () => {
+    await attempt(5, "the composer is ready on Pi's own terms, with no model picker", async () => {
       const textarea = page.getByPlaceholder("Ask, plan, or implement…");
       await waitUntil("the composer to mount", async () => (await textarea.count()) > 0);
       await waitUntil(
@@ -280,7 +273,13 @@ async function main() {
         await captureFailureEvidence(page, mainStdout, mainStderr, "composer-inert");
         throw error;
       });
-      return { ok: true };
+      // Pi drops `command.model` and pins its own, so a picker here would
+      // name models it is going to ignore.
+      // Substring, not exact: the pill's label is the picked model's name and
+      // falls back to the bare word "Model" when nothing is picked, and no
+      // other button on this surface has either in its accessible name.
+      const pickers = await page.getByRole("button", { name: "Model" }).count();
+      return { ok: pickers === 0, detail: `modelPickers=${pickers}` };
     });
 
     await attempt(
@@ -323,7 +322,17 @@ async function main() {
           throw error;
         });
         const texts = await assistantMessageTexts(page);
-        return { ok: texts.length > 0, detail: `assistantMessages=${texts.length}` };
+        // The first delivered message names the Session (`chat/client.ts`'s
+        // `#autoTitle`), so the "Chat 1" captured at creation is no longer what
+        // the tab is called. Re-read it, or the relaunch below looks for a tab
+        // that stopped existing the moment the prompt landed.
+        chatTabLabel = await page
+          .locator('[role="tab"][aria-selected="true"]')
+          .getAttribute("aria-label");
+        return {
+          ok: texts.length > 0 && chatTabLabel !== null,
+          detail: `assistantMessages=${texts.length} tab=${chatTabLabel}`,
+        };
       },
     );
 

@@ -38,6 +38,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Credential, CredentialInfo, CredentialStore, Models } from "@earendil-works/pi-ai";
+import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 
 /** The file Pi keeps its credentials in, inside its agent directory. */
@@ -83,8 +84,21 @@ function expandTilde(path: string): string {
  * Pi's built-in providers, wired to Pi's own credentials. The `models` seam on
  * {@link import("./runtime").PiRuntimeHostOptions} stays exactly what it was —
  * a test injects a scripted collection and never comes near this.
+ *
+ * The OAuth registration is not optional here, and it is the difference between
+ * this working from source and working in the packaged app. A provider's OAuth
+ * flow is loaded by pi-ai through a *deliberately* bundler-opaque dynamic import
+ * (`auth/oauth/load.ts` — a variable specifier, so Node-only callback-server and
+ * PKCE code stays out of bundles that do not need it). Inside Electron main's
+ * bundle that specifier resolves relative to the emitted chunk, where no such
+ * file exists, and the first token derivation dies with `Cannot find module` —
+ * reported to the Session as `auth`, which reads as "sign in again" for a
+ * credential that was never the problem. `registerBunOAuthFlows` is pi-ai's own
+ * answer for a host that bundles: it imports the flows statically, so the
+ * dynamic path is never taken. Bun is its origin, not its requirement.
  */
 export function piOwnedModels(options: PiCredentialOptions = {}): Models {
+  registerBunOAuthFlows();
   return builtinModels({ credentials: new PiFileCredentialStore(piAuthFilePath(options)) });
 }
 
