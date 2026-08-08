@@ -20,6 +20,32 @@ Direct dependencies, all pinned to exactly `0.84.1`:
 `@earendil-works/pi-telemetry` arrives transitively and is not imported here.
 The coding-agent TUI, client, and protocol packages are intentionally absent.
 
+## Process sandbox runtime
+
+Direct dependency, pinned exactly to `0.0.70` when Session 3 enables Pi bash:
+
+- `@anthropic-ai/sandbox-runtime` — https://github.com/anthropic-experimental/sandbox-runtime,
+  Apache-2.0, maintained macOS Seatbelt process boundary used by Claude Code.
+  Its access policy is inherited by bash children rather than reimplemented in
+  Volli. This is the smallest maintained Node-seam dependency that supplies the
+  approved Claude Code-style boundary without building a custom sandbox.
+
+Session 3 divergence: Volli supplies the canonical Ticket worktree and a
+sanitized environment, uses SRT's immutable maintained policy for
+worktree-only writes, user-home denial outside that worktree, and no network,
+and fails closed before advertising execution when the runtime or policy is
+unavailable. Its sanitized PATH intentionally retains fixed system/global
+toolchain roots (`/opt/homebrew`, `/usr/local`, and system paths) so ordinary
+build/test commands work; user-home toolchains and credentials are excluded,
+and explicit user-home grants remain deferred. Host process-group abort,
+timeout, and close are best-effort lifecycle hygiene only; they do not promise
+cleanup of daemonized or reparented descendants.
+
+Upgrade checks: review SRT's exact version, license, macOS Seatbelt policy and
+its inheritance by shell children; rerun outside-worktree/user-home write and
+network-denial tests; verify the sanitized environment and fail-closed startup
+path; and record any policy or API divergence here before bumping the pin.
+
 ## Local patches
 
 None.
@@ -68,18 +94,12 @@ vendoring Pi requires a concrete, documented need per
 
 ## Deliberate Session 3 boundary
 
-Only Pi core's `read`, `edit`, and `write` tools are loaded, each with a
-Volli-owned execution environment that rejects paths outside the Ticket
-worktree and rejects symlinks. Before Pi bash or any process execution is
-exposed in Session 3, Volli must land a fail-closed process containment
-boundary: a `cwd`-only restriction is forbidden. It must prove outside-worktree
-reads and writes, traversal and symlink escapes, descendant-process escape, and
-abort/cleanup are contained; when the boundary is unavailable, execution stays
-unavailable. The final Auto/Manage permission and sandbox UX remains deferred.
-The current name-based filesystem guard has a TOCTOU limit: an external process
-with write access to the worktree could replace a validated component with a
-symlink before Pi's delegated filesystem operation opens it. Descriptor-based
-`O_NOFOLLOW` operations are required to close that host-level race completely.
+Only Pi core's `read`, `edit`, and `write` tools are loaded until the pinned SRT
+boundary enables bash. The filesystem tools retain Volli's worktree and symlink
+guard. That name-based guard has a TOCTOU limit: an external process with write
+access to the worktree could replace a validated component with a symlink before
+Pi's delegated filesystem operation opens it. Descriptor-based `O_NOFOLLOW`
+operations are required to close that host-level race completely.
 
 ## License
 

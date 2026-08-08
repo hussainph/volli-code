@@ -496,19 +496,27 @@ durable and visible after leaving and reopening the tab.
 
 ### Session 3 — Reasoning and coding activity
 
-- **Strict prerequisite:** before exposing Pi bash or any process execution,
-  land a fail-closed process containment boundary. A `cwd`-only restriction is
-  forbidden. The boundary must prove it blocks outside-worktree reads and
-  writes, traversal and symlink escapes, descendant-process escape, and that
-  abort and cleanup terminate the contained process tree. If containment is
-  unavailable, process execution remains unavailable.
+- **Execution prerequisite:** before exposing Pi bash, pin
+  `@anthropic-ai/sandbox-runtime` (SRT) at `0.0.70` in the Node-only Agent
+  Runtime seam. On macOS, its maintained Seatbelt policy is inherited by bash
+  children: canonical Ticket-worktree writes are allowed, the user home outside
+  that worktree is denied, and network access is denied. Keep the maintained
+  policy immutable; do not hand-author a looser profile. If SRT or its policy is
+  unavailable, process execution fails closed and is not advertised.
+- Sanitize the execution environment. Do not inherit user-home credentials,
+  shell hooks, or user-home toolchains. The fixed system/global PATH roots
+  (`/opt/homebrew`, `/usr/local`, and system paths) intentionally remain for
+  ordinary build/test commands; explicit user-home toolchain grants are later
+  work.
+- Abort, timeout, and close use host process-group termination as best-effort
+  lifecycle hygiene. They do not claim to contain or reliably clean up a
+  daemonized or reparented descendant.
 - Map Pi reasoning and built-in coding tools to Volli observations.
 - Introduce the closed activity vocabulary in shared/product semantics.
 - Stamp structured activity descriptors before renderer projection.
 - Reuse the existing activity bundle and tool-detail UI.
 - Ensure project/user Pi extensions remain disabled.
-- Final Auto/Manage permission and sandbox UX remains deferred; this boundary
-  only establishes the non-negotiable containment required before execution.
+- Final Auto/Manage permission and sandbox UX remains deferred.
 
 **Exit:** inspect/read/edit/execute activity streams and settles without any
 renderer dependence on Pi tool names; existing reasoning semantics remain
