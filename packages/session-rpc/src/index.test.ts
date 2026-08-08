@@ -16,6 +16,23 @@ type CapabilitySnapshot = Extract<
   { kind: "capabilities.updated" }
 >["snapshot"];
 
+type SessionAttachmentProjection = SessionRuntimeSnapshot["projection"]["attachments"][number];
+
+const RECOVERY_PATH =
+  "/Users/alice/Library/Application Support/Volli Code/pi-sessions/pi-session-9.jsonl";
+
+function recoveryNative() {
+  return {
+    id: "pi-session-9",
+    detail: { runtime: "pi", sessionId: "pi-session-9", sessionFilePath: RECOVERY_PATH },
+  };
+}
+
+const INTERACTION_NATIVE = {
+  id: "permission-native-7",
+  detail: { requestId: "permission-request-7" },
+};
+
 function frame(sequence: number): SessionStreamFrame {
   return {
     sessionId: "session-1",
@@ -40,6 +57,86 @@ function frame(sequence: number): SessionStreamFrame {
     },
     transcript: null,
   };
+}
+
+function attachmentWithRecovery(): SessionAttachmentProjection {
+  return {
+    id: "attachment-1",
+    sessionId: "session-1",
+    adapterId: "pi",
+    venue: { id: "local", kind: "local" },
+    continuity: "fresh",
+    native: recoveryNative(),
+    status: "open",
+    openedAt: 10,
+    closedAt: null,
+    outcome: null,
+    failure: null,
+  };
+}
+
+function interactionWithCorrelation() {
+  return {
+    id: "permission-1",
+    attachmentId: "attachment-1",
+    kind: "permission" as const,
+    title: "Allow file write?",
+    detail: null,
+    options: [{ id: "once", label: "Allow once", description: null }],
+    multiple: false,
+    native: { ...INTERACTION_NATIVE, detail: { ...INTERACTION_NATIVE.detail } },
+  };
+}
+
+function snapshotWithRecovery(): SessionRuntimeSnapshot {
+  const base = snapshot();
+  const attachment = attachmentWithRecovery();
+  return {
+    ...base,
+    projection: {
+      ...base.projection,
+      attachments: [attachment],
+      liveExecutor: attachment,
+      interactions: { active: [interactionWithCorrelation()], resolved: [] },
+    },
+  };
+}
+
+function frameWithPayload(
+  sequence: number,
+  payload: SessionStreamFrame["event"]["payload"],
+): SessionStreamFrame {
+  const base = frame(sequence);
+  return { ...base, event: { ...base.event, payload } };
+}
+
+function attachmentFrames(): readonly SessionStreamFrame[] {
+  const attachment = attachmentWithRecovery();
+  const eventAttachment = {
+    id: attachment.id,
+    sessionId: attachment.sessionId,
+    adapterId: attachment.adapterId,
+    venue: attachment.venue,
+    continuity: attachment.continuity,
+    native: attachment.native,
+  };
+  return [
+    frameWithPayload(5, { kind: "attachment.opened", attachment: eventAttachment }),
+    frameWithPayload(6, {
+      kind: "attachment.native_referenced",
+      attachmentId: attachment.id,
+      native: recoveryNative(),
+    }),
+    frameWithPayload(7, {
+      kind: "attachment.failed",
+      attachment: { ...eventAttachment, id: "attachment-2" },
+      failure: { code: "runtime_failed", detail: "Runtime failed", diagnostic: null },
+    }),
+    frameWithPayload(8, {
+      kind: "interaction.opened",
+      interaction: interactionWithCorrelation(),
+    }),
+  ];
 }
 
 function snapshot(): SessionRuntimeSnapshot {
@@ -330,6 +427,112 @@ describe("AsyncQueue", () => {
 });
 
 describe("Session tRPC router", () => {
+  it("removes attachment recovery locators from projection reads without mutating runtime state", async () => {
+    const fixture = runtimeFixture();
+    const serverSnapshot = snapshotWithRecovery();
+    const unreferencedAttachment = {
+      ...attachmentWithRecovery(),
+      id: "attachment-without-recovery",
+      native: null,
+    };
+    const runtime: SessionRuntime = {
+      ...fixture.runtime,
+      projection: async () => ({
+        projection: {
+          ...serverSnapshot.projection,
+          attachments: [...serverSnapshot.projection.attachments, unreferencedAttachment],
+        },
+        throughSequence: serverSnapshot.throughSequence,
+      }),
+    };
+    const caller = createSessionRouter().createCaller({
+      runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    const resolved = await caller.session.projection({ sessionId: "session-1" });
+
+    expect(resolved.projection.attachments[0]?.native).toBeNull();
+    expect(resolved.projection.attachments[1]).toBe(unreferencedAttachment);
+    expect(resolved.projection.liveExecutor?.native).toBeNull();
+    expect(resolved.projection.interactions.active[0]?.native).toEqual(INTERACTION_NATIVE);
+    expect(serverSnapshot.projection.attachments[0]?.native).toEqual(recoveryNative());
+    expect(serverSnapshot.projection.liveExecutor?.native).toEqual(recoveryNative());
+  });
+
+  it("removes attachment recovery locators from snapshot projections and replay frames", async () => {
+    const fixture = runtimeFixture();
+    const serverSnapshot = { ...snapshotWithRecovery(), frames: attachmentFrames() };
+    const runtime: SessionRuntime = { ...fixture.runtime, snapshot: async () => serverSnapshot };
+    const caller = createSessionRouter().createCaller({
+      runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    const resolved = await caller.session.snapshot({ sessionId: "session-1" });
+    const payloads = resolved.frames.map((item) => item.event.payload);
+
+    expect(resolved.projection.attachments[0]?.native).toBeNull();
+    expect(
+      payloads[0]?.kind === "attachment.opened" ? payloads[0].attachment.native : undefined,
+    ).toBeNull();
+    expect(
+      payloads[1]?.kind === "attachment.native_referenced" ? payloads[1].native : undefined,
+    ).toEqual({
+      id: null,
+      detail: null,
+    });
+    expect(
+      payloads[2]?.kind === "attachment.failed" ? payloads[2].attachment.native : undefined,
+    ).toBeNull();
+    expect(
+      payloads[3]?.kind === "interaction.opened" ? payloads[3].interaction.native : undefined,
+    ).toEqual(INTERACTION_NATIVE);
+    expect(serverSnapshot.frames.map((item) => item.event.payload)).toEqual(
+      attachmentFrames().map((item) => item.event.payload),
+    );
+  });
+
+  it("removes attachment recovery locators from subscribed frames and preserves interaction correlation", async () => {
+    const fixture = runtimeFixture();
+    const serverFrames = attachmentFrames();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+    const stream = await caller.session.subscribe({ sessionId: "session-1" });
+    const iterator = stream[Symbol.asyncIterator]();
+    const rendererFrames: SessionStreamFrame[] = [];
+
+    for (const serverFrame of serverFrames) {
+      const pending = iterator.next();
+      await Promise.resolve();
+      fixture.emit(serverFrame);
+      rendererFrames.push(trackedValue((await pending).value).data as SessionStreamFrame);
+    }
+    await iterator.return?.();
+
+    const payloads = rendererFrames.map((item) => item.event.payload);
+    expect(
+      payloads[0]?.kind === "attachment.opened" ? payloads[0].attachment.native : undefined,
+    ).toBeNull();
+    expect(
+      payloads[1]?.kind === "attachment.native_referenced" ? payloads[1].native : undefined,
+    ).toEqual({
+      id: null,
+      detail: null,
+    });
+    expect(
+      payloads[2]?.kind === "attachment.failed" ? payloads[2].attachment.native : undefined,
+    ).toBeNull();
+    expect(
+      payloads[3]?.kind === "interaction.opened" ? payloads[3].interaction.native : undefined,
+    ).toEqual(INTERACTION_NATIVE);
+    expect(serverFrames.map((item) => item.event.payload)).toEqual(
+      attachmentFrames().map((item) => item.event.payload),
+    );
+  });
+
   it("keeps exhaustive capability catalogs out of renderer snapshots and streams", async () => {
     const fixture = runtimeFixture();
     const base = snapshot();

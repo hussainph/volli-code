@@ -551,18 +551,49 @@ function rendererCapabilitySnapshot(
   return { ...snapshot, catalog: [] };
 }
 
+/** Recovery locators stay in the server runtime; the renderer only needs attachment identity/state. */
+function rendererAttachment<
+  Attachment extends {
+    native: SessionRuntimeSnapshot["projection"]["attachments"][number]["native"];
+  },
+>(attachment: Attachment): Attachment {
+  return attachment.native === null ? attachment : { ...attachment, native: null };
+}
+
 function rendererFrame(frame: SessionStreamFrame): SessionStreamFrame {
-  if (frame.event.payload.kind !== "capabilities.updated") return frame;
-  return {
-    ...frame,
-    event: {
-      ...frame.event,
-      payload: {
-        kind: "capabilities.updated",
-        snapshot: rendererCapabilitySnapshot(frame.event.payload.snapshot),
-      },
-    },
-  };
+  const payload = frame.event.payload;
+  switch (payload.kind) {
+    case "attachment.opened":
+    case "attachment.failed":
+      return {
+        ...frame,
+        event: {
+          ...frame.event,
+          payload: { ...payload, attachment: rendererAttachment(payload.attachment) },
+        },
+      };
+    case "attachment.native_referenced":
+      return {
+        ...frame,
+        event: {
+          ...frame.event,
+          payload: { ...payload, native: { id: null, detail: null } },
+        },
+      };
+    case "capabilities.updated":
+      return {
+        ...frame,
+        event: {
+          ...frame.event,
+          payload: {
+            kind: "capabilities.updated",
+            snapshot: rendererCapabilitySnapshot(payload.snapshot),
+          },
+        },
+      };
+    default:
+      return frame;
+  }
 }
 
 function rendererProjection(
@@ -571,6 +602,11 @@ function rendererProjection(
   return {
     projection: {
       ...snapshot.projection,
+      attachments: snapshot.projection.attachments.map(rendererAttachment),
+      liveExecutor:
+        snapshot.projection.liveExecutor === null
+          ? null
+          : rendererAttachment(snapshot.projection.liveExecutor),
       capabilities: snapshot.projection.capabilities.map(rendererCapabilitySnapshot),
     },
     throughSequence: snapshot.throughSequence,
