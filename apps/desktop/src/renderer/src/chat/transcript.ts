@@ -142,7 +142,7 @@ export function appendFrames(
   let settled: Map<string, number> | null = null;
   for (const frame of fresh) {
     const kind = frame.event.payload.kind;
-    if (kind === "turn.started" || kind === "turn.completed") {
+    if (kind === "turn.started" || kind === "turn.completed" || kind === "turn.interrupted") {
       turnActive = kind === "turn.started";
       turnEpoch += 1;
     }

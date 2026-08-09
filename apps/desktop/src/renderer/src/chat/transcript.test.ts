@@ -99,7 +99,10 @@ function transcriptFrame(sequence: number, held: UIMessage): ChatSessionFrame {
   );
 }
 
-function turn(sequence: number, kind: "turn.started" | "turn.completed"): ChatSessionFrame {
+function turn(
+  sequence: number,
+  kind: "turn.started" | "turn.completed" | "turn.interrupted",
+): ChatSessionFrame {
   return frame(sequence, { kind, attachmentId: "attachment-1", turnId: "turn-1" });
 }
 
@@ -177,6 +180,16 @@ describe("appendFrames", () => {
 
     expect(whole.turnActive).toBe(false);
     expect(whole.turnEpoch).toBe(2);
+  });
+
+  it("ends the working state when durable history says the turn was interrupted", () => {
+    const interrupted = appendFrames(EMPTY_TRANSCRIPT, [
+      turn(1, "turn.started"),
+      turn(2, "turn.interrupted"),
+    ]);
+
+    expect(interrupted.turnActive).toBe(false);
+    expect(interrupted.turnEpoch).toBe(2);
   });
 });
 

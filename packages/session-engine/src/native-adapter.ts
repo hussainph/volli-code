@@ -62,6 +62,18 @@ export interface NativeAttachmentSpec {
 
 export type NativeMessageDelivery = "queue" | "steer" | "replace";
 
+/** Typed attach refusal whose user-actionable blocker must survive as Attention. */
+export class NativeAttachmentError extends Error {
+  constructor(
+    message: string,
+    readonly code: string,
+    readonly attentionKind: "configuration_invalid" | "adapter_unrecoverable",
+  ) {
+    super(message);
+    this.name = "NativeAttachmentError";
+  }
+}
+
 export type HarnessCommand =
   | {
       kind: "message.submit";
@@ -76,6 +88,12 @@ export type HarnessCommand =
     }
   | {
       kind: "executor.interrupt";
+      commandId: string;
+      sessionId: string;
+      attachmentId: string;
+    }
+  | {
+      kind: "executor.retry";
       commandId: string;
       sessionId: string;
       attachmentId: string;
@@ -169,6 +187,7 @@ export type HarnessObservation =
     })
   | (HarnessObservationBase & { kind: "turn.started"; turnId: string })
   | (HarnessObservationBase & { kind: "turn.completed"; turnId: string })
+  | (HarnessObservationBase & { kind: "turn.interrupted"; turnId: string })
   | (HarnessObservationBase & {
       kind: "interaction.opened";
       interaction: Omit<SessionInteraction, "attachmentId">;

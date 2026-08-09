@@ -847,6 +847,26 @@ describe("Session tRPC router", () => {
     ]);
   });
 
+  it("passes an explicit executor retry to the Session runtime", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await caller.session.command({
+      commandId: "retry-command",
+      sessionId: "session-1",
+      command: { kind: "executor.retry", attachmentId: "attachment-1" },
+    });
+
+    expect(fixture.calls.command.at(-1)).toEqual({
+      commandId: "retry-command",
+      sessionId: "session-1",
+      command: { kind: "executor.retry", attachmentId: "attachment-1" },
+    });
+  });
+
   it("carries per-prompt answers through a resolve command and leaves absent ones absent", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({

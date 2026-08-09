@@ -235,6 +235,7 @@ const commandSchema = z.discriminatedUnion("kind", [
     variant: nullableString.optional(),
   }),
   z.object({ kind: z.literal("executor.interrupt"), attachmentId: nonEmptyString.optional() }),
+  z.object({ kind: z.literal("executor.retry"), attachmentId: nonEmptyString.optional() }),
   z.object({
     kind: z.literal("interaction.resolve"),
     interactionId: nonEmptyString,

@@ -549,6 +549,21 @@ stable.
 **Exit:** Stop works; a settled turn survives app relaunch without duplication;
 an interrupted streaming tail never masquerades as committed history.
 
+Bounded follow-ups deferred from this slice:
+
+- Own provider authentication as an in-app surface after the existing manual
+  Ticket-terminal handoff and explicit Retry path are proven. Session 4 does
+  not create a terminal, launch Pi inside one, or expose provider credentials.
+- Do not guess or migrate pre-Session-4 Pi sidecars that lack Volli semantic
+  markers. Recovery either validates the owned marked sidecar or fails/raises
+  recovery Attention explicitly.
+- Do not recover accepted queue/steer messages that had not drained before a
+  crash; Pi's sidecar contains no durable evidence for them yet.
+- Keep cold full replay as the correctness path. A durable cursor checkpoint,
+  bidirectional sidecar-versus-ledger inventory audit, descriptor-relative
+  no-follow hardening, compaction, branching, and generic recovery registries
+  are separate follow-ups rather than expansions of this vertical slice.
+
 ### Session 5 — Model access and structured UI reset
 
 - Replace OpenCode Runtime Catalog consumption with sanitized Pi Model Access.

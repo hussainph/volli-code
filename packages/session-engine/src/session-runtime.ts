@@ -32,6 +32,7 @@ import type {
   ObservationSink,
   Reconciliation,
 } from "./native-adapter";
+import { NativeAttachmentError } from "./native-adapter";
 import type { SessionTranscriptArtifact, TranscriptArtifactStore } from "./transcript-artifacts";
 import {
   applyTranscriptDelta,
@@ -118,6 +119,7 @@ export type SessionClientCommand =
       variant?: string | null;
     }
   | { kind: "executor.interrupt"; attachmentId?: string }
+  | { kind: "executor.retry"; attachmentId?: string }
   | {
       kind: "interaction.resolve";
       interactionId: string;
@@ -142,6 +144,9 @@ type MessageCommandRequest = ExistingSessionCommandRequest & {
 };
 type InterruptCommandRequest = ExistingSessionCommandRequest & {
   command: Extract<SessionClientCommand, { kind: "executor.interrupt" }>;
+};
+type RetryCommandRequest = ExistingSessionCommandRequest & {
+  command: Extract<SessionClientCommand, { kind: "executor.retry" }>;
 };
 type ResolveInteractionCommandRequest = ExistingSessionCommandRequest & {
   command: Extract<SessionClientCommand, { kind: "interaction.resolve" }>;
@@ -455,6 +460,8 @@ class DefaultSessionRuntime implements SessionRuntime {
         return this.#submitMessage(request as MessageCommandRequest, projection, location, existed);
       case "executor.interrupt":
         return this.#interrupt(request as InterruptCommandRequest, projection, location, existed);
+      case "executor.retry":
+        return this.#retry(request as RetryCommandRequest, projection, location, existed);
       case "interaction.resolve":
         return this.#resolveInteraction(
           request as ResolveInteractionCommandRequest,
@@ -571,14 +578,19 @@ class DefaultSessionRuntime implements SessionRuntime {
       handle = await adapter.attach(spec, sink);
     } catch (error) {
       sink.discard();
+      const nativeFailure =
+        error instanceof NativeAttachmentError
+          ? { code: error.code, attentionKind: error.attentionKind }
+          : null;
       return this.#failAttach({
         request,
         submitted,
         adapter,
         location,
-        code: "attach_failed",
+        code: nativeFailure?.code ?? "attach_failed",
         detail: errorMessage(error),
         attachmentId,
+        attentionKind: nativeFailure?.attentionKind,
       });
     }
 
@@ -605,6 +617,20 @@ class DefaultSessionRuntime implements SessionRuntime {
         kind: "attachment.opened",
         attachment,
       });
+      const clearedConfiguration = await Promise.all(
+        projection.attention.active
+          .filter(({ kind }) => kind === "configuration_invalid")
+          .map(({ id: attentionId }) =>
+            this.ports.engine.observe({
+              id: this.#id("event"),
+              sessionId: request.sessionId,
+              occurredAt: this.ports.clock.now(),
+              provenance: adapterProvenance(adapter, location.venue),
+              kind: "attention.cleared",
+              attentionId,
+            }),
+          ),
+      );
       this.#bindings.set(attachmentId, {
         adapter,
         handle,
@@ -614,7 +640,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         cursor: null,
         reconcileInFlight: null,
       });
-      await this.#publish([opened]);
+      await this.#publish([opened, ...clearedConfiguration]);
       await sink.activate();
       await this.#recordCapabilities(
         request.sessionId,
@@ -728,6 +754,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     code: string;
     detail: string;
     attachmentId?: string;
+    attentionKind?: "configuration_invalid" | "adapter_unrecoverable";
   }): Promise<SessionRuntimeCommandResult> {
     const attachmentId = input.attachmentId ?? this.#id("attachment");
     const failed = await this.ports.engine.observe({
@@ -750,7 +777,32 @@ class DefaultSessionRuntime implements SessionRuntime {
       },
       failure: { code: input.code, detail: input.detail, diagnostic: null },
     });
-    await this.#publish([failed]);
+    const attention =
+      input.attentionKind === undefined
+        ? null
+        : await this.ports.engine.observe({
+            id: this.#id("event"),
+            sessionId: input.request.sessionId,
+            occurredAt: this.ports.clock.now(),
+            provenance: adapterProvenance(
+              // `attentionKind` is only supplied for a typed failure thrown by
+              // the resolved adapter's attach call.
+              input.adapter as NativeHarnessAdapter,
+              input.location.venue,
+            ),
+            kind: "attention.raised",
+            attention: {
+              id: this.#id("attention"),
+              // The attachment attempt is already a closed fact. This Attention
+              // belongs to the Session until a fresh attach succeeds, rather
+              // than pretending a failed binding can receive recovery work.
+              attachmentId: null,
+              kind: input.attentionKind,
+              detail: input.detail,
+              diagnostic: null,
+            },
+          });
+    await this.#publish(attention === null ? [failed] : [failed, attention]);
     const receipt = await this.#recordDelivery(
       input.request.sessionId,
       null,
@@ -895,6 +947,104 @@ class DefaultSessionRuntime implements SessionRuntime {
       binding.venue,
       receipt,
       "executor.interrupted",
+    );
+    return this.#result(request.sessionId, submitted.command, durable);
+  }
+
+  async #retry(
+    request: RetryCommandRequest,
+    projection: SessionProjection,
+    location: SessionLocation,
+    existed: boolean,
+  ): Promise<SessionRuntimeCommandResult> {
+    const attachmentId = request.command.attachmentId ?? projection.liveExecutor?.id;
+    if (!attachmentId) throw new SessionRuntimeConflictError("No live executor can be retried");
+    const submitted = await this.ports.engine.submit({
+      commandId: request.commandId,
+      sessionId: request.sessionId,
+      intent: { kind: "executor.retry", attachmentId },
+      provenance: userProvenance(location.venue),
+    });
+    await this.#publishSubmit(submitted, existed);
+    if (submitted.receipt && submitted.receipt.status !== "unreconciled") {
+      return this.#result(request.sessionId, submitted.command, submitted.receipt);
+    }
+    const needsRehydration = !this.#bindings.has(attachmentId);
+    if (!existed && needsRehydration) {
+      const unavailable = await this.#rejectUnavailableLocation(
+        request.sessionId,
+        submitted.command,
+        projection,
+        location,
+      );
+      if (unavailable) return this.#result(request.sessionId, submitted.command, unavailable);
+    }
+    const attachment = projection.attachments.find(({ id }) => id === attachmentId);
+    /* v8 ignore next 3 -- SessionEngine only routes retry to an open attachment. */
+    if (attachment === undefined) {
+      throw new SessionRuntimeNotFoundError(`Attachment ${attachmentId} is not open`);
+    }
+    let binding: BindingRecord;
+    try {
+      binding = await this.#bindingForCommand(
+        submitted.command,
+        projection,
+        location,
+        !existed && needsRehydration,
+      );
+    } catch (error) {
+      const detail = `Retry recovery failed: ${errorMessage(error)}`;
+      const adapter = adapterIdentity(attachment.adapterId);
+      const recoveryAttentionId = `${attachmentId}:recovery`;
+      if (!projection.attention.active.some(({ id }) => id === recoveryAttentionId)) {
+        const attention = await this.ports.engine.observe({
+          id: this.#id("event"),
+          sessionId: request.sessionId,
+          attachmentId,
+          occurredAt: this.ports.clock.now(),
+          provenance: adapterProvenance(adapter, location.venue),
+          kind: "attention.raised",
+          attention: {
+            id: recoveryAttentionId,
+            attachmentId,
+            kind: "adapter_unrecoverable",
+            detail,
+            diagnostic: null,
+          },
+        });
+        await this.#publish([attention]);
+      }
+      const receipt = await this.#recordDelivery(
+        request.sessionId,
+        attachmentId,
+        adapter,
+        location.venue,
+        {
+          commandId: request.commandId,
+          status: "rejected",
+          code: error instanceof NativeAttachmentError ? error.code : "retry_recovery_failed",
+          detail,
+          native: null,
+        },
+        "executor.retried",
+      );
+      return this.#result(request.sessionId, submitted.command, receipt);
+    }
+    const recovered = await this.#recoverAdapterDelivery({ request, submitted, binding, existed });
+    if (recovered) return recovered;
+    const receipt = await binding.handle.dispatch({
+      kind: "executor.retry",
+      commandId: request.commandId,
+      sessionId: request.sessionId,
+      attachmentId,
+    });
+    const durable = await this.#recordDelivery(
+      request.sessionId,
+      attachmentId,
+      binding.adapter,
+      binding.venue,
+      receipt,
+      "executor.retried",
     );
     return this.#result(request.sessionId, submitted.command, durable);
   }
@@ -1229,10 +1379,54 @@ class DefaultSessionRuntime implements SessionRuntime {
     this.#assertOpen();
     const location = await this.ports.locations.resolve(projection.session);
     this.#assertOpen();
-    const binding = await this.#bindingForAttachment(input.attachmentId, projection, location);
+    const attachment = projection.attachments.find(({ id }) => id === input.attachmentId);
+    if (attachment === undefined) {
+      throw new SessionRuntimeNotFoundError(`Attachment ${input.attachmentId} is not open`);
+    }
+    const recoveryAttentionId = `${input.attachmentId}:recovery`;
+    let binding: BindingRecord;
+    try {
+      binding = await this.#bindingForAttachment(input.attachmentId, projection, location);
+    } catch (error) {
+      // Only failure to reconstruct the binding is unrecoverable. A binding
+      // that was reconstructed and then had a transient reconcile failure is
+      // still a live executor and remains a normal retryable transport error.
+      if (this.#closed) throw error;
+      if (projection.attention.active.some(({ id }) => id === recoveryAttentionId)) throw error;
+      const detail = `Recovery failed: ${errorMessage(error)}`;
+      const attention = await this.ports.engine.observe({
+        id: this.#id("event"),
+        sessionId: input.sessionId,
+        attachmentId: input.attachmentId,
+        occurredAt: this.ports.clock.now(),
+        provenance: adapterProvenance(adapterIdentity(attachment.adapterId), location.venue),
+        kind: "attention.raised",
+        attention: {
+          id: recoveryAttentionId,
+          attachmentId: input.attachmentId,
+          kind: "adapter_unrecoverable",
+          detail,
+          diagnostic: null,
+        },
+      });
+      await this.#publish([attention]);
+      throw error;
+    }
     await this.#assertBindingOperationOpen();
     await this.#reconcileBinding(binding, true);
     await this.#assertBindingOperationOpen();
+    if (projection.attention.active.some(({ id }) => id === recoveryAttentionId)) {
+      const cleared = await this.ports.engine.observe({
+        id: this.#id("event"),
+        sessionId: input.sessionId,
+        attachmentId: input.attachmentId,
+        occurredAt: this.ports.clock.now(),
+        provenance: adapterProvenance(adapterIdentity(attachment.adapterId), location.venue),
+        kind: "attention.cleared",
+        attentionId: recoveryAttentionId,
+      });
+      await this.#publish([cleared]);
+    }
   }
 
   async close(): Promise<void> {
@@ -1444,6 +1638,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       }
       case "turn.started":
       case "turn.completed":
+      case "turn.interrupted":
         event = await this.ports.engine.observe({
           ...base,
           kind: observation.kind,
@@ -1760,6 +1955,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       | "executor.start.requested"
       | "executor.stop.requested"
       | "executor.interrupted"
+      | "executor.retried"
       | "message.submitted"
       | "interaction.resolved",
   ): Promise<CommandReceipt> {
@@ -2300,6 +2496,7 @@ function resultKindFor(
   | "executor.start.requested"
   | "executor.stop.requested"
   | "executor.interrupted"
+  | "executor.retried"
   | "message.submitted"
   | "interaction.resolved" {
   switch (command.intent.kind) {
@@ -2309,6 +2506,8 @@ function resultKindFor(
       return "executor.stop.requested";
     case "executor.interrupt":
       return "executor.interrupted";
+    case "executor.retry":
+      return "executor.retried";
     case "message.submit":
       return "message.submitted";
     case "interaction.resolve":

@@ -24,6 +24,7 @@ import type {
   SessionEvent,
   SessionEventPayload,
   SessionEventProvenance,
+  SessionInput,
   SessionLedger,
   SessionLedgerClock,
   SessionLedgerIds,
@@ -69,6 +70,11 @@ export interface SubmitSessionCommandResult {
 
 export interface SessionEngine {
   createSession(request: CreateSessionRequest): Promise<CreateSessionResult>;
+  getOrRecordSessionInput(request: {
+    sessionId: string;
+    input: SessionInput;
+    provenance: SessionEventProvenance;
+  }): Promise<SessionInput>;
   observe(observation: SessionObservation): Promise<SessionEvent>;
   submit(request: SubmitSessionCommandRequest): Promise<SubmitSessionCommandResult>;
   getSession(query: GetSessionQuery): Promise<SessionProjection | null>;
@@ -181,6 +187,34 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           receipt: receiptEvent.payload.receipt,
           receiptEvent,
         };
+      });
+    },
+
+    async getOrRecordSessionInput(request) {
+      return ports.ledger.transaction((transaction) => {
+        const session = transaction.getSession(request.sessionId);
+        if (!session) throw new SessionEngineNotFoundError(request.sessionId);
+        const events = transaction.listEvents({ sessionId: request.sessionId });
+        const existing = events.find(
+          (event) =>
+            event.payload.kind === "session.input.recorded" &&
+            event.payload.input.kind === request.input.kind,
+        );
+        if (existing?.payload.kind === "session.input.recorded") {
+          return { ...existing.payload.input };
+        }
+        const occurredAt = ports.clock.now();
+        const event: SessionEvent = {
+          id: ports.ids.next("event"),
+          sessionId: request.sessionId,
+          sequence: nextSequence(events),
+          occurredAt,
+          recordedAt: ports.clock.now(),
+          provenance: request.provenance,
+          payload: { kind: "session.input.recorded", input: { ...request.input } },
+        };
+        transaction.appendEvent(event);
+        return { ...request.input };
       });
     },
 
@@ -697,7 +731,8 @@ function resolveCommandRoute(
           };
     }
     case "executor.stop":
-    case "executor.interrupt": {
+    case "executor.interrupt":
+    case "executor.retry": {
       const attachment = projection.attachments.find(
         (candidate) => candidate.id === intent.attachmentId,
       );
@@ -963,7 +998,8 @@ function assertAdapterReceiptRoute(
     (command.intent.kind === "message.submit" ||
       command.intent.kind === "interaction.resolve" ||
       command.intent.kind === "executor.stop" ||
-      command.intent.kind === "executor.interrupt") &&
+      command.intent.kind === "executor.interrupt" ||
+      command.intent.kind === "executor.retry") &&
     observationAttachmentId(observation) !== route.attachmentId
   ) {
     throw new SessionEngineConflictError(
@@ -981,6 +1017,7 @@ function expectedResultKind(intent: SessionCommandIntent["kind"]): CommandReceip
     "executor.start": "executor.start.requested",
     "executor.stop": "executor.stop.requested",
     "executor.interrupt": "executor.interrupted",
+    "executor.retry": "executor.retried",
     "message.submit": "message.submitted",
     "interaction.resolve": "interaction.resolved",
   };

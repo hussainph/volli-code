@@ -1,16 +1,23 @@
 /** The singular, Node-hostable Agent Runtime backed by Pi core. */
 
 import { randomUUID } from "node:crypto";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { realpath } from "node:fs/promises";
+import { isAbsolute, relative, resolve } from "node:path";
+import type { AgentMessage, CustomEntry, MessageEntry } from "@earendil-works/pi-agent-core";
 import { Agent, JsonlSessionRepo, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import type { AssistantMessage, Models } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Models, UserMessage } from "@earendil-works/pi-ai";
+import { isActivityKind } from "@volli/shared";
 import type {
   AgentRuntime,
   DeliveryOutcome,
   RuntimeAttachmentHandle,
+  RuntimeActivityObservation,
   RuntimeActivityValue,
   RuntimeFailure,
+  SettledMessageObservation,
+  AttentionObservation,
   TicketRuntimeSpec,
+  TurnObservation,
 } from "../contracts";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
 import { mapPiActivity } from "./activity";
@@ -67,6 +74,230 @@ function durableMessage(message: AgentMessage): AgentMessage {
   return JSON.parse(JSON.stringify(message)) as AgentMessage;
 }
 
+function queuedUserMessage(text: string): UserMessage {
+  return { role: "user", content: text, timestamp: Date.now() };
+}
+
+function recoverableMessage(entry: MessageEntry): boolean {
+  const message = entry.message;
+  if (message.role !== "assistant") return true;
+  return !["aborted", "error", "deferred"].includes(message.stopReason);
+}
+
+const VOLLI_OBSERVATION_MARKER = "volli.observation.v1";
+
+type RecoverableObservation =
+  | TurnObservation
+  | SettledMessageObservation
+  | RuntimeActivityObservation
+  | AttentionObservation;
+
+interface AcceptedMessageCommandMarker {
+  kind: "command-accepted";
+  commandId: string;
+  operation: "message.submit";
+  delivery: "prompt" | "queue" | "steer";
+  turnId: string;
+  message: UserMessage;
+}
+
+interface AcceptedRetryCommandMarker {
+  kind: "command-accepted";
+  commandId: string;
+  operation: "executor.retry";
+  delivery: "retry";
+  turnId: string;
+}
+
+type AcceptedCommandMarker = AcceptedMessageCommandMarker | AcceptedRetryCommandMarker;
+
+type RecoverableMarker = RecoverableObservation | AcceptedCommandMarker;
+
+function recoveredObservation(
+  entry: CustomEntry,
+): (RecoverableMarker & { occurredAt: number; recoveryCursor: string }) | null {
+  if (entry.customType !== VOLLI_OBSERVATION_MARKER) return null;
+  const data = entry.data;
+  if (!isRecord(data)) throw new Error("Pi recovery marker is malformed.");
+  if (!isRecoverableObservation(data)) throw new Error("Pi recovery marker is malformed.");
+  return {
+    ...(data as unknown as RecoverableMarker),
+    occurredAt: entry.timestamp,
+    recoveryCursor: entry.id,
+  };
+}
+
+function isRecoverableObservation(value: Record<string, unknown>): boolean {
+  switch (value["kind"]) {
+    case "turn":
+      return (
+        isOneOf(value["state"], ["started", "completed", "interrupted"]) &&
+        typeof value["turnId"] === "string"
+      );
+    case "message-settled":
+      return typeof value["turnId"] === "string" && isSettledMessage(value["message"]);
+    case "activity":
+      return (
+        typeof value["turnId"] === "string" &&
+        typeof value["activityId"] === "string" &&
+        isOneOf(value["state"], ["completed", "failed"]) &&
+        isActivityDescriptor(value["descriptor"]) &&
+        isRuntimeValue(value["input"]) &&
+        isRuntimeValue(value["output"]) &&
+        (value["error"] === undefined || typeof value["error"] === "string")
+      );
+    case "attention":
+      return (
+        isOneOf(value["state"], ["raised", "cleared"]) &&
+        isOneOf(value["reason"], [
+          "auth",
+          "configuration",
+          "context",
+          "runtime-failure",
+          "partial-turn",
+        ]) &&
+        typeof value["message"] === "string"
+      );
+    case "command-accepted":
+      if (typeof value["commandId"] !== "string" || typeof value["turnId"] !== "string") {
+        return false;
+      }
+      if (value["operation"] === "executor.retry") {
+        return value["delivery"] === "retry" && value["message"] === undefined;
+      }
+      return (
+        value["operation"] === "message.submit" &&
+        isOneOf(value["delivery"], ["prompt", "queue", "steer"]) &&
+        isPersistedUserMessage(value["message"])
+      );
+    default:
+      return false;
+  }
+}
+
+function isPersistedUserMessage(value: unknown): value is UserMessage {
+  return (
+    isRecord(value) &&
+    value["role"] === "user" &&
+    typeof value["content"] === "string" &&
+    typeof value["timestamp"] === "number" &&
+    Number.isFinite(value["timestamp"])
+  );
+}
+
+function assertUniqueAcceptedCommands(markers: readonly RecoverableMarker[]): void {
+  const commands = new Set<string>();
+  const turns = new Set<string>();
+  for (const marker of markers) {
+    if (marker.kind !== "command-accepted") continue;
+    if (commands.has(marker.commandId) || turns.has(marker.turnId)) {
+      throw new Error("Pi recovery delivery markers conflict.");
+    }
+    commands.add(marker.commandId);
+    turns.add(marker.turnId);
+  }
+}
+
+function isSettledMessage(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (
+    typeof value["entryId"] !== "string" ||
+    value["role"] !== "assistant" ||
+    typeof value["text"] !== "string" ||
+    (value["reasoning"] !== undefined && typeof value["reasoning"] !== "string")
+  ) {
+    return false;
+  }
+  const model = value["model"];
+  if (
+    model !== undefined &&
+    (!isRecord(model) ||
+      typeof model["providerId"] !== "string" ||
+      typeof model["modelId"] !== "string")
+  ) {
+    return false;
+  }
+  const usage = value["usage"];
+  return (
+    usage === undefined ||
+    (isRecord(usage) &&
+      optionalFiniteNumber(usage["inputTokens"]) &&
+      optionalFiniteNumber(usage["outputTokens"]) &&
+      optionalFiniteNumber(usage["costUsd"]))
+  );
+}
+
+function isActivityDescriptor(value: unknown): boolean {
+  if (!isRecord(value) || !isActivityKind(value["kind"])) return false;
+  if (typeof value["nativeToolName"] !== "string" || !isRecord(value["subject"])) return false;
+  const subject = value["subject"];
+  if (!nullableString(subject["label"]) || !nullableString(subject["path"])) return false;
+  const lineRange = subject["lineRange"];
+  if (
+    lineRange !== null &&
+    (!isRecord(lineRange) ||
+      !Number.isInteger(lineRange["start"]) ||
+      !Number.isInteger(lineRange["end"]))
+  ) {
+    return false;
+  }
+  const outcome = value["outcome"];
+  if (outcome !== null) {
+    if (!isRecord(outcome)) return false;
+    for (const key of [
+      "exitCode",
+      "matchCount",
+      "fileCount",
+      "lineCount",
+      "bytes",
+      "addedLines",
+      "removedLines",
+    ]) {
+      if (!nullableFiniteNumber(outcome[key])) return false;
+    }
+    if (!nullableString(outcome["diff"]) || !nullableString(outcome["summary"])) return false;
+  }
+  return nullableFiniteNumber(value["startedAt"]) && nullableFiniteNumber(value["endedAt"]);
+}
+
+function isRuntimeValue(value: unknown): boolean {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  // JSONL parsing cannot produce NaN or infinities; retain the check for callers
+  // constructing an in-memory entry through a future repository implementation.
+  /* v8 ignore next */
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isRuntimeValue);
+  return isRecord(value) && Object.values(value).every(isRuntimeValue);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isOneOf<const T extends string>(value: unknown, allowed: readonly T[]): value is T {
+  return typeof value === "string" && allowed.includes(value as T);
+}
+
+function optionalFiniteNumber(value: unknown): boolean {
+  return value === undefined || (typeof value === "number" && Number.isFinite(value));
+}
+
+function nullableFiniteNumber(value: unknown): boolean {
+  return value === null || (typeof value === "number" && Number.isFinite(value));
+}
+
+function nullableString(value: unknown): boolean {
+  return value === null || typeof value === "string";
+}
+
+async function assertOwnedRecoveryPath(root: string, candidate: string): Promise<void> {
+  const [ownedRoot, ownedCandidate] = await Promise.all([realpath(root), realpath(candidate)]);
+  const pathFromRoot = relative(ownedRoot, ownedCandidate);
+  if (pathFromRoot === "" || pathFromRoot.startsWith("..") || isAbsolute(pathFromRoot)) {
+    throw new Error("Pi recovery sidecar is outside the runtime-owned session directory.");
+  }
+}
+
 function isAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
 }
@@ -113,20 +344,143 @@ async function attachTicketSession(
   let toolEnv: TicketExecutionEnv | undefined;
   let unsubscribe: (() => void) | undefined;
   let abortListener: (() => void) | undefined;
+  let createdSidecar = false;
 
   try {
     const sidecars = new JsonlSessionRepo({ fs: sidecarEnv, sessionsRoot: host.sessionDataDir });
-    const sidecar = await sidecars.create({
-      cwd: spec.worktreePath,
-      metadata: {
-        volliSessionId: spec.identity.sessionId,
-        volliThreadId: spec.identity.rootThreadId,
-        volliAttachmentId: spec.identity.attachmentId,
-      },
-    });
+    const expectedMetadata = {
+      volliSessionId: spec.identity.sessionId,
+      volliThreadId: spec.identity.rootThreadId,
+      volliAttachmentId: spec.identity.attachmentId,
+    };
+    const inputRecovery = spec.recovery;
+    const sidecar =
+      inputRecovery === undefined
+        ? await sidecars.create({ cwd: spec.worktreePath, metadata: expectedMetadata })
+        : await (async () => {
+            const candidates = (await sidecars.list({ cwd: spec.worktreePath })).filter(
+              (candidate) => candidate.id === inputRecovery.sessionId,
+            );
+            if (candidates.length !== 1) {
+              throw new Error("Pi recovery sidecar was not found uniquely for this worktree.");
+            }
+            const candidate = candidates[0]!;
+            if (resolve(candidate.path) !== resolve(inputRecovery.sessionFilePath)) {
+              throw new Error("Pi recovery sidecar path does not match the owned session.");
+            }
+            await assertOwnedRecoveryPath(host.sessionDataDir, candidate.path);
+            if (
+              candidate.metadata?.["volliSessionId"] !== expectedMetadata.volliSessionId ||
+              candidate.metadata?.["volliThreadId"] !== expectedMetadata.volliThreadId ||
+              candidate.metadata?.["volliAttachmentId"] !== expectedMetadata.volliAttachmentId
+            ) {
+              throw new Error("Pi recovery sidecar identity does not match this attachment.");
+            }
+            return sidecars.open(candidate);
+          })();
+    createdSidecar = inputRecovery === undefined;
     const sidecarMetadata = await sidecar.getMetadata();
     sidecarPath = sidecarMetadata.path;
     const recovery = recoveryRefFor(sidecarMetadata.id, sidecarPath);
+    const recoveredEntries = inputRecovery
+      ? await sidecar.findEntries({ order: "oldestFirst" })
+      : [];
+    const recoveredMarkers = recoveredEntries
+      .filter((entry): entry is CustomEntry => entry.type === "custom")
+      .map(recoveredObservation)
+      .filter(
+        (observation): observation is NonNullable<ReturnType<typeof recoveredObservation>> =>
+          observation !== null,
+      );
+    const recoveredObservations = recoveredMarkers.filter(
+      (
+        marker,
+      ): marker is RecoverableObservation & {
+        occurredAt: number;
+        recoveryCursor: string;
+      } => marker.kind !== "command-accepted",
+    );
+    assertUniqueAcceptedCommands(recoveredMarkers);
+    const messageMarkerCounts = new Map<string, number>();
+    for (const observation of recoveredObservations) {
+      if (observation.kind !== "message-settled") continue;
+      messageMarkerCounts.set(
+        observation.message.entryId,
+        (messageMarkerCounts.get(observation.message.entryId) ?? 0) + 1,
+      );
+    }
+    const settledAssistantEntryIds = new Set(
+      recoveredEntries.flatMap((entry) => {
+        if (entry.type !== "message" || entry.message.role !== "assistant") return [];
+        return classifyAssistantMessage(entry.id, entry.message as AssistantMessage).kind ===
+          "settled"
+          ? [entry.id]
+          : [];
+      }),
+    );
+    const disagreedSettledEntryIds = new Set([
+      ...[...settledAssistantEntryIds].filter((entryId) => messageMarkerCounts.get(entryId) !== 1),
+      ...[...messageMarkerCounts.keys()].filter(
+        (entryId) => !settledAssistantEntryIds.has(entryId),
+      ),
+    ]);
+    const acceptedMessages = new Map(
+      recoveredMarkers.flatMap((marker) =>
+        marker.kind === "command-accepted" && marker.operation === "message.submit"
+          ? [[marker.recoveryCursor, marker.message] as const]
+          : [],
+      ),
+    );
+    const recoveredMessages = recoveredEntries.flatMap((entry) => {
+      const accepted = acceptedMessages.get(entry.id);
+      if (accepted !== undefined) return [accepted];
+      if (entry.type !== "message") return [];
+      if (!recoverableMessage(entry) || disagreedSettledEntryIds.has(entry.id)) return [];
+      return [entry.message];
+    });
+    const activeAttentionReasons = new Set<AttentionObservation["reason"]>();
+    const openTurnIds = new Set<string>();
+    for (const observation of recoveredObservations) {
+      if (observation.kind === "turn") {
+        if (observation.state === "started") openTurnIds.add(observation.turnId);
+        else openTurnIds.delete(observation.turnId);
+      }
+      if (observation.kind !== "attention") continue;
+      if (observation.state === "raised") activeAttentionReasons.add(observation.reason);
+      else activeAttentionReasons.delete(observation.reason);
+    }
+    const persistObservation = async <T extends RecoverableMarker>(observation: T): Promise<T> => {
+      const durable = JSON.parse(JSON.stringify(observation)) as T;
+      const markerId = await sidecar.appendCustomEntry(VOLLI_OBSERVATION_MARKER, durable);
+      const marker = await sidecar.getEntry(markerId);
+      /* v8 ignore next -- appendCustomEntry promises the entry it just returned. */
+      if (marker?.type !== "custom") throw new Error("Pi recovery marker was not persisted.");
+      return {
+        ...durable,
+        occurredAt: marker.timestamp,
+        recoveryCursor: marker.id,
+      };
+    };
+    if (disagreedSettledEntryIds.size > 0) {
+      await persistObservation({
+        kind: "attention",
+        state: "raised",
+        reason: "runtime-failure",
+        message:
+          "Pi recovery history is incomplete; an uncommitted assistant message was withheld.",
+      });
+      activeAttentionReasons.add("runtime-failure");
+    }
+    for (const recoveredTurnId of openTurnIds) {
+      await persistObservation({
+        kind: "attention",
+        state: "raised",
+        reason: "partial-turn",
+        message: "A recovered Pi turn ended before its completion marker was committed.",
+      });
+      activeAttentionReasons.add("partial-turn");
+      await persistObservation({ kind: "turn", state: "interrupted", turnId: recoveredTurnId });
+    }
     try {
       toolEnv = await host.executionEnvFactory(spec.worktreePath);
       if (spec.tools.tools.includes("execute")) {
@@ -153,6 +507,46 @@ async function attachTicketSession(
     let failure: RuntimeFailure | undefined;
     let closed = false;
     let cancelled = false;
+    type PendingMessageDelivery = {
+      commandId: string | null;
+      operation: "message.submit";
+      delivery: AcceptedMessageCommandMarker["delivery"];
+      message: UserMessage;
+    };
+    type PendingRetryDelivery = {
+      commandId: string | null;
+      operation: "executor.retry";
+      delivery: "retry";
+    };
+    type PendingDelivery = PendingMessageDelivery | PendingRetryDelivery;
+    let pendingRunDelivery: PendingDelivery | undefined;
+    const pendingQueuedDeliveries = new Map<AgentMessage, PendingMessageDelivery>();
+    const acceptedUserMessages = new WeakSet<UserMessage>();
+    const persistAcceptedDelivery = async (
+      delivery: PendingDelivery | undefined,
+      acceptedTurnId: string,
+    ): Promise<boolean> => {
+      if (!delivery?.commandId) return false;
+      if (delivery.operation === "message.submit") {
+        await persistObservation({
+          kind: "command-accepted",
+          commandId: delivery.commandId,
+          operation: delivery.operation,
+          delivery: delivery.delivery,
+          turnId: acceptedTurnId,
+          message: durableMessage(delivery.message) as UserMessage,
+        });
+      } else {
+        await persistObservation({
+          kind: "command-accepted",
+          commandId: delivery.commandId,
+          operation: delivery.operation,
+          delivery: delivery.delivery,
+          turnId: acceptedTurnId,
+        });
+      }
+      return true;
+    };
     const activityByToolCallId = new Map<
       string,
       { input: RuntimeActivityValue; startedAt: number }
@@ -168,18 +562,30 @@ async function attachTicketSession(
         model,
         thinkingLevel: spec.model.reasoningLevel,
         tools,
+        messages: recoveredMessages,
       },
       streamFn: models.streamSimple.bind(models),
       sessionId: sidecarMetadata.id,
       toolExecution: "sequential",
     });
+    agent.steeringMode = "one-at-a-time";
+    agent.followUpMode = "one-at-a-time";
 
     unsubscribe = agent.subscribe(async (event) => {
       if (event.type === "agent_start") {
         turnId = randomUUID();
         failure = undefined;
         activityByToolCallId.clear();
-        await commitObservation({ kind: "turn", state: "started", turnId });
+        await commitObservation(
+          await persistObservation({ kind: "turn", state: "started", turnId }),
+        );
+        const delivery = pendingRunDelivery;
+        pendingRunDelivery = undefined;
+        if (await persistAcceptedDelivery(delivery, turnId)) {
+          if (delivery?.operation === "message.submit") {
+            acceptedUserMessages.add(delivery.message);
+          }
+        }
         return;
       }
 
@@ -207,7 +613,7 @@ async function attachTicketSession(
         }
 
         try {
-          await commitObservation(activity);
+          await commitObservation(await persistObservation(activity));
         } finally {
           activityByToolCallId.delete(event.toolCallId);
         }
@@ -231,13 +637,30 @@ async function attachTicketSession(
       }
 
       if (event.type === "message_end") {
-        const entryId = await sidecar.appendMessage(durableMessage(event.message));
+        if (event.message.role === "user") {
+          const delivery = pendingQueuedDeliveries.get(event.message);
+          if (delivery !== undefined) {
+            pendingQueuedDeliveries.delete(event.message);
+            if (await persistAcceptedDelivery(delivery, randomUUID())) {
+              acceptedUserMessages.add(event.message);
+            }
+          }
+        }
+        const acceptedUserMessage =
+          event.message.role === "user" && acceptedUserMessages.has(event.message);
+        const entryId = acceptedUserMessage
+          ? null
+          : await sidecar.appendMessage(durableMessage(event.message));
         if (event.message.role !== "assistant") {
           return;
         }
+        /* v8 ignore next -- acceptedUserMessages only contains user messages. */
+        if (entryId === null) throw new Error("Pi assistant message was not persisted.");
         const outcome = classifyAssistantMessage(entryId, event.message as AssistantMessage);
         if (outcome.kind === "settled") {
-          await commitObservation({ kind: "message-settled", turnId, message: outcome.message });
+          await commitObservation(
+            await persistObservation({ kind: "message-settled", turnId, message: outcome.message }),
+          );
         } else if (outcome.kind === "failed") {
           failure = outcome.failure;
         }
@@ -249,18 +672,35 @@ async function attachTicketSession(
       }
       activityByToolCallId.clear();
       if (failure === undefined) {
-        await commitObservation({ kind: "turn", state: "completed", turnId });
+        for (const reason of activeAttentionReasons) {
+          const cleared = await persistObservation({
+            kind: "attention",
+            state: "cleared",
+            reason,
+            message: "Runtime recovered.",
+          });
+          activeAttentionReasons.delete(reason);
+          await commitObservation(cleared);
+        }
+        await commitObservation(
+          await persistObservation({ kind: "turn", state: "completed", turnId }),
+        );
         return;
       }
       if (failure.reason !== "aborted") {
-        await commitObservation({
+        const reason = attentionReasonFor(failure);
+        const raised = await persistObservation({
           kind: "attention",
           state: "raised",
-          reason: attentionReasonFor(failure),
+          reason,
           message: failure.message,
         });
+        activeAttentionReasons.add(reason);
+        await commitObservation(raised);
       }
-      await commitObservation({ kind: "turn", state: "interrupted", turnId });
+      await commitObservation(
+        await persistObservation({ kind: "turn", state: "interrupted", turnId }),
+      );
     });
 
     const onAbort = (): void => {
@@ -273,7 +713,49 @@ async function attachTicketSession(
     abortListener = onAbort;
 
     const handle: RuntimeAttachmentHandle = {
-      async submitUserMessage(text: string): Promise<DeliveryOutcome> {
+      async submitUserMessage(text, delivery = "queue", commandId): Promise<DeliveryOutcome> {
+        if (closed || cancelled) {
+          return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
+        }
+        if (delivery === "replace") {
+          return {
+            kind: "rejected",
+            reason: "replace-unsupported",
+            message: "Pi does not support replacing the active turn.",
+          };
+        }
+        if (agent.state.isStreaming) {
+          const message = queuedUserMessage(text);
+          const pending = {
+            commandId: commandId ?? null,
+            operation: "message.submit" as const,
+            delivery,
+            message,
+          };
+          pendingQueuedDeliveries.set(message, pending);
+          if (delivery === "steer") agent.steer(message);
+          else agent.followUp(message);
+          return { kind: "delivered", delivery };
+        }
+        const delivered =
+          agent.state.messages.length === 0 ? composeFirstUserMessage(spec.brief, text) : text;
+        const message = queuedUserMessage(delivered);
+        observationDelivery.consumeFailure();
+        pendingRunDelivery = {
+          commandId: commandId ?? null,
+          operation: "message.submit" as const,
+          delivery: "prompt" as const,
+          message,
+        };
+        await agent.prompt(message);
+        const failed = observationDelivery.consumeFailure();
+        if (failed !== undefined) {
+          throw failed;
+        }
+        return { kind: "delivered", delivery: "prompt" };
+      },
+
+      async retry(commandId): Promise<DeliveryOutcome> {
         if (closed || cancelled) {
           return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
         }
@@ -281,18 +763,34 @@ async function attachTicketSession(
           return {
             kind: "rejected",
             reason: "busy-unsupported",
-            message: "The agent is still working on the previous message.",
+            message: "Pi is already running.",
           };
         }
-        const delivered =
-          agent.state.messages.length === 0 ? composeFirstUserMessage(spec.brief, text) : text;
-        observationDelivery.consumeFailure();
-        await agent.prompt(delivered);
-        const failed = observationDelivery.consumeFailure();
-        if (failed !== undefined) {
-          throw failed;
+        const messages = [...agent.state.messages];
+        const tail = messages.at(-1);
+        if (
+          tail?.role === "assistant" &&
+          ["aborted", "error", "deferred"].includes(tail.stopReason)
+        ) {
+          messages.pop();
+          agent.state.messages = messages;
+        } else if (tail?.role !== "user" && tail?.role !== "toolResult") {
+          return {
+            kind: "rejected",
+            reason: "retry-unavailable",
+            message: "There is no failed Pi turn to retry.",
+          };
         }
-        return { kind: "delivered", delivery: "prompt" };
+        observationDelivery.consumeFailure();
+        pendingRunDelivery = {
+          commandId: commandId ?? null,
+          operation: "executor.retry" as const,
+          delivery: "retry" as const,
+        };
+        await agent.continue();
+        const failed = observationDelivery.consumeFailure();
+        if (failed !== undefined) throw failed;
+        return { kind: "delivered", delivery: "retry" };
       },
 
       async interrupt(): Promise<void> {
@@ -314,6 +812,61 @@ async function attachTicketSession(
         await observe({ kind: "attachment", state: "closed" });
       },
 
+      async reconcile(cursor) {
+        const entries = await sidecar.findEntries({ order: "oldestFirst" });
+        const cursorIndex =
+          cursor === null ? -1 : entries.findIndex((entry) => entry.id === cursor);
+        if (cursor !== null && cursorIndex < 0) {
+          throw new Error("Pi recovery cursor is not present in the owned sidecar.");
+        }
+        const allMarkers = entries
+          .filter((entry): entry is CustomEntry => entry.type === "custom")
+          .map(recoveredObservation)
+          .filter(
+            (observation): observation is NonNullable<ReturnType<typeof recoveredObservation>> =>
+              observation !== null,
+          );
+        assertUniqueAcceptedCommands(allMarkers);
+        const afterCursorIds = new Set(entries.slice(cursorIndex + 1).map(({ id }) => id));
+        const markers = allMarkers.filter((marker) => afterCursorIds.has(marker.recoveryCursor));
+        const observations = markers
+          .filter(
+            (
+              marker,
+            ): marker is RecoverableObservation & {
+              occurredAt: number;
+              recoveryCursor: string;
+            } => marker.kind !== "command-accepted",
+          )
+          .filter(
+            (observation) =>
+              observation.kind !== "message-settled" ||
+              !disagreedSettledEntryIds.has(observation.message.entryId),
+          );
+        const receipts = [
+          ...new Map(
+            allMarkers
+              .filter(
+                (
+                  marker,
+                ): marker is AcceptedCommandMarker & {
+                  occurredAt: number;
+                  recoveryCursor: string;
+                } => marker.kind === "command-accepted",
+              )
+              .map((marker) => [
+                marker.commandId,
+                { commandId: marker.commandId, acceptedAt: marker.occurredAt },
+              ]),
+          ).values(),
+        ];
+        return {
+          cursor: markers.at(-1)?.recoveryCursor ?? cursor,
+          observations,
+          ...(receipts.length > 0 ? { receipts } : {}),
+        };
+      },
+
       recovery,
     };
 
@@ -322,7 +875,11 @@ async function attachTicketSession(
       onAbort();
     }
 
-    await observe({ kind: "attachment", state: "started", recovery });
+    await observe({
+      kind: "attachment",
+      state: spec.recovery === undefined ? "started" : "recovered",
+      recovery,
+    });
     return handle;
   } catch (error) {
     if (abortListener !== undefined) {
@@ -333,7 +890,7 @@ async function attachTicketSession(
       /* v8 ignore next -- owned-environment cleanup is best effort after a failed attach. */
       () => undefined,
     );
-    if (sidecarPath !== undefined) {
+    if (createdSidecar && sidecarPath !== undefined) {
       await sidecarEnv.remove(sidecarPath, { force: true }).catch(
         /* v8 ignore next -- sidecar deletion is best effort after a failed attach. */
         () => undefined,

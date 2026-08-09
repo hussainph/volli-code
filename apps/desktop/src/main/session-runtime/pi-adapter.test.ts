@@ -84,11 +84,20 @@ class RecordingSink implements ObservationSink {
 class FakeRuntime implements AgentRuntime {
   readonly specs: TicketRuntimeSpec[] = [];
   readonly submissions: string[] = [];
+  readonly deliveries: Array<Parameters<RuntimeAttachmentHandle["submitUserMessage"]>[1]> = [];
+  readonly submissionCommandIds: Array<
+    Parameters<RuntimeAttachmentHandle["submitUserMessage"]>[2]
+  > = [];
   readonly outcomes: DeliveryOutcome[] = [];
   interrupts = 0;
+  retries = 0;
   closes = 0;
   startFailure: unknown = null;
   submitFailure: unknown = null;
+  reconciliationCursor: string | null = null;
+  readonly reconciliationObservations: RuntimeObservation[] = [];
+  readonly reconciliationReceipts: Array<{ commandId: string; acceptedAt: number }> = [];
+  readonly reconciledFrom: Array<string | null> = [];
   recovery: RuntimeAttachmentHandle["recovery"] = {
     runtime: "pi",
     sessionId: "pi-session-9",
@@ -101,16 +110,32 @@ class FakeRuntime implements AgentRuntime {
     this.#observe = spec.observer;
     if (this.startFailure !== null) throw this.startFailure;
     return {
-      submitUserMessage: async (text: string): Promise<DeliveryOutcome> => {
+      submitUserMessage: async (text, delivery, commandId): Promise<DeliveryOutcome> => {
         this.submissions.push(text);
+        this.deliveries.push(delivery);
+        this.submissionCommandIds.push(commandId);
         if (this.submitFailure !== null) throw this.submitFailure;
         return this.outcomes.shift() ?? { kind: "delivered", delivery: "prompt" };
       },
       interrupt: async (): Promise<void> => {
         this.interrupts += 1;
       },
+      retry: async (commandId): Promise<DeliveryOutcome> => {
+        this.retries += 1;
+        this.submissionCommandIds.push(commandId);
+        if (this.submitFailure !== null) throw this.submitFailure;
+        return this.outcomes.shift() ?? { kind: "delivered", delivery: "retry" };
+      },
       close: async (): Promise<void> => {
         this.closes += 1;
+      },
+      reconcile: async (cursor) => {
+        this.reconciledFrom.push(cursor);
+        return {
+          cursor: this.reconciliationCursor ?? cursor,
+          observations: [...this.reconciliationObservations],
+          receipts: [...this.reconciliationReceipts],
+        };
       },
       recovery: this.recovery,
     };
@@ -268,27 +293,23 @@ describe("Pi native adapter attach", () => {
     expect(runtime.specs).toHaveLength(0);
   });
 
-  it("rejects a persisted native resume without starting a fresh Pi sidecar", async () => {
+  it("passes a persisted Pi recovery reference into the runtime", async () => {
     const { adapter, runtime } = composition();
+    const recovery = {
+      runtime: "pi" as const,
+      sessionId: "pi-session-previous",
+      sessionFilePath: "/data/pi-sessions/pi-session-previous.jsonl",
+    };
 
-    await expect(
-      adapter.attach(
-        attachmentSpec({
-          continuity: "native_resume",
-          native: {
-            id: "pi-session-previous",
-            detail: {
-              runtime: "pi",
-              sessionId: "pi-session-previous",
-              sessionFilePath: "/data/pi-sessions/pi-session-previous.jsonl",
-            },
-          },
-        }),
-        new RecordingSink(),
-      ),
-    ).rejects.toThrow(/Pi recovery is not available yet/);
+    await adapter.attach(
+      attachmentSpec({
+        continuity: "native_resume",
+        native: { id: recovery.sessionId, detail: recovery },
+      }),
+      new RecordingSink(),
+    );
 
-    expect(runtime.specs).toHaveLength(0);
+    expect(runtime.spec.recovery).toEqual(recovery);
   });
 
   it("refuses a profile it does not have", async () => {
@@ -340,12 +361,12 @@ describe("Pi native adapter observation translation", () => {
     ]);
   });
 
-  it("closes an interrupted turn without inventing a second story about why", async () => {
+  it("records an interrupted turn without pretending it completed", async () => {
     const { runtime, sink } = await attached();
 
     await runtime.observe({ kind: "turn", state: "interrupted", turnId: "turn-1" });
 
-    expect(sink.kinds()).toEqual(["turn.completed"]);
+    expect(sink.kinds()).toEqual(["turn.interrupted"]);
   });
 
   it("opens a streamed message with a reset and grows it with appends", async () => {
@@ -734,7 +755,7 @@ describe("Pi native adapter observation translation", () => {
     ).toEqual([activityMessageId]);
   });
 
-  it("settles the message the deltas were growing, under the same id", async () => {
+  it("retires the provisional overlay before settling under the stable Pi entry id", async () => {
     const { runtime, sink } = await attached();
 
     await runtime.observe({ kind: "turn", state: "started", turnId: "turn-1" });
@@ -750,19 +771,24 @@ describe("Pi native adapter observation translation", () => {
         model: { providerId: "openai-codex", modelId: "gpt-5.6-terra" },
         usage: { inputTokens: 11, outputTokens: 3, costUsd: 0.5 },
       },
+      occurredAt: 42,
+      recoveryCursor: "marker-7",
     });
 
     const [settled] = sink.of("transcript.message");
-    const messageId = `pi:${ATTACHMENT_ID}:turn-1:0`;
+    const provisionalId = `pi:${ATTACHMENT_ID}:turn-1:0`;
+    const messageId = `pi:${ATTACHMENT_ID}:entry:entry-7`;
     expect(settled.id).toBe("pi:message:entry-7");
-    // The overlay is retired by the durable message's own id, so the two halves
-    // have to name the same message.
     expect(settled.message.id).toBe(messageId);
+    expect(sink.of("transcript.delta").at(-1)).toMatchObject({
+      messageId: provisionalId,
+      delta: { op: "message.remove" },
+    });
     expect(settled.threadId).toBe(piRootThreadId(SESSION_ID));
     expect(settled.branchId).toBe(`branch:${SESSION_ID}:main`);
     expect(settled.attemptId).toBe(`attempt:${messageId}`);
     expect(settled.turnId).toBe("turn-1");
-    expect(settled.cursor).toEqual({ entryId: "entry-7" });
+    expect(settled.cursor).toEqual({ entryId: "marker-7" });
     expect(settled.message.parts).toEqual([
       { type: "reasoning", text: "thinking", state: "done" },
       { type: "text", text: "Hello", state: "done" },
@@ -799,9 +825,9 @@ describe("Pi native adapter observation translation", () => {
     });
 
     expect(sink.of("transcript.message").map((message) => message.message.id)).toEqual([
-      `pi:${ATTACHMENT_ID}:turn-1:0`,
-      `pi:${ATTACHMENT_ID}:turn-1:1`,
-      `pi:${ATTACHMENT_ID}:turn-2:0`,
+      `pi:${ATTACHMENT_ID}:entry:entry-1`,
+      `pi:${ATTACHMENT_ID}:entry:entry-2`,
+      `pi:${ATTACHMENT_ID}:entry:entry-3`,
     ]);
   });
 
@@ -845,7 +871,7 @@ describe("Pi native adapter observation translation", () => {
       "transcript.delta",
       "transcript.delta",
       "transcript.delta",
-      "turn.completed",
+      "turn.interrupted",
     ]);
     expect(sink.of("transcript.delta").at(-1)?.delta).toEqual({ op: "message.remove" });
   });
@@ -933,6 +959,7 @@ describe("Pi native adapter dispatch", () => {
     });
 
     expect(runtime.submissions).toEqual(["Ship the facade"]);
+    expect(runtime.submissionCommandIds).toEqual(["command-1"]);
     expect(receipt).toEqual({
       commandId: "command-1",
       status: "accepted",
@@ -967,6 +994,35 @@ describe("Pi native adapter dispatch", () => {
     expect(runtime.submissions).toEqual(["first\n\nsecond"]);
   });
 
+  it("forwards queue and steer delivery to the runtime without conflating them", async () => {
+    const { binding, runtime } = await attached();
+
+    await binding.dispatch({
+      kind: "message.submit",
+      commandId: "command-queue",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      message: userMessage("later"),
+      delivery: "queue",
+      model: null,
+      agent: null,
+      variant: null,
+    });
+    await binding.dispatch({
+      kind: "message.submit",
+      commandId: "command-steer",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      message: userMessage("now"),
+      delivery: "steer",
+      model: null,
+      agent: null,
+      variant: null,
+    });
+
+    expect(runtime.deliveries).toEqual(["queue", "steer"]);
+  });
+
   it("rejects a message with nothing in it to send", async () => {
     const { binding, runtime } = await attached();
 
@@ -984,6 +1040,31 @@ describe("Pi native adapter dispatch", () => {
 
     expect(receipt.status).toBe("rejected");
     expect(receipt).toMatchObject({ code: "PI_EMPTY_MESSAGE" });
+    expect(runtime.submissions).toEqual([]);
+  });
+
+  it("rejects replace delivery without sending anything to Pi", async () => {
+    const { binding, runtime } = await attached();
+
+    const receipt = await binding.dispatch({
+      kind: "message.submit",
+      commandId: "command-replace",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      message: userMessage("replace the current work"),
+      delivery: "replace",
+      model: null,
+      agent: null,
+      variant: null,
+    });
+
+    expect(receipt).toEqual({
+      commandId: "command-replace",
+      status: "rejected",
+      code: "PI_REPLACE_UNSUPPORTED",
+      detail: "Pi does not support replacing the active turn.",
+      native: binding.native,
+    });
     expect(runtime.submissions).toEqual([]);
   });
 
@@ -1058,6 +1139,22 @@ describe("Pi native adapter dispatch", () => {
     expect(runtime.closes).toBe(0);
   });
 
+  it("retries the failed Pi run without resubmitting its user message", async () => {
+    const { binding, runtime } = await attached();
+
+    const receipt = await binding.dispatch({
+      kind: "executor.retry",
+      commandId: "command-retry",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+    });
+
+    expect(runtime.retries).toBe(1);
+    expect(runtime.submissions).toEqual([]);
+    expect(runtime.submissionCommandIds).toEqual(["command-retry"]);
+    expect(receipt.status).toBe("accepted");
+  });
+
   it("rejects an interaction resolution, because Pi raises none to resolve", async () => {
     const { binding } = await attached();
 
@@ -1104,6 +1201,82 @@ describe("Pi native adapter reconcile and release", () => {
     expect(await binding.reconcile({ entryId: "entry-7" })).toEqual({
       cursor: { entryId: "entry-7" },
       observations: [],
+      receipts: [],
+    });
+  });
+
+  it("maps durable Pi delivery evidence to an accepted Session receipt", async () => {
+    const { binding, runtime } = await attached();
+    runtime.reconciliationReceipts.push({ commandId: "command-crash-window", acceptedAt: 456 });
+
+    expect(await binding.reconcile({ entryId: "after-turn-completed" })).toEqual({
+      cursor: { entryId: "after-turn-completed" },
+      observations: [],
+      receipts: [
+        {
+          commandId: "command-crash-window",
+          status: "accepted",
+          acceptedAt: 456,
+          native: binding.native,
+        },
+      ],
+    });
+  });
+
+  it("maps a cold replay to byte-stable durable Session observations", async () => {
+    const { binding, runtime, sink } = await attached();
+    const durable: RuntimeObservation[] = [
+      {
+        kind: "turn",
+        state: "started",
+        turnId: "turn-1",
+        occurredAt: 101,
+        recoveryCursor: "marker-1",
+      },
+      {
+        kind: "message-settled",
+        turnId: "turn-1",
+        message: { entryId: "message-1", role: "assistant", text: "Remember me" },
+        occurredAt: 102,
+        recoveryCursor: "marker-2",
+      },
+      {
+        kind: "activity",
+        state: "completed",
+        turnId: "turn-1",
+        activityId: "tool-1",
+        descriptor: {
+          kind: "read-file",
+          nativeToolName: "read",
+          subject: { label: "README.md", path: "README.md", lineRange: null },
+          outcome: null,
+          startedAt: 90,
+          endedAt: 100,
+        },
+        input: { path: "README.md" },
+        output: "contents",
+        occurredAt: 103,
+        recoveryCursor: "marker-3",
+      },
+      {
+        kind: "turn",
+        state: "completed",
+        turnId: "turn-1",
+        occurredAt: 104,
+        recoveryCursor: "marker-4",
+      },
+    ];
+    for (const observation of durable) await runtime.observe(observation);
+    const live = [...sink.observations];
+    runtime.reconciliationObservations.push(...durable);
+    runtime.reconciliationCursor = "marker-4";
+
+    const replay = await binding.reconcile(null);
+
+    expect(runtime.reconciledFrom).toEqual([null]);
+    expect(replay).toEqual({
+      cursor: { entryId: "marker-4" },
+      observations: live,
       receipts: [],
     });
   });

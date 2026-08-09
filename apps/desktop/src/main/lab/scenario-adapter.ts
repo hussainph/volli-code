@@ -151,6 +151,15 @@ class LabScenarioBinding implements BindingHandle {
         native: this.native,
       };
     }
+    if (command.kind === "executor.retry") {
+      return {
+        commandId: command.commandId,
+        status: "rejected",
+        code: "unsupported_command",
+        detail: `Lab scenario ${this.#options.scenario.id} has no failed runtime turn to retry`,
+        native: this.native,
+      };
+    }
     const accepted: DeliveryReceipt = {
       commandId: command.commandId,
       status: "accepted",
@@ -222,6 +231,7 @@ class LabScenarioBinding implements BindingHandle {
         return { ...beat, id, occurredAt };
       case "turn.started":
       case "turn.completed":
+      case "turn.interrupted":
         return { ...beat, id, occurredAt };
       case "interaction.opened":
         return { ...beat, id, occurredAt };

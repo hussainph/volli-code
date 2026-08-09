@@ -568,6 +568,16 @@ function decodePayload(value: unknown, context: string): SessionEventPayload {
       return { kind };
     case "session.retitled":
       return { kind, title: readNullableString(record.title, `${context}.title`) };
+    case "session.input.recorded": {
+      const input = asRecord(record.input, `${context}.input`);
+      return {
+        kind,
+        input: {
+          kind: enumValue(input.kind, ["runtime-brief"], `${context}.input.kind`),
+          text: readString(input.text, `${context}.input.text`),
+        },
+      };
+    }
     case "session.signaled":
       return {
         kind,
@@ -607,6 +617,7 @@ function decodePayload(value: unknown, context: string): SessionEventPayload {
       };
     case "turn.started":
     case "turn.completed":
+    case "turn.interrupted":
       return {
         kind,
         attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
@@ -723,6 +734,7 @@ function decodeIntent(value: unknown, context: string): SessionCommandIntent {
       };
     case "executor.stop":
     case "executor.interrupt":
+    case "executor.retry":
       return { kind, attachmentId: readString(row.attachmentId, `${context}.attachmentId`) };
     case "message.submit":
       return { kind, reference: decodeTranscript(row.reference, `${context}.reference`) };
@@ -793,6 +805,7 @@ function decodeReceiptResult(value: unknown, context: string): CommandReceiptRes
       "executor.start.requested",
       "executor.stop.requested",
       "executor.interrupted",
+      "executor.retried",
       "message.submitted",
       "interaction.resolved",
     ],

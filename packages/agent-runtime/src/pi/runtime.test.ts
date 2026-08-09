@@ -4,6 +4,8 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -225,6 +227,22 @@ function jsonlFiles(root: string): string[] {
   return readdirSync(root, { recursive: true })
     .map(String)
     .filter((path) => path.endsWith(".jsonl"));
+}
+
+function readJsonl(path: string): Record<string, unknown>[] {
+  return readFileSync(path, "utf8")
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+function writeLinearJsonl(path: string, entries: Record<string, unknown>[]): void {
+  entries.forEach((entry, index) => {
+    if (index === 0) return;
+    entry["seq"] = index;
+    entry["parentId"] = index === 1 ? null : entries[index - 1]?.["id"];
+  });
+  writeFileSync(path, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
 }
 
 // --- tests -----------------------------------------------------------------
@@ -638,6 +656,18 @@ describe("startTicketSession", () => {
     const ref = handle.recovery;
     expect(existsSync(ref?.sessionFilePath as string)).toBe(true);
 
+    const replay = await handle.reconcile(null);
+    expect(replay.observations.filter((observation) => observation.kind === "activity")).toEqual([
+      activities[1],
+    ]);
+    expect(
+      replay.observations.some(
+        (observation) =>
+          observation.kind === "activity" &&
+          (observation.state === "started" || observation.state === "progress"),
+      ),
+    ).toBe(false);
+
     await handle.close();
 
     const sidecar = readFileSync(ref?.sessionFilePath as string, "utf8");
@@ -840,7 +870,821 @@ describe("startTicketSession", () => {
     expect(secondUserMessages).not.toContain("BEGIN TICKET BRIEF");
   });
 
-  it("rejects a second message while the agent is still working", async () => {
+  it("reopens its owned sidecar and seeds the next turn with settled context", async () => {
+    const attachment = fixture();
+    const firstRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("remembered answer");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const firstHandle = await firstRuntime.startTicketSession(attachment.spec);
+    await firstHandle.submitUserMessage("remember this");
+    const recovery = firstHandle.recovery;
+    const firstReplay = await firstHandle.reconcile(null);
+    expect(kinds([...firstReplay.observations])).toEqual([
+      "turn:started",
+      "message-settled",
+      "turn:completed",
+    ]);
+    await firstHandle.close();
+
+    let recoveredContext: Context | undefined;
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, context) => {
+            recoveredContext = context;
+            emit.text("continued answer");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const secondHandle = await secondRuntime.startTicketSession({
+      ...attachment.spec,
+      recovery,
+    });
+    expect(await secondHandle.reconcile(null)).toEqual(firstReplay);
+    expect(await secondHandle.reconcile(firstReplay.cursor)).toEqual({
+      cursor: firstReplay.cursor,
+      observations: [],
+    });
+    await expect(secondHandle.reconcile("missing-cursor")).rejects.toThrow("cursor is not present");
+    await secondHandle.submitUserMessage("continue");
+
+    expect(jsonlFiles(attachment.sessionDataDir)).toHaveLength(1);
+    expect(JSON.stringify(recoveredContext?.messages)).toContain("remembered answer");
+    expect(secondHandle.recovery).toEqual(recovery);
+    await secondHandle.close();
+  });
+
+  it("recovers accepted prompt and retry receipts independently of the observation cursor", async () => {
+    const attachment = fixture();
+    const firstRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => emit.fail("invalid api key"),
+          (emit) => {
+            emit.text("authenticated");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const firstHandle = await firstRuntime.startTicketSession(attachment.spec);
+    await firstHandle.submitUserMessage("authenticate", "queue", "command-prompt");
+    await firstHandle.retry("command-retry");
+    const replay = await firstHandle.reconcile(null);
+
+    expect(replay.receipts).toEqual([
+      expect.objectContaining({ commandId: "command-prompt", acceptedAt: expect.any(Number) }),
+      expect.objectContaining({ commandId: "command-retry", acceptedAt: expect.any(Number) }),
+    ]);
+    const markerKinds = readFileSync(firstHandle.recovery!.sessionFilePath, "utf8")
+      .trimEnd()
+      .split("\n")
+      .flatMap((line) => {
+        const entry = JSON.parse(line) as {
+          customType?: string;
+          data?: { kind?: string; state?: string };
+        };
+        return entry.customType === "volli.observation.v1"
+          ? [`${entry.data?.kind}:${entry.data?.state ?? ""}`]
+          : [];
+      });
+    expect(markerKinds.indexOf("turn:started")).toBeLessThan(
+      markerKinds.indexOf("command-accepted:"),
+    );
+    expect((await firstHandle.reconcile(replay.cursor)).receipts).toEqual(replay.receipts);
+    const recovery = firstHandle.recovery;
+    await firstHandle.close();
+
+    const reopenedRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+    const reopened = await reopenedRuntime.startTicketSession({ ...attachment.spec, recovery });
+    expect((await reopened.reconcile(replay.cursor)).receipts).toEqual(replay.receipts);
+    await reopened.close();
+  });
+
+  it("recovers an accepted receipt for an interrupted open-tail command", async () => {
+    const attachment = fixture();
+    const streaming = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([haltOnAbort("partial", streaming.resolve)])),
+    });
+    const handle = await runtime.startTicketSession(attachment.spec);
+    const delivery = handle.submitUserMessage("start", "queue", "command-interrupted");
+    await streaming.promise;
+    await handle.interrupt();
+    await delivery;
+
+    expect((await handle.reconcile(null)).receipts).toEqual([
+      expect.objectContaining({ commandId: "command-interrupted" }),
+    ]);
+    await handle.close();
+  });
+
+  it("does not feed an aborted assistant tail back into Pi after reopen", async () => {
+    const attachment = fixture();
+    const streaming = Promise.withResolvers<void>();
+    const firstRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([haltOnAbort("half-written private thought", streaming.resolve)]),
+      ),
+    });
+    const firstHandle = await firstRuntime.startTicketSession(attachment.spec);
+    const firstDelivery = firstHandle.submitUserMessage("start", "queue", "command-recovered-user");
+    await streaming.promise;
+    await firstHandle.interrupt();
+    await firstDelivery;
+    const recovery = firstHandle.recovery;
+    const replay = await firstHandle.reconcile(null);
+    expect(kinds([...replay.observations])).toEqual(["turn:started", "turn:interrupted"]);
+    const durableEntries = readFileSync(recovery!.sessionFilePath, "utf8")
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type?: string; message?: { role?: string } });
+    expect(
+      durableEntries.filter((entry) => entry.type === "message" && entry.message?.role === "user"),
+    ).toEqual([]);
+    await firstHandle.close();
+
+    let recoveredContext: Context | undefined;
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, context) => {
+            recoveredContext = context;
+            emit.text("clean continuation");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const secondHandle = await secondRuntime.startTicketSession({ ...attachment.spec, recovery });
+    await secondHandle.submitUserMessage("continue");
+
+    expect(JSON.stringify(recoveredContext?.messages)).not.toContain(
+      "half-written private thought",
+    );
+    expect(recoveredContext?.messages.filter(({ role }) => role === "user")).toHaveLength(2);
+    expect(JSON.stringify(recoveredContext?.messages[0])).toContain("start");
+    await secondHandle.close();
+  });
+
+  it("settles an unterminated recovered turn as partial instead of completing it", async () => {
+    const attachment = fixture();
+    const firstRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("settled before crash");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const firstHandle = await firstRuntime.startTicketSession(attachment.spec);
+    await firstHandle.submitUserMessage("start", "queue", "command-partial-turn");
+    const recovery = firstHandle.recovery!;
+    await firstHandle.close();
+    const lines = readFileSync(recovery.sessionFilePath, "utf8").trimEnd().split("\n");
+    writeFileSync(
+      recovery.sessionFilePath,
+      `${lines
+        .filter((line) => {
+          const entry = JSON.parse(line) as {
+            type?: string;
+            customType?: string;
+            data?: { kind?: string; state?: string };
+          };
+          return !(
+            entry.type === "custom" &&
+            entry.customType === "volli.observation.v1" &&
+            entry.data?.kind === "turn" &&
+            entry.data.state === "completed"
+          );
+        })
+        .join("\n")}\n`,
+    );
+
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+    const secondHandle = await secondRuntime.startTicketSession({ ...attachment.spec, recovery });
+    const replay = await secondHandle.reconcile(null);
+
+    expect(kinds([...replay.observations])).toEqual([
+      "turn:started",
+      "message-settled",
+      "attention",
+      "turn:interrupted",
+    ]);
+    expect(replay.observations[2]).toMatchObject({
+      kind: "attention",
+      state: "raised",
+      reason: "partial-turn",
+    });
+    expect(replay.receipts).toEqual([
+      expect.objectContaining({ commandId: "command-partial-turn" }),
+    ]);
+    await secondHandle.close();
+  });
+
+  it("withholds an assistant entry whose semantic marker was not committed", async () => {
+    const attachment = fixture();
+    const firstRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("answer without ledger evidence");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const firstHandle = await firstRuntime.startTicketSession(attachment.spec);
+    await firstHandle.submitUserMessage("start");
+    const recovery = firstHandle.recovery!;
+    await firstHandle.close();
+    const lines = readFileSync(recovery.sessionFilePath, "utf8").trimEnd().split("\n");
+    const retained = lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((entry) => {
+        const data = entry["data"] as { kind?: string } | undefined;
+        return !(
+          entry["type"] === "custom" &&
+          entry["customType"] === "volli.observation.v1" &&
+          data?.kind === "message-settled"
+        );
+      });
+    retained.forEach((entry, index, entries) => {
+      if (index === 0) return;
+      entry["seq"] = index;
+      entry["parentId"] = index === 1 ? null : entries[index - 1]?.["id"];
+    });
+    writeFileSync(
+      recovery.sessionFilePath,
+      `${retained.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    );
+
+    let recoveredContext: Context | undefined;
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, context) => {
+            recoveredContext = context;
+            emit.text("safe retry");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const secondHandle = await secondRuntime.startTicketSession({ ...attachment.spec, recovery });
+    expect((await secondHandle.reconcile(null)).observations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "attention",
+          state: "raised",
+          reason: "runtime-failure",
+        }),
+      ]),
+    );
+    await secondHandle.submitUserMessage("retry safely");
+    expect(JSON.stringify(recoveredContext?.messages)).not.toContain(
+      "answer without ledger evidence",
+    );
+    await secondHandle.close();
+  });
+
+  it("withholds duplicate settled markers from reconciliation", async () => {
+    const attachment = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("duplicated answer");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const firstHandle = await runtime.startTicketSession(attachment.spec);
+    await firstHandle.submitUserMessage("start");
+    const recovery = firstHandle.recovery!;
+    await firstHandle.close();
+    const entries = readJsonl(recovery.sessionFilePath);
+    const marker = entries.find((entry) => {
+      const data = entry["data"] as { kind?: string } | undefined;
+      return data?.kind === "message-settled";
+    })!;
+    entries.push({ ...marker, id: `${String(marker["id"])}-duplicate` });
+    writeLinearJsonl(recovery.sessionFilePath, entries);
+
+    const reopened = await runtime.startTicketSession({ ...attachment.spec, recovery });
+    const replay = await reopened.reconcile(null);
+
+    expect(replay.observations.some((observation) => observation.kind === "message-settled")).toBe(
+      false,
+    );
+    expect(replay.observations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "attention",
+          state: "raised",
+          reason: "runtime-failure",
+        }),
+      ]),
+    );
+    await reopened.close();
+  });
+
+  it("withholds a settled marker that references no assistant entry", async () => {
+    const attachment = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("orphaned answer");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const firstHandle = await runtime.startTicketSession(attachment.spec);
+    await firstHandle.submitUserMessage("start");
+    const recovery = firstHandle.recovery!;
+    await firstHandle.close();
+    const entries = readJsonl(recovery.sessionFilePath).filter((entry) => {
+      const message = entry["message"] as { role?: string } | undefined;
+      return message?.role !== "assistant";
+    });
+    writeLinearJsonl(recovery.sessionFilePath, entries);
+
+    const reopened = await runtime.startTicketSession({ ...attachment.spec, recovery });
+    const replay = await reopened.reconcile(null);
+
+    expect(replay.observations.some((observation) => observation.kind === "message-settled")).toBe(
+      false,
+    );
+    expect(replay.observations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "attention",
+          state: "raised",
+          reason: "runtime-failure",
+        }),
+      ]),
+    );
+    await reopened.close();
+  });
+
+  it("rejects structurally malformed recovery markers without deleting the sidecar", async () => {
+    const attachment = fixture();
+    const firstRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+    const firstHandle = await firstRuntime.startTicketSession(attachment.spec);
+    const recovery = firstHandle.recovery!;
+    await firstHandle.close();
+    const lines = readFileSync(recovery.sessionFilePath, "utf8").trimEnd().split("\n");
+    const header = lines[0]!;
+    const settled = {
+      entryId: "entry-1",
+      role: "assistant",
+      text: "settled",
+      reasoning: "because",
+      model: { providerId: "anthropic", modelId: MODEL_ID },
+      usage: { inputTokens: 1, outputTokens: 2, costUsd: 0.01 },
+    };
+    const descriptor = {
+      kind: "read-file",
+      nativeToolName: "read",
+      subject: { label: null, path: null, lineRange: { start: 1, end: 2 } },
+      outcome: {
+        exitCode: null,
+        matchCount: null,
+        fileCount: null,
+        lineCount: null,
+        bytes: null,
+        addedLines: null,
+        removedLines: null,
+        diff: null,
+        summary: null,
+      },
+      startedAt: 1,
+      endedAt: 2,
+    };
+    const activity = {
+      kind: "activity",
+      turnId: "turn-1",
+      activityId: "activity-1",
+      state: "failed",
+      descriptor,
+      input: { nested: [1, true, null] },
+      output: "failed",
+      error: "provider failed",
+    };
+    const malformedData: unknown[] = [
+      null,
+      { kind: "unknown" },
+      { kind: "turn", state: "started" },
+      { kind: "message-settled", turnId: "turn-1", message: null },
+      { kind: "message-settled", turnId: "turn-1", message: { ...settled, entryId: 1 } },
+      { kind: "message-settled", turnId: "turn-1", message: { ...settled, role: "user" } },
+      { kind: "message-settled", turnId: "turn-1", message: { ...settled, text: 1 } },
+      { kind: "message-settled", turnId: "turn-1", message: { ...settled, reasoning: 1 } },
+      { kind: "message-settled", turnId: "turn-1", message: { ...settled, model: null } },
+      {
+        kind: "message-settled",
+        turnId: "turn-1",
+        message: { ...settled, model: { providerId: 1, modelId: MODEL_ID } },
+      },
+      {
+        kind: "message-settled",
+        turnId: "turn-1",
+        message: { ...settled, model: { providerId: "anthropic", modelId: 1 } },
+      },
+      { kind: "message-settled", turnId: "turn-1", message: { ...settled, usage: null } },
+      {
+        kind: "message-settled",
+        turnId: "turn-1",
+        message: { ...settled, usage: { inputTokens: Number.POSITIVE_INFINITY } },
+      },
+      { ...activity, descriptor: null },
+      { ...activity, descriptor: { ...descriptor, kind: "unknown" } },
+      { ...activity, descriptor: { ...descriptor, nativeToolName: 1 } },
+      { ...activity, descriptor: { ...descriptor, subject: null } },
+      {
+        ...activity,
+        descriptor: { ...descriptor, subject: { ...descriptor.subject, label: 1 } },
+      },
+      {
+        ...activity,
+        descriptor: { ...descriptor, subject: { ...descriptor.subject, path: 1 } },
+      },
+      {
+        ...activity,
+        descriptor: { ...descriptor, subject: { ...descriptor.subject, lineRange: "1-2" } },
+      },
+      {
+        ...activity,
+        descriptor: {
+          ...descriptor,
+          subject: { ...descriptor.subject, lineRange: { start: "1", end: 2 } },
+        },
+      },
+      {
+        ...activity,
+        descriptor: {
+          ...descriptor,
+          subject: { ...descriptor.subject, lineRange: { start: 1, end: "2" } },
+        },
+      },
+      { ...activity, descriptor: { ...descriptor, outcome: "failed" } },
+      {
+        ...activity,
+        descriptor: { ...descriptor, outcome: { ...descriptor.outcome, exitCode: "one" } },
+      },
+      {
+        ...activity,
+        descriptor: { ...descriptor, outcome: { ...descriptor.outcome, diff: 1 } },
+      },
+      {
+        ...activity,
+        descriptor: { ...descriptor, outcome: { ...descriptor.outcome, summary: 1 } },
+      },
+      { ...activity, descriptor: { ...descriptor, endedAt: "later" } },
+      { ...activity, error: 1 },
+      { kind: "attention", state: "raised", reason: "auth", message: 1 },
+      {
+        kind: "command-accepted",
+        commandId: 1,
+        operation: "message.submit",
+        delivery: "prompt",
+        turnId: "turn-1",
+      },
+      {
+        kind: "command-accepted",
+        commandId: "command-1",
+        operation: "unknown",
+        delivery: "prompt",
+        turnId: "turn-1",
+      },
+      {
+        kind: "command-accepted",
+        commandId: "command-1",
+        operation: "message.submit",
+        delivery: "unknown",
+        turnId: "turn-1",
+      },
+      {
+        kind: "command-accepted",
+        commandId: "command-1",
+        operation: "message.submit",
+        delivery: "prompt",
+        turnId: 1,
+      },
+      {
+        kind: "command-accepted",
+        commandId: "command-1",
+        operation: "executor.retry",
+        delivery: "queue",
+        turnId: "turn-1",
+      },
+      {
+        kind: "command-accepted",
+        commandId: "command-1",
+        operation: "message.submit",
+        delivery: "retry",
+        turnId: "turn-1",
+        message: { role: "user", content: "accepted", timestamp: Date.now() },
+      },
+    ];
+
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+    for (const [index, data] of malformedData.entries()) {
+      const malformed = {
+        kind: "entry",
+        lane: "main",
+        type: "custom",
+        id: `malformed-marker-${index}`,
+        parentId: null,
+        seq: 1,
+        timestamp: Date.now(),
+        customType: "volli.observation.v1",
+        data,
+      };
+      writeFileSync(recovery.sessionFilePath, `${header}\n${JSON.stringify(malformed)}\n`);
+      try {
+        const unexpected = await secondRuntime.startTicketSession({
+          ...attachment.spec,
+          recovery,
+        });
+        await unexpected.close();
+        throw new Error(`Malformed marker case ${index} was accepted.`);
+      } catch (error) {
+        if (error instanceof Error && error.message.includes("was accepted")) throw error;
+        expect(error).toEqual(
+          expect.objectContaining({ message: "Pi recovery marker is malformed." }),
+        );
+      }
+      expect(existsSync(recovery.sessionFilePath)).toBe(true);
+    }
+  });
+
+  it("accepts complete semantic markers and ignores foreign custom entries", async () => {
+    const attachment = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+    const firstHandle = await runtime.startTicketSession(attachment.spec);
+    const recovery = firstHandle.recovery!;
+    await firstHandle.close();
+    const [header] = readFileSync(recovery.sessionFilePath, "utf8").trimEnd().split("\n");
+    const entries = [
+      {
+        kind: "entry",
+        lane: "main",
+        type: "custom",
+        id: "foreign-marker",
+        parentId: null,
+        seq: 1,
+        timestamp: Date.now(),
+        customType: "foreign.marker",
+        data: null,
+      },
+      {
+        kind: "entry",
+        lane: "main",
+        type: "custom",
+        id: "activity-marker",
+        parentId: "foreign-marker",
+        seq: 2,
+        timestamp: Date.now(),
+        customType: "volli.observation.v1",
+        data: {
+          kind: "activity",
+          turnId: "turn-1",
+          activityId: "activity-1",
+          state: "failed",
+          descriptor: {
+            kind: "read-file",
+            nativeToolName: "read",
+            subject: { label: null, path: null, lineRange: null },
+            outcome: null,
+            startedAt: null,
+            endedAt: null,
+          },
+          input: null,
+          output: false,
+          error: "failed",
+        },
+      },
+      {
+        kind: "entry",
+        lane: "main",
+        type: "custom",
+        id: "attention-clear-marker",
+        parentId: "activity-marker",
+        seq: 3,
+        timestamp: Date.now(),
+        customType: "volli.observation.v1",
+        data: {
+          kind: "attention",
+          state: "cleared",
+          reason: "runtime-failure",
+          message: "Runtime recovered.",
+        },
+      },
+    ];
+    writeFileSync(
+      recovery.sessionFilePath,
+      `${header}\n${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    );
+
+    const reopened = await runtime.startTicketSession({ ...attachment.spec, recovery });
+    expect((await reopened.reconcile(null)).observations).toHaveLength(2);
+    await reopened.close();
+  });
+
+  it("rejects duplicate or conflicting command delivery markers", async () => {
+    for (const second of [
+      { commandId: "command-1", turnId: "turn-2" },
+      { commandId: "command-2", turnId: "turn-1" },
+    ]) {
+      const attachment = fixture();
+      const runtime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        models: modelsWithStream(scriptedStream([])),
+      });
+      const firstHandle = await runtime.startTicketSession(attachment.spec);
+      const recovery = firstHandle.recovery!;
+      await firstHandle.close();
+      const [header] = readFileSync(recovery.sessionFilePath, "utf8").trimEnd().split("\n");
+      const markers = [{ commandId: "command-1", turnId: "turn-1" }, second].map((data, index) => ({
+        kind: "entry",
+        lane: "main",
+        type: "custom",
+        id: `delivery-${index}`,
+        parentId: index === 0 ? null : "delivery-0",
+        seq: index + 1,
+        timestamp: Date.now() + index,
+        customType: "volli.observation.v1",
+        data: {
+          kind: "command-accepted",
+          operation: "message.submit",
+          delivery: "prompt",
+          message: { role: "user", content: "accepted", timestamp: Date.now() },
+          ...data,
+        },
+      }));
+      writeFileSync(
+        recovery.sessionFilePath,
+        `${header}\n${markers.map((marker) => JSON.stringify(marker)).join("\n")}\n`,
+      );
+
+      await expect(runtime.startTicketSession({ ...attachment.spec, recovery })).rejects.toThrow(
+        "Pi recovery delivery markers conflict.",
+      );
+      expect(existsSync(recovery.sessionFilePath)).toBe(true);
+    }
+  });
+
+  it("rejects a forged recovery path without touching the foreign file", async () => {
+    const attachment = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+    const firstHandle = await runtime.startTicketSession(attachment.spec);
+    const recovery = firstHandle.recovery!;
+    await firstHandle.close();
+    const foreignPath = join(attachment.worktreePath, "foreign.jsonl");
+    writeFileSync(foreignPath, "foreign bytes\n");
+
+    await expect(
+      runtime.startTicketSession({
+        ...attachment.spec,
+        recovery: { ...recovery, sessionFilePath: foreignPath },
+      }),
+    ).rejects.toThrow("path does not match");
+    expect(readFileSync(foreignPath, "utf8")).toBe("foreign bytes\n");
+    expect(existsSync(recovery.sessionFilePath)).toBe(true);
+  });
+
+  it("rejects a missing recovery id before trusting its locator", async () => {
+    const attachment = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+    const firstHandle = await runtime.startTicketSession(attachment.spec);
+    const recovery = firstHandle.recovery!;
+    await firstHandle.close();
+
+    await expect(
+      runtime.startTicketSession({
+        ...attachment.spec,
+        recovery: { ...recovery, sessionId: "missing-session" },
+      }),
+    ).rejects.toThrow("not found uniquely");
+    expect(existsSync(recovery.sessionFilePath)).toBe(true);
+  });
+
+  it("rejects a recovery sidecar symlink that escapes the owned directory", async () => {
+    const attachment = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+    const firstHandle = await runtime.startTicketSession(attachment.spec);
+    const recovery = firstHandle.recovery!;
+    await firstHandle.close();
+    const foreignPath = join(attachment.worktreePath, "foreign-sidecar.jsonl");
+    writeFileSync(foreignPath, readFileSync(recovery.sessionFilePath));
+    unlinkSync(recovery.sessionFilePath);
+    symlinkSync(foreignPath, recovery.sessionFilePath);
+
+    await expect(runtime.startTicketSession({ ...attachment.spec, recovery })).rejects.toThrow(
+      "outside the runtime-owned session directory",
+    );
+    expect(readFileSync(foreignPath, "utf8")).toContain(recovery.sessionId);
+  });
+
+  it("rejects recovery metadata owned by a different attachment", async () => {
+    const attachment = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+    const firstHandle = await runtime.startTicketSession(attachment.spec);
+    const recovery = firstHandle.recovery!;
+    await firstHandle.close();
+
+    await expect(
+      runtime.startTicketSession({
+        ...attachment.spec,
+        identity: { ...attachment.spec.identity, attachmentId: "attachment-2" },
+        recovery,
+      }),
+    ).rejects.toThrow("identity does not match");
+    expect(existsSync(recovery.sessionFilePath)).toBe(true);
+  });
+
+  it("preserves a reopened sidecar when attachment preparation fails", async () => {
+    const attachment = fixture();
+    const firstRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+    const firstHandle = await firstRuntime.startTicketSession(attachment.spec);
+    const recovery = firstHandle.recovery!;
+    await firstHandle.close();
+
+    const failingRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+      executionEnvFactory: async () => {
+        throw new Error("sandbox unavailable");
+      },
+    });
+    await expect(
+      failingRuntime.startTicketSession({
+        ...attachment.spec,
+        tools: { tools: ["execute"] },
+        recovery,
+      }),
+    ).rejects.toThrow("Contained process execution is unavailable.");
+    expect(existsSync(recovery.sessionFilePath)).toBe(true);
+    expect(jsonlFiles(attachment.sessionDataDir)).toHaveLength(1);
+  });
+
+  it("rejects replace while the agent is still working", async () => {
     const { spec, sessionDataDir } = fixture();
     const streaming = Promise.withResolvers<void>();
 
@@ -852,13 +1696,130 @@ describe("startTicketSession", () => {
 
     const first = handle.submitUserMessage("go");
     await streaming.promise;
-    expect(await handle.submitUserMessage("and also")).toEqual({
+    expect(await handle.submitUserMessage("and also", "replace")).toEqual({
       kind: "rejected",
-      reason: "busy-unsupported",
-      message: "The agent is still working on the previous message.",
+      reason: "replace-unsupported",
+      message: "Pi does not support replacing the active turn.",
     });
 
     await handle.interrupt();
+    await first;
+    await handle.close();
+  });
+
+  it("queues a follow-up while the current turn is still working", async () => {
+    const { spec, sessionDataDir } = fixture();
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const followUpStarted = Promise.withResolvers<void>();
+    const followUpRelease = Promise.withResolvers<void>();
+    const contexts: Context[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          async (emit, context) => {
+            contexts.push(context);
+            started.resolve();
+            await release.promise;
+            emit.text("first done");
+            emit.finish();
+          },
+          async (emit, context) => {
+            contexts.push(context);
+            followUpStarted.resolve();
+            await followUpRelease.promise;
+            emit.text("follow-up done");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startTicketSession(spec);
+
+    const first = handle.submitUserMessage("first", "queue", "command-first");
+    await started.promise;
+    await expect(handle.submitUserMessage("also verify the tests", "queue")).resolves.toEqual({
+      kind: "delivered",
+      delivery: "queue",
+    });
+    expect((await handle.reconcile(null)).receipts).toEqual([
+      expect.objectContaining({ commandId: "command-first" }),
+    ]);
+    release.resolve();
+    await followUpStarted.promise;
+
+    expect(JSON.stringify(contexts[1]?.messages)).toContain("also verify the tests");
+    expect((await handle.reconcile(null)).receipts).toEqual([
+      expect.objectContaining({ commandId: "command-first" }),
+    ]);
+    followUpRelease.resolve();
+    await first;
+    await handle.close();
+  });
+
+  it("steers before an ordinary queued follow-up", async () => {
+    const { spec, sessionDataDir } = fixture();
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const steerStarted = Promise.withResolvers<void>();
+    const steerRelease = Promise.withResolvers<void>();
+    const queueStarted = Promise.withResolvers<void>();
+    const queueRelease = Promise.withResolvers<void>();
+    const contexts: Context[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          async (emit, context) => {
+            contexts.push(context);
+            started.resolve();
+            await release.promise;
+            emit.text("first done");
+            emit.finish();
+          },
+          async (emit, context) => {
+            contexts.push(context);
+            steerStarted.resolve();
+            await steerRelease.promise;
+            emit.text("steer done");
+            emit.finish();
+          },
+          async (emit, context) => {
+            contexts.push(context);
+            queueStarted.resolve();
+            await queueRelease.promise;
+            emit.text("queue done");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startTicketSession(spec);
+
+    const first = handle.submitUserMessage("first", "queue", "command-first");
+    await started.promise;
+    await handle.submitUserMessage("queue this later", "queue", "command-queue");
+    await handle.submitUserMessage("steer with this now", "steer", "command-steer");
+    release.resolve();
+    await steerStarted.promise;
+
+    const nextTurn = JSON.stringify(contexts[1]?.messages);
+    expect(nextTurn).toContain("steer with this now");
+    expect(nextTurn).not.toContain("queue this later");
+    expect((await handle.reconcile(null)).receipts?.map(({ commandId }) => commandId)).toEqual([
+      "command-first",
+      "command-steer",
+    ]);
+    steerRelease.resolve();
+    await queueStarted.promise;
+    expect(JSON.stringify(contexts[2]?.messages)).toContain("queue this later");
+    expect((await handle.reconcile(null)).receipts?.map(({ commandId }) => commandId)).toEqual([
+      "command-first",
+      "command-steer",
+      "command-queue",
+    ]);
+    queueRelease.resolve();
     await first;
     await handle.close();
   });
@@ -1029,7 +1990,7 @@ describe("startTicketSession", () => {
       "attention",
       "turn:interrupted",
     ]);
-    expect(observations[2]).toEqual({
+    expect(observations[2]).toMatchObject({
       kind: "attention",
       state: "raised",
       reason: "auth",
@@ -1049,14 +2010,150 @@ describe("startTicketSession", () => {
     await handle.submitUserMessage("go");
 
     expect(observations.filter((observation) => observation.kind === "attention")).toEqual([
-      {
+      expect.objectContaining({
         kind: "attention",
         state: "raised",
         reason: "runtime-failure",
         message: "malformed provider payload",
-      },
+      }),
     ]);
     await handle.close();
+  });
+
+  it("rejects retry when the attachment is closed, busy, or has no failed turn", async () => {
+    const idle = fixture();
+    const idleRuntime = createPiAgentRuntime({
+      sessionDataDir: idle.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+    const idleHandle = await idleRuntime.startTicketSession(idle.spec);
+    await expect(idleHandle.retry()).resolves.toMatchObject({
+      kind: "rejected",
+      reason: "retry-unavailable",
+    });
+    await idleHandle.close();
+    await expect(idleHandle.retry()).resolves.toMatchObject({ kind: "rejected", reason: "closed" });
+
+    const busy = fixture();
+    const streaming = Promise.withResolvers<void>();
+    const busyRuntime = createPiAgentRuntime({
+      sessionDataDir: busy.sessionDataDir,
+      models: modelsWithStream(scriptedStream([haltOnAbort("working", streaming.resolve)])),
+    });
+    const busyHandle = await busyRuntime.startTicketSession(busy.spec);
+    const delivery = busyHandle.submitUserMessage("start");
+    await streaming.promise;
+    await expect(busyHandle.retry()).resolves.toMatchObject({
+      kind: "rejected",
+      reason: "busy-unsupported",
+    });
+    await busyHandle.interrupt();
+    await delivery;
+    await busyHandle.close();
+  });
+
+  it("propagates a durable observation failure from retry", async () => {
+    const attachment = fixture();
+    let failRetryCommit = false;
+    attachment.spec.observer = async (observation) => {
+      attachment.observations.push(observation);
+      if (failRetryCommit && observation.kind === "message-settled") {
+        failRetryCommit = false;
+        throw new Error("retry commit failed");
+      }
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => emit.fail("invalid api key"),
+          (emit) => {
+            emit.text("authenticated");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startTicketSession(attachment.spec);
+    await handle.submitUserMessage("start");
+    failRetryCommit = true;
+
+    await expect(handle.retry()).rejects.toThrow("retry commit failed");
+    await handle.close();
+  });
+
+  it("durably clears runtime attention only after a successful retry", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => emit.fail("invalid x-api-key secret-token"),
+          (emit) => {
+            emit.text("authenticated now");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startTicketSession(spec);
+    await handle.submitUserMessage("first");
+    expect(observations.filter((observation) => observation.kind === "attention")).toHaveLength(1);
+
+    await expect(handle.retry()).resolves.toEqual({ kind: "delivered", delivery: "retry" });
+
+    expect(observations.filter((observation) => observation.kind === "attention")).toEqual([
+      expect.objectContaining({ kind: "attention", state: "raised", reason: "auth" }),
+      expect.objectContaining({ kind: "attention", state: "cleared", reason: "auth" }),
+    ]);
+    expect(kinds(observations).slice(-3)).toEqual([
+      "message-settled",
+      "attention",
+      "turn:completed",
+    ]);
+    expect(
+      (await handle.reconcile(null)).observations.filter(
+        (observation) => observation.kind === "attention",
+      ),
+    ).toEqual(observations.filter((observation) => observation.kind === "attention"));
+    await handle.close();
+  });
+
+  it("retries a recovered failed turn and clears its durable attention", async () => {
+    const attachment = fixture();
+    const firstRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([(emit) => emit.fail("invalid api key")])),
+    });
+    const firstHandle = await firstRuntime.startTicketSession(attachment.spec);
+    await firstHandle.submitUserMessage("authenticate this request");
+    const recovery = firstHandle.recovery;
+    await firstHandle.close();
+
+    let recoveredContext: Context | undefined;
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, context) => {
+            recoveredContext = context;
+            emit.text("recovered successfully");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const secondHandle = await secondRuntime.startTicketSession({ ...attachment.spec, recovery });
+
+    await expect(secondHandle.retry()).resolves.toEqual({ kind: "delivered", delivery: "retry" });
+    expect(JSON.stringify(recoveredContext?.messages)).toContain("authenticate this request");
+    expect(
+      attachment.observations.filter((observation) => observation.kind === "attention"),
+    ).toEqual([
+      expect.objectContaining({ state: "raised", reason: "auth" }),
+      expect.objectContaining({ state: "cleared", reason: "auth" }),
+    ]);
+    await secondHandle.close();
   });
 
   it("raises attention when production provider wiring has no credentials", async () => {
@@ -1072,7 +2169,12 @@ describe("startTicketSession", () => {
     });
 
     expect(observations.filter((observation) => observation.kind === "attention")).toEqual([
-      { kind: "attention", state: "raised", reason: "auth", message: expect.any(String) },
+      expect.objectContaining({
+        kind: "attention",
+        state: "raised",
+        reason: "auth",
+        message: expect.any(String),
+      }),
     ]);
     await handle.close();
   });

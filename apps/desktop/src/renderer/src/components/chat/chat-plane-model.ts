@@ -135,6 +135,7 @@ export interface SessionBlockerState {
    * then leaves them where they started, doubting the message too.
    */
   action: SessionBlockerAction | null;
+  secondaryAction?: SessionBlockerAction | null;
 }
 
 /** What the plane reads to decide whether anything is stopping the typing. */
@@ -144,11 +145,29 @@ export interface SessionBlockerInput {
   attention: SessionAttentionProjection;
   catalogState: CatalogState;
   catalogError: string | null;
+  /** Whether this Ticket already owns a manual terminal companion tab. */
+  terminalAvailable: boolean;
+  /** Pi Ticket Sessions can retry natively; preserved executors cannot. */
+  runtimeRetryAvailable: boolean;
 }
 
 export interface SessionBlockerActs {
   recover(): void;
+  retryRuntime(): void;
+  openTerminal(): void;
   openSettings(): void;
+}
+
+/** Select the user's existing ticket terminal tab without creating a new one. */
+export function terminalCompanionTabId(
+  container:
+    | {
+        activeSessionId: string | null;
+        tabs: readonly { sessionId: string }[];
+      }
+    | undefined,
+): string | null {
+  return container?.activeSessionId ?? container?.tabs.at(-1)?.sessionId ?? null;
 }
 
 /**
@@ -181,6 +200,8 @@ export function sessionBlocker(
   asked: boolean,
 ): SessionBlockerState | null {
   const retry: SessionBlockerAction = { label: "Retry", act: acts.recover };
+  const retryRuntime: SessionBlockerAction = { label: "Retry", act: acts.retryRuntime };
+  const terminal: SessionBlockerAction = { label: "Open Terminal", act: acts.openTerminal };
   const settings: SessionBlockerAction = { label: "Settings", act: acts.openSettings };
   if (input.sessionError !== null) {
     return { message: input.sessionError, detail: null, tone: "error", action: retry };
@@ -189,7 +210,15 @@ export function sessionBlocker(
   if (attention) {
     return asked && answeredByCard(attention.kind)
       ? null
-      : attentionBlocker(attention, retry, settings);
+      : attentionBlocker(
+          attention,
+          retry,
+          retryRuntime,
+          terminal,
+          settings,
+          input.runtimeRetryAvailable,
+          input.terminalAvailable,
+        );
   }
   // Only a catalog that has actually answered can say a person configured
   // nothing; `loading` looks identical from here and is not a blocked state.
@@ -221,7 +250,8 @@ function answeredByCard(kind: SessionAttention["kind"]): boolean {
 }
 
 /**
- * One line and at most one action per attention kind.
+ * One line and one recovery action per attention kind, except Pi auth/config:
+ * its existing terminal handoff and exact Retry are intentionally adjacent.
  *
  * The switch is total over the union and has no `default`: a kind added later
  * has to be answered here, not silently absorbed into whichever branch was
@@ -229,8 +259,9 @@ function answeredByCard(kind: SessionAttention["kind"]): boolean {
  *
  * Which kinds earn a button, and why the rest do not:
  *
- * - **Settings** — `auth_required` and `configuration_invalid`. Both are facts
- *   about what is configured, and Settings is where that is changed.
+ * - **Terminal + Retry** — Pi auth/configuration recovery uses an existing
+ *   manual Ticket terminal for provider-owned sign-in, then retries the exact
+ *   failed run without submitting the user's message again.
  * - **Retry** — `transport_retrying`, `adapter_disconnected` and `rate_limited`.
  *   The first two are a connection to re-establish, which is exactly what
  *   `recover` does. A rate limit gets one because the wait is the whole fix; the
@@ -247,14 +278,38 @@ function answeredByCard(kind: SessionAttention["kind"]): boolean {
 function attentionBlocker(
   attention: SessionAttention,
   retry: SessionBlockerAction,
+  retryRuntime: SessionBlockerAction,
+  terminal: SessionBlockerAction,
   settings: SessionBlockerAction,
+  runtimeRetryAvailable: boolean,
+  terminalAvailable: boolean,
 ): SessionBlockerState {
   const detail = attention.detail;
   switch (attention.kind) {
     case "auth_required":
-      return { message: "Sign-in required", detail, tone: "error", action: settings };
+      return !runtimeRetryAvailable
+        ? { message: "Sign-in required", detail, tone: "error", action: settings }
+        : terminalAvailable
+          ? {
+              message: "Sign-in required",
+              detail,
+              tone: "error",
+              action: terminal,
+              secondaryAction: retryRuntime,
+            }
+          : { message: "Sign-in required", detail, tone: "error", action: retryRuntime };
     case "configuration_invalid":
-      return { message: "Configuration invalid", detail, tone: "error", action: settings };
+      return !runtimeRetryAvailable
+        ? { message: "Configuration invalid", detail, tone: "error", action: settings }
+        : terminalAvailable
+          ? {
+              message: "Configuration invalid",
+              detail,
+              tone: "error",
+              action: terminal,
+              secondaryAction: retryRuntime,
+            }
+          : { message: "Configuration invalid", detail, tone: "error", action: retryRuntime };
     case "transport_retrying":
       return { message: "Reconnecting", detail, tone: "waiting", action: retry };
     case "adapter_disconnected":
