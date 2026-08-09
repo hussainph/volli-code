@@ -166,6 +166,9 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/db/theme-repo.ts",
         "**/src/main/db/harness-command-repo.ts",
         "**/src/main/session-rpc-ipc.ts",
+        "**/src/main/session-runtime/structured-sessions.ts",
+        "**/src/main/session-runtime/ticket-sessions.ts",
+        "**/src/main/session-runtime/project-sessions.ts",
       ],
       // Global bar only — vitest applies global thresholds to every included
       // file even when per-glob entries exist, so partial carve-outs can't
