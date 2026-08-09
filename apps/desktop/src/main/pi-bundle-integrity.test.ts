@@ -16,6 +16,22 @@ afterEach(async () => {
 });
 
 describe("prepared Pi bundle integrity", () => {
+  it("uses host-independent code-unit ordering for the release fingerprint", async () => {
+    const piDirectory = await mkdtemp(join(tmpdir(), "volli-pi-ordering-"));
+    temporaryDirectories.push(piDirectory);
+    await Promise.all([
+      writeFile(join(piDirectory, "!"), "!"),
+      writeFile(join(piDirectory, "_"), "_"),
+      writeFile(join(piDirectory, "-"), "-"),
+      writeFile(join(piDirectory, "0"), "0"),
+      writeFile(join(piDirectory, "@"), "@"),
+    ]);
+
+    await expect(fingerprintPiBundle(piDirectory)).resolves.toBe(
+      "018ce859a3116a4eb63e49e6820ea8053e03bc0c4dc697ad4704868fa6a38036",
+    );
+  });
+
   it("accepts an executable tree only while every cached byte matches its marker", async () => {
     const destination = await mkdtemp(join(tmpdir(), "volli-pi-integrity-"));
     temporaryDirectories.push(destination);

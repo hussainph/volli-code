@@ -785,7 +785,10 @@ async function attachTicketSession(
         }
         let available: Awaited<ReturnType<Models["getAvailable"]>>;
         try {
-          available = await models.getAvailable(selection.providerId);
+          available = await models.getAvailable(
+            selection.providerId,
+            spec.signal ? { signal: spec.signal } : undefined,
+          );
         } catch {
           return {
             kind: "rejected",

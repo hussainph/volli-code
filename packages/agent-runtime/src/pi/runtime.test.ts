@@ -2410,6 +2410,26 @@ describe("startTicketSession", () => {
     await handle.close();
   });
 
+  it("carries attachment cancellation into an idle model availability probe", async () => {
+    const controller = new AbortController();
+    const attachment = fixture({ signal: controller.signal });
+    const models = modelsWithStream(scriptedStream([]));
+    const getAvailable = vi.spyOn(models, "getAvailable");
+    const handle = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models,
+    }).startTicketSession(attachment.spec);
+
+    await handle.selectModel({
+      providerId: PROVIDER_ID,
+      modelId: MODEL_ID,
+      reasoningLevel: "off",
+    });
+
+    expect(getAvailable).toHaveBeenCalledWith(PROVIDER_ID, { signal: controller.signal });
+    await handle.close();
+  });
+
   it("sanitizes model availability failures during an idle change", async () => {
     const attachment = fixture();
     const models = modelsWithStream(scriptedStream([]));

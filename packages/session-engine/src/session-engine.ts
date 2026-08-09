@@ -461,7 +461,10 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           );
         }
         const events = transaction.listEvents({ sessionId: session.id });
-        const priorReceipt = transaction.listReceipts(command.id).at(-1) ?? null;
+        const priorReceipt =
+          transaction
+            .listReceipts(command.id)
+            .findLast((receipt) => receipt.status !== "unreconciled") ?? null;
         if (priorReceipt) {
           const event = events.find(
             (candidate) =>

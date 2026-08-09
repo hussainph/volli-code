@@ -53,7 +53,9 @@ export async function verifiedPiBundleCache(
 async function bundleFiles(root: string, directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
   const files: string[] = [];
-  for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
+  for (const entry of entries.toSorted((left, right) =>
+    left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+  )) {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) {
       files.push(...(await bundleFiles(root, path)));

@@ -25,6 +25,7 @@ import type {
 } from "@volli/shared";
 import {
   isSessionAttachmentContinuity,
+  REASONING_LEVELS,
   sameCommandReceipt,
   SESSION_INTERACTION_CANCEL_REASONS,
 } from "@volli/shared";
@@ -831,11 +832,7 @@ function decodeModelSelection(value: unknown, context: string): ModelSelection {
   return {
     providerId: readString(row.providerId, `${context}.providerId`),
     modelId: readString(row.modelId, `${context}.modelId`),
-    reasoningLevel: enumValue(
-      row.reasoningLevel,
-      ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
-      `${context}.reasoningLevel`,
-    ),
+    reasoningLevel: enumValue(row.reasoningLevel, REASONING_LEVELS, `${context}.reasoningLevel`),
   };
 }
 

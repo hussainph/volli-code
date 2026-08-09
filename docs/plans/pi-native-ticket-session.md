@@ -592,11 +592,13 @@ Session 5 implementation decisions (2026-08-09):
 - An attach failure still leaves the newly created Session and its selected
   model durable, so authentication or availability recovery can use the same
   composer and Retry path rather than manufacturing a second Session.
-- Provider sign-in uses a Ticket-scoped `model-access` terminal intent. Main
-  resolves the version- and checksum-pinned official Pi CLI directory bundled
-  under app resources, re-verifies the prepared resource tree and executable on
-  cache hits, fixes the restricted launch flags and absolute credential
-  directory, and leaves `/login` plus the existing explicit Retry to the user.
+- Provider sign-in uses an explicit `model-access` terminal intent: Ticket
+  recovery launches it in Ticket scope, while Project Settings launches it in
+  Project scope before a Ticket Session exists. Main resolves the version- and
+  checksum-pinned official Pi CLI directory bundled under app resources,
+  re-verifies the prepared resource tree and executable on cache hits, fixes
+  the restricted launch flags and absolute credential directory, and leaves
+  `/login` plus the existing explicit Retry to the user.
 - Ticketless project Chats temporarily keep OpenCode through a private
   main-owned route. Runtime Catalog remains available to the development Lab,
   but is not exposed over production renderer IPC or settings.

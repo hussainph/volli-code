@@ -212,7 +212,7 @@ describe("registerSessionRpcIpcHandlers", () => {
       invoke(sender(), { procedure: "session.projection", input: { sessionId: "session-1" } }),
     ).resolves.toEqual({
       ok: true,
-      data: { projection: { capabilities: [] }, throughSequence: 4 },
+      data: { projection: {}, throughSequence: 4 },
     });
     await expect(
       invoke(sender(), {

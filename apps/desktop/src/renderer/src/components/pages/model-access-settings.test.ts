@@ -47,6 +47,15 @@ describe("default model availability", () => {
     );
   });
 
+  it("uses off as the product policy for a model without reasoning controls", () => {
+    expect(
+      canSaveDefaultModel(
+        { ...MODEL, reasoningLevels: [] },
+        { ...selection, reasoningLevel: "off" },
+      ),
+    ).toBe(true);
+  });
+
   it("rejects unavailable models and unsupported reasoning", () => {
     expect(canSaveDefaultModel({ ...MODEL, state: "unavailable" }, selection)).toBe(false);
     expect(canSaveDefaultModel(MODEL, { ...selection, reasoningLevel: "xhigh" })).toBe(false);

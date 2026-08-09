@@ -1,20 +1,11 @@
 import type Database from "better-sqlite3";
-import type { ModelAccessSnapshot, ModelSelection, ReasoningLevel } from "@volli/shared";
+import { REASONING_LEVELS, type ModelAccessSnapshot, type ModelSelection } from "@volli/shared";
 
 import { setAppState } from "../db/app-state-repo";
 import { prepared } from "../db/prepared";
 
 export const MODEL_ACCESS_DEFAULT_APP_STATE_KEY = "volli:model-access-default";
 
-const REASONING_LEVELS = new Set<ReasoningLevel>([
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-]);
 const MAX_IDENTIFIER_LENGTH = 512;
 
 function isIdentifier(value: unknown): value is string {
@@ -41,15 +32,11 @@ export function readDefaultModelSelection(db: Database.Database): ModelSelection
     const providerId = candidate["providerId"];
     const modelId = candidate["modelId"];
     const reasoningLevel = candidate["reasoningLevel"];
-    if (
-      !isIdentifier(providerId) ||
-      !isIdentifier(modelId) ||
-      typeof reasoningLevel !== "string" ||
-      !REASONING_LEVELS.has(reasoningLevel as ReasoningLevel)
-    ) {
+    const validReasoningLevel = REASONING_LEVELS.find((level) => level === reasoningLevel);
+    if (!isIdentifier(providerId) || !isIdentifier(modelId) || validReasoningLevel === undefined) {
       return null;
     }
-    return { providerId, modelId, reasoningLevel: reasoningLevel as ReasoningLevel };
+    return { providerId, modelId, reasoningLevel: validReasoningLevel };
   } catch {
     return null;
   }

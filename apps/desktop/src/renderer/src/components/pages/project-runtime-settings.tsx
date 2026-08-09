@@ -32,9 +32,10 @@ export function ProjectRuntimeSettings({ project }: { project: Project }) {
   const listings = useHarnessListings();
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const active = activeHarness(listings, selectedId);
+  React.useEffect(() => setSelectedId(null), [project.id]);
 
   return (
-    <div key={project.id} className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3">
       <HarnessSelector listings={listings} activeId={active?.id ?? null} onSelect={setSelectedId} />
       {active ? (
         <div className="flex flex-col gap-6">

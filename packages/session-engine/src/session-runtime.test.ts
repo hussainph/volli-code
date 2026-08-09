@@ -461,6 +461,29 @@ describe("SessionRuntime native adapter contract", () => {
       { status: "unreconciled", detail: "provider did not confirm selection" },
       { status: "unreconciled", detail: "provider still did not confirm selection" },
     ]);
+
+    adapter.reconcileReceipts = [
+      {
+        commandId: "command-select-unknown-model",
+        status: "accepted",
+        acceptedAt: 300,
+        native: { id: "native-model-selection", detail: null },
+      },
+    ];
+    await runtime.reconcile({ sessionId, attachmentId });
+
+    await expect(runtime.projection({ sessionId })).resolves.toMatchObject({
+      projection: {
+        modelSelection: selection,
+        receipts: expect.arrayContaining([
+          expect.objectContaining({
+            commandId: "command-select-unknown-model",
+            status: "completed",
+            result: { kind: "model.selected", sessionId },
+          }),
+        ]),
+      },
+    });
   });
 
   it("settles a fresh model selection when its durable binding directory is unavailable", async () => {

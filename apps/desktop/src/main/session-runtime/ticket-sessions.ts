@@ -7,6 +7,7 @@ const STRUCTURED_PROFILE_ID = "native";
 export type TicketSessionsErrorCode =
   | "DEFAULT_MODEL_REQUIRED"
   | "MODEL_SELECTION_REJECTED"
+  | "SESSION_NOT_TICKET_SESSION"
   | "TICKET_NOT_IN_PROJECT";
 
 export class TicketSessionsError extends Error {
@@ -86,7 +87,11 @@ export function createTicketSessions(options: TicketSessionsOptions): TicketSess
     },
     async attach(input) {
       if (await options.readBornTicketless(input.sessionId)) {
-        throw new Error("The requested Session is not a Ticket Session");
+        throw new TicketSessionsError(
+          "SESSION_NOT_TICKET_SESSION",
+          "The requested Session is not a Ticket Session",
+          input.sessionId,
+        );
       }
       return attachTicketSession(options.runtime, input.operationId, input.sessionId);
     },

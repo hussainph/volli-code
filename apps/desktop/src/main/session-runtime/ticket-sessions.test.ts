@@ -151,6 +151,35 @@ describe("Ticket Sessions", () => {
     ]);
   });
 
+  it("keeps the durable Session id when model policy cannot be recorded", async () => {
+    const commands: SessionRuntimeCommandRequest[] = [];
+    const ticketSessions = createTicketSessions({
+      readBornTicketless: async () => false,
+      ticketBelongsToProject: () => true,
+      runtime: {
+        command: async (request) => {
+          commands.push(request);
+          return result(
+            request,
+            request.command.kind === "model.select" ? "rejected" : "completed",
+          );
+        },
+      },
+      readDefaultModel,
+    });
+
+    await expect(ticketSessions.start(startInput("operation-model-refused"))).rejects.toMatchObject(
+      {
+        code: "MODEL_SELECTION_REJECTED",
+        sessionId: "session-1",
+      },
+    );
+    expect(commands.map((request) => request.command.kind)).toEqual([
+      "session.create",
+      "model.select",
+    ]);
+  });
+
   it("preserves the durable Session for explicit recovery when attachment is rejected", async () => {
     const commands: SessionRuntimeCommandRequest[] = [];
     const ticketSessions = createTicketSessions({
@@ -302,7 +331,7 @@ describe("Ticket Sessions", () => {
 
     await expect(
       ticketSessions.attach({ operationId: "operation-cross-attach", sessionId: "scratch" }),
-    ).rejects.toThrow("not a Ticket Session");
+    ).rejects.toMatchObject({ code: "SESSION_NOT_TICKET_SESSION", sessionId: "scratch" });
     expect(commands).toEqual([]);
   });
 });

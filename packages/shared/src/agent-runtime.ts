@@ -8,7 +8,16 @@ export interface AuthoritySnapshot {
 }
 
 /** Volli's reasoning policy, independent of any provider's type names. */
-export type ReasoningLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export const REASONING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+export type ReasoningLevel = (typeof REASONING_LEVELS)[number];
 
 /** The selected model access for one Session attachment. */
 export interface ModelSelection {

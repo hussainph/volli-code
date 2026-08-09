@@ -110,7 +110,7 @@ function modelKey(model: Pick<Model<string>, "provider" | "id">): string {
 }
 
 function billingSource(
-  provider: Models["getProviders"] extends () => readonly (infer T)[] ? T : never,
+  provider: ReturnType<Models["getProviders"]>[number],
   auth: Awaited<ReturnType<Models["checkAuth"]>>,
 ): ModelAccessBillingSource {
   if (auth?.type === "oauth" && provider.auth.oauth?.isSubscription === true) {

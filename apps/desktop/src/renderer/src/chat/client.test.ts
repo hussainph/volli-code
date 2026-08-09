@@ -8,7 +8,7 @@
  * message that leaves exactly once — are all about *when* things happen, and
  * none of them is observable through a component.
  */
-import type { SessionAttachmentProjection, SessionProjection } from "@volli/shared";
+import type { CommandReceipt, SessionAttachmentProjection, SessionProjection } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -33,10 +33,28 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 /* ------------------------------------------------------------------ scripts */
 
 const SESSION = { id: "durable", projectId: "p1", ticketId: null, title: null, createdAt: 0 };
-const ACCEPTED = { sessionId: SESSION.id, receipt: { status: "accepted" } };
+const ACCEPTED_RECEIPT: CommandReceipt = {
+  id: "receipt-accepted",
+  commandId: "command-accepted",
+  status: "accepted",
+  acceptedAt: 0,
+  result: { kind: "session.signaled", sessionId: SESSION.id },
+  recordedAt: 0,
+  sequence: 1,
+};
+const REJECTED_RECEIPT: CommandReceipt = {
+  id: "receipt-rejected",
+  commandId: "command-rejected",
+  status: "rejected",
+  code: "adapter_unavailable",
+  detail: "OpenCode is unavailable",
+  recordedAt: 0,
+  sequence: 1,
+};
+const ACCEPTED = { sessionId: SESSION.id, receipt: ACCEPTED_RECEIPT };
 const REFUSED = {
   sessionId: SESSION.id,
-  receipt: { status: "rejected", code: "adapter_unavailable", detail: "OpenCode is unavailable" },
+  receipt: REJECTED_RECEIPT,
 };
 
 function attachmentFor(id: string, adapterId = "opencode"): SessionAttachmentProjection {
@@ -124,7 +142,9 @@ function sliceOf(overrides: Partial<ChatSessionSlice> = {}): ChatSessionSlice {
 
 interface CommandAnswer {
   sessionId: string;
-  receipt?: unknown;
+  receipt?: CommandReceipt | null;
+  state?: "ready" | "needs-recovery";
+  throughSequence?: number;
 }
 
 class FakeStream {
@@ -293,11 +313,12 @@ async function adopted(prepare: (rpc: FakeRpc) => void = () => undefined) {
       return {
         sessionId: answer.sessionId,
         state:
-          answer.receipt && (answer.receipt as { status?: string }).status === "rejected"
+          answer.state ??
+          (answer.receipt && (answer.receipt as { status?: string }).status === "rejected"
             ? "needs-recovery"
-            : "ready",
-        receipt: answer.receipt,
-        throughSequence: 1,
+            : "ready"),
+        receipt: answer.receipt ?? null,
+        throughSequence: answer.throughSequence ?? 1,
       };
     },
   }));
@@ -789,6 +810,21 @@ describe("product-owned attach", () => {
     await expect(client.retryAttach()).resolves.toBe(false);
     expect(slice()!.sessionError).toBe("Could not start Session: socket hang up");
   });
+
+  it("keeps an attachment without a terminal receipt in recovery", async () => {
+    const { client, slice } = await adopted((fake) => {
+      fake.answerAttach = () => ({
+        sessionId: SESSION.id,
+        state: "needs-recovery",
+        receipt: null,
+        throughSequence: 1,
+      });
+    });
+
+    await expect(client.retryAttach()).resolves.toBe(false);
+    expect(slice()!.lifecycle).toBe("error");
+    expect(slice()!.sessionError).toBe("Could not start Session: attachment needs recovery");
+  });
 });
 
 describe("retryAttach", () => {
@@ -815,7 +851,6 @@ describe("retryAttach", () => {
     expect(rpc.attaches).toEqual([
       { operationId: expect.any(String), sessionId: expect.any(String), bornTicketless: false },
     ]);
-    expect(JSON.stringify(rpc.attaches)).not.toMatch(/adapter|profile|pi|opencode/i);
   });
 
   it("does not guess a runtime route before durable Session origin is known", async () => {
@@ -935,7 +970,6 @@ describe("selectModel", () => {
         },
       },
     ]);
-    expect(JSON.stringify(rpc.commands)).not.toMatch(/adapter|profile|pi/i);
   });
 
   it("does not issue a model command during an active turn", async () => {

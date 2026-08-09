@@ -309,7 +309,7 @@ function ModelPill({
                             modelId: model.modelId,
                             reasoningLevel: model.reasoningLevels.includes(selection.reasoningLevel)
                               ? selection.reasoningLevel
-                              : (model.reasoningLevels[0] ?? ""),
+                              : (model.reasoningLevels[0] ?? "off"),
                           });
                           setOpen(false);
                         }}

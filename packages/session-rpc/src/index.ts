@@ -2,6 +2,7 @@ import { initTRPC, TRPCError, tracked } from "@trpc/server";
 import {
   isSessionStreamOverlay,
   MAX_RUNTIME_PREFERENCE_MODELS,
+  REASONING_LEVELS,
   type ModelAccessSnapshot,
   type RuntimeCatalog,
   type SessionClientCommand,
@@ -10,6 +11,7 @@ import {
   type SessionRuntimeCommandRequest,
   type SessionRuntimeProjectionSnapshot,
   type SessionRuntimeSnapshot,
+  type SessionPresentationProjection,
   type SessionStreamEmission,
   type SessionStreamFrame,
   type SessionStartResult,
@@ -242,7 +244,7 @@ const runtimeModelRefSchema = z.object({ providerId: nonEmptyString, modelId: no
 const modelSelectionSchema = z.object({
   providerId: nonEmptyString,
   modelId: nonEmptyString,
-  reasoningLevel: z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"]),
+  reasoningLevel: z.enum(REASONING_LEVELS),
 });
 const modelAccessStateSchema = z.enum(["available", "authentication-required", "unavailable"]);
 const modelAccessSnapshotSchema = z.object({
@@ -263,7 +265,7 @@ const modelAccessSnapshotSchema = z.object({
       modelId: nonEmptyString,
       label: nonEmptyString,
       state: modelAccessStateSchema,
-      reasoningLevels: z.array(z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"])),
+      reasoningLevels: z.array(z.enum(REASONING_LEVELS)),
     }),
   ),
 });
@@ -441,7 +443,7 @@ export function createSessionRouter() {
         )
         .mutation(async ({ ctx, input }) => {
           if (!ctx.startTicketSession) {
-            throw new Error("Ticket Sessions are unavailable on this transport");
+            unavailable("Ticket Sessions are unavailable on this transport");
           }
           return ctx.startTicketSession(input);
         }),
@@ -449,7 +451,7 @@ export function createSessionRouter() {
         .input(z.object({ operationId: nonEmptyString, sessionId: nonEmptyString }))
         .mutation(async ({ ctx, input }) => {
           if (!ctx.attachTicketSession) {
-            throw new Error("Ticket Sessions are unavailable on this transport");
+            unavailable("Ticket Sessions are unavailable on this transport");
           }
           return ctx.attachTicketSession(input);
         }),
@@ -465,7 +467,7 @@ export function createSessionRouter() {
         )
         .mutation(async ({ ctx, input }) => {
           if (!ctx.startProjectSession) {
-            throw new Error("Project Sessions are unavailable on this transport");
+            unavailable("Project Sessions are unavailable on this transport");
           }
           return ctx.startProjectSession(input);
         }),
@@ -473,7 +475,7 @@ export function createSessionRouter() {
         .input(z.object({ operationId: nonEmptyString, sessionId: nonEmptyString }))
         .mutation(async ({ ctx, input }) => {
           if (!ctx.attachProjectSession) {
-            throw new Error("Project Sessions are unavailable on this transport");
+            unavailable("Project Sessions are unavailable on this transport");
           }
           return ctx.attachProjectSession(input);
         }),
@@ -483,13 +485,13 @@ export function createSessionRouter() {
         .input(z.object({ refresh: z.boolean().optional() }))
         .query(async ({ ctx, input }) => {
           if (!ctx.inspectModelAccess) {
-            throw new Error("Model Access is unavailable on this transport");
+            unavailable("Model Access is unavailable on this transport");
           }
           return modelAccessSnapshotSchema.parse(await ctx.inspectModelAccess(input));
         }),
       defaultSelection: instrumentedProcedure.query(({ ctx }) => {
         if (!ctx.readDefaultModelSelection) {
-          throw new Error("Model Access preferences are unavailable on this transport");
+          unavailable("Model Access preferences are unavailable on this transport");
         }
         const selection = ctx.readDefaultModelSelection();
         return selection === null ? null : modelSelectionSchema.parse(selection);
@@ -498,7 +500,7 @@ export function createSessionRouter() {
         .input(modelSelectionSchema)
         .mutation(async ({ ctx, input }) => {
           if (!ctx.writeDefaultModelSelection) {
-            throw new Error("Model Access preferences are unavailable on this transport");
+            unavailable("Model Access preferences are unavailable on this transport");
           }
           await ctx.writeDefaultModelSelection(input);
           return input;
@@ -874,62 +876,50 @@ function rendererFrame(frame: SessionStreamFrame): SessionStreamFrame {
   }
 }
 
-function rendererProjection(
-  snapshot: SessionRuntimeProjectionSnapshot,
-): SessionRuntimeProjectionSnapshot {
-  const attachments = snapshot.projection.attachments;
-  const liveExecutor = snapshot.projection.liveExecutor;
+function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
+  projection: SessionPresentationProjection;
+  throughSequence: number;
+} {
+  const source = snapshot.projection;
+  const projection: Partial<SessionPresentationProjection> = {};
+  if (source.session !== undefined) projection.session = source.session;
+  if (source.status !== undefined) projection.status = source.status;
+  if (source.attention !== undefined) {
+    projection.attention = {
+      active: source.attention.active.map(rendererAttention),
+      primary:
+        source.attention.primary === null ? null : rendererAttention(source.attention.primary),
+    };
+  }
+  if (source.interactions !== undefined) {
+    projection.interactions = {
+      active: source.interactions.active.map(rendererInteraction),
+      resolved: source.interactions.resolved.map((entry) => ({
+        ...entry,
+        interaction: rendererInteraction(entry.interaction),
+      })),
+    };
+  }
+  if (source.signal !== undefined) projection.signal = source.signal;
+  if (source.modelSelection !== undefined) projection.modelSelection = source.modelSelection;
+  if (source.turnActive !== undefined) projection.turnActive = source.turnActive;
+  if (source.lastActivityAt !== undefined) projection.lastActivityAt = source.lastActivityAt;
+  if (source.bornTicketless !== undefined) projection.bornTicketless = source.bornTicketless;
+  if (source.liveExecutor !== undefined) {
+    projection.liveExecutor = source.liveExecutor === null ? null : { id: source.liveExecutor.id };
+  }
   return {
-    projection: {
-      ...snapshot.projection,
-      ...(Array.isArray(snapshot.projection.commands)
-        ? { commands: snapshot.projection.commands.map(rendererCommand) }
-        : {}),
-      ...(snapshot.projection.pendingExecutorStart === undefined
-        ? {}
-        : {
-            pendingExecutorStart:
-              snapshot.projection.pendingExecutorStart === null
-                ? null
-                : rendererCommand(snapshot.projection.pendingExecutorStart),
-          }),
-      ...(Array.isArray(attachments) ? { attachments: attachments.map(rendererAttachment) } : {}),
-      ...(liveExecutor === undefined
-        ? {}
-        : {
-            liveExecutor: liveExecutor === null ? null : rendererAttachment(liveExecutor),
-          }),
-      capabilities: snapshot.projection.capabilities.map(rendererCapabilitySnapshot),
-      ...(snapshot.projection.attention === undefined
-        ? {}
-        : {
-            attention: {
-              active: snapshot.projection.attention.active.map(rendererAttention),
-              primary:
-                snapshot.projection.attention.primary === null
-                  ? null
-                  : rendererAttention(snapshot.projection.attention.primary),
-            },
-          }),
-      ...(snapshot.projection.interactions === undefined
-        ? {}
-        : {
-            interactions: {
-              active: snapshot.projection.interactions.active.map(rendererInteraction),
-              resolved: snapshot.projection.interactions.resolved.map((entry) => ({
-                ...entry,
-                interaction: rendererInteraction(entry.interaction),
-              })),
-            },
-          }),
-    },
+    projection: projection as SessionPresentationProjection,
     throughSequence: snapshot.throughSequence,
   };
 }
 
-function rendererSnapshot(snapshot: SessionRuntimeSnapshot): SessionRuntimeSnapshot {
+function rendererSnapshot(snapshot: SessionRuntimeSnapshot): {
+  projection: SessionPresentationProjection;
+  frames: SessionStreamFrame[];
+  throughSequence: number;
+} {
   return {
-    ...snapshot,
     ...rendererProjection(snapshot),
     frames: snapshot.frames.map(rendererFrame),
   };
@@ -950,6 +940,10 @@ async function requireRuntimeCatalog(
       message: error instanceof Error ? error.message : String(error),
     });
   }
+}
+
+function unavailable(message: string): never {
+  throw new TRPCError({ code: "NOT_IMPLEMENTED", message });
 }
 
 export type AppRouter = ReturnType<typeof createSessionRouter>;

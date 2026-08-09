@@ -21,7 +21,6 @@ import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import type {
   ModelAccessModel,
   ModelAccessProvider,
-  ReasoningLevel,
   SessionAttentionProjection,
   SessionInteraction,
 } from "@volli/shared";
@@ -60,6 +59,7 @@ import {
 import { ActivityBundle, ToolRow } from "@renderer/components/chat/activity-ui";
 import {
   answerInteraction,
+  composerModelSelection,
   holdList,
   messageRoute,
   resolvingWith,
@@ -160,11 +160,8 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   );
   const changeModel = React.useCallback(
     (next: ComposerModelSelection) => {
-      void selectModel({
-        providerId: next.providerId,
-        modelId: next.modelId,
-        reasoningLevel: next.reasoningLevel as ReasoningLevel,
-      });
+      const nextSelection = composerModelSelection(next);
+      if (nextSelection !== null) void selectModel(nextSelection);
     },
     [selectModel],
   );
@@ -448,7 +445,16 @@ function useModelAccess(active: boolean): {
   const revision = modelAccess?.revision ?? 0;
 
   React.useEffect(() => {
-    if (!active || inspect === undefined) return;
+    if (!active) return;
+    setCatalogState("loading");
+    setCatalogError(null);
+    if (inspect === undefined) {
+      setModels(NO_MODELS);
+      setProviders([]);
+      setCatalogState("error");
+      setCatalogError("Model Access is unavailable");
+      return;
+    }
     let current = true;
     void inspect({})
       .then((access) => {

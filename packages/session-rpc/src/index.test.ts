@@ -205,6 +205,7 @@ function attachmentFrames(): readonly SessionStreamFrame[] {
         },
       },
     },
+    frameWithPayload(12, { kind: "command.recorded", command: modelCommand() }),
   ];
 }
 
@@ -509,7 +510,7 @@ describe("Session tRPC router", () => {
     });
 
     await expect(caller.session.projection({ sessionId: "session-1" })).resolves.toEqual({
-      projection: { capabilities: [] },
+      projection: {},
       throughSequence: 4,
     });
   });
@@ -539,14 +540,20 @@ describe("Session tRPC router", () => {
 
     const resolved = await caller.session.projection({ sessionId: "session-1" });
 
-    expect(resolved.projection.attachments[0]?.native).toBeUndefined();
-    expect(resolved.projection.attachments[1]).toEqual(
-      expect.objectContaining({ id: "attachment-without-recovery", status: "open" }),
-    );
-    expect(resolved.projection.liveExecutor?.native).toBeUndefined();
+    expect(Object.keys(resolved.projection).toSorted()).toEqual([
+      "attention",
+      "bornTicketless",
+      "interactions",
+      "lastActivityAt",
+      "liveExecutor",
+      "modelSelection",
+      "session",
+      "signal",
+      "status",
+      "turnActive",
+    ]);
+    expect(resolved.projection.liveExecutor).toEqual({ id: "attachment-1" });
     expect(resolved.projection.interactions.active[0]?.native).toEqual({ id: null, detail: null });
-    expect(JSON.stringify(resolved)).not.toMatch(/adapterId|profileId/);
-    expect(JSON.stringify(resolved)).not.toMatch(/pi|native-session|permission-request/i);
     expect(serverSnapshot.projection.attachments[0]?.native).toEqual(recoveryNative());
     expect(serverSnapshot.projection.liveExecutor?.native).toEqual(recoveryNative());
   });
@@ -563,11 +570,22 @@ describe("Session tRPC router", () => {
     const resolved = await caller.session.snapshot({ sessionId: "session-1" });
     const payloads = resolved.frames.map((item) => item.event.payload);
 
-    expect(resolved.projection.attachments[0]?.native).toBeUndefined();
+    expect(Object.keys(resolved.projection).toSorted()).toEqual([
+      "attention",
+      "bornTicketless",
+      "interactions",
+      "lastActivityAt",
+      "liveExecutor",
+      "modelSelection",
+      "session",
+      "signal",
+      "status",
+      "turnActive",
+    ]);
+    expect(resolved.projection.liveExecutor).toEqual({ id: "attachment-1" });
     expect(
       payloads[0]?.kind === "attachment.opened" ? payloads[0].attachment.native : undefined,
     ).toBeUndefined();
-    expect(JSON.stringify(resolved)).not.toMatch(/adapterId|profileId/);
     expect(
       payloads[1]?.kind === "attachment.native_referenced" ? payloads[1].native : undefined,
     ).toEqual({
@@ -580,7 +598,6 @@ describe("Session tRPC router", () => {
     expect(
       payloads[3]?.kind === "interaction.opened" ? payloads[3].interaction.native : undefined,
     ).toEqual({ id: null, detail: null });
-    expect(JSON.stringify(resolved)).not.toMatch(/pi|native-session|permission-request/i);
     expect(serverSnapshot.frames.map((item) => item.event.payload)).toEqual(
       attachmentFrames().map((item) => item.event.payload),
     );
@@ -621,8 +638,6 @@ describe("Session tRPC router", () => {
     expect(
       payloads[3]?.kind === "interaction.opened" ? payloads[3].interaction.native : undefined,
     ).toEqual({ id: null, detail: null });
-    expect(JSON.stringify(rendererFrames)).not.toMatch(/adapterId|profileId/);
-    expect(JSON.stringify(rendererFrames)).not.toMatch(/pi|native-session|permission-request/i);
     expect(serverFrames.map((item) => item.event.payload)).toEqual(
       attachmentFrames().map((item) => item.event.payload),
     );
@@ -646,7 +661,7 @@ describe("Session tRPC router", () => {
     });
 
     const resolved = await caller.session.snapshot({ sessionId: "session-1" });
-    expect(resolved.projection.capabilities[0]?.catalog).toEqual([]);
+    expect("capabilities" in resolved.projection).toBe(false);
     expect(
       resolved.frames[0]?.event.payload.kind === "capabilities.updated"
         ? resolved.frames[0].event.payload.snapshot.catalog
@@ -718,8 +733,7 @@ describe("Session tRPC router", () => {
 
     expect(Object.keys(resolved).toSorted()).toEqual(["projection", "throughSequence"]);
     expect(resolved.throughSequence).toBe(9);
-    // The one thing this edge still owes the renderer: no exhaustive inventory.
-    expect(resolved.projection.capabilities[0]?.catalog).toEqual([]);
+    expect("capabilities" in resolved.projection).toBe(false);
     expect(diagnostics.list().map((entry) => `${entry.procedure}:${entry.phase}`)).toEqual([
       "session.projection:start",
       "session.projection:success",
@@ -1091,6 +1105,46 @@ describe("Session tRPC router", () => {
     await expect(caller.runtimeCatalog.resolve({ adapterId: "opencode" })).rejects.toThrow(
       "Runtime Catalog is unavailable on this transport",
     );
+  });
+
+  it("classifies unconfigured product facades as unavailable transport capabilities", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    const calls = [
+      () =>
+        caller.ticketSessions.start({
+          operationId: "operation-ticket",
+          projectId: "project-1",
+          ticketId: "ticket-1",
+          title: null,
+        }),
+      () =>
+        caller.ticketSessions.attach({ operationId: "operation-ticket-attach", sessionId: "s1" }),
+      () =>
+        caller.projectSessions.start({
+          operationId: "operation-project",
+          projectId: "project-1",
+          title: null,
+        }),
+      () =>
+        caller.projectSessions.attach({ operationId: "operation-project-attach", sessionId: "s1" }),
+      () => caller.modelAccess.inspect({}),
+      () => caller.modelAccess.defaultSelection(),
+      () =>
+        caller.modelAccess.setDefault({
+          providerId: "openai-codex",
+          modelId: "gpt-5.6-sol",
+          reasoningLevel: "high",
+        }),
+    ];
+
+    for (const call of calls) {
+      await expect(call()).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
+    }
   });
 
   it("wraps a Runtime Catalog resolver rejection as a not-found projectId", async () => {

@@ -5,4 +5,9 @@ export * from "./runtime-catalog";
 export * from "./transcript-artifacts";
 export * from "./transcript-overlay";
 export * from "./session-runtime";
-export type { ModelAccessSnapshot, SessionStartResult } from "@volli/shared";
+export { REASONING_LEVELS } from "@volli/shared";
+export type {
+  ModelAccessSnapshot,
+  SessionPresentationProjection,
+  SessionStartResult,
+} from "@volli/shared";

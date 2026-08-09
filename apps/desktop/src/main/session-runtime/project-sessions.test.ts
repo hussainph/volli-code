@@ -72,6 +72,37 @@ describe("temporary project Sessions", () => {
     });
   });
 
+  it("keeps a rejected project attachment durable for explicit recovery", async () => {
+    const sessions = createProjectSessions({
+      readBornTicketless: async () => true,
+      runtime: {
+        command: async (request) => {
+          const accepted = result(request);
+          return {
+            ...accepted,
+            receipt: {
+              id: `receipt:${request.commandId}`,
+              commandId: request.commandId,
+              status: "rejected",
+              code: "configuration_invalid",
+              detail: "Legacy runtime unavailable",
+              recordedAt: 2,
+              sequence: 2,
+            },
+          };
+        },
+      },
+    });
+
+    await expect(
+      sessions.attach({ operationId: "project-rejected", sessionId: "session-existing" }),
+    ).resolves.toMatchObject({
+      sessionId: "session-existing",
+      state: "needs-recovery",
+      receipt: { status: "rejected", code: "configuration_invalid" },
+    });
+  });
+
   it("refuses to cross-attach a Ticket Session through the compatibility route", async () => {
     const commands: SessionRuntimeCommandRequest[] = [];
     const sessions = createProjectSessions({

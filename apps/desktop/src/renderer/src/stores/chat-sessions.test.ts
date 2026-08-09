@@ -1,4 +1,4 @@
-import type { SessionProjection } from "@volli/shared";
+import type { CommandReceipt, SessionProjection, SessionStartResult } from "@volli/shared";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -15,10 +15,28 @@ import { createChatSessionsStore } from "./chat-sessions";
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 const SESSION = { id: "durable-1", projectId: "p1", ticketId: "t1", title: "VC-1", createdAt: 0 };
-const ACCEPTED = { sessionId: SESSION.id, receipt: { status: "accepted" } };
+const ACCEPTED_RECEIPT: CommandReceipt = {
+  id: "receipt-accepted",
+  commandId: "command-accepted",
+  status: "accepted",
+  acceptedAt: 0,
+  result: { kind: "session.signaled", sessionId: SESSION.id },
+  recordedAt: 0,
+  sequence: 1,
+};
+const REJECTED_RECEIPT: CommandReceipt = {
+  id: "receipt-rejected",
+  commandId: "command-rejected",
+  status: "rejected",
+  code: "adapter_unavailable",
+  detail: "OpenCode is unavailable",
+  recordedAt: 0,
+  sequence: 1,
+};
+const ACCEPTED = { sessionId: SESSION.id, receipt: ACCEPTED_RECEIPT };
 const REFUSED = {
   sessionId: SESSION.id,
-  receipt: { status: "rejected", code: "adapter_unavailable", detail: "OpenCode is unavailable" },
+  receipt: REJECTED_RECEIPT,
 };
 
 const projection: SessionProjection = {
@@ -41,15 +59,10 @@ const projection: SessionProjection = {
 
 interface CommandAnswer {
   sessionId: string;
-  receipt?: unknown;
+  receipt?: CommandReceipt | null;
 }
 
-type StartAnswer = {
-  sessionId: string;
-  receipt?: unknown;
-  state: "ready" | "needs-recovery";
-  throughSequence: number;
-};
+type StartAnswer = SessionStartResult;
 
 function fakeTransport() {
   const commands: ChatCommandRequest[] = [];
@@ -192,6 +205,7 @@ describe("createChatSession", () => {
     state.startAnswer = () => ({
       sessionId: SESSION.id,
       state: "needs-recovery",
+      receipt: null,
       throughSequence: 2,
     });
 

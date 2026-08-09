@@ -235,7 +235,8 @@ export function canSaveDefaultModel(
     model !== null &&
     model.state !== "unavailable" &&
     selection !== null &&
-    model.reasoningLevels.includes(selection.reasoningLevel)
+    (model.reasoningLevels.includes(selection.reasoningLevel) ||
+      (model.reasoningLevels.length === 0 && selection.reasoningLevel === "off"))
   );
 }
 

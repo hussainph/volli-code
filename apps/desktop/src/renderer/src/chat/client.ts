@@ -24,6 +24,7 @@ import type {
   ModelSelection,
   SessionInteractionResolution,
   SessionPresentationProjection,
+  SessionStartResult,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 
@@ -309,12 +310,7 @@ export interface ChatSessionClientDeps extends ChatSessionTransport {
   store: ChatSessionStore;
 }
 
-export interface ProductSessionResult {
-  sessionId: string;
-  state: "ready" | "needs-recovery";
-  receipt?: unknown;
-  throughSequence: number;
-}
+export type ProductSessionResult = SessionStartResult;
 
 /** The app's transport. Built per call; the RPC client underneath is a singleton. */
 export function browserChatTransport(): ChatSessionTransport {
@@ -436,11 +432,15 @@ export class ChatSessionClient {
         bornTicketless: slice.projection.bornTicketless,
       });
       const refusal = rejectedReceipt(attached);
+      const failure =
+        attached.state === "ready" && refusal === null
+          ? null
+          : (refusal ?? "attachment needs recovery");
       this.#writes().settle(
         this.sessionId,
-        refusal === null ? null : `Could not start Session: ${refusal}`,
+        failure === null ? null : `Could not start Session: ${failure}`,
       );
-      return refusal === null;
+      return failure === null;
     } catch (failure) {
       this.#writes().settle(this.sessionId, `Could not start Session: ${errorMessage(failure)}`);
       return false;

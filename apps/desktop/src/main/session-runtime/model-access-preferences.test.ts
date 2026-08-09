@@ -9,10 +9,11 @@ import {
   writeDefaultModelSelection,
 } from "./model-access-preferences";
 
-let ctx: TestDb;
+let ctx: TestDb | null = null;
 
 afterEach(() => {
-  ctx.cleanup();
+  ctx?.cleanup();
+  ctx = null;
 });
 
 describe("Model Access default selection", () => {

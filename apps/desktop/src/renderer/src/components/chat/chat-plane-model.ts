@@ -7,15 +7,28 @@
  * streamed token is allowed to repaint.
  */
 import type {
+  ModelSelection,
   SessionAttention,
   SessionAttentionProjection,
   SessionInteraction,
   SessionInteractionResolution,
 } from "@volli/shared";
+import { REASONING_LEVELS } from "@volli/shared";
 import type { UIMessage } from "ai";
 
 import type { InteractionSubmission } from "@renderer/chat/interaction";
 import type { ComposerIntent } from "@renderer/chat/session-model";
+
+export function composerModelSelection(input: {
+  providerId: string;
+  modelId: string;
+  reasoningLevel: string;
+}): ModelSelection | null {
+  const reasoningLevel = REASONING_LEVELS.find((level) => level === input.reasoningLevel);
+  return reasoningLevel === undefined
+    ? null
+    : { providerId: input.providerId, modelId: input.modelId, reasoningLevel };
+}
 
 /* -------------------------------------------------------------- answering */
 

@@ -12,6 +12,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   answerInteraction,
+  composerModelSelection,
   holdList,
   messageRoute,
   resolvingWith,
@@ -23,6 +24,36 @@ import {
   type SessionBlockerActs,
   type SessionBlockerInput,
 } from "./chat-plane-model";
+
+describe("composer model selection", () => {
+  it("accepts only product reasoning levels at the durable command boundary", () => {
+    expect(
+      composerModelSelection({
+        providerId: "openai-codex",
+        modelId: "gpt-5.6-sol",
+        reasoningLevel: "high",
+      }),
+    ).toEqual({
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "high",
+    });
+    expect(
+      composerModelSelection({
+        providerId: "openai-codex",
+        modelId: "gpt-5.6-sol",
+        reasoningLevel: "",
+      }),
+    ).toBeNull();
+    expect(
+      composerModelSelection({
+        providerId: "openai-codex",
+        modelId: "gpt-5.6-sol",
+        reasoningLevel: "provider-ultra",
+      }),
+    ).toBeNull();
+  });
+});
 
 const NO_OP = () => undefined;
 const ACTS: SessionBlockerActs = {
