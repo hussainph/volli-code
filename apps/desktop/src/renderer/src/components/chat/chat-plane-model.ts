@@ -158,7 +158,12 @@ export interface SessionBlockerInput {
   catalogError: string | null;
   /** Whether this Ticket already owns a manual terminal companion tab. */
   terminalAvailable: boolean;
-  /** Pi Ticket Sessions can retry natively; preserved executors cannot. */
+  /**
+   * Whether retrying the exact failed run is on offer for an auth or
+   * configuration stop. Every structured Session runs on Pi and can, but only a
+   * Ticket Session has the manual terminal beside it that makes signing in and
+   * retrying one gesture; a project chat is sent to Settings instead.
+   */
   runtimeRetryAvailable: boolean;
 }
 

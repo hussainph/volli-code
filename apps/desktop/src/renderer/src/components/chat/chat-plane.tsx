@@ -144,15 +144,14 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
 
   const messages = slice?.transcript.messages ?? NO_MESSAGES;
   const queue = slice?.queue ?? NO_QUEUE;
-  const bornTicketless = slice?.projection?.bornTicketless === true;
   const modelSelection = slice?.projection?.modelSelection ?? null;
   const selection: ComposerModelSelection = modelSelection ?? EMPTY_MODEL_SELECTION;
   const working = slice?.lifecycle === "working";
   const liveExecutorId = slice?.projection?.liveExecutor?.id ?? null;
   const deliverable = slice !== undefined && isDeliverable(slice);
-  const composable = bornTicketless || modelSelection !== null;
+  const composable = modelSelection !== null;
   const { models, providers, catalogState, catalogError } = useModelAccess(
-    !bornTicketless && slice?.projection != null,
+    slice?.projection != null,
   );
   const composerModels = React.useMemo(
     () => models.map((model) => composerModel(model, providers)),
@@ -314,7 +313,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
       catalogState,
       catalogError,
       terminalAvailable: ticketId !== null,
-      runtimeRetryAvailable: !bornTicketless && ticketId !== null,
+      runtimeRetryAvailable: ticketId !== null,
     },
     blockerActs,
     interactions.length > 0,
@@ -409,7 +408,6 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
                 onValueChange={onInputChange}
                 textareaRef={textareaRef}
                 models={composerModels}
-                offersModelChoice={!bornTicketless}
                 selection={selection}
                 onSelectionChange={changeModel}
                 modelChoiceDisabled={working}

@@ -80,18 +80,16 @@ export function isWorking(slice: ChatSessionSlice): boolean {
  * *write* a message, a live executor is what you need to *deliver* one. Anything
  * written before both hold joins the queue instead of being dropped.
  *
- * The model half is the live executor's own question to answer, and it is asked
- * of the binding rather than of {@link sessionAdapterId} because there is
- * nothing to guess here: a Session with no live executor is not deliverable
- * whatever it would attach, and one with a live executor is holding the record
- * that names it.
+ * One rule, whatever the Session was born as. Every structured Session records
+ * its model policy durably before anything attaches — a project chat's is taken
+ * from the app default exactly as a Ticket Session's is — so a projection with
+ * no selection on it is not a Session that picks its own model, it is a Session
+ * whose model nobody has written down yet.
  */
 export function isDeliverable(slice: ChatSessionSlice): boolean {
-  const live = slice.projection?.liveExecutor ?? null;
-  if (live === null) return false;
-  return slice.projection?.bornTicketless === true
-    ? true
-    : slice.projection?.modelSelection !== null;
+  const projection = slice.projection;
+  if (projection === null) return false;
+  return projection.liveExecutor !== null && projection.modelSelection !== null;
 }
 
 /**
