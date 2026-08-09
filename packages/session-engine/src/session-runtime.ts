@@ -148,6 +148,25 @@ type InterruptCommandRequest = ExistingSessionCommandRequest & {
 type RetryCommandRequest = ExistingSessionCommandRequest & {
   command: Extract<SessionClientCommand, { kind: "executor.retry" }>;
 };
+type DeliveryResultKind =
+  | "executor.start.requested"
+  | "executor.stop.requested"
+  | "executor.interrupted"
+  | "executor.retried"
+  | "message.submitted"
+  | "interaction.resolved";
+type AttachFailureAttentionKind = "configuration_invalid" | "adapter_unrecoverable";
+type FailAttachInput = {
+  request: AttachCommandRequest;
+  submitted: SubmitSessionCommandResult;
+  location: SessionLocation;
+  code: string;
+  detail: string;
+  attachmentId?: string;
+} & (
+  | { adapter: null; attentionKind?: never }
+  | { adapter: NativeHarnessAdapter; attentionKind?: AttachFailureAttentionKind }
+);
 type ResolveInteractionCommandRequest = ExistingSessionCommandRequest & {
   command: Extract<SessionClientCommand, { kind: "interaction.resolve" }>;
 };
@@ -161,6 +180,9 @@ export interface SessionRuntimeCommandResult {
   receipt: CommandReceipt | null;
   throughSequence: number;
 }
+type DeliveredSessionRuntimeCommandResult = SessionRuntimeCommandResult & {
+  receipt: CommandReceipt;
+};
 
 export interface CancelInteractionRequest {
   sessionId: string;
@@ -744,18 +766,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     return this.#result(request.sessionId, submitted.command, receipt);
   }
 
-  async #failAttach(input: {
-    request: Extract<SessionRuntimeCommandRequest, { sessionId: string }> & {
-      command: Extract<SessionClientCommand, { kind: "adapter.attach" }>;
-    };
-    submitted: SubmitSessionCommandResult;
-    adapter: NativeHarnessAdapter | null;
-    location: SessionLocation;
-    code: string;
-    detail: string;
-    attachmentId?: string;
-    attentionKind?: "configuration_invalid" | "adapter_unrecoverable";
-  }): Promise<SessionRuntimeCommandResult> {
+  async #failAttach(input: FailAttachInput): Promise<SessionRuntimeCommandResult> {
     const attachmentId = input.attachmentId ?? this.#id("attachment");
     const failed = await this.ports.engine.observe({
       id: this.#id("event"),
@@ -784,15 +795,15 @@ class DefaultSessionRuntime implements SessionRuntime {
             id: this.#id("event"),
             sessionId: input.request.sessionId,
             occurredAt: this.ports.clock.now(),
-            provenance: adapterProvenance(
-              // `attentionKind` is only supplied for a typed failure thrown by
-              // the resolved adapter's attach call.
-              input.adapter as NativeHarnessAdapter,
-              input.location.venue,
-            ),
+            provenance: adapterProvenance(input.adapter, input.location.venue),
             kind: "attention.raised",
             attention: {
-              id: this.#id("attention"),
+              id: freshAttachAttentionId(
+                input.request.sessionId,
+                input.adapter.manifest.id,
+                input.request.command.profileId,
+                input.attentionKind,
+              ),
               // The attachment attempt is already a closed fact. This Attention
               // belongs to the Session until a fresh attach succeeds, rather
               // than pretending a failed binding can receive recovery work.
@@ -993,6 +1004,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         !existed && needsRehydration,
       );
     } catch (error) {
+      if (this.#closed) throw error;
       const detail = `Retry recovery failed: ${errorMessage(error)}`;
       const adapter = adapterIdentity(attachment.adapterId);
       const recoveryAttentionId = `${attachmentId}:recovery`;
@@ -1031,7 +1043,17 @@ class DefaultSessionRuntime implements SessionRuntime {
       return this.#result(request.sessionId, submitted.command, receipt);
     }
     const recovered = await this.#recoverAdapterDelivery({ request, submitted, binding, existed });
-    if (recovered) return recovered;
+    if (recovered) {
+      await this.#clearRecoveryAttentionAfterAcceptedRetry({
+        sessionId: request.sessionId,
+        attachmentId,
+        projection,
+        adapter: binding.adapter,
+        venue: binding.venue,
+        receipt: recovered.receipt,
+      });
+      return recovered;
+    }
     const receipt = await binding.handle.dispatch({
       kind: "executor.retry",
       commandId: request.commandId,
@@ -1046,7 +1068,38 @@ class DefaultSessionRuntime implements SessionRuntime {
       receipt,
       "executor.retried",
     );
+    await this.#clearRecoveryAttentionAfterAcceptedRetry({
+      sessionId: request.sessionId,
+      attachmentId,
+      projection,
+      adapter: binding.adapter,
+      venue: binding.venue,
+      receipt: durable,
+    });
     return this.#result(request.sessionId, submitted.command, durable);
+  }
+
+  async #clearRecoveryAttentionAfterAcceptedRetry(input: {
+    sessionId: string;
+    attachmentId: string;
+    projection: SessionProjection;
+    adapter: AdapterIdentity;
+    venue: SessionExecutionVenue;
+    receipt: CommandReceipt;
+  }): Promise<void> {
+    if (input.receipt.status !== "accepted") return;
+    const attentionId = `${input.attachmentId}:recovery`;
+    if (!input.projection.attention.active.some(({ id }) => id === attentionId)) return;
+    const cleared = await this.ports.engine.observe({
+      id: this.#id("event"),
+      sessionId: input.sessionId,
+      attachmentId: input.attachmentId,
+      occurredAt: this.ports.clock.now(),
+      provenance: adapterProvenance(input.adapter, input.venue),
+      kind: "attention.cleared",
+      attentionId,
+    });
+    await this.#publish([cleared]);
   }
 
   async #resolveInteraction(
@@ -1258,7 +1311,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     submitted: SubmitSessionCommandResult;
     binding: BindingRecord;
     existed: boolean;
-  }): Promise<SessionRuntimeCommandResult | null> {
+  }): Promise<DeliveredSessionRuntimeCommandResult | null> {
     const priorReceipt = input.submitted.receipt;
     if (!priorReceipt && !input.existed) return null;
     await this.#reconcileBinding(input.binding);
@@ -1272,7 +1325,11 @@ class DefaultSessionRuntime implements SessionRuntime {
       provenance: userProvenance(input.binding.venue),
     });
     const receipt = replayed.receipt ?? priorReceipt;
-    return receipt ? this.#result(input.request.sessionId, replayed.command, receipt) : null;
+    if (!receipt) return null;
+    return {
+      ...(await this.#result(input.request.sessionId, replayed.command, receipt)),
+      receipt,
+    };
   }
 
   async snapshot(input: { sessionId: string }): Promise<SessionRuntimeSnapshot> {
@@ -1951,13 +2008,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     adapter: AdapterIdentity,
     venue: SessionExecutionVenue,
     receipt: DeliveryReceipt,
-    resultKind:
-      | "executor.start.requested"
-      | "executor.stop.requested"
-      | "executor.interrupted"
-      | "executor.retried"
-      | "message.submitted"
-      | "interaction.resolved",
+    resultKind: DeliveryResultKind,
   ): Promise<CommandReceipt> {
     const unstamped: UnstampedCommandReceipt =
       receipt.status === "accepted"
@@ -2490,15 +2541,7 @@ function unwrapNativeBinding(reference: SessionNativeReference | null): {
   };
 }
 
-function resultKindFor(
-  command: SessionCommand,
-):
-  | "executor.start.requested"
-  | "executor.stop.requested"
-  | "executor.interrupted"
-  | "executor.retried"
-  | "message.submitted"
-  | "interaction.resolved" {
+function resultKindFor(command: SessionCommand): DeliveryResultKind {
   switch (command.intent.kind) {
     case "executor.start":
       return "executor.start.requested";
@@ -2516,6 +2559,15 @@ function resultKindFor(
     default:
       throw new SessionRuntimeConflictError(`Command ${command.id} is not adapter-bound`);
   }
+}
+
+function freshAttachAttentionId(
+  sessionId: string,
+  adapterId: string,
+  profileId: string,
+  kind: AttachFailureAttentionKind,
+): string {
+  return ["attach", sessionId, adapterId, profileId, kind].map(encodeURIComponent).join(":");
 }
 
 function nativeObservationId(

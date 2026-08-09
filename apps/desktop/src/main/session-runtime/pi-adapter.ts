@@ -42,6 +42,7 @@ import {
   createPiAgentRuntime,
   type AgentRuntime,
   type AttentionObservation,
+  type DeliveryOutcome,
   type PiRuntimeHostOptions,
   type RuntimeAttachmentHandle,
   type RuntimeActivityObservation,
@@ -172,7 +173,7 @@ const REJECTION_CODES = {
   closed: "PI_ATTACHMENT_CLOSED",
   "replace-unsupported": "PI_REPLACE_UNSUPPORTED",
   "retry-unavailable": "PI_RETRY_UNAVAILABLE",
-} as const;
+} as const satisfies Record<Extract<DeliveryOutcome, { kind: "rejected" }>["reason"], string>;
 
 /** One in-flight assistant message: the id its deltas address and the parts it has opened. */
 interface StreamingMessage {
@@ -293,7 +294,16 @@ export function createPiNativeAdapter(options: PiAdapterOptions): NativeHarnessA
 
     async attach(spec: NativeAttachmentSpec, sink: ObservationSink): Promise<BindingHandle> {
       if (spec.profileId !== PI_PROFILE_ID) throw new Error(`Unknown Pi profile ${spec.profileId}`);
-      const recovery = piRecoveryRef(spec);
+      let recovery: RuntimeRecoveryRef | undefined;
+      try {
+        recovery = piRecoveryRef(spec);
+      } catch (error) {
+        throw new NativeAttachmentError(
+          errorMessage(error),
+          "PI_RECOVERY_FAILED",
+          "adapter_unrecoverable",
+        );
+      }
       const context = await options.resolveTicketContext(spec.sessionId);
       if (context === null) {
         // Thrown, not emitted: the runtime discards this attach's sink when the

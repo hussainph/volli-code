@@ -78,10 +78,20 @@ function queuedUserMessage(text: string): UserMessage {
   return { role: "user", content: text, timestamp: Date.now() };
 }
 
+const FAILED_ASSISTANT_STOP_REASONS = [
+  "aborted",
+  "error",
+  "deferred",
+] as const satisfies readonly AssistantMessage["stopReason"][];
+
+function hasFailedStopReason(message: AssistantMessage): boolean {
+  return FAILED_ASSISTANT_STOP_REASONS.some((reason) => reason === message.stopReason);
+}
+
 function recoverableMessage(entry: MessageEntry): boolean {
   const message = entry.message;
   if (message.role !== "assistant") return true;
-  return !["aborted", "error", "deferred"].includes(message.stopReason);
+  return !hasFailedStopReason(message as AssistantMessage);
 }
 
 const VOLLI_OBSERVATION_MARKER = "volli.observation.v1";
@@ -465,11 +475,11 @@ async function attachTicketSession(
       await persistObservation({
         kind: "attention",
         state: "raised",
-        reason: "runtime-failure",
+        reason: "partial-turn",
         message:
-          "Pi recovery history is incomplete; an uncommitted assistant message was withheld.",
+          "Pi recovery history disagreed about a settled assistant message; the incomplete turn was withheld.",
       });
-      activeAttentionReasons.add("runtime-failure");
+      activeAttentionReasons.add("partial-turn");
     }
     for (const recoveredTurnId of openTurnIds) {
       await persistObservation({
@@ -768,10 +778,7 @@ async function attachTicketSession(
         }
         const messages = [...agent.state.messages];
         const tail = messages.at(-1);
-        if (
-          tail?.role === "assistant" &&
-          ["aborted", "error", "deferred"].includes(tail.stopReason)
-        ) {
+        if (tail?.role === "assistant" && hasFailedStopReason(tail as AssistantMessage)) {
           messages.pop();
           agent.state.messages = messages;
         } else if (tail?.role !== "user" && tail?.role !== "toolResult") {

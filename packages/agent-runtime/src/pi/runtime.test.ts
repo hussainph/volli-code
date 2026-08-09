@@ -1106,7 +1106,7 @@ describe("startTicketSession", () => {
     await secondHandle.close();
   });
 
-  it("withholds an assistant entry whose semantic marker was not committed", async () => {
+  it("withholds an assistant entry without a semantic marker as a recoverable partial turn", async () => {
     const attachment = fixture();
     const firstRuntime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
@@ -1163,7 +1163,7 @@ describe("startTicketSession", () => {
         expect.objectContaining({
           kind: "attention",
           state: "raised",
-          reason: "runtime-failure",
+          reason: "partial-turn",
         }),
       ]),
     );
@@ -1174,7 +1174,7 @@ describe("startTicketSession", () => {
     await secondHandle.close();
   });
 
-  it("withholds duplicate settled markers from reconciliation", async () => {
+  it("withholds duplicate settled markers as a recoverable partial turn", async () => {
     const attachment = fixture();
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
@@ -1210,14 +1210,14 @@ describe("startTicketSession", () => {
         expect.objectContaining({
           kind: "attention",
           state: "raised",
-          reason: "runtime-failure",
+          reason: "partial-turn",
         }),
       ]),
     );
     await reopened.close();
   });
 
-  it("withholds a settled marker that references no assistant entry", async () => {
+  it("withholds a settled marker without an assistant entry as a recoverable partial turn", async () => {
     const attachment = fixture();
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
@@ -1251,7 +1251,7 @@ describe("startTicketSession", () => {
         expect.objectContaining({
           kind: "attention",
           state: "raised",
-          reason: "runtime-failure",
+          reason: "partial-turn",
         }),
       ]),
     );

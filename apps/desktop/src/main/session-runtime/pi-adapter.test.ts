@@ -13,6 +13,7 @@ import type {
   NativeAttachmentSpec,
   ObservationSink,
 } from "@volli/session-engine";
+import { NativeAttachmentError } from "@volli/session-engine";
 import { ACTIVITY_METADATA_KEY } from "@volli/shared";
 import type { UIMessage } from "ai";
 
@@ -310,6 +311,56 @@ describe("Pi native adapter attach", () => {
     );
 
     expect(runtime.spec.recovery).toEqual(recovery);
+  });
+
+  it.each([null, "not-an-object", []])(
+    "classifies missing or non-object Pi recovery detail as unrecoverable (%s)",
+    async (detail) => {
+      const { adapter, runtime } = composition();
+
+      const rejection = adapter.attach(
+        attachmentSpec({
+          continuity: "native_resume",
+          native: { id: "pi-session-previous", detail },
+        }),
+        new RecordingSink(),
+      );
+
+      const error: unknown = await rejection.catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(NativeAttachmentError);
+      expect(error).toMatchObject({
+        code: "PI_RECOVERY_FAILED",
+        attentionKind: "adapter_unrecoverable",
+      });
+      expect(runtime.specs).toHaveLength(0);
+    },
+  );
+
+  it("classifies a Pi native id and recovery session id mismatch as unrecoverable", async () => {
+    const { adapter, runtime } = composition();
+
+    const rejection = adapter.attach(
+      attachmentSpec({
+        continuity: "native_resume",
+        native: {
+          id: "pi-session-native",
+          detail: {
+            runtime: "pi",
+            sessionId: "pi-session-detail",
+            sessionFilePath: "/data/pi-sessions/pi-session-detail.jsonl",
+          },
+        },
+      }),
+      new RecordingSink(),
+    );
+
+    const error: unknown = await rejection.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(NativeAttachmentError);
+    expect(error).toMatchObject({
+      code: "PI_RECOVERY_FAILED",
+      attentionKind: "adapter_unrecoverable",
+    });
+    expect(runtime.specs).toHaveLength(0);
   });
 
   it("refuses a profile it does not have", async () => {
@@ -900,7 +951,13 @@ describe("Pi native adapter observation translation", () => {
   it("maps every runtime attention reason onto product vocabulary", async () => {
     const { runtime, sink } = await attached();
 
-    for (const reason of ["auth", "configuration", "context", "runtime-failure"] as const) {
+    for (const reason of [
+      "auth",
+      "configuration",
+      "context",
+      "runtime-failure",
+      "partial-turn",
+    ] as const) {
       await runtime.observe({ kind: "attention", state: "raised", reason, message: reason });
     }
 
@@ -909,6 +966,7 @@ describe("Pi native adapter observation translation", () => {
       "configuration_invalid",
       "context_limit_reached",
       "adapter_unrecoverable",
+      "partial_turn_interrupted",
     ]);
   });
 
