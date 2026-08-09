@@ -46,7 +46,7 @@ A local-first macOS workspace for planning and running coding sessions, built wi
 - `vp run -r typecheck` · `vp run -r test` · `vp check` (= `vp fmt` + `vp lint`) — the quality stack. `vp` is the global toolchain CLI (Node/pnpm pinned in root `package.json`).
 - `vp run -r test:coverage` — **a separate gate, and CI runs it.** Holds `packages/shared` and a protected renderer surface at 100%; thresholds only evaluate under `--coverage`, so a green `vp run -r test` says nothing about it. Run it before pushing anything that adds a branch or a store action.
 - `vp install` / `pnpm install` for deps; `pnpm run ensure:electron` (`apps/desktop`) prefetches Electron's lazily-fetched binary.
-- CI: PRs run one lean Linux job and must be green before shipping. **Desktop e2e smokes (`apps/desktop/e2e/*.mjs`) do NOT run in CI — run the relevant ones locally before shipping any desktop-touching PR.** The macOS smoke lane is manual-only (`gh workflow run ci.yml -f desktop-smoke=true`); `act pull_request --container-architecture linux/amd64` mirrors the Linux job locally.
+- CI: PRs run one lean Linux job and must be green before shipping. **Desktop e2e smokes (`apps/desktop/e2e/*.mjs`) do NOT run in CI — run the relevant ones locally before shipping any desktop-touching PR.** The macOS smoke lane is manual-only (`gh workflow run ci.yml -f desktop-smoke=true`); `act pull_request --container-architecture linux/amd64` mirrors the Linux job locally. Anything touching the Pi runtime also runs `pnpm smoke:pi` locally (builds, then the three Pi smokes; needs a display and a real `~/.pi/agent/auth.json`).
 
 ## Retained foundations
 
