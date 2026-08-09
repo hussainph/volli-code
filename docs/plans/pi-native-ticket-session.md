@@ -614,8 +614,9 @@ Bounded follow-ups deferred from this slice:
   loose app build prepares and verifies the resource now.
 - In-app OAuth/API-key entry remains separate from the proven manual Pi
   terminal handoff. Credentials continue to be owned by Pi.
-- Full deletion of the Lab Runtime Catalog, OpenCode adapter, and migration
-  scaffolding remains Session 7 work.
+- Full deletion of the OpenCode adapter and migration scaffolding remains
+  Session 7 work. The Runtime Catalog was pulled forward into Session 6 once it
+  proved to be already dead in the shipped app (see that session's notes).
 
 ### Session 6 — Environment inspector and terminal hierarchy
 
@@ -646,13 +647,36 @@ Session 6 implementation decisions (2026-08-09):
   Skill inventory are deferred with attachment transport rather than guessed
   from free-form Markdown.
 
+Session 6 also absorbed two subtractions that review made unavoidable:
+
+- **The Runtime Catalog surface is deleted** (23 files, ~2,200 lines). It was
+  not merely orphaned — production never passed `resolveRuntimeCatalog` to
+  `registerSessionRpcIpcHandlers`, so every `runtimeCatalog.*` call in the
+  shipped app already threw `"Runtime Catalog is unavailable on this
+  transport"`. Its Settings pane had no importer. Removing it changes nothing a
+  user could observe, which is why it did not need to wait for Session 7.
+- **Four e2e smokes are deleted** and two trimmed. Every one of them failed on a
+  stale premise, not a regression: they drove the `"Show … in chat"` switches
+  that only ever existed in the deleted catalog pane, or they asserted the fake
+  OpenCode answer string against a ticket chat that is now Pi. A red smoke that
+  cannot pass trains people to ignore red.
+
+Two behaviours lost their only proof and need Pi-backed replacements when
+ticketless chats move to Pi — they are **not** covered elsewhere today:
+
+- scratch-chat streaming, restart-resume, and tab-close retirement (was
+  `session-chat-smoke.mjs`);
+- the "Cleaned up" band toggle and the ticket-orphan sidebar reopen (was
+  `sessions-chat-host-smoke.mjs`).
+
 **Exit:** the Ticket Session feels product-owned at rest and while working; no
 empty future-feature chrome dominates the view.
 
 ### Session 7 — Remove OpenCode and collapse the platform
 
-- Remove the OpenCode package, structured process supervision, native catalog
-  wiring, chat defaults, test fixtures, and package dependencies.
+- Remove the OpenCode package, structured process supervision, chat defaults,
+  test fixtures, and package dependencies. (The Runtime Catalog wiring is
+  already gone — Session 6 removed it.)
 - Retire generic adapter/profile machinery that has no remaining terminal or
   migration value.
 - Mark old live OpenCode attachments history-only or archive their Sessions;

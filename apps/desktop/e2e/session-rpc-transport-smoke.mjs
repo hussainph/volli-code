@@ -9,9 +9,9 @@
  * router. All of those pass both suites and fail on launch.
  *
  * So this asserts the chain from inside the real app: the door exists, a routed
- * procedure reaches the router and comes back with its verdict, a lab-only one
- * is refused, and the Runtime Catalog settings section renders a real answer
- * instead of sitting on its checking copy forever.
+ * procedure reaches the router and comes back with its verdict, and a lab-only
+ * one is refused. Those three are the whole point — the allow-list, the preload
+ * door, and the router agreeing on every name they share.
  *
  *   Run:
  *     vp run --filter @volli/desktop build
@@ -19,7 +19,7 @@
  *
  * MANUALLY-RUN (needs a display + the built app); NOT wired into `vp test`.
  */
-import { createRunner, launch, makeScratch, waitUntil } from "./lib/smoke-kit.mjs";
+import { createRunner, launch, makeScratch } from "./lib/smoke-kit.mjs";
 
 const { userDataDir, dbPath, cleanup } = await makeScratch("session-rpc-");
 const { attempt, summarize } = createRunner();
@@ -59,54 +59,13 @@ async function main() {
       };
     });
 
-    // Either answer proves the route: a view means the catalog resolved, a
-    // coded failure means the router ran and refused. Only the allow-list's own
-    // message would mean the request never got that far.
-    await attempt(3, "the Runtime Catalog is routed over IPC", async () => {
-      const reply = await page.evaluate(() =>
-        window.api.sessionRpc.request({
-          procedure: "runtimeCatalog.inspect",
-          input: { adapterId: "opencode" },
-        }),
-      );
-      return {
-        ok: reply.ok === true || reply.error.message !== "Invalid Session RPC request",
-        detail: JSON.stringify(reply).slice(0, 200),
-      };
-    });
-
-    await attempt(4, "a lab-only procedure is refused", async () => {
+    await attempt(3, "a lab-only procedure is refused", async () => {
       const reply = await page.evaluate(() =>
         window.api.sessionRpc.request({ procedure: "labDiagnostics.list", input: {} }),
       );
       return {
         ok: reply.ok === false && reply.error.message === "Invalid Session RPC request",
         detail: JSON.stringify(reply).slice(0, 200),
-      };
-    });
-
-    await attempt(5, "Settings answers about OpenCode instead of checking forever", async () => {
-      await page.getByRole("button", { name: "Settings", exact: true }).first().click();
-      await page.getByRole("button", { name: "Harness Runtimes", exact: true }).click();
-      // The category details one harness at a time and opens on the first
-      // built-in, so the model browser is behind OpenCode's own selection.
-      await page.getByRole("button", { name: "OpenCode", exact: true }).click();
-      const settled = await waitUntil("the OpenCode section to settle", async () => {
-        if ((await page.getByText("Checking the local runtime…").count()) > 0) return false;
-        const unavailable = await page.getByText("OpenCode unavailable").count();
-        const providers = await page
-          .getByRole("button", { name: "Refresh OpenCode models" })
-          .count();
-        return providers > 0 ? { unavailable } : false;
-      }).catch((error) => error);
-      return {
-        ok: !(settled instanceof Error),
-        detail:
-          settled instanceof Error
-            ? settled.message
-            : settled.unavailable > 0
-              ? "reports the runtime unavailable, with its reason"
-              : "lists providers",
       };
     });
   } finally {

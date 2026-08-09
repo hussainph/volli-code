@@ -594,10 +594,11 @@ CREATE INDEX session_receipts_session_sequence ON session_command_receipts(sessi
  *
  * **The value under each adapter key is the FULL stored record** —
  * `{recordVersion, preferences, observedAt, models, agents}` — not the user's
- * intent alone, and that is the part worth writing down. `resolve`
- * (`main/runtime-catalog.ts`) answers chat out of the stored record and never
- * discovers, and a global `save` pre-filters `models` down to the GLOBALLY
- * enabled set. An override that stored intent alone would therefore resolve
+ * intent alone, and that is the part worth writing down. `resolve` (in the
+ * since-deleted `main/runtime-catalog.ts`) answered chat out of the stored
+ * record and never discovered, and a global `save` pre-filtered `models` down
+ * to the GLOBALLY enabled set. An override that stored intent alone would
+ * therefore resolve
  * against a global snapshot that need not contain a model this project enabled
  * — the project's own chosen model missing from the project's own picker. That
  * is a wrong answer, not a degraded one. Carrying the snapshot the project's
