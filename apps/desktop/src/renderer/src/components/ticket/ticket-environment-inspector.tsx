@@ -10,13 +10,18 @@ import { type ChangeSetSnapshot, type Ticket } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
 import {
+  beginTicketEnvironmentRead,
   buildTicketEnvironmentInspector,
   hasChangeSetRow,
   readTicketEnvironmentChangeSet,
+  settleTicketEnvironmentRead,
   shouldRevalidateTicketEnvironment,
+  type TicketEnvironmentConsultation,
   type TicketEnvironmentDestination,
   type TicketEnvironmentRow,
+  ticketEnvironmentConsultationFor,
 } from "@renderer/components/ticket/ticket-environment-inspector-model";
+import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 
 /**
  * Keyed by the model's own row union rather than re-listing it, so a new row
@@ -54,36 +59,52 @@ export function TicketEnvironmentInspector({
   /** Open one referenced file — a Sources row promises the file, not the list. */
   onOpenSource(relPath: string): void;
 }) {
-  const [loadedChangeSet, setLoadedChangeSet] = React.useState<ChangeSetSnapshot | undefined>(
-    changeSet,
-  );
-  const [error, setError] = React.useState<string | null>(null);
+  const [consultation, setConsultation] = React.useState<TicketEnvironmentConsultation>(() => ({
+    ticketId: ticket.id,
+  }));
+  // The rail reuses this Inspector across tickets, so a read is only ever
+  // applied while it is still the newest one — a swap mid-read supersedes it
+  // rather than letting the previous ticket's counts land under the new one.
+  const changeSetRead = useLatestAsync();
   const loading = React.useRef(false);
   const lastReadAt = React.useRef<number | null>(changeSet === undefined ? null : Date.now());
 
+  const ticketId = ticket.id;
   const refresh = React.useCallback(async () => {
     if (ticket.worktreePath === null || loading.current) return;
+    const token = changeSetRead.claim();
     loading.current = true;
-    setError(null);
+    setConsultation((previous) => beginTicketEnvironmentRead(previous, ticketId));
     try {
       const result = await readTicketEnvironmentChangeSet(() =>
-        window.api.worktree.changeSet(ticket.id),
+        window.api.worktree.changeSet(ticketId),
       );
-      if ("error" in result) {
-        setError(result.error);
-        return;
-      }
-      setLoadedChangeSet(result.changeSet);
+      if (!changeSetRead.isCurrent(token)) return; // superseded — drop the stale result
+      setConsultation((previous) => settleTicketEnvironmentRead(previous, ticketId, result));
     } finally {
-      lastReadAt.current = Date.now();
-      loading.current = false;
+      if (changeSetRead.isCurrent(token)) {
+        lastReadAt.current = Date.now();
+        loading.current = false;
+      }
     }
-  }, [ticket.id, ticket.worktreePath]);
+  }, [changeSetRead, ticketId, ticket.worktreePath]);
 
   React.useEffect(() => {
     if (changeSet !== undefined || ticket.worktreePath === null) return;
     void refresh();
-  }, [changeSet, refresh, ticket.worktreePath]);
+    // A ticket swap (or unmount) retires the read in flight: its late resolve
+    // drops itself, and the freshness clock and in-flight gate reset so the
+    // next ticket's own read is never held behind the one it replaced.
+    return () => {
+      changeSetRead.invalidate();
+      loading.current = false;
+      lastReadAt.current = null;
+    };
+  }, [changeSet, changeSetRead, refresh, ticket.worktreePath]);
+
+  // Counts read for another ticket describe nothing here, so the swap shows a
+  // pending read rather than a frame of the previous ticket's Inspector.
+  const consulted = ticketEnvironmentConsultationFor(consultation, ticketId);
 
   const revalidateOnConsult = React.useCallback(() => {
     if (
@@ -100,8 +121,8 @@ export function TicketEnvironmentInspector({
   return (
     <TicketEnvironmentInspectorContent
       ticket={ticket}
-      changeSet={changeSet ?? loadedChangeSet}
-      changeSetError={error ?? undefined}
+      changeSet={changeSet ?? consulted.changeSet}
+      changeSetError={consulted.error}
       onNavigate={onNavigate}
       onOpenSource={onOpenSource}
       onRetry={() => void refresh()}

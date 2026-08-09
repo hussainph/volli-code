@@ -54,15 +54,61 @@ export function shouldRevalidateTicketEnvironment({
 }
 
 /** Pure read outcome: the Retry button and initial load share these exact semantics. */
+export type TicketEnvironmentChangeSetRead = { changeSet: ChangeSetSnapshot } | { error: string };
+
 export async function readTicketEnvironmentChangeSet(
   read: () => Promise<WorktreeChangeSetResult>,
-): Promise<{ changeSet: ChangeSetSnapshot } | { error: string }> {
+): Promise<TicketEnvironmentChangeSetRead> {
   try {
     const result = await read();
     return result.ok ? { changeSet: result.changeSet } : { error: result.error };
   } catch (cause) {
     return { error: errorMessage(cause) };
   }
+}
+
+/**
+ * The consulted Change Set state, tagged with the ticket it was read for. One
+ * Inspector serves every ticket the rail shows, so retained counts — the whole
+ * point of the state — have to name their ticket before they are shown again.
+ */
+export interface TicketEnvironmentConsultation {
+  ticketId: string;
+  changeSet?: ChangeSetSnapshot;
+  error?: string;
+}
+
+/** What `ticketId` may show: another ticket's consultation describes nothing here. */
+export function ticketEnvironmentConsultationFor(
+  consultation: TicketEnvironmentConsultation,
+  ticketId: string,
+): TicketEnvironmentConsultation {
+  return consultation.ticketId === ticketId ? consultation : { ticketId };
+}
+
+/** A read starts: the banner it is retrying goes, the counts it may confirm stay. */
+export function beginTicketEnvironmentRead(
+  consultation: TicketEnvironmentConsultation,
+  ticketId: string,
+): TicketEnvironmentConsultation {
+  const current = ticketEnvironmentConsultationFor(consultation, ticketId);
+  return current.error === undefined ? current : { ticketId, changeSet: current.changeSet };
+}
+
+/**
+ * A read settles. A failure keeps the counts a person already saw and labels
+ * them stale; a success replaces both. A read for a ticket the rail has since
+ * left is dropped rather than answered under whichever ticket replaced it.
+ */
+export function settleTicketEnvironmentRead(
+  consultation: TicketEnvironmentConsultation,
+  ticketId: string,
+  read: TicketEnvironmentChangeSetRead,
+): TicketEnvironmentConsultation {
+  if (consultation.ticketId !== ticketId) return consultation;
+  return "error" in read
+    ? { ...consultation, error: read.error }
+    : { ticketId, changeSet: read.changeSet };
 }
 
 function changeSetDetail(changeSet: ChangeSetSnapshot): string {

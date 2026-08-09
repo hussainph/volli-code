@@ -2,10 +2,13 @@ import { describe, expect, it } from "vite-plus/test";
 import type { ChangeSetSnapshot, Ticket } from "@volli/shared";
 
 import {
+  beginTicketEnvironmentRead,
   buildTicketEnvironmentInspector,
   hasChangeSetRow,
   readTicketEnvironmentChangeSet,
+  settleTicketEnvironmentRead,
   shouldRevalidateTicketEnvironment,
+  ticketEnvironmentConsultationFor,
 } from "./ticket-environment-inspector-model";
 
 function ticket(overrides: Partial<Ticket> = {}): Ticket {
@@ -177,5 +180,50 @@ describe("readTicketEnvironmentChangeSet", () => {
     expect(
       await readTicketEnvironmentChangeSet(() => Promise.reject(new Error("ipc closed"))),
     ).toEqual({ error: "ipc closed" });
+  });
+});
+
+describe("ticket environment consultation", () => {
+  it("never answers a ticket with the counts, or the failure, of the one the rail left", () => {
+    const readA = settleTicketEnvironmentRead({ ticketId: "ticket-a" }, "ticket-a", {
+      changeSet: changeSet(),
+    });
+    expect(readA).toEqual({ ticketId: "ticket-a", changeSet: changeSet() });
+
+    // The rail swaps to another ticket while A's read is still in flight.
+    const onB = ticketEnvironmentConsultationFor(readA, "ticket-b");
+    expect(onB).toEqual({ ticketId: "ticket-b" });
+    const readB = settleTicketEnvironmentRead(
+      beginTicketEnvironmentRead(onB, "ticket-b"),
+      "ticket-b",
+      {
+        changeSet: changeSet({ totalCount: 1, insertions: 1, deletions: 0 }),
+      },
+    );
+
+    // A's read lands last. Neither its counts nor its failure may reach B.
+    expect(settleTicketEnvironmentRead(readB, "ticket-a", { changeSet: changeSet() })).toBe(readB);
+    expect(settleTicketEnvironmentRead(readB, "ticket-a", { error: "offline" })).toBe(readB);
+    expect(ticketEnvironmentConsultationFor(readB, "ticket-b")).toEqual({
+      ticketId: "ticket-b",
+      changeSet: changeSet({ totalCount: 1, insertions: 1, deletions: 0 }),
+    });
+  });
+
+  it("keeps the counts a person already saw across a failed re-read, and drops the banner the retry answers", () => {
+    const read = settleTicketEnvironmentRead({ ticketId: "ticket-a" }, "ticket-a", {
+      changeSet: changeSet(),
+    });
+    const failed = settleTicketEnvironmentRead(read, "ticket-a", { error: "offline" });
+    expect(failed).toEqual({ ticketId: "ticket-a", changeSet: changeSet(), error: "offline" });
+
+    // Retrying retires the banner but keeps the last counts under it; a read
+    // that begins with nothing to retire is left exactly as it stood.
+    expect(beginTicketEnvironmentRead(failed, "ticket-a")).toEqual({
+      ticketId: "ticket-a",
+      changeSet: changeSet(),
+    });
+    expect(beginTicketEnvironmentRead(read, "ticket-a")).toBe(read);
+    expect(beginTicketEnvironmentRead(failed, "ticket-b")).toEqual({ ticketId: "ticket-b" });
   });
 });
