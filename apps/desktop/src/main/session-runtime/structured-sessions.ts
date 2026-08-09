@@ -22,6 +22,14 @@ import type { ModelSelection, SessionStartResult } from "@volli/shared";
 export const STRUCTURED_ADAPTER_ID = "pi";
 export const STRUCTURED_PROFILE_ID = "native";
 
+/**
+ * The refusal, once, for both Roles. Two wordings of one rule would read as two
+ * rules — a person meeting it on a project chat and again on a Ticket has no way
+ * to tell that the second is the same missing setting as the first.
+ */
+export const DEFAULT_MODEL_REQUIRED =
+  "Choose a default model in Settings before starting a Session.";
+
 export type StructuredSessionsErrorCode =
   | "DEFAULT_MODEL_REQUIRED"
   | "MODEL_SELECTION_REJECTED"

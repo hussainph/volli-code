@@ -17,6 +17,7 @@ import type { ModelSelection, SessionStartResult } from "@volli/shared";
 
 import {
   attachStructuredSession,
+  DEFAULT_MODEL_REQUIRED,
   recordModelSelection,
   requireDefaultModel,
   StructuredSessionsError,
@@ -38,8 +39,6 @@ import {
 function modelBackfillCommandId(sessionId: string): string {
   return `${sessionId}:model-backfill`;
 }
-
-const DEFAULT_MODEL_REQUIRED = "Choose a default model in Settings before starting a Session.";
 
 export interface ProjectSessionStartInput {
   operationId: string;

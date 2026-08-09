@@ -252,28 +252,25 @@ describe("createChatSession", () => {
 
   it("reports a start refused for want of a default model the same way on either route", async () => {
     // Both Roles record the app default before anything attaches, so both
-    // refuse before a Session exists when there is none — and a refusal with no
-    // id to carry it has one road out, whichever route asked.
+    // refuse before a Session exists when there is none — with one wording, and
+    // a refusal with no id to carry it has one road out whichever route asked.
     const { state, store } = fixture();
+    const refusal = "Choose a default model in Settings before starting a Session.";
 
     state.startAnswer = () => {
-      throw new Error("Choose a default model in Settings before starting a Session.");
+      throw new Error(refusal);
     };
     await expect(
       store.getState().createChatSession({ projectId: "p1", ticketId: null, title: null }),
     ).resolves.toBeNull();
-
-    state.startAnswer = () => {
-      throw new Error("Choose a default model in Settings before starting a Ticket Session.");
-    };
     await expect(
       store.getState().createChatSession({ projectId: "p1", ticketId: "t1", title: null }),
     ).resolves.toBeNull();
 
     expect(store.getState().sessions).toEqual({});
     expect(vi.mocked(toast.error).mock.calls.map(([message]) => message)).toEqual([
-      "Could not start Session: Choose a default model in Settings before starting a Session.",
-      "Could not start Session: Choose a default model in Settings before starting a Ticket Session.",
+      `Could not start Session: ${refusal}`,
+      `Could not start Session: ${refusal}`,
     ]);
   });
 });

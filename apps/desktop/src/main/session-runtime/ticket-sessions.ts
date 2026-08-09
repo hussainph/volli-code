@@ -2,6 +2,7 @@ import type { ModelSelection, SessionStartResult } from "@volli/shared";
 
 import {
   attachStructuredSession,
+  DEFAULT_MODEL_REQUIRED,
   recordModelSelection,
   requireDefaultModel,
   StructuredSessionsError,
@@ -42,10 +43,7 @@ export function createTicketSessions(options: TicketSessionsOptions): TicketSess
           "The requested Ticket was not found in this project.",
         );
       }
-      const model = requireDefaultModel(
-        options.readDefaultModel(),
-        "Choose a default model in Settings before starting a Ticket Session.",
-      );
+      const model = requireDefaultModel(options.readDefaultModel(), DEFAULT_MODEL_REQUIRED);
       const created = await options.runtime.command({
         commandId: `${input.operationId}:create`,
         command: {
