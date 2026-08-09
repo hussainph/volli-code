@@ -600,8 +600,8 @@ Session 5 implementation decisions (2026-08-09):
   the restricted launch flags and absolute credential directory, and leaves
   `/login` plus the existing explicit Retry to the user.
 - Ticketless project Chats temporarily keep OpenCode through a private
-  main-owned route. Runtime Catalog remains available to the development Lab,
-  but is not exposed over production renderer IPC or settings.
+  main-owned route. Runtime Catalog was Lab-only under this slice and never
+  exposed over production renderer IPC or settings.
 - There is no production provider slash-command inventory to migrate in this
   slice. The existing Lab-only Volli/Skill affordance remains unchanged.
 
@@ -621,7 +621,7 @@ Bounded follow-ups deferred from this slice:
 ### Session 6 — Environment inspector and terminal hierarchy
 
 - Implement the compact Environment/Sources inspector using existing Change Set,
-  branch, attachment, and navigation primitives.
+  branch, navigation, and Ticket Body file-reference primitives.
 - Omit Delegation until durable child Sessions exist.
 - Keep terminal panes as persistent companion tabs and remove any Chat creation
   hierarchy that presents them as structured alternatives.
