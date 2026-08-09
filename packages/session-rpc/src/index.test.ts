@@ -801,6 +801,49 @@ describe("Session tRPC router", () => {
     expect(JSON.stringify(access)).not.toMatch(/adapter|profile|credential|token/i);
   });
 
+  it("sanitizes a whitespace-padded catalog label instead of rejecting the whole snapshot", async () => {
+    // A live upstream model catalog is not an identifier Volli minted — it is
+    // under no obligation to trim its own display text, and a large one
+    // (observed: 1000+ entries) has shipped labels with incidental
+    // surrounding whitespace. `nonEmptyString`'s "no surrounding whitespace"
+    // refinement is the right contract for providerId/modelId (Volli's own
+    // identifiers); reusing it for `label` used to fail `.parse()` on the
+    // ENTIRE snapshot over one cosmetic entry, which broke every Model
+    // Access caller (composer, Settings, `setDefault`'s availability check).
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      inspectModelAccess: async () => ({
+        observedAt: 42,
+        providers: [
+          {
+            id: "openai-codex",
+            label: "  OpenAI Codex  ",
+            state: "available" as const,
+            accountLabel: "OAuth",
+            billingSource: "ambient" as const,
+            recovery: null,
+          },
+        ],
+        models: [
+          {
+            providerId: "openai-codex",
+            modelId: "gpt-5.6-sol",
+            label: "  GPT-5.6 Sol  ",
+            state: "available" as const,
+            reasoningLevels: ["off", "low", "medium", "high"] as const,
+          },
+        ],
+      }),
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    const access = await caller.modelAccess.inspect({});
+
+    expect(access.providers[0]?.label).toBe("OpenAI Codex");
+    expect(access.models[0]?.label).toBe("GPT-5.6 Sol");
+  });
+
   it("reads and writes the user-configured default model through an exact safe shape", async () => {
     const fixture = runtimeFixture();
     const writes: unknown[] = [];

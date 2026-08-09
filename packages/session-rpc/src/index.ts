@@ -221,6 +221,25 @@ const nonEmptyString = z
     (value) => value.trim() === value,
     "Expected an identifier without surrounding whitespace",
   );
+/**
+ * Free-text display text from a catalog Volli does not control (a Model
+ * Access provider's or model's own `label`) — sanitized, not rejected, on
+ * incidental surrounding whitespace. `nonEmptyString`'s "no surrounding
+ * whitespace" refinement is an identifier contract for values THIS app
+ * mints (`providerId`, `modelId`, session/operation ids); a live upstream
+ * model catalog is under no such obligation, and a genuinely large one
+ * (Pi's `builtinModels()` currently lists 1000+ entries) has already been
+ * observed shipping a handful of whitespace-padded display names. Rejecting
+ * the whole snapshot over one cosmetic label crashes every Model Access
+ * caller — the composer's catalog, Settings, and `modelAccess.setDefault`'s
+ * own availability check — which is a worse outcome than trimming it.
+ */
+const displayLabel = z
+  .string()
+  .min(1)
+  .max(MAX_IDENTIFIER_LENGTH)
+  .transform((value) => value.trim())
+  .refine((value) => value.length > 0, "Expected non-empty display text");
 const nonNegativeSafeInteger = z
   .number()
   .int()
@@ -248,7 +267,7 @@ const modelAccessSnapshotSchema = z.object({
   providers: z.array(
     z.object({
       id: nonEmptyString,
-      label: nonEmptyString,
+      label: displayLabel,
       state: modelAccessStateSchema,
       accountLabel: nullableString,
       billingSource: z.enum(["subscription", "api-key", "gateway", "local", "ambient", "unknown"]),
@@ -259,7 +278,7 @@ const modelAccessSnapshotSchema = z.object({
     z.object({
       providerId: nonEmptyString,
       modelId: nonEmptyString,
-      label: nonEmptyString,
+      label: displayLabel,
       state: modelAccessStateSchema,
       reasoningLevels: z.array(z.enum(REASONING_LEVELS)),
     }),
