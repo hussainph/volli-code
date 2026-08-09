@@ -1,6 +1,5 @@
 /**
- * The list the Harness Runtimes settings category selects from, and the words
- * its binary row refuses a candidate with.
+ * The list the Harness Runtimes settings category selects from.
  *
  * The list is assembled HERE rather than in main because neither side holds all
  * of it. `volli:harness-registered` deliberately omits the built-ins — the
@@ -11,15 +10,9 @@
  *
  * Pure so it can be tested without a preload bridge: the view above it is a
  * projection of this, and every rule that decides what a user sees (which
- * harnesses, in what order, under which origin, and what a refusal says) lives
- * on this side of the seam.
+ * harnesses, in what order, under which origin) lives on this side of the seam.
  */
-import {
-  FIRST_CLASS_HARNESS_IDS,
-  harnessAdapters,
-  type HarnessAdapter,
-  type HarnessCommandFailureReason,
-} from "@volli/shared";
+import { FIRST_CLASS_HARNESS_IDS, harnessAdapters, type HarnessAdapter } from "@volli/shared";
 
 /** Where a harness came from: shipped with the app, or a manifest someone registered and trusted. */
 export type HarnessOrigin = "built-in" | "registered";
@@ -93,52 +86,4 @@ export function activeHarness(
   selectedId: string | null,
 ): HarnessListing | null {
   return listings.find((listing) => listing.id === selectedId) ?? listings[0] ?? null;
-}
-
-/**
- * The one line a refused binary override gets, per typed reason.
- *
- * Each says what is wrong and the single thing to do about it, and they are
- * kept distinct because the four are genuinely different situations —
- * `path-unavailable` is the host failing to read a login-shell PATH at all,
- * which says nothing about what was typed, so its recovery is to retry and
- * never to retype.
- */
-const COMMAND_FAILURE_LINES: Record<HarnessCommandFailureReason, string> = {
-  "not-found": "Not on PATH — check the name.",
-  "not-executable": "Not an executable file — check the path.",
-  "not-resolvable": "Broken link — point at the real file.",
-  "path-unavailable": "Couldn't read the login-shell PATH — try again.",
-};
-
-/** {@link COMMAND_FAILURE_LINES} for `reason`. */
-export function harnessCommandFailureLine(reason: HarnessCommandFailureReason): string {
-  return COMMAND_FAILURE_LINES[reason];
-}
-
-/**
- * Whether a refusal from `volli:harness-command-set` actually carries one of
- * the four verdicts {@link COMMAND_FAILURE_LINES} has words for.
- *
- * `HarnessCommandSetResult` declares `reason` required on its failure arm, and
- * that is honest about the handler — but the handler is not the only thing that
- * answers the channel. The IPC envelope around it composes refusals of its own
- * that the contract type never sees: `registerGuardedIpcHandlers` answers
- * `{ ok: false, error }` when the arg guard rejects or the body throws, and
- * `registerDegradedIpcHandlers` answers the same for every harness channel when
- * the boot-time database open failed. Both are missing `reason` entirely, and
- * because the type promises it is there, TypeScript will not flag a single
- * reader of it.
- *
- * Trusting the type is what makes that a silent failure rather than a loud one:
- * `undefined` is not `null`, so the failure branch renders, and
- * {@link harnessCommandFailureLine} of `undefined` is `undefined`, so what
- * renders is an empty red line — a refusal a human can neither read nor act on,
- * while the `error` string main did send is dropped on the floor. Narrow here
- * instead, and let a refusal that fails this test fall back to that string.
- */
-export function isHarnessCommandFailureReason(
-  value: unknown,
-): value is HarnessCommandFailureReason {
-  return typeof value === "string" && Object.hasOwn(COMMAND_FAILURE_LINES, value);
 }

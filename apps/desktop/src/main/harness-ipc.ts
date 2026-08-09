@@ -38,17 +38,11 @@ import {
   HARNESS_EVENT_GRACE_MS,
   HARNESS_IPC,
   isFirstClassHarnessId,
-  parseHarnessId,
   supportedEvents,
 } from "@volli/shared";
 import type {
   HarnessAdapter,
   HarnessChannelStatus,
-  HarnessCommandGetInput,
-  HarnessCommandGetResult,
-  HarnessCommandSetInput,
-  HarnessCommandSetResult,
-  HarnessId,
   HarnessIpcChannel,
   HarnessPendingResult,
   HarnessRegisteredResult,
@@ -60,16 +54,10 @@ import type {
 import type { DbHandle } from "./data-ipc";
 import { listHarnessChannels } from "./db/harness-channel-repo";
 import {
-  clearStoredHarnessCommand,
-  setStoredHarnessCommand,
-  storedHarnessCommand,
-} from "./db/harness-command-repo";
-import {
   getRegisteredHarness,
   recordHarnessTrust,
   restoreRegisteredHarness,
 } from "./db/harness-registry-repo";
-import { validateHarnessBinary } from "./harness-binary";
 import { decideRegisteredHarnesses, scanHarnessManifests } from "./harness-registry";
 import type { DecidedHarnessManifest } from "./harness-registry";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
@@ -110,16 +98,6 @@ export interface HarnessIpcDeps {
    */
   launchableHarnesses(): readonly HarnessAdapter[];
   now(): number;
-  /**
-   * Drops a live native adapter's cached verified binary for `harnessId`, so
-   * its NEXT resolution honors the override this call just stored or cleared
-   * instead of what an earlier probe verified. Optional, and currently
-   * supplied by nobody: every harness this host launches resolves fresh and
-   * caches nothing this needs to drop. It stays for the adapter that caches
-   * one, since the alternative is an override that only takes effect on the
-   * next relaunch.
-   */
-  invalidateNativeBinary?(harnessId: string): void;
 }
 
 /**
@@ -179,40 +157,6 @@ function channelStates(db: Database.Database, deps: HarnessIpcDeps): HarnessChan
     };
   });
 }
-
-/**
- * The harness `harnessId` names, or `null` when this host cannot name one.
- *
- * The two binary-override channels take an id straight off the wire, and the
- * guard behind them can only ask whether it is a string — membership in the
- * launchable set is host state no pure predicate in `@volli/shared` can reach.
- * So the check lives here, and it is not decorative: `harness-command-repo.ts`
- * splices the value verbatim into an `app_state` key
- * (`volli:harness-command:<harnessId>`), which only a harness this host can
- * launch has any business owning. An unchecked id therefore buys a permanent
- * row nothing will ever consult — a "saved" answer the user cannot see is
- * inert, because there is no failure to show, only an override that silently
- * never applies.
- *
- * Both halves, in the order {@link channelStates} already uses them and for the
- * same reason: the four adapters Volli ships, plus whatever THIS launch
- * resolved. A registered manifest is a legitimate id that is not first-class,
- * so `isFirstClassHarnessId` alone would lock every bring-your-own harness out
- * of its own override. And the launchable set is read, never re-scanned from
- * disk — a manifest whose wrappers this launch never generated is not
- * launchable, and accepting an override for it would be the same lie
- * `volli:harness-registered` is written to avoid.
- */
-function knownHarnessId(harnessId: string, deps: HarnessIpcDeps): HarnessId | null {
-  const parsed = parseHarnessId(harnessId);
-  if (parsed === null) return null;
-  if (getHarnessAdapter(parsed) !== undefined) return parsed;
-  return deps.launchableHarnesses().some((adapter) => adapter.id === parsed) ? parsed : null;
-}
-
-/** What both override channels say about an id this host cannot launch. */
-const unknownHarness = (harnessId: string): string =>
-  `${harnessId} isn't a harness this host can launch.`;
 
 /**
  * Registers the harness-trust channels. A degraded db answers all of them with
@@ -326,51 +270,6 @@ export function registerHarnessIpcHandlers(handle: DbHandle, deps: HarnessIpcDep
       // exactly when the answer could have moved.
       channels: channelStates(db, deps),
     }),
-
-    "volli:harness-command-get": (input: HarnessCommandGetInput): HarnessCommandGetResult => {
-      const harnessId = knownHarnessId(input.harnessId, deps);
-      if (harnessId === null) return { ok: false, error: unknownHarness(input.harnessId) };
-      return { ok: true, command: storedHarnessCommand(db, harnessId) };
-    },
-
-    "volli:harness-command-set": async (
-      input: HarnessCommandSetInput,
-    ): Promise<HarnessCommandSetResult> => {
-      const harnessId = knownHarnessId(input.harnessId, deps);
-      // THROWN, not returned, and the shape is the point rather than a
-      // shortcut. `HarnessCommandSetResult`'s failure arm requires a `reason`
-      // from `HarnessCommandFailureReason`, and all four of those are verdicts
-      // about the CANDIDATE BINARY — not on PATH, not executable, not
-      // canonicalizable, PATH unreadable. None of them is true here: the
-      // command was never examined, because there is no harness to examine it
-      // for. Picking the closest one would put a sentence about the user's
-      // typing under a field they typed correctly.
-      //
-      // A throw reaches `registerGuardedIpcHandlers`, which answers
-      // `{ ok: false, error }` — the same reason-less envelope the arg guard
-      // and a degraded-db boot already produce on this channel, and the one the
-      // renderer's `isHarnessCommandFailureReason` was written to route to the
-      // error string rather than to an empty red line. So this refusal lands
-      // where the surface already knows how to read it, and no reason is
-      // invented to describe a situation none of them means.
-      if (harnessId === null) throw new Error(unknownHarness(input.harnessId));
-      if (input.command === null) {
-        clearStoredHarnessCommand(db, harnessId);
-        // The stored override just changed, so a native adapter's cached
-        // verified binary is stale — drop it, or the clear would only take
-        // effect on the next relaunch.
-        deps.invalidateNativeBinary?.(harnessId);
-        return { ok: true, resolvedPath: null };
-      }
-      const validation = await validateHarnessBinary(input.command);
-      if (!validation.ok) return validation;
-      // The raw value, never the realpath: a launch resolves fresh every time
-      // it attaches, so a PATH or filesystem change after this write is
-      // honored automatically rather than frozen at the moment of validation.
-      setStoredHarnessCommand(db, harnessId, input.command, deps.now());
-      deps.invalidateNativeBinary?.(harnessId);
-      return { ok: true, resolvedPath: validation.resolvedPath };
-    },
   };
 
   registerGuardedIpcHandlers(HARNESS_IPC, handlers);

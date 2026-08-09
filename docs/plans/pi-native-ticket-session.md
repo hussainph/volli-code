@@ -715,8 +715,20 @@ Session 7 implementation decisions (2026-08-10):
 - Old open OpenCode attachments close at boot as durable `attachment.closed`
   facts — history-only; transcripts stay readable because settled artifacts
   are vendor-neutral; Pi never attaches under an OpenCode native identity.
-- `opencode-binary.ts` split: the generic login-shell binary location survives
-  for terminal companions as `binary-location.ts`.
+- `opencode-binary.ts` split: the generic login-shell binary location was kept
+  as `binary-location.ts` for terminal companions, then retired with the binary
+  override below — no terminal path ever imported it, and a launch resolves its
+  binary off the login-shell PATH the generated wrapper walks.
+- The per-harness binary-override Settings row is retired, not wired up: the
+  removed structured adapter was its only launch-time reader, so the row saved
+  a value nothing consulted. Gone with it are the two `volli:harness-command-*`
+  channels, their preload and shared contract, `harness-command-repo.ts`,
+  `harness-binary.ts`, `binary-location.ts`, and the `invalidateNativeBinary`
+  dependency no production caller ever supplied. Terminal launches resolve
+  binaries through the wrapper's PATH walk, and the live per-harness escape
+  hatch remains the wrapper's `VOLLI_HARNESS_BIN_<SLUG>` env var. Stored
+  `app_state` rows are preserved — migrations are append-only and nothing
+  deletes them.
 - The two Session 6 lost proofs were restored Pi-backed
   (`pi-scratch-chat-smoke.mjs`, `pi-sessions-host-smoke.mjs`);
   `pi-ticket-chat-smoke.mjs` was repaired (broken since Session 5's
@@ -731,9 +743,6 @@ Bounded follow-ups deferred from this slice:
 - The public `apps/docs` site rewrite and `docs/ROADMAP.md` (untracked).
 - A replacement for the deleted OpenCode delta-frame adapter-conformance
   integration test; the engine-side probe survives.
-- The per-harness binary-override Settings row, whose only launch-time reader
-  was the removed structured adapter — wire into terminal launch or retire,
-  pending product decision.
 
 ## Testing and evidence
 

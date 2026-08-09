@@ -38,10 +38,6 @@ import type {
   FileWriteResult,
   GhosttyAppearancePayload,
   GhosttyConfigResult,
-  HarnessCommandGetInput,
-  HarnessCommandGetResult,
-  HarnessCommandSetInput,
-  HarnessCommandSetResult,
   HarnessPendingResult,
   HarnessRegisteredResult,
   HarnessTrustSetInput,
@@ -457,17 +453,6 @@ const api = {
      * has a shelf life.
      */
     registered: (): Promise<HarnessRegisteredResult> => invoke("volli:harness-registered"),
-    /** The stored raw binary override for one harness, or `null` when unset. */
-    commandGet: (input: HarnessCommandGetInput): Promise<HarnessCommandGetResult> =>
-      invoke("volli:harness-command-get", input),
-    /**
-     * Validates and persists a per-harness binary override; `command: null`
-     * clears it. What is stored is what the user typed, never the realpath —
-     * resolution runs live at attach time, so a later PATH or filesystem change
-     * is honored without them retyping anything.
-     */
-    commandSet: (input: HarnessCommandSetInput): Promise<HarnessCommandSetResult> =>
-      invoke("volli:harness-command-set", input),
   },
   files: {
     /** The whole-project file index the `@` picker ranks over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */
