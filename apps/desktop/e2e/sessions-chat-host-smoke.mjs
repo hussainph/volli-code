@@ -381,8 +381,11 @@ async function main() {
           (await page.getByRole("tab", { name: orphanTicketId, exact: true }).count()) === 1,
       );
       const tabsBefore = await page.locator('[role="tab"]:visible').count();
-      await tabStripNewSessionButton(page).click();
-      await page.getByRole("menuitem", { name: "Chat", exact: true }).click();
+      await page
+        .locator('[role="tablist"]')
+        .locator("xpath=..")
+        .getByRole("button", { name: "New chat", exact: true })
+        .click();
       await waitUntil(
         "the ticket's new chat tab to appear",
         async () => (await page.locator('[role="tab"]:visible').count()) > tabsBefore,
@@ -483,8 +486,11 @@ async function main() {
             (await page.getByRole("tab", { name: concludeTicketId, exact: true }).count()) === 1,
         );
         const tabsBefore = await page.locator('[role="tab"]:visible').count();
-        await tabStripNewSessionButton(page).click();
-        await page.getByRole("menuitem", { name: "Chat", exact: true }).click();
+        await page
+          .locator('[role="tablist"]')
+          .locator("xpath=..")
+          .getByRole("button", { name: "New chat", exact: true })
+          .click();
         await waitUntil(
           "the doomed chat tab to appear",
           async () => (await page.locator('[role="tab"]:visible').count()) > tabsBefore,

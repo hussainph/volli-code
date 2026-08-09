@@ -66,10 +66,7 @@ try {
   const aside = page.locator("aside");
   await waitUntil("rail visible", async () => (await aside.count()) === 1);
 
-  // "New session" is a menu since the chat surface landed (PR #179):
-  // Terminal / Chat. These shots want the terminal kind.
-  await aside.getByRole("button", { name: "New session" }).click();
-  await page.getByRole("menuitem", { name: "Terminal", exact: true }).click();
+  await aside.getByRole("button", { name: "New terminal", exact: true }).click();
   await waitUntil(
     "session tab",
     async () => (await page.getByRole("tab", { name: "Session 1", exact: true }).count()) === 1,

@@ -627,6 +627,25 @@ Bounded follow-ups deferred from this slice:
 - Validate normal, narrow, long-content, dark/light, reduced-motion, failure, and
   empty states according to `docs/DESIGN.md`.
 
+Session 6 implementation decisions (2026-08-09):
+
+- Pin the compact inspector at the top of the existing Ticket right rail rather
+  than creating a floating chat overlay or a second responsive layout system.
+- Replace Ticket-surface `+` create menus with direct Chat and Terminal controls.
+  Existing terminal split behavior remains available; Browser creation and a new
+  split-control surface are separate product work.
+- The renderer currently has no attachment-list transport. This slice exposes
+  Ticket Body source references and reuses Files navigation; attachment
+  transport or management is deferred rather than added incidentally.
+- The pinned inspector revalidates when consulted rather than owning a second
+  worktree watch. A shared Change Set/status projection, publish readiness,
+  and CI lifecycle status would otherwise duplicate the existing exclusive
+  Changes/Details watch owners, so that deeper consolidation is deferred.
+- URL and Skill context do not yet have a Ticket-renderer source contract.
+  This slice deliberately shows only existing `@file` Body references; URL and
+  Skill inventory are deferred with attachment transport rather than guessed
+  from free-form Markdown.
+
 **Exit:** the Ticket Session feels product-owned at rest and while working; no
 empty future-feature chrome dominates the view.
 

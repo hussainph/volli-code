@@ -106,18 +106,17 @@ async function ensurePiAuthInto(homeDir) {
   await fs.copyFile(REAL_PI_AUTH, dest);
 }
 
-/** The tab strip's own "+" (there are two identical mounts — tab strip and rail; this scopes to the strip). */
-function tabStripNewSessionButton(page) {
+/** The tab strip's direct Chat control (the rail has its own copy). */
+function tabStripNewChatButton(page) {
   return page
     .locator('[role="tablist"]')
     .locator("xpath=..")
-    .getByRole("button", { name: "New session", exact: true });
+    .getByRole("button", { name: "New chat", exact: true });
 }
 
 async function openNewChatTab(page) {
   const tabsBefore = await page.locator('[role="tab"]').count();
-  await tabStripNewSessionButton(page).click();
-  await page.getByRole("menuitem", { name: "Chat", exact: true }).click();
+  await tabStripNewChatButton(page).click();
   await waitUntil(
     "a new chat tab to appear",
     async () => (await page.locator('[role="tab"]').count()) > tabsBefore,
