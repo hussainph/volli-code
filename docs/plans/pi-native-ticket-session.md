@@ -701,6 +701,40 @@ empty future-feature chrome dominates the view.
 **Exit:** no production structured path imports, launches, names, or configures
 OpenCode; terminal OpenCode remains possible only as a manual companion command.
 
+Session 7 implementation decisions (2026-08-10):
+
+- Ticketless project chats moved to the singular Pi runtime rather than being
+  disabled, honoring Session 0's "not disabled" decision: a role-discriminated
+  runtime identity (`project` role with null ticket identity), a
+  project-scoped Runtime Brief, and a durable `model.select` recorded at
+  start, with attach-time backfill from the app default for pre-Session-7
+  sessions.
+- The renderer's bornTicketless carve-outs are gone: one deliverability rule
+  (live executor plus recorded model selection) and the composer model pill
+  on every structured chat.
+- Old open OpenCode attachments close at boot as durable `attachment.closed`
+  facts — history-only; transcripts stay readable because settled artifacts
+  are vendor-neutral; Pi never attaches under an OpenCode native identity.
+- `opencode-binary.ts` split: the generic login-shell binary location survives
+  for terminal companions as `binary-location.ts`.
+- The two Session 6 lost proofs were restored Pi-backed
+  (`pi-scratch-chat-smoke.mjs`, `pi-sessions-host-smoke.mjs`);
+  `pi-ticket-chat-smoke.mjs` was repaired (broken since Session 5's
+  default-model requirement); a live Model Access bug (whitespace-padded
+  catalog labels rejecting the whole snapshot) was fixed in `session-rpc`.
+- Delivered as two stacked PRs on Session 6.
+
+Bounded follow-ups deferred from this slice:
+
+- Adapter-registry collapse into the singular runtime port: Pi and the dev
+  Lab scenario adapter still ride `NativeHarnessAdapter`/registry.
+- The public `apps/docs` site rewrite and `docs/ROADMAP.md` (untracked).
+- A replacement for the deleted OpenCode delta-frame adapter-conformance
+  integration test; the engine-side probe survives.
+- The per-harness binary-override Settings row, whose only launch-time reader
+  was the removed structured adapter — wire into terminal launch or retire,
+  pending product decision.
+
 ## Testing and evidence
 
 ### Required deterministic CI

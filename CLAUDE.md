@@ -25,7 +25,7 @@ A local-first macOS workspace for planning and running coding sessions, built wi
 - Retry transient transport failures without duplicating accepted work. Authentication, permissions, configuration, and quota failures require explicit user recovery.
 - Existing hooks and terminal markers are compatibility evidence for TUI adapters, not the canonical source of Session truth.
 - A Session starts with one root Agent Thread. Each Thread has at most one live Thread Binding; Conversation Branches and Generation Attempts preserve edits and regeneration without rewriting history.
-- `adapterId` and profile fields are executor-registry machinery, not product architecture: Pi is the one structured executor. Terminals are explicit manual companions and never silent structured fallbacks.
+- `adapterId` and `profileId` fields are migration scaffolding for the singular runtime, not product architecture: Pi is the one structured executor, and collapsing the registry into a single port is a deliberate follow-up. Terminals are explicit manual companions and never silent structured fallbacks.
 
 - Ticket rules + all auto-move logic: pure, tested TS in `@volli/shared`; the UI only observes it.
 - Terminal access goes through the `TerminalEngine` seam: node-pty never leaves `src/main`, restty (ghostty-derived WebGPU renderer, decision #26) never leaves the renderer's terminal components. Native modules (node-pty, better-sqlite3) need `pnpm -C apps/desktop run rebuild:native` after every install (Electron ABI).

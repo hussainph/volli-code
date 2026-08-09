@@ -29,7 +29,7 @@ App data lives under Electron's `userData` directory. The agent-facing `volli` C
 - Retry transient transport failures without duplicating accepted work. Authentication, permissions, configuration, and quota failures require explicit user recovery.
 - Existing hooks and terminal markers are compatibility evidence for TUI adapters, not the canonical source of Session truth.
 - A Session starts with one root Agent Thread. Each Thread has at most one live Thread Binding; Conversation Branches and Generation Attempts preserve edits and regeneration without rewriting history.
-- `adapterId` and profile fields are executor-registry machinery, not product architecture: Pi is the one structured executor. Terminals are explicit manual companions and never silent structured fallbacks.
+- `adapterId` and `profileId` fields are migration scaffolding for the singular runtime, not product architecture: Pi is the one structured executor, and collapsing the registry into a single port is a deliberate follow-up. Terminals are explicit manual companions and never silent structured fallbacks.
 
 ## Conventions
 
