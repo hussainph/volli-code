@@ -1,4 +1,5 @@
 import * as React from "react";
+import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
 import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
@@ -17,15 +18,19 @@ import {
   type TicketEnvironmentRow,
 } from "@renderer/components/ticket/ticket-environment-inspector-model";
 
+/**
+ * Keyed by the model's own row union rather than re-listing it, so a new row
+ * kind is a compile error here instead of silently taking a default glyph.
+ */
+const ENVIRONMENT_ICONS: Record<TicketEnvironmentRow["id"], PhosphorIcon> = {
+  changes: GitDiffIcon,
+  worktree: TerminalWindowIcon,
+  branch: GitBranchIcon,
+  "pull-request": GitPullRequestIcon,
+};
+
 function EnvironmentIcon({ id }: { id: TicketEnvironmentRow["id"] }) {
-  const Icon =
-    id === "changes"
-      ? GitDiffIcon
-      : id === "worktree"
-        ? TerminalWindowIcon
-        : id === "pull-request"
-          ? GitPullRequestIcon
-          : GitBranchIcon;
+  const Icon = ENVIRONMENT_ICONS[id];
   return <Icon weight="fill" className="size-4 shrink-0 text-muted-foreground" />;
 }
 
