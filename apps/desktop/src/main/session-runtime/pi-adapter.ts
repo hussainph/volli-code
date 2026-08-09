@@ -318,7 +318,10 @@ function piNativeAdapter(
               id: "interaction.permission",
               state: "unavailable",
               evidence: "declared",
-              detail: "Pi runs under Auto authority inside the worktree and asks for nothing",
+              // One probe answers for every Role, so this cannot name a
+              // worktree: a project Session's workspace is the Main checkout.
+              detail:
+                "Pi runs under Auto authority inside the Session workspace and asks for nothing",
             },
             {
               id: "interaction.question",
