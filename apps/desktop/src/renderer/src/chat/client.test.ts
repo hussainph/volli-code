@@ -26,6 +26,7 @@ import {
 } from "@renderer/chat/client";
 import { getChatClient } from "@renderer/chat/registry";
 import { EMPTY_TRANSCRIPT } from "@renderer/chat/transcript";
+import { rejectedReceipt } from "@renderer/chat/wire";
 import { createChatSessionsStore } from "@renderer/stores/chat-sessions";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
@@ -312,11 +313,7 @@ async function adopted(prepare: (rpc: FakeRpc) => void = () => undefined) {
       const answer = await rpc.answerAttach();
       return {
         sessionId: answer.sessionId,
-        state:
-          answer.state ??
-          (answer.receipt && (answer.receipt as { status?: string }).status === "rejected"
-            ? "needs-recovery"
-            : "ready"),
+        state: answer.state ?? (rejectedReceipt(answer) === null ? "ready" : "needs-recovery"),
         receipt: answer.receipt ?? null,
         throughSequence: answer.throughSequence ?? 1,
       };
