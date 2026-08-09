@@ -16,7 +16,10 @@ const targets = process.argv.includes("--all")
 
 for (const target of targets) {
   const artifact = manifest.targets[target];
-  if (!artifact) throw new Error(`Pi CLI has no official bundle for ${target}`);
+  if (!artifact) {
+    console.log(`Skipping Pi CLI preparation: no official bundle for ${target}`);
+    continue;
+  }
   const destination = join(resourceRoot, target);
   if (
     await verifiedPiBundleCache(destination, {
