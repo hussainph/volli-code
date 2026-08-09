@@ -26,6 +26,11 @@
  *                      SQLite. (Driving the native folder picker isn't feasible
  *                      under Playwright; this is the established seeding path — see
  *                      board-smoke.mjs / global-artifacts-smoke.mjs.)
+ *   • seedDefaultModel() — records the app-wide default model every structured
+ *                      Session (Ticket or Project) now requires before it can
+ *                      start, over the same `modelAccess.setDefault` tRPC
+ *                      mutation Settings uses. Needs real Pi credentials
+ *                      already readable, so callers run it after seeding those.
  *   • readMonacoState()/isMonacoEditable() — the ONE encoding of how to
  *                      interrogate this Monaco build (input surface, read-only
  *                      contract, rendered aria-label), shared by every probe
@@ -324,6 +329,57 @@ export async function readSeededProjects(page) {
     for (const p of boot.data.projects) byName[p.name] = p;
     return { projects: boot.data.projects, byName };
   });
+}
+
+// ---- model access ------------------------------------------------------------
+
+/**
+ * Seeds the app-wide default model that EVERY structured Session — Ticket or
+ * Project — now requires before it can even start (`requireDefaultModel` in
+ * `structured-sessions.ts`; `ticket-sessions.ts` and `project-sessions.ts`
+ * both call it). There is no bootstrap for this anywhere in main: a fresh
+ * profile's `app_state` simply has no row for it until something calls the
+ * `modelAccess.setDefault` mutation, so every smoke that starts a Session has
+ * to do this first — the same way Settings' "Default model" section does
+ * (`model-access-settings.tsx`), just over the same tRPC edge directly rather
+ * than through the Select+Save UI.
+ *
+ * Picks the first "available" model the LIVE catalog reports (real Pi
+ * credentials must already be readable — see `ensurePiAuthInto` callers) and
+ * that model's last-listed reasoning level, mirroring the Settings pane's own
+ * `preferredReasoning` heuristic, rather than hardcoding a provider/model/
+ * reasoning triple upstream's own catalog is free to stop supporting.
+ *
+ * @param {import("playwright-core").Page} page
+ * @returns {Promise<{providerId:string, modelId:string, reasoningLevel:string, label:string}>}
+ */
+export async function seedDefaultModel(page) {
+  const result = await page.evaluate(async () => {
+    const inspected = await window.api.sessionRpc.request({
+      procedure: "modelAccess.inspect",
+      input: {},
+    });
+    if (!inspected.ok) return { ok: false, error: inspected };
+    const models = inspected.data.models ?? [];
+    const model = models.find((candidate) => candidate.state === "available");
+    if (!model) return { ok: false, error: { message: "no available model in the live catalog" } };
+    const reasoningLevel = model.reasoningLevels.at(-1) ?? "off";
+    const selection = {
+      providerId: model.providerId,
+      modelId: model.modelId,
+      reasoningLevel,
+    };
+    const saved = await window.api.sessionRpc.request({
+      procedure: "modelAccess.setDefault",
+      input: selection,
+    });
+    if (!saved.ok) return { ok: false, error: saved };
+    return { ok: true, selection: { ...selection, label: model.label } };
+  });
+  if (!result.ok) {
+    throw new Error(`seedDefaultModel failed: ${JSON.stringify(result.error)}`);
+  }
+  return result.selection;
 }
 
 // ---- Monaco DOM readers ----------------------------------------------------

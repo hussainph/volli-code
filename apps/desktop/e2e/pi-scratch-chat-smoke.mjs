@@ -1,55 +1,60 @@
 /**
- * E2e proof of the Pi-backed native adapter attaching a real TICKET chat,
- * against the BUILT app. New ticket chats on this branch attach the `pi`
- * manifest (`apps/desktop/src/main/session-runtime/pi-adapter.ts`, pinned
- * model `openai-codex`/`gpt-5.6-luna`) instead of OpenCode — see that file's
- * module doc comment. There is no fake server anywhere in this probe (the
- * retired `session-chat-smoke.mjs` had one): Pi runs in-process in Electron
- * main and this smoke drives ONE real
- * turn against a real provider, billed to a ChatGPT subscription ($0
- * marginal — keep it to one short prompt, never loop turns speculatively).
+ * E2e proof of the Pi-backed native adapter attaching a real TICKETLESS
+ * (scratch) chat, against the BUILT app — the ticketless twin of
+ * `pi-ticket-chat-smoke.mjs`. Project Sessions attached OpenCode until commit
+ * 49a62640 moved them onto the same Pi runtime a ticket chat uses
+ * (`apps/desktop/src/main/session-runtime/project-sessions.ts`), and commit
+ * 0f0e7007 gave them the ticket composer's model semantics
+ * (`chat-plane.tsx` dropped its ticket/project "pinned" carve-out) — so the
+ * retired `session-chat-smoke.mjs`'s fake-`opencode`-binary proof of the
+ * scratch-chat lifecycle no longer has anything to attach to. This is that
+ * proof, rebuilt on the real thing: there is no fake server anywhere here,
+ * and this smoke drives ONE real turn against a real provider, billed to a
+ * ChatGPT subscription ($0 marginal — keep it to one short prompt, never loop
+ * turns speculatively).
  *
- * One thing makes a real Pi turn possible at all, and it is set up before the
- * app ever launches: **credentials**. This smoke isolates `HOME` into a
- * scratch dir (same posture as `VOLLI_WORKTREE_HOME_DIR` — never touch the
- * developer's real profile), and Pi's credential store reads
- * `$PI_CODING_AGENT_DIR` else `~/.pi/agent/auth.json` under that `HOME`
- * (`packages/agent-runtime/src/pi/models.ts`), so the real
- * `~/.pi/agent/auth.json` is copied into `<fakeHome>/.pi/agent/auth.json`
- * first. Fails fast with a clear message if the real file is missing, and the
- * copy is never read back or logged — this smoke does not print, log, or
- * commit auth contents.
+ * Two things make a real Pi turn against a TICKETLESS Session possible at
+ * all, both set up before the first prompt is typed:
  *
- * Deliberately NOT set up: OpenCode. There is no fake OpenCode server and no
- * binary override — a Pi Session no longer asks OpenCode anything.
+ *   1. **Credentials.** Same posture as `pi-ticket-chat-smoke.mjs`: `HOME` is
+ *      isolated into a scratch dir (never the developer's real profile), and
+ *      the real `~/.pi/agent/auth.json` is copied into
+ *      `<fakeHome>/.pi/agent/auth.json` — see `ensurePiAuthInto`. Fails fast
+ *      with a clear message if the real file is missing; the copy is never
+ *      read back or logged.
+ *   2. **An app-wide default model.** `project-sessions.ts`'s `start()` calls
+ *      `requireDefaultModel` exactly like a Ticket Session does — nothing
+ *      bootstraps this on a fresh profile, so check 1 records one over the
+ *      same `modelAccess.setDefault` tRPC mutation Settings' "Default model"
+ *      section uses (`smoke-kit.mjs`'s `seedDefaultModel`), same as
+ *      `pi-ticket-chat-smoke.mjs`'s own check 1.
  *
- * One more thing every structured Session now needs before it can even start:
- * an app-wide default model (`requireDefaultModel`, `structured-sessions.ts`,
- * called by both `ticket-sessions.ts` and `project-sessions.ts`). Nothing
- * bootstraps this on a fresh profile, so check 1 records one over the same
- * `modelAccess.setDefault` tRPC mutation Settings' "Default model" section
- * uses (`smoke-kit.mjs`'s `seedDefaultModel`) before the ticket chat is ever
- * created. The composer's Model pill (`composer-ui.tsx`) is offered to every
- * Session now regardless of Role — Ticket or Project — since
- * `chat-plane.tsx` dropped its old ticket/project "pinned" carve-out; Pi
- * still ignores `command.model` and always executes the pinned `PI_MODEL`
- * (`pi-adapter.ts`), so check 6 below proves the pill names the model this
- * Session actually recorded rather than the placeholder a Session with
- * nothing selected would show.
+ * Once both are in place the composer offers the same Model Access pill a
+ * ticket chat's does (check 3) — the "born ticketless" carve-outs that used
+ * to hide it are gone.
+ *
+ * A scratch chat's open TAB is not itself durable — its Session is — so
+ * "the session resumes" after a relaunch is a sidebar-row click, not an
+ * auto-reopened tab (same finding the retired smoke made). Check 6 proves
+ * that adopts the SAME conversation from durable data, with no live executor
+ * attached. Check 7 proves the other end of a chat tab's life: closing it
+ * retires the tab, and nothing puts it back — `client.dispose()`'s own
+ * comment is "Releases nothing on the harness — the Session outlives it", so
+ * this is checking the TAB's retirement, not the Session's.
  *
  * Run:
  *   pnpm run build
- *   node apps/desktop/e2e/pi-ticket-chat-smoke.mjs
+ *   node apps/desktop/e2e/pi-scratch-chat-smoke.mjs
  *
- * MANUALLY-RUN (needs a display, the built app, and a real `~/.pi/agent/auth.json`
- * with `openai-codex` credentials); NOT wired into `vp test`.
+ * MANUALLY-RUN (needs a display, the built app, and a real
+ * `~/.pi/agent/auth.json` with `openai-codex` credentials); NOT wired into
+ * `vp test`.
  */
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import { dirname, join } from "node:path";
 
 import {
-  cardById,
   createRunner,
   goToBoard,
   launch,
@@ -63,28 +68,32 @@ import {
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 
-const PROJECT = { id: "pi-ticket-chat-project", name: "Pi Ticket Chat", prefix: "PT" };
-const PROMPT_TEXT = "Reply with one short sentence.";
+const PROJECT = { id: "pi-scratch-chat-project", name: "Pi Scratch Chat", prefix: "SC" };
+// Kept at or under 48 characters, on purpose: `autoTitleFromMessage`
+// (chat/rename.ts) keeps a first line of 48 characters or fewer verbatim as
+// the Session's title, so this prompt IS the title once delivered — no
+// transformation to restate here, and a change to either end surfaces as
+// this smoke failing to find its own tab after the first message lands.
+const PROMPT_TEXT = "Reply with one short sentence, please.";
 
 const REAL_PI_AUTH = join(os.homedir(), ".pi", "agent", "auth.json");
 
-const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("pi-ticket-chat-smoke-");
+const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("pi-scratch-chat-smoke-");
 // Isolates Pi's own credential/config lookups from the developer's real
 // profile — the same posture VOLLI_WORKTREE_HOME_DIR takes for worktrees.
 const fakeHome = join(scratch, "home");
-const worktreesRoot = join(scratch, "worktree-home");
 const { attempt, summarize } = createRunner();
 
-const EVIDENCE_DIR = process.argv[2] ?? join(os.tmpdir(), "volli-pi-ticket-chat-evidence");
+const EVIDENCE_DIR = process.argv[2] ?? join(os.tmpdir(), "volli-pi-scratch-chat-evidence");
 
 async function captureFailureEvidence(page, mainOut, mainErr, label) {
   await fs.mkdir(EVIDENCE_DIR, { recursive: true }).catch(() => {});
   const slug = label.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
   await page
-    .screenshot({ path: join(EVIDENCE_DIR, `pi-ticket-chat-${slug}.png`), fullPage: true })
+    .screenshot({ path: join(EVIDENCE_DIR, `pi-scratch-chat-${slug}.png`), fullPage: true })
     .catch(() => {});
   await fs.writeFile(
-    join(EVIDENCE_DIR, `pi-ticket-chat-${slug}.log`),
+    join(EVIDENCE_DIR, `pi-scratch-chat-${slug}.log`),
     [
       `=== ${label} ===`,
       "",
@@ -97,16 +106,11 @@ async function captureFailureEvidence(page, mainOut, mainErr, label) {
     ].join("\n"),
     "utf8",
   );
-  console.log(`  evidence: ${join(EVIDENCE_DIR, `pi-ticket-chat-${slug}.png`)}`);
-  console.log(`  evidence: ${join(EVIDENCE_DIR, `pi-ticket-chat-${slug}.log`)}`);
+  console.log(`  evidence: ${join(EVIDENCE_DIR, `pi-scratch-chat-${slug}.png`)}`);
+  console.log(`  evidence: ${join(EVIDENCE_DIR, `pi-scratch-chat-${slug}.log`)}`);
 }
 
-/**
- * Copies the real Pi credentials into the isolated `fakeHome`, never reading
- * or printing their contents — only `fs.copyFile`, byte for byte. Fails fast
- * with a clear message if the real file is missing, rather than letting the
- * app boot into a login-required dead end.
- */
+/** Verbatim from pi-ticket-chat-smoke.mjs — see that file for why order/isolation matter. */
 async function ensurePiAuthInto(homeDir) {
   if (!(await pathExists(REAL_PI_AUTH))) {
     throw new Error(
@@ -119,17 +123,28 @@ async function ensurePiAuthInto(homeDir) {
   await fs.copyFile(REAL_PI_AUTH, dest);
 }
 
-/** The tab strip's direct Chat control (the rail has its own copy). */
-function tabStripNewChatButton(page) {
+/** The nearest visible tablist's own "+" — scopes past the ticket rail's identical mount. */
+function tabStripNewSessionButton(page) {
   return page
     .locator('[role="tablist"]')
     .locator("xpath=..")
-    .getByRole("button", { name: "New chat", exact: true });
+    .getByRole("button", { name: "New session", exact: true });
+}
+
+/** Navigate to Sessions and wait for its (auto-opened scratch terminal) tab strip to mount. */
+async function goToSessions(page) {
+  await page.getByRole("button", { name: "Sessions", exact: true }).click();
+  await waitUntil(
+    "the Sessions tab strip to mount",
+    async () => (await page.locator('[role="tab"]').count()) >= 1,
+    { timeout: 20000 },
+  );
 }
 
 async function openNewChatTab(page) {
   const tabsBefore = await page.locator('[role="tab"]').count();
-  await tabStripNewChatButton(page).click();
+  await tabStripNewSessionButton(page).click();
+  await page.getByRole("menuitem", { name: "Chat", exact: true }).click();
   await waitUntil(
     "a new chat tab to appear",
     async () => (await page.locator('[role="tab"]').count()) > tabsBefore,
@@ -172,32 +187,20 @@ async function userMessageTexts(page) {
 }
 
 /**
- * The absolute path of a directory named `<needle>-*` (or exactly `needle`)
- * anywhere under `root`, or null — mirrors the same helper in
- * worktree-smoke.mjs.
+ * A project sidebar row (either band) whose visible text includes `text` — a
+ * scratch chat's open tab does not survive a relaunch on its own (unlike a
+ * ticket's, which the adopt path restores from the recorded active tab);
+ * reopening one is a sidebar-row click, the same path a person uses.
  */
-async function findWorktreeDir(root, needle) {
-  let entries;
-  try {
-    entries = await fs.readdir(root, { recursive: true, withFileTypes: true });
-  } catch {
-    return null;
-  }
-  const hit = entries.find(
-    (e) => e.isDirectory() && (e.name === needle || e.name.startsWith(`${needle}-`)),
-  );
-  return hit ? join(hit.parentPath ?? hit.path, hit.name) : null;
+function sidebarRow(page, text) {
+  return page.locator("[data-session-band] button", { hasText: text });
 }
 
 async function main() {
   await ensurePiAuthInto(fakeHome);
   await fs.mkdir(fakeHome, { recursive: true });
 
-  const app = await launch({
-    dbPath,
-    userDataDir,
-    extraEnv: { HOME: fakeHome, VOLLI_WORKTREE_HOME_DIR: worktreesRoot },
-  });
+  const app = await launch({ dbPath, userDataDir, extraEnv: { HOME: fakeHome } });
   const mainStdout = [];
   const mainStderr = [];
   const proc = app.process();
@@ -210,7 +213,7 @@ async function main() {
     await page.waitForLoadState("domcontentloaded");
     await sleep(1000);
 
-    const projectPath = await makeGitRepo(scratch, "pi-ticket-chat-");
+    const projectPath = await makeGitRepo(scratch, "pi-scratch-chat-");
     await seedProjects(page, [{ ...PROJECT, path: projectPath }]);
     await goToBoard(page);
     const { byName } = await readSeededProjects(page);
@@ -220,73 +223,26 @@ async function main() {
     let defaultModel = null;
     await attempt(
       1,
-      "seed the app default model — every Session, Ticket or Project, now requires one before it can start",
+      "seed the app default model — a ticketless Session requires one before it can start",
       async () => {
         defaultModel = await seedDefaultModel(page);
         return { ok: defaultModel !== null, detail: JSON.stringify(defaultModel) };
       },
     );
 
-    let displayId = null;
-    await attempt(2, "seed a ticket through the preload bridge", async () => {
-      const result = await page.evaluate((input) => window.api.tickets.create(input), {
-        projectId,
-        status: "todo",
-        title: "Pi ticket chat smoke ticket",
-        priority: "medium",
-      });
-      if (!result.ok) return { ok: false, detail: result.error };
-      displayId = `${PROJECT.prefix}-${result.ticket.ticketNumber}`;
-      await page.reload();
-      await page.waitForLoadState("domcontentloaded");
-      await sleep(1000);
-      await goToBoard(page);
-      return { ok: (await cardById(page, displayId).count()) === 1, detail: displayId };
-    });
-    if (displayId === null) throw new Error("ticket seed failed — cannot continue");
-
-    await attempt(3, "open the seeded ticket's detail", async () => {
-      await cardById(page, displayId).dblclick();
-      await waitUntil(
-        "the ticket detail to open",
-        async () => (await page.getByRole("tab", { name: displayId, exact: true }).count()) === 1,
-      );
-      return { ok: true };
-    });
-
-    await attempt(4, "the tab strip's + menu creates a chat tab (attaches Pi)", async () => {
-      chatTabLabel = await openNewChatTab(page);
-      return { ok: chatTabLabel !== null, detail: chatTabLabel };
-    });
-
-    // Carried over from the retired session-chat-smoke.mjs: a chat on
-    // a worktree ticket must attach against the materialized worktree, not
-    // a directory that was never provisioned.
-    await attempt(5, "creating the chat materialized the ticket's worktree", async () => {
-      const worktreeDir = await waitUntil(
-        "the ticket's worktree to appear on disk",
-        async () => (await findWorktreeDir(worktreesRoot, displayId)) ?? false,
-        { timeout: 20000 },
-      ).catch(async (error) => {
-        await captureFailureEvidence(page, mainStdout, mainStderr, "worktree-absent");
-        throw error;
-      });
-      const row = await page.evaluate(async (pid) => {
-        const boot = await window.api.data.bootstrap();
-        if (!boot.ok) return null;
-        return (
-          (boot.data.ticketsByProject?.[pid] ?? []).find((t) => t.worktreePath !== null) ?? null
-        );
-      }, projectId);
-      return {
-        ok: row !== null && row.worktreePath === worktreeDir,
-        detail: `dir=${worktreeDir} stamped=${row?.worktreePath ?? "none"}`,
-      };
-    });
+    await attempt(
+      2,
+      "the Sessions page's + menu creates a ticketless (scratch) chat tab",
+      async () => {
+        await goToSessions(page);
+        chatTabLabel = await openNewChatTab(page);
+        return { ok: chatTabLabel !== null, detail: chatTabLabel };
+      },
+    );
 
     await attempt(
-      6,
-      "the composer is ready, its Model pill naming the recorded model (not the unselected placeholder)",
+      3,
+      "the composer is ready, its Model pill naming the recorded model — the ticket-only 'pinned' carve-out is gone",
       async () => {
         const textarea = page.getByPlaceholder("Ask, plan, or implement…");
         await waitUntil("the composer to mount", async () => (await textarea.count()) > 0);
@@ -298,13 +254,6 @@ async function main() {
           await captureFailureEvidence(page, mainStdout, mainStderr, "composer-inert");
           throw error;
         });
-        // Every structured Session offers the Model Access pill now, Ticket
-        // or Project alike (`chat-plane.tsx` dropped its old "pinned"
-        // carve-out) — Pi still ignores `command.model` and always executes
-        // the pinned PI_MODEL (`pi-adapter.ts`), so the picker existing is
-        // not the regression to watch for. What still has to hold is that it
-        // names the model THIS Session recorded (check 1's seed) rather than
-        // the bare "Model" placeholder a Session with nothing selected shows.
         const pill = page.getByRole("button", { name: defaultModel.label });
         const shown = await waitUntil(
           "the model pill to name the recorded model",
@@ -322,7 +271,7 @@ async function main() {
     );
 
     await attempt(
-      7,
+      4,
       "submitting the one real prompt starts a turn (streaming/working state appears)",
       async () => {
         await submitPrompt(page, PROMPT_TEXT);
@@ -339,7 +288,7 @@ async function main() {
     // Real network round trip — generous timeout (30-90s is normal for one
     // turn against a real hosted model).
     await attempt(
-      8,
+      5,
       "the turn settles with a non-empty assistant reply in the transcript",
       async () => {
         await waitUntil(
@@ -353,18 +302,16 @@ async function main() {
         await waitUntil(
           "the turn to settle (Stop clears)",
           async () => (await stopButton(page).count()) === 0,
-          {
-            timeout: 30000,
-          },
+          { timeout: 30000 },
         ).catch(async (error) => {
           await captureFailureEvidence(page, mainStdout, mainStderr, "turn-never-settled");
           throw error;
         });
         const texts = await assistantMessageTexts(page);
         // The first delivered message names the Session (`chat/client.ts`'s
-        // `#autoTitle`), so the "Chat 1" captured at creation is no longer what
-        // the tab is called. Re-read it, or the relaunch below looks for a tab
-        // that stopped existing the moment the prompt landed.
+        // `#autoTitle`), so the "Chat 1" captured at creation is no longer
+        // what the tab — or the sidebar row the relaunch below looks for —
+        // is called.
         chatTabLabel = await page
           .locator('[role="tab"][aria-selected="true"]')
           .getAttribute("aria-label");
@@ -380,11 +327,7 @@ async function main() {
     await sleep(500);
     await app.close();
 
-    const app2 = await launch({
-      dbPath,
-      userDataDir,
-      extraEnv: { HOME: fakeHome, VOLLI_WORKTREE_HOME_DIR: worktreesRoot },
-    });
+    const app2 = await launch({ dbPath, userDataDir, extraEnv: { HOME: fakeHome } });
     const relaunchStdout = [];
     const relaunchStderr = [];
     const proc2 = app2.process();
@@ -393,32 +336,41 @@ async function main() {
     try {
       const page2 = await app2.firstWindow();
       await page2.waitForLoadState("domcontentloaded");
+      await sleep(1000);
 
       await attempt(
-        9,
-        "after relaunch, the ticket chat renders both messages from durable data, no live attach",
+        6,
+        "after relaunch, the sidebar reopens the scratch chat and resumes BOTH messages from durable data, no live attach",
         async () => {
-          const detailOpen = await waitUntil(
-            "the ticket detail to reopen",
-            async () =>
-              (await page2.getByRole("tab", { name: displayId, exact: true }).count()) === 1,
-            { timeout: 10000 },
-          )
-            .then(() => true)
-            .catch(() => false);
-          if (!detailOpen) {
-            await cardById(page2, displayId)
-              .dblclick()
-              .catch(() => {});
-          }
-          const chatTab = page2.getByRole("tab", { name: chatTabLabel, exact: true });
-          if ((await chatTab.count()) === 0) {
-            await waitUntil(
-              "the chat tab to be reachable",
-              async () => (await chatTab.count()) > 0,
-              { timeout: 10000 },
+          const row = sidebarRow(page2, chatTabLabel);
+          await waitUntil(
+            "the chat's sidebar row to reappear after relaunch",
+            async () => (await row.count()) >= 1,
+            { timeout: 15000 },
+          ).catch(async (error) => {
+            await captureFailureEvidence(
+              page2,
+              relaunchStdout,
+              relaunchStderr,
+              "relaunch-row-missing",
             );
-          }
+            throw error;
+          });
+          await row.first().click();
+          const chatTab = page2.getByRole("tab", { name: chatTabLabel, exact: true });
+          await waitUntil(
+            "the chat tab to open from the sidebar row",
+            async () => (await chatTab.count()) > 0,
+            { timeout: 10000 },
+          ).catch(async (error) => {
+            await captureFailureEvidence(
+              page2,
+              relaunchStdout,
+              relaunchStderr,
+              "relaunch-tab-not-opened",
+            );
+            throw error;
+          });
           await chatTab.click();
           const rendered = await waitUntil(
             "both durable messages to render without a live adapter",
@@ -447,6 +399,24 @@ async function main() {
           };
         },
       );
+
+      // The close trap this smoke exists to catch: this tab is the persisted
+      // active one AND its Session is still on the sidebar's durable listing —
+      // exactly the pair a relaunch-effect regression would adopt from.
+      // Standing the active tab down before the close is the whole of what
+      // stops it; a reordering that lost it would leave a chat tab nobody can
+      // close, with every check above still green.
+      await attempt(7, "closing the chat tab retires it, and nothing puts it back", async () => {
+        const chatTab = page2.getByRole("tab", { name: chatTabLabel, exact: true });
+        await page2.getByRole("button", { name: `Close ${chatTabLabel}`, exact: true }).click();
+        await waitUntil("the chat tab to go", async () => (await chatTab.count()) === 0);
+        // A fixed wait, because what is being asserted is that nothing
+        // happens: a resurrection would land on the effect after the close
+        // commits, and there is no state to poll for its absence.
+        await sleep(1500);
+        const back = await chatTab.count();
+        return { ok: back === 0, detail: back === 0 ? "stayed closed" : "the tab came back" };
+      });
     } finally {
       await app2.close().catch(() => {});
     }
