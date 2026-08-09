@@ -49,6 +49,9 @@ const { attempt, summarize } = createRunner();
 // know which shell to ask).
 const BARE_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
 
+/** What main logs when the login-shell PATH walk fails to place the wrappers. */
+const WRAPPER_FAILURE_MARKER = "[volli] failed to generate harness wrappers";
+
 /**
  * Where a FAILING run leaves its evidence — screenshot, the main process's own
  * stdout/stderr, the renderer console. Overridable by first argument, the same
@@ -121,10 +124,15 @@ async function main() {
       2,
       "boot did not already fail to generate harness wrappers off the bare PATH",
       async () => {
-        const failed = mainStderr.some((line) =>
-          line.includes("[volli] failed to generate harness wrappers"),
-        );
-        if (failed) {
+        // Node delivers stderr in arbitrary chunks, so the marker can straddle
+        // two of them. Match the JOINED stream and split it into lines only to
+        // name the offending one — matching per chunk reports a green PASS on
+        // exactly the boot failure this probe exists to catch.
+        const offending = mainStderr
+          .join("")
+          .split("\n")
+          .find((line) => line.includes(WRAPPER_FAILURE_MARKER));
+        if (offending !== undefined) {
           await captureFailureEvidence(
             page,
             mainStdout,
@@ -134,10 +142,8 @@ async function main() {
           );
         }
         return {
-          ok: !failed,
-          detail: failed
-            ? mainStderr.find((line) => line.includes("failed to generate harness wrappers"))
-            : "no boot-time harness-wrapper failure logged",
+          ok: offending === undefined,
+          detail: offending ?? "no boot-time harness-wrapper failure logged",
         };
       },
     );
