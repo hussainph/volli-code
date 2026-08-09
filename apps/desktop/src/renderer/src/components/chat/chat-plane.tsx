@@ -313,7 +313,6 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
       catalogState,
       catalogError,
       terminalAvailable: ticketId !== null,
-      runtimeRetryAvailable: ticketId !== null,
     },
     blockerActs,
     interactions.length > 0,

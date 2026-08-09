@@ -156,15 +156,16 @@ export interface SessionBlockerInput {
   attention: SessionAttentionProjection;
   catalogState: CatalogState;
   catalogError: string | null;
-  /** Whether this Ticket already owns a manual terminal companion tab. */
-  terminalAvailable: boolean;
   /**
-   * Whether retrying the exact failed run is on offer for an auth or
-   * configuration stop. Every structured Session runs on Pi and can, but only a
-   * Ticket Session has the manual terminal beside it that makes signing in and
-   * retrying one gesture; a project chat is sent to Settings instead.
+   * Whether this Session has a manual terminal companion beside it — which only
+   * a Ticket Session does.
+   *
+   * It decides the whole auth/configuration handoff, not just the Terminal
+   * button: signing in is provider-owned and happens in that terminal, so the
+   * exact-run Retry only means anything where the sign-in it follows can
+   * actually happen. A project chat has neither and is sent to Settings.
    */
-  runtimeRetryAvailable: boolean;
+  terminalAvailable: boolean;
 }
 
 export interface SessionBlockerActs {
@@ -232,7 +233,6 @@ export function sessionBlocker(
           retryRuntime,
           terminal,
           settings,
-          input.runtimeRetryAvailable,
           input.terminalAvailable,
         );
   }
@@ -277,7 +277,9 @@ function answeredByCard(kind: SessionAttention["kind"]): boolean {
  *
  * - **Terminal + Retry** — Pi auth/configuration recovery uses an existing
  *   manual Ticket terminal for provider-owned sign-in, then retries the exact
- *   failed run without submitting the user's message again.
+ *   failed run without submitting the user's message again. Where there is no
+ *   such terminal — a project chat — the pair collapses to Settings rather than
+ *   to a Retry of a run nothing has fixed yet.
  * - **Retry** — `transport_retrying`, `adapter_disconnected` and `rate_limited`.
  *   The first two are a connection to re-establish, which is exactly what
  *   `recover` does. A rate limit gets one because the wait is the whole fix; the
@@ -297,35 +299,30 @@ function attentionBlocker(
   retryRuntime: SessionBlockerAction,
   terminal: SessionBlockerAction,
   settings: SessionBlockerAction,
-  runtimeRetryAvailable: boolean,
   terminalAvailable: boolean,
 ): SessionBlockerState {
   const detail = attention.detail;
   switch (attention.kind) {
     case "auth_required":
-      return !runtimeRetryAvailable
-        ? { message: "Sign-in required", detail, tone: "error", action: settings }
-        : terminalAvailable
-          ? {
-              message: "Sign-in required",
-              detail,
-              tone: "error",
-              action: terminal,
-              secondaryAction: retryRuntime,
-            }
-          : { message: "Sign-in required", detail, tone: "error", action: retryRuntime };
+      return terminalAvailable
+        ? {
+            message: "Sign-in required",
+            detail,
+            tone: "error",
+            action: terminal,
+            secondaryAction: retryRuntime,
+          }
+        : { message: "Sign-in required", detail, tone: "error", action: settings };
     case "configuration_invalid":
-      return !runtimeRetryAvailable
-        ? { message: "Configuration invalid", detail, tone: "error", action: settings }
-        : terminalAvailable
-          ? {
-              message: "Configuration invalid",
-              detail,
-              tone: "error",
-              action: terminal,
-              secondaryAction: retryRuntime,
-            }
-          : { message: "Configuration invalid", detail, tone: "error", action: retryRuntime };
+      return terminalAvailable
+        ? {
+            message: "Configuration invalid",
+            detail,
+            tone: "error",
+            action: terminal,
+            secondaryAction: retryRuntime,
+          }
+        : { message: "Configuration invalid", detail, tone: "error", action: settings };
     case "transport_retrying":
       return { message: "Reconnecting", detail, tone: "waiting", action: retry };
     case "adapter_disconnected":

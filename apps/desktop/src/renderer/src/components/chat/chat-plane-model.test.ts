@@ -70,7 +70,6 @@ function blockerInput(overrides: Partial<SessionBlockerInput> = {}): SessionBloc
     catalogState: "ready",
     catalogError: null,
     terminalAvailable: false,
-    runtimeRetryAvailable: false,
     ...overrides,
   };
 }
@@ -142,11 +141,7 @@ describe("sessionBlocker", () => {
   it("offers an existing manual terminal companion plus an honest runtime retry", () => {
     expect(
       sessionBlocker(
-        {
-          ...raised(attention("auth_required")),
-          terminalAvailable: true,
-          runtimeRetryAvailable: true,
-        },
+        { ...raised(attention("auth_required")), terminalAvailable: true },
         ACTS,
         false,
       ),
@@ -156,37 +151,33 @@ describe("sessionBlocker", () => {
     });
   });
 
-  it("offers Pi runtime retry without inventing a terminal companion", () => {
-    expect(
-      sessionBlocker(
-        { ...raised(attention("configuration_invalid")), runtimeRetryAvailable: true },
-        ACTS,
-        false,
-      ),
-    ).toMatchObject({ action: { label: "Retry" } });
-    expect(
-      sessionBlocker(
-        { ...raised(attention("auth_required")), runtimeRetryAvailable: true },
-        ACTS,
-        false,
-      ),
-    ).toMatchObject({ action: { label: "Retry" } });
-  });
-
   it("offers the existing terminal and retry for invalid Pi configuration", () => {
     expect(
       sessionBlocker(
-        {
-          ...raised(attention("configuration_invalid")),
-          runtimeRetryAvailable: true,
-          terminalAvailable: true,
-        },
+        { ...raised(attention("configuration_invalid")), terminalAvailable: true },
         ACTS,
         false,
       ),
     ).toMatchObject({
       action: { label: "Open Terminal" },
       secondaryAction: { label: "Retry" },
+    });
+  });
+
+  it("sends a Session with no terminal beside it to Settings, not to a bare Retry", () => {
+    // Signing in is provider-owned and happens in that terminal. Without one,
+    // retrying the exact failed run repeats a failure nothing has addressed.
+    expect(sessionBlocker(raised(attention("auth_required")), ACTS, false)).toEqual({
+      message: "Sign-in required",
+      detail: null,
+      tone: "error",
+      action: { label: "Settings", act: NO_OP },
+    });
+    expect(sessionBlocker(raised(attention("configuration_invalid")), ACTS, false)).toEqual({
+      message: "Configuration invalid",
+      detail: null,
+      tone: "error",
+      action: { label: "Settings", act: NO_OP },
     });
   });
 
