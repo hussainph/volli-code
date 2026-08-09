@@ -154,5 +154,73 @@ describe.skipIf(!enabled)(
         await env.cleanup();
       }
     });
+
+    it("keeps two Session workspaces apart in one process", async () => {
+      // The process-global SRT configuration carries no workspace paths at all;
+      // each root travels per command. That was invisible while every Session
+      // was a Ticket worktree under the same parent, but a project Session is
+      // rooted at the Main checkout, so two live roots of different kinds is
+      // now an ordinary state and nothing else proves it holds. The preflight
+      // is cached per manager, so whichever env prepares first is the one that
+      // installed the shared boundary — and it must still not decide which root
+      // a later command gets.
+      expect(process.platform).toBe("darwin");
+      expect(SandboxManager.isSupportedPlatform()).toBe(true);
+
+      parent = await mkdtemp(join(homedir(), ".volli-srt-integration-"));
+      const secretA = `root-a-secret-${randomUUID()}`;
+      const secretB = `root-b-secret-${randomUUID()}`;
+      await mkdir(join(parent, "root-a"));
+      await mkdir(join(parent, "root-b"));
+
+      const envA = await ScopedExecutionEnv.create(join(parent, "root-a"), {
+        sandbox: SandboxManager,
+      });
+      const envB = await ScopedExecutionEnv.create(join(parent, "root-b"), {
+        sandbox: SandboxManager,
+      });
+      const fileInA = join(envA.cwd, "secret.txt");
+      const fileInB = join(envB.cwd, "secret.txt");
+      await writeFile(fileInA, secretA);
+      await writeFile(fileInB, secretB);
+
+      try {
+        // A prepares the shared boundary; B never does before it runs.
+        await expect(envA.prepareProcessExecution()).resolves.toEqual({
+          ok: true,
+          value: undefined,
+        });
+
+        expectDenied(await envB.exec(`/bin/cat ${JSON.stringify(fileInA)}`), secretA);
+        await expect(envB.exec("pwd")).resolves.toEqual({
+          ok: true,
+          value: expect.objectContaining({ stdout: `${envB.cwd}\n`, exitCode: 0 }),
+        });
+        expect(await readFile(fileInA, "utf8")).toBe(secretA);
+
+        // The same in the other direction, including for the env that installed
+        // the boundary: preparing it buys no reach into a root it does not own.
+        expectDenied(await envA.exec(`/bin/cat ${JSON.stringify(fileInB)}`), secretB);
+        await expect(envA.exec("pwd")).resolves.toEqual({
+          ok: true,
+          value: expect.objectContaining({ stdout: `${envA.cwd}\n`, exitCode: 0 }),
+        });
+        expect(await readFile(fileInB, "utf8")).toBe(secretB);
+
+        // Each still owns its own root, so the denial above is containment and
+        // not a boundary that simply refuses everything.
+        await expect(envA.exec("/bin/cat secret.txt")).resolves.toMatchObject({
+          ok: true,
+          value: { stdout: secretA, exitCode: 0 },
+        });
+        await expect(envB.exec("/bin/cat secret.txt")).resolves.toMatchObject({
+          ok: true,
+          value: { stdout: secretB, exitCode: 0 },
+        });
+      } finally {
+        await envA.cleanup();
+        await envB.cleanup();
+      }
+    });
   },
 );
