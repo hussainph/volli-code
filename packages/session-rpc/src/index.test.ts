@@ -17,6 +17,8 @@ type CapabilitySnapshot = Extract<
 >["snapshot"];
 
 type SessionAttachmentProjection = SessionRuntimeSnapshot["projection"]["attachments"][number];
+type SessionCommand = SessionRuntimeSnapshot["projection"]["commands"][number];
+type SessionAttention = SessionRuntimeSnapshot["projection"]["attention"]["active"][number];
 
 const RECOVERY_PATH =
   "/Users/alice/Library/Application Support/Volli Code/pi-sessions/pi-session-9.jsonl";
@@ -88,6 +90,39 @@ function interactionWithCorrelation() {
   };
 }
 
+function executorCommand(): SessionCommand {
+  return {
+    id: "command-start-1",
+    sessionId: "session-1",
+    createdAt: 10,
+    route: { adapterId: "pi", attachmentId: "attachment-1" },
+    intent: { kind: "executor.start", adapterId: "pi", continuity: "fresh" },
+  };
+}
+
+function modelCommand(): SessionCommand {
+  return {
+    id: "command-model-1",
+    sessionId: "session-1",
+    createdAt: 9,
+    route: null,
+    intent: {
+      kind: "model.select",
+      selection: { providerId: "openai-codex", modelId: "gpt-5.6-sol", reasoningLevel: "high" },
+    },
+  };
+}
+
+function recoveryAttention(): SessionAttention {
+  return {
+    id: "attention-auth-1",
+    attachmentId: "attachment-1",
+    kind: "auth_required",
+    detail: "Sign in required",
+    diagnostic: { credentialPath: RECOVERY_PATH },
+  };
+}
+
 function snapshotWithRecovery(): SessionRuntimeSnapshot {
   const base = snapshot();
   const attachment = attachmentWithRecovery();
@@ -95,9 +130,21 @@ function snapshotWithRecovery(): SessionRuntimeSnapshot {
     ...base,
     projection: {
       ...base.projection,
+      commands: [executorCommand(), modelCommand()],
+      pendingExecutorStart: executorCommand(),
       attachments: [attachment],
       liveExecutor: attachment,
-      interactions: { active: [interactionWithCorrelation()], resolved: [] },
+      attention: { active: [recoveryAttention()], primary: recoveryAttention() },
+      interactions: {
+        active: [interactionWithCorrelation()],
+        resolved: [
+          {
+            interaction: interactionWithCorrelation(),
+            resolution: { optionIds: ["once"], response: null },
+            resolvedAt: 11,
+          },
+        ],
+      },
     },
   };
 }
@@ -108,6 +155,25 @@ function frameWithPayload(
 ): SessionStreamFrame {
   const base = frame(sequence);
   return { ...base, event: { ...base.event, payload } };
+}
+
+function observedFrame(): SessionStreamFrame {
+  const base = frameWithPayload(11, {
+    kind: "adapter.observed",
+    attachmentId: "attachment-1",
+    name: "runtime observation",
+    native: { credentialPath: RECOVERY_PATH },
+  });
+  return {
+    ...base,
+    event: {
+      ...base.event,
+      provenance: {
+        source: { kind: "adapter", id: "pi", detail: { credentialPath: RECOVERY_PATH } },
+        venue: null,
+      },
+    },
+  };
 }
 
 function attachmentFrames(): readonly SessionStreamFrame[] {
@@ -136,6 +202,10 @@ function attachmentFrames(): readonly SessionStreamFrame[] {
       kind: "interaction.opened",
       interaction: interactionWithCorrelation(),
     }),
+    frameWithPayload(9, { kind: "command.recorded", command: executorCommand() }),
+    frameWithPayload(10, { kind: "attention.raised", attention: recoveryAttention() }),
+    observedFrame(),
+    frameWithPayload(12, { kind: "command.recorded", command: modelCommand() }),
   ];
 }
 
@@ -159,6 +229,7 @@ function snapshot(): SessionRuntimeSnapshot {
       capabilities: [],
       interactions: { active: [], resolved: [] },
       signal: null,
+      modelSelection: null,
       turnActive: false,
       lastActivityAt: 10,
       bornTicketless: true,
@@ -439,12 +510,12 @@ describe("Session tRPC router", () => {
     });
 
     await expect(caller.session.projection({ sessionId: "session-1" })).resolves.toEqual({
-      projection: { capabilities: [] },
+      projection: {},
       throughSequence: 4,
     });
   });
 
-  it("removes attachment recovery locators from projection reads without mutating runtime state", async () => {
+  it("removes runtime identity and recovery locators from projection reads without mutating runtime state", async () => {
     const fixture = runtimeFixture();
     const serverSnapshot = snapshotWithRecovery();
     const unreferencedAttachment = {
@@ -469,15 +540,25 @@ describe("Session tRPC router", () => {
 
     const resolved = await caller.session.projection({ sessionId: "session-1" });
 
-    expect(resolved.projection.attachments[0]?.native).toBeNull();
-    expect(resolved.projection.attachments[1]).toBe(unreferencedAttachment);
-    expect(resolved.projection.liveExecutor?.native).toBeNull();
-    expect(resolved.projection.interactions.active[0]?.native).toEqual(INTERACTION_NATIVE);
+    expect(Object.keys(resolved.projection).toSorted()).toEqual([
+      "attention",
+      "bornTicketless",
+      "interactions",
+      "lastActivityAt",
+      "liveExecutor",
+      "modelSelection",
+      "session",
+      "signal",
+      "status",
+      "turnActive",
+    ]);
+    expect(resolved.projection.liveExecutor).toEqual({ id: "attachment-1" });
+    expect(resolved.projection.interactions.active[0]?.native).toEqual({ id: null, detail: null });
     expect(serverSnapshot.projection.attachments[0]?.native).toEqual(recoveryNative());
     expect(serverSnapshot.projection.liveExecutor?.native).toEqual(recoveryNative());
   });
 
-  it("removes attachment recovery locators from snapshot projections and replay frames", async () => {
+  it("removes runtime identity and recovery locators from snapshot projections and replay frames", async () => {
     const fixture = runtimeFixture();
     const serverSnapshot = { ...snapshotWithRecovery(), frames: attachmentFrames() };
     const runtime: SessionRuntime = { ...fixture.runtime, snapshot: async () => serverSnapshot };
@@ -489,10 +570,22 @@ describe("Session tRPC router", () => {
     const resolved = await caller.session.snapshot({ sessionId: "session-1" });
     const payloads = resolved.frames.map((item) => item.event.payload);
 
-    expect(resolved.projection.attachments[0]?.native).toBeNull();
+    expect(Object.keys(resolved.projection).toSorted()).toEqual([
+      "attention",
+      "bornTicketless",
+      "interactions",
+      "lastActivityAt",
+      "liveExecutor",
+      "modelSelection",
+      "session",
+      "signal",
+      "status",
+      "turnActive",
+    ]);
+    expect(resolved.projection.liveExecutor).toEqual({ id: "attachment-1" });
     expect(
       payloads[0]?.kind === "attachment.opened" ? payloads[0].attachment.native : undefined,
-    ).toBeNull();
+    ).toBeUndefined();
     expect(
       payloads[1]?.kind === "attachment.native_referenced" ? payloads[1].native : undefined,
     ).toEqual({
@@ -501,16 +594,16 @@ describe("Session tRPC router", () => {
     });
     expect(
       payloads[2]?.kind === "attachment.failed" ? payloads[2].attachment.native : undefined,
-    ).toBeNull();
+    ).toBeUndefined();
     expect(
       payloads[3]?.kind === "interaction.opened" ? payloads[3].interaction.native : undefined,
-    ).toEqual(INTERACTION_NATIVE);
+    ).toEqual({ id: null, detail: null });
     expect(serverSnapshot.frames.map((item) => item.event.payload)).toEqual(
       attachmentFrames().map((item) => item.event.payload),
     );
   });
 
-  it("removes attachment recovery locators from subscribed frames and preserves interaction correlation", async () => {
+  it("removes runtime identity and recovery locators from subscribed frames", async () => {
     const fixture = runtimeFixture();
     const serverFrames = attachmentFrames();
     const caller = createSessionRouter().createCaller({
@@ -532,7 +625,7 @@ describe("Session tRPC router", () => {
     const payloads = rendererFrames.map((item) => item.event.payload);
     expect(
       payloads[0]?.kind === "attachment.opened" ? payloads[0].attachment.native : undefined,
-    ).toBeNull();
+    ).toBeUndefined();
     expect(
       payloads[1]?.kind === "attachment.native_referenced" ? payloads[1].native : undefined,
     ).toEqual({
@@ -541,10 +634,10 @@ describe("Session tRPC router", () => {
     });
     expect(
       payloads[2]?.kind === "attachment.failed" ? payloads[2].attachment.native : undefined,
-    ).toBeNull();
+    ).toBeUndefined();
     expect(
       payloads[3]?.kind === "interaction.opened" ? payloads[3].interaction.native : undefined,
-    ).toEqual(INTERACTION_NATIVE);
+    ).toEqual({ id: null, detail: null });
     expect(serverFrames.map((item) => item.event.payload)).toEqual(
       attachmentFrames().map((item) => item.event.payload),
     );
@@ -568,7 +661,7 @@ describe("Session tRPC router", () => {
     });
 
     const resolved = await caller.session.snapshot({ sessionId: "session-1" });
-    expect(resolved.projection.capabilities[0]?.catalog).toEqual([]);
+    expect("capabilities" in resolved.projection).toBe(false);
     expect(
       resolved.frames[0]?.event.payload.kind === "capabilities.updated"
         ? resolved.frames[0].event.payload.snapshot.catalog
@@ -640,12 +733,268 @@ describe("Session tRPC router", () => {
 
     expect(Object.keys(resolved).toSorted()).toEqual(["projection", "throughSequence"]);
     expect(resolved.throughSequence).toBe(9);
-    // The one thing this edge still owes the renderer: no exhaustive inventory.
-    expect(resolved.projection.capabilities[0]?.catalog).toEqual([]);
+    expect("capabilities" in resolved.projection).toBe(false);
     expect(diagnostics.list().map((entry) => `${entry.procedure}:${entry.phase}`)).toEqual([
       "session.projection:start",
       "session.projection:success",
     ]);
+  });
+
+  it("exposes Model Access without adapter, profile, or credential inputs", async () => {
+    const fixture = runtimeFixture();
+    const calls: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      inspectModelAccess: async (input) => {
+        calls.push(input);
+        return {
+          observedAt: 42,
+          credentialToken: "root-secret",
+          providers: [
+            {
+              id: "openai-codex",
+              label: "OpenAI Codex",
+              state: "available" as const,
+              accountLabel: "OAuth",
+              billingSource: "ambient" as const,
+              recovery: null,
+              runtime: { credential: "provider-secret" },
+            },
+          ],
+          models: [
+            {
+              providerId: "openai-codex",
+              modelId: "gpt-5.6-sol",
+              label: "GPT-5.6 Sol",
+              state: "available" as const,
+              reasoningLevels: ["off", "low", "medium", "high"] as const,
+              headers: { authorization: "model-secret" },
+            },
+          ],
+        };
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    const access = await caller.modelAccess.inspect({ refresh: true });
+
+    expect(calls).toEqual([{ refresh: true }]);
+    expect(access.models[0]).toMatchObject({
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+    });
+    expect(Object.keys(access).toSorted()).toEqual(["models", "observedAt", "providers"]);
+    expect(Object.keys(access.providers[0]!).toSorted()).toEqual([
+      "accountLabel",
+      "billingSource",
+      "id",
+      "label",
+      "recovery",
+      "state",
+    ]);
+    expect(Object.keys(access.models[0]!).toSorted()).toEqual([
+      "label",
+      "modelId",
+      "providerId",
+      "reasoningLevels",
+      "state",
+    ]);
+    expect(JSON.stringify(access)).not.toMatch(/adapter|profile|credential|token/i);
+  });
+
+  it("reads and writes the user-configured default model through an exact safe shape", async () => {
+    const fixture = runtimeFixture();
+    const writes: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      readDefaultModelSelection: () => ({
+        providerId: "openai-codex",
+        modelId: "gpt-5.6-sol",
+        reasoningLevel: "high",
+        credential: "must-not-cross",
+      }),
+      writeDefaultModelSelection: (selection) => {
+        writes.push(selection);
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    const current = await caller.modelAccess.defaultSelection();
+    await caller.modelAccess.setDefault({
+      providerId: "anthropic",
+      modelId: "claude-sonnet",
+      reasoningLevel: "medium",
+    });
+
+    expect(current).toEqual({
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "high",
+    });
+    expect(writes).toEqual([
+      {
+        providerId: "anthropic",
+        modelId: "claude-sonnet",
+        reasoningLevel: "medium",
+      },
+    ]);
+    const empty = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      readDefaultModelSelection: () => null,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+    await expect(empty.modelAccess.defaultSelection()).resolves.toBeNull();
+  });
+
+  it("starts a Ticket Session without accepting runtime identity", async () => {
+    const fixture = runtimeFixture();
+    const calls: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      startTicketSession: async (input) => {
+        calls.push(input);
+        return {
+          sessionId: "session-1",
+          state: "ready" as const,
+          receipt: null,
+          throughSequence: 6,
+        };
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    const started = await caller.ticketSessions.start({
+      operationId: "operation-1",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "VC-1",
+    });
+
+    expect(started).toMatchObject({ sessionId: "session-1", state: "ready" });
+    expect(calls).toEqual([
+      {
+        operationId: "operation-1",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        title: "VC-1",
+      },
+    ]);
+    expect(JSON.stringify(calls)).not.toMatch(/adapter|profile|pi/i);
+  });
+
+  it("withholds executor creation and attachment commands from Electron renderers", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+      transport: "electron-ipc",
+    });
+
+    await expect(
+      caller.session.command({
+        commandId: "forged-create",
+        command: { kind: "session.create", projectId: "p1", ticketId: null, title: null },
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      caller.session.command({
+        commandId: "forged-attach",
+        sessionId: "session-1",
+        command: {
+          kind: "adapter.attach",
+          adapterId: "pi",
+          profileId: "native",
+          continuity: "fresh",
+        },
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(fixture.calls.command).toEqual([]);
+  });
+
+  it("reattaches Ticket and temporary project Sessions without runtime identity", async () => {
+    const fixture = runtimeFixture();
+    const calls: unknown[] = [];
+    const answer = {
+      sessionId: "session-1",
+      state: "ready" as const,
+      receipt: null,
+      throughSequence: 6,
+    };
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      attachTicketSession: async (input) => {
+        calls.push(["ticket.attach", input]);
+        return answer;
+      },
+      startProjectSession: async (input) => {
+        calls.push(["project.start", input]);
+        return answer;
+      },
+      attachProjectSession: async (input) => {
+        calls.push(["project.attach", input]);
+        return answer;
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await caller.ticketSessions.attach({ operationId: "ticket-retry", sessionId: "session-1" });
+    await caller.projectSessions.start({
+      operationId: "project-start",
+      projectId: "project-1",
+      title: "Scratch",
+    });
+    await caller.projectSessions.attach({
+      operationId: "project-retry",
+      sessionId: "session-2",
+    });
+
+    expect(calls).toEqual([
+      ["ticket.attach", { operationId: "ticket-retry", sessionId: "session-1" }],
+      ["project.start", { operationId: "project-start", projectId: "project-1", title: "Scratch" }],
+      ["project.attach", { operationId: "project-retry", sessionId: "session-2" }],
+    ]);
+    expect(JSON.stringify(calls)).not.toMatch(/adapter|profile|pi|opencode/i);
+  });
+
+  it("fails product facades explicitly when a transport did not configure them", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await expect(
+      caller.ticketSessions.start({
+        operationId: "ticket-start",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        title: null,
+      }),
+    ).rejects.toThrow("Ticket Sessions are unavailable");
+    await expect(
+      caller.ticketSessions.attach({ operationId: "ticket-attach", sessionId: "session-1" }),
+    ).rejects.toThrow("Ticket Sessions are unavailable");
+    await expect(
+      caller.projectSessions.start({
+        operationId: "project-start",
+        projectId: "project-1",
+        title: null,
+      }),
+    ).rejects.toThrow("Project Sessions are unavailable");
+    await expect(
+      caller.projectSessions.attach({ operationId: "project-attach", sessionId: "session-1" }),
+    ).rejects.toThrow("Project Sessions are unavailable");
+    await expect(caller.modelAccess.inspect({})).rejects.toThrow("Model Access is unavailable");
+    await expect(caller.modelAccess.defaultSelection()).rejects.toThrow(
+      "Model Access preferences are unavailable",
+    );
+    await expect(
+      caller.modelAccess.setDefault({
+        providerId: "openai-codex",
+        modelId: "gpt-5.6-sol",
+        reasoningLevel: "high",
+      }),
+    ).rejects.toThrow("Model Access preferences are unavailable");
   });
 
   it("exposes bounded Runtime Catalog browsing and shortlist resolution to Lab clients", async () => {
@@ -756,6 +1105,46 @@ describe("Session tRPC router", () => {
     await expect(caller.runtimeCatalog.resolve({ adapterId: "opencode" })).rejects.toThrow(
       "Runtime Catalog is unavailable on this transport",
     );
+  });
+
+  it("classifies unconfigured product facades as unavailable transport capabilities", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    const calls = [
+      () =>
+        caller.ticketSessions.start({
+          operationId: "operation-ticket",
+          projectId: "project-1",
+          ticketId: "ticket-1",
+          title: null,
+        }),
+      () =>
+        caller.ticketSessions.attach({ operationId: "operation-ticket-attach", sessionId: "s1" }),
+      () =>
+        caller.projectSessions.start({
+          operationId: "operation-project",
+          projectId: "project-1",
+          title: null,
+        }),
+      () =>
+        caller.projectSessions.attach({ operationId: "operation-project-attach", sessionId: "s1" }),
+      () => caller.modelAccess.inspect({}),
+      () => caller.modelAccess.defaultSelection(),
+      () =>
+        caller.modelAccess.setDefault({
+          providerId: "openai-codex",
+          modelId: "gpt-5.6-sol",
+          reasoningLevel: "high",
+        }),
+    ];
+
+    for (const call of calls) {
+      await expect(call()).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
+    }
   });
 
   it("wraps a Runtime Catalog resolver rejection as a not-found projectId", async () => {
@@ -878,6 +1267,47 @@ describe("Session tRPC router", () => {
       },
     ]);
     expect("attachmentId" in fixture.calls.command.at(-1)!.command).toBe(false);
+  });
+
+  it("passes a durable model selection without adapter or profile identity", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    const selected = await caller.session.command({
+      commandId: "select-model",
+      sessionId: "session-1",
+      command: {
+        kind: "model.select",
+        selection: {
+          providerId: "openai-codex",
+          modelId: "gpt-5.6-sol",
+          reasoningLevel: "high",
+        },
+      },
+    });
+
+    expect(fixture.calls.command.at(-1)).toEqual({
+      commandId: "select-model",
+      sessionId: "session-1",
+      command: {
+        kind: "model.select",
+        selection: {
+          providerId: "openai-codex",
+          modelId: "gpt-5.6-sol",
+          reasoningLevel: "high",
+        },
+      },
+    });
+    expect(JSON.stringify(fixture.calls.command.at(-1))).not.toMatch(/adapter|profile/i);
+    expect(selected).toEqual({
+      sessionId: "session-1",
+      receipt: null,
+      throughSequence: 1,
+    });
+    expect(JSON.stringify(selected)).not.toMatch(/adapter|profile/i);
   });
 
   it("carries per-prompt answers through a resolve command and leaves absent ones absent", async () => {

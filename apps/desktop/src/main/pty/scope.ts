@@ -83,6 +83,11 @@ export interface SessionScope {
 /** A resolved scope, or the one failure: a ticket request naming a ticket that does not exist. */
 export type ScopeResolution = { ok: true; scope: SessionScope } | { ok: false; error: string };
 
+export interface ModelAccessTerminalLaunch {
+  command: string;
+  env: Readonly<Record<string, string>>;
+}
+
 /**
  * Resolves a request to its session scope from the db: a ticket session
  * (VOLLI_TICKET env, MAIN-repo-root cwd, the ticket's harness, `Session N`
@@ -100,6 +105,7 @@ export async function resolveScope(
   attachmentsRootPath: string,
   wrapperFor: HarnessWrapperLookup,
   adapterFor: HarnessAdapterLookup,
+  modelAccessTerminal: ModelAccessTerminalLaunch | null = null,
 ): Promise<ScopeResolution> {
   // Presentation metadata is non-security-sensitive, but still normalize the
   // IPC value so an untyped caller cannot persist arbitrary vocabulary.
@@ -111,6 +117,34 @@ export async function resolveScope(
     const kickoff = request.ticket.kickoff;
     const resume = request.ticket.resume;
     const usesWorktree = ctx.usesWorktree;
+    if (request.ticket.purpose === "model-access") {
+      if (kickoff !== undefined || resume !== undefined) {
+        return {
+          ok: false,
+          error: "Model Access cannot start a kickoff or resume another Session",
+        };
+      }
+      if (modelAccessTerminal === null) {
+        return { ok: false, error: "Bundled Pi CLI is unavailable" };
+      }
+      return {
+        ok: true,
+        scope: {
+          projectId: ctx.projectId,
+          ticketId: request.ticket.ticketId,
+          harnessId: ctx.preferredHarnessId,
+          launchKind: "shell",
+          placement,
+          cwd: ctx.projectPath,
+          env: { ...ticketSessionEnv(ctx.projectPath, displayId), ...modelAccessTerminal.env },
+          title: "Model Access",
+          artifactsRoot: ctx.projectPath,
+          launchCommand: modelAccessTerminal.command,
+          worktree: null,
+          resume: null,
+        },
+      };
+    }
     const sessionCount = await sessionEngine.countSessions({
       projectId: ctx.projectId,
       scope: "ticket",
@@ -262,6 +296,29 @@ export async function resolveScope(
   // injected the same way a ticket session gets it (decision #9). A project
   // that can't be resolved still spawns (no artifacts env) rather than failing.
   const project = getProjectById(db, request.workspaceId);
+  if (request.purpose === "model-access") {
+    if (project === undefined) return { ok: false, error: "Unknown project" };
+    if (modelAccessTerminal === null) {
+      return { ok: false, error: "Bundled Pi CLI is unavailable" };
+    }
+    return {
+      ok: true,
+      scope: {
+        projectId: project.id,
+        ticketId: null,
+        harnessId: DEFAULT_HARNESS_ID,
+        launchKind: "shell",
+        placement,
+        cwd: project.path,
+        env: { ...projectSessionEnv(project.path), ...modelAccessTerminal.env },
+        title: "Model Access",
+        artifactsRoot: project.path,
+        launchCommand: modelAccessTerminal.command,
+        worktree: null,
+        resume: null,
+      },
+    };
+  }
   const sessionCount = await sessionEngine.countSessions({
     projectId: request.workspaceId,
     scope: "scratch",

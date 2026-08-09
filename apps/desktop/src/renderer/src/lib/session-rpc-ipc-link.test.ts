@@ -9,7 +9,42 @@ import {
   createSessionRpcClient,
   sessionRpcClient,
   type SessionRpcBridge,
+  type SessionRpcClient,
 } from "./session-rpc-ipc-link";
+
+function assertPresentationClient(client: SessionRpcClient): void {
+  void client.session.command.mutate({
+    commandId: "command-attach",
+    sessionId: "session-1",
+    command: {
+      // @ts-expect-error Product renderer commands never name adapters or profiles.
+      kind: "adapter.attach",
+      adapterId: "pi",
+      profileId: "native",
+      continuity: "fresh",
+    },
+  });
+  void client.session.projection.query({ sessionId: "session-1" }).then(({ projection }) => {
+    // @ts-expect-error The presentation projection has no adapter-shaped attachment inventory.
+    return projection.attachments;
+  });
+  client.session.subscribe.subscribe(
+    { sessionId: "session-1" },
+    {
+      onData: ({ data }) => {
+        if ("sequence" in data && data.event.payload.kind === "attachment.opened") {
+          // @ts-expect-error Streamed presentation frames omit executor identity.
+          void data.event.payload.attachment.adapterId;
+        }
+        if ("sequence" in data && data.event.payload.kind === "capabilities.updated") {
+          // @ts-expect-error Streamed presentation frames omit executor profile identity.
+          void data.event.payload.snapshot.profileId;
+        }
+      },
+    },
+  );
+}
+void assertPresentationClient;
 
 interface FakeBridge extends SessionRpcBridge {
   readonly requests: SessionRpcIpcRequest[];
@@ -91,18 +126,18 @@ describe("query and mutation", () => {
   it("routes a mutation the same way", async () => {
     const bridge = fakeBridge();
     const client = createSessionRpcClient(bridge);
-    const preferences = {
-      version: 1 as const,
-      enabledModels: [],
-      defaults: { providerId: "", modelId: "", variant: "", agent: "" },
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "high" as const,
     };
 
-    const answer = client.runtimeCatalog.save.mutate({ adapterId: "opencode", preferences });
+    const answer = client.modelAccess.setDefault.mutate(selection);
     await flush();
-    expect(bridge.requests[0]?.procedure).toBe("runtimeCatalog.save");
+    expect(bridge.requests[0]?.procedure).toBe("modelAccess.setDefault");
 
-    bridge.reply({ ok: true, data: preferences });
-    await expect(answer).resolves.toEqual(preferences);
+    bridge.reply({ ok: true, data: selection });
+    await expect(answer).resolves.toEqual(selection);
   });
 
   // The bridge flattens a router failure into `{ code, message }`, and a caller
@@ -112,13 +147,13 @@ describe("query and mutation", () => {
     const bridge = fakeBridge();
     const client = createSessionRpcClient(bridge);
 
-    const answer = client.runtimeCatalog.resolve.query({ adapterId: "opencode" });
+    const answer = client.modelAccess.defaultSelection.query();
     await flush();
-    bridge.reply({ ok: false, error: { code: "NOT_FOUND", message: "Unknown project" } });
+    bridge.reply({ ok: false, error: { code: "NOT_FOUND", message: "Unknown model" } });
 
     await expect(answer).rejects.toMatchObject({
-      message: "Unknown project",
-      data: { code: "NOT_FOUND", httpStatus: 404, path: "runtimeCatalog.resolve" },
+      message: "Unknown model",
+      data: { code: "NOT_FOUND", httpStatus: 404, path: "modelAccess.defaultSelection" },
     });
   });
 

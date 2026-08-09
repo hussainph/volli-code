@@ -1,4 +1,4 @@
-import type { SessionProjection } from "@volli/shared";
+import type { CommandReceipt, SessionProjection, SessionStartResult } from "@volli/shared";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -15,10 +15,28 @@ import { createChatSessionsStore } from "./chat-sessions";
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 const SESSION = { id: "durable-1", projectId: "p1", ticketId: "t1", title: "VC-1", createdAt: 0 };
-const ACCEPTED = { sessionId: SESSION.id, receipt: { status: "accepted" } };
+const ACCEPTED_RECEIPT: CommandReceipt = {
+  id: "receipt-accepted",
+  commandId: "command-accepted",
+  status: "accepted",
+  acceptedAt: 0,
+  result: { kind: "session.signaled", sessionId: SESSION.id },
+  recordedAt: 0,
+  sequence: 1,
+};
+const REJECTED_RECEIPT: CommandReceipt = {
+  id: "receipt-rejected",
+  commandId: "command-rejected",
+  status: "rejected",
+  code: "adapter_unavailable",
+  detail: "OpenCode is unavailable",
+  recordedAt: 0,
+  sequence: 1,
+};
+const ACCEPTED = { sessionId: SESSION.id, receipt: ACCEPTED_RECEIPT };
 const REFUSED = {
   sessionId: SESSION.id,
-  receipt: { status: "rejected", code: "adapter_unavailable", detail: "OpenCode is unavailable" },
+  receipt: REJECTED_RECEIPT,
 };
 
 const projection: SessionProjection = {
@@ -33,6 +51,7 @@ const projection: SessionProjection = {
   capabilities: [],
   interactions: { active: [], resolved: [] },
   signal: null,
+  modelSelection: null,
   turnActive: false,
   lastActivityAt: SESSION.createdAt,
   bornTicketless: SESSION.ticketId === null,
@@ -40,14 +59,19 @@ const projection: SessionProjection = {
 
 interface CommandAnswer {
   sessionId: string;
-  receipt?: unknown;
+  receipt?: CommandReceipt | null;
 }
+
+type StartAnswer = SessionStartResult;
 
 function fakeTransport() {
   const commands: ChatCommandRequest[] = [];
+  const ticketStarts: unknown[] = [];
+  const projectStarts: unknown[] = [];
   const subscriptions: ChatStreamCursor[] = [];
   const state = {
     answer: (() => ACCEPTED) as (request: ChatCommandRequest) => CommandAnswer,
+    startAnswer: (() => ({ ...ACCEPTED, state: "ready", throughSequence: 2 })) as () => StartAnswer,
     snapshotError: null as Error | null,
   };
   const rpc: ChatSessionRpc = {
@@ -80,8 +104,19 @@ function fakeTransport() {
     rpc,
     scheduler: { schedule: () => () => undefined },
     newCommandId: () => `cmd-${++ids}`,
+    startSession: async (input) => {
+      if (input.ticketId === null) {
+        projectStarts.push({
+          operationId: input.operationId,
+          projectId: input.projectId,
+          title: input.title,
+        });
+      } else ticketStarts.push(input);
+      return state.startAnswer();
+    },
+    attachSession: async () => ({ ...ACCEPTED, state: "ready", throughSequence: 2 }),
   };
-  return { commands, subscriptions, state, transport };
+  return { commands, projectStarts, subscriptions, state, ticketStarts, transport };
 }
 
 function fixture() {
@@ -104,8 +139,8 @@ afterEach(() => {
 });
 
 describe("createChatSession", () => {
-  it("persists the intent, seeds the slice and attaches the default executor", async () => {
-    const { commands, store, subscriptions } = fixture();
+  it("starts a Ticket Session through the product route without runtime identity", async () => {
+    const { commands, store, subscriptions, ticketStarts } = fixture();
 
     const sessionId = await store.getState().createChatSession({
       projectId: "p1",
@@ -114,16 +149,15 @@ describe("createChatSession", () => {
     });
 
     expect(sessionId).toBe(SESSION.id);
-    expect(commands.map((request) => request.command)).toEqual([
-      { kind: "session.create", projectId: "p1", ticketId: "t1", title: "VC-1 · parser" },
+    expect(ticketStarts).toEqual([
       {
-        kind: "adapter.attach",
-        adapterId: "opencode",
-        profileId: "native",
-        continuity: "fresh",
+        operationId: "cmd-1",
+        projectId: "p1",
+        ticketId: "t1",
+        title: "VC-1 · parser",
       },
     ]);
-    expect(commands[0]!.sessionId).toBeUndefined();
+    expect(commands).toEqual([]);
     expect(subscriptions).toHaveLength(1);
     expect(store.getState().sessions[SESSION.id]).toMatchObject({
       lifecycle: "ready",
@@ -134,24 +168,24 @@ describe("createChatSession", () => {
     expect(getChatClient(SESSION.id)).toBeDefined();
   });
 
-  it("attaches the executor it was given rather than the default", async () => {
-    const { commands, store } = fixture();
+  it("keeps ticketless compatibility behind the private project route", async () => {
+    const { commands, projectStarts, store } = fixture();
 
     await store.getState().createChatSession({
       projectId: "p1",
       ticketId: null,
       title: null,
-      executor: { adapterId: "claude-code", profileId: "acp" },
     });
 
-    expect(commands[1]!.command).toMatchObject({ adapterId: "claude-code", profileId: "acp" });
+    expect(projectStarts).toEqual([{ operationId: "cmd-1", projectId: "p1", title: null }]);
+    expect(commands).toEqual([]);
   });
 
   it("keeps the durable Session when the attach is refused", async () => {
     // A refused attach does not un-create the Session: the id comes back so the
     // retry addresses it, and the error sits on the Session it belongs to.
     const { state, store } = fixture();
-    state.answer = (request) => (request.command.kind === "adapter.attach" ? REFUSED : ACCEPTED);
+    state.startAnswer = () => ({ ...REFUSED, state: "needs-recovery", throughSequence: 2 });
 
     const sessionId = await store.getState().createChatSession({
       projectId: "p1",
@@ -162,13 +196,46 @@ describe("createChatSession", () => {
     expect(sessionId).toBe(SESSION.id);
     expect(store.getState().sessions[SESSION.id]).toMatchObject({
       lifecycle: "error",
-      sessionError: "Could not start OpenCode: OpenCode is unavailable",
+      sessionError: "Could not start Session: OpenCode is unavailable",
+    });
+  });
+
+  it("uses a product recovery message when a ticketless attach has no receipt", async () => {
+    const { state, store } = fixture();
+    state.startAnswer = () => ({
+      sessionId: SESSION.id,
+      state: "needs-recovery",
+      receipt: null,
+      throughSequence: 2,
+    });
+
+    await store.getState().createChatSession({ projectId: "p1", ticketId: null, title: null });
+
+    expect(store.getState().sessions[SESSION.id]?.sessionError).toBe(
+      "Could not start Session: Runtime recovery is required.",
+    );
+  });
+
+  it("lets durable Ticket Attention explain a refused attach without masking recovery", async () => {
+    const { state, store } = fixture();
+    state.startAnswer = () => ({ ...REFUSED, state: "needs-recovery", throughSequence: 2 });
+
+    const sessionId = await store.getState().createChatSession({
+      projectId: "p1",
+      ticketId: "ticket-1",
+      title: null,
+    });
+
+    expect(sessionId).toBe(SESSION.id);
+    expect(store.getState().sessions[SESSION.id]).toMatchObject({
+      lifecycle: "ready",
+      sessionError: null,
     });
   });
 
   it("has no Session to keep when the create itself never answered", async () => {
     const { state, store } = fixture();
-    state.answer = () => {
+    state.startAnswer = () => {
       throw new Error("socket hang up");
     };
 
@@ -178,7 +245,7 @@ describe("createChatSession", () => {
 
     expect(store.getState().sessions).toEqual({});
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
-      "Could not start OpenCode: socket hang up",
+      "Could not start Session: socket hang up",
       expect.anything(),
     );
   });
@@ -205,15 +272,6 @@ describe("adoptChatSession", () => {
 
     expect(store.getState().sessions["durable-9"]).toBe(first);
     expect(subscriptions).toHaveLength(0);
-  });
-
-  it("remembers a non-default executor for the retry that may follow", async () => {
-    const { commands, store } = fixture();
-
-    store.getState().adoptChatSession("durable-9", { adapterId: "codex", profileId: "acp" });
-    await getChatClient("durable-9")!.attach();
-
-    expect(commands[0]!.command).toMatchObject({ adapterId: "codex", profileId: "acp" });
   });
 });
 
@@ -247,12 +305,6 @@ describe("writes addressed to a Session that is gone", () => {
     store.getState().attaching("ghost");
     store.getState().delivered("ghost");
     store.getState().settle("ghost", "gone");
-    store.getState().setSelection("ghost", {
-      providerId: "p",
-      modelId: "m",
-      variant: "",
-      agent: "",
-    });
     store.getState().enqueue("ghost", { id: "q1", text: "hello" });
     store.getState().dequeue("ghost", "q1");
     store.getState().retitle("ghost", "Parser");
@@ -365,19 +417,7 @@ describe("the slice", () => {
     const { store, slice } = seeded();
     store.getState().setProjection("durable-9", {
       ...projection,
-      liveExecutor: {
-        id: "attach-1",
-        sessionId: SESSION.id,
-        adapterId: "opencode",
-        venue: { id: "local", kind: "local" },
-        continuity: "fresh",
-        native: null,
-        status: "open",
-        openedAt: 0,
-        closedAt: null,
-        outcome: null,
-        failure: null,
-      },
+      liveExecutor: { id: "attach-1" },
     });
     store.getState().applyStream(
       "durable-9",
@@ -404,15 +444,6 @@ describe("the slice", () => {
     store.getState().delivered("durable-9");
 
     expect(slice()).toMatchObject({ lifecycle: "working", sessionError: null });
-  });
-
-  it("keeps a selection the composer picked", () => {
-    const { store, slice } = seeded();
-    const selection = { providerId: "anthropic", modelId: "claude", variant: "", agent: "build" };
-
-    store.getState().setSelection("durable-9", selection);
-
-    expect(slice().selection).toBe(selection);
   });
 });
 

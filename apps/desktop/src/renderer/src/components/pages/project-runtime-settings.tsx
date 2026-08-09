@@ -5,10 +5,8 @@ import { activeHarness } from "@renderer/components/pages/harness-catalog";
 import {
   HarnessIdentitySection,
   HarnessSelector,
-  MODEL_CATALOG_HARNESS_ID,
   useHarnessListings,
 } from "@renderer/components/pages/harness-picker";
-import { RuntimeCatalogSettings } from "@renderer/components/pages/runtime-catalog-settings";
 
 /**
  * Configure → Runtime: which models one project's chat picks from.
@@ -34,6 +32,7 @@ export function ProjectRuntimeSettings({ project }: { project: Project }) {
   const listings = useHarnessListings();
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const active = activeHarness(listings, selectedId);
+  React.useEffect(() => setSelectedId(null), [project.id]);
 
   return (
     <div className="flex flex-col gap-3">
@@ -41,9 +40,6 @@ export function ProjectRuntimeSettings({ project }: { project: Project }) {
       {active ? (
         <div className="flex flex-col gap-6">
           <HarnessIdentitySection listing={active} />
-          {active.id === MODEL_CATALOG_HARNESS_ID ? (
-            <RuntimeCatalogSettings key={project.id} adapterId={active.id} projectId={project.id} />
-          ) : null}
         </div>
       ) : null}
     </div>

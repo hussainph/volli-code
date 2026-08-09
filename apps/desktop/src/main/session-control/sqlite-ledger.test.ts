@@ -152,6 +152,78 @@ describe("SqliteSessionLedger", () => {
     ]);
   });
 
+  it("round-trips durable model selection through SQLite", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-model-selection",
+      projectId,
+      ticketId: null,
+      title: "Model selection",
+      provenance,
+    });
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "high" as const,
+    };
+
+    await control.submit({
+      commandId: "select-model",
+      sessionId: created.session.id,
+      intent: { kind: "model.select", selection },
+      provenance,
+    });
+
+    const projection = await control.getSession({ sessionId: created.session.id });
+    expect(projection?.modelSelection).toEqual(selection);
+    expect(projection?.commands.map((command) => command.intent.kind)).toEqual([
+      "session.create",
+      "model.select",
+    ]);
+    expect(
+      projection?.receipts.some(
+        (receipt) => receipt.status === "completed" && receipt.result.kind === "model.selected",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects an unsupported persisted model reasoning level", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-invalid-model-selection",
+      projectId,
+      ticketId: null,
+      title: "Invalid model selection",
+      provenance,
+    });
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "high" as const,
+    };
+    await control.submit({
+      commandId: "select-invalid-model",
+      sessionId: created.session.id,
+      intent: { kind: "model.select", selection },
+      provenance,
+    });
+    const selected = (await control.listEvents({ sessionId: created.session.id })).find(
+      (event) => event.payload.kind === "model.selected",
+    );
+    expect(selected).toBeDefined();
+    ctx.db.prepare("UPDATE session_events SET payload = ? WHERE id = ?").run(
+      JSON.stringify({
+        kind: "model.selected",
+        selection: { ...selection, reasoningLevel: "extreme" },
+      }),
+      selected!.id,
+    );
+
+    await expect(control.getSession({ sessionId: created.session.id })).rejects.toThrow(
+      "payload.selection.reasoningLevel has an unsupported value",
+    );
+  });
+
   it("round-trips an explicit executor retry command and receipt", async () => {
     const { ledger, control, projectId } = setup();
     const created = await control.createSession({

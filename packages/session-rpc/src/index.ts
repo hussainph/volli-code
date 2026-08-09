@@ -2,18 +2,76 @@ import { initTRPC, TRPCError, tracked } from "@trpc/server";
 import {
   isSessionStreamOverlay,
   MAX_RUNTIME_PREFERENCE_MODELS,
+  REASONING_LEVELS,
+  type ModelAccessSnapshot,
   type RuntimeCatalog,
   type SessionClientCommand,
   type SessionRuntime,
+  type SessionRuntimeCommandResult,
   type SessionRuntimeCommandRequest,
   type SessionRuntimeProjectionSnapshot,
   type SessionRuntimeSnapshot,
+  type SessionPresentationProjection,
   type SessionStreamEmission,
   type SessionStreamFrame,
+  type SessionStartResult,
 } from "@volli/session-engine";
 import { z } from "zod";
 
 type RpcUiMessage = Extract<SessionClientCommand, { kind: "message.submit" }>["message"];
+type RpcModelSelection = Extract<SessionClientCommand, { kind: "model.select" }>["selection"];
+
+export type RendererSessionCommand =
+  | Pick<Extract<SessionClientCommand, { kind: "message.submit" }>, "kind" | "message" | "delivery">
+  | Extract<
+      SessionClientCommand,
+      | { kind: "model.select" }
+      | { kind: "executor.interrupt" }
+      | { kind: "executor.retry" }
+      | { kind: "interaction.resolve" }
+    >;
+
+export interface RendererSessionCommandRequest {
+  commandId: string;
+  sessionId: string;
+  command: RendererSessionCommand;
+}
+
+export type RendererSessionCommandResult = Pick<
+  SessionRuntimeCommandResult,
+  "sessionId" | "receipt" | "throughSequence"
+>;
+
+type RendererSafeValue<Value> = Value extends readonly (infer Item)[]
+  ? readonly RendererSafeValue<Item>[]
+  : Value extends object
+    ? {
+        [Key in keyof Value as Key extends "adapterId" | "profileId"
+          ? never
+          : Key]: RendererSafeValue<Value[Key]>;
+      }
+    : Value;
+
+/** A streamed Session emission with executor routing identity removed. */
+export type RendererSessionStreamEmission = RendererSafeValue<SessionStreamEmission>;
+
+export interface TicketSessionStartInput {
+  operationId: string;
+  projectId: string;
+  ticketId: string;
+  title: string | null;
+}
+
+export interface SessionAttachInput {
+  operationId: string;
+  sessionId: string;
+}
+
+export interface ProjectSessionStartInput {
+  operationId: string;
+  projectId: string;
+  title: string | null;
+}
 
 /**
  * The server-side composition root supplies this context. It deliberately
@@ -21,6 +79,13 @@ type RpcUiMessage = Extract<SessionClientCommand, { kind: "message.submit" }>["m
  */
 export interface SessionRouterContext {
   runtime: SessionRuntime;
+  inspectModelAccess?: (input: { refresh?: boolean }) => Promise<ModelAccessSnapshot>;
+  readDefaultModelSelection?: () => RpcModelSelection | null;
+  writeDefaultModelSelection?: (selection: RpcModelSelection) => void | Promise<void>;
+  startTicketSession?: (input: TicketSessionStartInput) => Promise<SessionStartResult>;
+  attachTicketSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
+  startProjectSession?: (input: ProjectSessionStartInput) => Promise<SessionStartResult>;
+  attachProjectSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
   resolveRuntimeCatalog?: (projectId?: string) => RuntimeCatalog | Promise<RuntimeCatalog>;
   diagnostics: RpcDiagnosticLog;
   transport?: "electron-ipc" | "lab-http" | "unknown";
@@ -176,6 +241,34 @@ const sseCursor = z
 const nullableString = z.string().nullable();
 const uiMessageSchema = z.custom<RpcUiMessage>(isUiMessage, "Expected an AI SDK UIMessage");
 const runtimeModelRefSchema = z.object({ providerId: nonEmptyString, modelId: nonEmptyString });
+const modelSelectionSchema = z.object({
+  providerId: nonEmptyString,
+  modelId: nonEmptyString,
+  reasoningLevel: z.enum(REASONING_LEVELS),
+});
+const modelAccessStateSchema = z.enum(["available", "authentication-required", "unavailable"]);
+const modelAccessSnapshotSchema = z.object({
+  observedAt: z.number().finite(),
+  providers: z.array(
+    z.object({
+      id: nonEmptyString,
+      label: nonEmptyString,
+      state: modelAccessStateSchema,
+      accountLabel: nullableString,
+      billingSource: z.enum(["subscription", "api-key", "gateway", "local", "ambient", "unknown"]),
+      recovery: z.union([z.object({ kind: z.enum(["external-sign-in", "retry"]) }), z.null()]),
+    }),
+  ),
+  models: z.array(
+    z.object({
+      providerId: nonEmptyString,
+      modelId: nonEmptyString,
+      label: nonEmptyString,
+      state: modelAccessStateSchema,
+      reasoningLevels: z.array(z.enum(REASONING_LEVELS)),
+    }),
+  ),
+});
 const runtimeSelectionSchema = z.object({
   providerId: z.string().max(MAX_IDENTIFIER_LENGTH),
   modelId: z.string().max(MAX_IDENTIFIER_LENGTH),
@@ -233,6 +326,10 @@ const commandSchema = z.discriminatedUnion("kind", [
     model: z.object({ providerId: nonEmptyString, modelId: nonEmptyString }).nullable().optional(),
     agent: nullableString.optional(),
     variant: nullableString.optional(),
+  }),
+  z.object({
+    kind: z.literal("model.select"),
+    selection: modelSelectionSchema,
   }),
   z.object({ kind: z.literal("executor.interrupt"), attachmentId: nonEmptyString.optional() }),
   z.object({ kind: z.literal("executor.retry"), attachmentId: nonEmptyString.optional() }),
@@ -334,6 +431,81 @@ const instrumentedProcedure = t.procedure.use(async ({ ctx, path, next }) => {
 /** Creates the reusable Session API used by both Electron IPC and Lab HTTP/SSE adapters. */
 export function createSessionRouter() {
   return t.router({
+    ticketSessions: t.router({
+      start: instrumentedProcedure
+        .input(
+          z.object({
+            operationId: nonEmptyString,
+            projectId: nonEmptyString,
+            ticketId: nonEmptyString,
+            title: nullableString,
+          }),
+        )
+        .mutation(async ({ ctx, input }) => {
+          if (!ctx.startTicketSession) {
+            unavailable("Ticket Sessions are unavailable on this transport");
+          }
+          return ctx.startTicketSession(input);
+        }),
+      attach: instrumentedProcedure
+        .input(z.object({ operationId: nonEmptyString, sessionId: nonEmptyString }))
+        .mutation(async ({ ctx, input }) => {
+          if (!ctx.attachTicketSession) {
+            unavailable("Ticket Sessions are unavailable on this transport");
+          }
+          return ctx.attachTicketSession(input);
+        }),
+    }),
+    projectSessions: t.router({
+      start: instrumentedProcedure
+        .input(
+          z.object({
+            operationId: nonEmptyString,
+            projectId: nonEmptyString,
+            title: nullableString,
+          }),
+        )
+        .mutation(async ({ ctx, input }) => {
+          if (!ctx.startProjectSession) {
+            unavailable("Project Sessions are unavailable on this transport");
+          }
+          return ctx.startProjectSession(input);
+        }),
+      attach: instrumentedProcedure
+        .input(z.object({ operationId: nonEmptyString, sessionId: nonEmptyString }))
+        .mutation(async ({ ctx, input }) => {
+          if (!ctx.attachProjectSession) {
+            unavailable("Project Sessions are unavailable on this transport");
+          }
+          return ctx.attachProjectSession(input);
+        }),
+    }),
+    modelAccess: t.router({
+      inspect: instrumentedProcedure
+        .input(z.object({ refresh: z.boolean().optional() }))
+        .query(async ({ ctx, input }) => {
+          if (!ctx.inspectModelAccess) {
+            unavailable("Model Access is unavailable on this transport");
+          }
+          return modelAccessSnapshotSchema.parse(await ctx.inspectModelAccess(input));
+        }),
+      defaultSelection: instrumentedProcedure.query(({ ctx }) => {
+        if (!ctx.readDefaultModelSelection) {
+          unavailable("Model Access preferences are unavailable on this transport");
+        }
+        const selection = ctx.readDefaultModelSelection();
+        return selection === null ? null : modelSelectionSchema.parse(selection);
+      }),
+      setDefault: instrumentedProcedure
+        .input(modelSelectionSchema)
+        .mutation(async ({ ctx, input }) => {
+          if (!ctx.writeDefaultModelSelection) {
+            unavailable("Model Access preferences are unavailable on this transport");
+          }
+          await ctx.writeDefaultModelSelection(input);
+          return input;
+        }),
+    }),
     /**
      * `projectId` says WHICH PROJECT is asking, and it decides two separate
      * things at once. It picks the catalog INSTANCE — the host keeps one per
@@ -473,7 +645,20 @@ export function createSessionRouter() {
         }),
       command: instrumentedProcedure
         .input(commandRequestSchema)
-        .mutation(({ ctx, input }) => ctx.runtime.command(toSessionRuntimeCommandRequest(input))),
+        .mutation(async ({ ctx, input }) => {
+          if (
+            ctx.transport === "electron-ipc" &&
+            (input.command.kind === "session.create" || input.command.kind === "adapter.attach")
+          ) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "Use the product Session start and recovery routes.",
+            });
+          }
+          return rendererCommandResult(
+            await ctx.runtime.command(toSessionRuntimeCommandRequest(input)),
+          );
+        }),
       // A pending interaction the user walked away from. The reason is fixed
       // here rather than taken as input: this transport is the user seam, and
       // the only thing it can honestly report is that they left it undecided.
@@ -549,77 +734,192 @@ export function createSessionRouter() {
 function rendererCapabilitySnapshot(
   snapshot: SessionRuntimeSnapshot["projection"]["capabilities"][number],
 ): SessionRuntimeSnapshot["projection"]["capabilities"][number] {
-  return { ...snapshot, catalog: [] };
+  const { adapterId: _adapterId, profileId: _profileId, ...presentation } = snapshot;
+  return {
+    ...presentation,
+    catalog: [],
+  } as unknown as SessionRuntimeSnapshot["projection"]["capabilities"][number];
 }
 
-/** Recovery locators stay in the server runtime; the renderer only needs attachment identity/state. */
+/** Runtime identity and recovery locators stay behind the product edge. */
 function rendererAttachment<
   Attachment extends {
+    adapterId: string;
     native: SessionRuntimeSnapshot["projection"]["attachments"][number]["native"];
   },
 >(attachment: Attachment): Attachment {
-  return attachment.native === null ? attachment : { ...attachment, native: null };
+  const { adapterId: _adapterId, native: _native, ...presentation } = attachment;
+  return presentation as Attachment;
+}
+
+function rendererCommand(
+  command: SessionRuntimeSnapshot["projection"]["commands"][number],
+): SessionRuntimeSnapshot["projection"]["commands"][number] {
+  const intent =
+    command.intent.kind === "executor.start"
+      ? (({ adapterId: _adapterId, ...presentation }) => presentation)(command.intent)
+      : command.intent;
+  const route = command.route === null ? null : { attachmentId: command.route.attachmentId };
+  return {
+    ...command,
+    intent,
+    route,
+  } as SessionRuntimeSnapshot["projection"]["commands"][number];
+}
+
+function rendererCommandResult(result: SessionRuntimeCommandResult): RendererSessionCommandResult {
+  return {
+    sessionId: result.sessionId,
+    receipt: result.receipt,
+    throughSequence: result.throughSequence,
+  };
+}
+
+function rendererInteraction<
+  Interaction extends {
+    native: SessionRuntimeSnapshot["projection"]["interactions"]["active"][number]["native"];
+  },
+>(interaction: Interaction): Interaction {
+  return { ...interaction, native: { id: null, detail: null } };
+}
+
+function rendererAttention<
+  Attention extends {
+    diagnostic: SessionRuntimeSnapshot["projection"]["attention"]["active"][number]["diagnostic"];
+  },
+>(attention: Attention): Attention {
+  return { ...attention, diagnostic: null };
 }
 
 function rendererFrame(frame: SessionStreamFrame): SessionStreamFrame {
   const payload = frame.event.payload;
+  const safeFrame: SessionStreamFrame = {
+    ...frame,
+    event: {
+      ...frame.event,
+      provenance: {
+        ...frame.event.provenance,
+        source:
+          frame.event.provenance.source.kind === "adapter"
+            ? { kind: "system", id: "session-runtime", detail: null }
+            : frame.event.provenance.source,
+      },
+    },
+  };
   switch (payload.kind) {
+    case "command.recorded":
+      return {
+        ...safeFrame,
+        event: {
+          ...safeFrame.event,
+          payload: { ...payload, command: rendererCommand(payload.command) },
+        },
+      };
     case "attachment.opened":
     case "attachment.failed":
       return {
-        ...frame,
+        ...safeFrame,
         event: {
-          ...frame.event,
-          payload: { ...payload, attachment: rendererAttachment(payload.attachment) },
+          ...safeFrame.event,
+          payload:
+            payload.kind === "attachment.failed"
+              ? {
+                  ...payload,
+                  attachment: rendererAttachment(payload.attachment),
+                  failure: { ...payload.failure, diagnostic: null },
+                }
+              : { ...payload, attachment: rendererAttachment(payload.attachment) },
         },
       };
     case "attachment.native_referenced":
       return {
-        ...frame,
+        ...safeFrame,
         event: {
-          ...frame.event,
+          ...safeFrame.event,
           payload: { ...payload, native: { id: null, detail: null } },
+        },
+      };
+    case "attention.raised":
+      return {
+        ...safeFrame,
+        event: {
+          ...safeFrame.event,
+          payload: { ...payload, attention: rendererAttention(payload.attention) },
         },
       };
     case "capabilities.updated":
       return {
-        ...frame,
+        ...safeFrame,
         event: {
-          ...frame.event,
+          ...safeFrame.event,
           payload: {
             kind: "capabilities.updated",
             snapshot: rendererCapabilitySnapshot(payload.snapshot),
           },
         },
       };
+    case "interaction.opened":
+      return {
+        ...safeFrame,
+        event: {
+          ...safeFrame.event,
+          payload: { ...payload, interaction: rendererInteraction(payload.interaction) },
+        },
+      };
+    case "adapter.observed":
+      return {
+        ...safeFrame,
+        event: { ...safeFrame.event, payload: { ...payload, native: null } },
+      };
     default:
-      return frame;
+      return safeFrame;
   }
 }
 
-function rendererProjection(
-  snapshot: SessionRuntimeProjectionSnapshot,
-): SessionRuntimeProjectionSnapshot {
-  const attachments = snapshot.projection.attachments;
-  const liveExecutor = snapshot.projection.liveExecutor;
+function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
+  projection: SessionPresentationProjection;
+  throughSequence: number;
+} {
+  const source = snapshot.projection;
+  const projection: Partial<SessionPresentationProjection> = {};
+  if (source.session !== undefined) projection.session = source.session;
+  if (source.status !== undefined) projection.status = source.status;
+  if (source.attention !== undefined) {
+    projection.attention = {
+      active: source.attention.active.map(rendererAttention),
+      primary:
+        source.attention.primary === null ? null : rendererAttention(source.attention.primary),
+    };
+  }
+  if (source.interactions !== undefined) {
+    projection.interactions = {
+      active: source.interactions.active.map(rendererInteraction),
+      resolved: source.interactions.resolved.map((entry) => ({
+        ...entry,
+        interaction: rendererInteraction(entry.interaction),
+      })),
+    };
+  }
+  if (source.signal !== undefined) projection.signal = source.signal;
+  if (source.modelSelection !== undefined) projection.modelSelection = source.modelSelection;
+  if (source.turnActive !== undefined) projection.turnActive = source.turnActive;
+  if (source.lastActivityAt !== undefined) projection.lastActivityAt = source.lastActivityAt;
+  if (source.bornTicketless !== undefined) projection.bornTicketless = source.bornTicketless;
+  if (source.liveExecutor !== undefined) {
+    projection.liveExecutor = source.liveExecutor === null ? null : { id: source.liveExecutor.id };
+  }
   return {
-    projection: {
-      ...snapshot.projection,
-      ...(Array.isArray(attachments) ? { attachments: attachments.map(rendererAttachment) } : {}),
-      ...(liveExecutor === undefined
-        ? {}
-        : {
-            liveExecutor: liveExecutor === null ? null : rendererAttachment(liveExecutor),
-          }),
-      capabilities: snapshot.projection.capabilities.map(rendererCapabilitySnapshot),
-    },
+    projection: projection as SessionPresentationProjection,
     throughSequence: snapshot.throughSequence,
   };
 }
 
-function rendererSnapshot(snapshot: SessionRuntimeSnapshot): SessionRuntimeSnapshot {
+function rendererSnapshot(snapshot: SessionRuntimeSnapshot): {
+  projection: SessionPresentationProjection;
+  frames: SessionStreamFrame[];
+  throughSequence: number;
+} {
   return {
-    ...snapshot,
     ...rendererProjection(snapshot),
     frames: snapshot.frames.map(rendererFrame),
   };
@@ -640,6 +940,10 @@ async function requireRuntimeCatalog(
       message: error instanceof Error ? error.message : String(error),
     });
   }
+}
+
+function unavailable(message: string): never {
+  throw new TRPCError({ code: "NOT_IMPLEMENTED", message });
 }
 
 export type AppRouter = ReturnType<typeof createSessionRouter>;

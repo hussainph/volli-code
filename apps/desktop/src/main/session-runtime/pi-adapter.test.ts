@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import type {
+  ModelSelectionOutcome,
   AgentRuntime,
   DeliveryOutcome,
   RuntimeAttachmentHandle,
@@ -14,11 +15,12 @@ import type {
   ObservationSink,
 } from "@volli/session-engine";
 import { NativeAttachmentError } from "@volli/session-engine";
-import { ACTIVITY_METADATA_KEY } from "@volli/shared";
+import { ACTIVITY_METADATA_KEY, type ModelAccessSnapshot } from "@volli/shared";
 import type { UIMessage } from "ai";
 
 import {
   createPiNativeAdapter,
+  createPiRuntimeHost,
   piRootThreadId,
   PI_ADAPTER_ID,
   PI_MODEL,
@@ -34,6 +36,11 @@ const context: PiTicketContext = {
   ticketId: "ticket-1",
   rootThreadId: piRootThreadId(SESSION_ID),
   brief: "VC-12: Host the Pi runtime",
+  model: {
+    providerId: "openai-codex",
+    modelId: "gpt-5.6-sol",
+    reasoningLevel: "high",
+  },
 };
 
 function attachmentSpec(overrides: Partial<NativeAttachmentSpec> = {}): NativeAttachmentSpec {
@@ -83,6 +90,7 @@ class RecordingSink implements ObservationSink {
 
 /** A runtime that records what it was asked to do and hands its observer back to the test. */
 class FakeRuntime implements AgentRuntime {
+  readonly modelAccessInputs: Array<{ refresh?: boolean; signal?: AbortSignal } | undefined> = [];
   readonly specs: TicketRuntimeSpec[] = [];
   readonly submissions: string[] = [];
   readonly deliveries: Array<Parameters<RuntimeAttachmentHandle["submitUserMessage"]>[1]> = [];
@@ -90,6 +98,9 @@ class FakeRuntime implements AgentRuntime {
     Parameters<RuntimeAttachmentHandle["submitUserMessage"]>[2]
   > = [];
   readonly outcomes: DeliveryOutcome[] = [];
+  readonly modelSelections: TicketRuntimeSpec["model"][] = [];
+  readonly modelSelectionOutcomes: ModelSelectionOutcome[] = [];
+  modelSelectionFailure: unknown = null;
   interrupts = 0;
   retries = 0;
   closes = 0;
@@ -106,6 +117,14 @@ class FakeRuntime implements AgentRuntime {
   };
   #observe: TicketRuntimeSpec["observer"] | null = null;
 
+  async inspectModelAccess(input?: {
+    refresh?: boolean;
+    signal?: AbortSignal;
+  }): Promise<ModelAccessSnapshot> {
+    this.modelAccessInputs.push(input);
+    return { observedAt: 0, providers: [], models: [] };
+  }
+
   async startTicketSession(spec: TicketRuntimeSpec): Promise<RuntimeAttachmentHandle> {
     this.specs.push(spec);
     this.#observe = spec.observer;
@@ -117,6 +136,11 @@ class FakeRuntime implements AgentRuntime {
         this.submissionCommandIds.push(commandId);
         if (this.submitFailure !== null) throw this.submitFailure;
         return this.outcomes.shift() ?? { kind: "delivered", delivery: "prompt" };
+      },
+      selectModel: async (selection): Promise<ModelSelectionOutcome> => {
+        this.modelSelections.push(selection);
+        if (this.modelSelectionFailure !== null) throw this.modelSelectionFailure;
+        return this.modelSelectionOutcomes.shift() ?? { kind: "selected" };
       },
       interrupt: async (): Promise<void> => {
         this.interrupts += 1;
@@ -190,6 +214,28 @@ describe("Pi native adapter manifest", () => {
   });
 });
 
+describe("Pi runtime host", () => {
+  it("owns Model Access and attachment through one runtime instance", async () => {
+    const runtime = new FakeRuntime();
+    let creations = 0;
+    const host = createPiRuntimeHost({
+      sessionDataDir: "/data/pi-sessions",
+      resolveTicketContext: async () => context,
+      createRuntime: () => {
+        creations += 1;
+        return runtime;
+      },
+    });
+
+    await host.inspectModelAccess({ refresh: true });
+    await host.adapter.attach(attachmentSpec(), new RecordingSink());
+
+    expect(creations).toBe(1);
+    expect(runtime.modelAccessInputs).toEqual([{ refresh: true }]);
+    expect(runtime.specs).toHaveLength(1);
+  });
+});
+
 describe("Pi native adapter probe", () => {
   it("reports the pinned runtime and the features the engine gates delivery on", async () => {
     const { adapter } = composition();
@@ -250,7 +296,7 @@ describe("Pi native adapter attach", () => {
     expect(spec.role).toBe("ticket");
     expect(spec.venue).toBe("local");
     expect(spec.worktreePath).toBe("/work/volli/.worktrees/VC-12");
-    expect(spec.model).toEqual(PI_MODEL);
+    expect(spec.model).toEqual(context.model);
     expect(spec.authority).toEqual({ mode: "auto" });
     expect(spec.tools).toEqual({ tools: ["read", "edit", "write", "execute"] });
     expect(spec.brief).toEqual({ text: "VC-12: Host the Pi runtime" });
@@ -285,11 +331,11 @@ describe("Pi native adapter attach", () => {
     expect(seen).toEqual([{ sessionDataDir: "/data/pi-sessions", models }]);
   });
 
-  it("fails a Session that has no ticket to brief the agent with", async () => {
+  it("fails a Session that lacks its Ticket runtime context", async () => {
     const { adapter, runtime } = composition({ resolveTicketContext: async () => null });
 
     await expect(adapter.attach(attachmentSpec(), new RecordingSink())).rejects.toThrow(
-      /no ticket to brief it with/,
+      /Ticket Session with a selected model and Runtime Brief/,
     );
     expect(runtime.specs).toHaveLength(0);
   });
@@ -1195,6 +1241,77 @@ describe("Pi native adapter dispatch", () => {
     // attachment able to take the next message.
     expect(runtime.spec.signal?.aborted).toBe(false);
     expect(runtime.closes).toBe(0);
+  });
+
+  it("applies a product model selection through the bound runtime handle", async () => {
+    const { binding, runtime } = await attached();
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "high" as const,
+    };
+
+    const receipt = await binding.dispatch({
+      kind: "model.select",
+      commandId: "command-model",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      selection,
+    });
+
+    expect(runtime.modelSelections).toEqual([selection]);
+    expect(receipt).toMatchObject({ commandId: "command-model", status: "accepted" });
+  });
+
+  it("sanitizes a runtime model-selection rejection", async () => {
+    const { binding, runtime } = await attached();
+    runtime.modelSelectionOutcomes.push({
+      kind: "rejected",
+      reason: "model-unavailable",
+      message: "The selected model is not currently available.",
+    });
+
+    const receipt = await binding.dispatch({
+      kind: "model.select",
+      commandId: "command-model-rejected",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      selection: {
+        providerId: "openai-codex",
+        modelId: "missing",
+        reasoningLevel: "off",
+      },
+    });
+
+    expect(receipt).toMatchObject({
+      status: "rejected",
+      code: "PI_MODEL_UNAVAILABLE",
+      detail: "The selected model is not currently available.",
+    });
+  });
+
+  it("does not persist secret-bearing model-selection exceptions", async () => {
+    const { binding, runtime } = await attached();
+    runtime.modelSelectionFailure = new Error("credential token sk-secret-model");
+
+    const receipt = await binding.dispatch({
+      kind: "model.select",
+      commandId: "command-model-failed",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      selection: {
+        providerId: "openai-codex",
+        modelId: "gpt-5.6-sol",
+        reasoningLevel: "high",
+      },
+    });
+
+    expect(receipt).toMatchObject({
+      status: "rejected",
+      code: "PI_MODEL_SELECTION_FAILED",
+      detail: "The model policy could not be applied. Retry.",
+    });
+    expect(JSON.stringify(receipt)).not.toContain("sk-secret-model");
   });
 
   it("retries the failed Pi run without resubmitting its user message", async () => {

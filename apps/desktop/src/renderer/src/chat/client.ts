@@ -21,9 +21,10 @@
 import type { SessionStreamOverlay } from "@volli/session-engine";
 import { errorMessage } from "@volli/shared";
 import type {
-  RuntimeSelection,
+  ModelSelection,
   SessionInteractionResolution,
-  SessionProjection,
+  SessionPresentationProjection,
+  SessionStartResult,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 
@@ -34,12 +35,7 @@ import {
   type ChatSessionFrame,
   type ChatTranscriptState,
 } from "@renderer/chat/transcript";
-import {
-  chatSessionFrame,
-  chatSessionOverlay,
-  rejectedReceipt,
-  startFailure,
-} from "@renderer/chat/wire";
+import { chatSessionFrame, chatSessionOverlay, rejectedReceipt } from "@renderer/chat/wire";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 
 /**
@@ -52,75 +48,15 @@ export type ChatSessionLifecycle = "starting" | "ready" | "working" | "error";
 
 export type ChatMessageDelivery = "queue" | "steer" | "replace";
 
-/** Which harness a Session attaches, and under which profile. */
-export interface ChatExecutorChoice {
-  adapterId: string;
-  profileId: string;
-}
-
-export const DEFAULT_CHAT_EXECUTOR: ChatExecutorChoice = {
-  adapterId: "opencode",
-  profileId: "native",
-};
-
-// Ticket Sessions attach the singular Pi-backed Agent Runtime; scratch/project
-// chats stay on the OpenCode default until their own migration slice.
-export const PI_TICKET_EXECUTOR: ChatExecutorChoice = {
-  adapterId: "pi",
-  profileId: "native",
-};
-
-/**
- * Whether this executor chooses its own model, leaving the Session none to make.
- *
- * Pi's adapter drops `command.model` outright and pins its own, so a model
- * selection is not a thing a Pi Session is waiting for — not to be typed into,
- * not to send, and not to draw a picker for. Naming that here rather than at
- * each surface keeps the composer's readiness and the picker's presence one
- * answer instead of two that can disagree.
- */
-export function pinsOwnModel(adapterId: string): boolean {
-  return adapterId === PI_TICKET_EXECUTOR.adapterId;
-}
-
-/**
- * Which executor a Session actually runs, across both ways a surface arrives at
- * one.
- *
- * The durable attachment is the truth and it is asked first: reopening a Session
- * adopts it without attaching anything, so the executor a *client* was
- * constructed with is a guess on that path — `adoptChatSession` is called
- * without one and would answer OpenCode for a Pi ticket chat. The newest
- * attachment is read rather than the live one because a Session between
- * attachments still has an executor; it just has no live binding right now.
- *
- * The client's own choice is the fallback, and it is the right one exactly
- * where it applies: a Session created a moment ago, whose attach is still in
- * flight, has no attachment record yet and is about to have that one.
- */
-export function sessionAdapterId(
-  slice: ChatSessionSlice | undefined,
-  fallback: ChatExecutorChoice,
-): string {
-  return slice?.projection?.attachments.at(-1)?.adapterId ?? fallback.adapterId;
-}
-
-export const EMPTY_CHAT_SELECTION: RuntimeSelection = {
-  providerId: "",
-  modelId: "",
-  variant: "",
-  agent: "",
-};
-
 /**
  * One Session's resident state.
  *
  * The runtime catalog is deliberately absent. Which models exist is a question
- * about a harness, asked and re-asked by whatever is on screen; only the answer
- * a person picked belongs to the Session, and that is `selection`.
+ * about the product runtime, asked and re-asked by whatever is on screen. The
+ * durable projection owns the Session's selected model.
  */
 export interface ChatSessionSlice {
-  projection: SessionProjection | null;
+  projection: SessionPresentationProjection | null;
   transcript: ChatTranscriptState;
   lifecycle: ChatSessionLifecycle;
   /**
@@ -130,7 +66,6 @@ export interface ChatSessionSlice {
    */
   sessionError: string | null;
   queue: readonly QueuedMessage[];
-  selection: RuntimeSelection;
 }
 
 /** A bound executor and a turn the stream has opened. */
@@ -154,7 +89,9 @@ export function isWorking(slice: ChatSessionSlice): boolean {
 export function isDeliverable(slice: ChatSessionSlice): boolean {
   const live = slice.projection?.liveExecutor ?? null;
   if (live === null) return false;
-  return pinsOwnModel(live.adapterId) || slice.selection.modelId.length > 0;
+  return slice.projection?.bornTicketless === true
+    ? true
+    : slice.projection?.modelSelection !== null;
 }
 
 /**
@@ -201,7 +138,7 @@ export interface ChatSessionWrites {
     frames: readonly ChatSessionFrame[],
     overlays: readonly SessionStreamOverlay[],
   ): void;
-  setProjection(sessionId: string, projection: SessionProjection): void;
+  setProjection(sessionId: string, projection: SessionPresentationProjection): void;
   /** An attachment attempt is in flight; nothing derives lifecycle until it lands. */
   attaching(sessionId: string): void;
   /** The harness took a message; the turn is live until the stream says otherwise. */
@@ -237,24 +174,19 @@ interface ChatStreamHandlers {
 }
 
 type ChatCommand =
-  | { kind: "session.create"; projectId: string; ticketId: string | null; title: string | null }
-  | { kind: "adapter.attach"; adapterId: string; profileId: string; continuity: "fresh" }
   | {
       kind: "message.submit";
       message: UIMessage;
       delivery: ChatMessageDelivery;
-      /** Null when the Session's executor pins its own — the edge rejects empty ids. */
-      model: { providerId: string; modelId: string } | null;
-      variant: string | null;
-      agent: string | null;
     }
+  | { kind: "model.select"; selection: ModelSelection }
   | { kind: "executor.interrupt"; attachmentId?: string }
   | { kind: "executor.retry"; attachmentId?: string }
   | { kind: "interaction.resolve"; interactionId: string; resolution: WireResolution };
 
 export interface ChatCommandRequest {
   commandId: string;
-  sessionId?: string;
+  sessionId: string;
   command: ChatCommand;
 }
 
@@ -269,13 +201,13 @@ export interface ChatSessionRpc {
   session: {
     snapshot: {
       query(input: { sessionId: string }): Promise<{
-        projection: SessionProjection;
+        projection: SessionPresentationProjection;
         frames: readonly unknown[];
         throughSequence: number;
       }>;
     };
     projection: {
-      query(input: { sessionId: string }): Promise<{ projection: SessionProjection }>;
+      query(input: { sessionId: string }): Promise<{ projection: SessionPresentationProjection }>;
     };
     subscribe: {
       subscribe(input: ChatStreamCursor, handlers: ChatStreamHandlers): { unsubscribe(): void };
@@ -361,35 +293,66 @@ export interface ChatSessionTransport {
   rpc: ChatSessionRpc;
   scheduler: FlushScheduler;
   newCommandId(): string;
+  startSession(input: {
+    operationId: string;
+    projectId: string;
+    ticketId: string | null;
+    title: string | null;
+  }): Promise<ProductSessionResult>;
+  attachSession(input: {
+    operationId: string;
+    sessionId: string;
+    bornTicketless: boolean;
+  }): Promise<ProductSessionResult>;
 }
 
 export interface ChatSessionClientDeps extends ChatSessionTransport {
   store: ChatSessionStore;
-  /** Remembered so a retry re-attaches what was chosen, never a second guess. */
-  executor: ChatExecutorChoice;
 }
+
+export type ProductSessionResult = SessionStartResult;
 
 /** The app's transport. Built per call; the RPC client underneath is a singleton. */
 export function browserChatTransport(): ChatSessionTransport {
+  const rpc = sessionRpcClient();
   return {
-    rpc: sessionRpcClient(),
+    rpc,
     scheduler: racingFlushScheduler(window),
     newCommandId: () => crypto.randomUUID(),
+    startSession: (input) =>
+      input.ticketId === null
+        ? rpc.projectSessions.start.mutate({
+            operationId: input.operationId,
+            projectId: input.projectId,
+            title: input.title,
+          })
+        : rpc.ticketSessions.start.mutate({
+            operationId: input.operationId,
+            projectId: input.projectId,
+            ticketId: input.ticketId,
+            title: input.title,
+          }),
+    attachSession: (input) =>
+      input.bornTicketless
+        ? rpc.projectSessions.attach.mutate({
+            operationId: input.operationId,
+            sessionId: input.sessionId,
+          })
+        : rpc.ticketSessions.attach.mutate({
+            operationId: input.operationId,
+            sessionId: input.sessionId,
+          }),
   };
 }
 
 export class ChatSessionClient {
   readonly sessionId: string;
-  /**
-   * What this client attaches, and what a surface falls back to when the
-   * Session has no attachment record yet — see {@link sessionAdapterId}.
-   */
-  readonly executor: ChatExecutorChoice;
 
   readonly #rpc: ChatSessionRpc;
   readonly #store: ChatSessionStore;
   readonly #scheduler: FlushScheduler;
   readonly #newCommandId: () => string;
+  readonly #attachSession: ChatSessionTransport["attachSession"];
   readonly #detachStore: () => void;
 
   #subscription: { unsubscribe(): void } | null = null;
@@ -418,8 +381,8 @@ export class ChatSessionClient {
     this.#store = deps.store;
     this.#scheduler = deps.scheduler;
     this.#newCommandId = deps.newCommandId;
-    this.executor = deps.executor;
-    // The queue's release rule reads lifecycle, projection and selection, and
+    this.#attachSession = deps.attachSession;
+    // The queue's release rule reads lifecycle and the durable projection, and
     // any of the three can move without this client having touched it — a person
     // picking a model is enough. Watching the store is what makes one rule
     // answer all of them.
@@ -446,33 +409,6 @@ export class ChatSessionClient {
    * failure is an exception. Neither un-creates the Session, so both land on the
    * same error and the id is never at risk.
    */
-  async attach(): Promise<boolean> {
-    try {
-      const attached = await this.#rpc.session.command.mutate({
-        commandId: this.#newCommandId(),
-        sessionId: this.sessionId,
-        command: {
-          kind: "adapter.attach",
-          // The ledger's word over this client's: an adopted client was
-          // constructed with the default executor, so on a reopened Pi ticket
-          // chat Retry would otherwise attach OpenCode onto a Session whose
-          // history Pi wrote. The profile stays the client's own — the
-          // attachment record names no profile, and every executor here has
-          // exactly one.
-          adapterId: sessionAdapterId(this.#slice(), this.executor),
-          profileId: this.executor.profileId,
-          continuity: "fresh",
-        },
-      });
-      const refusal = rejectedReceipt(attached);
-      this.#writes().settle(this.sessionId, refusal === null ? null : startFailure(refusal));
-      return refusal === null;
-    } catch (failure) {
-      this.#writes().settle(this.sessionId, startFailure(errorMessage(failure)));
-      return false;
-    }
-  }
-
   /**
    * Another attachment attempt on the Session that already exists.
    *
@@ -484,10 +420,31 @@ export class ChatSessionClient {
    */
   async retryAttach(): Promise<boolean> {
     const slice = this.#slice();
-    if (slice === undefined || slice.lifecycle === "starting") return false;
+    if (slice === undefined || slice.lifecycle === "starting" || slice.projection === null) {
+      return false;
+    }
     this.#writes().attaching(this.sessionId);
     void this.connect();
-    return this.attach();
+    try {
+      const attached = await this.#attachSession({
+        operationId: this.#newCommandId(),
+        sessionId: this.sessionId,
+        bornTicketless: slice.projection.bornTicketless,
+      });
+      const refusal = rejectedReceipt(attached);
+      const failure =
+        attached.state === "ready" && refusal === null
+          ? null
+          : (refusal ?? "attachment needs recovery");
+      this.#writes().settle(
+        this.sessionId,
+        failure === null ? null : `Could not start Session: ${failure}`,
+      );
+      return failure === null;
+    } catch (failure) {
+      this.#writes().settle(this.sessionId, `Could not start Session: ${errorMessage(failure)}`);
+      return false;
+    }
   }
 
   /**
@@ -532,26 +489,16 @@ export class ChatSessionClient {
     const body = text.trim();
     if (slice === undefined || !isDeliverable(slice) || body.length === 0) return false;
     try {
+      const message = {
+        id: this.#newCommandId(),
+        role: "user" as const,
+        parts: [{ type: "text" as const, text: body }],
+      };
+      const command: ChatCommand = { kind: "message.submit", message, delivery };
       const delivered = await this.#rpc.session.command.mutate({
         commandId: this.#newCommandId(),
         sessionId: this.sessionId,
-        command: {
-          kind: "message.submit",
-          message: {
-            id: this.#newCommandId(),
-            role: "user",
-            parts: [{ type: "text", text: body }],
-          },
-          delivery,
-          // Null rather than a pair of empty strings: the Session edge requires
-          // non-empty ids and would reject the message outright, and an executor
-          // that pins its own model has no selection to name.
-          model: slice.selection.modelId
-            ? { providerId: slice.selection.providerId, modelId: slice.selection.modelId }
-            : null,
-          variant: slice.selection.variant || null,
-          agent: slice.selection.agent || null,
-        },
+        command,
       });
       // A harness that cannot take a message says so in its receipt rather than
       // by throwing, and that receipt is the failure.
@@ -571,6 +518,19 @@ export class ChatSessionClient {
       this.#writes().settle(this.sessionId, `Message not delivered: ${errorMessage(failure)}`);
       return false;
     }
+  }
+
+  /** Records and applies a per-Session model override. The engine enforces idle-only changes. */
+  selectModel(selection: ModelSelection): Promise<boolean> {
+    const slice = this.#slice();
+    if (slice === undefined || slice.projection?.turnActive === true) return Promise.resolve(false);
+    return this.#run("Model not changed", () =>
+      this.#rpc.session.command.mutate({
+        commandId: this.#newCommandId(),
+        sessionId: this.sessionId,
+        command: { kind: "model.select", selection },
+      }),
+    );
   }
 
   interrupt(): Promise<boolean> {

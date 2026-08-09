@@ -7,17 +7,28 @@
  * streamed token is allowed to repaint.
  */
 import type {
-  RuntimeSelection,
+  ModelSelection,
   SessionAttention,
   SessionAttentionProjection,
   SessionInteraction,
   SessionInteractionResolution,
 } from "@volli/shared";
+import { REASONING_LEVELS } from "@volli/shared";
 import type { UIMessage } from "ai";
 
-import type { SessionTodo } from "@renderer/chat/activity";
 import type { InteractionSubmission } from "@renderer/chat/interaction";
 import type { ComposerIntent } from "@renderer/chat/session-model";
+
+export function composerModelSelection(input: {
+  providerId: string;
+  modelId: string;
+  reasoningLevel: string;
+}): ModelSelection | null {
+  const reasoningLevel = REASONING_LEVELS.find((level) => level === input.reasoningLevel);
+  return reasoningLevel === undefined
+    ? null
+    : { providerId: input.providerId, modelId: input.modelId, reasoningLevel };
+}
 
 /* -------------------------------------------------------------- answering */
 
@@ -394,50 +405,4 @@ export function sameMessages(left: readonly UIMessage[], right: readonly UIMessa
 /** An interaction is written once, when it opens; the id is the whole of it. */
 export function sameInteractionId(left: SessionInteraction, right: SessionInteraction): boolean {
   return left.id === right.id;
-}
-
-/**
- * The plan, by value — the one thing here identity cannot answer for, since it
- * is re-derived from the messages rather than carried by them.
- */
-export function sameTodos(
-  left: readonly SessionTodo[] | null,
-  right: readonly SessionTodo[] | null,
-): boolean {
-  if (left === right) return true;
-  if (left === null || right === null) return false;
-  if (left.length !== right.length) return false;
-  return left.every((todo, index) => {
-    const other = right[index];
-    return (
-      other !== undefined &&
-      todo.id === other.id &&
-      todo.content === other.content &&
-      todo.status === other.status &&
-      todo.priority === other.priority
-    );
-  });
-}
-
-/** Every step of a plan is finished, so the dock has nothing left to report. */
-export function todosSettled(todos: readonly SessionTodo[]): boolean {
-  return todos.every((todo) => todo.status === "completed" || todo.status === "cancelled");
-}
-
-/**
- * Whether a re-resolved selection says anything new.
- *
- * The catalog answers again whenever an executor appears or a preference is
- * saved, and it almost always resolves to the pick already held. Writing it back
- * regardless replaces the Session's slice, and everything reading that slice
- * repaints with it — the plane, and the tab's own title and liveness dot — to
- * say what was already on screen.
- */
-export function sameSelection(left: RuntimeSelection, right: RuntimeSelection): boolean {
-  return (
-    left.providerId === right.providerId &&
-    left.modelId === right.modelId &&
-    left.variant === right.variant &&
-    left.agent === right.agent
-  );
 }

@@ -10,11 +10,9 @@ import {
 import {
   HarnessIdentitySection,
   HarnessSelector,
-  MODEL_CATALOG_HARNESS_ID,
   preloadApi,
   useHarnessListings,
 } from "@renderer/components/pages/harness-picker";
-import { RuntimeCatalogSettings } from "@renderer/components/pages/runtime-catalog-settings";
 import { SettingsRow } from "@renderer/components/pages/settings-shell";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
@@ -59,9 +57,6 @@ function HarnessDetail({ listing }: { listing: HarnessListing }) {
       <HarnessIdentitySection listing={listing}>
         {listing.id === OVERRIDABLE_BINARY_HARNESS_ID ? <BinaryRow harnessId={listing.id} /> : null}
       </HarnessIdentitySection>
-      {listing.id === MODEL_CATALOG_HARNESS_ID ? (
-        <RuntimeCatalogSettings adapterId={listing.id} />
-      ) : null}
     </div>
   );
 }

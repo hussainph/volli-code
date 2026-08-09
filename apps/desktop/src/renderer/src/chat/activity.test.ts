@@ -15,7 +15,6 @@ import {
   describeActivity,
   detailText,
   diffStat,
-  extractTodos,
   groupTurns,
   formatBytes,
   formatDuration,
@@ -26,13 +25,11 @@ import {
   isAwaitingFirstOutput,
   parseDiff,
   parseMatches,
-  projectSessionTodos,
   reasoningBody,
   reasoningStatus,
   segmentMessageParts,
   segmentTurn,
   splitPath,
-  todosFromUnknown,
   type BundleRow,
   type ChatSegment,
 } from "./activity";
@@ -201,8 +198,10 @@ describe("segmentMessageParts", () => {
     expect(bundleOf(segments)).toHaveLength(5);
   });
 
-  it("hides plan activity from the transcript", () => {
-    expect(segmentMessageParts([tool("plan")], "m2")).toEqual([]);
+  it("keeps plan activity in the transcript once there is no synthesized dock", () => {
+    expect(segmentMessageParts([tool("plan")], "m2").map((segment) => segment.kind)).toEqual([
+      "bundle",
+    ]);
   });
 
   it("does not let a blank text part split one bundle into two", () => {
@@ -682,11 +681,42 @@ describe("presenters", () => {
     expect(row.object).toBeNull();
   });
 
-  it("plan carries no meta and no detail — the rail owns the content", () => {
-    const row = describeActivity(tool("plan"));
+  it("keeps legacy plan contents readable inline after removing the synthesized dock", () => {
+    const row = describeActivity(
+      tool("plan", {
+        input: {
+          todos: [
+            { content: "Read the seam", status: "completed" },
+            { content: "Ship the slice", status: "in_progress" },
+          ],
+        },
+      }),
+    );
     expect(row.verb).toBe("Planned");
     expect(row.meta).toBeNull();
-    expect(row.detail).toBeNull();
+    expect(row.detail).toEqual({ view: "output", text: "✓ Read the seam\n→ Ship the slice" });
+    expect(
+      describeActivity(
+        tool("plan", {
+          output: JSON.stringify([{ content: "Read JSON history", status: "pending" }]),
+        }),
+      ).detail,
+    ).toEqual({ view: "output", text: "○ Read JSON history" });
+    expect(
+      describeActivity(
+        tool("plan", { input: [{ content: "Read array history", status: "cancelled" }] }),
+      ).detail,
+    ).toEqual({ view: "output", text: "× Read array history" });
+    expect(describeActivity(tool("plan", { input: [{ content: "No status" }] })).detail).toEqual({
+      view: "output",
+      text: "○ No status",
+    });
+    expect(
+      describeActivity(tool("plan", { input: [null, { status: "pending" }, { content: "" }] }))
+        .detail,
+    ).toBeNull();
+    expect(describeActivity(tool("plan", { output: "not json" })).detail).toBeNull();
+    expect(describeActivity(tool("plan", { input: { todos: [] } })).detail).toBeNull();
   });
 
   it("edit-file shows the change counts only once settled", () => {
@@ -1007,23 +1037,6 @@ describe("memoization", () => {
     expect(describeActivity(settled).status).toBe("done");
     expect(describeActivity(settled)).not.toBe(describeActivity(running));
   });
-
-  it("parses a plan's todos once per snapshot", () => {
-    const { part, reads } = countingOutput(
-      tool("plan", {
-        output: JSON.stringify([{ content: "Ship it", status: "pending", priority: "high" }]),
-      }),
-    );
-    const messages: UIMessage[] = [{ id: "a1", role: "assistant", parts: [part] }];
-
-    const first = projectSessionTodos(messages);
-    expect(first).toEqual([
-      expect.objectContaining({ content: "Ship it", status: "pending", priority: "high" }),
-    ]);
-    expect(projectSessionTodos(messages)).toBe(first);
-    expect(extractTodos(part)).toBe(first);
-    expect(reads()).toBe(1);
-  });
 });
 
 describe("formatters", () => {
@@ -1195,10 +1208,8 @@ describe("isAwaitingFirstOutput", () => {
     );
   });
 
-  it("keeps holding when the only part is one the transcript hides", () => {
-    // A plan projects to the rail, not the feed — counting it would leave the
-    // reader staring at an empty turn.
-    expect(isAwaitingFirstOutput([assistant([tool("plan")])])).toBe(true);
+  it("stops holding when plan activity appears inline", () => {
+    expect(isAwaitingFirstOutput([assistant([tool("plan")])])).toBe(false);
   });
 });
 
@@ -1271,205 +1282,5 @@ describe("reasoningStatus", () => {
       verb: "Thinking…",
       meta: null,
     });
-  });
-});
-
-describe("projectSessionTodos", () => {
-  it("reads the latest plan activity", () => {
-    const todos = projectSessionTodos([
-      {
-        id: "a1",
-        role: "assistant",
-        parts: [
-          tool("plan", {
-            input: {
-              todos: [
-                { id: "t1", content: "First", status: "completed", priority: "high" },
-                { id: "t2", content: "Second", status: "in_progress", priority: "medium" },
-              ],
-            },
-          }),
-        ],
-      },
-    ]);
-    expect(todos).toEqual([
-      { id: "t1", content: "First", status: "completed", priority: "high" },
-      { id: "t2", content: "Second", status: "in_progress", priority: "medium" },
-    ]);
-  });
-
-  it("accepts todos without ids and JSON-string tool output", () => {
-    const fromLegacyShape = projectSessionTodos([
-      {
-        id: "a2",
-        role: "assistant",
-        parts: [
-          tool("plan", {
-            input: {
-              todos: [
-                { content: "Ship it", status: "in_progress", priority: "high" },
-                { content: "Verify", status: "pending", priority: "medium" },
-              ],
-            },
-          }),
-        ],
-      },
-    ]);
-    expect(fromLegacyShape?.map((todo) => todo.content)).toEqual(["Ship it", "Verify"]);
-    expect(fromLegacyShape?.every((todo) => todo.id.length > 0)).toBe(true);
-
-    const fromJsonOutput = projectSessionTodos([
-      {
-        id: "a3",
-        role: "assistant",
-        parts: [
-          tool("plan", {
-            output: JSON.stringify([
-              { content: "Only output", status: "pending", priority: "low" },
-            ]),
-          }),
-        ],
-      },
-    ]);
-    expect(fromJsonOutput).toEqual([
-      expect.objectContaining({ content: "Only output", status: "pending", priority: "low" }),
-    ]);
-  });
-
-  it("ignores messages with no plan activity", () => {
-    expect(
-      projectSessionTodos([{ id: "a4", role: "assistant", parts: [tool("read-file")] }]),
-    ).toBeNull();
-  });
-
-  it("skips a message that is not the assistant's", () => {
-    const todos = projectSessionTodos([
-      {
-        id: "a5",
-        role: "assistant",
-        parts: [
-          tool("plan", {
-            input: { todos: [{ id: "t1", content: "First", status: "pending", priority: "low" }] },
-          }),
-        ],
-      },
-      { id: "u5", role: "user", parts: [{ type: "text", text: "thanks" }] },
-    ]);
-    expect(todos?.map((todo) => todo.id)).toEqual(["t1"]);
-  });
-
-  it("skips a plan call that failed or was denied and reads the one before it", () => {
-    const todos = projectSessionTodos([
-      {
-        id: "a6",
-        role: "assistant",
-        parts: [
-          tool("plan", {
-            input: {
-              todos: [{ id: "t1", content: "Good plan", status: "pending", priority: "low" }],
-            },
-          }),
-        ],
-      },
-      { id: "a7", role: "assistant", parts: [tool("plan", { state: "output-error" })] },
-    ]);
-    expect(todos?.map((todo) => todo.id)).toEqual(["t1"]);
-  });
-
-  it("keeps searching when the latest plan call has nothing parseable", () => {
-    const todos = projectSessionTodos([
-      {
-        id: "a8",
-        role: "assistant",
-        parts: [
-          tool("plan", {
-            input: { todos: [{ id: "t1", content: "Good", status: "pending", priority: "low" }] },
-          }),
-        ],
-      },
-      { id: "a9", role: "assistant", parts: [tool("plan", { input: { unrelated: true } })] },
-    ]);
-    expect(todos?.map((todo) => todo.id)).toEqual(["t1"]);
-  });
-
-  it("reads no todos from a plan call that has not sent anything yet", () => {
-    // Same shape as an unstarted tool call elsewhere in this file: the harness
-    // opened the call before it streamed any input.
-    const part: DynamicToolUIPart = {
-      type: "dynamic-tool",
-      toolName: "native-plan",
-      toolCallId: "call-plan-raw",
-      state: "input-streaming",
-      toolMetadata: metadata(descriptor("plan")),
-    };
-    expect(extractTodos(part)).toBeNull();
-  });
-});
-
-describe("todosFromUnknown", () => {
-  it("reads an explicit empty list as empty, not missing", () => {
-    expect(todosFromUnknown([])).toEqual([]);
-    expect(todosFromUnknown({ todos: [] })).toEqual([]);
-  });
-
-  it("drops rows that are not objects or that carry no content at all", () => {
-    expect(
-      todosFromUnknown([
-        "not a todo",
-        { status: "pending", priority: "low" },
-        { content: "Kept", status: "pending", priority: "low" },
-      ]),
-    ).toEqual([{ id: expect.any(String), content: "Kept", status: "pending", priority: "low" }]);
-  });
-
-  it("reads content from 'title' or 'text' when 'content' is absent", () => {
-    expect(todosFromUnknown([{ title: "From title", status: "pending" }])?.[0]?.content).toBe(
-      "From title",
-    );
-    expect(todosFromUnknown([{ text: "From text", status: "pending" }])?.[0]?.content).toBe(
-      "From text",
-    );
-  });
-
-  it("is null for a value that is not a todo list at all", () => {
-    expect(todosFromUnknown(42)).toBeNull();
-    expect(todosFromUnknown("   ")).toBeNull();
-    expect(todosFromUnknown("not json")).toBeNull();
-  });
-
-  it("normalizes status synonyms the same way across harnesses", () => {
-    const statuses = ["complete", "done", "canceled", "active", "running", "cancelled"].map(
-      (status, index) => ({ id: `${index}`, content: `todo ${index}`, status, priority: "low" }),
-    );
-    expect(todosFromUnknown(statuses)?.map((todo) => todo.status)).toEqual([
-      "completed",
-      "completed",
-      "cancelled",
-      "in_progress",
-      "in_progress",
-      "cancelled",
-    ]);
-  });
-
-  it("drops a row whose status does not normalize to anything known", () => {
-    expect(todosFromUnknown([{ content: "x", status: "bogus" }])).toEqual([]);
-    expect(todosFromUnknown([{ content: "x", status: 5 }])).toEqual([]);
-  });
-
-  it("defaults priority to medium when it is missing, blank, or unrecognized", () => {
-    const rows = [
-      { content: "a", status: "pending" },
-      { content: "b", status: "pending", priority: null },
-      { content: "c", status: "pending", priority: "" },
-      { content: "d", status: "pending", priority: 5 },
-      { content: "e", status: "pending", priority: "urgent" },
-    ];
-    expect(todosFromUnknown(rows)?.map((todo) => todo.priority)).toEqual([
-      "medium",
-      "medium",
-      "medium",
-      "medium",
-      "medium",
-    ]);
   });
 });

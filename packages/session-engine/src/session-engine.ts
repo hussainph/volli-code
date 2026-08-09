@@ -68,6 +68,20 @@ export interface SubmitSessionCommandResult {
   receiptEvent: SessionEvent | null;
 }
 
+export interface CompleteModelSelectionRequest {
+  sessionId: string;
+  commandId: string;
+  attachmentId: string;
+  occurredAt: number;
+  provenance: SessionEventProvenance;
+}
+
+export interface CompleteModelSelectionResult {
+  event: SessionEvent;
+  receipt: CommandReceipt;
+  receiptEvent: SessionEvent;
+}
+
 export interface SessionEngine {
   createSession(request: CreateSessionRequest): Promise<CreateSessionResult>;
   getOrRecordSessionInput(request: {
@@ -77,6 +91,10 @@ export interface SessionEngine {
   }): Promise<SessionInput>;
   observe(observation: SessionObservation): Promise<SessionEvent>;
   submit(request: SubmitSessionCommandRequest): Promise<SubmitSessionCommandResult>;
+  /** Atomically commits an adapter-applied idle model policy and its terminal receipt. */
+  completeModelSelection(
+    request: CompleteModelSelectionRequest,
+  ): Promise<CompleteModelSelectionResult>;
   getSession(query: GetSessionQuery): Promise<SessionProjection | null>;
   /**
    * The stored Session row alone, without folding its history.
@@ -365,7 +383,8 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         if (
           command.intent.kind !== "session.archive" &&
           command.intent.kind !== "session.retitle" &&
-          command.intent.kind !== "session.signal"
+          command.intent.kind !== "session.signal" &&
+          (command.intent.kind !== "model.select" || command.route !== null)
         ) {
           return { command, commandEvent, receipt: null, receiptEvent: null };
         }
@@ -383,11 +402,13 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
               ? { kind: "session.archived" }
               : command.intent.kind === "session.retitle"
                 ? { kind: "session.retitled", title: command.intent.title }
-                : {
-                    kind: "session.signaled",
-                    signal: command.intent.signal,
-                    reason: command.intent.reason,
-                  },
+                : command.intent.kind === "model.select"
+                  ? { kind: "model.selected", selection: command.intent.selection }
+                  : {
+                      kind: "session.signaled",
+                      signal: command.intent.signal,
+                      reason: command.intent.reason,
+                    },
         };
         transaction.appendEvent(sessionEvent);
         const receiptEvent = receiptRecordedEvent(
@@ -405,12 +426,105 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
               ? { kind: "session.archived", sessionId: session.id }
               : command.intent.kind === "session.retitle"
                 ? { kind: "session.retitled", sessionId: session.id }
-                : { kind: "session.signaled", sessionId: session.id },
+                : command.intent.kind === "model.select"
+                  ? { kind: "model.selected", sessionId: session.id }
+                  : { kind: "session.signaled", sessionId: session.id },
           ),
         );
         transaction.appendReceipt(receiptEvent.payload.receipt);
         transaction.appendEvent(receiptEvent);
         return { command, commandEvent, receipt: receiptEvent.payload.receipt, receiptEvent };
+      });
+    },
+
+    async completeModelSelection(request) {
+      return ports.ledger.transaction((transaction) => {
+        const session = transaction.getSession(request.sessionId);
+        if (!session) throw new SessionEngineNotFoundError(request.sessionId);
+        const command = transaction.getCommand(request.commandId);
+        if (
+          !command ||
+          command.sessionId !== session.id ||
+          command.intent.kind !== "model.select" ||
+          command.route?.attachmentId !== request.attachmentId
+        ) {
+          throw new SessionEngineConflictError(
+            `Command ${request.commandId} is not a routed model selection for attachment ${request.attachmentId}`,
+          );
+        }
+        if (
+          request.provenance.source.kind !== "adapter" ||
+          request.provenance.source.id !== command.route.adapterId
+        ) {
+          throw new SessionEngineConflictError(
+            `Command ${command.id} was not completed by adapter ${command.route.adapterId}`,
+          );
+        }
+        const events = transaction.listEvents({ sessionId: session.id });
+        const priorReceipt =
+          transaction
+            .listReceipts(command.id)
+            .findLast((receipt) => receipt.status !== "unreconciled") ?? null;
+        if (priorReceipt) {
+          const event = events.find(
+            (candidate) =>
+              candidate.commandId === command.id && candidate.payload.kind === "model.selected",
+          );
+          const receiptEvent = receiptEventFor(events, priorReceipt.id);
+          const commandEvent = commandEventFor(events, command.id);
+          if (
+            priorReceipt.status !== "completed" ||
+            priorReceipt.result.kind !== "model.selected" ||
+            priorReceipt.result.sessionId !== session.id ||
+            !event ||
+            event.attachmentId !== command.route.attachmentId ||
+            event.payload.kind !== "model.selected" ||
+            event.payload.selection.providerId !== command.intent.selection.providerId ||
+            event.payload.selection.modelId !== command.intent.selection.modelId ||
+            event.payload.selection.reasoningLevel !== command.intent.selection.reasoningLevel ||
+            event.provenance.source.kind !== "adapter" ||
+            event.provenance.source.id !== command.route.adapterId ||
+            !receiptEvent ||
+            receiptEvent.payload.kind !== "command.receipt.recorded" ||
+            !sameCommandReceipt(receiptEvent.payload.receipt, priorReceipt) ||
+            !sameSessionEventProvenance(receiptEvent.provenance, event.provenance) ||
+            !commandEvent ||
+            !(commandEvent.sequence < event.sequence && event.sequence < receiptEvent.sequence)
+          ) {
+            throw new SessionEngineConflictError(
+              `Command ${command.id} has invalid completed model-selection history`,
+            );
+          }
+          return { event, receipt: priorReceipt, receiptEvent };
+        }
+
+        const sequence = nextSequence(events);
+        const event: SessionEvent = {
+          id: ports.ids.next("event"),
+          sessionId: session.id,
+          sequence,
+          occurredAt: request.occurredAt,
+          recordedAt: ports.clock.now(),
+          provenance: request.provenance,
+          attachmentId: request.attachmentId,
+          commandId: command.id,
+          payload: { kind: "model.selected", selection: command.intent.selection },
+        };
+        const receiptEvent = receiptRecordedEvent(
+          ports.ids.next("event"),
+          session.id,
+          sequence + 1,
+          request.occurredAt,
+          request.provenance,
+          completedReceipt(ports.ids.next("receipt"), command.id, sequence + 1, ports.clock.now(), {
+            kind: "model.selected",
+            sessionId: session.id,
+          }),
+        );
+        transaction.appendEvent(event);
+        transaction.appendReceipt(receiptEvent.payload.receipt);
+        transaction.appendEvent(receiptEvent);
+        return { event, receipt: receiptEvent.payload.receipt, receiptEvent };
       });
     },
 
@@ -551,6 +665,38 @@ function replaySubmit(
   if (receipt && (!receiptEvent || receiptEvent.sessionId !== session.id)) {
     throw new SessionEngineConflictError(`Receipt ${receipt.id} has no Session event`);
   }
+  if (
+    stored.intent.kind === "model.select" &&
+    receipt?.status === "completed" &&
+    receipt.result.kind === "model.selected"
+  ) {
+    const selectedEvent = events.find(
+      (event) => event.commandId === stored.id && event.payload.kind === "model.selected",
+    );
+    if (
+      !selectedEvent ||
+      !receiptEvent ||
+      !(
+        commandEvent.sequence < selectedEvent.sequence &&
+        selectedEvent.sequence < receiptEvent.sequence
+      )
+    ) {
+      throw new SessionEngineConflictError(
+        `Command ${stored.id} has incomplete model selection history`,
+      );
+    }
+    if (
+      selectedEvent.payload.kind !== "model.selected" ||
+      selectedEvent.payload.selection.providerId !== stored.intent.selection.providerId ||
+      selectedEvent.payload.selection.modelId !== stored.intent.selection.modelId ||
+      selectedEvent.payload.selection.reasoningLevel !== stored.intent.selection.reasoningLevel ||
+      receipt.result.sessionId !== session.id
+    ) {
+      throw new SessionEngineConflictError(
+        `Command ${stored.id} has model selection history that does not match intent`,
+      );
+    }
+  }
   return {
     command: stored,
     commandEvent,
@@ -636,6 +782,15 @@ function rejectionFor(
       code:
         command.intent.kind === "session.archive" ? "session_already_archived" : "session_archived",
       detail: `Session ${projection.session.id} is archived`,
+    };
+  }
+  if (command.intent.kind === "model.select" && projection.turnActive) {
+    return {
+      id: `rejected:${command.id}`,
+      commandId: command.id,
+      status: "rejected",
+      code: "turn_active",
+      detail: "The model cannot change while a turn is active",
     };
   }
   if (!routeRejection) return null;
@@ -748,6 +903,15 @@ function resolveCommandRoute(
               detail: `Attachment ${intent.attachmentId} is not open`,
             },
           };
+    }
+    case "model.select": {
+      const attachment = projection.liveExecutor;
+      return attachment
+        ? {
+            route: { adapterId: attachment.adapterId, attachmentId: attachment.id },
+            rejection: null,
+          }
+        : { route: null, rejection: null };
     }
     case "session.archive":
     case "session.retitle":
@@ -996,6 +1160,7 @@ function assertAdapterReceiptRoute(
   }
   if (
     (command.intent.kind === "message.submit" ||
+      command.intent.kind === "model.select" ||
       command.intent.kind === "interaction.resolve" ||
       command.intent.kind === "executor.stop" ||
       command.intent.kind === "executor.interrupt" ||
@@ -1014,6 +1179,7 @@ function expectedResultKind(intent: SessionCommandIntent["kind"]): CommandReceip
     "session.archive": "session.archived",
     "session.retitle": "session.retitled",
     "session.signal": "session.signaled",
+    "model.select": "model.selected",
     "executor.start": "executor.start.requested",
     "executor.stop": "executor.stop.requested",
     "executor.interrupt": "executor.interrupted",

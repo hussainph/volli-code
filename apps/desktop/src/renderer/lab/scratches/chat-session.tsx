@@ -12,11 +12,7 @@
  */
 import * as React from "react";
 
-import {
-  DEFAULT_CHAT_EXECUTOR,
-  racingFlushScheduler,
-  type ChatExecutorChoice,
-} from "@renderer/chat/client";
+import { racingFlushScheduler } from "@renderer/chat/client";
 import { AppShell } from "@renderer/components/app-shell";
 import { ChatPlane } from "@renderer/components/chat/chat-plane";
 import {
@@ -34,6 +30,7 @@ import { LAB_SCENARIO_ADAPTER_ID } from "../../../lab-scenarios";
 import { LAB_SESSION_PROJECT_ID, LAB_SESSION_TICKET_ID } from "../../../lab-session-rpc-path";
 import { LabScenarioPicker } from "../chat/scenario-picker";
 import { LabRuntimeCatalogProvider } from "../runtime-catalog-client";
+import { LabModelAccessProvider } from "../model-access-client";
 import { createSessionRpcClient } from "../session-rpc-client";
 import { appApi, seedApp } from "../seed";
 
@@ -45,9 +42,11 @@ export const api = appApi;
 
 export default function ChatSessionScratch() {
   return (
-    <LabRuntimeCatalogProvider>
-      <AppShell mainContent={<LabChatMain />} />
-    </LabRuntimeCatalogProvider>
+    <LabModelAccessProvider>
+      <LabRuntimeCatalogProvider>
+        <AppShell mainContent={<LabChatMain />} />
+      </LabRuntimeCatalogProvider>
+    </LabModelAccessProvider>
   );
 }
 
@@ -75,12 +74,26 @@ function LabChatSession({ scenarioId }: { scenarioId: string | null }) {
   // point of this surface is the real components, not a second transport.
   const store = React.useMemo(() => {
     const rpc = createSessionRpcClient();
+    const executor = labExecutor(scenarioId);
     return createChatSessionsStore(() => ({
       rpc,
       scheduler: racingFlushScheduler(window),
       newCommandId: () => crypto.randomUUID(),
+      startSession: async (input) => {
+        const created = await rpc.session.command.mutate({
+          commandId: input.operationId,
+          command: {
+            kind: "session.create",
+            projectId: input.projectId,
+            ticketId: input.ticketId,
+            title: input.title,
+          },
+        });
+        return attachLabSession(rpc, created.sessionId, crypto.randomUUID(), executor);
+      },
+      attachSession: (input) => attachLabSession(rpc, input.sessionId, input.operationId, executor),
     }));
-  }, []);
+  }, [scenarioId]);
   const [sessionId, setSessionId] = React.useState<string | null>(null);
   const started = React.useRef(false);
 
@@ -93,7 +106,6 @@ function LabChatSession({ scenarioId }: { scenarioId: string | null }) {
         projectId: LAB_SESSION_PROJECT_ID,
         ticketId: LAB_SESSION_TICKET_ID,
         title: "Chat 1",
-        executor: labExecutor(scenarioId),
       })
       .then(setSessionId);
   }, [scenarioId, store]);
@@ -155,8 +167,28 @@ function useLabChatStatus(store: LabChatStore, sessionId: string | null) {
   );
 }
 
-function labExecutor(scenarioId: string | null): ChatExecutorChoice {
+function labExecutor(scenarioId: string | null): { adapterId: string; profileId: string } {
   return scenarioId === null
-    ? DEFAULT_CHAT_EXECUTOR
+    ? { adapterId: "opencode", profileId: "native" }
     : { adapterId: LAB_SCENARIO_ADAPTER_ID, profileId: scenarioId };
+}
+
+async function attachLabSession(
+  rpc: ReturnType<typeof createSessionRpcClient>,
+  sessionId: string,
+  commandId: string,
+  executor: { adapterId: string; profileId: string },
+) {
+  const attached = await rpc.session.command.mutate({
+    commandId,
+    sessionId,
+    command: { kind: "adapter.attach", ...executor, continuity: "fresh" },
+  });
+  return {
+    sessionId,
+    state:
+      attached.receipt?.status === "rejected" ? ("needs-recovery" as const) : ("ready" as const),
+    receipt: attached.receipt,
+    throughSequence: attached.throughSequence,
+  };
 }

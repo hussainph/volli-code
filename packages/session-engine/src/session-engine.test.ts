@@ -404,6 +404,367 @@ describe("SessionEngine creation and explicit commands", () => {
     });
   });
 
+  it("selects a model as a durable completed Session command", async () => {
+    const { plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "high" as const,
+    };
+
+    const selected = await plane.submit({
+      commandId: "command-model-select",
+      sessionId: session.id,
+      intent: { kind: "model.select", selection },
+      provenance: userProvenance,
+    });
+
+    expect(selected).toMatchObject({
+      commandEvent: { payload: { kind: "command.recorded" } },
+      receipt: {
+        status: "completed",
+        result: { kind: "model.selected", sessionId: session.id },
+      },
+      receiptEvent: { payload: { kind: "command.receipt.recorded" } },
+    });
+    await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+      modelSelection: selection,
+    });
+    expect(
+      (await plane.listEvents({ sessionId: session.id }))
+        .filter((event) => event.commandId === "command-model-select")
+        .map((event) => event.payload.kind),
+    ).toEqual(["command.recorded", "model.selected", "command.receipt.recorded"]);
+    await expect(
+      plane.submit({
+        commandId: "command-model-select",
+        sessionId: session.id,
+        intent: { kind: "model.select", selection },
+        provenance: userProvenance,
+      }),
+    ).resolves.toEqual(selected);
+    await expect(
+      plane.submit({
+        commandId: "command-model-select",
+        sessionId: session.id,
+        intent: {
+          kind: "model.select",
+          selection: { ...selection, reasoningLevel: "medium" },
+        },
+        provenance: userProvenance,
+      }),
+    ).rejects.toThrow("different intent");
+  });
+
+  it("rejects model changes while a turn is active", async () => {
+    const { plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+    const running = attachment(session.id);
+    await plane.observe({
+      id: "model-select-open",
+      sessionId: session.id,
+      occurredAt: 1,
+      provenance: adapterProvenance,
+      kind: "attachment.opened",
+      attachment: running,
+    });
+    await plane.observe({
+      id: "model-select-turn",
+      sessionId: session.id,
+      occurredAt: 2,
+      provenance: adapterProvenance,
+      kind: "turn.started",
+      attachmentId: running.id,
+      turnId: "turn-model-select",
+    });
+
+    const selected = await plane.submit({
+      commandId: "command-model-select-busy",
+      sessionId: session.id,
+      intent: {
+        kind: "model.select",
+        selection: {
+          providerId: "openai-codex",
+          modelId: "gpt-5.6-sol",
+          reasoningLevel: "high",
+        },
+      },
+      provenance: userProvenance,
+    });
+
+    expect(selected.receipt).toMatchObject({ status: "rejected", code: "turn_active" });
+    await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+      modelSelection: null,
+    });
+  });
+
+  it("routes an idle live model change and completes its fact and receipt atomically", async () => {
+    const { plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+    const running = attachment(session.id);
+    await plane.observe({
+      id: "model-select-live-open",
+      sessionId: session.id,
+      occurredAt: 1,
+      provenance: adapterProvenance,
+      kind: "attachment.opened",
+      attachment: running,
+    });
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "high" as const,
+    };
+
+    const submitted = await plane.submit({
+      commandId: "command-model-select-live",
+      sessionId: session.id,
+      intent: { kind: "model.select", selection },
+      provenance: userProvenance,
+    });
+
+    expect(submitted).toMatchObject({
+      command: {
+        route: { adapterId: running.adapterId, attachmentId: running.id },
+      },
+      receipt: null,
+      receiptEvent: null,
+    });
+    await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+      modelSelection: null,
+    });
+
+    const completed = await plane.completeModelSelection({
+      sessionId: session.id,
+      commandId: submitted.command.id,
+      attachmentId: running.id,
+      occurredAt: 3,
+      provenance: adapterProvenance,
+    });
+
+    expect(completed).toMatchObject({
+      event: { payload: { kind: "model.selected", selection } },
+      receipt: {
+        status: "completed",
+        result: { kind: "model.selected", sessionId: session.id },
+      },
+      receiptEvent: { payload: { kind: "command.receipt.recorded" } },
+    });
+    expect(
+      (await plane.listEvents({ sessionId: session.id }))
+        .filter((event) => event.commandId === submitted.command.id)
+        .map((event) => event.payload.kind),
+    ).toEqual(["command.recorded", "model.selected", "command.receipt.recorded"]);
+    await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+      modelSelection: selection,
+    });
+    await expect(
+      plane.completeModelSelection({
+        sessionId: session.id,
+        commandId: submitted.command.id,
+        attachmentId: running.id,
+        occurredAt: 4,
+        provenance: adapterProvenance,
+      }),
+    ).resolves.toEqual(completed);
+  });
+
+  it("refuses to complete a routed model selection without its exact adapter provenance", async () => {
+    const { plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+    const running = attachment(session.id);
+    await plane.observe({
+      id: "model-select-provenance-open",
+      sessionId: session.id,
+      occurredAt: 1,
+      provenance: adapterProvenance,
+      kind: "attachment.opened",
+      attachment: running,
+    });
+    await plane.submit({
+      commandId: "command-model-select-provenance",
+      sessionId: session.id,
+      intent: {
+        kind: "model.select",
+        selection: {
+          providerId: "openai-codex",
+          modelId: "gpt-5.6-sol",
+          reasoningLevel: "high",
+        },
+      },
+      provenance: userProvenance,
+    });
+
+    await expect(
+      plane.completeModelSelection({
+        sessionId: session.id,
+        commandId: "command-model-select-provenance",
+        attachmentId: running.id,
+        occurredAt: 3,
+        provenance: userProvenance,
+      }),
+    ).rejects.toThrow("was not completed by adapter");
+  });
+
+  it("refuses an observed model-selection receipt from a different attachment", async () => {
+    const { plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+    const routed = attachment(session.id, "attachment-model-route");
+    await plane.observe({
+      id: "model-route-open",
+      sessionId: session.id,
+      occurredAt: 1,
+      provenance: adapterProvenance,
+      kind: "attachment.opened",
+      attachment: routed,
+    });
+    const submitted = await plane.submit({
+      commandId: "command-model-route",
+      sessionId: session.id,
+      intent: {
+        kind: "model.select",
+        selection: {
+          providerId: "openai-codex",
+          modelId: "gpt-5.6-sol",
+          reasoningLevel: "high",
+        },
+      },
+      provenance: userProvenance,
+    });
+    await plane.observe({
+      id: "model-route-close",
+      sessionId: session.id,
+      occurredAt: 2,
+      provenance: adapterProvenance,
+      kind: "attachment.closed",
+      attachmentId: routed.id,
+      outcome: "interrupted",
+    });
+    const other = attachment(session.id, "attachment-model-other");
+    await plane.observe({
+      id: "model-other-open",
+      sessionId: session.id,
+      occurredAt: 3,
+      provenance: adapterProvenance,
+      kind: "attachment.opened",
+      attachment: other,
+    });
+
+    await expect(
+      plane.observe({
+        id: "model-receipt-from-other",
+        sessionId: session.id,
+        occurredAt: 4,
+        provenance: adapterProvenance,
+        attachmentId: other.id,
+        kind: "command.receipt",
+        receipt: {
+          id: "model-receipt-from-other",
+          commandId: submitted.command.id,
+          status: "accepted",
+          acceptedAt: 4,
+          result: { kind: "model.selected", sessionId: session.id },
+        },
+      }),
+    ).rejects.toThrow("does not match routed attachment");
+  });
+
+  it("refuses model-selection completion without its exact Session command route", async () => {
+    const { plane } = composition();
+
+    await expect(
+      plane.completeModelSelection({
+        sessionId: "missing-session",
+        commandId: "missing-command",
+        attachmentId: "missing-attachment",
+        occurredAt: 1,
+        provenance: adapterProvenance,
+      }),
+    ).rejects.toBeInstanceOf(SessionEngineNotFoundError);
+
+    const { session } = await plane.createSession(createRequest());
+    await expect(
+      plane.completeModelSelection({
+        sessionId: session.id,
+        commandId: "command-create",
+        attachmentId: "missing-attachment",
+        occurredAt: 2,
+        provenance: adapterProvenance,
+      }),
+    ).rejects.toThrow(
+      "Command command-create is not a routed model selection for attachment missing-attachment",
+    );
+  });
+
+  it("rejects model-selection completion when a later receipt corrupts completed history", async () => {
+    const { ledger, plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+    const running = attachment(session.id, "attachment-model-history");
+    await plane.observe({
+      id: "model-history-open",
+      sessionId: session.id,
+      occurredAt: 1,
+      provenance: adapterProvenance,
+      kind: "attachment.opened",
+      attachment: running,
+    });
+    const submitted = await plane.submit({
+      commandId: "command-model-history",
+      sessionId: session.id,
+      intent: {
+        kind: "model.select",
+        selection: {
+          providerId: "openai-codex",
+          modelId: "gpt-5.6-sol",
+          reasoningLevel: "high",
+        },
+      },
+      provenance: userProvenance,
+    });
+    await plane.completeModelSelection({
+      sessionId: session.id,
+      commandId: submitted.command.id,
+      attachmentId: running.id,
+      occurredAt: 2,
+      provenance: adapterProvenance,
+    });
+    await ledger.transaction((transaction) => {
+      const sequence = transaction.listEvents({ sessionId: session.id }).at(-1)!.sequence + 1;
+      const receipt = {
+        id: "receipt-model-history-corrupt",
+        commandId: submitted.command.id,
+        status: "rejected" as const,
+        code: "late_rejection",
+        detail: null,
+        recordedAt: 3,
+        sequence,
+      };
+      transaction.appendReceipt(receipt);
+      transaction.appendEvent({
+        id: "event-model-history-corrupt",
+        sessionId: session.id,
+        sequence,
+        occurredAt: 3,
+        recordedAt: 3,
+        provenance: adapterProvenance,
+        attachmentId: running.id,
+        commandId: submitted.command.id,
+        payload: { kind: "command.receipt.recorded", receipt },
+      });
+    });
+
+    await expect(
+      plane.completeModelSelection({
+        sessionId: session.id,
+        commandId: submitted.command.id,
+        attachmentId: running.id,
+        occurredAt: 4,
+        provenance: adapterProvenance,
+      }),
+    ).rejects.toThrow("has invalid completed model-selection history");
+  });
+
   it("records an explicit Session signal as an immutable fact with an internal receipt", async () => {
     const { plane } = composition();
     const { session } = await plane.createSession(createRequest());
@@ -2193,6 +2554,131 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
         provenance: userProvenance,
       }),
     ).rejects.toThrow("has no recorded event");
+  });
+
+  it("rejects a completed model-selection replay whose immutable fact is missing", async () => {
+    const { ledger, plane } = composition();
+    const seeded = sessionRecord("session-model-fact-missing");
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "high" as const,
+    };
+    const stored = command("command-model-fact-missing", seeded.id, {
+      kind: "model.select",
+      selection,
+    });
+    const receipt = {
+      id: "receipt-model-fact-missing",
+      commandId: stored.id,
+      status: "completed" as const,
+      result: { kind: "model.selected" as const, sessionId: seeded.id },
+      recordedAt: 2,
+      sequence: 2,
+    };
+    await ledger.transaction((transaction) => {
+      transaction.insertSession(seeded);
+      transaction.saveCommand(stored);
+      transaction.appendEvent({
+        id: "event-model-command",
+        sessionId: seeded.id,
+        sequence: 1,
+        occurredAt: 1,
+        recordedAt: 1,
+        provenance: userProvenance,
+        commandId: stored.id,
+        payload: { kind: "command.recorded", command: stored },
+      });
+      transaction.appendReceipt(receipt);
+      transaction.appendEvent({
+        id: "event-model-receipt",
+        sessionId: seeded.id,
+        sequence: 2,
+        occurredAt: 2,
+        recordedAt: 2,
+        provenance: userProvenance,
+        commandId: stored.id,
+        payload: { kind: "command.receipt.recorded", receipt },
+      });
+    });
+
+    await expect(
+      plane.submit({
+        commandId: stored.id,
+        sessionId: seeded.id,
+        intent: { kind: "model.select", selection },
+        provenance: userProvenance,
+      }),
+    ).rejects.toThrow("incomplete model selection history");
+  });
+
+  it("rejects a completed model-selection replay whose immutable fact disagrees with intent", async () => {
+    const { ledger, plane } = composition();
+    const seeded = sessionRecord("session-model-fact-mismatch");
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "high" as const,
+    };
+    const stored = command("command-model-fact-mismatch", seeded.id, {
+      kind: "model.select",
+      selection,
+    });
+    const receipt = {
+      id: "receipt-model-fact-mismatch",
+      commandId: stored.id,
+      status: "completed" as const,
+      result: { kind: "model.selected" as const, sessionId: seeded.id },
+      recordedAt: 3,
+      sequence: 3,
+    };
+    await ledger.transaction((transaction) => {
+      transaction.insertSession(seeded);
+      transaction.saveCommand(stored);
+      transaction.appendEvent({
+        id: "event-model-mismatch-command",
+        sessionId: seeded.id,
+        sequence: 1,
+        occurredAt: 1,
+        recordedAt: 1,
+        provenance: userProvenance,
+        commandId: stored.id,
+        payload: { kind: "command.recorded", command: stored },
+      });
+      transaction.appendEvent({
+        id: "event-model-mismatch-fact",
+        sessionId: seeded.id,
+        sequence: 2,
+        occurredAt: 2,
+        recordedAt: 2,
+        provenance: userProvenance,
+        commandId: stored.id,
+        payload: {
+          kind: "model.selected",
+          selection: { ...selection, reasoningLevel: "medium" },
+        },
+      });
+      transaction.appendReceipt(receipt);
+      transaction.appendEvent({
+        id: "event-model-mismatch-receipt",
+        sessionId: seeded.id,
+        sequence: 3,
+        occurredAt: 3,
+        recordedAt: 3,
+        provenance: userProvenance,
+        commandId: stored.id,
+        payload: { kind: "command.receipt.recorded", receipt },
+      });
+    });
+
+    await expect(
+      plane.submit({
+        commandId: stored.id,
+        sessionId: seeded.id,
+        intent: { kind: "model.select", selection },
+        provenance: userProvenance,
+      }),
+    ).rejects.toThrow("model selection history that does not match intent");
   });
 
   it("detects a pre-existing create command with a missing receipt, Session, or created event", async () => {

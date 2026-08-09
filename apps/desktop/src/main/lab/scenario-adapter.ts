@@ -151,6 +151,15 @@ class LabScenarioBinding implements BindingHandle {
         native: this.native,
       };
     }
+    if (command.kind === "model.select") {
+      return {
+        commandId: command.commandId,
+        status: "rejected",
+        code: "unsupported_command",
+        detail: `Lab scenario ${this.#options.scenario.id} has no live model policy`,
+        native: this.native,
+      };
+    }
     if (command.kind === "executor.retry") {
       return {
         commandId: command.commandId,

@@ -6,6 +6,7 @@ import type {
   ListLatestTicketSignalsQuery,
   ListSessionsQuery,
   LatestSessionSignal,
+  ModelSelection,
   Session,
   SessionAttachment,
   SessionAttachmentFailure,
@@ -24,6 +25,7 @@ import type {
 } from "@volli/shared";
 import {
   isSessionAttachmentContinuity,
+  REASONING_LEVELS,
   sameCommandReceipt,
   SESSION_INTERACTION_CANCEL_REASONS,
 } from "@volli/shared";
@@ -568,6 +570,11 @@ function decodePayload(value: unknown, context: string): SessionEventPayload {
       return { kind };
     case "session.retitled":
       return { kind, title: readNullableString(record.title, `${context}.title`) };
+    case "model.selected":
+      return {
+        kind,
+        selection: decodeModelSelection(record.selection, `${context}.selection`),
+      };
     case "session.input.recorded": {
       const input = asRecord(record.input, `${context}.input`);
       return {
@@ -722,6 +729,11 @@ function decodeIntent(value: unknown, context: string): SessionCommandIntent {
         signal: enumValue(row.signal, ["done", "blocked"], `${context}.signal`),
         reason: readNullableString(row.reason, `${context}.reason`),
       };
+    case "model.select":
+      return {
+        kind,
+        selection: decodeModelSelection(row.selection, `${context}.selection`),
+      };
     case "executor.start":
       return {
         kind,
@@ -802,6 +814,7 @@ function decodeReceiptResult(value: unknown, context: string): CommandReceiptRes
       "session.archived",
       "session.retitled",
       "session.signaled",
+      "model.selected",
       "executor.start.requested",
       "executor.stop.requested",
       "executor.interrupted",
@@ -812,6 +825,15 @@ function decodeReceiptResult(value: unknown, context: string): CommandReceiptRes
     `${context}.kind`,
   );
   return { kind, sessionId: readString(row.sessionId, `${context}.sessionId`) };
+}
+
+function decodeModelSelection(value: unknown, context: string): ModelSelection {
+  const row = asRecord(value, context);
+  return {
+    providerId: readString(row.providerId, `${context}.providerId`),
+    modelId: readString(row.modelId, `${context}.modelId`),
+    reasoningLevel: enumValue(row.reasoningLevel, REASONING_LEVELS, `${context}.reasoningLevel`),
+  };
 }
 
 function decodeAttachment(value: unknown, context: string): SessionAttachment {

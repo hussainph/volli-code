@@ -8,19 +8,15 @@
  * message that leaves exactly once — are all about *when* things happen, and
  * none of them is observable through a component.
  */
-import type { SessionAttachmentProjection, SessionProjection } from "@volli/shared";
+import type { CommandReceipt, SessionAttachmentProjection, SessionProjection } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   browserChatTransport,
   isDeliverable,
   isWorking,
-  pinsOwnModel,
   racingFlushScheduler,
-  sessionAdapterId,
   settledLifecycle,
-  DEFAULT_CHAT_EXECUTOR,
-  PI_TICKET_EXECUTOR,
   type ChatCommandRequest,
   type ChatSessionRpc,
   type ChatSessionSlice,
@@ -30,6 +26,7 @@ import {
 } from "@renderer/chat/client";
 import { getChatClient } from "@renderer/chat/registry";
 import { EMPTY_TRANSCRIPT } from "@renderer/chat/transcript";
+import { rejectedReceipt } from "@renderer/chat/wire";
 import { createChatSessionsStore } from "@renderer/stores/chat-sessions";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
@@ -37,10 +34,28 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 /* ------------------------------------------------------------------ scripts */
 
 const SESSION = { id: "durable", projectId: "p1", ticketId: null, title: null, createdAt: 0 };
-const ACCEPTED = { sessionId: SESSION.id, receipt: { status: "accepted" } };
+const ACCEPTED_RECEIPT: CommandReceipt = {
+  id: "receipt-accepted",
+  commandId: "command-accepted",
+  status: "accepted",
+  acceptedAt: 0,
+  result: { kind: "session.signaled", sessionId: SESSION.id },
+  recordedAt: 0,
+  sequence: 1,
+};
+const REJECTED_RECEIPT: CommandReceipt = {
+  id: "receipt-rejected",
+  commandId: "command-rejected",
+  status: "rejected",
+  code: "adapter_unavailable",
+  detail: "OpenCode is unavailable",
+  recordedAt: 0,
+  sequence: 1,
+};
+const ACCEPTED = { sessionId: SESSION.id, receipt: ACCEPTED_RECEIPT };
 const REFUSED = {
   sessionId: SESSION.id,
-  receipt: { status: "rejected", code: "adapter_unavailable", detail: "OpenCode is unavailable" },
+  receipt: REJECTED_RECEIPT,
 };
 
 function attachmentFor(id: string, adapterId = "opencode"): SessionAttachmentProjection {
@@ -73,6 +88,7 @@ function projectionFor(attachmentId: string | null, adapterId = "opencode"): Ses
     capabilities: [],
     interactions: { active: [], resolved: [] },
     signal: null,
+    modelSelection: null,
     turnActive: false,
     lastActivityAt: SESSION.createdAt,
     bornTicketless: SESSION.ticketId === null,
@@ -119,7 +135,6 @@ function sliceOf(overrides: Partial<ChatSessionSlice> = {}): ChatSessionSlice {
     lifecycle: "ready",
     sessionError: null,
     queue: [],
-    selection: { providerId: "", modelId: "", variant: "", agent: "" },
     ...overrides,
   };
 }
@@ -128,7 +143,9 @@ function sliceOf(overrides: Partial<ChatSessionSlice> = {}): ChatSessionSlice {
 
 interface CommandAnswer {
   sessionId: string;
-  receipt?: unknown;
+  receipt?: CommandReceipt | null;
+  state?: "ready" | "needs-recovery";
+  throughSequence?: number;
 }
 
 class FakeStream {
@@ -157,6 +174,8 @@ class FakeRpc implements ChatSessionRpc {
   readonly cancels: { sessionId: string; interactionId: string }[] = [];
   readonly reconciles: { sessionId: string; attachmentId: string }[] = [];
   readonly streams: FakeStream[] = [];
+  readonly attaches: Array<{ operationId: string; sessionId: string; bornTicketless: boolean }> =
+    [];
   projectionQueries = 0;
 
   snapshotFrames: readonly unknown[] = [];
@@ -170,6 +189,7 @@ class FakeRpc implements ChatSessionRpc {
   projectionError: Error | null = null;
 
   answer: (request: ChatCommandRequest) => CommandAnswer | Promise<CommandAnswer> = () => ACCEPTED;
+  answerAttach: () => CommandAnswer | Promise<CommandAnswer> = () => ACCEPTED;
   answerCancel: () => unknown = () => ACCEPTED;
   answerReconcile: () => unknown = () => ACCEPTED;
   /** Runs inside `subscribe`, before the caller holds the handle. */
@@ -285,6 +305,19 @@ async function adopted(prepare: (rpc: FakeRpc) => void = () => undefined) {
     rpc,
     scheduler,
     newCommandId: () => `cmd-${++commandIds}`,
+    startSession: async () => {
+      throw new Error("adopted fixtures do not start Sessions");
+    },
+    attachSession: async (input) => {
+      rpc.attaches.push(input);
+      const answer = await rpc.answerAttach();
+      return {
+        sessionId: answer.sessionId,
+        state: answer.state ?? (rejectedReceipt(answer) === null ? "ready" : "needs-recovery"),
+        receipt: answer.receipt ?? null,
+        throughSequence: answer.throughSequence ?? 1,
+      };
+    },
   }));
   const sessionId = `session-${++sessionCounter}`;
   open.push({ close: () => store.getState().closeChatSession(sessionId) });
@@ -393,11 +426,15 @@ describe("racingFlushScheduler", () => {
 });
 
 describe("browserChatTransport", () => {
-  it("builds the app's transport over the IPC bridge and the window's pacing", () => {
+  it("routes product starts and retries without renderer runtime identity", async () => {
+    const procedures: string[] = [];
     vi.stubGlobal("window", {
       api: {
         sessionRpc: {
-          request: async () => ({ ok: true, data: null }),
+          request: async (request: { procedure: string }) => {
+            procedures.push(request.procedure);
+            return { ok: true, data: null };
+          },
           onEvent: () => () => undefined,
           cancel: () => undefined,
         },
@@ -413,6 +450,34 @@ describe("browserChatTransport", () => {
     expect(typeof transport.rpc.session.snapshot.query).toBe("function");
     expect(transport.newCommandId()).not.toBe(transport.newCommandId());
     expect(typeof transport.scheduler.schedule(() => undefined)).toBe("function");
+    await transport.startSession({
+      operationId: "project-start",
+      projectId: "project-1",
+      ticketId: null,
+      title: "Scratch",
+    });
+    await transport.startSession({
+      operationId: "ticket-start",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "VC-1",
+    });
+    await transport.attachSession({
+      operationId: "project-retry",
+      sessionId: "session-1",
+      bornTicketless: true,
+    });
+    await transport.attachSession({
+      operationId: "ticket-retry",
+      sessionId: "session-2",
+      bornTicketless: false,
+    });
+    expect(procedures).toEqual([
+      "projectSessions.start",
+      "ticketSessions.start",
+      "projectSessions.attach",
+      "ticketSessions.attach",
+    ]);
     vi.unstubAllGlobals();
   });
 });
@@ -429,38 +494,27 @@ describe("session derivations", () => {
     expect(isWorking(sliceOf({ transcript: turning }))).toBe(false);
   });
 
-  it("is deliverable only with both a bound executor and a picked model", () => {
+  it("lets the private ticketless compatibility route use its main-owned default", () => {
     const live = projectionFor("attach-1");
-    const picked = { providerId: "p", modelId: "m", variant: "", agent: "" };
 
-    expect(isDeliverable(sliceOf({ projection: live, selection: picked }))).toBe(true);
-    expect(isDeliverable(sliceOf({ projection: live }))).toBe(false);
-    expect(isDeliverable(sliceOf({ selection: picked }))).toBe(false);
+    expect(isDeliverable(sliceOf({ projection: live }))).toBe(true);
+    expect(isDeliverable(sliceOf())).toBe(false);
   });
 
-  it("is deliverable with no model at all under an executor that pins its own", () => {
-    const pi = projectionFor("attach-1", "pi");
+  it("uses durable Ticket model policy rather than executor identity for delivery", () => {
+    const ticket = { ...projectionFor("attach-1"), bornTicketless: false };
+    const selected = {
+      ...ticket,
+      modelSelection: {
+        providerId: "openai-codex",
+        modelId: "gpt-5.6-sol",
+        reasoningLevel: "high" as const,
+      },
+    };
 
-    expect(isDeliverable(sliceOf({ projection: pi }))).toBe(true);
-    // Still nowhere to deliver to, whatever the Session would attach.
-    expect(isDeliverable(sliceOf({ projection: projectionFor(null) }))).toBe(false);
-  });
-
-  it("names the executor a Session runs, durable record first", () => {
-    expect(pinsOwnModel(PI_TICKET_EXECUTOR.adapterId)).toBe(true);
-    expect(pinsOwnModel(DEFAULT_CHAT_EXECUTOR.adapterId)).toBe(false);
-
-    // The reopen path: adopted with no executor named, so only the attachment
-    // the ledger already holds can say this is a Pi Session.
-    const reopened = sliceOf({ projection: projectionFor("attach-1", "pi") });
-    expect(sessionAdapterId(reopened, DEFAULT_CHAT_EXECUTOR)).toBe("pi");
-
-    // The fresh-create path: the attach is still in flight, so the client's own
-    // choice is all there is — and it is about to be the record.
-    const attaching = sliceOf({ projection: projectionFor(null) });
-    expect(sessionAdapterId(attaching, PI_TICKET_EXECUTOR)).toBe("pi");
-    expect(sessionAdapterId(sliceOf(), PI_TICKET_EXECUTOR)).toBe("pi");
-    expect(sessionAdapterId(undefined, DEFAULT_CHAT_EXECUTOR)).toBe("opencode");
+    expect(isDeliverable(sliceOf({ projection: selected }))).toBe(true);
+    expect(isDeliverable(sliceOf({ projection: ticket }))).toBe(false);
+    expect(isDeliverable(sliceOf({ projection: { ...selected, liveExecutor: null } }))).toBe(false);
   });
 
   it("holds starting and error against anything the stream says", () => {
@@ -732,26 +786,41 @@ describe("reconnect", () => {
 
 /* ------------------------------------------------------------- the executor */
 
-describe("attach", () => {
+describe("product-owned attach", () => {
   it("reports the refusal a harness answered with, and keeps the Session", async () => {
     const { client, slice } = await adopted((fake) => {
-      fake.answer = () => REFUSED;
+      fake.answerAttach = () => REFUSED;
     });
 
-    await expect(client.attach()).resolves.toBe(false);
+    await expect(client.retryAttach()).resolves.toBe(false);
     expect(slice()!.lifecycle).toBe("error");
-    expect(slice()!.sessionError).toBe("Could not start OpenCode: OpenCode is unavailable");
+    expect(slice()!.sessionError).toBe("Could not start Session: OpenCode is unavailable");
   });
 
   it("reports a transport failure the same way", async () => {
     const { client, slice } = await adopted((fake) => {
-      fake.answer = () => {
+      fake.answerAttach = () => {
         throw new Error("socket hang up");
       };
     });
 
-    await expect(client.attach()).resolves.toBe(false);
-    expect(slice()!.sessionError).toBe("Could not start OpenCode: socket hang up");
+    await expect(client.retryAttach()).resolves.toBe(false);
+    expect(slice()!.sessionError).toBe("Could not start Session: socket hang up");
+  });
+
+  it("keeps an attachment without a terminal receipt in recovery", async () => {
+    const { client, slice } = await adopted((fake) => {
+      fake.answerAttach = () => ({
+        sessionId: SESSION.id,
+        state: "needs-recovery",
+        receipt: null,
+        throughSequence: 1,
+      });
+    });
+
+    await expect(client.retryAttach()).resolves.toBe(false);
+    expect(slice()!.lifecycle).toBe("error");
+    expect(slice()!.sessionError).toBe("Could not start Session: attachment needs recovery");
   });
 });
 
@@ -761,43 +830,40 @@ describe("retryAttach", () => {
 
     await expect(client.retryAttach()).resolves.toBe(true);
 
-    expect(rpc.commands).toEqual([
-      {
-        commandId: expect.any(String),
-        sessionId,
-        command: {
-          kind: "adapter.attach",
-          adapterId: "opencode",
-          profileId: "native",
-          continuity: "fresh",
-        },
-      },
+    expect(rpc.attaches).toEqual([
+      { operationId: expect.any(String), sessionId, bornTicketless: true },
     ]);
+    expect(rpc.commands).toEqual([]);
     expect(rpc.streams).toHaveLength(2);
     expect(slice()!.lifecycle).toBe("ready");
   });
 
-  it("attaches what the ledger names, not what this client guessed", async () => {
-    // The reopen path: adopted without an executor, so the client holds the
-    // OpenCode default while the Session's own history was written by Pi.
+  it("routes recovery from durable Session birth rather than executor identity", async () => {
     const { client, rpc } = await adopted((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1", "pi");
+      fake.snapshotProjection = { ...projectionFor(null), bornTicketless: false };
     });
 
     await expect(client.retryAttach()).resolves.toBe(true);
 
-    expect(rpc.commands).toHaveLength(1);
-    expect(rpc.commands[0]!.command).toMatchObject({
-      kind: "adapter.attach",
-      adapterId: "pi",
-      profileId: "native",
+    expect(rpc.attaches).toEqual([
+      { operationId: expect.any(String), sessionId: expect.any(String), bornTicketless: false },
+    ]);
+  });
+
+  it("does not guess a runtime route before durable Session origin is known", async () => {
+    const { client, rpc } = await adopted((fake) => {
+      fake.snapshotError = new Error("snapshot unavailable");
     });
+
+    await expect(client.retryAttach()).resolves.toBe(false);
+
+    expect(rpc.attaches).toEqual([]);
   });
 
   it("refuses while an attempt is already in flight", async () => {
     const gate = deferred();
     const { client } = await adopted((fake) => {
-      fake.answer = async () => {
+      fake.answerAttach = async () => {
         await gate.promise;
         return ACCEPTED;
       };
@@ -833,7 +899,8 @@ describe("recover", () => {
 
     await expect(client.recover()).resolves.toBe(true);
 
-    expect(rpc.commands.map((request) => request.command.kind)).toEqual(["adapter.attach"]);
+    expect(rpc.attaches).toHaveLength(1);
+    expect(rpc.commands).toEqual([]);
   });
 
   it("does nothing for a Session this surface no longer holds", async () => {
@@ -872,24 +939,67 @@ describe("retryRuntime", () => {
   });
 });
 
+describe("selectModel", () => {
+  it("records a per-Session override without runtime identity", async () => {
+    const { client, rpc, sessionId } = await adopted((fake) => {
+      fake.snapshotProjection = { ...projectionFor("attach-1"), bornTicketless: false };
+    });
+
+    await expect(
+      client.selectModel({
+        providerId: "openai-codex",
+        modelId: "gpt-5.6-sol",
+        reasoningLevel: "xhigh",
+      }),
+    ).resolves.toBe(true);
+
+    expect(rpc.commands).toEqual([
+      {
+        commandId: expect.any(String),
+        sessionId,
+        command: {
+          kind: "model.select",
+          selection: {
+            providerId: "openai-codex",
+            modelId: "gpt-5.6-sol",
+            reasoningLevel: "xhigh",
+          },
+        },
+      },
+    ]);
+  });
+
+  it("does not issue a model command during an active turn", async () => {
+    const { client, rpc } = await adopted((fake) => {
+      fake.snapshotProjection = {
+        ...projectionFor("attach-1"),
+        bornTicketless: false,
+        turnActive: true,
+      };
+    });
+
+    await expect(
+      client.selectModel({
+        providerId: "openai-codex",
+        modelId: "gpt-5.6-sol",
+        reasoningLevel: "high",
+      }),
+    ).resolves.toBe(false);
+    expect(rpc.commands).toEqual([]);
+  });
+});
+
 /* -------------------------------------------------------------- the message */
 
 describe("submit", () => {
   async function ready(prepare: (rpc: FakeRpc) => void = () => undefined) {
-    const session = await adopted((fake) => {
+    return adopted((fake) => {
       fake.snapshotProjection = projectionFor("attach-1");
       prepare(fake);
     });
-    session.store.getState().setSelection(session.sessionId, {
-      providerId: "anthropic",
-      modelId: "claude",
-      variant: "thinking",
-      agent: "build",
-    });
-    return session;
   }
 
-  it("sends the picked model, variant and agent", async () => {
+  it("keeps model policy out of message commands", async () => {
     const { client, rpc, sessionId } = await ready();
 
     await expect(client.submit("  ship it  ", "steer")).resolves.toBe(true);
@@ -906,44 +1016,34 @@ describe("submit", () => {
             parts: [{ type: "text", text: "ship it" }],
           },
           delivery: "steer",
-          model: { providerId: "anthropic", modelId: "claude" },
-          variant: "thinking",
-          agent: "build",
         },
       },
     ]);
+    expect(Object.keys(rpc.submissions()[0]!.command).toSorted()).toEqual([
+      "delivery",
+      "kind",
+      "message",
+    ]);
   });
 
-  it("sends null for a variant and an agent nobody picked", async () => {
-    const { client, rpc, store, sessionId } = await ready();
-    store.getState().setSelection(sessionId, {
-      providerId: "anthropic",
-      modelId: "claude",
-      variant: "",
-      agent: "",
-    });
-
-    await client.submit("go", "queue");
-
-    const command = rpc.submissions()[0]!.command;
-    expect(command).toMatchObject({ variant: null, agent: null });
-  });
-
-  it("sends a null model for an executor that pins its own", async () => {
-    // No `setSelection` at all: a Pi Session never picks one, and the Session
-    // edge requires non-empty ids — a pair of empty strings is rejected before
-    // the engine ever sees the message.
+  it("uses the Ticket's durable selection without copying it onto the message", async () => {
     const { client, rpc } = await adopted((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1", "pi");
+      fake.snapshotProjection = {
+        ...projectionFor("attach-1"),
+        bornTicketless: false,
+        modelSelection: {
+          providerId: "openai-codex",
+          modelId: "gpt-5.6-sol",
+          reasoningLevel: "high",
+        },
+      };
     });
 
     await expect(client.submit("go", "queue")).resolves.toBe(true);
 
-    expect(rpc.submissions()[0]!.command).toMatchObject({
-      model: null,
-      variant: null,
-      agent: null,
-    });
+    expect(rpc.submissions()[0]!.command).not.toHaveProperty("model");
+    expect(rpc.submissions()[0]!.command).not.toHaveProperty("variant");
+    expect(rpc.submissions()[0]!.command).not.toHaveProperty("agent");
   });
 
   it("marks the Session working once the harness took it", async () => {
@@ -1005,16 +1105,9 @@ describe("auto-title on delivery", () => {
   }
 
   async function readyWithTitle(title: string | null) {
-    const session = await adopted((fake) => {
+    return adopted((fake) => {
       fake.snapshotProjection = projectionWithTitle(title);
     });
-    session.store.getState().setSelection(session.sessionId, {
-      providerId: "anthropic",
-      modelId: "claude",
-      variant: "",
-      agent: "",
-    });
-    return session;
   }
 
   it("renames a Session still on its creation default once a message delivers", async () => {
@@ -1041,13 +1134,6 @@ describe("auto-title on delivery", () => {
         session: { ...SESSION, title: "Chat 1" },
       };
     });
-    store.getState().setSelection(sessionId, {
-      providerId: "anthropic",
-      modelId: "claude",
-      variant: "",
-      agent: "",
-    });
-
     store.getState().enqueue(sessionId, { id: "q1", text: "Fix the parser" });
     expect(renameMock).not.toHaveBeenCalled();
 
@@ -1212,14 +1298,7 @@ describe("resolveInteraction", () => {
 
 describe("the queued message", () => {
   async function pending(prepare: (rpc: FakeRpc) => void = () => undefined) {
-    const session = await adopted(prepare);
-    session.store.getState().setSelection(session.sessionId, {
-      providerId: "anthropic",
-      modelId: "claude",
-      variant: "",
-      agent: "",
-    });
-    return session;
+    return adopted(prepare);
   }
 
   it("holds a message written before an executor was live, and releases it once", async () => {

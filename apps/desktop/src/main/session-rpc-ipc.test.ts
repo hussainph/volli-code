@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { RuntimeCatalog, SessionRuntime, SessionStreamFrame } from "@volli/session-engine";
+import type { SessionRuntime, SessionStreamFrame } from "@volli/session-engine";
 
 const { handlers, listeners } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
@@ -30,17 +30,6 @@ vi.mock("@volli/session-rpc", async (importOriginal) => {
       return {
         createCaller: () => ({
           session: { subscribe: async () => stream },
-          runtimeCatalog: {
-            inspect: async () => {
-              throw new Error("runtimeCatalog is not exercised by the streaming fixture");
-            },
-            save: async () => {
-              throw new Error("runtimeCatalog is not exercised by the streaming fixture");
-            },
-            resolve: async () => {
-              throw new Error("runtimeCatalog is not exercised by the streaming fixture");
-            },
-          },
         }),
       } as unknown as ReturnType<typeof actual.createSessionRouter>;
     },
@@ -151,54 +140,6 @@ function frame(sequence: number): SessionStreamFrame {
   };
 }
 
-function runtimeCatalogFixture(): {
-  resolveRuntimeCatalog: (projectId?: string) => RuntimeCatalog;
-  calls: {
-    resolvedFor: (string | undefined)[];
-    inspected: unknown[];
-    saved: unknown[];
-    cleared: unknown[];
-    resolved: unknown[];
-  };
-} {
-  const calls = {
-    resolvedFor: [] as (string | undefined)[],
-    inspected: [] as unknown[],
-    saved: [] as unknown[],
-    cleared: [] as unknown[],
-    resolved: [] as unknown[],
-  };
-  const catalog: RuntimeCatalog = {
-    inspect: async (input) => {
-      calls.inspected.push(input);
-      return { providers: [], models: [], modelTotal: 0 } as never;
-    },
-    save: async (input) => {
-      calls.saved.push(input);
-      return input.preferences;
-    },
-    clear: async (input) => {
-      calls.cleared.push(input);
-    },
-    resolve: async (input) => {
-      calls.resolved.push(input);
-      return {
-        adapterId: input.adapterId,
-        observedAt: 10,
-        catalog: { providers: [], models: [], agents: [] },
-        selection: { providerId: "", modelId: "", variant: "", agent: "" },
-      };
-    },
-  };
-  return {
-    resolveRuntimeCatalog: (projectId) => {
-      calls.resolvedFor.push(projectId);
-      return catalog;
-    },
-    calls,
-  };
-}
-
 function sender(id = 1): FakeSender {
   const destroyedListeners: (() => void)[] = [];
   let destroyed = false;
@@ -271,7 +212,7 @@ describe("registerSessionRpcIpcHandlers", () => {
       invoke(sender(), { procedure: "session.projection", input: { sessionId: "session-1" } }),
     ).resolves.toEqual({
       ok: true,
-      data: { projection: { capabilities: [] }, throughSequence: 4 },
+      data: { projection: {}, throughSequence: 4 },
     });
     await expect(
       invoke(sender(), {
@@ -285,11 +226,14 @@ describe("registerSessionRpcIpcHandlers", () => {
         procedure: "session.command",
         input: {
           commandId: "command-1",
+          sessionId: "session-1",
           command: {
-            kind: "session.create",
-            projectId: "project-1",
-            ticketId: null,
-            title: null,
+            kind: "model.select",
+            selection: {
+              providerId: "openai-codex",
+              modelId: "gpt-5.6-sol",
+              reasoningLevel: "high",
+            },
           },
         },
       }),
@@ -299,7 +243,10 @@ describe("registerSessionRpcIpcHandlers", () => {
         procedure: "session.refreshCapabilities",
         input: { sessionId: "session-1", attachmentId: "attachment-1" },
       }),
-    ).resolves.toEqual({ ok: true, data: { catalog: [] } });
+    ).resolves.toEqual({
+      ok: true,
+      data: { catalog: [] },
+    });
     await expect(
       invoke(sender(), {
         procedure: "session.reconcile",
@@ -558,140 +505,151 @@ describe("registerSessionRpcIpcHandlers", () => {
     await registration.close();
   });
 
-  it("routes runtimeCatalog.inspect over IPC, carrying the resolver through the context", async () => {
+  it("routes product-owned Model Access inspection over IPC", async () => {
     const fixture = runtimeFixture();
-    const catalog = runtimeCatalogFixture();
+    const calls: unknown[] = [];
     const registration = registerSessionRpcIpcHandlers({
       runtime: fixture.runtime,
-      resolveRuntimeCatalog: catalog.resolveRuntimeCatalog,
+      inspectModelAccess: async (input) => {
+        calls.push(input);
+        return { observedAt: 42, providers: [], models: [] };
+      },
     });
 
     await expect(
       invoke(sender(), {
-        procedure: "runtimeCatalog.inspect",
-        input: { projectId: "project-1", adapterId: "opencode" },
+        procedure: "modelAccess.inspect",
+        input: { refresh: true },
       }),
-    ).resolves.toEqual({ ok: true, data: { providers: [], models: [], modelTotal: 0 } });
-
-    expect(catalog.calls.resolvedFor).toEqual(["project-1"]);
-    // `projectId` reaches the catalog too: it picks the instance AND scopes the
-    // stored preferences that instance answers with.
-    expect(catalog.calls.inspected).toEqual([{ projectId: "project-1", adapterId: "opencode" }]);
+    ).resolves.toEqual({
+      ok: true,
+      data: { observedAt: 42, providers: [], models: [] },
+    });
+    expect(calls).toEqual([{ refresh: true }]);
     await registration.close();
   });
 
-  it("routes runtimeCatalog.save over IPC, carrying the resolver through the context", async () => {
+  it("routes the user-configured Model Access default over IPC", async () => {
     const fixture = runtimeFixture();
-    const catalog = runtimeCatalogFixture();
+    const writes: unknown[] = [];
     const registration = registerSessionRpcIpcHandlers({
       runtime: fixture.runtime,
-      resolveRuntimeCatalog: catalog.resolveRuntimeCatalog,
-    });
-    const preferences = {
-      version: 1 as const,
-      enabledModels: [],
-      defaults: { providerId: "", modelId: "", variant: "", agent: "" },
-    };
-
-    await expect(
-      invoke(sender(), {
-        procedure: "runtimeCatalog.save",
-        input: { adapterId: "opencode", preferences },
+      readDefaultModelSelection: () => ({
+        providerId: "openai-codex",
+        modelId: "gpt-5.6-sol",
+        reasoningLevel: "high",
       }),
-    ).resolves.toEqual({ ok: true, data: preferences });
-
-    // No `projectId` on this request — the router resolves against `undefined`.
-    expect(catalog.calls.resolvedFor).toEqual([undefined]);
-    expect(catalog.calls.saved).toEqual([{ adapterId: "opencode", preferences }]);
-    await registration.close();
-  });
-
-  it("routes runtimeCatalog.clear over IPC, which requires a projectId", async () => {
-    const fixture = runtimeFixture();
-    const catalog = runtimeCatalogFixture();
-    const registration = registerSessionRpcIpcHandlers({
-      runtime: fixture.runtime,
-      resolveRuntimeCatalog: catalog.resolveRuntimeCatalog,
+      writeDefaultModelSelection: (selection) => {
+        writes.push(selection);
+      },
     });
 
     await expect(
-      invoke(sender(), {
-        procedure: "runtimeCatalog.clear",
-        input: { projectId: "project-1", adapterId: "opencode" },
-      }),
-    ).resolves.toEqual({ ok: true, data: undefined });
-    // A clear drops a project's override; there is nothing to drop globally.
-    await expect(
-      invoke(sender(), { procedure: "runtimeCatalog.clear", input: { adapterId: "opencode" } }),
-    ).resolves.toMatchObject({ ok: false });
-
-    expect(catalog.calls.resolvedFor).toEqual(["project-1"]);
-    expect(catalog.calls.cleared).toEqual([{ projectId: "project-1", adapterId: "opencode" }]);
-    await registration.close();
-  });
-
-  it("routes runtimeCatalog.resolve over IPC, carrying the resolver through the context", async () => {
-    const fixture = runtimeFixture();
-    const catalog = runtimeCatalogFixture();
-    const registration = registerSessionRpcIpcHandlers({
-      runtime: fixture.runtime,
-      resolveRuntimeCatalog: catalog.resolveRuntimeCatalog,
-    });
-
-    await expect(
-      invoke(sender(), { procedure: "runtimeCatalog.resolve", input: { adapterId: "opencode" } }),
+      invoke(sender(), { procedure: "modelAccess.defaultSelection", input: undefined }),
     ).resolves.toEqual({
       ok: true,
       data: {
-        adapterId: "opencode",
-        observedAt: 10,
-        catalog: { providers: [], models: [], agents: [] },
-        selection: { providerId: "", modelId: "", variant: "", agent: "" },
+        providerId: "openai-codex",
+        modelId: "gpt-5.6-sol",
+        reasoningLevel: "high",
       },
     });
-
-    expect(catalog.calls.resolvedFor).toEqual([undefined]);
-    expect(catalog.calls.resolved).toEqual([{ adapterId: "opencode" }]);
-    await registration.close();
-  });
-
-  it("fails clearly when no resolver is registered for this transport", async () => {
-    const fixture = runtimeFixture();
-    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
-
-    await expect(
-      invoke(sender(), { procedure: "runtimeCatalog.resolve", input: { adapterId: "opencode" } }),
-    ).resolves.toMatchObject({
-      ok: false,
-      error: { message: "Runtime Catalog is unavailable on this transport" },
-    });
-    await registration.close();
-  });
-
-  // The bridge flattens every failure into `{ code, message }`, and a caller
-  // that cannot tell "this project does not exist" from "the catalog broke"
-  // has to guess which one it is showing. The router raises the resolver's
-  // rejection as a TRPCError, so the code has to survive the flattening — not
-  // collapse into the INTERNAL_SERVER_ERROR fallback the sanitizer applies to
-  // anything it cannot read a code off.
-  it("carries a NOT_FOUND for an unknown project id across the bridge, code intact", async () => {
-    const fixture = runtimeFixture();
-    const registration = registerSessionRpcIpcHandlers({
-      runtime: fixture.runtime,
-      resolveRuntimeCatalog: (projectId) => {
-        throw new Error(`Unknown project ${projectId ?? "none"}`);
-      },
-    });
-
     await expect(
       invoke(sender(), {
-        procedure: "runtimeCatalog.inspect",
-        input: { projectId: "ghost-project", adapterId: "opencode" },
+        procedure: "modelAccess.setDefault",
+        input: {
+          providerId: "anthropic",
+          modelId: "claude-sonnet",
+          reasoningLevel: "medium",
+        },
       }),
     ).resolves.toEqual({
-      ok: false,
-      error: { code: "NOT_FOUND", message: "Unknown project ghost-project" },
+      ok: true,
+      data: {
+        providerId: "anthropic",
+        modelId: "claude-sonnet",
+        reasoningLevel: "medium",
+      },
     });
+    expect(writes).toEqual([
+      { providerId: "anthropic", modelId: "claude-sonnet", reasoningLevel: "medium" },
+    ]);
+    await registration.close();
+  });
+
+  it("routes product-owned Ticket Session start over IPC", async () => {
+    const fixture = runtimeFixture();
+    const calls: unknown[] = [];
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: fixture.runtime,
+      startTicketSession: async (input) => {
+        calls.push(input);
+        return {
+          sessionId: "session-1",
+          state: "ready",
+          receipt: null,
+          throughSequence: 6,
+        };
+      },
+    });
+    const input = {
+      operationId: "operation-1",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "VC-1",
+    };
+
+    await expect(invoke(sender(), { procedure: "ticketSessions.start", input })).resolves.toEqual({
+      ok: true,
+      data: { sessionId: "session-1", state: "ready", receipt: null, throughSequence: 6 },
+    });
+    expect(calls).toEqual([input]);
+    await registration.close();
+  });
+
+  it("routes product-owned reattach and temporary project starts over IPC", async () => {
+    const fixture = runtimeFixture();
+    const calls: unknown[] = [];
+    const answer = {
+      sessionId: "session-1",
+      state: "ready" as const,
+      receipt: null,
+      throughSequence: 6,
+    };
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: fixture.runtime,
+      attachTicketSession: async (input) => {
+        calls.push(["ticket.attach", input]);
+        return answer;
+      },
+      startProjectSession: async (input) => {
+        calls.push(["project.start", input]);
+        return answer;
+      },
+      attachProjectSession: async (input) => {
+        calls.push(["project.attach", input]);
+        return answer;
+      },
+    });
+
+    await invoke(sender(), {
+      procedure: "ticketSessions.attach",
+      input: { operationId: "ticket-retry", sessionId: "session-1" },
+    });
+    await invoke(sender(), {
+      procedure: "projectSessions.start",
+      input: { operationId: "project-start", projectId: "project-1", title: "Scratch" },
+    });
+    await invoke(sender(), {
+      procedure: "projectSessions.attach",
+      input: { operationId: "project-retry", sessionId: "session-2" },
+    });
+
+    expect(calls).toEqual([
+      ["ticket.attach", { operationId: "ticket-retry", sessionId: "session-1" }],
+      ["project.start", { operationId: "project-start", projectId: "project-1", title: "Scratch" }],
+      ["project.attach", { operationId: "project-retry", sessionId: "session-2" }],
+    ]);
     await registration.close();
   });
 });

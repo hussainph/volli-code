@@ -222,6 +222,7 @@ export function getSession(db: Database.Database, sessionId: string): SessionRec
     capabilities: [],
     interactions: { active: [], resolved: [] },
     signal: null,
+    modelSelection: null,
     turnActive: false,
     lastActivityAt: session.created_at,
     // This helper reads the ledger tables directly rather than replaying

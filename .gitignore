@@ -18,3 +18,4 @@ docs/ROADMAP.md
 .claude/scheduled_tasks.lock
 vite.config.ts.timestamp-*.mjs
 volli.db*
+apps/desktop/resources/pi-cli/darwin-*/

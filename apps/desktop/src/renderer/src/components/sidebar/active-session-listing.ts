@@ -90,9 +90,13 @@ export type ActiveSessionTarget =
 export type SessionRowKind = "terminal" | "chat";
 
 /**
- * Why this row needs a human. `blocked`/`done` are the agent's own voluntary
- * `volli session` signals and carry its words; `waiting` is the involuntary
- * hook channel, which is more reliable but has nothing to say beyond the fact.
+ * Why this row needs a human. `blocked` is the agent's own voluntary `volli
+ * session` signal and carries its words; `waiting` is the involuntary hook
+ * channel, which is more reliable but has nothing to say beyond the fact.
+ *
+ * A legacy `done` signal is deliberately not attention. It may remain in the
+ * durable protocol for terminal compatibility, but an agent yielding cannot
+ * decide that the ticket is complete or ready for human review.
  *
  * This is what carries the needs-you signal now that there is no needs-you
  * band: a row with an attention sorts to the top of Active and draws its
@@ -100,7 +104,7 @@ export type SessionRowKind = "terminal" | "chat";
  * Needs-Review row has always spoken.
  */
 export interface SessionAttention {
-  signal: "done" | "blocked" | "waiting";
+  signal: "blocked" | "waiting";
   reason: string | null;
 }
 
@@ -597,12 +601,15 @@ export function buildActiveSessionListing(
       // pane is still in some tab can be routed to a row, so `exact` stands for
       // both facts at once: there is a signal, and we found where it lives.
       let signaledTab: SessionTab | undefined;
-      let exact: LatestSessionSignal | null = null;
-      if (signal !== undefined) {
+      let exact: (LatestSessionSignal & { signal: "blocked" }) | null = null;
+      // `done` is retained in the durable signal vocabulary for compatibility,
+      // but it is not a product attention state. Only a blocked signal can
+      // choose and promote an exact pane in the Session navigator.
+      if (signal?.signal === "blocked") {
         signaledTab = tabs.find((tab) =>
           sessionPanes(tab.layout).some((pane) => pane.sessionId === signal.sessionId),
         );
-        if (signaledTab !== undefined) exact = signal;
+        if (signaledTab !== undefined) exact = { ...signal, signal: "blocked" };
       }
       const fallbackTab =
         liveTabs.find((tab) => tab.sessionId === container?.activeSessionId) ?? liveTabs.at(-1);
@@ -623,7 +630,7 @@ export function buildActiveSessionListing(
         // that a human is needed, but only the CLI signal knows what for.
         const attention: SessionAttention | null =
           exact !== null
-            ? { signal: exact.signal, reason: exact.reason }
+            ? { signal: "blocked", reason: exact.reason }
             : subject.activity === "waiting"
               ? { signal: "waiting", reason: null }
               : null;

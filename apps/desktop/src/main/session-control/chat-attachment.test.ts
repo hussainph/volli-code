@@ -36,6 +36,7 @@ function projectionWith(
     lastActivityAt: 1,
     bornTicketless: true,
     ...overrides,
+    modelSelection: overrides.modelSelection ?? null,
   };
 }
 

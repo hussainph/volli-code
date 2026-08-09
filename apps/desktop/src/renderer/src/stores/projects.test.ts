@@ -2,7 +2,7 @@ import type { Canvas, Project, Ticket } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 import { flushPendingAppState } from "@renderer/lib/app-state-storage";
-import { EMPTY_CHAT_SELECTION, type ChatSessionSlice } from "@renderer/chat/client";
+import { type ChatSessionSlice } from "@renderer/chat/client";
 import { EMPTY_TRANSCRIPT } from "@renderer/chat/transcript";
 import { useBoardStore } from "./board";
 import { useChatSessionsStore } from "./chat-sessions";
@@ -85,7 +85,6 @@ function chatSlice(): ChatSessionSlice {
     lifecycle: "ready",
     sessionError: null,
     queue: [],
-    selection: EMPTY_CHAT_SELECTION,
   };
 }
 

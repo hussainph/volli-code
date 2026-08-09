@@ -1,0 +1,17 @@
+{
+  "version": "0.84.1",
+  "targets": {
+    "darwin-arm64": {
+      "archive": "pi-darwin-arm64.tar.gz",
+      "sha256": "683c84261f40b870b4a7ccf181a48ad6ecd71853b0112d1bb617539530c6121d",
+      "treeSha256": "e62d06466700d0fa827e9029d8ea0d7f0fd14b87a9a629109750e2452b141c93",
+      "size": 31844340
+    },
+    "darwin-x64": {
+      "archive": "pi-darwin-x64.tar.gz",
+      "sha256": "f9060962b9cca5438d7fb97b60adae9c9302503d39b68d8aea8b891e2eb3e786",
+      "treeSha256": "4c254a2d496fdea76c4dd8a4511db0e0996ca83a1073edef6170c1b6e957d9f9",
+      "size": 34371994
+    }
+  }
+}

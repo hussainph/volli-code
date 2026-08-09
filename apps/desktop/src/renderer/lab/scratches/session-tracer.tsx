@@ -11,7 +11,7 @@ import type {
   SessionAttention,
   SessionCapabilitySnapshot,
   SessionInteraction,
-  SessionProjection,
+  SessionPresentationProjection,
 } from "@volli/shared";
 import type { RpcDiagnosticEntry } from "@volli/session-rpc";
 
@@ -260,7 +260,8 @@ export default function SessionTracerScratch() {
   const [titleValue, setTitleValue] = React.useState("Native Session trace");
   const [sessionId, setSessionId] = React.useState("");
   const [prompt, setPrompt] = React.useState("Explain the current Session state.");
-  const [projection, setProjection] = React.useState<SessionProjection | null>(null);
+  const [projection, setProjection] = React.useState<SessionPresentationProjection | null>(null);
+  const [capabilities, setCapabilities] = React.useState<readonly SessionCapabilitySnapshot[]>([]);
   const [frames, setFrames] = React.useState<ReadonlyMap<number, LabSessionStreamFrame>>(new Map());
   const [diagnostics, setDiagnostics] = React.useState<readonly RpcDiagnosticEntry[]>([]);
   const [status, setStatus] = React.useState("Idle");
@@ -307,6 +308,7 @@ export default function SessionTracerScratch() {
   React.useEffect(() => {
     if (!sessionId || !client.current) {
       setProjection(null);
+      setCapabilities([]);
       setFrames(new Map());
       return;
     }
@@ -424,7 +426,7 @@ export default function SessionTracerScratch() {
 
   const frameList = orderedFrames(frames);
   const liveAttachmentId = projection?.liveExecutor?.id;
-  const capabilitySnapshot = latestCapabilities(projection?.capabilities ?? [], liveAttachmentId);
+  const capabilitySnapshot = latestCapabilities(capabilities, liveAttachmentId);
   const models = React.useMemo(() => catalogModels(capabilitySnapshot), [capabilitySnapshot]);
   const providers = React.useMemo(
     () => [...new Set(models.map((model) => model.providerId))],
@@ -625,7 +627,7 @@ export default function SessionTracerScratch() {
             void run("Refresh capabilities", (rpc, activeSessionId) =>
               rpc.session.refreshCapabilities
                 .mutate({ sessionId: activeSessionId, attachmentId: liveAttachmentId })
-                .then(() => undefined),
+                .then((snapshot) => setCapabilities((current) => [...current, snapshot])),
             )
           }
         >
@@ -680,7 +682,7 @@ export default function SessionTracerScratch() {
           <SessionMessageList frames={frameList} />
         </section>
         <AttentionList attention={projection?.attention.active ?? []} />
-        <CapabilityList capabilities={projection?.capabilities ?? []} />
+        <CapabilityList capabilities={capabilities} />
         <section className="border border-border bg-card p-3">
           <h2 className="mb-2 font-mono text-label uppercase text-muted-foreground">
             Active interactions

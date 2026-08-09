@@ -39,9 +39,17 @@ import { getTicket } from "./db/tickets-repo";
 import { listAttachments } from "./db/attachments-repo";
 import { createDesktopSessionEngine } from "./session-control";
 import { createDesktopSessionRuntime } from "./session-runtime";
-import { createPiNativeAdapter, piRootThreadId } from "./session-runtime/pi-adapter";
+import { createPiRuntimeHost, piRootThreadId } from "./session-runtime/pi-adapter";
+import { createTicketSessions } from "./session-runtime/ticket-sessions";
+import { createProjectSessions } from "./session-runtime/project-sessions";
+import {
+  assertDefaultModelAvailable,
+  readDefaultModelSelection,
+  writeDefaultModelSelection,
+} from "./session-runtime/model-access-preferences";
 import { registerSessionRpcIpcHandlers } from "./session-rpc-ipc";
 import { createOpenCodeNativeAdapter } from "@volli/opencode-adapter";
+import { piAuthFilePath } from "@volli/agent-runtime";
 import { listRegisteredHarnesses } from "./db/harness-registry-repo";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
@@ -78,7 +86,7 @@ import { startAgentSocket, type AgentSocketServer } from "./agent-socket";
 import { loginShellPath } from "./login-path";
 import { resolveOpenCodeBinary } from "./opencode-binary";
 import { storedHarnessCommand } from "./db/harness-command-repo";
-import { createRuntimeCatalogHub } from "./runtime-catalog-hub";
+import { piLoginLaunch, verifiedPiCliResource } from "./pi-cli-resource";
 import {
   detectHarnesses,
   installHarnessSkills,
@@ -421,13 +429,11 @@ app.whenReady().then(async () => {
         },
       })
     : null;
-  // The Pi-backed Agent Runtime, hosted beside OpenCode rather than instead of
-  // it: the structured product's one target executor, reached by attaching the
-  // `pi` adapter. Deliberately NOT registered with the Runtime Catalog hub
-  // below — the composer's model picker stays OpenCode-fed this slice, and Pi
-  // ignores whatever model a command names.
-  const piAdapter = dbHandle.ok
-    ? createPiNativeAdapter({
+  // The Pi-backed Agent Runtime is the structured Ticket product's one target
+  // executor. OpenCode remains only behind the temporary ticketless project
+  // facade; Ticket model access and selection come from this Pi host.
+  const piRuntimeHost = dbHandle.ok
+    ? createPiRuntimeHost({
         sessionDataDir: join(app.getPath("userData"), "pi-sessions"),
         // The runtime needs the Ticket a Session runs for, which a directory
         // cannot say. The generated Brief is recorded once before the first
@@ -436,7 +442,9 @@ app.whenReady().then(async () => {
           if (sessionEngine === null) return null;
           const projection = await sessionEngine.getSession({ sessionId });
           const attaching = projection?.session;
-          if (!attaching || attaching.ticketId === null) return null;
+          if (!attaching || attaching.ticketId === null || projection.modelSelection === null) {
+            return null;
+          }
           const project = getProjectById(dbHandle.db, attaching.projectId);
           const ticket = getTicket(dbHandle.db, attaching.ticketId);
           if (!project || !ticket || ticket.projectId !== project.id) return null;
@@ -460,35 +468,38 @@ app.whenReady().then(async () => {
             ticketId: ticket.id,
             rootThreadId: piRootThreadId(sessionId),
             brief: brief.text,
+            model: projection.modelSelection,
           };
         },
       })
     : null;
   const sessionRuntime =
-    dbHandle.ok && sessionEngine !== null && nativeAdapter !== null && piAdapter !== null
+    dbHandle.ok && sessionEngine !== null && nativeAdapter !== null && piRuntimeHost !== null
       ? createDesktopSessionRuntime({
           db: dbHandle.db,
           transcriptDirectory: join(app.getPath("userData"), "session-transcripts"),
-          adapters: [nativeAdapter, piAdapter],
+          adapters: [nativeAdapter, piRuntimeHost.adapter],
           sessionEngine,
         })
       : null;
-  // One Runtime Catalog per project directory, resolved by the `projectId` a
-  // `runtimeCatalog.*` request carries — never the directory that happened to
-  // construct first. See `runtime-catalog-hub.ts` for why it has no dispose
-  // and no cache eviction.
-  const runtimeCatalogHub =
-    dbHandle.ok && nativeAdapter !== null
-      ? createRuntimeCatalogHub({
-          db: dbHandle.db,
-          adapters: [
-            {
-              id: nativeAdapter.manifest.id,
-              profileId: "native",
-              discover: (context, signal) => nativeAdapter.probe(context, signal),
-            },
-          ],
-          fallbackDirectory: app.getPath("home"),
+  const sessionDb = dbHandle.ok ? dbHandle.db : null;
+  const ticketSessions =
+    sessionRuntime !== null && piRuntimeHost !== null && sessionDb !== null
+      ? createTicketSessions({
+          runtime: sessionRuntime,
+          readDefaultModel: () => readDefaultModelSelection(sessionDb),
+          ticketBelongsToProject: (projectId, ticketId) =>
+            getTicket(sessionDb, ticketId)?.projectId === projectId,
+          readBornTicketless: async (sessionId) =>
+            (await sessionRuntime.projection({ sessionId })).projection.bornTicketless,
+        })
+      : null;
+  const projectSessions =
+    sessionRuntime !== null && nativeAdapter !== null
+      ? createProjectSessions({
+          runtime: sessionRuntime,
+          readBornTicketless: async (sessionId) =>
+            (await sessionRuntime.projection({ sessionId })).projection.bornTicketless,
         })
       : null;
   const sessionRpc =
@@ -496,7 +507,21 @@ app.whenReady().then(async () => {
       ? null
       : registerSessionRpcIpcHandlers({
           runtime: sessionRuntime,
-          resolveRuntimeCatalog: runtimeCatalogHub ?? undefined,
+          inspectModelAccess: piRuntimeHost?.inspectModelAccess,
+          readDefaultModelSelection:
+            sessionDb !== null ? () => readDefaultModelSelection(sessionDb) : undefined,
+          writeDefaultModelSelection:
+            sessionDb !== null && piRuntimeHost !== null
+              ? async (selection) => {
+                  const access = await piRuntimeHost.inspectModelAccess({});
+                  assertDefaultModelAvailable(access, selection);
+                  writeDefaultModelSelection(sessionDb, selection, Date.now());
+                }
+              : undefined,
+          startTicketSession: ticketSessions?.start,
+          attachTicketSession: ticketSessions?.attach,
+          startProjectSession: projectSessions?.start,
+          attachProjectSession: projectSessions?.attach,
         });
   // Boot recovery: no PTY survives a relaunch. Close only stale local terminal
   // attachments; the durable Session itself intentionally remains open.
@@ -663,6 +688,23 @@ app.whenReady().then(async () => {
     socketPath: runtimePaths.socketPath,
     binDir: runtimePaths.binDir,
   };
+  try {
+    const bundledPiPath = await verifiedPiCliResource({
+      platform: process.platform,
+      arch: process.arch,
+      appPath: app.getAppPath(),
+      resourcesPath: process.resourcesPath,
+      isPackaged: app.isPackaged,
+    });
+    if (bundledPiPath !== null) {
+      agentRuntime.modelAccessTerminal = piLoginLaunch({
+        binaryPath: bundledPiPath,
+        authFilePath: piAuthFilePath(),
+      });
+    }
+  } catch (error) {
+    console.warn(`[volli] bundled Pi CLI is unavailable: ${errorMessage(error)}`);
+  }
   /** Wrappers refused this launch because the name would shadow a system tool. */
   let harnessRuntimeRefused: RefusedWrapper[] = [];
 

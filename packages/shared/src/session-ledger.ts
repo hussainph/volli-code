@@ -3,6 +3,8 @@
  * A Session belongs to Volli; adapters and UI surfaces only attach to it.
  */
 
+import type { ModelSelection } from "./agent-runtime";
+
 export interface Session {
   id: string;
   projectId: string;
@@ -348,6 +350,7 @@ export type SessionEventPayload =
   | { kind: "session.created"; session: Session }
   | { kind: "session.archived" }
   | { kind: "session.retitled"; title: string | null }
+  | { kind: "model.selected"; selection: ModelSelection }
   | { kind: "session.input.recorded"; input: SessionInput }
   /** An adapter-neutral outcome signal; it is not a Ticket lifecycle event. */
   | { kind: "session.signaled"; signal: "done" | "blocked"; reason: string | null }
@@ -599,6 +602,7 @@ export type SessionCommandIntent =
   | { kind: "session.archive" }
   | { kind: "session.retitle"; title: string | null }
   | { kind: "session.signal"; signal: "done" | "blocked"; reason: string | null }
+  | { kind: "model.select"; selection: ModelSelection }
   | { kind: "executor.start"; adapterId: string; continuity: SessionAttachmentContinuity }
   | { kind: "executor.stop"; attachmentId: string }
   /** A non-destructive adapter interrupt (for example terminal Esc); the attachment remains live. */
@@ -646,6 +650,7 @@ export type CommandReceiptResult =
   | { kind: "session.archived"; sessionId: string }
   | { kind: "session.retitled"; sessionId: string }
   | { kind: "session.signaled"; sessionId: string }
+  | { kind: "model.selected"; sessionId: string }
   | { kind: "executor.start.requested"; sessionId: string }
   | { kind: "executor.stop.requested"; sessionId: string }
   | { kind: "executor.interrupted"; sessionId: string }
@@ -696,6 +701,14 @@ export type CommandReceipt = UnstampedCommandReceipt & {
 };
 
 export type AcceptedCommandReceipt = Extract<CommandReceipt, { status: "accepted" }>;
+
+/** Product-owned result of starting or reattaching a structured Session. */
+export interface SessionStartResult {
+  sessionId: string;
+  state: "ready" | "needs-recovery";
+  receipt: CommandReceipt | null;
+  throughSequence: number;
+}
 
 export function sameCommandReceipt(left: CommandReceipt, right: CommandReceipt): boolean {
   return left.id === right.id && stableSessionValue(left) === stableSessionValue(right);
@@ -768,6 +781,8 @@ export interface SessionProjection {
   interactions: SessionInteractionProjection;
   /** Latest explicit generic outcome signal, independent of planner history. */
   signal: { signal: "done" | "blocked"; reason: string | null; occurredAt: number } | null;
+  /** Latest accepted product model policy, durable across attachment and relaunch. */
+  modelSelection: ModelSelection | null;
   /** Whether a turn is open right now — the durable half of "the agent is working". */
   turnActive: boolean;
   /** Epoch milliseconds of the newest thing that happened here; seeded from the Session's creation. */
@@ -782,6 +797,22 @@ export interface SessionProjection {
    * today, but only the scratch one was ever meant to.
    */
   bornTicketless: boolean;
+}
+
+/** Renderer-owned Session state with executor implementation details removed. */
+export interface SessionPresentationProjection extends Pick<
+  SessionProjection,
+  | "session"
+  | "status"
+  | "attention"
+  | "interactions"
+  | "signal"
+  | "modelSelection"
+  | "turnActive"
+  | "lastActivityAt"
+  | "bornTicketless"
+> {
+  liveExecutor: { id: string } | null;
 }
 
 /**
@@ -804,6 +835,7 @@ export function projectSession(
   let status: SessionProjection["status"] = "open";
   let title = session.title;
   let signal: SessionProjection["signal"] = null;
+  let modelSelection: ModelSelection | null = null;
   let turnActive = false;
   let lastActivityAt = session.createdAt;
   // Seeded from the live session row so a fold given no `session.created`
@@ -845,6 +877,9 @@ export function projectSession(
         break;
       case "session.retitled":
         title = event.payload.title;
+        break;
+      case "model.selected":
+        modelSelection = event.payload.selection;
         break;
       case "session.input.recorded":
         break;
@@ -1009,6 +1044,7 @@ export function projectSession(
     capabilities: [...capabilities.values()],
     interactions: { active: [...interactions.values()], resolved: resolvedInteractions },
     signal,
+    modelSelection,
     turnActive,
     lastActivityAt,
     bornTicketless,
