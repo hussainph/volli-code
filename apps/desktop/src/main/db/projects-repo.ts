@@ -37,10 +37,15 @@ interface ProjectRow {
   next_ticket_number: number;
   /**
    * Migration 019 — `{[adapterId]: storedRuntimeRecord}` as JSON; NULL =
-   * inherit the global `app_state` record for every adapter. Read through
-   * `getProjectRuntimeRecord` below rather than `mapProject`, for
-   * `next_ticket_number`'s reason: nothing on the boot payload wants it, and
-   * the whole point of the column is that only the catalog interprets it.
+   * inherit the global `app_state` record for every adapter.
+   *
+   * DEAD, and deliberately still here. The Runtime Catalog that was its only
+   * interpreter went with the singular Pi runtime, so nothing in the app writes
+   * this column or reads a record out of it any more; the accessors that did
+   * are gone. The column stays because migrations are append-only, SQLite
+   * `DROP COLUMN` is not safe on the versions we support, and a user's stored
+   * overrides are their data — `db/export.ts` still carries the raw string out
+   * so a rescue export loses nothing.
    */
   runtime_preferences: string | null;
 }
@@ -255,89 +260,6 @@ export function updateProjectAppearance(
       WHERE id = ?`,
   ).run(appearance, now, id);
   return getProjectById(db, id);
-}
-
-/**
- * This project's stored runtime record for one adapter (migration 019) as its
- * RAW JSON string, or `null` when the project overrides nothing for it.
- *
- * Raw rather than parsed because the only reader that can interpret it is the
- * Runtime Catalog, which already owns a tolerant parser for the identical
- * payload in `app_state`. Parsing here would mean a second one, and the two
- * would drift.
- *
- * Degrades rather than throws on a column that is not an object — a hand-edited
- * row inherits the global record, which is survivable and visible, instead of
- * taking a Settings read down. (`json_valid` is enforced by the column's CHECK,
- * so what is left to defend against is valid JSON of the wrong shape.)
- */
-export function getProjectRuntimeRecord(
-  db: Database.Database,
-  projectId: string,
-  adapterId: string,
-): string | null {
-  const row = prepared<[string], { runtime_preferences: string | null }>(
-    db,
-    "SELECT runtime_preferences FROM projects WHERE id = ?",
-  ).get(projectId);
-  const record = parseRuntimeRecords(row?.runtime_preferences ?? null);
-  const value = record?.[adapterId];
-  return value === undefined ? null : JSON.stringify(value);
-}
-
-/**
- * Sets — or with `json === null` clears — this project's stored runtime record
- * for one adapter, keeping every other adapter's key untouched. Clearing the
- * LAST key nulls the whole column rather than leaving `{}` behind, so "does
- * this project override anything?" stays a single `IS NULL`, exactly as the
- * canvas columns keep it.
- *
- * A read-modify-write, so it takes a transaction of its own the way
- * `nextTicketNumberForProject` does; better-sqlite3 nests that as a SAVEPOINT
- * inside a caller's transaction. `row_version`/`updated_at` move like every
- * other project write.
- */
-export function setProjectRuntimeRecord(
-  db: Database.Database,
-  projectId: string,
-  adapterId: string,
-  json: string | null,
-  now: number,
-): void {
-  const write = db.transaction(() => {
-    const row = prepared<[string], { runtime_preferences: string | null }>(
-      db,
-      "SELECT runtime_preferences FROM projects WHERE id = ?",
-    ).get(projectId);
-    if (!row) return;
-    const records = { ...parseRuntimeRecords(row.runtime_preferences) };
-    if (json === null) {
-      delete records[adapterId];
-    } else {
-      records[adapterId] = JSON.parse(json) as unknown;
-    }
-    const payload = Object.keys(records).length === 0 ? null : JSON.stringify(records);
-    prepared(
-      db,
-      `UPDATE projects
-          SET runtime_preferences = ?, row_version = row_version + 1, updated_at = ?
-        WHERE id = ?`,
-    ).run(payload, now, projectId);
-  });
-  write();
-}
-
-/** The column as an adapter-keyed map, or `null` for absent/malformed/not-an-object. */
-function parseRuntimeRecords(value: string | null): Record<string, unknown> | null {
-  if (value === null || value.length === 0) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    return null;
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
-  return parsed as Record<string, unknown>;
 }
 
 /** The `sortOrder` one past the current max (`-1` when the table is empty, so this returns `0`). */
