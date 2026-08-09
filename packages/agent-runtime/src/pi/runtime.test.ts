@@ -25,7 +25,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { RuntimeObservation, SessionRuntimeSpec } from "../contracts";
-import { ScopedExecutionEnv, type TicketExecutionEnv } from "./scoped-execution-env";
+import { ScopedExecutionEnv, type SessionExecutionEnv } from "./scoped-execution-env";
 import { createPiTools } from "./tools";
 import { createPiAgentRuntime } from "./runtime";
 
@@ -640,7 +640,7 @@ describe("startSession", () => {
         error: new Error("host-specific sandbox failure"),
       }),
       cleanup,
-    } as unknown as TicketExecutionEnv;
+    } as unknown as SessionExecutionEnv;
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(scriptedStream([])),
@@ -702,7 +702,7 @@ describe("startSession", () => {
       cwd: attachment.worktreePath,
       prepareProcessExecution,
       cleanup,
-    } as unknown as TicketExecutionEnv;
+    } as unknown as SessionExecutionEnv;
     const stream = vi.fn(scriptedStream([]));
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
@@ -738,7 +738,7 @@ describe("startSession", () => {
         throw new Error("host sandbox implementation detail");
       },
       cleanup,
-    } as unknown as TicketExecutionEnv;
+    } as unknown as SessionExecutionEnv;
     const stream = vi.fn(scriptedStream([]));
     attachment.spec.observer = async (observation) => {
       attachment.observations.push(observation);
@@ -777,7 +777,7 @@ describe("startSession", () => {
       cwd: attachment.worktreePath,
       prepareProcessExecution: vi.fn(async () => ({ ok: true as const, value: undefined })),
       cleanup,
-    } as unknown as TicketExecutionEnv;
+    } as unknown as SessionExecutionEnv;
     attachment.spec.observer = async (observation) => {
       attachment.observations.push(observation);
       if (observation.kind === "attachment" && observation.state === "started") {
@@ -814,7 +814,7 @@ describe("startSession", () => {
       prepareProcessExecution: vi.fn(async () => ({ ok: true as const, value: undefined })),
       exec,
       cleanup,
-    } as unknown as TicketExecutionEnv;
+    } as unknown as SessionExecutionEnv;
     let secondCallContext: Context | undefined;
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,

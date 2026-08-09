@@ -29,7 +29,7 @@ import { mapPiActivity } from "./activity";
 import { inspectPiModelAccess } from "./model-access";
 import { piOwnedModels } from "./models";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
-import { ScopedExecutionEnv, type TicketExecutionEnv } from "./scoped-execution-env";
+import { ScopedExecutionEnv, type SessionExecutionEnv } from "./scoped-execution-env";
 import { createPiTools } from "./tools";
 import { attentionReasonFor, classifyAssistantMessage, recoveryRefFor } from "./transcript";
 
@@ -45,7 +45,7 @@ export interface PiRuntimeHostOptions {
   /** Host clock for runtime observations; injectable for deterministic tests. */
   now?: () => number;
   /** Internal contained-environment factory for deterministic Node runtime tests. */
-  executionEnvFactory?: (workspacePath: string) => Promise<TicketExecutionEnv>;
+  executionEnvFactory?: (workspacePath: string) => Promise<SessionExecutionEnv>;
 }
 
 /** Everything {@link attachSession} needs, with the default already chosen. */
@@ -53,7 +53,7 @@ interface PiRuntimeHost {
   sessionDataDir: string;
   models: Models;
   now: () => number;
-  executionEnvFactory: (workspacePath: string) => Promise<TicketExecutionEnv>;
+  executionEnvFactory: (workspacePath: string) => Promise<SessionExecutionEnv>;
 }
 
 /**
@@ -358,7 +358,7 @@ async function attachSession(
 
   const sidecarEnv = new NodeExecutionEnv({ cwd: host.sessionDataDir });
   let sidecarPath: string | undefined;
-  let toolEnv: TicketExecutionEnv | undefined;
+  let toolEnv: SessionExecutionEnv | undefined;
   let unsubscribe: (() => void) | undefined;
   let abortListener: (() => void) | undefined;
   let createdSidecar = false;

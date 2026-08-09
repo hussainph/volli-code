@@ -57,8 +57,14 @@ export interface ScopedExecutionEnvOptions {
   fileOperations?: FileOperations;
 }
 
-/** The contained Ticket execution capability Pi's coding tools receive. */
-export interface TicketExecutionEnv extends ExecutionEnv {
+/**
+ * The contained execution capability Pi's coding tools receive.
+ *
+ * Named for the Session rather than the Ticket because the root it contains is
+ * whatever that Session's workspace is: a Ticket worktree, or the project's
+ * Main checkout for a project Session. Nothing here reads the difference.
+ */
+export interface SessionExecutionEnv extends ExecutionEnv {
   /** Proves the process boundary before Pi's bash tool is advertised. */
   prepareProcessExecution(): Promise<Result<void, ExecutionError>>;
   /** Releases active commands and owned output spools when an attachment ends. */
@@ -152,7 +158,10 @@ function isSafeTempFragment(value: string): boolean {
   return true;
 }
 
-function perCommandSandboxConfig(worktree: string, homeDir: string): Partial<SandboxRuntimeConfig> {
+function perCommandSandboxConfig(
+  workspace: string,
+  homeDir: string,
+): Partial<SandboxRuntimeConfig> {
   return {
     network: {
       allowedDomains: [],
@@ -165,12 +174,12 @@ function perCommandSandboxConfig(worktree: string, homeDir: string): Partial<San
     },
     filesystem: {
       // SRT's maintained macOS policy uses deny-read plus this carve-back for a
-      // worktree that is commonly nested under the user's home directory.
+      // workspace that is commonly nested under the user's home directory.
       denyRead: [homeDir],
-      allowRead: [worktree],
-      allowWrite: [worktree],
+      allowRead: [workspace],
+      allowWrite: [workspace],
       // SRT adds these compatibility defaults. Deny its home and temporary
-      // Claude scratch paths so the Ticket worktree remains the only writable
+      // Claude scratch paths so the Session workspace remains the only writable
       // agent-controlled location.
       denyWrite: [
         join(homeDir, ".npm", "_logs"),
@@ -232,10 +241,10 @@ async function prepareSandbox(sandbox: SandboxRuntime): Promise<void> {
 }
 
 /**
- * The filesystem capability supplied to Pi's contained Ticket coding tools.
+ * The filesystem capability supplied to Pi's contained coding tools.
  * Process execution is fail-closed until SRT's process-global boundary is ready.
  */
-export class ScopedExecutionEnv implements TicketExecutionEnv {
+export class ScopedExecutionEnv implements SessionExecutionEnv {
   readonly cwd: string;
   readonly #delegate: NodeExecutionEnv;
   readonly #sandbox: SandboxRuntime;
@@ -292,7 +301,7 @@ export class ScopedExecutionEnv implements TicketExecutionEnv {
           return err(
             new FileError(
               "permission_denied",
-              "Symlinks are not available inside the contained Ticket tool boundary.",
+              "Symlinks are not available inside the contained Session tool boundary.",
               current,
             ),
           );
