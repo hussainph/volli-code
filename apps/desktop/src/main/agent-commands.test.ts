@@ -3176,8 +3176,7 @@ describe("doctor", () => {
 
 describe("composeProjectBrief", () => {
   it("names the ticketless Session, its project root, and the one CLI instruction", () => {
-    expect(composeProjectBrief({ project: { id: "project-1", path: "/code/volli" } }))
-      .toMatchInlineSnapshot(`
+    expect(composeProjectBrief({ project: { path: "/code/volli" } })).toMatchInlineSnapshot(`
         "This is a project-scoped chat Session with no Ticket. Your working directory is the project root at /code/volli.
 
         Coordinate the board through the bundled \`volli\` CLI: run \`volli help\` for the full reference (and the volli skill, when installed, for norms)."
@@ -3185,7 +3184,7 @@ describe("composeProjectBrief", () => {
   });
 
   it("is deterministic for one project", () => {
-    const project = { id: "project-1", path: "/code/volli" };
+    const project = { path: "/code/volli" };
     expect(composeProjectBrief({ project })).toBe(composeProjectBrief({ project }));
   });
 });

@@ -137,7 +137,7 @@ export function composeTicketBrief(input: {
  * the Ticket Brief's, verbatim: the board is reachable from here too, and two
  * wordings of one instruction would read as two different rules.
  */
-export function composeProjectBrief(input: { project: Pick<Project, "id" | "path"> }): string {
+export function composeProjectBrief(input: { project: Pick<Project, "path"> }): string {
   return `This is a project-scoped chat Session with no Ticket. Your working directory is the project root at ${input.project.path}.\n\nCoordinate the board through the bundled \`volli\` CLI: run \`volli help\` for the full reference (and the volli skill, when installed, for norms).`;
 }
 
