@@ -28,6 +28,13 @@ export const SESSION_RPC_CANCEL_CHANNEL = "volli:session-rpc-cancel" satisfies V
  * live reference to it through `@volli/shared`.
  */
 export const SESSION_RPC_IPC_PROCEDURES = Object.freeze([
+  "modelAccess.inspect",
+  "modelAccess.defaultSelection",
+  "modelAccess.setDefault",
+  "ticketSessions.start",
+  "ticketSessions.attach",
+  "projectSessions.start",
+  "projectSessions.attach",
   "session.snapshot",
   "session.projection",
   "session.subscribe",
@@ -35,10 +42,6 @@ export const SESSION_RPC_IPC_PROCEDURES = Object.freeze([
   "session.cancelInteraction",
   "session.refreshCapabilities",
   "session.reconcile",
-  "runtimeCatalog.inspect",
-  "runtimeCatalog.save",
-  "runtimeCatalog.clear",
-  "runtimeCatalog.resolve",
 ] as const);
 
 export type SessionRpcIpcProcedure = (typeof SESSION_RPC_IPC_PROCEDURES)[number];

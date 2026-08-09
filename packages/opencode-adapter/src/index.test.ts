@@ -3998,6 +3998,19 @@ describe("OpenCodeNativeAdapter", () => {
     ).toMatchObject({ status: "rejected", code: "RETRY_UNSUPPORTED" });
     expect(
       await handle.dispatch({
+        kind: "model.select",
+        commandId: "model-selection-unsupported",
+        sessionId: "volli-session-1",
+        attachmentId: "attachment-1",
+        selection: {
+          providerId: "openai",
+          modelId: "gpt-5",
+          reasoningLevel: "high",
+        },
+      }),
+    ).toMatchObject({ status: "rejected", code: "MODEL_SELECTION_UNSUPPORTED" });
+    expect(
+      await handle.dispatch({
         ...messageCommand(),
         model: null,
         agent: null,

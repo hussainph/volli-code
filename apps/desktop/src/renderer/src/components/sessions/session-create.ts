@@ -11,7 +11,6 @@
  */
 import { errorMessage, type HarnessId, type Project } from "@volli/shared";
 
-import type { ChatExecutorChoice } from "@renderer/chat/client";
 import { toastError } from "@renderer/lib/toast";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
@@ -50,12 +49,13 @@ export interface SessionResume {
 }
 
 /** The main-process create request derived from a scope (ticket scopes carry env-injection intent). */
-function createRequest(
+export function terminalCreateRequest(
   scope: SessionScope,
   projectPath: string,
   placement: "tab" | "split",
   kickoff?: SessionKickoff,
   resume?: SessionResume,
+  purpose?: "model-access",
 ) {
   return {
     workspaceId: scope.projectId,
@@ -63,10 +63,12 @@ function createRequest(
     cols: INITIAL_COLS,
     rows: INITIAL_ROWS,
     placement,
+    ...(scope.kind === "scratch" && purpose ? { purpose } : {}),
     ...(scope.kind === "ticket"
       ? {
           ticket: {
             ticketId: scope.ticketId,
+            ...(purpose ? { purpose } : {}),
             ...(kickoff ? { kickoff } : {}),
             ...(resume ? { resume } : {}),
           },
@@ -172,11 +174,12 @@ async function bootSession(
   land: (sessionId: string, launch: SessionLaunch) => boolean,
   kickoff?: SessionKickoff,
   resume?: SessionResume,
+  purpose?: "model-access",
 ): Promise<string | null> {
   return underOwnerGuard(scope, terminalStarting, async (project) => {
     try {
       const result = await window.api.terminal.create(
-        createRequest(scope, project.path, placement, kickoff, resume),
+        terminalCreateRequest(scope, project.path, placement, kickoff, resume, purpose),
       );
       if (!result.ok) {
         toastError(`Couldn't ${verb}: ${result.error}`);
@@ -221,6 +224,22 @@ export async function createTerminalSession(
       return true;
     },
     kickoff,
+  );
+}
+
+/** Open the main-owned bundled Pi CLI so the user can run `/login`. */
+export async function createModelAccessTerminal(scope: SessionScope): Promise<string | null> {
+  return bootSession(
+    scope,
+    "tab",
+    "open Model Access",
+    (sessionId, launch) => {
+      useSessionsStore.getState().addSession(scope, sessionId, launch);
+      return true;
+    },
+    undefined,
+    undefined,
+    "model-access",
   );
 }
 
@@ -281,8 +300,6 @@ export async function createTerminalSplit(
 /** How a chat create lands once the Session is durable. */
 export interface ChatBoot {
   title: string;
-  /** Which executor to attach; the store's default when omitted. */
-  executor?: ChatExecutorChoice;
   /**
    * Registers the tab against FRESH store state, returning whether it landed —
    * false ⇒ the owner vanished mid-flight, so this surface lets the Session go.
@@ -321,7 +338,7 @@ function abandonChat(sessionId: string): void {
  */
 export async function bootChatSession(
   scope: SessionScope,
-  { title, executor, land }: ChatBoot,
+  { title, land }: ChatBoot,
 ): Promise<string | null> {
   return underOwnerGuard(scope, chatStarting, async () => {
     try {
@@ -329,7 +346,6 @@ export async function bootChatSession(
         projectId: scope.projectId,
         ticketId: scope.kind === "ticket" ? scope.ticketId : null,
         title,
-        ...(executor === undefined ? {} : { executor }),
       });
       if (sessionId === null) return null;
       // The owner may have been removed while `session.create` was in flight;

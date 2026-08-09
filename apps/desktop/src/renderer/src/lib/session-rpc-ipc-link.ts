@@ -21,8 +21,13 @@ import { TRPC_ERROR_CODES_BY_KEY, type TRPC_ERROR_CODE_KEY } from "@trpc/server/
 // a hand-copied table would be a second answer to a question that already has
 // one.
 import { getStatusCodeFromKey } from "@trpc/server/unstable-core-do-not-import";
-import type { AppRouter } from "@volli/session-rpc";
-import { SESSION_RPC_IPC_PROCEDURES } from "@volli/shared";
+import type {
+  AppRouter,
+  RendererSessionCommandRequest,
+  RendererSessionCommandResult,
+  RendererSessionStreamEmission,
+} from "@volli/session-rpc";
+import { SESSION_RPC_IPC_PROCEDURES, type SessionPresentationProjection } from "@volli/shared";
 import type {
   SessionRpcIpcEvent,
   SessionRpcIpcProcedure,
@@ -37,7 +42,48 @@ export interface SessionRpcBridge {
   cancel(subscriptionId: string): void;
 }
 
-export type SessionRpcClient = TRPCClient<AppRouter>;
+type AppSessionRpcClient = TRPCClient<AppRouter>;
+type AppSessionProcedures = AppSessionRpcClient["session"];
+type AppSessionSubscribeParameters = Parameters<AppSessionProcedures["subscribe"]["subscribe"]>;
+type AppSessionSubscribeOptions = NonNullable<AppSessionSubscribeParameters[1]>;
+
+export type SessionRpcClient = Omit<AppSessionRpcClient, "session"> & {
+  session: Omit<
+    AppSessionProcedures,
+    "snapshot" | "projection" | "subscribe" | "command" | "refreshCapabilities"
+  > & {
+    snapshot: {
+      query(
+        input: { sessionId: string },
+        options?: Parameters<AppSessionProcedures["snapshot"]["query"]>[1],
+      ): Promise<{
+        projection: SessionPresentationProjection;
+        frames: readonly unknown[];
+        throughSequence: number;
+      }>;
+    };
+    projection: {
+      query(
+        input: { sessionId: string },
+        options?: Parameters<AppSessionProcedures["projection"]["query"]>[1],
+      ): Promise<{
+        projection: SessionPresentationProjection;
+        throughSequence: number;
+      }>;
+    };
+    subscribe: {
+      subscribe(
+        input: AppSessionSubscribeParameters[0],
+        options: Omit<AppSessionSubscribeOptions, "onData"> & {
+          onData?(emission: { id: string; data: RendererSessionStreamEmission }): void;
+        },
+      ): ReturnType<AppSessionProcedures["subscribe"]["subscribe"]>;
+    };
+    command: {
+      mutate(input: RendererSessionCommandRequest): Promise<RendererSessionCommandResult>;
+    };
+  };
+};
 
 /**
  * Builds the terminating link over one bridge.
@@ -196,7 +242,9 @@ export function sessionRpcIpcLink(bridge: SessionRpcBridge): TRPCLink<AppRouter>
 
 /** Creates a Session RPC client over one bridge. */
 export function createSessionRpcClient(bridge: SessionRpcBridge): SessionRpcClient {
-  return createTRPCClient<AppRouter>({ links: [sessionRpcIpcLink(bridge)] });
+  return createTRPCClient<AppRouter>({
+    links: [sessionRpcIpcLink(bridge)],
+  }) as unknown as SessionRpcClient;
 }
 
 let client: SessionRpcClient | null = null;

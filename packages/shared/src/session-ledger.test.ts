@@ -615,6 +615,22 @@ describe("observationPayload", () => {
 });
 
 describe("projectSession", () => {
+  it("projects the latest durable model selection", () => {
+    const first = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "medium" as const,
+    };
+    const latest = { ...first, reasoningLevel: "high" as const };
+
+    const projection = projectSession(session, [
+      event(2, { kind: "model.selected", selection: latest }),
+      event(1, { kind: "model.selected", selection: first }),
+    ]);
+
+    expect(projection.modelSelection).toEqual(latest);
+  });
+
   it("projects retitle and native-continuation facts without mutating immutable inputs", () => {
     const attachment = {
       id: "attachment-1",

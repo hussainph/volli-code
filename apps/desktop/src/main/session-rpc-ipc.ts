@@ -1,8 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { ipcMain } from "electron";
 import type { WebContents } from "electron";
-import { createSessionRouter, RpcDiagnosticLog, sanitizeDiagnosticText } from "@volli/session-rpc";
-import type { RuntimeCatalog, SessionRuntime } from "@volli/session-engine";
+import {
+  createSessionRouter,
+  RpcDiagnosticLog,
+  sanitizeDiagnosticText,
+  type ProjectSessionStartInput,
+  type SessionAttachInput,
+  type TicketSessionStartInput,
+} from "@volli/session-rpc";
+import type { SessionRuntime } from "@volli/session-engine";
+import type { ModelAccessSnapshot, ModelSelection, SessionStartResult } from "@volli/shared";
 import {
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
@@ -69,7 +77,12 @@ type PublishedProcedure<Procedure extends SessionRouterProcedure> = Procedure;
  * a diagnostic log over the same channel it runs Sessions on.
  */
 type DeliberatelyMainOnlyProcedure = PublishedProcedure<
-  "labDiagnostics.list" | "labDiagnostics.subscribe"
+  | "labDiagnostics.list"
+  | "labDiagnostics.subscribe"
+  | "runtimeCatalog.inspect"
+  | "runtimeCatalog.save"
+  | "runtimeCatalog.clear"
+  | "runtimeCatalog.resolve"
 >;
 
 /**
@@ -91,7 +104,13 @@ export type SessionRpcIpcCoverage = AssertNever<
 
 export interface RegisterSessionRpcIpcOptions {
   runtime: SessionRuntime;
-  resolveRuntimeCatalog?: (projectId?: string) => RuntimeCatalog | Promise<RuntimeCatalog>;
+  inspectModelAccess?: (input: { refresh?: boolean }) => Promise<ModelAccessSnapshot>;
+  readDefaultModelSelection?: () => ModelSelection | null;
+  writeDefaultModelSelection?: (selection: ModelSelection) => void | Promise<void>;
+  startTicketSession?: (input: TicketSessionStartInput) => Promise<SessionStartResult>;
+  attachTicketSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
+  startProjectSession?: (input: ProjectSessionStartInput) => Promise<SessionStartResult>;
+  attachProjectSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
   diagnostics?: RpcDiagnosticLog;
 }
 
@@ -137,7 +156,13 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
         }
         const caller = router.createCaller({
           runtime: options.runtime,
-          resolveRuntimeCatalog: options.resolveRuntimeCatalog,
+          inspectModelAccess: options.inspectModelAccess,
+          readDefaultModelSelection: options.readDefaultModelSelection,
+          writeDefaultModelSelection: options.writeDefaultModelSelection,
+          startTicketSession: options.startTicketSession,
+          attachTicketSession: options.attachTicketSession,
+          startProjectSession: options.startProjectSession,
+          attachProjectSession: options.attachProjectSession,
           diagnostics,
           transport: "electron-ipc",
         });
@@ -163,7 +188,8 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
     const caller = router.createCaller(
       {
         runtime: options.runtime,
-        resolveRuntimeCatalog: options.resolveRuntimeCatalog,
+        inspectModelAccess: options.inspectModelAccess,
+        startTicketSession: options.startTicketSession,
         diagnostics,
         transport: "electron-ipc",
       },
@@ -257,6 +283,20 @@ async function callProcedure(
   request: Exclude<SessionRpcIpcRequest, { procedure: "session.subscribe" }>,
 ): Promise<unknown> {
   switch (request.procedure) {
+    case "modelAccess.inspect":
+      return caller.modelAccess.inspect(request.input as never);
+    case "modelAccess.defaultSelection":
+      return caller.modelAccess.defaultSelection();
+    case "modelAccess.setDefault":
+      return caller.modelAccess.setDefault(request.input as never);
+    case "ticketSessions.start":
+      return caller.ticketSessions.start(request.input as never);
+    case "ticketSessions.attach":
+      return caller.ticketSessions.attach(request.input as never);
+    case "projectSessions.start":
+      return caller.projectSessions.start(request.input as never);
+    case "projectSessions.attach":
+      return caller.projectSessions.attach(request.input as never);
     case "session.snapshot":
       return caller.session.snapshot(request.input as never);
     case "session.projection":
@@ -269,14 +309,6 @@ async function callProcedure(
       return caller.session.refreshCapabilities(request.input as never);
     case "session.reconcile":
       return caller.session.reconcile(request.input as never);
-    case "runtimeCatalog.inspect":
-      return caller.runtimeCatalog.inspect(request.input as never);
-    case "runtimeCatalog.save":
-      return caller.runtimeCatalog.save(request.input as never);
-    case "runtimeCatalog.clear":
-      return caller.runtimeCatalog.clear(request.input as never);
-    case "runtimeCatalog.resolve":
-      return caller.runtimeCatalog.resolve(request.input as never);
     /* v8 ignore next 4 -- unreachable behind `isRequest`; it exists so a listed procedure this switch forgot fails to compile. */
     default: {
       const exhaustive: never = request;

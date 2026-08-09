@@ -15,6 +15,7 @@
 import type {
   ActivityDescriptor,
   AuthoritySnapshot,
+  ModelAccessSnapshot,
   ModelSelection,
   SessionRole,
 } from "@volli/shared";
@@ -198,6 +199,15 @@ export type DeliveryOutcome =
       message: string;
     };
 
+/** Observable outcome of applying one idle-time Session model policy. */
+export type ModelSelectionOutcome =
+  | { kind: "selected" }
+  | {
+      kind: "rejected";
+      reason: "busy-unsupported" | "closed" | "model-unavailable" | "reasoning-unsupported";
+      message: string;
+    };
+
 /** One live runtime attachment. Closing it never ends Session identity. */
 export interface RuntimeAttachmentHandle {
   submitUserMessage(
@@ -205,6 +215,8 @@ export interface RuntimeAttachmentHandle {
     delivery?: RuntimeMessageDelivery,
     commandId?: string,
   ): Promise<DeliveryOutcome>;
+  /** Apply a validated model policy only while this attachment is idle. */
+  selectModel(selection: ModelSelection): Promise<ModelSelectionOutcome>;
   /** Retry the last failed run without duplicating its user message. */
   retry(commandId?: string): Promise<DeliveryOutcome>;
   /** Abort the current run and settle the resulting state honestly. */
@@ -224,5 +236,10 @@ export interface RuntimeAttachmentHandle {
 
 /** The singular runtime port. Not a registry; there is exactly one executor. */
 export interface AgentRuntime {
+  /** Inspect provider accounts and models without exposing runtime credentials or native types. */
+  inspectModelAccess(input?: {
+    refresh?: boolean;
+    signal?: AbortSignal;
+  }): Promise<ModelAccessSnapshot>;
   startTicketSession(spec: TicketRuntimeSpec): Promise<RuntimeAttachmentHandle>;
 }

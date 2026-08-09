@@ -43,6 +43,7 @@ import {
   type AgentRuntime,
   type AttentionObservation,
   type DeliveryOutcome,
+  type ModelSelectionOutcome,
   type PiRuntimeHostOptions,
   type RuntimeAttachmentHandle,
   type RuntimeActivityObservation,
@@ -137,6 +138,8 @@ export interface PiTicketContext {
   rootThreadId: string;
   /** The generated Runtime Brief; the runtime prepends it to the first user message. */
   brief: string;
+  /** Durable product policy selected before this attachment starts. */
+  model: ModelSelection;
 }
 
 export interface PiAdapterOptions {
@@ -174,6 +177,13 @@ const REJECTION_CODES = {
   "replace-unsupported": "PI_REPLACE_UNSUPPORTED",
   "retry-unavailable": "PI_RETRY_UNAVAILABLE",
 } as const satisfies Record<Extract<DeliveryOutcome, { kind: "rejected" }>["reason"], string>;
+
+const MODEL_SELECTION_REJECTION_CODES = {
+  "busy-unsupported": "PI_BUSY",
+  closed: "PI_ATTACHMENT_CLOSED",
+  "model-unavailable": "PI_MODEL_UNAVAILABLE",
+  "reasoning-unsupported": "PI_REASONING_UNSUPPORTED",
+} as const satisfies Record<Extract<ModelSelectionOutcome, { kind: "rejected" }>["reason"], string>;
 
 /** One in-flight assistant message: the id its deltas address and the parts it has opened. */
 interface StreamingMessage {
@@ -228,7 +238,13 @@ function recoveryCursor(entryId: string | undefined): { cursor?: SessionNativeDe
   return entryId === undefined ? {} : { cursor: { entryId } };
 }
 
-export function createPiNativeAdapter(options: PiAdapterOptions): NativeHarnessAdapter {
+export interface PiRuntimeHost {
+  readonly adapter: NativeHarnessAdapter;
+  inspectModelAccess: AgentRuntime["inspectModelAccess"];
+}
+
+/** Main-owned singular runtime host; the native adapter remains private migration scaffolding. */
+export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
   const now = options.now ?? Date.now;
   const create = options.createRuntime ?? createPiAgentRuntime;
   const runtime = create({
@@ -236,6 +252,22 @@ export function createPiNativeAdapter(options: PiAdapterOptions): NativeHarnessA
     ...(options.models === undefined ? {} : { models: options.models }),
   });
 
+  return {
+    adapter: piNativeAdapter(options, runtime, now),
+    inspectModelAccess: (input) => runtime.inspectModelAccess(input),
+  };
+}
+
+/** @deprecated Main should own {@link createPiRuntimeHost}; retained for isolated adapter tests. */
+export function createPiNativeAdapter(options: PiAdapterOptions): NativeHarnessAdapter {
+  return createPiRuntimeHost(options).adapter;
+}
+
+function piNativeAdapter(
+  options: PiAdapterOptions,
+  runtime: AgentRuntime,
+  now: () => number,
+): NativeHarnessAdapter {
   return {
     manifest: PI_MANIFEST,
 
@@ -311,7 +343,7 @@ export function createPiNativeAdapter(options: PiAdapterOptions): NativeHarnessA
         // survives — and it becomes the `attach_failed` receipt's detail, which
         // is where a user looks.
         throw new NativeAttachmentError(
-          "Pi runs Ticket Sessions only, and this Session has no ticket to brief it with.",
+          "Pi requires a Ticket Session with a selected model and Runtime Brief.",
           "PI_CONFIGURATION_INVALID",
           "configuration_invalid",
         );
@@ -388,7 +420,7 @@ class PiBinding implements BindingHandle {
       // is the isolated checkout — never the main one.
       worktreePath: this.#spec.directory,
       venue: "local",
-      model: PI_MODEL,
+      model: this.#context.model,
       authority: { mode: "auto" },
       brief: { text: this.#context.brief },
       tools: { tools: [...PI_TOOLS.tools] },
@@ -431,6 +463,23 @@ class PiBinding implements BindingHandle {
     switch (command.kind) {
       case "message.submit":
         return this.#submit(handle, command);
+      case "model.select":
+        try {
+          const outcome = await handle.selectModel(command.selection);
+          return outcome.kind === "selected"
+            ? this.#accepted(command.commandId)
+            : this.#rejected(
+                command.commandId,
+                MODEL_SELECTION_REJECTION_CODES[outcome.reason],
+                outcome.message,
+              );
+        } catch {
+          return this.#rejected(
+            command.commandId,
+            "PI_MODEL_SELECTION_FAILED",
+            "The model policy could not be applied. Retry.",
+          );
+        }
       case "executor.interrupt":
         try {
           await handle.interrupt();

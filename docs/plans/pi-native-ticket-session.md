@@ -581,6 +581,40 @@ Bounded follow-ups deferred from this slice:
 available model, and start a Ticket Session without encountering harness
 vocabulary.
 
+Session 5 implementation decisions (2026-08-09):
+
+- One-click Ticket Chat creation reads one app-wide, user-configured default
+  model and reasoning level from main-owned storage. It never silently repairs
+  or substitutes an unavailable default.
+- The compact composer dropdown records an explicit durable override for that
+  Session only. It is disabled during an active turn; the Session Engine keeps
+  the same rule as the authoritative guard.
+- An attach failure still leaves the newly created Session and its selected
+  model durable, so authentication or availability recovery can use the same
+  composer and Retry path rather than manufacturing a second Session.
+- Provider sign-in uses a Ticket-scoped `model-access` terminal intent. Main
+  resolves the version- and checksum-pinned official Pi CLI directory bundled
+  under app resources, re-verifies the prepared resource tree and executable on
+  cache hits, fixes the restricted launch flags and absolute credential
+  directory, and leaves `/login` plus the existing explicit Retry to the user.
+- Ticketless project Chats temporarily keep OpenCode through a private
+  main-owned route. Runtime Catalog remains available to the development Lab,
+  but is not exposed over production renderer IPC or settings.
+- There is no production provider slash-command inventory to migrate in this
+  slice. The existing Lab-only Volli/Skill affordance remains unchanged.
+
+Bounded follow-ups deferred from this slice:
+
+- A signed/notarized distributable app pipeline does not exist in this
+  repository yet. Copying the prepared Pi resource directory into an `.app`,
+  signing its nested Mach-O files under hardened runtime, notarizing/stapling,
+  and proving the result on a clean machine belong to the packaging slice; the
+  loose app build prepares and verifies the resource now.
+- In-app OAuth/API-key entry remains separate from the proven manual Pi
+  terminal handoff. Credentials continue to be owned by Pi.
+- Full deletion of the Lab Runtime Catalog, OpenCode adapter, and migration
+  scaffolding remains Session 7 work.
+
 ### Session 6 — Environment inspector and terminal hierarchy
 
 - Implement the compact Environment/Sources inspector using existing Change Set,

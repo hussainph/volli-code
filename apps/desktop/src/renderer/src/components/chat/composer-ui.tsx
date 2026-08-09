@@ -10,11 +10,7 @@
  *     executor that pins its own model renders no pill at all rather than a
  *     disabled one, on the same rule as the mode segment below: a control naming
  *     models the harness will drop is worse than no control.
- *  2. **Mode is a segment, and only when there is a choice.** Which agents are
- *     a person's to pick is a harness-declared fact (`session-model.ts`), so a
- *     harness with one primary agent renders no control at all rather than a
- *     disabled one.
- *  3. **Delivery is session state, not a control.** Idle, ⏎ sends. While a turn
+ *  2. **Delivery is session state, not a control.** Idle, ⏎ sends. While a turn
  *     is live the submit glyph becomes Queue, ⏎ queues, ⌘⏎ steers without
  *     interrupting, and ⌫ on an empty box takes the newest queued message back.
  *     Stop appears beside submit only while there is something to stop.
@@ -32,7 +28,6 @@ import {
   SquareIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import type { RuntimeCatalogModel, RuntimeSelection } from "@volli/shared";
 
 import {
   PromptInput,
@@ -51,11 +46,8 @@ import {
 } from "@ai-elements/prompt-input";
 import {
   composerIntent,
-  offersAgentChoice,
-  primaryAgents,
   takeQueued,
   unqueueLast,
-  type ComposerAgent,
   type ComposerIntent,
   type QueuedMessage,
 } from "@renderer/chat/session-model";
@@ -68,12 +60,12 @@ export interface SessionComposerProps {
   onValueChange(value: string): void;
   /** Lets a decision elsewhere in the Session hand the cursor back to the reader. */
   textareaRef?: React.Ref<HTMLTextAreaElement>;
-  models: readonly RuntimeCatalogModel[];
-  agents: readonly ComposerAgent[];
-  /** False where the executor pins its own model, so no pill is drawn. */
+  models: readonly ComposerModel[];
   offersModelChoice?: boolean;
-  selection: RuntimeSelection;
-  onSelectionChange(next: RuntimeSelection): void;
+  selection: ComposerModelSelection;
+  onSelectionChange(next: ComposerModelSelection): void;
+  /** Model policy is immutable during an active turn. */
+  modelChoiceDisabled?: boolean;
   /** A turn is live: submit becomes Queue and Stop joins it. */
   working: boolean;
   /** Something is attached and a model is chosen. False makes the box inert. */
@@ -90,10 +82,10 @@ export function SessionComposer({
   onValueChange,
   textareaRef,
   models,
-  agents,
   offersModelChoice = true,
   selection,
   onSelectionChange,
+  modelChoiceDisabled = false,
   working,
   ready,
   queued,
@@ -193,9 +185,13 @@ export function SessionComposer({
 
       <PromptInputFooter className="border-t border-border/70 pt-2">
         <PromptInputTools className="min-w-0">
-          <AgentSegment agents={agents} selection={selection} onChange={onSelectionChange} />
           {offersModelChoice ? (
-            <ModelPill models={models} selection={selection} onChange={onSelectionChange} />
+            <ModelPill
+              models={models}
+              selection={selection}
+              disabled={modelChoiceDisabled}
+              onChange={onSelectionChange}
+            />
           ) : null}
         </PromptInputTools>
         <div className="ml-auto flex shrink-0 items-center gap-1">
@@ -224,9 +220,25 @@ export function SessionComposer({
 /* ------------------------------------------------------------------- model */
 
 /** `sonnet-4.5 · high` — two values, one caret. */
+export interface ComposerModel {
+  id: string;
+  providerId: string;
+  providerLabel: string;
+  modelId: string;
+  label: string;
+  state: "available" | "authentication-required" | "unavailable";
+  reasoningLevels: readonly string[];
+}
+
+export interface ComposerModelSelection {
+  providerId: string;
+  modelId: string;
+  reasoningLevel: string;
+}
+
 export function modelPillLabel(
-  models: readonly RuntimeCatalogModel[],
-  selection: RuntimeSelection,
+  models: readonly ComposerModel[],
+  selection: ComposerModelSelection,
 ): string {
   const model = models.find(
     (candidate) =>
@@ -234,22 +246,29 @@ export function modelPillLabel(
   );
   const name = model?.label ?? selection.modelId;
   if (!name) return "Model";
-  return selection.variant ? `${name} · ${selection.variant}` : name;
+  return selection.reasoningLevel ? `${name} · ${selection.reasoningLevel}` : name;
 }
 
 function ModelPill({
   models,
   selection,
+  disabled,
   onChange,
 }: {
-  models: readonly RuntimeCatalogModel[];
-  selection: RuntimeSelection;
-  onChange(next: RuntimeSelection): void;
+  models: readonly ComposerModel[];
+  selection: ComposerModelSelection;
+  disabled: boolean;
+  onChange(next: ComposerModelSelection): void;
 }) {
   const [open, setOpen] = React.useState(false);
   // First-appearance order: the catalog's own ordering is the harness's answer
   // to "which provider matters", and re-sorting it here would be our opinion.
-  const providers = [...new Set(models.map((model) => model.providerId))];
+  const providers = models.reduce<Array<{ id: string; label: string }>>((result, model) => {
+    if (!result.some((provider) => provider.id === model.providerId)) {
+      result.push({ id: model.providerId, label: model.providerLabel });
+    }
+    return result;
+  }, []);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -258,7 +277,7 @@ function ModelPill({
           type="button"
           size="sm"
           variant="ghost"
-          disabled={models.length === 0}
+          disabled={disabled || models.length === 0}
           className="min-w-0 text-muted-foreground"
         >
           <span className="min-w-0 truncate">{modelPillLabel(models, selection)}</span>
@@ -270,10 +289,10 @@ function ModelPill({
           <PromptInputCommandInput placeholder="Model" />
           <PromptInputCommandList>
             <PromptInputCommandEmpty>No match</PromptInputCommandEmpty>
-            {providers.map((providerId) => (
-              <PromptInputCommandGroup key={providerId} heading={providerId}>
+            {providers.map((provider) => (
+              <PromptInputCommandGroup key={provider.id} heading={provider.label}>
                 {models
-                  .filter((model) => model.providerId === providerId)
+                  .filter((model) => model.providerId === provider.id)
                   .map((model) => {
                     const selected =
                       model.providerId === selection.providerId &&
@@ -288,9 +307,9 @@ function ModelPill({
                             ...selection,
                             providerId: model.providerId,
                             modelId: model.modelId,
-                            variant: model.variants.includes(selection.variant)
-                              ? selection.variant
-                              : (model.variants[0] ?? ""),
+                            reasoningLevel: model.reasoningLevels.includes(selection.reasoningLevel)
+                              ? selection.reasoningLevel
+                              : (model.reasoningLevels[0] ?? ""),
                           });
                           setOpen(false);
                         }}
@@ -299,12 +318,18 @@ function ModelPill({
                           className={cn("size-3.5 shrink-0", !selected && "invisible")}
                           weight="bold"
                         />
-                        <span className="min-w-0 flex-1 truncate">{model.label}</span>
-                        {selected && model.variants.length > 1 ? (
+                        <span className="min-w-0 flex-1 truncate">
+                          {model.label}
+                          {model.state === "authentication-required" ? " — Sign in required" : null}
+                          {model.state === "unavailable" ? " — Unavailable" : null}
+                        </span>
+                        {selected && model.reasoningLevels.length > 1 ? (
                           <EffortSegment
-                            variants={model.variants}
-                            value={selection.variant}
-                            onChange={(variant) => onChange({ ...selection, variant })}
+                            variants={model.reasoningLevels}
+                            value={selection.reasoningLevel}
+                            onChange={(reasoningLevel) =>
+                              onChange({ ...selection, reasoningLevel })
+                            }
                           />
                         ) : null}
                       </PromptInputCommandItem>
@@ -352,45 +377,6 @@ function EffortSegment({
           )}
         >
           {variant}
-        </button>
-      ))}
-    </span>
-  );
-}
-
-/* ------------------------------------------------------------------- agent */
-
-function AgentSegment({
-  agents,
-  selection,
-  onChange,
-}: {
-  agents: readonly ComposerAgent[];
-  selection: RuntimeSelection;
-  onChange(next: RuntimeSelection): void;
-}) {
-  if (!offersAgentChoice(agents)) return null;
-  return (
-    <span
-      role="group"
-      aria-label="Mode"
-      className="flex shrink-0 items-center gap-0.5 rounded-full bg-muted p-0.5"
-    >
-      {primaryAgents(agents).map((agent) => (
-        <button
-          key={agent.id}
-          type="button"
-          aria-pressed={agent.id === selection.agent}
-          disabled={agent.state !== "available"}
-          onClick={() => onChange({ ...selection, agent: agent.id })}
-          className={cn(
-            "rounded-full px-2.5 py-0.5 text-xs capitalize transition-colors duration-150 ease-swift disabled:opacity-50",
-            agent.id === selection.agent
-              ? "bg-background text-foreground shadow-[var(--shadow-raised)]"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {agent.label}
         </button>
       ))}
     </span>

@@ -14,16 +14,12 @@
  * what a client asks of it, plus the fold.
  */
 import { errorMessage } from "@volli/shared";
-import type { RuntimeSelection } from "@volli/shared";
 import { create } from "zustand";
 
 import {
   browserChatTransport,
   isWorking,
   settledLifecycle,
-  DEFAULT_CHAT_EXECUTOR,
-  EMPTY_CHAT_SELECTION,
-  type ChatExecutorChoice,
   type ChatSessionLifecycle,
   type ChatSessionSlice,
   type ChatSessionTransport,
@@ -32,14 +28,13 @@ import {
 import { disposeChatClient, getOrCreateChatClient } from "@renderer/chat/registry";
 import { enqueueMessage, removeQueued, type QueuedMessage } from "@renderer/chat/session-model";
 import { appendFrames, EMPTY_TRANSCRIPT } from "@renderer/chat/transcript";
-import { startFailure } from "@renderer/chat/wire";
+import { rejectedReceipt } from "@renderer/chat/wire";
 import { toastError } from "@renderer/lib/toast";
 
 export interface CreateChatSessionInput {
   projectId: string;
   ticketId: string | null;
   title: string | null;
-  executor?: ChatExecutorChoice;
 }
 
 export interface ChatSessionsState extends ChatSessionWrites {
@@ -53,10 +48,9 @@ export interface ChatSessionsState extends ChatSessionWrites {
    */
   createChatSession(input: CreateChatSessionInput): Promise<string | null>;
   /** Attaches a client to a Session that is already durable — the hydration path. */
-  adoptChatSession(sessionId: string, executor?: ChatExecutorChoice): void;
+  adoptChatSession(sessionId: string): void;
   /** Drops the Session from this surface. The Session itself is untouched. */
   closeChatSession(sessionId: string): void;
-  setSelection(sessionId: string, selection: RuntimeSelection): void;
   enqueue(sessionId: string, message: QueuedMessage): void;
   /**
    * Retitles a Session on this surface ahead of its stream.
@@ -166,11 +160,10 @@ export function createChatSessionsStore(
       });
     };
 
-    const attach = (sessionId: string, executor: ChatExecutorChoice | undefined) =>
+    const attach = (sessionId: string) =>
       getOrCreateChatClient(sessionId, {
         ...transport(),
         store: api,
-        executor: executor ?? DEFAULT_CHAT_EXECUTOR,
       });
 
     return {
@@ -181,30 +174,31 @@ export function createChatSessionsStore(
 
       async createChatSession(input) {
         const edge = transport();
-        let sessionId: string;
+        let started: Awaited<ReturnType<ChatSessionTransport["startSession"]>>;
         try {
-          const created = await edge.rpc.session.command.mutate({
-            commandId: edge.newCommandId(),
-            command: {
-              kind: "session.create",
-              projectId: input.projectId,
-              ticketId: input.ticketId,
-              title: input.title,
-            },
+          started = await edge.startSession({
+            operationId: edge.newCommandId(),
+            projectId: input.projectId,
+            ticketId: input.ticketId,
+            title: input.title,
           });
-          sessionId = created.sessionId;
         } catch (failure) {
           // The one failure with nothing durable to carry it: there is no id, so
           // there is no slice, so a toast is the only place it can be said.
-          toastError(startFailure(errorMessage(failure)));
+          toastError(`Could not start Session: ${errorMessage(failure)}`);
           return null;
         }
+        const sessionId = started.sessionId;
         set((state) => ({ sessions: { ...state.sessions, [sessionId]: seedSlice("starting") } }));
-        const client = attach(sessionId, input.executor);
-        // Subscribed before the attach rather than after it, so the frames the
-        // attach itself commits are not a gap the surface has to re-read.
+        const client = attach(sessionId);
         void client.connect();
-        await client.attach();
+        const refusal = rejectedReceipt(started);
+        get().settle(
+          sessionId,
+          started.state === "ready" || input.ticketId !== null
+            ? null
+            : `Could not start Session: ${refusal ?? "Runtime recovery is required."}`,
+        );
         return sessionId;
       },
 
@@ -212,10 +206,10 @@ export function createChatSessionsStore(
       // no attachment attempt, so there is nothing in flight for `starting` to
       // name, and the composer is gated by whether an executor is live — which
       // the arriving snapshot answers — and never by this.
-      adoptChatSession(sessionId, executor) {
+      adoptChatSession(sessionId) {
         if (get().sessions[sessionId] !== undefined) return;
         set((state) => ({ sessions: { ...state.sessions, [sessionId]: seedSlice("ready") } }));
-        const client = attach(sessionId, executor);
+        const client = attach(sessionId);
         void client.connect();
       },
 
@@ -268,10 +262,6 @@ export function createChatSessionsStore(
               }
             : { ...slice, lifecycle: "error", sessionError: error },
         );
-      },
-
-      setSelection(sessionId, selection) {
-        update(sessionId, (slice) => ({ ...slice, selection }));
       },
 
       enqueue(sessionId, message) {
@@ -483,6 +473,5 @@ function seedSlice(lifecycle: ChatSessionLifecycle): ChatSessionSlice {
     lifecycle,
     sessionError: null,
     queue: [],
-    selection: EMPTY_CHAT_SELECTION,
   };
 }

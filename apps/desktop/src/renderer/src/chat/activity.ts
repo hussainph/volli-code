@@ -134,11 +134,6 @@ export function activityDescriptor(part: DynamicToolUIPart): ActivityDescriptor 
   };
 }
 
-/** Hidden from the transcript; the plan projects to the rail instead. */
-export function isPlanActivity(part: DynamicToolUIPart): boolean {
-  return activityDescriptor(part).kind === "plan";
-}
-
 /**
  * `trim()` alone is not enough: zero-width space and word joiner are not
  * whitespace per spec, and a text part carrying only those renders nothing
@@ -226,7 +221,6 @@ function segmentParts(entries: readonly KeyedPart[]): ChatSegment[] {
       return;
     }
     if (part.type !== "dynamic-tool") return;
-    if (isPlanActivity(part)) return;
     if (isBlocking(part.state)) {
       flush();
       segments.push({ kind: "attention", part, key });
@@ -611,7 +605,7 @@ export const ACTIVITY_PRESENTERS: Record<ActivityKind, ActivityParse> = {
     object: context.descriptor.subject.label,
     openPath: null,
     ...NO_META,
-    detail: null,
+    detail: planDetail(context),
   }),
 
   other: (context) => ({
@@ -747,6 +741,44 @@ const MATCH_LINES_PER_FILE = 3;
 function outputDetail(context: ActivityContext): ActivityDetail | null {
   const text = readableText(context.output) ?? context.descriptor.outcome?.summary ?? null;
   return text === null ? null : { view: "output", text: clampLines(text) };
+}
+
+/** Keeps compatibility todo snapshots readable as inline history, not a live product dock. */
+function planDetail(context: ActivityContext): ActivityDetail | null {
+  const lines = planLines(context.input) ?? planLines(context.output);
+  return lines === null ? null : { view: "output", text: clampLines(lines.join("\n")) };
+}
+
+function planLines(value: unknown): string[] | null {
+  const todos = planTodos(value);
+  if (todos === null) return null;
+  const lines: string[] = [];
+  for (const todo of todos) {
+    if (!isRecord(todo) || typeof todo.content !== "string" || todo.content.length === 0) continue;
+    const status = typeof todo.status === "string" ? todo.status.toLowerCase() : "pending";
+    const glyph =
+      status === "completed" || status === "complete" || status === "done"
+        ? "✓"
+        : status === "in_progress" || status === "active" || status === "running"
+          ? "→"
+          : status === "cancelled" || status === "canceled"
+            ? "×"
+            : "○";
+    lines.push(`${glyph} ${todo.content}`);
+  }
+  return lines.length > 0 ? lines : null;
+}
+
+function planTodos(value: unknown): unknown[] | null {
+  if (typeof value === "string") {
+    try {
+      return planTodos(JSON.parse(value) as unknown);
+    } catch {
+      return null;
+    }
+  }
+  if (Array.isArray(value)) return value;
+  return isRecord(value) && Array.isArray(value.todos) ? value.todos : null;
 }
 
 function contentDetail(context: ActivityContext): ActivityDetail | null {
@@ -905,136 +937,6 @@ export function reasoningStatus(
   if (options.streaming) return { verb: header ?? "Thinking…", meta: null };
   if (header) return { verb: header, meta: elapsed };
   return { verb: elapsed ? `Thought for ${elapsed}` : "Thought", meta: null };
-}
-
-/* -------------------------------------------------------------------- todos */
-
-export type SessionTodoStatus = "pending" | "in_progress" | "completed" | "cancelled";
-export type SessionTodoPriority = "high" | "medium" | "low";
-
-export interface SessionTodo {
-  id: string;
-  content: string;
-  status: SessionTodoStatus;
-  priority: SessionTodoPriority;
-}
-
-export function projectSessionTodos(messages: readonly UIMessage[]): SessionTodo[] | null {
-  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
-    const message = messages[messageIndex];
-    if (!message || message.role !== "assistant") continue;
-    for (let partIndex = message.parts.length - 1; partIndex >= 0; partIndex -= 1) {
-      const part = message.parts[partIndex];
-      if (part?.type !== "dynamic-tool" || !isPlanActivity(part)) continue;
-      if (part.state === "output-error" || part.state === "output-denied") continue;
-      const todos = extractTodos(part);
-      if (todos) return todos;
-    }
-  }
-  return null;
-}
-
-/**
- * Same table as {@link DESCRIPTIONS}, for the same reason.
- *
- * The dock re-projects the plan on every committed frame, and a harness that
- * hands its todo list back as a JSON *string* — several do — makes that a
- * `JSON.parse` of the whole plan per frame for a list that has not moved.
- * Cached on the part, a plan is parsed once and re-parsed exactly when the
- * harness commits a new snapshot of it.
- */
-const TODOS = new WeakMap<DynamicToolUIPart, SessionTodo[] | null>();
-
-export function extractTodos(part: DynamicToolUIPart): SessionTodo[] | null {
-  // Never `undefined`, so `undefined` is unambiguously a miss and a cached
-  // "this part is not a todo list" costs nothing to answer twice.
-  const cached = TODOS.get(part);
-  if (cached !== undefined) return cached;
-  const todos = readTodos(part);
-  TODOS.set(part, todos);
-  return todos;
-}
-
-function readTodos(part: DynamicToolUIPart): SessionTodo[] | null {
-  const fromInput = todosFromUnknown("input" in part ? part.input : undefined);
-  if (fromInput) return fromInput;
-  return todosFromUnknown("output" in part ? part.output : undefined);
-}
-
-/**
- * Todos are often `{content,status,priority}` with no id, and tool output may be
- * a JSON string of the array. Returns `[]` for an explicit empty list, `null`
- * when the value is not a todo list at all.
- */
-export function todosFromUnknown(value: unknown): SessionTodo[] | null {
-  const resolved = coerceTodoList(value);
-  if (!resolved) return null;
-  if (resolved.length === 0) return [];
-  const todos: SessionTodo[] = [];
-  for (let index = 0; index < resolved.length; index += 1) {
-    const item = resolved[index];
-    if (!isRecord(item)) continue;
-    const content =
-      typeof item.content === "string"
-        ? item.content
-        : typeof item.title === "string"
-          ? item.title
-          : typeof item.text === "string"
-            ? item.text
-            : null;
-    const status = normalizeTodoStatus(item.status);
-    const priority = normalizeTodoPriority(item.priority);
-    if (!content || !status) continue;
-    const id =
-      typeof item.id === "string" && item.id.trim().length > 0
-        ? item.id
-        : `todo-${index}-${content.slice(0, 24)}`;
-    todos.push({ id, content, status, priority });
-  }
-  // A payload that was a todo list but whose rows all failed to parse reads as
-  // empty rather than missing, so the dock can clear.
-  return todos;
-}
-
-function coerceTodoList(value: unknown): unknown[] | null {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) return null;
-    try {
-      return coerceTodoList(JSON.parse(trimmed) as unknown);
-    } catch {
-      return null;
-    }
-  }
-  if (Array.isArray(value)) return value;
-  if (isRecord(value) && Array.isArray(value.todos)) return value.todos;
-  return null;
-}
-
-function normalizeTodoStatus(value: unknown): SessionTodoStatus | null {
-  if (typeof value !== "string") return null;
-  const normalized = value.trim().toLowerCase().replace(/[-\s]/g, "_");
-  if (
-    normalized === "pending" ||
-    normalized === "in_progress" ||
-    normalized === "completed" ||
-    normalized === "cancelled"
-  ) {
-    return normalized;
-  }
-  if (normalized === "complete" || normalized === "done") return "completed";
-  if (normalized === "canceled") return "cancelled";
-  if (normalized === "active" || normalized === "running") return "in_progress";
-  return null;
-}
-
-// Unlike status, priority is never a reason to drop a row: a todo with an
-// unreadable priority is still a todo, so this always names one.
-function normalizeTodoPriority(value: unknown): SessionTodoPriority {
-  if (typeof value !== "string") return "medium";
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "high" || normalized === "medium" || normalized === "low") return normalized;
-  return "medium";
 }
 
 /* ------------------------------------------------------------------- shared */

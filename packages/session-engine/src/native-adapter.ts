@@ -1,4 +1,5 @@
 import type {
+  ModelSelection,
   SessionAttachmentContinuity,
   SessionCapabilityCatalogItem,
   SessionCapabilityFeature,
@@ -85,6 +86,13 @@ export type HarnessCommand =
       model: { providerId: string; modelId: string } | null;
       agent: string | null;
       variant: string | null;
+    }
+  | {
+      kind: "model.select";
+      commandId: string;
+      sessionId: string;
+      attachmentId: string;
+      selection: ModelSelection;
     }
   | {
       kind: "executor.interrupt";

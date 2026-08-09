@@ -1,6 +1,7 @@
 import { projectSession } from "@volli/shared";
 import type {
   CommandReceipt,
+  ModelSelection,
   Session,
   SessionAttachment,
   SessionAttachmentContinuity,
@@ -118,6 +119,7 @@ export type SessionClientCommand =
       agent?: string | null;
       variant?: string | null;
     }
+  | { kind: "model.select"; selection: ModelSelection }
   | { kind: "executor.interrupt"; attachmentId?: string }
   | { kind: "executor.retry"; attachmentId?: string }
   | {
@@ -142,6 +144,9 @@ type AttachCommandRequest = ExistingSessionCommandRequest & {
 type MessageCommandRequest = ExistingSessionCommandRequest & {
   command: Extract<SessionClientCommand, { kind: "message.submit" }>;
 };
+type SelectModelCommandRequest = ExistingSessionCommandRequest & {
+  command: Extract<SessionClientCommand, { kind: "model.select" }>;
+};
 type InterruptCommandRequest = ExistingSessionCommandRequest & {
   command: Extract<SessionClientCommand, { kind: "executor.interrupt" }>;
 };
@@ -154,6 +159,7 @@ type DeliveryResultKind =
   | "executor.interrupted"
   | "executor.retried"
   | "message.submitted"
+  | "model.selected"
   | "interaction.resolved";
 type AttachFailureAttentionKind = "configuration_invalid" | "adapter_unrecoverable";
 type FailAttachInput = {
@@ -414,6 +420,8 @@ class DefaultSessionRuntime implements SessionRuntime {
   readonly #bindings = new Map<string, BindingRecord>();
   readonly #rehydratingBindings = new Map<string, Promise<BindingRecord>>();
   readonly #inFlight = new Map<string, InFlightCommand>();
+  readonly #sessionAdmissionTails = new Map<string, Promise<void>>();
+  readonly #messageAdmissions = new Map<string, () => void>();
   readonly #subscribers = new Map<string, Set<Subscriber>>();
   readonly #capabilityRevisions = new Map<string, number>();
   readonly #capabilityWrites = new Map<string, Promise<SessionCapabilitySnapshot>>();
@@ -445,12 +453,53 @@ class DefaultSessionRuntime implements SessionRuntime {
       return existing.promise;
     }
 
-    const promise = this.#command(request).finally(async () => {
+    const serializesAdmission =
+      "sessionId" in request &&
+      (request.command.kind === "message.submit" || request.command.kind === "model.select");
+    const previous =
+      "sessionId" in request ? this.#sessionAdmissionTails.get(request.sessionId) : null;
+    const admission =
+      "sessionId" in request && request.command.kind === "message.submit"
+        ? Promise.withResolvers<void>()
+        : null;
+    const run = () => {
+      if (admission !== null && "sessionId" in request) {
+        this.#messageAdmissions.set(request.sessionId, admission.resolve);
+      }
+      return this.#command(request).finally(() => {
+        if (admission !== null && "sessionId" in request) {
+          this.#releaseMessageAdmission(request.sessionId, admission.resolve);
+        }
+      });
+    };
+    const operation = previous ? previous.then(run) : run();
+    const promise = operation.finally(async () => {
       this.#inFlight.delete(request.commandId);
       await this.#releaseBindingsAfterClose();
     });
     this.#inFlight.set(request.commandId, { signature, promise });
+    if (serializesAdmission && "sessionId" in request) {
+      const sessionId = request.sessionId;
+      const tail =
+        admission?.promise ??
+        promise.then(
+          () => undefined,
+          () => undefined,
+        );
+      this.#sessionAdmissionTails.set(sessionId, tail);
+      void tail.finally(() => {
+        if (this.#sessionAdmissionTails.get(sessionId) === tail) {
+          this.#sessionAdmissionTails.delete(sessionId);
+        }
+      });
+    }
     return promise;
+  }
+
+  #releaseMessageAdmission(sessionId: string, release: () => void): void {
+    if (this.#messageAdmissions.get(sessionId) !== release) return;
+    this.#messageAdmissions.delete(sessionId);
+    release();
   }
 
   async #command(request: SessionRuntimeCommandRequest): Promise<SessionRuntimeCommandResult> {
@@ -480,6 +529,13 @@ class DefaultSessionRuntime implements SessionRuntime {
         return this.#attach(request as AttachCommandRequest, projection, location, existed);
       case "message.submit":
         return this.#submitMessage(request as MessageCommandRequest, projection, location, existed);
+      case "model.select":
+        return this.#selectModel(
+          request as SelectModelCommandRequest,
+          projection,
+          location,
+          existed,
+        );
       case "executor.interrupt":
         return this.#interrupt(request as InterruptCommandRequest, projection, location, existed);
       case "executor.retry":
@@ -494,6 +550,78 @@ class DefaultSessionRuntime implements SessionRuntime {
       case "adapter.release":
         return this.#release(request as ReleaseCommandRequest, projection, location, existed);
     }
+  }
+
+  async #selectModel(
+    request: SelectModelCommandRequest,
+    projection: SessionProjection,
+    location: SessionLocation,
+    existed: boolean,
+  ): Promise<SessionRuntimeCommandResult> {
+    const submitted = await this.ports.engine.submit({
+      commandId: request.commandId,
+      sessionId: request.sessionId,
+      intent: { kind: "model.select", selection: request.command.selection },
+      provenance: userProvenance(location.venue),
+    });
+    await this.#publishSubmit(submitted, existed);
+    if (submitted.receipt && submitted.receipt.status !== "unreconciled") {
+      return this.#result(request.sessionId, submitted.command, submitted.receipt);
+    }
+
+    const attachmentId = submitted.command.route?.attachmentId;
+    if (!attachmentId) {
+      throw new SessionRuntimeConflictError(
+        `Model selection ${request.commandId} has neither a receipt nor a live attachment route`,
+      );
+    }
+    const needsRehydration = !this.#bindings.has(attachmentId);
+    if (!existed && needsRehydration) {
+      const unavailable = await this.#rejectUnavailableLocation(
+        request.sessionId,
+        submitted.command,
+        projection,
+        location,
+      );
+      if (unavailable) return this.#result(request.sessionId, submitted.command, unavailable);
+    }
+    const binding = await this.#bindingForCommand(
+      submitted.command,
+      projection,
+      location,
+      !existed && needsRehydration,
+    );
+    const recovered = await this.#recoverAdapterDelivery({ request, submitted, binding, existed });
+    if (recovered) return recovered;
+    if (existed) await this.ports.locations.reaffirm(projection.session, binding.spec.directory);
+
+    const receipt = await binding.handle.dispatch({
+      kind: "model.select",
+      commandId: request.commandId,
+      sessionId: request.sessionId,
+      attachmentId,
+      selection: request.command.selection,
+    });
+    if (receipt.status === "accepted") {
+      const completed = await this.ports.engine.completeModelSelection({
+        sessionId: request.sessionId,
+        commandId: request.commandId,
+        attachmentId,
+        occurredAt: receipt.acceptedAt,
+        provenance: adapterProvenance(binding.adapter, binding.venue),
+      });
+      await this.#publish([completed.event, completed.receiptEvent]);
+      return this.#result(request.sessionId, submitted.command, completed.receipt);
+    }
+    const durable = await this.#recordDelivery(
+      request.sessionId,
+      attachmentId,
+      binding.adapter,
+      binding.venue,
+      receipt,
+      "model.selected",
+    );
+    return this.#result(request.sessionId, submitted.command, durable);
   }
 
   async #attach(
@@ -1701,6 +1829,10 @@ class DefaultSessionRuntime implements SessionRuntime {
           kind: observation.kind,
           turnId: observation.turnId,
         });
+        if (observation.kind === "turn.started") {
+          const release = this.#messageAdmissions.get(spec.sessionId);
+          if (release !== undefined) this.#releaseMessageAdmission(spec.sessionId, release);
+        }
         break;
       case "interaction.opened":
         event = await this.ports.engine.observe({
@@ -1987,6 +2119,18 @@ class DefaultSessionRuntime implements SessionRuntime {
       const command = commands.get(receipt.commandId);
       if (!command) continue;
       if (receipt.status === "unknown" && terminalReceiptCommands.has(receipt.commandId)) continue;
+      if (command.intent.kind === "model.select" && receipt.status === "accepted") {
+        const completed = await this.ports.engine.completeModelSelection({
+          sessionId: binding.spec.sessionId,
+          commandId: command.id,
+          attachmentId: binding.spec.attachmentId,
+          occurredAt: receipt.acceptedAt,
+          provenance: adapterProvenance(binding.adapter, binding.venue),
+        });
+        await this.#publish([completed.event, completed.receiptEvent]);
+        terminalReceiptCommands.add(receipt.commandId);
+        continue;
+      }
       const resultKind = resultKindFor(command);
       const durable = await this.#recordDelivery(
         binding.spec.sessionId,
@@ -2553,6 +2697,8 @@ function resultKindFor(command: SessionCommand): DeliveryResultKind {
       return "executor.retried";
     case "message.submit":
       return "message.submitted";
+    case "model.select":
+      return "model.selected";
     case "interaction.resolve":
       return "interaction.resolved";
     /* v8 ignore next 2 -- only adapter-bound intents enter reconciliation. */

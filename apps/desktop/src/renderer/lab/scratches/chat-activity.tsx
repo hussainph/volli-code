@@ -16,9 +16,8 @@
  * the model pill, and exercise its keystrokes: ⏎ sends or queues depending on
  * the state toggle, ⌘⏎ steers, ⌫ on an empty box takes the queued message back.
  *
- * `plan` appears in the row gallery even though the real transcript hides it
- * (it projects to the rail). It is here so a change to its presenter is visible
- * rather than silently unreviewed.
+ * Plan activity stays in the transcript like every other structured activity;
+ * there is no synthesized rail projection.
  */
 import * as React from "react";
 import {
@@ -27,25 +26,18 @@ import {
   type ActivityDescriptor,
   type ActivityKind,
   type ActivityOutcome,
-  type RuntimeCatalogModel,
-  type RuntimeSelection,
   type SessionInteraction,
 } from "@volli/shared";
 import type { DynamicToolUIPart, ReasoningUIPart } from "ai";
 
-import { type BundleRow, type SessionTodo } from "@renderer/chat/activity";
+import { type BundleRow } from "@renderer/chat/activity";
+import { enqueueMessage, type QueuedMessage } from "@renderer/chat/session-model";
+import { ActivityBundle, AttentionReceipt, ToolRow } from "@renderer/components/chat/activity-ui";
 import {
-  enqueueMessage,
-  type ComposerAgent,
-  type QueuedMessage,
-} from "@renderer/chat/session-model";
-import {
-  ActivityBundle,
-  AttentionReceipt,
-  SessionTodoDock,
-  ToolRow,
-} from "@renderer/components/chat/activity-ui";
-import { SessionComposer } from "@renderer/components/chat/composer-ui";
+  SessionComposer,
+  type ComposerModel,
+  type ComposerModelSelection,
+} from "@renderer/components/chat/composer-ui";
 import { InteractionCard, InteractionReceiptLine } from "@renderer/components/chat/interaction-ui";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Button } from "@renderer/components/ui/button";
@@ -456,18 +448,6 @@ const FAILED_BUNDLE: BundleRow[] = [
 
 const TALL_BUNDLE: BundleRow[] = toolRows([...CHECK_RUN, ...EXPLORE_RUN, ...SETTLED_RUN], "b6");
 
-const TODOS: SessionTodo[] = [
-  { id: "t1", content: "Read the streaming seam", status: "completed", priority: "medium" },
-  {
-    id: "t2",
-    content: "Rewrite the composer as one pill",
-    status: "in_progress",
-    priority: "high",
-  },
-  { id: "t3", content: "Gate the session rail mode", status: "pending", priority: "medium" },
-  { id: "t4", content: "Drop the wire inspector", status: "cancelled", priority: "low" },
-];
-
 /**
  * A permission: one prompt, three declared options, correlated to a call. The
  * card draws every option the harness stated rather than three buttons of its
@@ -547,55 +527,43 @@ const QUESTION: SessionInteraction = {
   native: { id: "q-1", detail: null },
 };
 
-const MODELS: RuntimeCatalogModel[] = [
+const MODELS: ComposerModel[] = [
   {
     id: "anthropic/claude-sonnet-4-5",
     label: "sonnet-4.5",
     state: "available",
     providerId: "anthropic",
+    providerLabel: "Anthropic",
     modelId: "claude-sonnet-4-5",
-    variants: ["low", "medium", "high"],
+    reasoningLevels: ["low", "medium", "high"],
   },
   {
     id: "anthropic/claude-opus-4-1",
     label: "opus-4.1",
     state: "available",
     providerId: "anthropic",
+    providerLabel: "Anthropic",
     modelId: "claude-opus-4-1",
-    variants: ["medium", "high"],
+    reasoningLevels: ["medium", "high"],
   },
   {
     id: "openai/gpt-5-codex",
     label: "gpt-5-codex",
     state: "available",
     providerId: "openai",
+    providerLabel: "OpenAI",
     modelId: "gpt-5-codex",
-    variants: [],
+    reasoningLevels: [],
   },
   {
     id: "openai/o4-mini",
     label: "o4-mini",
     state: "unavailable",
     providerId: "openai",
+    providerLabel: "OpenAI",
     modelId: "o4-mini",
-    variants: [],
+    reasoningLevels: [],
   },
-];
-
-/**
- * The catalog OpenCode actually reports, helpers included. The point of the
- * fixture is that the declared flags — not a name list — are what keep
- * `explore` and `compaction` out of the Build / Plan segment. Only `build` and
- * `plan` should render below.
- */
-const AGENTS: ComposerAgent[] = [
-  { id: "build", label: "build", state: "available", mode: "primary" },
-  { id: "plan", label: "plan", state: "available", mode: "primary" },
-  { id: "general", label: "general", state: "available", mode: "subagent" },
-  { id: "explore", label: "explore", state: "available", mode: "subagent" },
-  { id: "compaction", label: "compaction", state: "available", mode: "primary", hidden: true },
-  { id: "title", label: "title", state: "available", mode: null, hidden: true },
-  { id: "summary", label: "summary", state: "available", mode: null, hidden: true },
 ];
 
 /* -------------------------------------------------------------------- shell */
@@ -689,10 +657,6 @@ export default function ChatActivityScratch() {
         <AttentionReceipt part={DENIED_ROW} />
       </Section>
 
-      <Section label="Plan dock">
-        <SessionTodoDock todos={TODOS} />
-      </Section>
-
       <ComposerStates />
     </ContentColumn>
   );
@@ -720,11 +684,10 @@ type ComposerStateName = (typeof COMPOSER_STATES)[number];
 function ComposerStates() {
   const [state, setState] = React.useState<ComposerStateName>("idle");
   const [value, setValue] = React.useState("");
-  const [selection, setSelection] = React.useState<RuntimeSelection>({
+  const [selection, setSelection] = React.useState<ComposerModelSelection>({
     providerId: "anthropic",
     modelId: "claude-sonnet-4-5",
-    variant: "high",
-    agent: "build",
+    reasoningLevel: "high",
   });
   const [queued, setQueued] = React.useState<readonly QueuedMessage[]>([
     { id: "q1", text: "also add a test for the empty-name branch" },
@@ -760,7 +723,6 @@ function ComposerStates() {
         value={value}
         onValueChange={setValue}
         models={MODELS}
-        agents={AGENTS}
         selection={selection}
         onSelectionChange={setSelection}
         working={working}

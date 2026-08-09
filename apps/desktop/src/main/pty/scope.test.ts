@@ -96,6 +96,106 @@ async function seedTerminal(
 }
 
 describe("resolveScope", () => {
+  it("turns model-access intent into the main-owned Pi login launch", async () => {
+    const { project, ticket, control } = setup();
+    const result = await resolveScope(
+      ctx.db,
+      control,
+      {
+        workspaceId: project.id,
+        cwd: project.path,
+        cols: 80,
+        rows: 24,
+        ticket: { ticketId: ticket.id, purpose: "model-access" },
+      },
+      "",
+      () => null,
+      (id) => getHarnessAdapter(id),
+      { command: "'/bundle/pi/pi' --no-tools", env: { PI_OFFLINE: "1" } },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      scope: {
+        ticketId: ticket.id,
+        title: "Model Access",
+        launchKind: "shell",
+        launchCommand: "'/bundle/pi/pi' --no-tools",
+        env: { PI_OFFLINE: "1" },
+        worktree: null,
+        resume: null,
+      },
+    });
+  });
+
+  it("opens global Model Access in the selected project without a Ticket", async () => {
+    const { project, control } = setup();
+    const result = await resolveScope(
+      ctx.db,
+      control,
+      {
+        workspaceId: project.id,
+        cwd: "/renderer-supplied",
+        cols: 80,
+        rows: 24,
+        purpose: "model-access",
+      },
+      "",
+      () => null,
+      (id) => getHarnessAdapter(id),
+      { command: "'/bundle/pi/pi' --no-tools", env: { PI_OFFLINE: "1" } },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      scope: {
+        projectId: project.id,
+        ticketId: null,
+        title: "Model Access",
+        cwd: project.path,
+        launchKind: "shell",
+        launchCommand: "'/bundle/pi/pi' --no-tools",
+        env: { PI_OFFLINE: "1" },
+      },
+    });
+  });
+
+  it("refuses model-access without a bundle or alongside kickoff/resume", async () => {
+    const { project, ticket, control } = setup();
+    const base = {
+      workspaceId: project.id,
+      cwd: project.path,
+      cols: 80,
+      rows: 24,
+    };
+    const resolve = (
+      ticketInput: NonNullable<import("@volli/shared").CreateTerminalSessionRequest["ticket"]>,
+    ) =>
+      resolveScope(
+        ctx.db,
+        control,
+        { ...base, ticket: ticketInput },
+        "",
+        () => null,
+        (id) => getHarnessAdapter(id),
+      );
+
+    await expect(resolve({ ticketId: ticket.id, purpose: "model-access" })).resolves.toEqual({
+      ok: false,
+      error: "Bundled Pi CLI is unavailable",
+    });
+    await expect(
+      resolve({
+        ticketId: ticket.id,
+        purpose: "model-access",
+        kickoff: { harnessId: "codex", prompt: "no" },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: "Model Access cannot start a kickoff or resume another Session",
+    });
+  });
+
   it("numbers from session-engine projections rather than terminal columns", async () => {
     const { project, ticket, control } = setup();
     await control.createSession({

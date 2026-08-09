@@ -224,7 +224,7 @@ export default defineConfig(({ mode }) => ({
       },
       build: {
         command:
-          "vp run --filter @volli/cli build && vp build && node scripts/verify-chat-css.mjs && vp pack && node scripts/copy-cli.mjs",
+          "node scripts/prepare-pi-cli.mjs && vp run --filter @volli/cli build && vp build && node scripts/verify-chat-css.mjs && vp pack && node scripts/copy-cli.mjs",
         cache: false,
       },
       // The UI lab (src/renderer/lab) — the renderer dev server alone, no

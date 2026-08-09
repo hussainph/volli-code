@@ -19,8 +19,9 @@ import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
 import { ClockIcon } from "@phosphor-icons/react/dist/csr/Clock";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import type {
-  RuntimeCatalogChoices,
-  RuntimeSelection,
+  ModelAccessModel,
+  ModelAccessProvider,
+  ReasoningLevel,
   SessionAttentionProjection,
   SessionInteraction,
 } from "@volli/shared";
@@ -41,33 +42,22 @@ import {
   gatedApprovalIds,
   groupTurns,
   isAwaitingFirstOutput,
-  projectSessionTodos,
   segmentTurn,
   type ChatSegment,
-  type SessionTodo,
 } from "@renderer/chat/activity";
-import {
-  DEFAULT_CHAT_EXECUTOR,
-  EMPTY_CHAT_SELECTION,
-  isDeliverable,
-  pinsOwnModel,
-} from "@renderer/chat/client";
+import { isDeliverable } from "@renderer/chat/client";
 import {
   footInteraction,
   interactionForApproval,
   readInteractionResolutionMessage,
   type InteractionSubmission,
 } from "@renderer/chat/interaction";
-import {
-  resolveRuntimeSelection,
-  type ComposerIntent,
-  type QueuedMessage,
-} from "@renderer/chat/session-model";
+import { type ComposerIntent, type QueuedMessage } from "@renderer/chat/session-model";
 import {
   useSessionController,
   type ChatSessionsStore,
 } from "@renderer/chat/use-session-controller";
-import { ActivityBundle, SessionTodoDock, ToolRow } from "@renderer/components/chat/activity-ui";
+import { ActivityBundle, ToolRow } from "@renderer/components/chat/activity-ui";
 import {
   answerInteraction,
   holdList,
@@ -75,52 +65,43 @@ import {
   resolvingWith,
   sameInteractionId,
   sameMessages,
-  sameSelection,
-  sameTodos,
   sessionBlocker,
-  terminalCompanionTabId,
-  todosSettled,
   withdrawInteraction,
   type CatalogState,
   type SessionBlockerActs,
   type SessionBlockerState,
 } from "@renderer/components/chat/chat-plane-model";
-import { SessionComposer } from "@renderer/components/chat/composer-ui";
+import { createModelAccessTerminal } from "@renderer/components/sessions/session-create";
+import {
+  SessionComposer,
+  type ComposerModel,
+  type ComposerModelSelection,
+} from "@renderer/components/chat/composer-ui";
 import { InteractionCard, InteractionReceiptLine } from "@renderer/components/chat/interaction-ui";
 import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Button } from "@renderer/components/ui/button";
-import { useRuntimeCatalogClient } from "@renderer/lib/runtime-catalog-client";
+import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { cn } from "@renderer/lib/utils";
 import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
-import { useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
-
-/**
- * Which harness answers "what models can I pick" — for the Sessions that have
- * the question.
- *
- * Not the Session's own executor: a scripted lab profile attaches under an
- * adapter of its own and has no catalog, and the pick a person makes is about
- * the provider behind it. What it must not do is answer for a Session whose
- * executor pins its own model — see {@link pinsOwnModel}. Asking OpenCode what
- * a Pi Session may run names models Pi will drop, and gating that Session's
- * composer on the answer left it inert forever on a profile with no OpenCode.
- */
-const CATALOG_ADAPTER_ID = DEFAULT_CHAT_EXECUTOR.adapterId;
 
 const NO_MESSAGES: readonly UIMessage[] = [];
 const NO_INTERACTIONS: readonly SessionInteraction[] = [];
 const NO_QUEUE: readonly QueuedMessage[] = [];
-const EMPTY_CATALOG: RuntimeCatalogChoices = { providers: [], models: [], agents: [] };
+const NO_MODELS: readonly ModelAccessModel[] = [];
+const EMPTY_MODEL_SELECTION: ComposerModelSelection = {
+  providerId: "",
+  modelId: "",
+  reasoningLevel: "",
+};
 const EMPTY_ATTENTION: SessionAttentionProjection = { active: [], primary: null };
 const EMPTY_OPENED: ReadonlyMap<string, SessionInteraction> = new Map();
 const EMPTY_RESOLVING: ReadonlySet<string> = new Set();
 
 export interface ChatPlaneProps {
   sessionId: string;
-  /** Which project's runtime preferences this chat resolves against (see `useRuntimeCatalog`). */
+  /** Project scope for Model Access and file navigation. */
   projectId: string;
   onOpenFile(path: string): void;
   /** The UI lab's own store, which owns its own transport. Omitted in the app. */
@@ -137,15 +118,11 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
     recover,
     retryRuntime,
     resolveInteraction,
+    selectModel,
     submit,
   } = controller;
-  const setSelection = controller.setSelection;
   const slice = controller.session;
   const ticketId = slice?.projection?.session.ticketId ?? null;
-  const terminalTabId = useSessionsStore((state) => {
-    if (ticketId === null) return null;
-    return terminalCompanionTabId(state.byOwner[ticketId]);
-  });
 
   // The half-typed message is part of the Session, not this view: it has to
   // survive both a tab switch (this component unmounts) and a relaunch, so it
@@ -161,31 +138,35 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   // once, and one boolean disables every other card's controls while one of
   // them is in flight.
   const [resolving, setResolving] = React.useState<ReadonlySet<string>>(EMPTY_RESOLVING);
-  const [todos, setTodos] = React.useState<SessionTodo[] | null>(null);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
   const composerHeight = useMeasuredHeight<HTMLDivElement>();
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
 
   const messages = slice?.transcript.messages ?? NO_MESSAGES;
   const queue = slice?.queue ?? NO_QUEUE;
-  const selection = slice?.selection ?? EMPTY_CHAT_SELECTION;
+  const bornTicketless = slice?.projection?.bornTicketless === true;
+  const modelSelection = slice?.projection?.modelSelection ?? null;
+  const selection: ComposerModelSelection = modelSelection ?? EMPTY_MODEL_SELECTION;
   const working = slice?.lifecycle === "working";
   const liveExecutorId = slice?.projection?.liveExecutor?.id ?? null;
   const deliverable = slice !== undefined && isDeliverable(slice);
-  // Which executor this Session attaches decides what "ready" even means: one
-  // that pins its own model is waiting for nothing, and one that does not needs
-  // a model picked before a message can be written. A model is what you need to
-  // *write* a message; a live executor is what you need to *deliver* one.
-  // Anything written before both hold joins the queue.
-  const pinned = pinsOwnModel(controller.adapterId);
-  const composable = pinned || selection.modelId.length > 0;
-
-  const { catalog, catalogState, catalogError } = useRuntimeCatalog(
-    projectId,
-    liveExecutorId,
-    selection,
-    setSelection,
-    pinned,
+  const composable = bornTicketless || modelSelection !== null;
+  const { models, providers, catalogState, catalogError } = useModelAccess(
+    !bornTicketless && slice?.projection != null,
+  );
+  const composerModels = React.useMemo(
+    () => models.map((model) => composerModel(model, providers)),
+    [models, providers],
+  );
+  const changeModel = React.useCallback(
+    (next: ComposerModelSelection) => {
+      void selectModel({
+        providerId: next.providerId,
+        modelId: next.modelId,
+        reasoningLevel: next.reasoningLevel as ReasoningLevel,
+      });
+    },
+    [selectModel],
   );
 
   // The projection is replaced wholesale on every refresh, so its open
@@ -196,16 +177,6 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
     slice?.projection?.interactions.active ?? NO_INTERACTIONS,
     sameInteractionId,
   );
-
-  // Live todos from the plan activity. Held by value: the plan is re-projected
-  // from scratch on every frame batch and is almost always the same plan, but a
-  // fresh array of identical rows still fails React's bail-out.
-  React.useEffect(() => {
-    const projected = projectSessionTodos(messages);
-    if (projected === null) return;
-    const next = projected.length > 0 ? projected : null;
-    setTodos((current) => (sameTodos(current, next) ? current : next));
-  }, [messages]);
 
   /**
    * The one road out of this surface for anything a person typed.
@@ -332,12 +303,12 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
       // fresh attach there. Once Pi is live, it is the exact failed run.
       retryRuntime: () => void (liveExecutorId === null ? recover() : retryRuntime()),
       openTerminal: () => {
-        if (ticketId === null || terminalTabId === null) return;
-        useWorkspaceStore.getState().openTicketSession(projectId, ticketId, terminalTabId);
+        if (ticketId === null) return;
+        void createModelAccessTerminal({ kind: "ticket", projectId, ticketId });
       },
       openSettings: () => setSettingsOpen(true),
     }),
-    [liveExecutorId, projectId, recover, retryRuntime, setSettingsOpen, terminalTabId, ticketId],
+    [liveExecutorId, projectId, recover, retryRuntime, setSettingsOpen, ticketId],
   );
   const blocker = sessionBlocker(
     {
@@ -345,8 +316,8 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
       attention: slice?.projection?.attention ?? EMPTY_ATTENTION,
       catalogState,
       catalogError,
-      terminalAvailable: terminalTabId !== null,
-      runtimeRetryAvailable: controller.adapterId === "pi" && ticketId !== null,
+      terminalAvailable: ticketId !== null,
+      runtimeRetryAvailable: !bornTicketless && ticketId !== null,
     },
     blockerActs,
     interactions.length > 0,
@@ -436,18 +407,15 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
             />
           ) : (
             <>
-              {todos && todos.length > 0 && !todosSettled(todos) ? (
-                <SessionTodoDock todos={todos} />
-              ) : null}
               <SessionComposer
                 value={input}
                 onValueChange={onInputChange}
                 textareaRef={textareaRef}
-                models={catalog.models}
-                agents={catalog.agents}
-                offersModelChoice={!pinned}
+                models={composerModels}
+                offersModelChoice={!bornTicketless}
                 selection={selection}
-                onSelectionChange={setSelection}
+                onSelectionChange={changeModel}
+                modelChoiceDisabled={working}
                 working={working}
                 ready={composable}
                 queued={queue}
@@ -463,85 +431,65 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   );
 }
 
-/* ---------------------------------------------------------------- catalog */
+/* ------------------------------------------------------------ model access */
 
-/**
- * Which models a person can pick, and the one they have.
- *
- * Only a running harness can answer the first, so the ask is repeated when an
- * executor appears: opening a Session starts one, and the first ask races that
- * attach and loses — an empty answer arriving as the confident claim that
- * nothing is configured. It is repeated again when a runtime preference is
- * saved, which is the other way the answer legitimately changes.
- *
- * The selection lives in the Session's slice, not here: it is a choice about
- * this Session and it has to outlive the view. The current one is read through
- * a ref so re-resolving does not depend on the value it is about to write.
- *
- * `projectId` arrives as a prop from `ChatPlane`, not read off
- * `slice.projection.session.projectId`: the projection is null until the
- * first snapshot lands, so the first resolve would fire globally before it —
- * briefly offering models the project disabled, a wrong-model send window,
- * not a flicker.
- *
- * `pinned` is the Session that has no such question. It is not asked, so it
- * cannot be told there is nothing configured — which would be a blocked state
- * drawn over a Session that is ready to take a message.
- */
-function useRuntimeCatalog(
-  projectId: string,
-  liveExecutorId: string | null,
-  selection: RuntimeSelection,
-  setSelection: (next: RuntimeSelection) => void,
-  pinned: boolean,
-): { catalog: RuntimeCatalogChoices; catalogState: CatalogState; catalogError: string | null } {
-  const runtimeCatalog = useRuntimeCatalogClient();
-  const [catalog, setCatalog] = React.useState<RuntimeCatalogChoices>(EMPTY_CATALOG);
+function useModelAccess(active: boolean): {
+  models: readonly ModelAccessModel[];
+  providers: readonly ModelAccessProvider[];
+  catalogState: CatalogState;
+  catalogError: string | null;
+} {
+  const modelAccess = useModelAccessClient();
+  const [models, setModels] = React.useState<readonly ModelAccessModel[]>(NO_MODELS);
+  const [providers, setProviders] = React.useState<readonly ModelAccessProvider[]>([]);
   const [catalogState, setCatalogState] = React.useState<CatalogState>("loading");
   const [catalogError, setCatalogError] = React.useState<string | null>(null);
-  const held = React.useRef(selection);
-  held.current = selection;
-
-  const preferenceRevision = runtimeCatalog?.preferenceRevision ?? 0;
-  const resolve = runtimeCatalog?.resolve;
+  const inspect = modelAccess?.inspect;
+  const revision = modelAccess?.revision ?? 0;
 
   React.useEffect(() => {
-    if (pinned || resolve === undefined) return;
-    let active = true;
-    void resolve({ adapterId: CATALOG_ADAPTER_ID, projectId })
-      .then((resolved) => {
-        if (!active) return;
-        setCatalog(resolved.catalog);
+    if (!active || inspect === undefined) return;
+    let current = true;
+    void inspect({})
+      .then((access) => {
+        if (!current) return;
+        setModels(access.models);
+        setProviders(access.providers);
         setCatalogError(null);
-        setCatalogState(resolved.catalog.models.length > 0 ? "ready" : "empty");
-        const next = resolveRuntimeSelection(
-          resolved.catalog,
-          held.current.modelId ? held.current : resolved.selection,
+        setCatalogState(
+          access.models.some((model) => model.state === "available") ? "ready" : "empty",
         );
-        if (!sameSelection(next, held.current)) setSelection(next);
       })
-      .catch((unresolved: unknown) => {
-        if (!active) return;
-        // The last known catalog stays on screen. A refresh that fails is not
-        // evidence that the models a person already picked have gone away, and
-        // blanking the picker would take away the one control still usable.
+      .catch((failure: unknown) => {
+        if (!current) return;
         setCatalogState("error");
-        setCatalogError(errorMessage(unresolved));
+        setCatalogError(errorMessage(failure));
       });
     return () => {
-      active = false;
+      current = false;
     };
-  }, [liveExecutorId, pinned, preferenceRevision, projectId, resolve, setSelection]);
+  }, [active, inspect, revision]);
 
-  return pinned ? PINNED_CATALOG : { catalog, catalogState, catalogError };
+  return active
+    ? { models, providers, catalogState, catalogError }
+    : { models: NO_MODELS, providers: [], catalogState: "pinned", catalogError: null };
 }
 
-/** No catalog, and nothing missing: the executor already chose. */
-const PINNED_CATALOG = {
-  catalog: EMPTY_CATALOG,
-  catalogState: "pinned" as const,
-  catalogError: null,
-};
+function composerModel(
+  model: ModelAccessModel,
+  providers: readonly ModelAccessProvider[],
+): ComposerModel {
+  return {
+    id: `${model.providerId}/${model.modelId}`,
+    providerId: model.providerId,
+    providerLabel:
+      providers.find((provider) => provider.id === model.providerId)?.label ?? model.providerId,
+    modelId: model.modelId,
+    label: model.label,
+    state: model.state,
+    reasoningLevels: model.reasoningLevels,
+  };
+}
 
 /* ---------------------------------------------------------------- blocked */
 

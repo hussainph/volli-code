@@ -86,17 +86,14 @@ function KindGlyph({ kind }: { kind: SessionRowKind }) {
 }
 
 /**
- * Why a human is needed. `blocked`/`done` are the agent's own voluntary `volli
- * session` signals and carry its words; `waiting` is the involuntary channel,
- * which knows only that someone is needed — so a chat's `waitingOn` is what
- * turns that into an errand.
+ * Why a human is needed. `blocked` is the agent's own voluntary `volli session`
+ * signal and carries its words; `waiting` is the involuntary channel, which
+ * knows only that someone is needed — so a chat's `waitingOn` is what turns
+ * that into an errand.
  */
 function attentionLine(attention: SessionAttention, waitingOn: ChatWaitingReason | null): string {
   if (attention.signal === "blocked") {
     return attention.reason === null ? "Blocked" : `Blocked · ${attention.reason}`;
-  }
-  if (attention.signal === "done") {
-    return attention.reason === null ? "Ready for review" : `Ready · ${attention.reason}`;
   }
   return waitingOn === null ? "Waiting for you" : WAITING_COPY[waitingOn];
 }

@@ -2,7 +2,7 @@ import type { ChatSessionRecord, SessionListingRow, SessionProjection } from "@v
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { EMPTY_CHAT_SELECTION, type ChatSessionSlice } from "@renderer/chat/client";
+import { type ChatSessionSlice } from "@renderer/chat/client";
 import { EMPTY_TRANSCRIPT } from "@renderer/chat/transcript";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
@@ -25,6 +25,7 @@ const projection: SessionProjection = {
   capabilities: [],
   interactions: { active: [], resolved: [] },
   signal: null,
+  modelSelection: null,
   turnActive: false,
   lastActivityAt: 0,
   bornTicketless: false,
@@ -36,7 +37,6 @@ const slice: ChatSessionSlice = {
   lifecycle: "ready",
   sessionError: null,
   queue: [],
-  selection: EMPTY_CHAT_SELECTION,
 };
 
 function chatRow(overrides: Partial<ChatSessionRecord> = {}): SessionListingRow {

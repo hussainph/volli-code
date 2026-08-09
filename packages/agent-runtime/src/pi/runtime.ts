@@ -5,7 +5,12 @@ import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { AgentMessage, CustomEntry, MessageEntry } from "@earendil-works/pi-agent-core";
 import { Agent, JsonlSessionRepo, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import type { AssistantMessage, Models, UserMessage } from "@earendil-works/pi-ai";
+import {
+  getSupportedThinkingLevels,
+  type AssistantMessage,
+  type Models,
+  type UserMessage,
+} from "@earendil-works/pi-ai";
 import { isActivityKind } from "@volli/shared";
 import type {
   AgentRuntime,
@@ -21,6 +26,7 @@ import type {
 } from "../contracts";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
 import { mapPiActivity } from "./activity";
+import { inspectPiModelAccess } from "./model-access";
 import { piOwnedModels } from "./models";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
 import { ScopedExecutionEnv, type TicketExecutionEnv } from "./scoped-execution-env";
@@ -65,6 +71,7 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
     executionEnvFactory: options.executionEnvFactory ?? ScopedExecutionEnv.create,
   };
   return {
+    inspectModelAccess: (input) => inspectPiModelAccess(host.models, host.now, input),
     startTicketSession: (spec) => attachTicketSession(host, spec),
   };
 }
@@ -763,6 +770,63 @@ async function attachTicketSession(
           throw failed;
         }
         return { kind: "delivered", delivery: "prompt" };
+      },
+
+      async selectModel(selection) {
+        if (closed || cancelled) {
+          return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
+        }
+        if (agent.state.isStreaming) {
+          return {
+            kind: "rejected",
+            reason: "busy-unsupported",
+            message: "The model cannot change while Pi is running.",
+          };
+        }
+        let available: Awaited<ReturnType<Models["getAvailable"]>>;
+        try {
+          available = await models.getAvailable(selection.providerId);
+        } catch {
+          return {
+            kind: "rejected",
+            reason: "model-unavailable",
+            message: "The selected model is not currently available.",
+          };
+        }
+        const selected = available.find(
+          (candidate) =>
+            candidate.provider === selection.providerId && candidate.id === selection.modelId,
+        );
+        if (!selected) {
+          return {
+            kind: "rejected",
+            reason: "model-unavailable",
+            message: "The selected model is not currently available.",
+          };
+        }
+        if (!getSupportedThinkingLevels(selected).includes(selection.reasoningLevel)) {
+          return {
+            kind: "rejected",
+            reason: "reasoning-unsupported",
+            message: "The selected reasoning level is not supported by this model.",
+          };
+        }
+        // Availability can resolve asynchronously. Recheck the idle boundary
+        // immediately before changing the pair so neither half is applied to
+        // a turn that started while credentials were being inspected.
+        if (closed || cancelled) {
+          return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
+        }
+        if (agent.state.isStreaming) {
+          return {
+            kind: "rejected",
+            reason: "busy-unsupported",
+            message: "The model cannot change while Pi is running.",
+          };
+        }
+        agent.state.model = selected;
+        agent.state.thinkingLevel = selection.reasoningLevel;
+        return { kind: "selected" };
       },
 
       async retry(commandId): Promise<DeliveryOutcome> {

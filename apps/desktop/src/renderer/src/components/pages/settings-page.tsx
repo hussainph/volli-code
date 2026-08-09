@@ -10,6 +10,7 @@ import { errorMessage, type DirtyWorktreeOrphan } from "@volli/shared";
 
 import { AppearanceSettings } from "@renderer/components/pages/appearance-settings";
 import { HarnessSettings } from "@renderer/components/pages/harness-settings";
+import { ModelAccessSettings } from "@renderer/components/pages/model-access-settings";
 import {
   SettingsRow,
   SettingsSection,
@@ -49,6 +50,12 @@ export function SettingsPage({ initialCategoryKey }: { initialCategoryKey?: stri
       label: "Appearance",
       icon: PaletteIcon,
       content: <AppearanceSettings />,
+    },
+    {
+      key: "agent",
+      label: "Agent",
+      icon: CpuIcon,
+      content: <ModelAccessSettings />,
     },
     {
       key: "harness",

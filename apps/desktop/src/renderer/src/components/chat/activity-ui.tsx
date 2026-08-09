@@ -19,7 +19,6 @@ import {
   CaretRightIcon,
   CheckCircleIcon,
   CircleDashedIcon,
-  CircleIcon,
   CopyIcon,
   FilePlusIcon,
   FileTextIcon,
@@ -53,7 +52,6 @@ import {
   type ActivityRow,
   type ActivityStatus,
   type BundleRow,
-  type SessionTodo,
   type SummarySegment,
   type SummaryTone,
 } from "@renderer/chat/activity";
@@ -882,86 +880,4 @@ export function AttentionReceipt({ part }: { part: DynamicToolUIPart }) {
       <span className="shrink-0">this time</span>
     </div>
   );
-}
-
-/* -------------------------------------------------------------------- todos */
-
-export function SessionTodoDock({ todos }: { todos: readonly SessionTodo[] }) {
-  const [open, setOpen] = React.useState(true);
-  const done = todos.filter(
-    (todo) => todo.status === "completed" || todo.status === "cancelled",
-  ).length;
-  const active =
-    todos.find((todo) => todo.status === "in_progress") ??
-    todos.find((todo) => todo.status === "pending") ??
-    todos[todos.length - 1];
-
-  return (
-    <div className="pointer-events-auto mb-2 rounded-xl border border-border bg-card shadow-[var(--shadow-raised)]">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="group/row flex w-full items-center gap-2 px-3 py-2 text-left text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
-      >
-        <span className="font-medium tabular-nums text-foreground">
-          {done}/{todos.length}
-        </span>
-        {active ? (
-          <span className="min-w-0 truncate text-muted-foreground">{active.content}</span>
-        ) : null}
-        <Caret open={open} />
-      </button>
-      <Disclosure open={open}>
-        <ul className="space-y-1 border-t border-border/70 px-3 py-2">
-          {todos.map((todo) => (
-            <TodoRow key={todo.id} todo={todo} />
-          ))}
-        </ul>
-      </Disclosure>
-    </div>
-  );
-}
-
-export function SessionTodoList({ todos }: { todos: readonly SessionTodo[] }) {
-  return (
-    <ul className="space-y-1.5">
-      {todos.map((todo) => (
-        <TodoRow key={todo.id} todo={todo} />
-      ))}
-    </ul>
-  );
-}
-
-function TodoRow({ todo }: { todo: SessionTodo }) {
-  return (
-    <li className="flex items-start gap-2 text-xs">
-      <TodoGlyph status={todo.status} />
-      <span
-        className={cn(
-          "min-w-0 flex-1 leading-5",
-          (todo.status === "completed" || todo.status === "cancelled") &&
-            "text-muted-foreground line-through",
-        )}
-      >
-        {todo.content}
-      </span>
-    </li>
-  );
-}
-
-function TodoGlyph({ status }: { status: SessionTodo["status"] }) {
-  if (status === "completed") {
-    return <CheckCircleIcon className="mt-0.5 size-3.5 shrink-0 text-primary" weight="fill" />;
-  }
-  if (status === "cancelled") {
-    return <XCircleIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" weight="fill" />;
-  }
-  if (status === "in_progress") {
-    return (
-      <span className="mt-0.5 flex size-3.5 shrink-0 items-center justify-center">
-        <span className="size-2 animate-pulse rounded-full bg-primary" />
-      </span>
-    );
-  }
-  return <CircleIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />;
 }

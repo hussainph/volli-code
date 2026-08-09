@@ -1,11 +1,11 @@
 import { AppShell } from "@renderer/components/app-shell";
-import { DesktopRuntimeCatalogProvider } from "@renderer/lib/desktop-runtime-catalog-client";
+import { DesktopModelAccessProvider } from "@renderer/lib/desktop-model-access-client";
 
 function App() {
   return (
-    <DesktopRuntimeCatalogProvider>
+    <DesktopModelAccessProvider>
       <AppShell />
-    </DesktopRuntimeCatalogProvider>
+    </DesktopModelAccessProvider>
   );
 }
 

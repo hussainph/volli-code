@@ -18,6 +18,8 @@ export interface CreateTerminalSessionRequest {
   rows: number;
   /** App-owned layout intent. Omitted callers predate split metadata and land as a tab. */
   placement?: "tab" | "split";
+  /** Project-scoped manual provider sign-in; main chooses the executable and launch policy. */
+  purpose?: "model-access";
   /**
    * When present, the session is ticket-scoped: main resolves the ticket and
    * its project from the db (never trusting anything else from the renderer),
@@ -40,6 +42,8 @@ export interface CreateTerminalSessionRequest {
    */
   ticket?: {
     ticketId: string;
+    /** Product-owned manual provider sign-in terminal; main chooses the executable and flags. */
+    purpose?: "model-access";
     kickoff?: { harnessId: HarnessId; prompt: string };
     resume?: { sessionId: string };
   };

@@ -15,6 +15,8 @@ import {
   createAssistantMessageEventStream,
   createModels,
   fauxProvider,
+  InMemoryCredentialStore,
+  ModelsError,
   type AssistantMessage,
   type Context,
   type Model,
@@ -246,6 +248,373 @@ function writeLinearJsonl(path: string, entries: Record<string, unknown>[]): voi
 }
 
 // --- tests -----------------------------------------------------------------
+
+describe("model access", () => {
+  it("reports sanitized available and sign-in-required model access", async () => {
+    const credentials = new InMemoryCredentialStore();
+    await credentials.modify("openai-codex", async () => ({
+      type: "oauth",
+      access: "access-secret",
+      refresh: "refresh-secret",
+      expires: Date.now() + 60_000,
+    }));
+    const configured = fauxProvider({
+      provider: "openai-codex",
+      models: [{ id: "gpt-5.6-sol", name: "GPT-5.6 Sol", reasoning: true }],
+    });
+    const unconfigured = fauxProvider({
+      provider: "anthropic",
+      models: [{ id: "claude-sonnet", name: "Claude Sonnet", reasoning: true }],
+    });
+    const models = createModels({ credentials });
+    models.setProvider({
+      ...configured.provider,
+      name: "OpenAI Codex",
+      baseUrl: "https://access-secret.invalid",
+      headers: { Authorization: "Bearer access-secret" },
+      auth: {
+        oauth: {
+          name: "OpenAI (ChatGPT Plus/Pro)",
+          isSubscription: true,
+          login: async () => {
+            throw new Error("not called");
+          },
+          refresh: async (credential) => credential,
+          toAuth: async () => ({ headers: { Authorization: "Bearer access-secret" } }),
+        },
+      },
+    });
+    models.setProvider({
+      ...unconfigured.provider,
+      name: "Anthropic",
+      auth: {
+        apiKey: {
+          name: "Anthropic API key",
+          resolve: async () => undefined,
+        },
+      },
+    });
+
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+      now: () => 42,
+    });
+
+    const access = await runtime.inspectModelAccess();
+
+    expect(access).toEqual({
+      observedAt: 42,
+      providers: [
+        {
+          id: "openai-codex",
+          label: "OpenAI Codex",
+          state: "available",
+          accountLabel: null,
+          billingSource: "subscription",
+          recovery: null,
+        },
+        {
+          id: "anthropic",
+          label: "Anthropic",
+          state: "authentication-required",
+          accountLabel: null,
+          billingSource: "unknown",
+          recovery: { kind: "external-sign-in" },
+        },
+      ],
+      models: [
+        {
+          providerId: "openai-codex",
+          modelId: "gpt-5.6-sol",
+          label: "GPT-5.6 Sol",
+          state: "available",
+          reasoningLevels: ["off", "minimal", "low", "medium", "high"],
+        },
+        {
+          providerId: "anthropic",
+          modelId: "claude-sonnet",
+          label: "Claude Sonnet",
+          state: "authentication-required",
+          reasoningLevels: ["off", "minimal", "low", "medium", "high"],
+        },
+      ],
+    });
+    expect(JSON.stringify(access)).not.toMatch(/access-secret|refresh-secret|authorization/i);
+  });
+
+  it("isolates provider authentication failures without exposing their details", async () => {
+    const broken = fauxProvider({
+      provider: "anthropic",
+      models: [{ id: "claude-sonnet", name: "Claude Sonnet", reasoning: true }],
+    });
+    const models = createModels();
+    models.setProvider({
+      ...broken.provider,
+      name: "Anthropic",
+      auth: {
+        apiKey: {
+          name: "Anthropic API key",
+          resolve: async () => {
+            throw new Error("credential-store-secret");
+          },
+        },
+      },
+    });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+      now: () => 43,
+    });
+
+    const access = await runtime.inspectModelAccess();
+
+    expect(access).toEqual({
+      observedAt: 43,
+      providers: [
+        {
+          id: "anthropic",
+          label: "Anthropic",
+          state: "unavailable",
+          accountLabel: null,
+          billingSource: "unknown",
+          recovery: { kind: "retry" },
+        },
+      ],
+      models: [
+        {
+          providerId: "anthropic",
+          modelId: "claude-sonnet",
+          label: "Claude Sonnet",
+          state: "unavailable",
+          reasoningLevels: ["off", "minimal", "low", "medium", "high"],
+        },
+      ],
+    });
+    expect(JSON.stringify(access)).not.toContain("credential-store-secret");
+  });
+
+  it("reports only reasoning levels the model supports", async () => {
+    const faux = fauxProvider({
+      provider: "example",
+      models: [
+        { id: "always-reasons", reasoning: true },
+        { id: "plain", reasoning: false },
+      ],
+    });
+    const [alwaysReasons, plain] = faux.models;
+    const models = createModels();
+    models.setProvider({
+      ...faux.provider,
+      auth: {
+        apiKey: {
+          name: "Example API key",
+          resolve: async () => ({ auth: { apiKey: "configured" }, source: "EXAMPLE_API_KEY" }),
+        },
+      },
+      getModels: () => [
+        {
+          ...alwaysReasons,
+          thinkingLevelMap: { off: null, minimal: null, max: null },
+        },
+        plain,
+      ],
+    });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+    });
+
+    const access = await runtime.inspectModelAccess();
+
+    expect(access.models.map((model) => [model.modelId, model.reasoningLevels])).toEqual([
+      ["always-reasons", ["low", "medium", "high"]],
+      ["plain", ["off"]],
+    ]);
+  });
+
+  it("keeps credential-filtered models unavailable when their provider is usable", async () => {
+    const faux = fauxProvider({
+      provider: "subscription",
+      models: [{ id: "included" }, { id: "excluded" }],
+    });
+    const models = createModels();
+    models.setProvider({
+      ...faux.provider,
+      auth: {
+        apiKey: {
+          name: "Subscription credential",
+          resolve: async () => ({ auth: { apiKey: "configured" } }),
+        },
+      },
+      filterModels: (catalog) => catalog.filter((model) => model.id === "included"),
+    });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+    });
+
+    const access = await runtime.inspectModelAccess();
+
+    expect(access.providers[0]?.state).toBe("available");
+    expect(access.providers[0]?.billingSource).toBe("unknown");
+    expect(access.models.map((model) => [model.modelId, model.state])).toEqual([
+      ["included", "available"],
+      ["excluded", "unavailable"],
+    ]);
+  });
+
+  it("does not call API-key access a subscription merely because OAuth is offered", async () => {
+    const faux = fauxProvider({ provider: "mixed-auth", models: [{ id: "model-1" }] });
+    const models = createModels();
+    models.setProvider({
+      ...faux.provider,
+      auth: {
+        oauth: {
+          name: "Mixed subscription",
+          isSubscription: true,
+          login: async () => {
+            throw new Error("not called");
+          },
+          refresh: async (credential) => credential,
+          toAuth: async () => ({ headers: { Authorization: "Bearer oauth-secret" } }),
+        },
+      },
+    });
+    vi.spyOn(models, "checkAuth").mockResolvedValue({
+      type: "api_key",
+      source: "MIXED_API_KEY",
+    });
+    vi.spyOn(models, "getAvailable").mockResolvedValue(faux.models);
+    const runtime = createPiAgentRuntime({ sessionDataDir: "/runtime-owned/sessions", models });
+
+    const access = await runtime.inspectModelAccess();
+
+    expect(access.providers[0]).toMatchObject({
+      state: "available",
+      accountLabel: null,
+      billingSource: "unknown",
+    });
+    expect(JSON.stringify(access)).not.toMatch(/api-secret|MIXED_API_KEY|oauth-secret/);
+  });
+
+  it("turns a failed explicit catalog refresh into sanitized retry recovery", async () => {
+    const faux = fauxProvider({
+      provider: "dynamic",
+      models: [{ id: "stale-model" }],
+    });
+    const models = createModels();
+    models.setProvider({
+      ...faux.provider,
+      auth: {
+        apiKey: {
+          name: "Dynamic API key",
+          resolve: async () => ({ auth: { apiKey: "configured" } }),
+        },
+      },
+    });
+    vi.spyOn(models, "refresh").mockResolvedValue({
+      aborted: false,
+      errors: new Map([["dynamic", new Error("refresh-secret")]]),
+    });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+    });
+
+    const access = await runtime.inspectModelAccess({ refresh: true });
+
+    expect(access.providers).toEqual([
+      {
+        id: "dynamic",
+        label: "dynamic",
+        state: "unavailable",
+        accountLabel: null,
+        billingSource: "unknown",
+        recovery: { kind: "retry" },
+      },
+    ]);
+    expect(access.models[0]?.state).toBe("unavailable");
+    expect(JSON.stringify(access)).not.toContain("refresh-secret");
+  });
+
+  it("honors cancellation even when the model collection is empty", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models: createModels(),
+    });
+
+    await expect(runtime.inspectModelAccess({ signal: controller.signal })).rejects.toMatchObject({
+      name: "AbortError",
+    });
+  });
+
+  it("honors cancellation reported by Pi refresh", async () => {
+    const models = createModels();
+    vi.spyOn(models, "refresh").mockResolvedValue({ aborted: true, errors: new Map() });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+    });
+
+    await expect(runtime.inspectModelAccess({ refresh: true })).rejects.toMatchObject({
+      name: "AbortError",
+    });
+  });
+
+  it("threads an active cancellation signal through refresh and provider probes", async () => {
+    const faux = fauxProvider({ provider: "sign-in", models: [{ id: "model" }] });
+    const models = createModels();
+    models.setProvider(faux.provider);
+    const controller = new AbortController();
+    const refresh = vi.spyOn(models, "refresh").mockResolvedValue({
+      aborted: false,
+      errors: new Map(),
+    });
+    const checkAuth = vi.spyOn(models, "checkAuth").mockResolvedValue(undefined);
+    const getAvailable = vi.spyOn(models, "getAvailable").mockResolvedValue([]);
+    const runtime = createPiAgentRuntime({ sessionDataDir: "/runtime-owned/sessions", models });
+
+    const access = await runtime.inspectModelAccess({ refresh: true, signal: controller.signal });
+
+    expect(refresh).toHaveBeenCalledWith({ force: true, signal: controller.signal });
+    expect(checkAuth).toHaveBeenCalledWith("sign-in", { signal: controller.signal });
+    expect(getAvailable).toHaveBeenCalledWith("sign-in", { signal: controller.signal });
+    expect(access.providers[0]).toMatchObject({
+      state: "authentication-required",
+      recovery: { kind: "external-sign-in" },
+    });
+    expect(access.models[0]?.state).toBe("authentication-required");
+
+    checkAuth.mockResolvedValue({ type: "api_key", source: "SIGN_IN_API_KEY" });
+    const configuredButEmpty = await runtime.inspectModelAccess();
+    expect(configuredButEmpty.providers[0]).toMatchObject({
+      state: "unavailable",
+      recovery: null,
+    });
+  });
+
+  it("maps OAuth refresh failures to external sign-in without exposing details", async () => {
+    const faux = fauxProvider({ provider: "oauth-provider", models: [{ id: "model" }] });
+    const models = createModels();
+    models.setProvider(faux.provider);
+    vi.spyOn(models, "refresh").mockResolvedValue({
+      aborted: false,
+      errors: new Map([["oauth-provider", new ModelsError("oauth", "oauth-refresh-secret")]]),
+    });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+    });
+
+    const access = await runtime.inspectModelAccess({ refresh: true });
+
+    expect(access.providers[0]?.recovery).toEqual({ kind: "external-sign-in" });
+    expect(JSON.stringify(access)).not.toContain("oauth-refresh-secret");
+  });
+});
 
 describe("tool mapping", () => {
   it("binds only the declared contained coding tools from the product bundle", async () => {
@@ -1946,6 +2315,189 @@ describe("startTicketSession", () => {
       reason: "closed",
       message: "This attachment is closed.",
     });
+  });
+
+  it("applies an available idle model and reasoning policy to the next turn", async () => {
+    const used: Array<{ providerId: string; modelId: string; reasoning: string | undefined }> = [];
+    const script = scriptedStream([(emit) => emit.finish()]);
+    const provider = fauxProvider({
+      api: "anthropic-messages",
+      provider: PROVIDER_ID,
+      models: [
+        { id: MODEL_ID, reasoning: true },
+        { id: "claude-sonnet-4-6", reasoning: true },
+      ],
+    });
+    const models = createModels();
+    models.setProvider({
+      ...provider.provider,
+      streamSimple: ((model, context, options) => {
+        used.push({ providerId: model.provider, modelId: model.id, reasoning: options?.reasoning });
+        return script(model, context, options);
+      }) as typeof provider.provider.streamSimple,
+    });
+    const attachment = fixture();
+    const handle = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models,
+    }).startTicketSession(attachment.spec);
+
+    await expect(
+      handle.selectModel({
+        providerId: PROVIDER_ID,
+        modelId: "claude-sonnet-4-6",
+        reasoningLevel: "high",
+      }),
+    ).resolves.toEqual({ kind: "selected" });
+    await handle.submitUserMessage("use the new policy");
+
+    expect(used).toEqual([
+      { providerId: PROVIDER_ID, modelId: "claude-sonnet-4-6", reasoning: "high" },
+    ]);
+    await handle.close();
+  });
+
+  it("rejects model changes while busy or closed without partially changing policy", async () => {
+    const streaming = Promise.withResolvers<void>();
+    const attachment = fixture();
+    const handle = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([haltOnAbort("working", streaming.resolve)])),
+    }).startTicketSession(attachment.spec);
+    const delivery = handle.submitUserMessage("start");
+    await streaming.promise;
+
+    await expect(
+      handle.selectModel({
+        providerId: PROVIDER_ID,
+        modelId: MODEL_ID,
+        reasoningLevel: "high",
+      }),
+    ).resolves.toMatchObject({ kind: "rejected", reason: "busy-unsupported" });
+    await handle.interrupt();
+    await delivery;
+    await handle.close();
+    await expect(
+      handle.selectModel({
+        providerId: PROVIDER_ID,
+        modelId: MODEL_ID,
+        reasoningLevel: "high",
+      }),
+    ).resolves.toMatchObject({ kind: "rejected", reason: "closed" });
+  });
+
+  it("rejects unavailable and unsupported selections", async () => {
+    const attachment = fixture();
+    const handle = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    }).startTicketSession(attachment.spec);
+
+    await expect(
+      handle.selectModel({
+        providerId: PROVIDER_ID,
+        modelId: "missing",
+        reasoningLevel: "off",
+      }),
+    ).resolves.toMatchObject({ kind: "rejected", reason: "model-unavailable" });
+    await expect(
+      handle.selectModel({
+        providerId: PROVIDER_ID,
+        modelId: MODEL_ID,
+        reasoningLevel: "max",
+      }),
+    ).resolves.toMatchObject({ kind: "rejected", reason: "reasoning-unsupported" });
+    await handle.close();
+  });
+
+  it("sanitizes model availability failures during an idle change", async () => {
+    const attachment = fixture();
+    const models = modelsWithStream(scriptedStream([]));
+    vi.spyOn(models, "getAvailable").mockRejectedValue(
+      new Error("credential store exposed secret-token"),
+    );
+    const handle = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models,
+    }).startTicketSession(attachment.spec);
+
+    const selected = await handle.selectModel({
+      providerId: PROVIDER_ID,
+      modelId: MODEL_ID,
+      reasoningLevel: "off",
+    });
+
+    expect(selected).toEqual({
+      kind: "rejected",
+      reason: "model-unavailable",
+      message: "The selected model is not currently available.",
+    });
+    expect(JSON.stringify(selected)).not.toContain("secret-token");
+    await handle.close();
+  });
+
+  it("rechecks idle after asynchronous model availability resolves", async () => {
+    const streaming = Promise.withResolvers<void>();
+    const availabilityStarted = Promise.withResolvers<void>();
+    const releaseAvailability = Promise.withResolvers<void>();
+    const attachment = fixture();
+    const models = modelsWithStream(scriptedStream([haltOnAbort("working", streaming.resolve)]));
+    const getAvailable = models.getAvailable.bind(models);
+    vi.spyOn(models, "getAvailable").mockImplementation(async (...args) => {
+      availabilityStarted.resolve();
+      await releaseAvailability.promise;
+      return getAvailable(...args);
+    });
+    const handle = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models,
+    }).startTicketSession(attachment.spec);
+
+    const selected = handle.selectModel({
+      providerId: PROVIDER_ID,
+      modelId: MODEL_ID,
+      reasoningLevel: "high",
+    });
+    await availabilityStarted.promise;
+    const delivery = handle.submitUserMessage("start");
+    await streaming.promise;
+    releaseAvailability.resolve();
+
+    await expect(selected).resolves.toMatchObject({
+      kind: "rejected",
+      reason: "busy-unsupported",
+    });
+    await handle.interrupt();
+    await delivery;
+    await handle.close();
+  });
+
+  it("rejects when the attachment closes during asynchronous model availability", async () => {
+    const availabilityStarted = Promise.withResolvers<void>();
+    const releaseAvailability = Promise.withResolvers<void>();
+    const attachment = fixture();
+    const models = modelsWithStream(scriptedStream([]));
+    const getAvailable = models.getAvailable.bind(models);
+    vi.spyOn(models, "getAvailable").mockImplementation(async (...args) => {
+      availabilityStarted.resolve();
+      await releaseAvailability.promise;
+      return getAvailable(...args);
+    });
+    const handle = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models,
+    }).startTicketSession(attachment.spec);
+
+    const selected = handle.selectModel({
+      providerId: PROVIDER_ID,
+      modelId: MODEL_ID,
+      reasoningLevel: "high",
+    });
+    await availabilityStarted.promise;
+    await handle.close();
+    releaseAvailability.resolve();
+
+    await expect(selected).resolves.toMatchObject({ kind: "rejected", reason: "closed" });
   });
 
   it("fails attachment when the model is not in the runtime catalog", async () => {

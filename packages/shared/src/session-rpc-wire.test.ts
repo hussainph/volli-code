@@ -20,6 +20,13 @@ describe("Session RPC wire protocol", () => {
   it("publishes a frozen allow-list of the routed procedures", () => {
     expect(Object.isFrozen(SESSION_RPC_IPC_PROCEDURES)).toBe(true);
     expect(SESSION_RPC_IPC_PROCEDURES).toEqual([
+      "modelAccess.inspect",
+      "modelAccess.defaultSelection",
+      "modelAccess.setDefault",
+      "ticketSessions.start",
+      "ticketSessions.attach",
+      "projectSessions.start",
+      "projectSessions.attach",
       "session.snapshot",
       "session.projection",
       "session.subscribe",
@@ -27,10 +34,6 @@ describe("Session RPC wire protocol", () => {
       "session.cancelInteraction",
       "session.refreshCapabilities",
       "session.reconcile",
-      "runtimeCatalog.inspect",
-      "runtimeCatalog.save",
-      "runtimeCatalog.clear",
-      "runtimeCatalog.resolve",
     ]);
   });
 
@@ -40,6 +43,12 @@ describe("Session RPC wire protocol", () => {
   it("withholds the lab diagnostics namespace", () => {
     expect(
       SESSION_RPC_IPC_PROCEDURES.some((procedure) => procedure.startsWith("labDiagnostics.")),
+    ).toBe(false);
+  });
+
+  it("withholds the Lab-only Runtime Catalog namespace", () => {
+    expect(
+      SESSION_RPC_IPC_PROCEDURES.some((procedure) => procedure.startsWith("runtimeCatalog.")),
     ).toBe(false);
   });
 });

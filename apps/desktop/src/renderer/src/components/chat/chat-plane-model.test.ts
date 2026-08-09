@@ -6,15 +6,9 @@
  * disables, where words go when there is nowhere to send them, and what a
  * streamed token is allowed to re-render.
  */
-import type {
-  RuntimeSelection,
-  SessionAttention,
-  SessionInteractionResolution,
-} from "@volli/shared";
+import type { SessionAttention, SessionInteractionResolution } from "@volli/shared";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
-
-import { type SessionTodo } from "@renderer/chat/activity";
 
 import {
   answerInteraction,
@@ -23,11 +17,8 @@ import {
   resolvingWith,
   sameInteractionId,
   sameMessages,
-  sameSelection,
-  sameTodos,
   sessionBlocker,
   terminalCompanionTabId,
-  todosSettled,
   withdrawInteraction,
   type SessionBlockerActs,
   type SessionBlockerInput,
@@ -445,13 +436,6 @@ function assistantMessage(id: string, text: string): UIMessage {
   return { id, role: "assistant", parts: [{ type: "text", text }] };
 }
 
-function plan(step: SessionTodo["status"]): SessionTodo[] {
-  return [
-    { id: "t1", content: "Read the seam", status: "completed", priority: "medium" },
-    { id: "t2", content: "Hold the plan by value", status: step, priority: "high" },
-  ];
-}
-
 describe("holdList", () => {
   /**
    * The whole of the transcript's frame budget, stated as a count. Every turn
@@ -521,59 +505,5 @@ describe("sameInteractionId", () => {
 
     expect(sameInteractionId(opened, again)).toBe(true);
     expect(sameInteractionId(opened, other)).toBe(false);
-  });
-});
-
-describe("sameTodos", () => {
-  it("holds a plan that was re-projected unchanged", () => {
-    expect(sameTodos(plan("in_progress"), plan("in_progress"))).toBe(true);
-  });
-
-  it("gives way when a step moves on", () => {
-    expect(sameTodos(plan("in_progress"), plan("completed"))).toBe(false);
-    expect(sameTodos(plan("in_progress"), plan("in_progress").slice(1))).toBe(false);
-  });
-
-  it("tells a Session with no plan from one whose plan is empty", () => {
-    expect(sameTodos(null, null)).toBe(true);
-    expect(sameTodos(null, [])).toBe(false);
-    expect(sameTodos([], null)).toBe(false);
-  });
-
-  it("compares every field the dock draws", () => {
-    const [first, second] = plan("in_progress");
-
-    expect(sameTodos(plan("in_progress"), [{ ...first!, content: "Other" }, second!])).toBe(false);
-    expect(sameTodos(plan("in_progress"), [{ ...first!, id: "t9" }, second!])).toBe(false);
-    expect(sameTodos(plan("in_progress"), [{ ...first!, priority: "low" }, second!])).toBe(false);
-  });
-});
-
-describe("todosSettled", () => {
-  it("is settled only once nothing is left to do", () => {
-    expect(todosSettled(plan("in_progress"))).toBe(false);
-    expect(todosSettled(plan("completed"))).toBe(true);
-    expect(todosSettled(plan("cancelled"))).toBe(true);
-    expect(todosSettled([])).toBe(true);
-  });
-});
-
-describe("sameSelection", () => {
-  const selection: RuntimeSelection = {
-    providerId: "anthropic",
-    modelId: "sonnet-4.5",
-    variant: "high",
-    agent: "build",
-  };
-
-  it("holds a pick the catalog re-resolved to the same answer", () => {
-    expect(sameSelection(selection, { ...selection })).toBe(true);
-  });
-
-  it("gives way on any of the four values", () => {
-    expect(sameSelection(selection, { ...selection, providerId: "openai" })).toBe(false);
-    expect(sameSelection(selection, { ...selection, modelId: "haiku" })).toBe(false);
-    expect(sameSelection(selection, { ...selection, variant: "low" })).toBe(false);
-    expect(sameSelection(selection, { ...selection, agent: "plan" })).toBe(false);
   });
 });

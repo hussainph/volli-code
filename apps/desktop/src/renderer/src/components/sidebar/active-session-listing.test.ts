@@ -511,7 +511,7 @@ describe("buildActiveSessionListing — the Active band", () => {
     expect(result.active).toMatchObject([{ title: "Still open", attention: null }]);
   });
 
-  it("orders the waiting group by recency rather than by how much the signal has to say", () => {
+  it("does not let a legacy done signal claim review attention", () => {
     const now = 1_000_000;
     const blocked = signal("t-blocked", "sb", "blocked", null, now - 100);
     const done = signal("t-done", "sd", "done", null, now - 100);
@@ -568,9 +568,13 @@ describe("buildActiveSessionListing — the Active band", () => {
       now,
     });
 
-    // `blocked` no longer outranks `done`: both are rows a human is holding up,
-    // and the useful question between two of them is which one is fresher.
-    expect(titles(result.active)).toEqual(["Done session", "Blocked session"]);
+    // Only the genuinely blocked Session is promoted. The legacy `done` signal
+    // remains durable compatibility data, but it cannot assert that a human
+    // owes the Session a review or that the ticket's work is complete.
+    expect(result.active.map((row) => ({ title: row.title, attention: row.attention }))).toEqual([
+      { title: "Blocked session", attention: { signal: "blocked", reason: null } },
+      { title: "Done session", attention: null },
+    ]);
   });
 });
 

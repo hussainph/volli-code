@@ -10,8 +10,8 @@ import { toast } from "sonner";
 
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
-import { ticketScope } from "@renderer/stores/sessions";
-import { bootChatSession } from "./session-create";
+import { scratchScope, ticketScope } from "@renderer/stores/sessions";
+import { bootChatSession, terminalCreateRequest } from "./session-create";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 // The engine registry reaches for restty/WebGPU on import and no chat boot
@@ -66,7 +66,7 @@ describe("bootChatSession", () => {
     expect(useChatSessionsStore.getState().starting).toEqual({});
   });
 
-  it("carries a chosen executor, and a scratch scope's ticketless Session", async () => {
+  it("routes a scratch scope as a ticketless Session", async () => {
     const create = vi.fn(async () => "durable-1");
     stubChatStore(create);
 
@@ -74,7 +74,6 @@ describe("bootChatSession", () => {
       { kind: "scratch", projectId: "p1" },
       {
         title: "Chat 1",
-        executor: { adapterId: "claude-code", profileId: "acp" },
         land: () => true,
       },
     );
@@ -83,7 +82,6 @@ describe("bootChatSession", () => {
       projectId: "p1",
       ticketId: null,
       title: "Chat 1",
-      executor: { adapterId: "claude-code", profileId: "acp" },
     });
   });
 
@@ -173,5 +171,40 @@ describe("bootChatSession", () => {
       expect.anything(),
     );
     expect(useChatSessionsStore.getState().starting).toEqual({});
+  });
+});
+
+describe("terminalCreateRequest", () => {
+  it("sends only model-access intent and Ticket identity for the sign-in terminal", () => {
+    expect(
+      terminalCreateRequest(SCOPE, PROJECT.path, "tab", undefined, undefined, "model-access"),
+    ).toEqual({
+      workspaceId: PROJECT.id,
+      cwd: PROJECT.path,
+      cols: 80,
+      rows: 24,
+      placement: "tab",
+      ticket: { ticketId: "t1", purpose: "model-access" },
+    });
+  });
+
+  it("sends project-scoped model-access intent without inventing a Ticket", () => {
+    expect(
+      terminalCreateRequest(
+        scratchScope(PROJECT.id),
+        PROJECT.path,
+        "tab",
+        undefined,
+        undefined,
+        "model-access",
+      ),
+    ).toEqual({
+      workspaceId: PROJECT.id,
+      cwd: PROJECT.path,
+      cols: 80,
+      rows: 24,
+      placement: "tab",
+      purpose: "model-access",
+    });
   });
 });

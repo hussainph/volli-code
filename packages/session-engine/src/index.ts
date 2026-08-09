@@ -5,3 +5,4 @@ export * from "./runtime-catalog";
 export * from "./transcript-artifacts";
 export * from "./transcript-overlay";
 export * from "./session-runtime";
+export type { ModelAccessSnapshot, SessionStartResult } from "@volli/shared";

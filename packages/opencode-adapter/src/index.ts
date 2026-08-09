@@ -682,6 +682,15 @@ class OpenCodeBinding implements BindingHandle {
 
   async dispatch(command: HarnessCommand): Promise<DeliveryReceipt> {
     if (command.kind === "message.submit") return this.#dispatchMessage(command);
+    if (command.kind === "model.select") {
+      return {
+        commandId: command.commandId,
+        status: "rejected",
+        code: "MODEL_SELECTION_UNSUPPORTED",
+        detail: "This legacy executor cannot apply a Session model policy.",
+        native: this.native,
+      };
+    }
     if (command.kind === "executor.retry") {
       return {
         commandId: command.commandId,

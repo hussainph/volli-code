@@ -94,6 +94,7 @@ class FakeAdapter implements NativeHarnessAdapter {
   releaseFailure: unknown = null;
   dispatchReceipt: Awaited<ReturnType<BindingHandle["dispatch"]>> | null = null;
   dispatchGate: Promise<void> | null = null;
+  dispatchStarted: () => void = () => undefined;
   commands: HarnessCommand[] = [];
   /** What each attach was actually pointed at — the live half of the directory contract. */
   specs: Parameters<NativeHarnessAdapter["attach"]>[0][] = [];
@@ -146,6 +147,7 @@ class FakeAdapter implements NativeHarnessAdapter {
       dispatch: async (command) => {
         this.dispatches += 1;
         this.commands.push(command);
+        this.dispatchStarted();
         await this.dispatchGate;
         return (
           this.dispatchReceipt ?? {
@@ -246,6 +248,450 @@ async function createAndAttach(runtime: SessionRuntime) {
 }
 
 describe("SessionRuntime native adapter contract", () => {
+  it("records product model selection without an adapter command", async () => {
+    const { runtime } = composition();
+    const created = await runtime.command({
+      commandId: "command-create-model-selection",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        title: "Model selection",
+      },
+    });
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "high" as const,
+    };
+
+    const selected = await runtime.command({
+      commandId: "command-select-model",
+      sessionId: created.sessionId,
+      command: { kind: "model.select", selection },
+    });
+
+    expect(selected.receipt).toMatchObject({
+      status: "completed",
+      result: { kind: "model.selected" },
+    });
+    await expect(runtime.projection({ sessionId: created.sessionId })).resolves.toMatchObject({
+      projection: { modelSelection: selection },
+    });
+  });
+
+  it("applies an idle live model selection before committing its durable policy", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "high" as const,
+    };
+
+    const selected = await runtime.command({
+      commandId: "command-select-live-model",
+      sessionId,
+      command: { kind: "model.select", selection },
+    });
+
+    expect(adapter.commands.at(-1)).toMatchObject({
+      kind: "model.select",
+      commandId: "command-select-live-model",
+      selection,
+    });
+    expect(selected.receipt).toMatchObject({
+      status: "completed",
+      result: { kind: "model.selected", sessionId },
+    });
+    await expect(runtime.projection({ sessionId })).resolves.toMatchObject({
+      projection: { modelSelection: selection },
+    });
+
+    const dispatches = adapter.dispatches;
+    await expect(
+      runtime.command({
+        commandId: "command-select-live-model",
+        sessionId,
+        command: { kind: "model.select", selection },
+      }),
+    ).resolves.toEqual(selected);
+    expect(adapter.dispatches).toBe(dispatches);
+  });
+
+  it("keeps the previous model policy when the live runtime rejects a change", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    adapter.dispatchReceipt = {
+      commandId: "command-select-rejected-model",
+      status: "rejected",
+      code: "PI_MODEL_UNAVAILABLE",
+      detail: "The selected model is not currently available.",
+      native: null,
+    };
+
+    const selected = await runtime.command({
+      commandId: "command-select-rejected-model",
+      sessionId,
+      command: {
+        kind: "model.select",
+        selection: {
+          providerId: "openai-codex",
+          modelId: "missing",
+          reasoningLevel: "off",
+        },
+      },
+    });
+
+    expect(selected.receipt).toMatchObject({
+      status: "rejected",
+      code: "PI_MODEL_UNAVAILABLE",
+    });
+    await expect(runtime.projection({ sessionId })).resolves.toMatchObject({
+      projection: { modelSelection: null },
+    });
+  });
+
+  it("completes a persisted model selection from accepted reconciliation after relaunch", async () => {
+    const first = composition();
+    const sessionId = await createAndAttach(first.runtime);
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "high" as const,
+    };
+    await first.engine.submit({
+      commandId: "command-select-reconciled-model",
+      sessionId,
+      intent: { kind: "model.select", selection },
+      provenance: { source: { kind: "user", id: "session-client", detail: null }, venue },
+    });
+    await first.runtime.close();
+    first.adapter.reconcileReceipts = [
+      {
+        commandId: "command-select-reconciled-model",
+        status: "accepted",
+        acceptedAt: 250,
+        native: { id: "native-model-selection", detail: null },
+      },
+    ];
+    const recovered = composition({ engine: first.engine, adapter: first.adapter });
+
+    const selected = await recovered.runtime.command({
+      commandId: "command-select-reconciled-model",
+      sessionId,
+      command: { kind: "model.select", selection },
+    });
+
+    expect(selected.receipt).toMatchObject({
+      status: "completed",
+      result: { kind: "model.selected", sessionId },
+    });
+    expect(first.adapter.dispatches).toBe(0);
+    await expect(recovered.runtime.projection({ sessionId })).resolves.toMatchObject({
+      projection: { modelSelection: selection },
+    });
+  });
+
+  it("redelivers a persisted receipt-less model selection after reconciliation finds no outcome", async () => {
+    const { runtime, engine, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "medium" as const,
+    };
+    await engine.submit({
+      commandId: "command-select-redelivered-model",
+      sessionId,
+      intent: { kind: "model.select", selection },
+      provenance: { source: { kind: "user", id: "session-client", detail: null }, venue },
+    });
+
+    const selected = await runtime.command({
+      commandId: "command-select-redelivered-model",
+      sessionId,
+      command: { kind: "model.select", selection },
+    });
+
+    expect(adapter.reconciles).toBe(1);
+    expect(adapter.commands.at(-1)).toMatchObject({
+      kind: "model.select",
+      commandId: "command-select-redelivered-model",
+    });
+    expect(selected.receipt).toMatchObject({ status: "completed" });
+  });
+
+  it("records an unknown reconciled model-selection outcome without changing model policy", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    adapter.dispatchReceipt = {
+      commandId: "command-select-unknown-model",
+      status: "unknown",
+      detail: "provider did not confirm selection",
+      native: null,
+    };
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "high" as const,
+    };
+    await runtime.command({
+      commandId: "command-select-unknown-model",
+      sessionId,
+      command: { kind: "model.select", selection },
+    });
+    adapter.reconcileReceipts = [
+      {
+        commandId: "command-select-unknown-model",
+        status: "unknown",
+        detail: "provider still did not confirm selection",
+        native: null,
+      },
+    ];
+
+    await runtime.reconcile({ sessionId, attachmentId });
+
+    const { projection } = await runtime.projection({ sessionId });
+    expect(projection.modelSelection).toBeNull();
+    expect(
+      projection.receipts.filter(({ commandId }) => commandId === "command-select-unknown-model"),
+    ).toMatchObject([
+      { status: "unreconciled", detail: "provider did not confirm selection" },
+      { status: "unreconciled", detail: "provider still did not confirm selection" },
+    ]);
+  });
+
+  it("settles a fresh model selection when its durable binding directory is unavailable", async () => {
+    let unavailable = false;
+    const locations: SessionLocationResolver = {
+      resolve: async () => ({ directory: "/projects/fake", venue }),
+      prepare: async () => ({ directory: "/projects/fake", venue }),
+      reaffirm: async () => {
+        if (unavailable) throw new Error("worktree is missing");
+      },
+    };
+    const first = composition({ locations });
+    const sessionId = await createAndAttach(first.runtime);
+    await first.runtime.close();
+    unavailable = true;
+    const recovered = composition({
+      engine: first.engine,
+      adapter: first.adapter,
+      locations,
+      runtimeIdPrefix: "model-location-",
+    });
+
+    await expect(
+      recovered.runtime.command({
+        commandId: "command-select-missing-location",
+        sessionId,
+        command: {
+          kind: "model.select",
+          selection: {
+            providerId: "openai-codex",
+            modelId: "gpt-5.6-sol",
+            reasoningLevel: "high",
+          },
+        },
+      }),
+    ).resolves.toMatchObject({
+      receipt: { status: "rejected", code: "location_unavailable" },
+    });
+    expect(first.adapter.attaches).toBe(1);
+
+    unavailable = false;
+    await expect(
+      recovered.runtime.command({
+        commandId: "command-select-restored-location",
+        sessionId,
+        command: {
+          kind: "model.select",
+          selection: {
+            providerId: "openai-codex",
+            modelId: "gpt-5.6-sol",
+            reasoningLevel: "high",
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ receipt: { status: "completed" } });
+    expect(first.adapter.attaches).toBe(2);
+  });
+
+  it("rejects a persisted model selection that has neither a receipt nor an attachment route", async () => {
+    const ledger = createInMemorySessionLedger();
+    const engine = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+    const session = {
+      id: "session-unrouted-model",
+      projectId: "project-1",
+      ticketId: null,
+      title: null,
+      createdAt: 0,
+    };
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "high" as const,
+    };
+    const command = {
+      id: "command-unrouted-model",
+      sessionId: session.id,
+      createdAt: 0,
+      intent: { kind: "model.select" as const, selection },
+      route: null,
+    };
+    await ledger.transaction((transaction) => {
+      transaction.insertSession(session);
+      transaction.saveCommand(command);
+      transaction.appendEvent({
+        id: "event-unrouted-model",
+        sessionId: session.id,
+        sequence: 1,
+        occurredAt: 0,
+        recordedAt: 0,
+        provenance: { source: { kind: "user", id: "session-client", detail: null }, venue },
+        commandId: command.id,
+        payload: { kind: "command.recorded", command },
+      });
+    });
+    const { runtime } = composition({ engine });
+
+    await expect(
+      runtime.command({
+        commandId: command.id,
+        sessionId: session.id,
+        command: { kind: "model.select", selection },
+      }),
+    ).rejects.toThrow(
+      "Model selection command-unrouted-model has neither a receipt nor a live attachment route",
+    );
+  });
+
+  it("does not admit a model change while a message is becoming active", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const dispatchStarted = new Gate();
+    const releaseDispatch = new Gate();
+    adapter.dispatchStarted = () => dispatchStarted.resolve();
+    adapter.dispatchGate = releaseDispatch.promise;
+
+    const message = runtime.command({
+      commandId: "command-racing-message",
+      sessionId,
+      command: { kind: "message.submit", message: userMessage("racing-message") },
+    });
+    await dispatchStarted.promise;
+    const selection = runtime.command({
+      commandId: "command-racing-model",
+      sessionId,
+      command: {
+        kind: "model.select",
+        selection: {
+          providerId: "openai-codex",
+          modelId: "gpt-5.6-sol",
+          reasoningLevel: "high",
+        },
+      },
+    });
+    const admission = await Promise.race([
+      selection.then(() => "settled" as const),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
+    ]);
+    expect(admission).toBe("pending");
+    await adapter.emit({
+      id: "racing-turn-started",
+      kind: "turn.started",
+      occurredAt: 160,
+      turnId: "turn-racing-model",
+    });
+    releaseDispatch.resolve();
+
+    await message;
+    await expect(selection).resolves.toMatchObject({
+      receipt: { status: "rejected", code: "turn_active" },
+    });
+  });
+
+  it("delivers an interrupt while the active message command is still running", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const dispatchStarted = new Gate();
+    const releaseDispatch = new Gate();
+    adapter.dispatchStarted = () => dispatchStarted.resolve();
+    adapter.dispatchGate = releaseDispatch.promise;
+
+    const message = runtime.command({
+      commandId: "command-long-message",
+      sessionId,
+      command: { kind: "message.submit", message: userMessage("long-message") },
+    });
+    await dispatchStarted.promise;
+
+    const interrupt = runtime.command({
+      commandId: "command-live-interrupt",
+      sessionId,
+      command: { kind: "executor.interrupt" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(adapter.commands.map(({ kind }) => kind)).toEqual(["message.submit"]);
+
+    await adapter.emit({
+      id: "long-turn-started",
+      kind: "turn.started",
+      occurredAt: 160,
+      turnId: "turn-long-message",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(adapter.commands.map(({ kind }) => kind)).toEqual([
+      "message.submit",
+      "executor.interrupt",
+    ]);
+
+    releaseDispatch.resolve();
+    await expect(Promise.all([message, interrupt])).resolves.toHaveLength(2);
+  });
+
+  it("delivers a steering message after the active turn is durably admitted", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const dispatchStarted = new Gate();
+    const releaseDispatch = new Gate();
+    adapter.dispatchStarted = () => dispatchStarted.resolve();
+    adapter.dispatchGate = releaseDispatch.promise;
+
+    const message = runtime.command({
+      commandId: "command-active-message",
+      sessionId,
+      command: { kind: "message.submit", message: userMessage("active-message") },
+    });
+    await dispatchStarted.promise;
+    await adapter.emit({
+      id: "active-turn-started",
+      kind: "turn.started",
+      occurredAt: 160,
+      turnId: "turn-active-message",
+    });
+
+    const steering = runtime.command({
+      commandId: "command-live-steer",
+      sessionId,
+      command: {
+        kind: "message.submit",
+        message: userMessage("redirect", "redirect"),
+        delivery: "steer",
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(adapter.commands.map(({ kind }) => kind)).toEqual(["message.submit", "message.submit"]);
+    expect(adapter.commands[1]).toMatchObject({ delivery: "steer" });
+
+    releaseDispatch.resolve();
+    await expect(Promise.all([message, steering])).resolves.toHaveLength(2);
+  });
+
   it("buffers startup observations until the attachment is durable", async () => {
     const adapter = new FakeAdapter();
     adapter.attachObservation = {
