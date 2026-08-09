@@ -23,7 +23,6 @@ import {
   createPiRuntimeHost,
   piRootThreadId,
   PI_ADAPTER_ID,
-  PI_MODEL,
   type PiAdapterOptions,
   type PiRuntimeContext,
 } from "./pi-adapter";
@@ -254,16 +253,10 @@ describe("Pi native adapter probe", () => {
         .filter((feature) => feature.state === "available")
         .map((f) => f.id),
     ).toEqual(["message.submit", "executor.interrupt"]);
-    expect(result.capabilities.catalog).toEqual([
-      {
-        kind: "model",
-        id: `${PI_MODEL.providerId}/${PI_MODEL.modelId}`,
-        label: `${PI_MODEL.providerId}/${PI_MODEL.modelId}`,
-        state: "available",
-        evidence: "declared",
-        detail: null,
-      },
-    ]);
+    // The adapter has no model of its own to declare, and what a probe declares
+    // becomes a durable `capabilities.updated` fact — so it declares nothing
+    // rather than a literal the running Session may not match.
+    expect(result.capabilities.catalog).toEqual([]);
   });
 
   it("refuses a profile it does not have", async () => {

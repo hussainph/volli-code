@@ -92,26 +92,6 @@ const ACTIVITY_TOOL_NAME = "volli.activity";
 const PI_RUNTIME_PACKAGE = "@earendil-works/pi-agent-core";
 const PI_RUNTIME_VERSION = "0.84.1";
 
-/**
- * A model literal with exactly one reader left: the probe's declared catalog.
- *
- * It is no longer the model a Ticket Session runs on, and nothing below reads
- * it to decide what to run. The picker is Pi's own now — it reads Model Access
- * ({@link PiRuntimeHost.inspectModelAccess}), the choice it makes is recorded
- * as a durable per-Session selection, and `attach` carries that selection in
- * through {@link PiTicketContext.model}, which main resolves from the Session's
- * projection and refuses to attach without. So what survives here is the single
- * entry `probe` declares in its capability catalog, which the Session Engine
- * records and no product surface consults: a residual pending removal rather
- * than a policy. `openai-codex` is the provider this machine holds OAuth for;
- * Luna is its lightweight coding model at the full 272k context.
- */
-export const PI_MODEL: ModelSelection = {
-  providerId: "openai-codex",
-  modelId: "gpt-5.6-luna",
-  reasoningLevel: "medium",
-};
-
 const PI_MANIFEST: NativeHarnessManifest = {
   id: PI_ADAPTER_ID,
   displayName: "Pi",
@@ -330,16 +310,15 @@ function piNativeAdapter(
               detail: "Pi asks no questions in this migration slice",
             },
           ],
-          catalog: [
-            {
-              kind: "model",
-              id: `${PI_MODEL.providerId}/${PI_MODEL.modelId}`,
-              label: `${PI_MODEL.providerId}/${PI_MODEL.modelId}`,
-              state: "available",
-              evidence: "declared",
-              detail: null,
-            },
-          ],
+          // Empty, and honestly so. A probe answers for the adapter, which has
+          // no model of its own: the model a Session runs is the durable
+          // selection `attach` resolves per Session ({@link PiRuntimeContext}),
+          // and Model Access is where the models a person can pick are listed.
+          // A literal declared here could name a different model than the one
+          // actually running, and the Session Engine writes what a probe says
+          // into durable history as a `capabilities.updated` fact — so the
+          // literal was not a policy, it was a false fact about the Session.
+          catalog: [],
         },
       };
     },

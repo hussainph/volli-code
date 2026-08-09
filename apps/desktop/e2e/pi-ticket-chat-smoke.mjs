@@ -31,11 +31,11 @@
  * uses (`smoke-kit.mjs`'s `seedDefaultModel`) before the ticket chat is ever
  * created. The composer's Model pill (`composer-ui.tsx`) is offered to every
  * Session now regardless of Role — Ticket or Project — since
- * `chat-plane.tsx` dropped its old ticket/project "pinned" carve-out; Pi
- * still ignores `command.model` and always executes the pinned `PI_MODEL`
- * (`pi-adapter.ts`), so check 6 below proves the pill names the model this
- * Session actually recorded rather than the placeholder a Session with
- * nothing selected would show.
+ * `chat-plane.tsx` dropped its old ticket/project "pinned" carve-out, and the
+ * model it names is the one Pi actually runs: `attach` carries the Session's
+ * durable selection in and `model.select` reaches Pi's own picker. Check 6
+ * below proves the pill names the model this Session recorded rather than the
+ * placeholder a Session with nothing selected would show.
  *
  * Run:
  *   pnpm run build
@@ -300,11 +300,10 @@ async function main() {
         });
         // Every structured Session offers the Model Access pill now, Ticket
         // or Project alike (`chat-plane.tsx` dropped its old "pinned"
-        // carve-out) — Pi still ignores `command.model` and always executes
-        // the pinned PI_MODEL (`pi-adapter.ts`), so the picker existing is
-        // not the regression to watch for. What still has to hold is that it
-        // names the model THIS Session recorded (check 1's seed) rather than
-        // the bare "Model" placeholder a Session with nothing selected shows.
+        // carve-out), so the picker existing is not the regression to watch
+        // for. What has to hold is that it names the model THIS Session
+        // recorded (check 1's seed) rather than the bare "Model" placeholder
+        // a Session with nothing selected shows.
         const pill = page.getByRole("button", { name: defaultModel.label });
         const shown = await waitUntil(
           "the model pill to name the recorded model",
