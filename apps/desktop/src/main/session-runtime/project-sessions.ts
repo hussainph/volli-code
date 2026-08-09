@@ -23,6 +23,22 @@ import {
   type StructuredSessionCommands,
 } from "./structured-sessions";
 
+/**
+ * The backfill's command id, derived from the Session rather than the attach.
+ *
+ * The read that decides whether to backfill and the write that performs it are
+ * not one atomic step, so two attaches racing the same legacy Session — a Retry
+ * pressed while the first is still in flight, two surfaces mounting it at once —
+ * can both see nothing recorded and both write. An operation-scoped id would
+ * make those two writes look like two different intents and leave the Session
+ * with a duplicate `model.select` in its durable history. Keyed on the Session,
+ * they are one intent stated twice, which is precisely what command dedup exists
+ * to collapse.
+ */
+function modelBackfillCommandId(sessionId: string): string {
+  return `${sessionId}:model-backfill`;
+}
+
 const DEFAULT_MODEL_REQUIRED = "Choose a default model in Settings before starting a Session.";
 
 export interface ProjectSessionStartInput {
@@ -84,7 +100,7 @@ export function createProjectSessions(options: ProjectSessionsOptions): ProjectS
           input.sessionId,
         );
         await recordModelSelection(options.runtime, {
-          commandId: `${input.operationId}:model`,
+          commandId: modelBackfillCommandId(input.sessionId),
           sessionId: input.sessionId,
           model,
         });

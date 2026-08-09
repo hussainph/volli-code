@@ -145,12 +145,43 @@ describe("project Sessions", () => {
     // durable selection before anything attaches.
     expect(commands).toMatchObject([
       {
-        commandId: "project-backfill:model",
+        // Keyed on the Session, not the attach: see `modelBackfillCommandId`.
+        commandId: "session-legacy:model-backfill",
         sessionId: "session-legacy",
         command: { kind: "model.select", selection: MODEL },
       },
       { commandId: "project-backfill:start", sessionId: "session-legacy" },
     ]);
+  });
+
+  it("writes one backfill when two attaches race the same legacy Session", async () => {
+    const commands: SessionRuntimeCommandRequest[] = [];
+    // Stands in for the Session Engine's own dedup: one command id is one
+    // command, whether the second statement of it arrives while the first is
+    // still in flight or long after it settled.
+    const issued = new Map<string, Promise<SessionRuntimeCommandResult>>();
+    const { projectSessions } = sessions({
+      readModelSelection: async () => null,
+      runtime: {
+        command: (request) => {
+          const already = issued.get(request.commandId);
+          if (already) return already;
+          commands.push(request);
+          const pending = Promise.resolve(result(request));
+          issued.set(request.commandId, pending);
+          return pending;
+        },
+      },
+    });
+
+    const [first, second] = await Promise.all([
+      projectSessions.attach({ operationId: "attach-a", sessionId: "session-legacy" }),
+      projectSessions.attach({ operationId: "attach-b", sessionId: "session-legacy" }),
+    ]);
+
+    expect(first).toMatchObject({ sessionId: "session-legacy", state: "ready" });
+    expect(second).toMatchObject({ sessionId: "session-legacy", state: "ready" });
+    expect(commands.filter((request) => request.command.kind === "model.select")).toHaveLength(1);
   });
 
   it("refuses a backfill it cannot make honestly", async () => {
