@@ -74,11 +74,11 @@ export function useHarnessListings(): readonly HarnessListing[] {
 /**
  * The master list, as one row of pills above the detail it selects.
  *
- * Above rather than beside: a settings pane is one 608px reading column, and the
- * OpenCode detail already spends it on a provider/model master-detail of its
- * own — a second vertical rail in front of that leaves the model rows too narrow
- * to read their own ids. Above, the selector costs one row and the detail keeps
- * the full width.
+ * Above rather than beside: a settings pane is one 608px reading column, and it
+ * already sits behind Settings' own category rail. A second vertical rail in
+ * front of that is two rails deep to reach one card, and it spends the column's
+ * width on chrome rather than on the command a launch resolves. Above, the
+ * selector costs one row and the detail keeps the full width.
  *
  * Every harness is listed, including the ones with nothing to configure. A list
  * pruned to the configurable one would quietly claim this host can launch

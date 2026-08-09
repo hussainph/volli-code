@@ -158,9 +158,10 @@ export function SettingsSection({
  * using — what a section whose scope is set to Inherit says in place of the
  * picker it has handed back to the app-wide choice.
  *
- * Here rather than beside any one caller: Configure's Appearance and Runtime
- * categories both draw it, and the whole point of the idiom is that every
- * inheriting section looks the same.
+ * Here rather than beside its one caller: Configure's Appearance category draws
+ * it from four sections that inherit independently — canvas, mode, editor theme,
+ * terminal theme — and the whole point of the idiom is that every inheriting
+ * section looks the same.
  */
 export function InheritNote({ children }: { children: ReactNode }) {
   return <p className="text-xs leading-5 text-muted-foreground">{children}</p>;
