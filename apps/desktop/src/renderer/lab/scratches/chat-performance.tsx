@@ -1011,7 +1011,7 @@ function assistantTurnBody(index: number): UIMessage[] {
   }
 
   if (shape === 2) {
-    // Two messages, one turn — the shape OpenCode actually emits per step.
+    // Two messages, one turn — the shape a runtime actually emits per step.
     return [
       {
         id,
