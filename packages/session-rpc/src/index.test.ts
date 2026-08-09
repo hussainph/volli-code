@@ -157,6 +157,25 @@ function frameWithPayload(
   return { ...base, event: { ...base.event, payload } };
 }
 
+function observedFrame(): SessionStreamFrame {
+  const base = frameWithPayload(11, {
+    kind: "adapter.observed",
+    attachmentId: "attachment-1",
+    name: "runtime observation",
+    native: { credentialPath: RECOVERY_PATH },
+  });
+  return {
+    ...base,
+    event: {
+      ...base.event,
+      provenance: {
+        source: { kind: "adapter", id: "pi", detail: { credentialPath: RECOVERY_PATH } },
+        venue: null,
+      },
+    },
+  };
+}
+
 function attachmentFrames(): readonly SessionStreamFrame[] {
   const attachment = attachmentWithRecovery();
   const eventAttachment = {
@@ -185,26 +204,7 @@ function attachmentFrames(): readonly SessionStreamFrame[] {
     }),
     frameWithPayload(9, { kind: "command.recorded", command: executorCommand() }),
     frameWithPayload(10, { kind: "attention.raised", attention: recoveryAttention() }),
-    {
-      ...frameWithPayload(11, {
-        kind: "adapter.observed",
-        attachmentId: attachment.id,
-        name: "runtime observation",
-        native: { credentialPath: RECOVERY_PATH },
-      }),
-      event: {
-        ...frameWithPayload(11, {
-          kind: "adapter.observed",
-          attachmentId: attachment.id,
-          name: "runtime observation",
-          native: { credentialPath: RECOVERY_PATH },
-        }).event,
-        provenance: {
-          source: { kind: "adapter", id: "pi", detail: { credentialPath: RECOVERY_PATH } },
-          venue: null,
-        },
-      },
-    },
+    observedFrame(),
     frameWithPayload(12, { kind: "command.recorded", command: modelCommand() }),
   ];
 }

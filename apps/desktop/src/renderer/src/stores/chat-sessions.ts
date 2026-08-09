@@ -41,10 +41,10 @@ export interface ChatSessionsState extends ChatSessionWrites {
   /**
    * Mints one durable Session and attaches its first executor, resolving the id.
    *
-   * `null` means there is no Session: only `session.create` failing gets there,
-   * and it is the one failure with no slice to carry it. A failed *attach*
-   * resolves the id — the Session exists, it simply has no executor yet, and
-   * `retryAttach` addresses it rather than making another.
+   * `null` means there is no Session: only the product start route failing gets
+   * there, and it is the one failure with no slice to carry it. A failed
+   * *attach* resolves the id — the Session exists, it simply has no executor
+   * yet, and `retryAttach` addresses it rather than making another.
    */
   createChatSession(input: CreateChatSessionInput): Promise<string | null>;
   /** Attaches a client to a Session that is already durable — the hydration path. */
@@ -193,6 +193,10 @@ export function createChatSessionsStore(
         const client = attach(sessionId);
         void client.connect();
         const refusal = rejectedReceipt(started);
+        // A ticketed refusal is reported by durable Ticket Attention on the
+        // projection, so a slice-level error here would say the same thing
+        // twice. A ticketless Session has no Attention surface, so its refusal
+        // is settled onto the slice.
         get().settle(
           sessionId,
           started.state === "ready" || input.ticketId !== null

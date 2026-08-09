@@ -607,6 +607,69 @@ describe("SessionEngine creation and explicit commands", () => {
     ).rejects.toThrow("was not completed by adapter");
   });
 
+  it("refuses an observed model-selection receipt from a different attachment", async () => {
+    const { plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+    const routed = attachment(session.id, "attachment-model-route");
+    await plane.observe({
+      id: "model-route-open",
+      sessionId: session.id,
+      occurredAt: 1,
+      provenance: adapterProvenance,
+      kind: "attachment.opened",
+      attachment: routed,
+    });
+    const submitted = await plane.submit({
+      commandId: "command-model-route",
+      sessionId: session.id,
+      intent: {
+        kind: "model.select",
+        selection: {
+          providerId: "openai-codex",
+          modelId: "gpt-5.6-sol",
+          reasoningLevel: "high",
+        },
+      },
+      provenance: userProvenance,
+    });
+    await plane.observe({
+      id: "model-route-close",
+      sessionId: session.id,
+      occurredAt: 2,
+      provenance: adapterProvenance,
+      kind: "attachment.closed",
+      attachmentId: routed.id,
+      outcome: "interrupted",
+    });
+    const other = attachment(session.id, "attachment-model-other");
+    await plane.observe({
+      id: "model-other-open",
+      sessionId: session.id,
+      occurredAt: 3,
+      provenance: adapterProvenance,
+      kind: "attachment.opened",
+      attachment: other,
+    });
+
+    await expect(
+      plane.observe({
+        id: "model-receipt-from-other",
+        sessionId: session.id,
+        occurredAt: 4,
+        provenance: adapterProvenance,
+        attachmentId: other.id,
+        kind: "command.receipt",
+        receipt: {
+          id: "model-receipt-from-other",
+          commandId: submitted.command.id,
+          status: "accepted",
+          acceptedAt: 4,
+          result: { kind: "model.selected", sessionId: session.id },
+        },
+      }),
+    ).rejects.toThrow("does not match routed attachment");
+  });
+
   it("refuses model-selection completion without its exact Session command route", async () => {
     const { plane } = composition();
 
