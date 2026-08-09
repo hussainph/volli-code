@@ -23,8 +23,8 @@
  *
  * A request that asks several things shows one of them at a time, with a
  * counter and a step either way. Movement is free and submission is not: the
- * reader may answer in any order, and Submit waits for all of them because
- * OpenCode takes one `answers` array per request.
+ * reader may answer in any order, and Submit waits for all of them because a
+ * resolution carries one `answers` array.
  *
  * A refusal is not always one of the options. A permission declares `reject`,
  * an id we mint; a question's option ids are the harness's own encoded values

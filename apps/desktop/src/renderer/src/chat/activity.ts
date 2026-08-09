@@ -38,8 +38,9 @@ export type BundleRow =
       key: string;
       /**
        * Whether the model is still writing *this* thought — which is not what
-       * the part's own state says. OpenCode leaves a reasoning part `streaming`
-       * for the rest of the turn, so a row trusting it spins forever and its
+       * the part's own state says. A harness may leave a reasoning part
+       * `streaming` for the rest of the turn (OpenCode did), so a row trusting
+       * it spins forever and its
        * timer reports the whole turn's duration as the thought's. A thought is
        * over the moment anything follows it, and the projection is the only
        * place that knows what followed.
@@ -158,8 +159,9 @@ export function segmentMessageParts(
 /**
  * One turn's segments, across however many messages the harness split it into.
  *
- * OpenCode emits an assistant message *per step*, so a single reply arrives as
- * a dozen messages. Segmenting each one alone put a bundle boundary at every
+ * A harness may emit an assistant message *per step* (OpenCode did), so a
+ * single reply arrives as a dozen messages. Segmenting each one alone put a
+ * bundle boundary at every
  * step: four stacked `Ran 2 commands` headers where one `Ran 8 commands` was
  * meant, and any step that only thought became a bare reasoning row between
  * them. That seam is invisible to the reader and must not be felt — a turn is
@@ -203,7 +205,7 @@ function segmentParts(entries: readonly KeyedPart[]): ChatSegment[] {
   entries.forEach(({ part, key }) => {
     if (part.type === "text") {
       // A blank text part is not a segment. A harness opens one before it has
-      // words (OpenCode does) and can leave a whitespace-only one between tool
+      // words (OpenCode did) and can leave a whitespace-only one between tool
       // calls; rendered, it is a zero-height row that still collects the gap on
       // *both* sides of itself, and it `flush()`es — which is what split a
       // single run of exploration into two stacked headers each summarizing
@@ -237,9 +239,10 @@ function segmentParts(entries: readonly KeyedPart[]): ChatSegment[] {
 /**
  * Exactly one thought may be live, and only if nothing came after it.
  *
- * The harness cannot be trusted for this: OpenCode never flips a reasoning part
- * back off `streaming`, so every thought in a turn claimed to still be running
- * and each one's timer counted from its own start to the end of the turn. But
+ * The harness cannot be trusted for this: OpenCode never flipped a reasoning
+ * part back off `streaming`, so every thought in a turn claimed to still be
+ * running and each one's timer counted from its own start to the end of the
+ * turn. But
  * the transcript already knows the answer structurally — a tool call, a
  * sentence, or another thought after this one all mean the model finished
  * thinking. Only the final row in the turn can still be in progress.
@@ -574,8 +577,9 @@ export const ACTIVITY_PRESENTERS: Record<ActivityKind, ActivityParse> = {
   },
 
   "fetch-url": (context) => {
-    // OpenCode reports no byte count, so size is the richer meta when a harness
-    // offers it and duration is the honest fallback when none does.
+    // A harness need not report a byte count (OpenCode did not), so size is the
+    // richer meta when one offers it and duration is the honest fallback when
+    // none does.
     const bytes = context.descriptor.outcome?.bytes ?? null;
     return {
       verb: "Fetched",
