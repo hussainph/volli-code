@@ -26,6 +26,7 @@ import {
   sameSelection,
   sameTodos,
   sessionBlocker,
+  terminalCompanionTabId,
   todosSettled,
   withdrawInteraction,
   type SessionBlockerActs,
@@ -33,7 +34,12 @@ import {
 } from "./chat-plane-model";
 
 const NO_OP = () => undefined;
-const ACTS: SessionBlockerActs = { recover: NO_OP, openSettings: NO_OP };
+const ACTS: SessionBlockerActs = {
+  recover: NO_OP,
+  retryRuntime: NO_OP,
+  openTerminal: NO_OP,
+  openSettings: NO_OP,
+};
 
 function blockerInput(overrides: Partial<SessionBlockerInput> = {}): SessionBlockerInput {
   return {
@@ -41,6 +47,8 @@ function blockerInput(overrides: Partial<SessionBlockerInput> = {}): SessionBloc
     attention: { active: [], primary: null },
     catalogState: "ready",
     catalogError: null,
+    terminalAvailable: false,
+    runtimeRetryAvailable: false,
     ...overrides,
   };
 }
@@ -107,6 +115,57 @@ describe("sessionBlocker", () => {
     expect(sessionBlocker(raised(attention("auth_required")), ACTS, true)?.message).toBe(
       "Sign-in required",
     );
+  });
+
+  it("offers an existing manual terminal companion plus an honest runtime retry", () => {
+    expect(
+      sessionBlocker(
+        {
+          ...raised(attention("auth_required")),
+          terminalAvailable: true,
+          runtimeRetryAvailable: true,
+        },
+        ACTS,
+        false,
+      ),
+    ).toMatchObject({
+      action: { label: "Open Terminal" },
+      secondaryAction: { label: "Retry" },
+    });
+  });
+
+  it("offers Pi runtime retry without inventing a terminal companion", () => {
+    expect(
+      sessionBlocker(
+        { ...raised(attention("configuration_invalid")), runtimeRetryAvailable: true },
+        ACTS,
+        false,
+      ),
+    ).toMatchObject({ action: { label: "Retry" } });
+    expect(
+      sessionBlocker(
+        { ...raised(attention("auth_required")), runtimeRetryAvailable: true },
+        ACTS,
+        false,
+      ),
+    ).toMatchObject({ action: { label: "Retry" } });
+  });
+
+  it("offers the existing terminal and retry for invalid Pi configuration", () => {
+    expect(
+      sessionBlocker(
+        {
+          ...raised(attention("configuration_invalid")),
+          runtimeRetryAvailable: true,
+          terminalAvailable: true,
+        },
+        ACTS,
+        false,
+      ),
+    ).toMatchObject({
+      action: { label: "Open Terminal" },
+      secondaryAction: { label: "Retry" },
+    });
   });
 
   it("stands down for the attention the card is itself the answer to", () => {
@@ -220,6 +279,24 @@ describe("sessionBlocker", () => {
     expect(sessionBlocker(raised(quotaSpent(Number.NaN)), ACTS, false)?.message).toBe(
       "Quota exhausted",
     );
+  });
+});
+
+describe("terminalCompanionTabId", () => {
+  it("opens the user's active existing tab, with the newest tab as a defensive fallback", () => {
+    expect(
+      terminalCompanionTabId({
+        activeSessionId: "terminal-1",
+        tabs: [{ sessionId: "terminal-1" }, { sessionId: "terminal-2" }],
+      }),
+    ).toBe("terminal-1");
+    expect(
+      terminalCompanionTabId({
+        activeSessionId: null,
+        tabs: [{ sessionId: "terminal-1" }, { sessionId: "terminal-2" }],
+      }),
+    ).toBe("terminal-2");
+    expect(terminalCompanionTabId(undefined)).toBeNull();
   });
 });
 

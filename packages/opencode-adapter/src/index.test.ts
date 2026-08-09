@@ -3990,6 +3990,14 @@ describe("OpenCodeNativeAdapter", () => {
     const handle = await adapter.attach(spec(), { emit: async () => undefined });
     expect(
       await handle.dispatch({
+        kind: "executor.retry",
+        commandId: "retry-unsupported",
+        sessionId: "volli-session-1",
+        attachmentId: "attachment-1",
+      }),
+    ).toMatchObject({ status: "rejected", code: "RETRY_UNSUPPORTED" });
+    expect(
+      await handle.dispatch({
         ...messageCommand(),
         model: null,
         agent: null,

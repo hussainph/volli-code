@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 import {
   SessionEngineConflictError,
+  SessionEngineNotFoundError,
   createSessionEngine,
   createInMemorySessionLedger,
 } from "./index";
@@ -96,6 +97,44 @@ function createdEvent(id: string, session: Session, commandId = "command-create"
 }
 
 describe("SessionEngine creation and explicit commands", () => {
+  it("records one immutable Runtime Brief when concurrent callers disagree", async () => {
+    const { plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+
+    const [first, second] = await Promise.all([
+      plane.getOrRecordSessionInput({
+        sessionId: session.id,
+        input: { kind: "runtime-brief", text: "original ticket body" },
+        provenance: userProvenance,
+      }),
+      plane.getOrRecordSessionInput({
+        sessionId: session.id,
+        input: { kind: "runtime-brief", text: "edited ticket body" },
+        provenance: userProvenance,
+      }),
+    ]);
+
+    expect(first).toEqual({ kind: "runtime-brief", text: "original ticket body" });
+    expect(second).toEqual(first);
+    expect(
+      (await plane.listEvents({ sessionId: session.id })).filter(
+        ({ payload }) => payload.kind === "session.input.recorded",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("refuses to record a Runtime Brief for a missing Session", async () => {
+    const { plane } = composition();
+
+    await expect(
+      plane.getOrRecordSessionInput({
+        sessionId: "missing-session",
+        input: { kind: "runtime-brief", text: "orphaned brief" },
+        provenance: userProvenance,
+      }),
+    ).rejects.toBeInstanceOf(SessionEngineNotFoundError);
+  });
+
   it("records submitted intent as a canonical event even before an adapter receipt exists", async () => {
     const { plane } = composition();
     const { session } = await plane.createSession(createRequest());

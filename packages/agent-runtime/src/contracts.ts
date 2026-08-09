@@ -78,6 +78,8 @@ export interface TicketRuntimeSpec {
   brief: RuntimeBrief;
   promptResources?: readonly PromptResource[];
   tools: RuntimeToolBundle;
+  /** Opaque Pi sidecar locator from the durable Session Attachment. */
+  recovery?: RuntimeRecoveryRef;
   signal?: AbortSignal;
   /** Resolves only after the observation reaches its required consumer boundary. */
   observer: (observation: RuntimeObservation) => Promise<void>;
@@ -85,7 +87,7 @@ export interface TicketRuntimeSpec {
 
 /** Sanitized failure surfaced through observations. Never contains secrets. */
 export interface RuntimeFailure {
-  reason: "auth" | "configuration" | "model" | "aborted" | "unknown";
+  reason: "auth" | "configuration" | "context" | "model" | "aborted" | "unknown";
   message: string;
 }
 
@@ -124,6 +126,8 @@ export interface TurnObservation {
   kind: "turn";
   state: "started" | "completed" | "interrupted";
   turnId: string;
+  occurredAt?: number;
+  recoveryCursor?: string;
 }
 
 /** Transient stream delta. Never advances the durable recovery cursor. */
@@ -139,6 +143,8 @@ export interface SettledMessageObservation {
   kind: "message-settled";
   turnId: string;
   message: SettledAssistantMessage;
+  occurredAt?: number;
+  recoveryCursor?: string;
 }
 
 /** JSON-safe, runtime-normalized tool input and output. */
@@ -158,6 +164,8 @@ interface RuntimeActivityObservationBase {
   descriptor: ActivityDescriptor;
   input: RuntimeActivityValue;
   output: RuntimeActivityValue;
+  occurredAt?: number;
+  recoveryCursor?: string;
 }
 
 export type RuntimeActivityObservation =
@@ -173,27 +181,44 @@ export type RuntimeActivityObservation =
 export interface AttentionObservation {
   kind: "attention";
   state: "raised" | "cleared";
-  reason: "auth" | "configuration" | "context" | "runtime-failure";
+  reason: "auth" | "configuration" | "context" | "runtime-failure" | "partial-turn";
   message: string;
+  occurredAt?: number;
+  recoveryCursor?: string;
 }
+
+export type RuntimeMessageDelivery = "queue" | "steer" | "replace";
 
 /** Observable outcome of one delivery attempt. Never silently reinterpreted. */
 export type DeliveryOutcome =
-  | { kind: "delivered"; delivery: "prompt" }
+  | { kind: "delivered"; delivery: "prompt" | "queue" | "steer" | "retry" }
   | {
       kind: "rejected";
-      reason: "busy-unsupported" | "closed";
+      reason: "busy-unsupported" | "closed" | "replace-unsupported" | "retry-unavailable";
       message: string;
     };
 
 /** One live runtime attachment. Closing it never ends Session identity. */
 export interface RuntimeAttachmentHandle {
-  submitUserMessage(text: string): Promise<DeliveryOutcome>;
+  submitUserMessage(
+    text: string,
+    delivery?: RuntimeMessageDelivery,
+    commandId?: string,
+  ): Promise<DeliveryOutcome>;
+  /** Retry the last failed run without duplicating its user message. */
+  retry(commandId?: string): Promise<DeliveryOutcome>;
   /** Abort the current run and settle the resulting state honestly. */
   interrupt(): Promise<void>;
   /** Release local resources; the Session and its history remain. */
   close(): Promise<void>;
-  /** Recovery metadata persisted for Session 4; this slice does not reopen it. */
+  /** Replays durable semantic markers after an optional sidecar checkpoint. */
+  reconcile(cursor: string | null): Promise<{
+    cursor: string | null;
+    observations: readonly RuntimeObservation[];
+    /** Commands Pi durably accepted into a turn, for post-crash receipt repair. */
+    receipts?: readonly { commandId: string; acceptedAt: number }[];
+  }>;
+  /** Recovery metadata persisted by the Session owner for exact sidecar reopen. */
   readonly recovery: RuntimeRecoveryRef | undefined;
 }
 

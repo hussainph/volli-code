@@ -29,10 +29,12 @@ const OPAQUE_SECRET = /[A-Za-z0-9_-]{24,}/g;
 const PREFIXED_SECRET = /\b(?:sk|pk|ghp|gho|xox[a-z])[-_][A-Za-z0-9_-]+/gi;
 const AUTH_SIGNAL =
   /(api[ _-]?key|auth|credential|unauthorized|forbidden|login|sign[ _-]?in|not configured|401|403)/i;
+const CONTEXT_SIGNAL = /(context (?:length|limit|window)|too many tokens|maximum tokens)/i;
 
 const ATTENTION_REASON: Record<RuntimeFailure["reason"], AttentionObservation["reason"]> = {
   auth: "auth",
   configuration: "configuration",
+  context: "context",
   model: "runtime-failure",
   aborted: "runtime-failure",
   unknown: "runtime-failure",
@@ -57,6 +59,7 @@ export function attentionReasonFor(failure: RuntimeFailure): AttentionObservatio
 
 /** Auth failures need explicit user recovery; everything else is a model failure. */
 export function classifyDiagnostic(sanitized: string): RuntimeFailure["reason"] {
+  if (CONTEXT_SIGNAL.test(sanitized)) return "context";
   return AUTH_SIGNAL.test(sanitized) ? "auth" : "model";
 }
 

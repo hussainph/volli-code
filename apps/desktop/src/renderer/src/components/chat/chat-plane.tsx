@@ -78,6 +78,7 @@ import {
   sameSelection,
   sameTodos,
   sessionBlocker,
+  terminalCompanionTabId,
   todosSettled,
   withdrawInteraction,
   type CatalogState,
@@ -92,7 +93,9 @@ import { Button } from "@renderer/components/ui/button";
 import { useRuntimeCatalogClient } from "@renderer/lib/runtime-catalog-client";
 import { cn } from "@renderer/lib/utils";
 import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
+import { useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 /**
  * Which harness answers "what models can I pick" — for the Sessions that have
@@ -126,10 +129,23 @@ export interface ChatPlaneProps {
 
 export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlaneProps) {
   const controller = useSessionController(sessionId, store);
-  const { enqueue, dequeue, cancelInteraction, interrupt, recover, resolveInteraction, submit } =
-    controller;
+  const {
+    enqueue,
+    dequeue,
+    cancelInteraction,
+    interrupt,
+    recover,
+    retryRuntime,
+    resolveInteraction,
+    submit,
+  } = controller;
   const setSelection = controller.setSelection;
   const slice = controller.session;
+  const ticketId = slice?.projection?.session.ticketId ?? null;
+  const terminalTabId = useSessionsStore((state) => {
+    if (ticketId === null) return null;
+    return terminalCompanionTabId(state.byOwner[ticketId]);
+  });
 
   // The half-typed message is part of the Session, not this view: it has to
   // survive both a tab switch (this component unmounts) and a relaunch, so it
@@ -312,9 +328,16 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   const blockerActs = React.useMemo<SessionBlockerActs>(
     () => ({
       recover: () => void recover(),
+      // A failed initial Pi attach has no live binding to continue; Retry is a
+      // fresh attach there. Once Pi is live, it is the exact failed run.
+      retryRuntime: () => void (liveExecutorId === null ? recover() : retryRuntime()),
+      openTerminal: () => {
+        if (ticketId === null || terminalTabId === null) return;
+        useWorkspaceStore.getState().openTicketSession(projectId, ticketId, terminalTabId);
+      },
       openSettings: () => setSettingsOpen(true),
     }),
-    [recover, setSettingsOpen],
+    [liveExecutorId, projectId, recover, retryRuntime, setSettingsOpen, terminalTabId, ticketId],
   );
   const blocker = sessionBlocker(
     {
@@ -322,6 +345,8 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
       attention: slice?.projection?.attention ?? EMPTY_ATTENTION,
       catalogState,
       catalogError,
+      terminalAvailable: terminalTabId !== null,
+      runtimeRetryAvailable: controller.adapterId === "pi" && ticketId !== null,
     },
     blockerActs,
     interactions.length > 0,
@@ -558,6 +583,16 @@ function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
       {blocker.action ? (
         <Button size="xs" variant="ghost" className="shrink-0" onClick={blocker.action.act}>
           {blocker.action.label}
+        </Button>
+      ) : null}
+      {blocker.secondaryAction ? (
+        <Button
+          size="xs"
+          variant="ghost"
+          className="shrink-0"
+          onClick={blocker.secondaryAction.act}
+        >
+          {blocker.secondaryAction.label}
         </Button>
       ) : null}
     </div>

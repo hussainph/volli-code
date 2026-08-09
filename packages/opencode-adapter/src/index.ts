@@ -682,6 +682,15 @@ class OpenCodeBinding implements BindingHandle {
 
   async dispatch(command: HarnessCommand): Promise<DeliveryReceipt> {
     if (command.kind === "message.submit") return this.#dispatchMessage(command);
+    if (command.kind === "executor.retry") {
+      return {
+        commandId: command.commandId,
+        status: "rejected",
+        code: "RETRY_UNSUPPORTED",
+        detail: "This executor does not support retrying a failed run in place.",
+        native: this.native,
+      };
+    }
 
     try {
       if (command.kind === "executor.interrupt") {

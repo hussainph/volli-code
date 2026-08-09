@@ -120,6 +120,112 @@ describe("SqliteSessionLedger", () => {
     expect(await control.listEvents({ sessionId: created.session.id })).toHaveLength(3);
   });
 
+  it("round-trips the immutable Runtime Brief input through SQLite", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-brief",
+      projectId,
+      ticketId: null,
+      title: "Brief",
+      provenance,
+    });
+
+    await expect(
+      control.getOrRecordSessionInput({
+        sessionId: created.session.id,
+        input: { kind: "runtime-brief", text: "original bytes" },
+        provenance,
+      }),
+    ).resolves.toEqual({ kind: "runtime-brief", text: "original bytes" });
+
+    expect(
+      (await control.listEvents({ sessionId: created.session.id })).filter(
+        (event) => event.payload.kind === "session.input.recorded",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        payload: {
+          kind: "session.input.recorded",
+          input: { kind: "runtime-brief", text: "original bytes" },
+        },
+      }),
+    ]);
+  });
+
+  it("round-trips an explicit executor retry command and receipt", async () => {
+    const { ledger, control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-retry",
+      projectId,
+      ticketId: null,
+      title: "Retry",
+      provenance,
+    });
+    await ledger.transaction((transaction) => {
+      const command = {
+        id: "retry-command",
+        sessionId: created.session.id,
+        createdAt: 200,
+        intent: { kind: "executor.retry" as const, attachmentId: "attachment-1" },
+        route: { adapterId: "pi", attachmentId: "attachment-1" },
+      };
+      transaction.saveCommand(command);
+      transaction.appendEvent({
+        id: "retry-command-event",
+        sessionId: created.session.id,
+        sequence: 4,
+        occurredAt: 200,
+        recordedAt: 200,
+        provenance,
+        commandId: "retry-command",
+        payload: {
+          kind: "command.recorded",
+          command,
+        },
+      });
+      const receipt = {
+        id: "retry-receipt",
+        commandId: "retry-command",
+        status: "accepted" as const,
+        acceptedAt: 201,
+        recordedAt: 201,
+        sequence: 5,
+        result: { kind: "executor.retried" as const, sessionId: created.session.id },
+      };
+      transaction.appendReceipt(receipt);
+      transaction.appendEvent({
+        id: "retry-receipt-event",
+        sessionId: created.session.id,
+        sequence: 5,
+        occurredAt: 201,
+        recordedAt: 201,
+        provenance,
+        commandId: "retry-command",
+        payload: {
+          kind: "command.receipt.recorded",
+          receipt,
+        },
+      });
+    });
+
+    expect((await control.listEvents({ sessionId: created.session.id })).slice(-2)).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          command: expect.objectContaining({
+            intent: { kind: "executor.retry", attachmentId: "attachment-1" },
+          }),
+        }),
+      }),
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          receipt: expect.objectContaining({
+            result: { kind: "executor.retried", sessionId: created.session.id },
+          }),
+        }),
+      }),
+    ]);
+  });
+
   it("replays omitted and null event envelope ids through a durable SQLite read", async () => {
     const { control, projectId } = setup();
     const created = await control.createSession({
@@ -154,6 +260,39 @@ describe("SqliteSessionLedger", () => {
     });
     expect(replayed.attachmentId ?? null).toBeNull();
     expect(replayed.commandId ?? null).toBeNull();
+  });
+
+  it("round-trips an interrupted turn as its own durable fact", async () => {
+    const { ledger, control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-interrupted-turn",
+      projectId,
+      ticketId: null,
+      title: "Interrupted turn",
+      provenance,
+    });
+
+    await ledger.transaction((transaction) => {
+      transaction.appendEvent({
+        id: "turn-interrupted-event",
+        sessionId: created.session.id,
+        sequence: 4,
+        occurredAt: 200,
+        recordedAt: 201,
+        provenance,
+        payload: {
+          kind: "turn.interrupted",
+          attachmentId: "attachment-1",
+          turnId: "turn-1",
+        },
+      });
+    });
+
+    expect((await control.listEvents({ sessionId: created.session.id })).at(-1)?.payload).toEqual({
+      kind: "turn.interrupted",
+      attachmentId: "attachment-1",
+      turnId: "turn-1",
+    });
   });
 
   it("does not make an unrelated append transaction fail on pre-existing receipt corruption", async () => {

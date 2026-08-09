@@ -8,6 +8,7 @@ import {
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamOverlay,
+  NativeAttachmentError,
   SessionRuntimeConflictError,
   SessionRuntimeNotFoundError,
   type BindingHandle,
@@ -84,6 +85,7 @@ class FakeAdapter implements NativeHarnessAdapter {
   reconcileReceipts: Awaited<ReturnType<BindingHandle["reconcile"]>>["receipts"] = [];
   reconcileObservations: HarnessObservation[] = [];
   reconcileGate: Promise<void> | null = null;
+  reconcileFailure: unknown = null;
   reconcileStarted: () => void = () => undefined;
   probeResult: NativeProbeResult | null = null;
   attachFailure: unknown = null;
@@ -159,6 +161,7 @@ class FakeAdapter implements NativeHarnessAdapter {
         this.reconcileCursors.push(cursor);
         this.reconcileStarted();
         await this.reconcileGate;
+        if (this.reconcileFailure) throw this.reconcileFailure;
         return {
           cursor: { value: this.reconciles },
           observations: this.reconcileObservations,
@@ -265,6 +268,30 @@ describe("SessionRuntime native adapter contract", () => {
       snapshot.frames.find(({ event }) => event.payload.kind === "attachment.opened")!.event
         .sequence,
     );
+  });
+
+  it("persists an interrupted turn distinctly and projects the Session idle", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+
+    await adapter.emit({
+      id: "turn-started",
+      kind: "turn.started",
+      occurredAt: 160,
+      turnId: "turn-1",
+    });
+    expect((await runtime.snapshot({ sessionId })).projection.turnActive).toBe(true);
+
+    await adapter.emit({
+      id: "turn-interrupted",
+      kind: "turn.interrupted",
+      occurredAt: 161,
+      turnId: "turn-1",
+    });
+
+    const snapshot = await runtime.snapshot({ sessionId });
+    expect(snapshot.projection.turnActive).toBe(false);
+    expect(snapshot.frames.map(({ event }) => event.payload.kind)).toContain("turn.interrupted");
   });
 
   it("probes, attaches, snapshots dynamic capabilities, and releases through the narrow binding", async () => {
@@ -561,6 +588,77 @@ describe("SessionRuntime native adapter contract", () => {
       code: "profile_unavailable",
     });
 
+    const misconfigured = composition();
+    const misconfiguredSession = await misconfigured.runtime.command({
+      commandId: "misconfigured-create",
+      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+    });
+    misconfigured.adapter.attachFailure = new NativeAttachmentError(
+      "No Pi model is configured",
+      "PI_CONFIGURATION_INVALID",
+      "configuration_invalid",
+    );
+    const misconfiguredResult = await misconfigured.runtime.command({
+      commandId: "misconfigured-attach",
+      sessionId: misconfiguredSession.sessionId,
+      command: {
+        kind: "adapter.attach",
+        adapterId: "fake",
+        profileId: "native",
+        continuity: "fresh",
+      },
+    });
+    expect(misconfiguredResult.receipt).toMatchObject({
+      status: "rejected",
+      code: "PI_CONFIGURATION_INVALID",
+    });
+    expect(
+      (await misconfigured.runtime.snapshot({ sessionId: misconfiguredSession.sessionId }))
+        .projection.attention.primary,
+    ).toMatchObject({
+      attachmentId: null,
+      kind: "configuration_invalid",
+      detail: "No Pi model is configured",
+    });
+    const firstConfigurationAttention = (
+      await misconfigured.runtime.snapshot({ sessionId: misconfiguredSession.sessionId })
+    ).projection.attention.primary;
+    expect(firstConfigurationAttention).not.toBeNull();
+    await misconfigured.runtime.command({
+      commandId: "misconfigured-attach-again",
+      sessionId: misconfiguredSession.sessionId,
+      command: {
+        kind: "adapter.attach",
+        adapterId: "fake",
+        profileId: "native",
+        continuity: "fresh",
+      },
+    });
+    const repeatedConfigurationAttention = (
+      await misconfigured.runtime.snapshot({ sessionId: misconfiguredSession.sessionId })
+    ).projection.attention.active;
+    expect(repeatedConfigurationAttention).toHaveLength(1);
+    expect(repeatedConfigurationAttention[0]).toMatchObject({
+      id: firstConfigurationAttention!.id,
+      attachmentId: null,
+      kind: "configuration_invalid",
+    });
+    misconfigured.adapter.attachFailure = null;
+    await misconfigured.runtime.command({
+      commandId: "misconfigured-retry",
+      sessionId: misconfiguredSession.sessionId,
+      command: {
+        kind: "adapter.attach",
+        adapterId: "fake",
+        profileId: "native",
+        continuity: "fresh",
+      },
+    });
+    expect(
+      (await misconfigured.runtime.snapshot({ sessionId: misconfiguredSession.sessionId }))
+        .projection.attention.primary,
+    ).toBeNull();
+
     const failed = composition();
     const failedSession = await failed.runtime.command({
       commandId: "failed-create",
@@ -743,6 +841,399 @@ describe("SessionRuntime native adapter contract", () => {
         },
       }),
     ).rejects.toBeInstanceOf(SessionRuntimeNotFoundError);
+  });
+
+  it("records and dispatches an explicit executor retry to the live attachment", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+
+    const retried = await runtime.command({
+      commandId: "retry-1",
+      sessionId,
+      command: { kind: "executor.retry" },
+    });
+
+    expect(adapter.commands.at(-1)).toEqual({
+      kind: "executor.retry",
+      commandId: "retry-1",
+      sessionId,
+      attachmentId,
+    });
+    expect(retried).toMatchObject({
+      command: { intent: { kind: "executor.retry", attachmentId } },
+      receipt: { status: "accepted", result: { kind: "executor.retried" } },
+    });
+    await runtime.command({
+      commandId: "retry-1",
+      sessionId,
+      command: { kind: "executor.retry", attachmentId },
+    });
+    expect(adapter.commands.filter(({ kind }) => kind === "executor.retry")).toHaveLength(1);
+  });
+
+  it("keeps recovery Attention when replaying an old accepted retry", async () => {
+    const first = composition();
+    const sessionId = await createAndAttach(first.runtime);
+    const attachmentId = (await first.runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    const request = {
+      commandId: "accepted-retry-replay",
+      sessionId,
+      command: { kind: "executor.retry" as const, attachmentId },
+    };
+    await first.runtime.command(request);
+    await first.runtime.close();
+    first.adapter.attachFailure = new NativeAttachmentError(
+      "The Pi sidecar is temporarily missing",
+      "PI_RECOVERY_FAILED",
+      "adapter_unrecoverable",
+    );
+    const recovered = composition({
+      engine: first.engine,
+      adapter: first.adapter,
+      runtimeIdPrefix: "accepted-retry-replay-",
+    });
+    await expect(recovered.runtime.reconcile({ sessionId, attachmentId })).rejects.toThrow(
+      "The Pi sidecar is temporarily missing",
+    );
+
+    await expect(recovered.runtime.command(request)).resolves.toMatchObject({
+      receipt: { status: "accepted" },
+    });
+    expect(
+      (await recovered.runtime.snapshot({ sessionId })).projection.attention.primary,
+    ).toMatchObject({
+      id: `${attachmentId}:recovery`,
+      kind: "adapter_unrecoverable",
+    });
+  });
+
+  it("rejects retry when no executor is attached", async () => {
+    const { runtime } = composition();
+    const created = await runtime.command({
+      commandId: "retry-detached-create",
+      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+    });
+
+    await expect(
+      runtime.command({
+        commandId: "retry-detached",
+        sessionId: created.sessionId,
+        command: { kind: "executor.retry" },
+      }),
+    ).rejects.toBeInstanceOf(SessionRuntimeConflictError);
+  });
+
+  it("reconciles a persisted retry before dispatching it again", async () => {
+    const { runtime, adapter, engine } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    await engine.submit({
+      commandId: "retry-recovered",
+      sessionId,
+      intent: { kind: "executor.retry", attachmentId },
+      provenance: { source: { kind: "user", id: "session-client", detail: null }, venue },
+    });
+    adapter.reconcileReceipts = [
+      {
+        commandId: "retry-recovered",
+        status: "accepted",
+        acceptedAt: 250,
+        native: { id: "retry-recovered", detail: null },
+      },
+    ];
+
+    const result = await runtime.command({
+      commandId: "retry-recovered",
+      sessionId,
+      command: { kind: "executor.retry", attachmentId },
+    });
+
+    expect(result.receipt).toMatchObject({ status: "accepted" });
+    expect(adapter.commands.filter(({ kind }) => kind === "executor.retry")).toHaveLength(0);
+  });
+
+  it("clears recovery Attention when reconciliation accepts an unreconciled retry", async () => {
+    const first = composition();
+    const sessionId = await createAndAttach(first.runtime);
+    const attachmentId = (await first.runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    const request = {
+      commandId: "unreconciled-retry-replay",
+      sessionId,
+      command: { kind: "executor.retry" as const, attachmentId },
+    };
+    first.adapter.dispatchReceipt = {
+      commandId: request.commandId,
+      status: "unknown",
+      detail: "Connection closed before acknowledgement",
+      native: null,
+    };
+    await expect(first.runtime.command(request)).resolves.toMatchObject({
+      receipt: { status: "unreconciled" },
+    });
+    await first.runtime.close();
+    first.adapter.attachFailure = new NativeAttachmentError(
+      "The Pi sidecar is temporarily missing",
+      "PI_RECOVERY_FAILED",
+      "adapter_unrecoverable",
+    );
+    const recovered = composition({
+      engine: first.engine,
+      adapter: first.adapter,
+      runtimeIdPrefix: "unreconciled-retry-replay-",
+    });
+    await expect(recovered.runtime.reconcile({ sessionId, attachmentId })).rejects.toThrow(
+      "The Pi sidecar is temporarily missing",
+    );
+    first.adapter.attachFailure = null;
+    first.adapter.reconcileReceipts = [
+      {
+        commandId: request.commandId,
+        status: "accepted",
+        acceptedAt: 250,
+        native: { id: request.commandId, detail: null },
+      },
+    ];
+
+    await expect(recovered.runtime.command(request)).resolves.toMatchObject({
+      receipt: { status: "accepted" },
+    });
+    expect(
+      (await recovered.runtime.snapshot({ sessionId })).projection.attention.primary,
+    ).toBeNull();
+    expect(first.adapter.commands.filter(({ kind }) => kind === "executor.retry")).toHaveLength(1);
+  });
+
+  it("settles a cold retry whose native binding cannot be recovered", async () => {
+    const first = composition();
+    const sessionId = await createAndAttach(first.runtime);
+    const attachmentId = (await first.runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    await first.runtime.close();
+    first.adapter.attachFailure = new NativeAttachmentError(
+      "The Pi sidecar is missing",
+      "PI_RECOVERY_FAILED",
+      "adapter_unrecoverable",
+    );
+    const recovered = composition({
+      engine: first.engine,
+      adapter: first.adapter,
+      runtimeIdPrefix: "cold-retry-",
+    });
+
+    const result = await recovered.runtime.command({
+      commandId: "retry-cold-failure",
+      sessionId,
+      command: { kind: "executor.retry", attachmentId },
+    });
+
+    expect(result.receipt).toMatchObject({
+      status: "rejected",
+      code: "PI_RECOVERY_FAILED",
+    });
+    expect(
+      (await recovered.runtime.snapshot({ sessionId })).projection.attention.primary,
+    ).toMatchObject({
+      attachmentId,
+      kind: "adapter_unrecoverable",
+      detail: "Retry recovery failed: The Pi sidecar is missing",
+    });
+    await recovered.runtime.command({
+      commandId: "retry-cold-failure-again",
+      sessionId,
+      command: { kind: "executor.retry", attachmentId },
+    });
+    first.adapter.attachFailure = new Error("generic recovery failure");
+    await expect(
+      recovered.runtime.command({
+        commandId: "retry-cold-generic-failure",
+        sessionId,
+        command: { kind: "executor.retry", attachmentId },
+      }),
+    ).resolves.toMatchObject({ receipt: { code: "retry_recovery_failed" } });
+    expect(
+      (await recovered.runtime.snapshot({ sessionId })).projection.attention.active,
+    ).toHaveLength(1);
+
+    first.adapter.attachFailure = null;
+    await expect(
+      recovered.runtime.command({
+        commandId: "retry-cold-success",
+        sessionId,
+        command: { kind: "executor.retry", attachmentId },
+      }),
+    ).resolves.toMatchObject({ receipt: { status: "accepted" } });
+    expect(
+      (await recovered.runtime.snapshot({ sessionId })).projection.attention.primary,
+    ).toBeNull();
+  });
+
+  it("settles cold retry when its durable directory is unavailable", async () => {
+    let unavailable = false;
+    const locations: SessionLocationResolver = {
+      resolve: async () => ({ directory: "/projects/fake", venue }),
+      prepare: async () => ({ directory: "/projects/fake", venue }),
+      reaffirm: async () => {
+        if (unavailable) throw new Error("worktree is missing");
+      },
+    };
+    const first = composition({ locations });
+    const sessionId = await createAndAttach(first.runtime);
+    const attachmentId = (await first.runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    await first.runtime.close();
+    unavailable = true;
+    const recovered = composition({
+      engine: first.engine,
+      adapter: first.adapter,
+      locations,
+      runtimeIdPrefix: "retry-location-",
+    });
+
+    await expect(
+      recovered.runtime.command({
+        commandId: "retry-location-unavailable",
+        sessionId,
+        command: { kind: "executor.retry", attachmentId },
+      }),
+    ).resolves.toMatchObject({
+      receipt: { status: "rejected", code: "location_unavailable" },
+    });
+  });
+
+  it("records durable Attention when relaunch reconciliation cannot recover its binding", async () => {
+    const first = composition();
+    const sessionId = await createAndAttach(first.runtime);
+    const attachmentId = (await first.runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    await first.runtime.close();
+    first.adapter.attachFailure = new NativeAttachmentError(
+      "The Pi sidecar cannot be verified",
+      "PI_RECOVERY_FAILED",
+      "adapter_unrecoverable",
+    );
+    const recovered = composition({
+      engine: first.engine,
+      adapter: first.adapter,
+      runtimeIdPrefix: "cold-reconcile-",
+    });
+
+    await expect(recovered.runtime.reconcile({ sessionId, attachmentId })).rejects.toThrow(
+      "The Pi sidecar cannot be verified",
+    );
+    expect(
+      (await recovered.runtime.snapshot({ sessionId })).projection.attention.primary,
+    ).toMatchObject({
+      attachmentId,
+      kind: "adapter_unrecoverable",
+      detail: "Recovery failed: The Pi sidecar cannot be verified",
+    });
+    await expect(recovered.runtime.reconcile({ sessionId, attachmentId })).rejects.toThrow(
+      "The Pi sidecar cannot be verified",
+    );
+    expect(
+      (await recovered.runtime.snapshot({ sessionId })).projection.attention.active,
+    ).toHaveLength(1);
+
+    first.adapter.attachFailure = null;
+    await recovered.runtime.reconcile({ sessionId, attachmentId });
+    expect(
+      (await recovered.runtime.snapshot({ sessionId })).projection.attention.primary,
+    ).toBeNull();
+  });
+
+  it("does not turn a transient live reconcile failure into unrecoverable Attention", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    adapter.reconcileFailure = new Error("temporary transport failure");
+
+    await expect(runtime.reconcile({ sessionId, attachmentId })).rejects.toThrow(
+      "temporary transport failure",
+    );
+    expect((await runtime.snapshot({ sessionId })).projection.attention.primary).toBeNull();
+  });
+
+  it("rejects reconciliation for an attachment the Session does not own", async () => {
+    const { runtime } = composition();
+    const sessionId = await createAndAttach(runtime);
+
+    await expect(
+      runtime.reconcile({ sessionId, attachmentId: "missing-attachment" }),
+    ).rejects.toBeInstanceOf(SessionRuntimeNotFoundError);
+  });
+
+  it("does not misclassify a transient reconcile after cold binding recovery", async () => {
+    const first = composition();
+    const sessionId = await createAndAttach(first.runtime);
+    const attachmentId = (await first.runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    await first.runtime.close();
+    first.adapter.reconcileFailure = new Error("temporary cold transport failure");
+    const recovered = composition({
+      engine: first.engine,
+      adapter: first.adapter,
+      runtimeIdPrefix: "cold-transport-",
+    });
+
+    await expect(recovered.runtime.reconcile({ sessionId, attachmentId })).rejects.toThrow(
+      "temporary cold transport failure",
+    );
+    expect(
+      (await recovered.runtime.snapshot({ sessionId })).projection.attention.primary,
+    ).toBeNull();
+    first.adapter.reconcileFailure = null;
+    await recovered.runtime.reconcile({ sessionId, attachmentId });
+  });
+
+  it("does not persist recovery Attention when shutdown wins a failing rehydrate", async () => {
+    const first = composition();
+    const sessionId = await createAndAttach(first.runtime);
+    const attachmentId = (await first.runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    await first.runtime.close();
+    const attachStarted = new Gate();
+    const releaseAttach = new Gate();
+    first.adapter.attachStarted = () => attachStarted.resolve();
+    first.adapter.attachGate = releaseAttach.promise;
+    first.adapter.attachFailure = new Error("late attach failure");
+    const recovered = composition({
+      engine: first.engine,
+      adapter: first.adapter,
+      runtimeIdPrefix: "closed-recovery-",
+    });
+
+    const reconciling = recovered.runtime.reconcile({ sessionId, attachmentId });
+    await attachStarted.promise;
+    await recovered.runtime.close();
+    releaseAttach.resolve();
+
+    await expect(reconciling).rejects.toThrow("late attach failure");
+    expect((await first.engine.getSession({ sessionId }))?.attention.primary).toBeNull();
+  });
+
+  it("does not persist retry recovery Attention when shutdown wins a failing rehydrate", async () => {
+    const first = composition();
+    const sessionId = await createAndAttach(first.runtime);
+    const attachmentId = (await first.runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    await first.runtime.close();
+    const attachStarted = new Gate();
+    const releaseAttach = new Gate();
+    first.adapter.attachStarted = () => attachStarted.resolve();
+    first.adapter.attachGate = releaseAttach.promise;
+    first.adapter.attachFailure = new Error("late retry attach failure");
+    const recovered = composition({
+      engine: first.engine,
+      adapter: first.adapter,
+      runtimeIdPrefix: "closed-retry-",
+    });
+
+    const retrying = recovered.runtime.command({
+      commandId: "closed-retry",
+      sessionId,
+      command: { kind: "executor.retry", attachmentId },
+    });
+    await attachStarted.promise;
+    await recovered.runtime.close();
+    releaseAttach.resolve();
+
+    await expect(retrying).rejects.toThrow("late retry attach failure");
+    expect((await first.engine.getSession({ sessionId }))?.attention.primary).toBeNull();
   });
 
   it("cancels a pending interaction as a fact, without answering it or telling the harness", async () => {
@@ -956,6 +1447,45 @@ describe("SessionRuntime native adapter contract", () => {
     expect(snapshot.projection.receipts).not.toContainEqual(
       expect.objectContaining({ commandId: "command-attach", status: "unreconciled" }),
     );
+  });
+
+  it("deduplicates the same stable reconciliation batch after a cold runtime rebuild", async () => {
+    const first = composition();
+    const sessionId = await createAndAttach(first.runtime);
+    const attachmentId = (await first.runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    first.adapter.reconcileObservations = [
+      {
+        id: "pi:turn:stable:started",
+        kind: "turn.started",
+        occurredAt: 500,
+        turnId: "stable",
+        cursor: { entryId: "marker-1" },
+      },
+      {
+        id: "pi:turn:stable:completed",
+        kind: "turn.completed",
+        occurredAt: 501,
+        turnId: "stable",
+        cursor: { entryId: "marker-2" },
+      },
+    ];
+    await first.runtime.reconcile({ sessionId, attachmentId });
+    await first.runtime.close();
+
+    const recovered = composition({
+      engine: first.engine,
+      adapter: first.adapter,
+      runtimeIdPrefix: "cold-",
+    });
+    await recovered.runtime.reconcile({ sessionId, attachmentId });
+
+    const snapshot = await recovered.runtime.snapshot({ sessionId });
+    expect(
+      snapshot.frames.filter(({ event }) => event.payload.kind === "turn.started"),
+    ).toHaveLength(1);
+    expect(
+      snapshot.frames.filter(({ event }) => event.payload.kind === "turn.completed"),
+    ).toHaveLength(1);
   });
 
   it("coalesces concurrent reconciliation through one durable acknowledgement", async () => {

@@ -845,6 +845,33 @@ describe("recover", () => {
   });
 });
 
+describe("retryRuntime", () => {
+  it("sends an explicit retry to the live attachment without another message", async () => {
+    const { client, rpc, sessionId } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1", "pi");
+    });
+
+    await expect(client.retryRuntime()).resolves.toBe(true);
+
+    expect(rpc.commands).toEqual([
+      {
+        commandId: expect.any(String),
+        sessionId,
+        command: { kind: "executor.retry", attachmentId: "attach-1" },
+      },
+    ]);
+  });
+
+  it("refuses runtime retry when the Session has no live attachment", async () => {
+    const { client, rpc } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor(null, "pi");
+    });
+
+    await expect(client.retryRuntime()).resolves.toBe(false);
+    expect(rpc.commands).toEqual([]);
+  });
+});
+
 /* -------------------------------------------------------------- the message */
 
 describe("submit", () => {

@@ -430,8 +430,8 @@ app.whenReady().then(async () => {
     ? createPiNativeAdapter({
         sessionDataDir: join(app.getPath("userData"), "pi-sessions"),
         // The runtime needs the Ticket a Session runs for, which a directory
-        // cannot say. Resolved per attach so a ticket edited between two
-        // attaches briefs the second one with what it says now.
+        // cannot say. The generated Brief is recorded once before the first
+        // runtime construction; every later attach reuses those exact bytes.
         resolveTicketContext: async (sessionId) => {
           if (sessionEngine === null) return null;
           const projection = await sessionEngine.getSession({ sessionId });
@@ -440,15 +440,26 @@ app.whenReady().then(async () => {
           const project = getProjectById(dbHandle.db, attaching.projectId);
           const ticket = getTicket(dbHandle.db, attaching.ticketId);
           if (!project || !ticket || ticket.projectId !== project.id) return null;
+          const brief = await sessionEngine.getOrRecordSessionInput({
+            sessionId,
+            input: {
+              kind: "runtime-brief",
+              text: composeTicketBrief({
+                project,
+                ticket,
+                attachments: listAttachments(dbHandle.db, ticket.id),
+              }),
+            },
+            provenance: {
+              source: { kind: "system", id: "pi-runtime", detail: null },
+              venue: { id: "local", kind: "local" },
+            },
+          });
           return {
             projectId: project.id,
             ticketId: ticket.id,
             rootThreadId: piRootThreadId(sessionId),
-            brief: composeTicketBrief({
-              project,
-              ticket,
-              attachments: listAttachments(dbHandle.db, ticket.id),
-            }),
+            brief: brief.text,
           };
         },
       })

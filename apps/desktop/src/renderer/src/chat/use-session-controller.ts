@@ -46,6 +46,7 @@ export interface SessionController {
   cancelInteraction(interactionId: string): Promise<boolean>;
   /** The single action an error row offers; which one it is is the client's call. */
   recover(): Promise<boolean>;
+  retryRuntime(): Promise<boolean>;
   close(): void;
 }
 
@@ -95,6 +96,7 @@ function bind(
     cancelInteraction: (interactionId) =>
       getChatClient(sessionId)?.cancelInteraction(interactionId) ?? refused,
     recover: () => getChatClient(sessionId)?.recover() ?? refused,
+    retryRuntime: () => getChatClient(sessionId)?.retryRuntime() ?? refused,
     close: () => {
       store.getState().closeChatSession(sessionId);
     },

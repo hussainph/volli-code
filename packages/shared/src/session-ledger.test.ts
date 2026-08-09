@@ -629,8 +629,12 @@ describe("projectSession", () => {
     const projection = projectSession(session, [
       event(1, { kind: "attachment.opened", attachment }),
       event(2, { kind: "session.retitled", title: "Retitled Session" }),
-      event(3, { kind: "attachment.native_referenced", attachmentId: attachment.id, native }),
-      event(4, {
+      event(3, {
+        kind: "session.input.recorded",
+        input: { kind: "runtime-brief", text: "Implement the Ticket faithfully." },
+      }),
+      event(4, { kind: "attachment.native_referenced", attachmentId: attachment.id, native }),
+      event(5, {
         kind: "attachment.native_referenced",
         attachmentId: "missing",
         native: { id: null, detail: null },

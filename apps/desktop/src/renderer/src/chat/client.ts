@@ -249,6 +249,7 @@ type ChatCommand =
       agent: string | null;
     }
   | { kind: "executor.interrupt"; attachmentId?: string }
+  | { kind: "executor.retry"; attachmentId?: string }
   | { kind: "interaction.resolve"; interactionId: string; resolution: WireResolution };
 
 export interface ChatCommandRequest {
@@ -503,6 +504,19 @@ export class ChatSessionClient {
     return (slice.projection?.liveExecutor ?? null) === null
       ? this.retryAttach()
       : this.reconcile();
+  }
+
+  /** Retry Pi's last failed run without submitting the user's message twice. */
+  retryRuntime(): Promise<boolean> {
+    const attachmentId = this.#liveAttachmentId();
+    if (attachmentId === null) return Promise.resolve(false);
+    return this.#run("Retry", () =>
+      this.#rpc.session.command.mutate({
+        commandId: this.#newCommandId(),
+        sessionId: this.sessionId,
+        command: { kind: "executor.retry", attachmentId },
+      }),
+    );
   }
 
   /**

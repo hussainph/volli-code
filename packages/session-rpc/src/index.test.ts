@@ -847,6 +847,39 @@ describe("Session tRPC router", () => {
     ]);
   });
 
+  it("passes executor retry attachment identity to the Session runtime only when supplied", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await caller.session.command({
+      commandId: "retry-command",
+      sessionId: "session-1",
+      command: { kind: "executor.retry", attachmentId: "attachment-1" },
+    });
+    await caller.session.command({
+      commandId: "session-owned-retry-command",
+      sessionId: "session-1",
+      command: { kind: "executor.retry" },
+    });
+
+    expect(fixture.calls.command.slice(-2)).toEqual([
+      {
+        commandId: "retry-command",
+        sessionId: "session-1",
+        command: { kind: "executor.retry", attachmentId: "attachment-1" },
+      },
+      {
+        commandId: "session-owned-retry-command",
+        sessionId: "session-1",
+        command: { kind: "executor.retry" },
+      },
+    ]);
+    expect("attachmentId" in fixture.calls.command.at(-1)!.command).toBe(false);
+  });
+
   it("carries per-prompt answers through a resolve command and leaves absent ones absent", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({

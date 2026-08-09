@@ -42,10 +42,12 @@ import {
   createPiAgentRuntime,
   type AgentRuntime,
   type AttentionObservation,
+  type DeliveryOutcome,
   type PiRuntimeHostOptions,
   type RuntimeAttachmentHandle,
   type RuntimeActivityObservation,
   type RuntimeObservation,
+  type RuntimeRecoveryRef,
   type SettledAssistantMessage,
   type TicketRuntimeSpec,
   type TranscriptDeltaObservation,
@@ -65,10 +67,12 @@ import type {
   ReleaseReason,
   TranscriptDelta,
 } from "@volli/session-engine";
+import { NativeAttachmentError } from "@volli/session-engine";
 import {
   ACTIVITY_METADATA_KEY,
   errorMessage,
   type ModelSelection,
+  type SessionNativeDetail,
   type SessionNativeReference,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
@@ -157,6 +161,7 @@ const ATTENTION_KINDS = {
   configuration: "configuration_invalid",
   context: "context_limit_reached",
   "runtime-failure": "adapter_unrecoverable",
+  "partial-turn": "partial_turn_interrupted",
 } as const satisfies Record<
   AttentionObservation["reason"],
   Extract<HarnessObservation, { kind: "attention.raised" }>["attention"]["kind"]
@@ -166,7 +171,9 @@ const ATTENTION_KINDS = {
 const REJECTION_CODES = {
   "busy-unsupported": "PI_BUSY",
   closed: "PI_ATTACHMENT_CLOSED",
-} as const;
+  "replace-unsupported": "PI_REPLACE_UNSUPPORTED",
+  "retry-unavailable": "PI_RETRY_UNAVAILABLE",
+} as const satisfies Record<Extract<DeliveryOutcome, { kind: "rejected" }>["reason"], string>;
 
 /** One in-flight assistant message: the id its deltas address and the parts it has opened. */
 interface StreamingMessage {
@@ -179,6 +186,46 @@ interface StreamingMessage {
 interface StreamingActivity {
   turnId: string;
   messageId: string;
+}
+
+function piRecoveryRef(spec: NativeAttachmentSpec): RuntimeRecoveryRef | undefined {
+  if (spec.continuity !== "native_resume") return undefined;
+  const detail = spec.native?.detail;
+  if (
+    spec.native === null ||
+    detail === null ||
+    Array.isArray(detail) ||
+    typeof detail !== "object"
+  ) {
+    throw new Error("Pi recovery metadata is missing or invalid.");
+  }
+  const record = detail as { readonly [key: string]: SessionNativeDetail };
+  if (
+    record["runtime"] !== "pi" ||
+    typeof record["sessionId"] !== "string" ||
+    typeof record["sessionFilePath"] !== "string" ||
+    spec.native.id !== record["sessionId"]
+  ) {
+    throw new Error("Pi recovery metadata does not match the persisted attachment.");
+  }
+  return {
+    runtime: "pi",
+    sessionId: record["sessionId"],
+    sessionFilePath: record["sessionFilePath"],
+  };
+}
+
+function recoveryEntryId(cursor: SessionNativeDetail | null): string | null {
+  if (cursor === null || Array.isArray(cursor) || typeof cursor !== "object") return null;
+  const entryId = (cursor as { readonly [key: string]: SessionNativeDetail })["entryId"];
+  if (typeof entryId !== "string") {
+    throw new Error("Pi recovery cursor is missing its sidecar entry id.");
+  }
+  return entryId;
+}
+
+function recoveryCursor(entryId: string | undefined): { cursor?: SessionNativeDetail } {
+  return entryId === undefined ? {} : { cursor: { entryId } };
 }
 
 export function createPiNativeAdapter(options: PiAdapterOptions): NativeHarnessAdapter {
@@ -247,11 +294,15 @@ export function createPiNativeAdapter(options: PiAdapterOptions): NativeHarnessA
 
     async attach(spec: NativeAttachmentSpec, sink: ObservationSink): Promise<BindingHandle> {
       if (spec.profileId !== PI_PROFILE_ID) throw new Error(`Unknown Pi profile ${spec.profileId}`);
-      // Session 2 can write a Pi sidecar but cannot reopen one. Starting a new
-      // sidecar for a persisted native binding would silently replace the
-      // recovery target the ledger named, so fail before constructing anything.
-      if (spec.continuity === "native_resume" && spec.native !== null) {
-        throw new Error("Pi recovery is not available yet. Start a new Ticket Chat instead.");
+      let recovery: RuntimeRecoveryRef | undefined;
+      try {
+        recovery = piRecoveryRef(spec);
+      } catch (error) {
+        throw new NativeAttachmentError(
+          errorMessage(error),
+          "PI_RECOVERY_FAILED",
+          "adapter_unrecoverable",
+        );
       }
       const context = await options.resolveTicketContext(spec.sessionId);
       if (context === null) {
@@ -259,12 +310,22 @@ export function createPiNativeAdapter(options: PiAdapterOptions): NativeHarnessA
         // attach rejects, so the error message is the only channel that
         // survives — and it becomes the `attach_failed` receipt's detail, which
         // is where a user looks.
-        throw new Error(
+        throw new NativeAttachmentError(
           "Pi runs Ticket Sessions only, and this Session has no ticket to brief it with.",
+          "PI_CONFIGURATION_INVALID",
+          "configuration_invalid",
         );
       }
-      const binding = new PiBinding({ spec, sink, context, now });
-      binding.bind(await runtime.startTicketSession(binding.ticketSpec()));
+      const binding = new PiBinding({ spec, sink, context, recovery, now });
+      try {
+        binding.bind(await runtime.startTicketSession(binding.ticketSpec()));
+      } catch (error) {
+        throw new NativeAttachmentError(
+          errorMessage(error),
+          recovery === undefined ? "PI_CONFIGURATION_INVALID" : "PI_RECOVERY_FAILED",
+          recovery === undefined ? "configuration_invalid" : "adapter_unrecoverable",
+        );
+      }
       return binding;
     },
   };
@@ -274,6 +335,7 @@ interface PiBindingOptions {
   spec: NativeAttachmentSpec;
   sink: ObservationSink;
   context: PiTicketContext;
+  recovery: RuntimeRecoveryRef | undefined;
   now: () => number;
 }
 
@@ -281,6 +343,7 @@ class PiBinding implements BindingHandle {
   readonly #spec: NativeAttachmentSpec;
   readonly #sink: ObservationSink;
   readonly #context: PiTicketContext;
+  readonly #recovery: RuntimeRecoveryRef | undefined;
   readonly #now: () => number;
   readonly #abort = new AbortController();
   readonly #threadId: string;
@@ -292,7 +355,7 @@ class PiBinding implements BindingHandle {
   #activityOverlays = new Map<string, StreamingActivity>();
   /** Turns that closed before every transient activity removal reached the Session. */
   #closedActivityTurns = new Set<string>();
-  /** Assistant messages already opened in the current turn; the message id's last segment. */
+  /** Assistant overlays already opened in the current turn; the id's last segment. */
   #messageSequence = 0;
   /** Transient and synthetic observations carry no native identity, so a counter is the whole of it. */
   #sequence = 0;
@@ -301,6 +364,7 @@ class PiBinding implements BindingHandle {
     this.#spec = options.spec;
     this.#sink = options.sink;
     this.#context = options.context;
+    this.#recovery = options.recovery;
     this.#now = options.now;
     this.#threadId = options.context.rootThreadId;
     this.#branchId = piMainBranchId(options.spec.sessionId);
@@ -328,6 +392,7 @@ class PiBinding implements BindingHandle {
       authority: { mode: "auto" },
       brief: { text: this.#context.brief },
       tools: { tools: [...PI_TOOLS.tools] },
+      ...(this.#recovery === undefined ? {} : { recovery: this.#recovery }),
       signal: this.#abort.signal,
       observer: (observation) => this.#translate(observation),
     };
@@ -373,6 +438,15 @@ class PiBinding implements BindingHandle {
         } catch (error) {
           return this.#unknown(command.commandId, error);
         }
+      case "executor.retry":
+        try {
+          const outcome = await handle.retry(command.commandId);
+          return outcome.kind === "delivered"
+            ? this.#accepted(command.commandId)
+            : this.#rejected(command.commandId, REJECTION_CODES[outcome.reason], outcome.message);
+        } catch (error) {
+          return this.#unknown(command.commandId, error);
+        }
       case "interaction.resolve":
         return this.#rejected(
           command.commandId,
@@ -382,13 +456,25 @@ class PiBinding implements BindingHandle {
     }
   }
 
-  /**
-   * Nothing to replay. Pi's history lives in a JSONL sidecar this slice writes
-   * and never reads back, so the honest reconciliation is the empty one that
-   * leaves the caller's cursor exactly where it was; Session 4 owns reopening.
-   */
   async reconcile(cursor: Parameters<BindingHandle["reconcile"]>[0]): Promise<Reconciliation> {
-    return { cursor, observations: [], receipts: [] };
+    const handle = this.#handle;
+    if (handle === null || this.#released) {
+      return { cursor, observations: [], receipts: [] };
+    }
+    const entryId = recoveryEntryId(cursor);
+    const replay = await handle.reconcile(entryId);
+    return {
+      cursor: replay.cursor === null ? cursor : { entryId: replay.cursor },
+      observations: replay.observations.flatMap((observation) =>
+        this.#durableObservations(observation),
+      ),
+      receipts: (replay.receipts ?? []).map(({ commandId, acceptedAt }) => ({
+        commandId,
+        status: "accepted",
+        acceptedAt,
+        native: this.#native,
+      })),
+    };
   }
 
   /**
@@ -420,8 +506,15 @@ class PiBinding implements BindingHandle {
         "There was no text in this message to send.",
       );
     }
+    if (command.delivery === "replace") {
+      return this.#rejected(
+        command.commandId,
+        "PI_REPLACE_UNSUPPORTED",
+        "Pi does not support replacing the active turn.",
+      );
+    }
     try {
-      const outcome = await handle.submitUserMessage(text);
+      const outcome = await handle.submitUserMessage(text, command.delivery, command.commandId);
       return outcome.kind === "delivered"
         ? this.#accepted(command.commandId)
         : this.#rejected(command.commandId, REJECTION_CODES[outcome.reason], outcome.message);
@@ -495,12 +588,7 @@ class PiBinding implements BindingHandle {
       await this.#retryClosedActivityWithdrawals();
       this.#messageSequence = 0;
       this.#streaming = null;
-      await this.#emit({
-        id: `pi:turn:${observation.turnId}:started`,
-        kind: "turn.started",
-        occurredAt: this.#now(),
-        turnId: observation.turnId,
-      });
+      await this.#emit(this.#turnObservation(observation));
       return;
     }
     // An interrupted turn is a closed turn. What made it stop is already said —
@@ -510,12 +598,7 @@ class PiBinding implements BindingHandle {
     this.#closedActivityTurns.add(observation.turnId);
     await this.#withdrawStreaming();
     await this.#retryClosedActivityWithdrawals();
-    await this.#emit({
-      id: `pi:turn:${observation.turnId}:completed`,
-      kind: "turn.completed",
-      occurredAt: this.#now(),
-      turnId: observation.turnId,
-    });
+    await this.#emit(this.#turnObservation(observation));
   }
 
   /**
@@ -553,34 +636,22 @@ class PiBinding implements BindingHandle {
   async #translateSettled(
     observation: Extract<RuntimeObservation, { kind: "message-settled" }>,
   ): Promise<void> {
-    const messageId = this.#streaming?.id ?? this.#openMessage(observation.turnId);
+    const streamingId = this.#streaming?.id;
     this.#streaming = null;
-    const parts = settledParts(observation.message);
-    if (parts.length === 0) {
+    const settled = this.#settledObservation(observation);
+    if (settled === null) {
       // Nothing durable to settle into — a tool-only assistant turn. The
       // transient claim still has to be withdrawn explicitly or it outlives the
       // message it stood for.
-      await this.#emitDelta(messageId, { op: "message.remove" });
+      if (streamingId !== undefined) {
+        await this.#emitDelta(streamingId, { op: "message.remove" });
+      }
       return;
     }
-    await this.#emit({
-      id: `pi:message:${observation.message.entryId}`,
-      kind: "transcript.message",
-      occurredAt: this.#now(),
-      // The only observation that moves the reconcile cursor, and Pi's entry id
-      // is exactly what a later resume deduplicates against.
-      cursor: { entryId: observation.message.entryId },
-      threadId: this.#threadId,
-      branchId: this.#branchId,
-      attemptId: `attempt:${messageId}`,
-      turnId: observation.turnId,
-      message: {
-        id: messageId,
-        role: "assistant",
-        parts,
-        ...messageMetadata(observation.message),
-      },
-    });
+    if (streamingId !== undefined && streamingId !== settled.message.id) {
+      await this.#emitDelta(streamingId, { op: "message.remove" });
+    }
+    await this.#emit(settled);
   }
 
   /**
@@ -607,10 +678,84 @@ class PiBinding implements BindingHandle {
       return;
     }
 
-    await this.#emit({
+    await this.#emit(this.#activityObservation(observation));
+    this.#activityOverlays.delete(messageId);
+  }
+
+  #translateAttention(observation: AttentionObservation): Promise<void> {
+    return this.#emit(this.#attentionObservation(observation));
+  }
+
+  #durableObservations(observation: RuntimeObservation): HarnessObservation[] {
+    switch (observation.kind) {
+      case "turn":
+        return [this.#turnObservation(observation)];
+      case "message-settled": {
+        const settled = this.#settledObservation(observation);
+        return settled === null ? [] : [settled];
+      }
+      case "activity":
+        return observation.state === "started" || observation.state === "progress"
+          ? []
+          : [this.#activityObservation(observation)];
+      case "attention":
+        return [this.#attentionObservation(observation)];
+      case "attachment":
+      case "delta":
+        return [];
+    }
+  }
+
+  #turnObservation(
+    observation: Extract<RuntimeObservation, { kind: "turn" }>,
+  ): Extract<HarnessObservation, { kind: "turn.started" | "turn.completed" | "turn.interrupted" }> {
+    return {
+      id: `pi:turn:${observation.turnId}:${observation.state}`,
+      kind:
+        observation.state === "started"
+          ? "turn.started"
+          : observation.state === "interrupted"
+            ? "turn.interrupted"
+            : "turn.completed",
+      occurredAt: observation.occurredAt ?? this.#now(),
+      ...recoveryCursor(observation.recoveryCursor),
+      turnId: observation.turnId,
+    };
+  }
+
+  #settledObservation(
+    observation: Extract<RuntimeObservation, { kind: "message-settled" }>,
+  ): Extract<HarnessObservation, { kind: "transcript.message" }> | null {
+    const parts = settledParts(observation.message);
+    if (parts.length === 0) return null;
+    const messageId = `pi:${this.#spec.attachmentId}:entry:${observation.message.entryId}`;
+    return {
+      id: `pi:message:${observation.message.entryId}`,
+      kind: "transcript.message",
+      occurredAt: observation.occurredAt ?? this.#now(),
+      ...recoveryCursor(observation.recoveryCursor),
+      threadId: this.#threadId,
+      branchId: this.#branchId,
+      attemptId: `attempt:${messageId}`,
+      turnId: observation.turnId,
+      message: {
+        id: messageId,
+        role: "assistant",
+        parts,
+        ...messageMetadata(observation.message),
+      },
+    };
+  }
+
+  #activityObservation(
+    observation: RuntimeActivityObservation,
+  ): Extract<HarnessObservation, { kind: "transcript.message" }> {
+    const messageId = this.#activityMessageId(observation.turnId, observation.activityId);
+    return {
       id: `pi:activity:${this.#spec.attachmentId}:${observation.turnId}:${observation.activityId}:${observation.state}`,
       kind: "transcript.message",
-      occurredAt: this.#now(),
+      occurredAt: observation.occurredAt ?? this.#now(),
+      ...recoveryCursor(observation.recoveryCursor),
       threadId: this.#threadId,
       branchId: this.#branchId,
       attemptId: `attempt:${messageId}`,
@@ -620,33 +765,35 @@ class PiBinding implements BindingHandle {
         role: "assistant",
         parts: [activityPart(observation)],
       },
-    });
-    this.#activityOverlays.delete(messageId);
+    };
   }
 
-  #translateAttention(observation: AttentionObservation): Promise<void> {
-    // Keyed by reason so a clear cancels the raise it belongs to; the runtime
-    // names no id of its own, and the reason is the whole of what it can name.
+  #attentionObservation(
+    observation: AttentionObservation,
+  ): Extract<HarnessObservation, { kind: "attention.raised" | "attention.cleared" }> {
     const attentionId = `pi:attention:${this.#spec.attachmentId}:${observation.reason}`;
+    const eventIdentity = observation.recoveryCursor ?? `live:${++this.#sequence}`;
     if (observation.state === "cleared") {
-      return this.#emit({
-        id: `${attentionId}:cleared:${++this.#sequence}`,
+      return {
+        id: `${attentionId}:cleared:${eventIdentity}`,
         kind: "attention.cleared",
-        occurredAt: this.#now(),
+        occurredAt: observation.occurredAt ?? this.#now(),
+        ...recoveryCursor(observation.recoveryCursor),
         attentionId,
-      });
+      };
     }
-    return this.#emit({
-      id: `${attentionId}:raised:${++this.#sequence}`,
+    return {
+      id: `${attentionId}:raised:${eventIdentity}`,
       kind: "attention.raised",
-      occurredAt: this.#now(),
+      occurredAt: observation.occurredAt ?? this.#now(),
+      ...recoveryCursor(observation.recoveryCursor),
       attention: {
         id: attentionId,
         kind: ATTENTION_KINDS[observation.reason],
         detail: observation.message,
         diagnostic: null,
       },
-    });
+    };
   }
 
   /** Retire an in-flight message nothing is going to finish. */

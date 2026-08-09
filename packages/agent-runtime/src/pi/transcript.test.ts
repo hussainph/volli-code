@@ -58,6 +58,7 @@ describe("attentionReasonFor", () => {
   it("maps every failure reason", () => {
     expect(attentionReasonFor({ reason: "auth", message: "" })).toBe("auth");
     expect(attentionReasonFor({ reason: "configuration", message: "" })).toBe("configuration");
+    expect(attentionReasonFor({ reason: "context", message: "" })).toBe("context");
     expect(attentionReasonFor({ reason: "model", message: "" })).toBe("runtime-failure");
     expect(attentionReasonFor({ reason: "aborted", message: "" })).toBe("runtime-failure");
     expect(attentionReasonFor({ reason: "unknown", message: "" })).toBe("runtime-failure");
@@ -71,6 +72,11 @@ describe("classifyDiagnostic", () => {
 
   it("treats everything else as a model failure", () => {
     expect(classifyDiagnostic("upstream connect timeout")).toBe("model");
+  });
+
+  it("recognises provider context-window failures", () => {
+    expect(classifyDiagnostic("maximum context length exceeded")).toBe("context");
+    expect(classifyDiagnostic("too many tokens for this context window")).toBe("context");
   });
 });
 

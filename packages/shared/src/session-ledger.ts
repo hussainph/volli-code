@@ -340,11 +340,15 @@ export type SessionAttention =
       kind: Exclude<SessionAttentionKind, "rate_limited" | "quota_exhausted">;
     });
 
+/** Immutable product input captured before the Agent Runtime first receives it. */
+export type SessionInput = { kind: "runtime-brief"; text: string };
+
 export type SessionEventPayload =
   | { kind: "command.recorded"; command: SessionCommand }
   | { kind: "session.created"; session: Session }
   | { kind: "session.archived" }
   | { kind: "session.retitled"; title: string | null }
+  | { kind: "session.input.recorded"; input: SessionInput }
   /** An adapter-neutral outcome signal; it is not a Ticket lifecycle event. */
   | { kind: "session.signaled"; signal: "done" | "blocked"; reason: string | null }
   | { kind: "attachment.opened"; attachment: SessionAttachment }
@@ -363,6 +367,7 @@ export type SessionEventPayload =
   | { kind: "run.completed"; attachmentId: string; runId: string }
   | { kind: "turn.started"; attachmentId: string; turnId: string }
   | { kind: "turn.completed"; attachmentId: string; turnId: string }
+  | { kind: "turn.interrupted"; attachmentId: string; turnId: string }
   | {
       kind: "transcript.referenced";
       attachmentId: string | null;
@@ -465,6 +470,11 @@ export type SessionObservation =
       turnId: string;
     })
   | (SessionObservationBase & {
+      kind: "turn.interrupted";
+      attachmentId: string;
+      turnId: string;
+    })
+  | (SessionObservationBase & {
       kind: "transcript.referenced";
       attachmentId: string | null;
       turnId: string | null;
@@ -535,6 +545,7 @@ export function observationPayload(observation: SessionObservation): SessionEven
       };
     case "turn.started":
     case "turn.completed":
+    case "turn.interrupted":
       return {
         kind: observation.kind,
         attachmentId: observation.attachmentId,
@@ -592,6 +603,8 @@ export type SessionCommandIntent =
   | { kind: "executor.stop"; attachmentId: string }
   /** A non-destructive adapter interrupt (for example terminal Esc); the attachment remains live. */
   | { kind: "executor.interrupt"; attachmentId: string }
+  /** Retry the last failed executor run without duplicating its submitted message. */
+  | { kind: "executor.retry"; attachmentId: string }
   | { kind: "message.submit"; reference: TranscriptReference }
   | {
       kind: "interaction.resolve";
@@ -636,6 +649,7 @@ export type CommandReceiptResult =
   | { kind: "executor.start.requested"; sessionId: string }
   | { kind: "executor.stop.requested"; sessionId: string }
   | { kind: "executor.interrupted"; sessionId: string }
+  | { kind: "executor.retried"; sessionId: string }
   | { kind: "message.submitted"; sessionId: string }
   | { kind: "interaction.resolved"; sessionId: string };
 
@@ -813,6 +827,7 @@ export function projectSession(
     if (
       event.payload.kind !== "command.recorded" &&
       event.payload.kind !== "command.receipt.recorded" &&
+      event.payload.kind !== "session.input.recorded" &&
       event.payload.kind !== "session.retitled"
     ) {
       lastActivityAt = event.occurredAt;
@@ -830,6 +845,8 @@ export function projectSession(
         break;
       case "session.retitled":
         title = event.payload.title;
+        break;
+      case "session.input.recorded":
         break;
       case "session.signaled":
         signal = {
@@ -942,6 +959,7 @@ export function projectSession(
         turnActive = true;
         break;
       case "turn.completed":
+      case "turn.interrupted":
         turnActive = false;
         break;
       // `session.created` carries the Session row as it was at birth — the
