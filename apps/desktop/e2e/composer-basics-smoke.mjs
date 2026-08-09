@@ -12,7 +12,7 @@
  *     markdown description editor (placeholder "Add description…");
  *   • a metadata chip row: Status ("Backlog"), Priority ("Medium"),
  *     Labels ("Labels"), and a Worktree toggle (role switch, default on);
- *   • a footer with a "Create more" switch, a "Choose agent" harness picker,
+ *   • a footer with a "Create more" switch, a "Terminal harness" picker,
  *     a secondary "Create" button, and the primary kickoff button
  *     (data-testid="composer-kickoff").
  *   • the dialog root carries data-testid="new-ticket-composer".

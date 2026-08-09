@@ -5,9 +5,9 @@
  * primary action. Its behaviour (per the ui/ticket-creation-fix spec):
  *   • accessible name starts with "Create & start" and carries the current
  *     harness label, e.g. "Create & start · Claude Code";
- *   • a neighboring "Choose agent" picker (visible label = active harness)
- *     opens a menu of Claude Code / Codex / OpenCode that switches the
- *     active harness;
+ *   • a neighboring "Terminal harness" picker (visible label = the active
+ *     one) opens a menu of Claude Code / Codex / OpenCode that switches which
+ *     TUI the booted terminal launches;
  *   • clicking it creates the ticket DIRECTLY in Doing (regardless of the Status
  *     chip), navigates into the ticket detail view, creates + focuses a terminal
  *     session tab, and AUTO-LAUNCHES the harness CLI inside that session's shell
@@ -244,7 +244,7 @@ async function main() {
     // === 2. Harness picker: choosing Codex launches the `codex` fake binary ===
     await attempt(
       2,
-      'Choose agent → "Codex": kickoff auto-launches the `codex` harness (probe records the codex fake binary)',
+      'Terminal harness → "Codex": kickoff auto-launches the `codex` harness (probe records the codex fake binary)',
       async () => {
         await resetProbe();
         await goToBoard(page);
@@ -253,8 +253,8 @@ async function main() {
           await closeAnyDialog(page);
           return { ok: false, detail: "composer / kickoff button missing (composer not built)" };
         }
-        // Pick Codex from the "Choose agent" caret menu.
-        await composer(page).getByRole("button", { name: "Choose agent" }).click();
+        // Pick Codex from the "Terminal harness" caret menu.
+        await composer(page).getByRole("button", { name: "Terminal harness" }).click();
         await sleep(200);
         await page.getByRole("menuitem", { name: "Codex", exact: true }).click();
         await sleep(200);
