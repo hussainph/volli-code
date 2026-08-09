@@ -5,9 +5,14 @@
  * them here rather than in each facade is what stops a second copy from quietly
  * naming a different runtime. The model rule is shared for the same reason: a
  * Session records the configured default as its own durable, observable event
- * before any attachment exists. Nothing here substitutes a model at attach time
- * — a Session that never recorded one is a Session whose model is a fact
- * nobody wrote down, and this is where it gets written.
+ * before any attachment exists.
+ *
+ * Which is the whole of what "substitute" is allowed to mean here. A Session
+ * born before the policy existed has its default written at attach — the
+ * project facade does exactly that — but it is written, as that Session's own
+ * `model.select`, ahead of the attachment and visible in its history. What none
+ * of this does is hand a model to a running attachment that the Session never
+ * recorded: a model nobody wrote down is not a model this runtime will use.
  */
 
 import type { SessionRuntime, SessionRuntimeCommandResult } from "@volli/session-engine";
