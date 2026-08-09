@@ -242,7 +242,7 @@ function snapshot(): SessionRuntimeSnapshot {
 function capabilitySnapshot(): CapabilitySnapshot {
   return {
     id: "capabilities-1",
-    adapterId: "opencode",
+    adapterId: "pi",
     attachmentId: "attachment-1",
     profileId: "native",
     revision: 1,
@@ -344,7 +344,7 @@ function runtimeFixture(): {
     },
     refreshCapabilities: async () => ({
       id: "capability-1",
-      adapterId: "opencode",
+      adapterId: "pi",
       attachmentId: "attachment-1",
       profileId: "native",
       revision: 1,

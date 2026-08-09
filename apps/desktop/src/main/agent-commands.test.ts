@@ -27,6 +27,7 @@ import { insertTicket } from "./db/tickets-repo";
 import { openTestDb, testProject, testSession, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import {
+  composeProjectBrief,
   createAgentCommandService as createAgentCommandServiceBase,
   type AgentCommandServiceOptions,
 } from "./agent-commands";
@@ -3170,5 +3171,21 @@ describe("doctor", () => {
     expect(response).toMatchObject({ ok: false, error: { code: "MUTATION_FAILED" } });
     if (response.ok) throw new Error("expected failure");
     expect(response.error.message).toContain("disk full");
+  });
+});
+
+describe("composeProjectBrief", () => {
+  it("names the ticketless Session, its project root, and the one CLI instruction", () => {
+    expect(composeProjectBrief({ project: { id: "project-1", path: "/code/volli" } }))
+      .toMatchInlineSnapshot(`
+        "This is a project-scoped chat Session with no Ticket. Your working directory is the project root at /code/volli.
+
+        Coordinate the board through the bundled \`volli\` CLI: run \`volli help\` for the full reference (and the volli skill, when installed, for norms)."
+      `);
+  });
+
+  it("is deterministic for one project", () => {
+    const project = { id: "project-1", path: "/code/volli" };
+    expect(composeProjectBrief({ project })).toBe(composeProjectBrief({ project }));
   });
 });

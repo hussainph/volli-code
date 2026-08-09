@@ -128,6 +128,19 @@ export function composeTicketBrief(input: {
   return `${orientation}Coordinate the board through the bundled \`volli\` CLI: run \`volli help\` for the full reference (and the volli skill, when installed, for norms).\n\n${ticketPrompt}${attachmentsSuffix}`;
 }
 
+/**
+ * The Project Brief: what an agent is told when the Session has no Ticket.
+ *
+ * A ticketless chat has no prose to hand over and no isolated checkout to name,
+ * so the brief says exactly that rather than leaving the agent to infer a
+ * missing Ticket from a brief that never mentions one. The `volli` sentence is
+ * the Ticket Brief's, verbatim: the board is reachable from here too, and two
+ * wordings of one instruction would read as two different rules.
+ */
+export function composeProjectBrief(input: { project: Pick<Project, "id" | "path"> }): string {
+  return `This is a project-scoped chat Session with no Ticket. Your working directory is the project root at ${input.project.path}.\n\nCoordinate the board through the bundled \`volli\` CLI: run \`volli help\` for the full reference (and the volli skill, when installed, for norms).`;
+}
+
 export interface AgentCommandServiceOptions {
   db: Database.Database;
   /** The app composition root's one durable Session Engine. */

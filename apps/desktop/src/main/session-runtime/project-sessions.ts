@@ -1,8 +1,29 @@
-import type { SessionRuntime } from "@volli/session-engine";
-import type { SessionStartResult } from "@volli/shared";
+/**
+ * Product-owned project Session commands: a chat with a project and no Ticket.
+ *
+ * The Role is the only thing that separates this from a Ticket Session. Both
+ * create durable identity first, both record a model policy before anything
+ * attaches, and both attach the one structured runtime — so everything they
+ * share lives in `structured-sessions.ts` and what remains here is the Role.
+ *
+ * `attach` carries one migration duty. Project Sessions predate the model
+ * policy this runtime requires, so a Session born before it has nothing
+ * recorded. Rather than substitute a model silently at attach time, the app
+ * default is recorded as this Session's own `model.select` — the same durable,
+ * observable event a Session created today writes at birth.
+ */
 
-const LEGACY_PROJECT_ADAPTER_ID = "opencode";
-const LEGACY_PROJECT_PROFILE_ID = "native";
+import type { ModelSelection, SessionStartResult } from "@volli/shared";
+
+import {
+  attachStructuredSession,
+  recordModelSelection,
+  requireDefaultModel,
+  StructuredSessionsError,
+  type StructuredSessionCommands,
+} from "./structured-sessions";
+
+const DEFAULT_MODEL_REQUIRED = "Choose a default model in Settings before starting a Session.";
 
 export interface ProjectSessionStartInput {
   operationId: string;
@@ -20,12 +41,18 @@ export interface ProjectSessions {
   attach(input: ProjectSessionAttachInput): Promise<SessionStartResult>;
 }
 
-export function createProjectSessions(options: {
-  runtime: Pick<SessionRuntime, "command">;
+export interface ProjectSessionsOptions {
+  runtime: StructuredSessionCommands;
+  readDefaultModel(): ModelSelection | null;
   readBornTicketless(sessionId: string): Promise<boolean>;
-}): ProjectSessions {
+  /** This Session's durable model policy, or `null` when it has never recorded one. */
+  readModelSelection(sessionId: string): Promise<ModelSelection | null>;
+}
+
+export function createProjectSessions(options: ProjectSessionsOptions): ProjectSessions {
   return {
     async start(input) {
+      const model = requireDefaultModel(options.readDefaultModel(), DEFAULT_MODEL_REQUIRED);
       const created = await options.runtime.command({
         commandId: `${input.operationId}:create`,
         command: {
@@ -35,39 +62,34 @@ export function createProjectSessions(options: {
           title: input.title,
         },
       });
-      return attachProjectSession(options.runtime, input.operationId, created.sessionId);
+      await recordModelSelection(options.runtime, {
+        commandId: `${input.operationId}:model`,
+        sessionId: created.sessionId,
+        model,
+      });
+      return attachStructuredSession(options.runtime, input.operationId, created.sessionId);
     },
     async attach(input) {
       if (!(await options.readBornTicketless(input.sessionId))) {
-        throw new Error("The requested Session is not a project Session");
+        throw new StructuredSessionsError(
+          "SESSION_NOT_PROJECT_SESSION",
+          "The requested Session is not a project Session",
+          input.sessionId,
+        );
       }
-      return attachProjectSession(options.runtime, input.operationId, input.sessionId);
+      if ((await options.readModelSelection(input.sessionId)) === null) {
+        const model = requireDefaultModel(
+          options.readDefaultModel(),
+          DEFAULT_MODEL_REQUIRED,
+          input.sessionId,
+        );
+        await recordModelSelection(options.runtime, {
+          commandId: `${input.operationId}:model`,
+          sessionId: input.sessionId,
+          model,
+        });
+      }
+      return attachStructuredSession(options.runtime, input.operationId, input.sessionId);
     },
-  };
-}
-
-async function attachProjectSession(
-  runtime: Pick<SessionRuntime, "command">,
-  operationId: string,
-  sessionId: string,
-): Promise<SessionStartResult> {
-  const attached = await runtime.command({
-    commandId: `${operationId}:start`,
-    sessionId,
-    command: {
-      kind: "adapter.attach",
-      adapterId: LEGACY_PROJECT_ADAPTER_ID,
-      profileId: LEGACY_PROJECT_PROFILE_ID,
-      continuity: "fresh",
-    },
-  });
-  return {
-    sessionId,
-    state:
-      attached.receipt?.status === "accepted" || attached.receipt?.status === "completed"
-        ? "ready"
-        : "needs-recovery",
-    receipt: attached.receipt,
-    throughSequence: attached.throughSequence,
   };
 }

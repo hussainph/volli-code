@@ -280,7 +280,7 @@ export class ScopedExecutionEnv implements TicketExecutionEnv {
     const target = resolve(this.cwd, path);
     if (!isInside(this.cwd, target)) {
       return err(
-        new FileError("permission_denied", "Path is outside the Ticket worktree.", target),
+        new FileError("permission_denied", "Path is outside the Session workspace.", target),
       );
     }
 
@@ -312,7 +312,7 @@ export class ScopedExecutionEnv implements TicketExecutionEnv {
       if (!isInside(this.cwd, canonical)) {
         return executionError(
           "spawn_error",
-          "Command working directory is outside the Ticket worktree.",
+          "Command working directory is outside the Session workspace.",
         );
       }
       return { ok: true, value: canonical };
