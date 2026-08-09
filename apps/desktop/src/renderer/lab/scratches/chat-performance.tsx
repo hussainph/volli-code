@@ -656,7 +656,7 @@ const DIFF = `@@ -12,7 +12,9 @@ export function projectSession(frames: readonly 
 const GREP_OUTPUT = [
   "packages/session-engine/src/projection.ts:41:export function projectSession(",
   "packages/session-engine/src/projection.ts:88:  const cache = new WeakMap<Frame, UIMessage>();",
-  "packages/opencode-adapter/src/stream.ts:132:  return projectSession(frames);",
+  "packages/agent-runtime/src/stream.ts:132:  return projectSession(frames);",
   "apps/desktop/src/renderer/lab/chat/session-controller.ts:214:  projectSession(batch);",
   "apps/desktop/src/renderer/lab/chat/message-projection.ts:19:import { projectSession }",
 ].join("\n");

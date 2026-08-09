@@ -6,71 +6,64 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   isExecutable,
-  resolveOpenCodeBinary,
+  locateBinary,
   verifiedPath,
-  type OpenCodeBinaryResolverDeps,
-} from "./opencode-binary";
+  type BinaryResolverDeps,
+} from "./binary-location";
 
-function deps(overrides: Partial<OpenCodeBinaryResolverDeps> = {}): OpenCodeBinaryResolverDeps {
+function deps(overrides: Partial<BinaryResolverDeps> = {}): BinaryResolverDeps {
   return {
     loginShellPath: async () => "/opt/homebrew/bin:/usr/bin:/bin",
-    resolveOnPath: async () => "/opt/homebrew/bin/opencode",
+    resolveOnPath: async () => "/opt/homebrew/bin/codex",
     isExecutable: async () => true,
     realpath: async (path) => path,
     ...overrides,
   };
 }
 
-describe("resolveOpenCodeBinary", () => {
-  it("walks a bare name down the login-shell PATH and returns the canonical executable", async () => {
+describe("locateBinary", () => {
+  it("walks a bare name down the login-shell PATH", async () => {
     const resolveOnPath = vi.fn(async (pathValue: string, command: string) => {
       expect(pathValue).toBe("/opt/homebrew/bin:/usr/bin:/bin");
-      expect(command).toBe("opencode");
-      return "/opt/homebrew/bin/opencode";
-    });
-    const realpath = vi.fn(async (path: string) => {
-      expect(path).toBe("/opt/homebrew/bin/opencode");
-      return "/opt/homebrew/Cellar/opencode/1.0/bin/opencode";
+      expect(command).toBe("codex");
+      return "/opt/homebrew/bin/codex";
     });
 
-    await expect(
-      resolveOpenCodeBinary("opencode", deps({ resolveOnPath, realpath })),
-    ).resolves.toBe("/opt/homebrew/Cellar/opencode/1.0/bin/opencode");
-
+    await expect(locateBinary("codex", deps({ resolveOnPath }))).resolves.toEqual({
+      ok: true,
+      path: "/opt/homebrew/bin/codex",
+    });
     expect(resolveOnPath).toHaveBeenCalledOnce();
-    expect(realpath).toHaveBeenCalledOnce();
   });
 
   it("reports a login shell that could not answer", async () => {
     await expect(
-      resolveOpenCodeBinary("opencode", deps({ loginShellPath: async () => null })),
-    ).rejects.toThrow("Could not read the login-shell PATH to find OpenCode");
+      locateBinary("codex", deps({ loginShellPath: async () => null })),
+    ).resolves.toEqual({ ok: false, reason: "path-unreadable" });
   });
 
   it("reports a bare command that is on no PATH entry", async () => {
-    await expect(
-      resolveOpenCodeBinary("opencode", deps({ resolveOnPath: async () => null })),
-    ).rejects.toThrow("OpenCode executable opencode was not found on the login-shell PATH");
+    await expect(locateBinary("codex", deps({ resolveOnPath: async () => null }))).resolves.toEqual(
+      {
+        ok: false,
+        reason: "not-on-path",
+      },
+    );
   });
 
-  it("canonicalizes a configured path instead of walking PATH with it", async () => {
+  it("takes an absolute path at its word instead of walking PATH with it", async () => {
     const loginShellPath = vi.fn(async () => "/opt/homebrew/bin:/usr/bin:/bin");
-    const resolveOnPath = vi.fn(async () => "/usr/bin/opt/custom/opencode");
+    const resolveOnPath = vi.fn(async () => "/usr/bin/opt/custom/codex");
     const isExecutableSpy = vi.fn(async () => true);
 
     await expect(
-      resolveOpenCodeBinary(
-        "/opt/custom/opencode",
-        deps({
-          loginShellPath,
-          resolveOnPath,
-          isExecutable: isExecutableSpy,
-          realpath: async () => "/opt/custom/opencode-1.0",
-        }),
+      locateBinary(
+        "/opt/custom/codex",
+        deps({ loginShellPath, resolveOnPath, isExecutable: isExecutableSpy }),
       ),
-    ).resolves.toBe("/opt/custom/opencode-1.0");
+    ).resolves.toEqual({ ok: true, path: "/opt/custom/codex" });
 
-    expect(isExecutableSpy).toHaveBeenCalledWith("/opt/custom/opencode");
+    expect(isExecutableSpy).toHaveBeenCalledWith("/opt/custom/codex");
     expect(resolveOnPath).not.toHaveBeenCalled();
     expect(loginShellPath).not.toHaveBeenCalled();
   });
@@ -78,16 +71,11 @@ describe("resolveOpenCodeBinary", () => {
   it("treats any value carrying a separator as a path", async () => {
     const resolveOnPath = vi.fn(async () => null);
 
-    await expect(resolveOpenCodeBinary("bin/opencode", deps({ resolveOnPath }))).resolves.toBe(
-      "bin/opencode",
-    );
+    await expect(locateBinary("bin/codex", deps({ resolveOnPath }))).resolves.toEqual({
+      ok: true,
+      path: "bin/codex",
+    });
     expect(resolveOnPath).not.toHaveBeenCalled();
-  });
-
-  it("rejects a configured path that is not executable", async () => {
-    await expect(
-      resolveOpenCodeBinary("/opt/custom/opencode", deps({ isExecutable: async () => false })),
-    ).rejects.toThrow("OpenCode executable /opt/custom/opencode is not an executable file");
   });
 });
 
@@ -108,7 +96,7 @@ describe("isExecutable", () => {
   });
 
   it("is false for a regular file with no execute bit", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "volli-opencode-binary-"));
+    const dir = await mkdtemp(join(tmpdir(), "volli-binary-location-"));
     const script = join(dir, "not-executable");
     await writeFile(script, "#!/bin/sh\necho hi\n", { mode: 0o644 });
     try {

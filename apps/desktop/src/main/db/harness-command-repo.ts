@@ -1,11 +1,16 @@
 /**
  * Per-harness binary override storage: one `app_state` row per harness, keyed
  * `volli:harness-command:<harnessId>` (#29's kv table). Stores the RAW value
- * the user typed, never a resolved path — resolution runs live, at attach
- * time, against whatever `opencode-binary.ts`'s `resolveOpenCodeBinary` finds
- * then, so a later PATH or filesystem change is honored without the user
- * re-entering anything. (`validateHarnessBinary`, in `harness-binary.ts`, is
- * the separate save-time check that refuses a candidate before it is stored.)
+ * the user typed, never a resolved path, so a later PATH or filesystem change
+ * is honored without the user re-entering anything. (`validateHarnessBinary`,
+ * in `harness-binary.ts`, is the separate save-time check that refuses a
+ * candidate before it is stored.)
+ *
+ * The structured OpenCode runtime was this override's only launch-time reader,
+ * and it is gone: today nothing between here and a spawn consults these rows —
+ * the terminal companion's wrapper resolves its binary off the login-shell
+ * PATH. The storage stays because the choice of what a live override should
+ * drive is a product decision, not a cleanup.
  */
 import type Database from "better-sqlite3";
 import { deleteAppState, setAppState } from "./app-state-repo";

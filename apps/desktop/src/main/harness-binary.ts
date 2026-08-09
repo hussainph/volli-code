@@ -1,16 +1,15 @@
 /**
- * The harness-generic half of binary resolution: any harness's user-supplied
- * override, validated the same way `opencode-binary.ts`'s
- * `resolveOpenCodeBinary` treats OpenCode's own launch path, but reported as
- * a typed result instead of a throw. OpenCode-specific resolution (naming
- * "OpenCode" in its errors, throwing rather than returning) stays where it
- * is — this file holds only what every harness override shares.
+ * A user-supplied harness binary override, answered as a typed result.
+ *
+ * The search itself lives in `binary-location.ts` and is shared; what this file
+ * adds is the report a Settings row can draw — which refusal, and in words that
+ * name the command the user typed rather than throwing at them.
  */
 import { errorMessage } from "@volli/shared";
 import type { HarnessCommandFailureReason } from "@volli/shared";
 
-import { locateBinary, processDeps } from "./opencode-binary";
-import type { OpenCodeBinaryResolverDeps } from "./opencode-binary";
+import { locateBinary, processDeps } from "./binary-location";
+import type { BinaryResolverDeps } from "./binary-location";
 
 /** Outcome of {@link validateHarnessBinary}. */
 export type HarnessBinaryValidation =
@@ -27,7 +26,7 @@ export type HarnessBinaryValidation =
  */
 export async function validateHarnessBinary(
   command: string,
-  deps: OpenCodeBinaryResolverDeps = processDeps,
+  deps: BinaryResolverDeps = processDeps,
 ): Promise<HarnessBinaryValidation> {
   const located = await locateBinary(command, deps);
   if (!located.ok) {

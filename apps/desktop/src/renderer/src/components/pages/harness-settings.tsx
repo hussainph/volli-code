@@ -20,11 +20,13 @@ import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 
 /**
- * The only harness whose binary Volli will store an override for. Exactly one
- * launch path reads the stored value — `main/index.ts`, which feeds it to
- * `resolveOpenCodeBinary` — so offering the control anywhere else would
- * persist a value no launch ever reads: a setting that appears to work and
- * does nothing.
+ * The only harness whose binary Volli will store an override for.
+ *
+ * The structured OpenCode runtime that read this value is gone, so today the
+ * stored override reaches no launch — the terminal companion's wrapper walks
+ * the login-shell PATH instead. Kept to one harness rather than widened while
+ * that is true: a control offered everywhere would be a setting that appears
+ * to work and does nothing, in as many places as there are harnesses.
  */
 const OVERRIDABLE_BINARY_HARNESS_ID = "opencode";
 

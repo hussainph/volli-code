@@ -18,6 +18,7 @@ import type { RpcDiagnosticEntry } from "@volli/session-rpc";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 
+import { LAB_SCENARIOS, LAB_SCENARIO_ADAPTER_ID } from "../../../lab-scenarios";
 import { SessionMessageList, type SessionMessageFrame } from "../session-message-list";
 import { createSessionRpcClient, type SessionRpcClient } from "../session-rpc-client";
 
@@ -497,21 +498,21 @@ export default function SessionTracerScratch() {
           type="button"
           disabled={!sessionId}
           onClick={() =>
-            void run("Attach OpenCode", (rpc, activeSessionId) =>
+            void run("Attach scenario", (rpc, activeSessionId) =>
               rpc.session.command.mutate({
                 commandId: nextCommandId(),
                 sessionId: activeSessionId,
                 command: {
                   kind: "adapter.attach",
-                  adapterId: "opencode",
-                  profileId: "native",
+                  adapterId: LAB_SCENARIO_ADAPTER_ID,
+                  profileId: LAB_SCENARIOS[0].id,
                   continuity: "fresh",
                 },
               }),
             )
           }
         >
-          Attach OpenCode
+          Attach scenario
         </Button>
       </section>
 

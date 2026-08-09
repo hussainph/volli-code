@@ -1,6 +1,6 @@
 # Volli Code — Agent Instructions
 
-Volli Code is a local-first macOS workspace for planning and running coding sessions, built with Electron, React, and TypeScript. The current app combines a Linear-style board, isolated ticket worktrees, durable local history, temporary OpenCode-backed structured chat, and embedded terminal harnesses. The product direction is one chat-first, Pi-backed Agent Runtime; external and bring-your-own TUI harnesses remain manual terminal companions, not structured execution surfaces.
+Volli Code is a local-first macOS workspace for planning and running coding sessions, built with Electron, React, and TypeScript. The current app combines a Linear-style board, isolated ticket worktrees, durable local history, Pi-backed structured chat, and embedded terminal harnesses. The product direction is one chat-first, Pi-backed Agent Runtime; external and bring-your-own TUI harnesses remain manual terminal companions, not structured execution surfaces.
 
 ## Required context
 
@@ -8,14 +8,13 @@ Use `CONTEXT.md` for canonical domain language and `docs/DESIGN.md` for the livi
 
 ## Structure
 
-- `apps/desktop/src/main/` — Electron main process: SQLite, temporary OpenCode hosting, node-pty, git/worktree execution, the `volli` CLI socket, and notifications. This is the only place Electron APIs run.
+- `apps/desktop/src/main/` — Electron main process: SQLite, Pi runtime hosting, node-pty, git/worktree execution, the `volli` CLI socket, and notifications. This is the only place Electron APIs run.
 - `apps/desktop/src/preload/` — the typed `contextBridge` API and the only bridge between renderer and main. Keep it thin and explicit.
 - `apps/desktop/src/renderer/` — React UI and Zustand stores. UI state is a projection of durable main-process state plus ephemeral view state. Do not import Node APIs.
 - `apps/desktop/scripts/` — Node build and development orchestration.
 - `packages/shared/` (`@volli/shared`) — pure, unit-tested domain code: models, ticket rules, event types, Session semantics, and branch/slug rules. Do not import Electron, Node, or DOM APIs.
 - `packages/session-engine/` (`@volli/session-engine`) — plain TypeScript Session commands, durable projections, temporary native-executor migration contracts, committed stream coordination, and AI SDK transcript vocabulary. It owns no transport or Node APIs.
 - `packages/session-rpc/` (`@volli/session-rpc`) — the thin tRPC edge for Session clients and sanitized diagnostics.
-- `packages/opencode-adapter/` (`@volli/opencode-adapter`) — the temporary Node-hosted OpenCode HTTP/SSE mapper and supervised loopback server. Do not add structured OpenCode features; it is removed after the Pi runtime proves its replacement.
 - `apps/desktop/src/renderer/lab/` — the UI lab (`pnpm lab`): browser-only scratches for trying interactions against real components and tokens with fixture data, before they become app features. Dev-server only, never built; it imports the app, never the reverse.
 
 App data lives under Electron's `userData` directory. The agent-facing `volli` CLI communicates with main over a Unix socket.
@@ -30,7 +29,7 @@ App data lives under Electron's `userData` directory. The agent-facing `volli` C
 - Retry transient transport failures without duplicating accepted work. Authentication, permissions, configuration, and quota failures require explicit user recovery.
 - Existing hooks and terminal markers are compatibility evidence for TUI adapters, not the canonical source of Session truth.
 - A Session starts with one root Agent Thread. Each Thread has at most one live Thread Binding; Conversation Branches and Generation Attempts preserve edits and regeneration without rewriting history.
-- Current OpenCode `adapterId` and profile fields are migration scaffolding, not product architecture. Terminals are explicit manual companions and never silent structured fallbacks.
+- `adapterId` and profile fields are executor-registry machinery, not product architecture: Pi is the one structured executor. Terminals are explicit manual companions and never silent structured fallbacks.
 
 ## Conventions
 

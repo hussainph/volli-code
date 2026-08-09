@@ -4,7 +4,7 @@
  * Everything on screen is the shipped component — the tab strip, the plane, the
  * composer, the cards. What the lab supplies is only what the app cannot: a
  * transport that is not Session IPC, and a scripted harness profile so a state
- * OpenCode raises when it feels like it can be put on screen on purpose.
+ * a live runtime raises when it feels like it can be put on screen on purpose.
  *
  * A scenario is an EXECUTOR, not a mode. It rides `createChatSession` as an
  * adapter/profile pair the runtime already validates, which is why nothing below
@@ -26,14 +26,14 @@ import { createChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
 
-import { LAB_SCENARIO_ADAPTER_ID } from "../../../lab-scenarios";
+import { LAB_SCENARIOS, LAB_SCENARIO_ADAPTER_ID } from "../../../lab-scenarios";
 import { LAB_SESSION_PROJECT_ID, LAB_SESSION_TICKET_ID } from "../../../lab-session-rpc-path";
 import { LabScenarioPicker } from "../chat/scenario-picker";
 import { LabModelAccessProvider } from "../model-access-client";
 import { createSessionRpcClient } from "../session-rpc-client";
 import { appApi, seedApp } from "../seed";
 
-export const title = "Ticket chat · OpenCode";
+export const title = "Ticket chat · scenarios";
 export const note = "The app's chat Session surface over the lab's HTTP edge";
 export const viewport = "window" as const;
 export const seed = seedApp;
@@ -50,14 +50,14 @@ export default function ChatSessionScratch() {
 /** Keeps the Session alive while Settings takes over the canvas. */
 function LabChatMain() {
   const settingsOpen = useUiStore((state) => state.settingsOpen);
-  const [scenario, setScenario] = React.useState<string | null>(null);
+  const [scenario, setScenario] = React.useState(LAB_SCENARIOS[0].id);
 
   return (
     <>
       <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden", settingsOpen && "hidden")}>
         {/* Keyed on the pick so a scenario gets a Session of its own rather than
             a second attachment on the last one's history. */}
-        <LabChatSession key={scenario ?? "live"} scenarioId={scenario} />
+        <LabChatSession key={scenario} scenarioId={scenario} />
       </div>
       {settingsOpen ? <SettingsPage initialCategoryKey="harness" /> : null}
       <LabScenarioPicker value={scenario} onChange={setScenario} />
@@ -65,7 +65,7 @@ function LabChatMain() {
   );
 }
 
-function LabChatSession({ scenarioId }: { scenarioId: string | null }) {
+function LabChatSession({ scenarioId }: { scenarioId: string }) {
   // One store per mount, over one client. The app's singleton reaches for
   // `window.api.sessionRpc`, which the lab does not have and must not fake: the
   // point of this surface is the real components, not a second transport.
@@ -164,10 +164,8 @@ function useLabChatStatus(store: LabChatStore, sessionId: string | null) {
   );
 }
 
-function labExecutor(scenarioId: string | null): { adapterId: string; profileId: string } {
-  return scenarioId === null
-    ? { adapterId: "opencode", profileId: "native" }
-    : { adapterId: LAB_SCENARIO_ADAPTER_ID, profileId: scenarioId };
+function labExecutor(scenarioId: string): { adapterId: string; profileId: string } {
+  return { adapterId: LAB_SCENARIO_ADAPTER_ID, profileId: scenarioId };
 }
 
 async function attachLabSession(

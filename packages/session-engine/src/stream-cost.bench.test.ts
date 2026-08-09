@@ -32,19 +32,15 @@ import {
  * purpose: `transcript.message` keeps its meaning and only the adapter's
  * emission cadence moved.
  *
- * The first test below feeds the observation mix the real adapter now
- * emits — verified against `packages/opencode-adapter/src/stream-cost.bench.test.ts`,
- * which measured it straight from the adapter: one `transcript.delta` reset,
- * 38 `part.append` deltas, one durable `transcript.message` settle (1 reset +
- * 38 appends = the same 39-frame shape). No adapter or timers here — this
- * probe only needs the engine's own side of that contract, built directly
- * against `@volli/session-engine`'s vocabulary (`session-engine` cannot import
- * `opencode-adapter` without a package cycle; the adapter-conformance half of
- * this contract already lives in
- * `apps/desktop/src/renderer/lab/chat/delta-frames.integration.test.ts`,
- * which drives the real adapter through the real runtime). This is what
- * settle-count persistence actually costs: one artifact write, one ledger
- * event, for the whole answer.
+ * The first test below feeds the observation mix a real adapter emits: one
+ * `transcript.delta` reset, 38 `part.append` deltas, one durable
+ * `transcript.message` settle (1 reset + 38 appends = the same 39-frame
+ * shape). The removed `@volli/opencode-adapter`'s own probe measured that mix
+ * straight from the adapter and is where these numbers came from. No adapter
+ * or timers here — this probe only needs the engine's own side of the
+ * contract, built directly against `@volli/session-engine`'s vocabulary. This
+ * is what settle-count persistence actually costs: one artifact write, one
+ * ledger event, for the whole answer.
  *
  * The second test keeps the old per-chunk feed this file used to run
  * exclusively, relabeled honestly: no adapter emits `transcript.message` once
@@ -53,14 +49,14 @@ import {
  * reading it correctly. That is a compatibility guarantee, not a cost this
  * probe still prices — so it asserts the folded outcome, not the bytes.
  *
- * The fixture is the same deterministic long answer
- * `opencode-adapter/src/stream-cost.bench.test.ts` uses (fixed prose + three
- * fenced code blocks, ~16-20KB), so the two probes describe the same answer.
+ * The fixture is the same deterministic long answer the removed adapter's
+ * probe used (fixed prose + three fenced code blocks, ~16-20KB), so today's
+ * numbers stay comparable to the baseline they were set against.
  */
 
 // ---------------------------------------------------------------------------
-// Deterministic long-answer fixture — identical generation to the
-// opencode-adapter probe, so the two baselines describe the same answer.
+// Deterministic long-answer fixture — identical generation to the removed
+// @volli/opencode-adapter probe, so the two baselines describe the same answer.
 // ---------------------------------------------------------------------------
 
 function fixtureProse(count: number, seed: string): string {
@@ -334,8 +330,8 @@ function settleObservation(fullText: string): HarnessObservation {
         ),
         toolPart(
           "call-read-2",
-          "packages/opencode-adapter/src/index.ts",
-          "STREAM_SNAPSHOT_DELAY_MS",
+          "packages/session-engine/src/projection.ts",
+          "STREAM_DELTA_DELAY_MS",
         ),
       ],
     },

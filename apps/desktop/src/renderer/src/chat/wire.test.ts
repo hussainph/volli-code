@@ -10,7 +10,7 @@
 import type { TranscriptDelta } from "@volli/session-engine";
 import { describe, expect, it } from "vite-plus/test";
 
-import { chatSessionFrame, chatSessionOverlay, rejectedReceipt, startFailure } from "./wire";
+import { chatSessionFrame, chatSessionOverlay, rejectedReceipt } from "./wire";
 
 /** The baseline every message's first delta is, keyed on one provider part. */
 function baseline(id: string, text: string): TranscriptDelta {
@@ -263,11 +263,5 @@ describe("rejectedReceipt", () => {
     expect(rejectedReceipt(null)).toBeNull();
     expect(rejectedReceipt({})).toBeNull();
     expect(rejectedReceipt({ receipt: "accepted" })).toBeNull();
-  });
-});
-
-describe("startFailure", () => {
-  it("names OpenCode and the detail in one sentence", () => {
-    expect(startFailure("socket hang up")).toBe("Could not start OpenCode: socket hang up");
   });
 });

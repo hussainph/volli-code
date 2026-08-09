@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { validateHarnessBinary } from "./harness-binary";
-import type { OpenCodeBinaryResolverDeps } from "./opencode-binary";
+import type { BinaryResolverDeps } from "./binary-location";
 
-function deps(overrides: Partial<OpenCodeBinaryResolverDeps> = {}): OpenCodeBinaryResolverDeps {
+function deps(overrides: Partial<BinaryResolverDeps> = {}): BinaryResolverDeps {
   return {
     loginShellPath: async () => "/opt/homebrew/bin:/usr/bin:/bin",
-    resolveOnPath: async () => "/opt/homebrew/bin/opencode",
+    resolveOnPath: async () => "/opt/homebrew/bin/codex",
     isExecutable: async () => true,
     realpath: async (path) => path,
     ...overrides,

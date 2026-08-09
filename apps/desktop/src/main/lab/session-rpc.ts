@@ -7,7 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { nodeHTTPRequestHandler } from "@trpc/server/adapters/node-http";
-import { createOpenCodeNativeAdapter, type OpenCodeNativeAdapter } from "@volli/opencode-adapter";
+import type { NativeHarnessAdapter } from "@volli/session-engine";
 import { createSessionRouter, RpcDiagnosticLog } from "@volli/session-rpc";
 import { createTicket } from "@volli/shared";
 
@@ -54,18 +54,6 @@ export async function createLabTaskWorkspace(parentDirectory: string): Promise<s
       `${JSON.stringify({ name: "volli-agent-lab", private: true, type: "module", scripts: { test: "node --test test/*.test.ts" } }, null, 2)}\n`,
       { mode: 0o600 },
     ),
-    // The approval gate is the one interaction the Lab could not reach. Left to
-    // the developer's own OpenCode config it never fired, so the card with Allow
-    // / Deny / Steer on it — the whole trust boundary of a chat-first Session —
-    // was only ever exercised against fixtures. Asking on `bash` puts a real
-    // permission in a real transcript on the way to running the task's own
-    // tests. Scoped to the disposable workspace, so it changes nothing else, and
-    // `edit` stays silent: a prompt per file would drown the thing being tested.
-    writeFile(
-      join(workspace, "opencode.json"),
-      `${JSON.stringify({ $schema: "https://opencode.ai/config.json", permission: { bash: "ask" } }, null, 2)}\n`,
-      { mode: 0o600 },
-    ),
     writeFile(
       join(workspace, "src/greeting.ts"),
       [
@@ -92,7 +80,7 @@ export async function createLabTaskWorkspace(parentDirectory: string): Promise<s
     ),
   ]);
   await execFileAsync("git", ["init", "--initial-branch=main"], { cwd: workspace });
-  await execFileAsync("git", ["add", "TASK.md", "package.json", "opencode.json", "src", "test"], {
+  await execFileAsync("git", ["add", "TASK.md", "package.json", "src", "test"], {
     cwd: workspace,
   });
   await execFileAsync(
@@ -114,14 +102,13 @@ export async function createLabTaskWorkspace(parentDirectory: string): Promise<s
 interface LabResources {
   readonly directory: string;
   readonly db: ReturnType<typeof openVolliDb>;
-  readonly adapter: OpenCodeNativeAdapter;
   readonly runtime: ReturnType<typeof createDesktopSessionRuntime>;
   readonly router: ReturnType<typeof createSessionRouter>;
   readonly diagnostics: RpcDiagnosticLog;
 }
 
 export interface LabSessionRpcServerOptions {
-  createAdapter?: () => OpenCodeNativeAdapter;
+  createAdapter?: () => NativeHarnessAdapter;
   now?: () => number;
   /** Injectable only so shutdown semantics can be verified without ending Node. */
   exitLifecycle?: LabProcessExitLifecycle;
@@ -143,7 +130,7 @@ const processExitLifecycle: LabProcessExitLifecycle = {
  * owns a disposable DB/artifact directory for exactly one Vite server.
  */
 export class LabSessionRpcServer {
-  readonly #createAdapter: () => OpenCodeNativeAdapter;
+  readonly #createAdapter: () => NativeHarnessAdapter;
   readonly #now: () => number;
   readonly #exitLifecycle: LabProcessExitLifecycle;
   readonly #onProcessExit = () => this.emergencyClose();
@@ -151,13 +138,13 @@ export class LabSessionRpcServer {
   #close: Promise<void> | null = null;
   #directory: string | null = null;
   #db: ReturnType<typeof openVolliDb> | null = null;
-  #adapter: OpenCodeNativeAdapter | null = null;
   #runtime: ReturnType<typeof createDesktopSessionRuntime> | null = null;
   #emergencyClosed = false;
   #closed = false;
 
   constructor(options: LabSessionRpcServerOptions = {}) {
-    this.#createAdapter = options.createAdapter ?? (() => createOpenCodeNativeAdapter());
+    this.#createAdapter =
+      options.createAdapter ?? (() => createLabScenarioAdapter({ now: this.#now }));
     this.#now = options.now ?? Date.now;
     this.#exitLifecycle = options.exitLifecycle ?? processExitLifecycle;
     this.#exitLifecycle.add(this.#onProcessExit);
@@ -211,9 +198,9 @@ export class LabSessionRpcServer {
   }
 
   /**
-   * Process-exit handlers cannot await. Start teardown of the provider child,
-   * close the SQLite handle, and synchronously remove only this Lab's owned
-   * temporary directory. Normal shutdown remains the complete async path.
+   * Process-exit handlers cannot await. Start teardown of the runtime's live
+   * bindings, close the SQLite handle, and synchronously remove only this Lab's
+   * owned temporary directory. Normal shutdown remains the complete async path.
    */
   emergencyClose(): void {
     if (this.#emergencyClosed) return;
@@ -223,13 +210,6 @@ export class LabSessionRpcServer {
 
     if (this.#runtime) {
       void this.#runtime.close().catch(() => undefined);
-    }
-    if (this.#adapter) {
-      try {
-        void this.#adapter.close().catch(() => undefined);
-      } catch {
-        // A process is already exiting; retain the directory cleanup guarantee.
-      }
     }
     try {
       this.#db?.close();
@@ -258,12 +238,8 @@ export class LabSessionRpcServer {
     try {
       await resources.runtime.close();
     } finally {
-      try {
-        await resources.adapter.close();
-      } finally {
-        resources.db.close();
-        await rm(resources.directory, { recursive: true, force: true });
-      }
+      resources.db.close();
+      await rm(resources.directory, { recursive: true, force: true });
     }
   }
 
@@ -322,24 +298,21 @@ export class LabSessionRpcServer {
           baseBranch: "main",
         }),
       );
-      const adapter = this.#createAdapter();
-      this.#adapter = adapter;
       const transcriptDirectory = join(directory, "artifacts");
       await mkdir(transcriptDirectory, { recursive: true, mode: 0o700 });
-      // The scripted harness sits beside the real one rather than replacing it:
-      // a scenario is picked per Session, so both must be attachable from the
-      // same running lab. It spawns nothing and reads nothing.
+      // The scripted harness is the lab's only producer. It spawns nothing and
+      // reads nothing, so a scratch reaches a real permission, a real refusal
+      // and a real stream without a provider being in the mood to raise one.
       const runtime = createDesktopSessionRuntime({
         db,
         transcriptDirectory,
-        adapters: [adapter, createLabScenarioAdapter({ now: this.#now })],
+        adapters: [this.#createAdapter()],
         now: this.#now,
       });
       this.#runtime = runtime;
       return {
         directory,
         db,
-        adapter,
         runtime,
         router: createSessionRouter(),
         diagnostics: new RpcDiagnosticLog(),
@@ -349,7 +322,6 @@ export class LabSessionRpcServer {
       await rm(directory, { recursive: true, force: true });
       this.#directory = null;
       this.#db = null;
-      this.#adapter = null;
       this.#runtime = null;
       throw error;
     }

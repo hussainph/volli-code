@@ -112,10 +112,12 @@ export interface HarnessIpcDeps {
   now(): number;
   /**
    * Drops a live native adapter's cached verified binary for `harnessId`, so
-   * its NEXT resolution honors the override this call just stored or
-   * cleared instead of what an earlier probe verified. Optional: a db-failed
-   * boot never constructs a native adapter, and most harnesses resolve fresh
-   * on every launch and cache nothing this needs to drop.
+   * its NEXT resolution honors the override this call just stored or cleared
+   * instead of what an earlier probe verified. Optional, and currently
+   * supplied by nobody: every harness this host launches resolves fresh and
+   * caches nothing this needs to drop. It stays for the adapter that caches
+   * one, since the alternative is an override that only takes effect on the
+   * next relaunch.
    */
   invalidateNativeBinary?(harnessId: string): void;
 }
@@ -186,11 +188,11 @@ function channelStates(db: Database.Database, deps: HarnessIpcDeps): HarnessChan
  * launchable set is host state no pure predicate in `@volli/shared` can reach.
  * So the check lives here, and it is not decorative: `harness-command-repo.ts`
  * splices the value verbatim into an `app_state` key
- * (`volli:harness-command:<harnessId>`), and no launch path ever reads a key
- * for a harness it cannot launch. An unchecked id therefore buys a permanent
- * row nothing consults and, worse, a "saved" answer for a setting that changes
- * nothing — the failure the user cannot see because there is no failure, only
- * an override that silently never applies.
+ * (`volli:harness-command:<harnessId>`), which only a harness this host can
+ * launch has any business owning. An unchecked id therefore buys a permanent
+ * row nothing will ever consult — a "saved" answer the user cannot see is
+ * inert, because there is no failure to show, only an override that silently
+ * never applies.
  *
  * Both halves, in the order {@link channelStates} already uses them and for the
  * same reason: the four adapters Volli ships, plus whatever THIS launch
