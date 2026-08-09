@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { activeHarness, type HarnessListing } from "@renderer/components/pages/harness-catalog";
+import { activeHarness } from "@renderer/components/pages/harness-catalog";
 import {
   HarnessIdentitySection,
   HarnessSelector,
@@ -9,10 +9,12 @@ import {
 
 /**
  * The Harness Runtimes category: every harness this host can launch, and what
- * there is to configure about the selected one, app-wide.
+ * is true of the selected one, app-wide.
  *
  * Master-detail INSIDE the pane — see {@link HarnessSelector} for why the
- * selector sits above the detail rather than beside it.
+ * selector sits above the detail rather than beside it. The detail is the
+ * identity card and nothing else, so it is rendered here directly; a wrapper
+ * around one child was only ever describing a stack that no longer stacks.
  */
 export function HarnessSettings() {
   const listings = useHarnessListings();
@@ -22,16 +24,7 @@ export function HarnessSettings() {
   return (
     <div className="flex flex-col gap-3">
       <HarnessSelector listings={listings} activeId={active?.id ?? null} onSelect={setSelectedId} />
-      {active ? <HarnessDetail listing={active} /> : null}
-    </div>
-  );
-}
-
-/** The selected harness's pane: its identity card, plus whatever it alone can configure. */
-function HarnessDetail({ listing }: { listing: HarnessListing }) {
-  return (
-    <div className="flex flex-col gap-6">
-      <HarnessIdentitySection listing={listing} />
+      {active ? <HarnessIdentitySection listing={active} /> : null}
     </div>
   );
 }
