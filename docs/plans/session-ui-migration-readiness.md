@@ -1,9 +1,10 @@
 # Session UI migration readiness
 
-> **Runtime direction superseded 2026-08-08.** The landed-state evidence below
-> remains useful, but native adapter selection and OpenCode continuation are no
-> longer the target product architecture. See
-> [`pi-native-ticket-session.md`](pi-native-ticket-session.md).
+> **Runtime direction superseded since 2026-08-10.** The OpenCode runtime this
+> document plans continuation for was removed in Session 7; see
+> [`pi-native-ticket-session.md`](pi-native-ticket-session.md). The
+> landed-state evidence below remains useful, but native adapter selection and
+> OpenCode continuation are not the target product architecture.
 
 Sessions 1–5 are landed. Chat is part of the production Session UI, and a chat
 that has no ticket opens its own conversation from Sessions.

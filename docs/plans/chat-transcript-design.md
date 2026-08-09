@@ -1,9 +1,11 @@
 # Chat transcript design
 
-> **Partially superseded 2026-08-08.** Preserve the transcript, reasoning,
-> activity, interaction, and composer craft below where it earns its place.
-> OpenCode mappings, Build/Plan modes, and the permanent Plan/Subagent Session
-> rail do not migrate. See [`pi-native-ticket-session.md`](pi-native-ticket-session.md).
+> **Partially superseded since 2026-08-10.** The OpenCode adapter whose
+> mappings this document describes was removed in Session 7; see
+> [`pi-native-ticket-session.md`](pi-native-ticket-session.md). The transcript,
+> reasoning, activity, interaction and composer craft below still earn their
+> place; the OpenCode mappings, Build/Plan modes and the permanent
+> Plan/Subagent Session rail did not migrate.
 
 Decisions for the Session chat surface, made against the `labs/chat-ui` draft. Research inputs: OpenCode (TUI + web), T3 Code, Codex (CLI source + desktop), Cursor, Claude desktop. Design lenses: interface-craft, emil-design-eng, apple-design.
 

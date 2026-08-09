@@ -1,8 +1,10 @@
 # OpenCode surface audit
 
-> **Historical evidence as of 2026-08-08.** Do not implement the remaining
-> parity plan. Structured OpenCode execution is frozen pending replacement and
-> removal by [`pi-native-ticket-session.md`](pi-native-ticket-session.md).
+> **Historical evidence record since 2026-08-10.** The structured OpenCode
+> execution this document audits was removed in Session 7; see
+> [`pi-native-ticket-session.md`](pi-native-ticket-session.md). Do not
+> implement the remaining parity plan — nothing runs the surface it measures
+> against. The landed P0 work lives on in the Session UI.
 
 What OpenCode can do that our Session UI cannot show or answer, and the order to close it in.
 
