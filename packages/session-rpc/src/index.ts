@@ -1,10 +1,8 @@
 import { initTRPC, TRPCError, tracked } from "@trpc/server";
 import {
   isSessionStreamOverlay,
-  MAX_RUNTIME_PREFERENCE_MODELS,
   REASONING_LEVELS,
   type ModelAccessSnapshot,
-  type RuntimeCatalog,
   type SessionClientCommand,
   type SessionRuntime,
   type SessionRuntimeCommandResult,
@@ -86,7 +84,6 @@ export interface SessionRouterContext {
   attachTicketSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
   startProjectSession?: (input: ProjectSessionStartInput) => Promise<SessionStartResult>;
   attachProjectSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
-  resolveRuntimeCatalog?: (projectId?: string) => RuntimeCatalog | Promise<RuntimeCatalog>;
   diagnostics: RpcDiagnosticLog;
   transport?: "electron-ipc" | "lab-http" | "unknown";
 }
@@ -240,7 +237,6 @@ const sseCursor = z
   .refine((value) => Number.isSafeInteger(Number(value)), "Expected a safe non-negative integer");
 const nullableString = z.string().nullable();
 const uiMessageSchema = z.custom<RpcUiMessage>(isUiMessage, "Expected an AI SDK UIMessage");
-const runtimeModelRefSchema = z.object({ providerId: nonEmptyString, modelId: nonEmptyString });
 const modelSelectionSchema = z.object({
   providerId: nonEmptyString,
   modelId: nonEmptyString,
@@ -268,17 +264,6 @@ const modelAccessSnapshotSchema = z.object({
       reasoningLevels: z.array(z.enum(REASONING_LEVELS)),
     }),
   ),
-});
-const runtimeSelectionSchema = z.object({
-  providerId: z.string().max(MAX_IDENTIFIER_LENGTH),
-  modelId: z.string().max(MAX_IDENTIFIER_LENGTH),
-  variant: z.string().max(MAX_IDENTIFIER_LENGTH),
-  agent: z.string().max(MAX_IDENTIFIER_LENGTH),
-});
-const runtimePreferencesSchema = z.object({
-  version: z.literal(1),
-  enabledModels: z.array(runtimeModelRefSchema).max(MAX_RUNTIME_PREFERENCE_MODELS),
-  defaults: runtimeSelectionSchema,
 });
 /** One prompt's answer, as `SessionInteractionAnswer` declares it. */
 const interactionAnswerSchema = z.object({
@@ -504,77 +489,6 @@ export function createSessionRouter() {
           }
           await ctx.writeDefaultModelSelection(input);
           return input;
-        }),
-    }),
-    /**
-     * `projectId` says WHICH PROJECT is asking, and it decides two separate
-     * things at once. It picks the catalog INSTANCE — the host keeps one per
-     * project directory — so it decides which checkout gets probed for models;
-     * and it travels into the call as the SCOPE, so it decides whether the
-     * project's own stored preferences answer or the global ones do. Omitting it
-     * asks the host's fallback directory against the global record, which is
-     * what a Session with no project yet wants and what a project-scoped
-     * Settings screen never does.
-     *
-     * **Send `save` the same `projectId` the preceding `inspect` used.** A
-     * catalog persists models out of the discovery snapshot it is holding, and
-     * that snapshot belongs to the one instance that produced it — so a save
-     * routed to a different (or omitted) `projectId` reaches an instance that
-     * has discovered nothing and is refused, however recently the user
-     * inspected. This holds at BOTH scopes and for the same reason: a
-     * project-scoped inspect and save carrying the same `projectId` route
-     * through `resolveRuntimeCatalog` to the same instance, so the pairing is
-     * kept by sending the same id twice — and broken by sending it once.
-     * Nothing here can enforce it: the two are independent requests and
-     * `resolveRuntimeCatalog` is free to answer each with a different instance.
-     * A client that lets a form default one and drop the other earns a refusal
-     * whose message ("inspect before saving") describes a state the user cannot
-     * see they are in.
-     *
-     * `clear` pairs with nothing — it drops a project's override and requires no
-     * snapshot at all — so it takes a required `projectId` and may be sent on
-     * its own.
-     */
-    runtimeCatalog: t.router({
-      inspect: instrumentedProcedure
-        .input(
-          z.object({
-            projectId: nonEmptyString.optional(),
-            adapterId: nonEmptyString,
-            providerId: nonEmptyString.optional(),
-            query: z.string().max(200).optional(),
-            offset: nonNegativeSafeInteger.optional(),
-            limit: z.number().int().min(1).max(100).optional(),
-            refresh: z.boolean().optional(),
-          }),
-        )
-        .query(async ({ ctx, input }) => {
-          const catalog = await requireRuntimeCatalog(ctx, input.projectId);
-          return catalog.inspect(input);
-        }),
-      save: instrumentedProcedure
-        .input(
-          z.object({
-            projectId: nonEmptyString.optional(),
-            adapterId: nonEmptyString,
-            preferences: runtimePreferencesSchema,
-          }),
-        )
-        .mutation(async ({ ctx, input }) => {
-          const catalog = await requireRuntimeCatalog(ctx, input.projectId);
-          return catalog.save(input);
-        }),
-      clear: instrumentedProcedure
-        .input(z.object({ projectId: nonEmptyString, adapterId: nonEmptyString }))
-        .mutation(async ({ ctx, input }) => {
-          const catalog = await requireRuntimeCatalog(ctx, input.projectId);
-          await catalog.clear(input);
-        }),
-      resolve: instrumentedProcedure
-        .input(z.object({ projectId: nonEmptyString.optional(), adapterId: nonEmptyString }))
-        .query(async ({ ctx, input }) => {
-          const catalog = await requireRuntimeCatalog(ctx, input.projectId);
-          return catalog.resolve(input);
         }),
     }),
     session: t.router({
@@ -923,23 +837,6 @@ function rendererSnapshot(snapshot: SessionRuntimeSnapshot): {
     ...rendererProjection(snapshot),
     frames: snapshot.frames.map(rendererFrame),
   };
-}
-
-async function requireRuntimeCatalog(
-  context: SessionRouterContext,
-  projectId: string | undefined,
-): Promise<RuntimeCatalog> {
-  if (!context.resolveRuntimeCatalog) {
-    throw new Error("Runtime Catalog is unavailable on this transport");
-  }
-  try {
-    return await context.resolveRuntimeCatalog(projectId);
-  } catch (error) {
-    throw new TRPCError({
-      code: "NOT_FOUND",
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
 }
 
 function unavailable(message: string): never {

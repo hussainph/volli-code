@@ -165,7 +165,6 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/db/export.ts",
         "**/src/main/db/theme-repo.ts",
         "**/src/main/db/harness-command-repo.ts",
-        "**/src/main/runtime-catalog-hub.ts",
         "**/src/main/session-rpc-ipc.ts",
       ],
       // Global bar only — vitest applies global thresholds to every included

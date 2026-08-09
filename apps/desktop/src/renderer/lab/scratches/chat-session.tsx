@@ -29,7 +29,6 @@ import { useUiStore } from "@renderer/stores/ui";
 import { LAB_SCENARIO_ADAPTER_ID } from "../../../lab-scenarios";
 import { LAB_SESSION_PROJECT_ID, LAB_SESSION_TICKET_ID } from "../../../lab-session-rpc-path";
 import { LabScenarioPicker } from "../chat/scenario-picker";
-import { LabRuntimeCatalogProvider } from "../runtime-catalog-client";
 import { LabModelAccessProvider } from "../model-access-client";
 import { createSessionRpcClient } from "../session-rpc-client";
 import { appApi, seedApp } from "../seed";
@@ -43,9 +42,7 @@ export const api = appApi;
 export default function ChatSessionScratch() {
   return (
     <LabModelAccessProvider>
-      <LabRuntimeCatalogProvider>
-        <AppShell mainContent={<LabChatMain />} />
-      </LabRuntimeCatalogProvider>
+      <AppShell mainContent={<LabChatMain />} />
     </LabModelAccessProvider>
   );
 }

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import type {
   CancelInteractionRequest,
-  RuntimeCatalog,
   SessionRuntime,
   SessionRuntimeCommandRequest,
   SessionRuntimeSnapshot,
@@ -997,116 +996,6 @@ describe("Session tRPC router", () => {
     ).rejects.toThrow("Model Access preferences are unavailable");
   });
 
-  it("exposes bounded Runtime Catalog browsing and shortlist resolution to Lab clients", async () => {
-    const fixture = runtimeFixture();
-    const calls: string[] = [];
-    const resolverCalls: (string | undefined)[] = [];
-    const runtimeCatalog: RuntimeCatalog = {
-      // `projectId` reaches the catalog rather than being stripped at the edge:
-      // it is the SCOPE the stored preferences are read and written at, not just
-      // the key the host picks an instance with.
-      inspect: async (input) => {
-        calls.push(`inspect:${input.projectId ?? "global"}:${input.providerId ?? "overview"}`);
-        return {
-          adapterId: input.adapterId,
-          status: "available",
-          reason: null,
-          observedAt: 10,
-          runtimeVersion: "1.0.0",
-          providers: [],
-          models: [],
-          modelTotal: 0,
-          preferences: {
-            version: 1,
-            enabledModels: [],
-            defaults: { providerId: "", modelId: "", variant: "", agent: "" },
-          },
-          preferencesOrigin: input.projectId === undefined ? "global" : "project",
-        };
-      },
-      save: async (input) => {
-        calls.push(`save:${input.projectId ?? "global"}:${input.preferences.enabledModels.length}`);
-        return input.preferences;
-      },
-      clear: async (input) => {
-        calls.push(`clear:${input.projectId}:${input.adapterId}`);
-      },
-      resolve: async (input) => {
-        calls.push(`resolve:${input.projectId ?? "global"}:${input.adapterId}`);
-        return {
-          adapterId: input.adapterId,
-          observedAt: 10,
-          catalog: { providers: [], models: [], agents: [] },
-          selection: { providerId: "", modelId: "", variant: "", agent: "" },
-        };
-      },
-    };
-    const caller = createSessionRouter().createCaller({
-      runtime: fixture.runtime,
-      resolveRuntimeCatalog: (projectId) => {
-        resolverCalls.push(projectId);
-        return runtimeCatalog;
-      },
-      diagnostics: new RpcDiagnosticLog(),
-      transport: "lab-http",
-    });
-
-    await caller.runtimeCatalog.inspect({
-      adapterId: "opencode",
-      providerId: "openai",
-      projectId: "project-1",
-    });
-    await caller.runtimeCatalog.save({
-      adapterId: "opencode",
-      projectId: "project-1",
-      preferences: {
-        version: 1,
-        enabledModels: [{ providerId: "openai", modelId: "codex" }],
-        defaults: { providerId: "openai", modelId: "codex", variant: "high", agent: "build" },
-      },
-    });
-    await caller.runtimeCatalog.clear({ adapterId: "opencode", projectId: "project-1" });
-    await caller.runtimeCatalog.resolve({ adapterId: "opencode", projectId: "project-1" });
-    await caller.runtimeCatalog.resolve({ adapterId: "opencode" });
-
-    await expect(
-      caller.runtimeCatalog.save({
-        adapterId: "opencode",
-        preferences: {
-          version: 1,
-          enabledModels: Array.from({ length: 51 }, (_, index) => ({
-            providerId: "provider",
-            modelId: `model-${index}`,
-          })),
-          defaults: { providerId: "", modelId: "", variant: "", agent: "" },
-        },
-      }),
-    ).rejects.toThrow();
-
-    expect(calls).toEqual([
-      "inspect:project-1:openai",
-      "save:project-1:1",
-      "clear:project-1:opencode",
-      "resolve:project-1:opencode",
-      "resolve:global:opencode",
-    ]);
-    // Every verb advertises the scope it was asked at — `resolve` included, so
-    // a project's chat resolves that project's own curated models.
-    expect(resolverCalls).toEqual(["project-1", "project-1", "project-1", "project-1", undefined]);
-  });
-
-  it("rejects Runtime Catalog procedures on a transport that carries no catalog", async () => {
-    const fixture = runtimeFixture();
-    const caller = createSessionRouter().createCaller({
-      runtime: fixture.runtime,
-      diagnostics: new RpcDiagnosticLog(),
-    });
-
-    await expect(caller.runtimeCatalog.resolve({ adapterId: "opencode" })).rejects.toThrow(
-      "Runtime Catalog is unavailable on this transport",
-    );
-  });
-
   it("classifies unconfigured product facades as unavailable transport capabilities", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({
@@ -1145,75 +1034,6 @@ describe("Session tRPC router", () => {
     for (const call of calls) {
       await expect(call()).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
     }
-  });
-
-  it("wraps a Runtime Catalog resolver rejection as a not-found projectId", async () => {
-    const fixture = runtimeFixture();
-    const caller = createSessionRouter().createCaller({
-      runtime: fixture.runtime,
-      resolveRuntimeCatalog: () => {
-        throw new Error("Unknown project unknown-project");
-      },
-      diagnostics: new RpcDiagnosticLog(),
-      transport: "lab-http",
-    });
-
-    await expect(
-      caller.runtimeCatalog.inspect({ adapterId: "opencode", projectId: "unknown-project" }),
-    ).rejects.toMatchObject({ code: "NOT_FOUND", message: "Unknown project unknown-project" });
-  });
-
-  it("stringifies a non-Error Runtime Catalog resolver rejection", async () => {
-    const fixture = runtimeFixture();
-    const caller = createSessionRouter().createCaller({
-      runtime: fixture.runtime,
-      // eslint-disable-next-line @typescript-eslint/only-throw-error -- exercises the non-Error fallback
-      resolveRuntimeCatalog: () => {
-        throw "boom";
-      },
-      diagnostics: new RpcDiagnosticLog(),
-      transport: "lab-http",
-    });
-
-    await expect(caller.runtimeCatalog.resolve({ adapterId: "opencode" })).rejects.toMatchObject({
-      code: "NOT_FOUND",
-      message: "boom",
-    });
-  });
-
-  // A blank `projectId` is a malformed request, and routing one reports it as
-  // the wrong thing entirely: the hub finds no project by that id and the
-  // caller is told NOT_FOUND, which reads as "your project is gone" rather
-  // than "you sent an empty string". Every other identifier this router takes
-  // is `nonEmptyString`, including `projectId` on `session.create`.
-  it("refuses a blank Runtime Catalog projectId as bad input, never routing it", async () => {
-    const fixture = runtimeFixture();
-    const resolverCalls: (string | undefined)[] = [];
-    const caller = createSessionRouter().createCaller({
-      runtime: fixture.runtime,
-      resolveRuntimeCatalog: (projectId) => {
-        resolverCalls.push(projectId);
-        throw new Error("the resolver must not be reached for a malformed request");
-      },
-      diagnostics: new RpcDiagnosticLog(),
-      transport: "lab-http",
-    });
-
-    await expect(
-      caller.runtimeCatalog.inspect({ adapterId: "opencode", projectId: "" }),
-    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
-    await expect(
-      caller.runtimeCatalog.save({
-        adapterId: "opencode",
-        projectId: "  ",
-        preferences: {
-          version: 1,
-          enabledModels: [],
-          defaults: { providerId: "", modelId: "", variant: "", agent: "" },
-        },
-      }),
-    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
-    expect(resolverCalls).toEqual([]);
   });
 
   it("passes a structurally valid create command to the runtime without a session identifier", async () => {
