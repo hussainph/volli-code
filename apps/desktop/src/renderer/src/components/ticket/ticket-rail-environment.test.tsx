@@ -38,6 +38,7 @@ describe("TicketRail", () => {
         onActivateSession={noop}
         onActivateChat={noop}
         activeTabId="doc"
+        onOpenSource={noop}
       />,
     );
 

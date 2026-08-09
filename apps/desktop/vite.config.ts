@@ -114,6 +114,7 @@ export default defineConfig(({ mode }) => ({
         "src/components/ticket/activity.ts",
         "src/components/ticket/session-history.ts",
         "src/components/ticket/ticket-chat-tab.ts",
+        "src/components/ticket/ticket-environment-inspector-model.ts",
         "src/lib/project-shortcut.ts",
         "src/lib/new-ticket-shortcut.ts",
         "src/lib/relative-time.ts",

@@ -1062,6 +1062,7 @@ export function TicketDetail({
                     onPinFile={pinFileFromRail}
                   />
                 }
+                onOpenSource={previewFileFromRail}
               />
             </aside>
           )}

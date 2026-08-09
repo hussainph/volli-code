@@ -335,8 +335,8 @@ function SessionList({
 
 /**
  * The right rail's session content: a scrollable "Sessions" working set (a
- * direct Chat and Terminal controls, plus one row per
- * live session from the unified store) and a bottom-pinned History drawer (a
+ * direct Chat and Terminal controls, plus one row per live session from the
+ * unified store) and a bottom-pinned History drawer (a
  * `RailDrawer` sibling of Details) holding ended/closed durable records —
  * searchable past 4 entries — so the working set stays unlabeled and flat.
  * The durable list (`api.sessions.listForTicket`) is re-read whenever the live

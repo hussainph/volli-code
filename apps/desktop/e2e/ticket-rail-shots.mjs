@@ -48,6 +48,9 @@ try {
       projectId: project.id,
       status: "todo",
       title: "Icon-mode rail visual proof",
+      // Body refs are the Inspector's only Sources feed, and one deliberately
+      // long path proves the narrow-rail truncation in the shots below.
+      body: "Read @docs/plan.md, @src/a-very-long-inspector-reference-that-must-truncate.tsx, and @src/third.ts.",
       priority: "medium",
     });
     if (!created.ok) throw new Error(created.error);
@@ -88,6 +91,18 @@ try {
       return { ok: stat.size > 1000, detail: path };
     });
   }
+
+  // The Inspector is pinned above every mode, so the shots above already carry
+  // it. This one frames the element itself, where truncation and the Sources
+  // rows are actually legible.
+  await attempt("inspector", "screenshot rail-environment-inspector.png", async () => {
+    const inspector = aside.getByTestId("ticket-environment-inspector");
+    await waitUntil("inspector visible", async () => (await inspector.count()) === 1);
+    const path = join(SHOT_DIR, "rail-environment-inspector.png");
+    await inspector.screenshot({ path });
+    const stat = await fs.stat(path);
+    return { ok: stat.size > 1000, detail: path };
+  });
 
   await attempt("live", "screenshot rail-live-session.png", async () => {
     const sessionTab = page.getByRole("tab", { name: "Session 1", exact: true });

@@ -1,11 +1,13 @@
 /**
  * The "+" that starts a Session, wherever one is offered.
  *
- * One control and several mounts — a ticket's tab strip and its rail's Sessions
- * header, the project's scratch strip and that surface's empty state — because
- * two identically-drawn buttons 300px apart must not mean two different things.
- * A surface rarely gains a second Session, so the press the menu costs is almost
- * never paid; what it buys is that neither kind is the hidden one.
+ * One control and two mounts — the project's scratch strip and that surface's
+ * empty state — because two identically-drawn buttons 300px apart must not mean
+ * two different things. A surface rarely gains a second Session, so the press
+ * the menu costs is almost never paid; what it buys is that neither kind is the
+ * hidden one. The Ticket surfaces choose instead: they draw Chat and Terminal
+ * as direct controls, since a ticket's working set is the one place both kinds
+ * are reached often enough to earn the width.
  *
  * `label` is the one draw that differs: a strip's "+" is one control among tabs
  * that already name what exists, while an empty surface's is the only thing on

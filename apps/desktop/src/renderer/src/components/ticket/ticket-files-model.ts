@@ -46,20 +46,32 @@ function comparePath(a: string, b: string): number {
 }
 
 /**
- * Build the Files navigator's two sections from body text, attachments, and
- * worktree entries. Attachment paths win over body refs when both name the
- * same relPath (the attachment carries a richer label).
+ * The Ticket Body's `@file` references as navigator rows, deduped by path and
+ * path-sorted. Split out because the rail's Environment inspector needs exactly
+ * this list without an attachment feed or a worktree listing, and it must not
+ * re-derive what a body reference row is.
  */
-export function buildTicketFilesNavigator(input: TicketFilesNavigatorInput): TicketFilesNavigator {
+export function bodyFileRefRows(body: string): TicketFileRefRow[] {
   const byPath = new Map<string, TicketFileRefRow>();
-
-  for (const ref of parseFileRefs(input.body)) {
+  for (const ref of parseFileRefs(body)) {
     byPath.set(ref.path, {
       relPath: ref.path,
       label: baseNameOf(ref.path),
       source: "body",
     });
   }
+  return [...byPath.values()].toSorted((a, b) => comparePath(a.relPath, b.relPath));
+}
+
+/**
+ * Build the Files navigator's two sections from body text, attachments, and
+ * worktree entries. Attachment paths win over body refs when both name the
+ * same relPath (the attachment carries a richer label).
+ */
+export function buildTicketFilesNavigator(input: TicketFilesNavigatorInput): TicketFilesNavigator {
+  const byPath = new Map<string, TicketFileRefRow>(
+    bodyFileRefRows(input.body).map((row) => [row.relPath, row]),
+  );
 
   for (const file of attachmentsSectionInput(input.attachments).files) {
     byPath.set(file.relPath, {

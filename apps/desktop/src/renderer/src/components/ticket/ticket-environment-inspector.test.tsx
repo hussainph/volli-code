@@ -5,8 +5,6 @@ import type { ChangeSetSnapshot, Ticket } from "@volli/shared";
 import {
   TicketEnvironmentInspector,
   TicketEnvironmentInspectorContent,
-  readTicketEnvironmentChangeSet,
-  shouldRevalidateTicketEnvironment,
 } from "./ticket-environment-inspector";
 
 const ticket: Ticket = {
@@ -41,39 +39,13 @@ const changeSet: ChangeSetSnapshot = {
 };
 
 describe("TicketEnvironmentInspector", () => {
-  it("revalidates a consulted inspector without turning it into a live dashboard", () => {
-    expect(
-      shouldRevalidateTicketEnvironment({ lastReadAt: null, now: 10_000, loading: false }),
-    ).toBe(true);
-    expect(
-      shouldRevalidateTicketEnvironment({ lastReadAt: 8_000, now: 10_000, loading: false }),
-    ).toBe(false);
-    expect(shouldRevalidateTicketEnvironment({ lastReadAt: 0, now: 10_000, loading: true })).toBe(
-      false,
-    );
-    expect(shouldRevalidateTicketEnvironment({ lastReadAt: 0, now: 10_000, loading: false })).toBe(
-      true,
-    );
-  });
-
-  it("turns a failed Change Set read into a retryable success without retaining the failure", async () => {
-    const reads = [
-      async () => ({ ok: false as const, error: "offline" }),
-      async () => ({ ok: true as const, changeSet }),
-    ];
-    const first = await readTicketEnvironmentChangeSet(reads.shift()!);
-    const second = await readTicketEnvironmentChangeSet(reads.shift()!);
-
-    expect(first).toEqual({ error: "offline" });
-    expect(second).toEqual({ changeSet });
-  });
-
   it("pins existing Environment and Sources facts as deliberate rail navigation", () => {
     const html = renderToStaticMarkup(
       <TicketEnvironmentInspector
         ticket={ticket}
         changeSet={changeSet}
         onNavigate={() => undefined}
+        onOpenSource={() => undefined}
       />,
     );
 
@@ -85,10 +57,47 @@ describe("TicketEnvironmentInspector", () => {
     expect(html).toContain("inspector.tsx");
     expect(html).toContain('data-testid="ticket-environment-destination-changes"');
     expect(html).toContain('data-testid="ticket-environment-destination-properties"');
-    expect(html).toContain('data-testid="ticket-environment-destination-files"');
   });
 
-  it("renders a recoverable Change Set failure and keeps long Sources legible in every theme", () => {
+  it("gives each Sources row its own file, so a reference never resolves to the whole list", () => {
+    const html = renderToStaticMarkup(
+      <TicketEnvironmentInspectorContent
+        ticket={ticket}
+        changeSet={changeSet}
+        onNavigate={() => undefined}
+        onOpenSource={() => undefined}
+        onRetry={() => undefined}
+      />,
+    );
+
+    expect(html).toContain('data-rel-path="docs/plan.md"');
+    expect(html).toContain('data-rel-path="src/inspector.tsx"');
+    // "View all" is the only control that routes to the list, and only when
+    // rows are actually hidden — two rows fit, so it must be absent here.
+    expect(html).not.toContain("View all");
+    expect(html).not.toContain('data-testid="ticket-environment-destination-files"');
+  });
+
+  it("keeps the last good counts on screen when a re-read fails, and offers one recovery", () => {
+    const html = renderToStaticMarkup(
+      <TicketEnvironmentInspectorContent
+        ticket={ticket}
+        changeSet={changeSet}
+        changeSetError="offline"
+        onNavigate={() => undefined}
+        onOpenSource={() => undefined}
+        onRetry={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("3 files · +8 −2");
+    expect(html).toContain("Changes may be out of date: offline");
+    expect(html).not.toContain("Couldn’t load changes");
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("Retry");
+  });
+
+  it("renders a first-read failure once, and keeps long Sources legible in every theme", () => {
     const html = renderToStaticMarkup(
       <TicketEnvironmentInspectorContent
         ticket={{
@@ -97,13 +106,15 @@ describe("TicketEnvironmentInspector", () => {
         }}
         changeSetError="offline"
         onNavigate={() => undefined}
+        onOpenSource={() => undefined}
         onRetry={() => undefined}
       />,
     );
 
-    expect(html).toContain("Changes unavailable");
     expect(html).toContain('role="alert"');
     expect(html).toContain("Couldn’t load changes: offline");
+    // The failure is stated once: no counts row restating it in other words.
+    expect(html).not.toContain("Changes unavailable");
     expect(html).toContain('title="offline"');
     expect(html).toContain("Retry");
     expect(html).toContain("View all");
@@ -119,6 +130,7 @@ describe("TicketEnvironmentInspector", () => {
       <TicketEnvironmentInspectorContent
         ticket={{ ...ticket, body: "", worktreePath: null, branch: null, baseBranch: null }}
         onNavigate={() => undefined}
+        onOpenSource={() => undefined}
         onRetry={() => undefined}
       />,
     );

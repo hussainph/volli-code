@@ -5,45 +5,17 @@ import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
 import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
 import { GitPullRequestIcon } from "@phosphor-icons/react/dist/csr/GitPullRequest";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { type ChangeSetSnapshot, errorMessage, type Ticket } from "@volli/shared";
+import { type ChangeSetSnapshot, type Ticket } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
 import {
   buildTicketEnvironmentInspector,
+  hasChangeSetRow,
+  readTicketEnvironmentChangeSet,
+  shouldRevalidateTicketEnvironment,
   type TicketEnvironmentDestination,
   type TicketEnvironmentRow,
 } from "@renderer/components/ticket/ticket-environment-inspector-model";
-
-const INSPECTOR_REVALIDATE_AFTER_MS = 5_000;
-
-/** The rail re-reads only when a person returns to it, never as a second live watcher. */
-export function shouldRevalidateTicketEnvironment({
-  lastReadAt,
-  now,
-  loading,
-}: {
-  lastReadAt: number | null;
-  now: number;
-  loading: boolean;
-}): boolean {
-  return !loading && (lastReadAt === null || now - lastReadAt >= INSPECTOR_REVALIDATE_AFTER_MS);
-}
-
-type TicketEnvironmentChangeSetResult =
-  | { ok: true; changeSet: ChangeSetSnapshot }
-  | { ok: false; error: string };
-
-/** Pure read outcome: the Retry button and initial load share these exact semantics. */
-export async function readTicketEnvironmentChangeSet(
-  read: () => Promise<TicketEnvironmentChangeSetResult>,
-): Promise<{ changeSet: ChangeSetSnapshot } | { error: string }> {
-  try {
-    const result = await read();
-    return result.ok ? { changeSet: result.changeSet } : { error: result.error };
-  } catch (cause) {
-    return { error: errorMessage(cause) };
-  }
-}
 
 function EnvironmentIcon({ id }: { id: TicketEnvironmentRow["id"] }) {
   const Icon =
@@ -68,11 +40,14 @@ export function TicketEnvironmentInspector({
   ticket,
   changeSet,
   onNavigate,
+  onOpenSource,
 }: {
   ticket: Ticket;
   /** Optional fixture/static snapshot. Live use reads one snapshot on mount. */
   changeSet?: ChangeSetSnapshot;
   onNavigate(destination: TicketEnvironmentDestination): void;
+  /** Open one referenced file — a Sources row promises the file, not the list. */
+  onOpenSource(relPath: string): void;
 }) {
   const [loadedChangeSet, setLoadedChangeSet] = React.useState<ChangeSetSnapshot | undefined>(
     changeSet,
@@ -123,6 +98,7 @@ export function TicketEnvironmentInspector({
       changeSet={changeSet ?? loadedChangeSet}
       changeSetError={error ?? undefined}
       onNavigate={onNavigate}
+      onOpenSource={onOpenSource}
       onRetry={() => void refresh()}
       onConsult={revalidateOnConsult}
     />
@@ -139,6 +115,7 @@ export function TicketEnvironmentInspectorContent({
   changeSet,
   changeSetError,
   onNavigate,
+  onOpenSource,
   onRetry,
   onConsult,
 }: {
@@ -146,6 +123,7 @@ export function TicketEnvironmentInspectorContent({
   changeSet?: ChangeSetSnapshot;
   changeSetError?: string;
   onNavigate(destination: TicketEnvironmentDestination): void;
+  onOpenSource(relPath: string): void;
   /** Required because an exposed failure must always have a recovery path. */
   onRetry(): void;
   /** Entering the summary is the only passive freshness trigger. */
@@ -186,9 +164,15 @@ export function TicketEnvironmentInspectorContent({
             </button>
           ))}
           {changeSetError !== undefined ? (
-            <div role="alert" className="mt-1 flex items-center gap-2 text-xs text-destructive">
+            <div
+              role="alert"
+              data-testid="ticket-environment-change-set-error"
+              className="mt-1 flex items-center gap-2 text-xs text-destructive"
+            >
               <span title={changeSetError} className="min-w-0 flex-1 truncate">
-                Couldn’t load changes: {changeSetError}
+                {hasChangeSetRow(inspector)
+                  ? `Changes may be out of date: ${changeSetError}`
+                  : `Couldn’t load changes: ${changeSetError}`}
               </span>
               <Button type="button" size="xs" variant="ghost" onClick={onRetry}>
                 <ArrowClockwiseIcon weight="fill" />
@@ -208,9 +192,10 @@ export function TicketEnvironmentInspectorContent({
             <button
               key={source.relPath}
               type="button"
-              data-testid={`ticket-environment-destination-${source.destination}`}
+              data-testid="ticket-environment-source"
+              data-rel-path={source.relPath}
               title={source.relPath}
-              onClick={() => onNavigate(source.destination)}
+              onClick={() => onOpenSource(source.relPath)}
               className="-mx-1 flex min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left transition-colors hover:bg-accent motion-reduce:transition-none"
             >
               <FoldersIcon weight="fill" className="size-4 shrink-0 text-muted-foreground" />

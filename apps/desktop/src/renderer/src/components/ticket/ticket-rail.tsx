@@ -112,6 +112,7 @@ export function TicketRail({
   activeTabId,
   filesContent,
   changesContent,
+  onOpenSource,
 }: {
   projectId: string;
   ticket: Ticket;
@@ -135,6 +136,8 @@ export function TicketRail({
   filesContent?: React.ReactNode;
   /** Optional Changes navigator — same seam as `filesContent`. */
   changesContent?: React.ReactNode;
+  /** Preview one Body-referenced file, so an Inspector Sources row opens the file itself. */
+  onOpenSource(relPath: string): void;
 }) {
   const storedMode = useUiStore((state) => state.railMode);
   const setRailMode = useUiStore((state) => state.setRailMode);
@@ -157,7 +160,11 @@ export function TicketRail({
   return (
     <div className="flex min-h-0 flex-1" data-testid="ticket-rail">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <TicketEnvironmentInspector ticket={ticket} onNavigate={onSelectMode} />
+        <TicketEnvironmentInspector
+          ticket={ticket}
+          onNavigate={onSelectMode}
+          onOpenSource={onOpenSource}
+        />
         {mode === "sessions" ? (
           <TicketSessionsPanel
             ticketId={ticket.id}
