@@ -159,6 +159,7 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/harness-binary.ts",
         "**/src/main/harness-ipc.ts",
         "**/src/main/binary-location.ts",
+        "**/src/main/session-runtime/boot-recovery.ts",
         "**/src/main/window-theme.ts",
         "**/src/main/theme-ipc.ts",
         "**/src/main/theme-overlay.ts",

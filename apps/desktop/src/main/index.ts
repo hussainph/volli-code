@@ -39,6 +39,7 @@ import { getTicket } from "./db/tickets-repo";
 import { listAttachments } from "./db/attachments-repo";
 import { createDesktopSessionEngine } from "./session-control";
 import { createDesktopSessionRuntime } from "./session-runtime";
+import { closeStaleAttachments } from "./session-runtime/boot-recovery";
 import { createPiRuntimeHost, piRootThreadId } from "./session-runtime/pi-adapter";
 import { createTicketSessions } from "./session-runtime/ticket-sessions";
 import { createProjectSessions } from "./session-runtime/project-sessions";
@@ -512,46 +513,24 @@ app.whenReady().then(async () => {
           startProjectSession: projectSessions?.start,
           attachProjectSession: projectSessions?.attach,
         });
-  // Boot recovery: no PTY survives a relaunch. Close only stale local terminal
-  // attachments; the durable Session itself intentionally remains open.
+  // Boot recovery: no PTY and no OpenCode binding survives a relaunch. The
+  // durable Session itself intentionally remains open; only the binding ends.
   if (dbHandle.ok && sessionEngine !== null) {
     try {
-      for (const project of listProjects(dbHandle.db)) {
-        const sessions = await sessionEngine.listSessions({ projectId: project.id, scope: "all" });
-        for (const projection of sessions) {
-          for (const attachment of projection.attachments) {
-            if (
-              attachment.adapterId === "terminal" &&
-              attachment.venue.kind === "local" &&
-              attachment.status === "open"
-            ) {
-              try {
-                await sessionEngine.observe({
-                  id: randomUUID(),
-                  kind: "attachment.closed",
-                  sessionId: projection.session.id,
-                  attachmentId: attachment.id,
-                  occurredAt: Date.now(),
-                  provenance: {
-                    source: { kind: "system", id: "desktop-recovery", detail: null },
-                    venue: { id: "local", kind: "local" },
-                  },
-                  outcome: "interrupted",
-                });
-              } catch (error) {
-                // One malformed or concurrently-closed attachment must not
-                // leave every later stale terminal falsely open after relaunch.
-                console.error(
-                  `[volli] failed to recover attachment ${attachment.id}:`,
-                  errorMessage(error),
-                );
-              }
-            }
-          }
-        }
-      }
+      await closeStaleAttachments({
+        engine: sessionEngine,
+        projectIds: listProjects(dbHandle.db).map((project) => project.id),
+        newId: randomUUID,
+        now: Date.now,
+        onError: (attachmentId, error) => {
+          console.error(
+            `[volli] failed to recover attachment ${attachmentId}:`,
+            errorMessage(error),
+          );
+        },
+      });
     } catch (error) {
-      console.error("[volli] failed to recover stale terminal attachments:", errorMessage(error));
+      console.error("[volli] failed to recover stale attachments:", errorMessage(error));
     }
   }
   // Read fresh per call rather than once at boot: `activate` can re-create the
