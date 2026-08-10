@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { createSessionEngine } from "@volli/session-engine";
-import type { SessionLedger, SessionObservation } from "@volli/shared";
+import type { SessionEvent, SessionLedger, SessionObservation } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
@@ -1108,5 +1108,153 @@ describe("SqliteSessionLedger", () => {
       "reason has an unsupported value",
     );
     ctx.db.pragma("ignore_check_constraints = OFF");
+  });
+
+  it("drops a row whose payload kind this build does not recognise, keeping the rest of the Session readable", async () => {
+    const { ledger, control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-retired-kind",
+      projectId,
+      ticketId: null,
+      title: "Retired kind",
+      provenance,
+    });
+    // "capabilities.retired" stands in for a Session event kind this build has
+    // since dropped support for, like the real capabilities.updated retirement
+    // this groundwork exists for. Written with raw SQL because appendEvent
+    // rejects it, and existing databases already carry rows like it.
+    ctx.db
+      .prepare(
+        `INSERT INTO session_events
+           (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+         VALUES ('retired-kind-event', ?, 4, 400, 400, ?, NULL, NULL, ?)`,
+      )
+      .run(
+        created.session.id,
+        JSON.stringify(provenance),
+        JSON.stringify({ kind: "capabilities.retired" }),
+      );
+    await ledger.transaction((transaction) => {
+      transaction.appendEvent({
+        id: "after-retired-kind-event",
+        sessionId: created.session.id,
+        sequence: 5,
+        occurredAt: 500,
+        recordedAt: 500,
+        provenance,
+        payload: { kind: "session.archived" },
+      });
+    });
+
+    const events = await control.listEvents({ sessionId: created.session.id });
+    expect(events.map((event) => event.sequence)).toEqual([1, 2, 3, 5]);
+    expect(events.map((event) => event.payload.kind)).toEqual([
+      "command.recorded",
+      "session.created",
+      "command.receipt.recorded",
+      "session.archived",
+    ]);
+  });
+
+  it("fills a page past retired rows instead of returning it short", async () => {
+    const { ledger, control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-retired-page",
+      projectId,
+      ticketId: null,
+      title: "Retired page",
+      provenance,
+    });
+    // A whole page of retired kinds. The limit counts events this build can
+    // return, so asking for one after sequence 3 must reach sequence 6 rather
+    // than come back empty — a caller advances its cursor from the last event
+    // it was handed, so an empty page would read as the end of the Session.
+    for (const sequence of [4, 5]) {
+      ctx.db
+        .prepare(
+          `INSERT INTO session_events
+             (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+           VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
+        )
+        .run(
+          `retired-page-${sequence}`,
+          created.session.id,
+          sequence,
+          sequence * 100,
+          sequence * 100,
+          JSON.stringify(provenance),
+          JSON.stringify({ kind: "capabilities.retired" }),
+        );
+    }
+    await ledger.transaction((transaction) => {
+      transaction.appendEvent({
+        id: "after-retired-page",
+        sessionId: created.session.id,
+        sequence: 6,
+        occurredAt: 600,
+        recordedAt: 600,
+        provenance,
+        payload: { kind: "session.archived" },
+      });
+    });
+
+    const page = await control.listEvents({
+      sessionId: created.session.id,
+      afterSequence: 3,
+      limit: 1,
+    });
+    expect(page.map((event) => event.sequence)).toEqual([6]);
+  });
+
+  it("returns null from getEvent for a row whose payload kind this build does not recognise", async () => {
+    const { ledger, control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-retired-kind-get-event",
+      projectId,
+      ticketId: null,
+      title: "Retired kind get event",
+      provenance,
+    });
+    ctx.db
+      .prepare(
+        `INSERT INTO session_events
+           (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+         VALUES ('retired-kind-get-event', ?, 4, 400, 400, ?, NULL, NULL, ?)`,
+      )
+      .run(
+        created.session.id,
+        JSON.stringify(provenance),
+        JSON.stringify({ kind: "capabilities.retired" }),
+      );
+
+    const event = await ledger.transaction((transaction) =>
+      transaction.getEvent("retired-kind-get-event"),
+    );
+    expect(event).toBeNull();
+  });
+
+  it("rejects appendEvent for an unrecognised payload kind, keeping the write path strict", async () => {
+    const { ledger, control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-strict-write",
+      projectId,
+      ticketId: null,
+      title: "Strict write",
+      provenance,
+    });
+
+    await expect(
+      ledger.transaction((transaction) => {
+        transaction.appendEvent({
+          id: "unknown-kind-event",
+          sessionId: created.session.id,
+          sequence: 4,
+          occurredAt: 400,
+          recordedAt: 400,
+          provenance,
+          payload: { kind: "capabilities.retired" } as unknown as SessionEvent["payload"],
+        });
+      }),
+    ).rejects.toThrow("is not a known Session event payload");
   });
 });

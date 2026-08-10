@@ -33,6 +33,24 @@ import {
 type SqlRow = Record<string, unknown>;
 
 /**
+ * Thrown when durable history carries a payload kind this build does not know.
+ *
+ * Separate from every other decode failure on purpose: a retired kind is an
+ * expected consequence of removing a Session Event, while a malformed field
+ * inside a known kind is corruption. The read path drops the first and still
+ * fails loudly on the second.
+ */
+export class UnknownPayloadKindError extends Error {
+  constructor(
+    readonly payloadKind: string,
+    context: string,
+  ) {
+    super(`${context}.kind is not a known Session event payload`);
+    this.name = "UnknownPayloadKindError";
+  }
+}
+
+/**
  * The desktop's sole durable Session writer.  Although better-sqlite3 is
  * synchronous, a Session Engine transaction may await host work, so this queue
  * holds BEGIN IMMEDIATE ownership across that await and never lets a second
@@ -200,7 +218,13 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
            FROM session_events WHERE id = ?`,
       )
       .get(eventId) as unknown;
-    return row === undefined ? null : decodeEvent(row, "session_events row");
+    if (row === undefined) return null;
+    try {
+      return decodeEvent(row, "session_events row");
+    } catch (error) {
+      if (error instanceof UnknownPayloadKindError) return null;
+      throw error;
+    }
   }
 
   appendEvent(event: SessionEvent): void {
@@ -278,17 +302,59 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     if (query.limit !== undefined && (!Number.isInteger(query.limit) || query.limit < 0)) {
       throw new Error("Event pagination limit must be a non-negative integer");
     }
-    const limit = query.limit === undefined ? "" : " LIMIT @limit";
-    const rows = this.db
-      .prepare(
-        `SELECT id, session_id, sequence, occurred_at, recorded_at, provenance,
-                attachment_id, command_id, payload
-           FROM session_events
-          WHERE session_id = @sessionId AND sequence > @afterSequence
-          ORDER BY sequence ASC${limit}`,
-      )
-      .all({ sessionId: query.sessionId, afterSequence, limit: query.limit }) as unknown[];
-    return rows.map((row) => decodeEvent(row, "session_events row"));
+    const statement = this.db.prepare(
+      `SELECT id, session_id, sequence, occurred_at, recorded_at, provenance,
+              attachment_id, command_id, payload
+         FROM session_events
+        WHERE session_id = @sessionId AND sequence > @afterSequence
+        ORDER BY sequence ASC${query.limit === undefined ? "" : " LIMIT @limit"}`,
+    );
+    const decoded: SessionEvent[] = [];
+    let dropped = 0;
+    const retiredKinds = new Set<string>();
+    // The limit counts events this build can return, not rows SQLite matched.
+    // A page made entirely of retired kinds would otherwise come back empty
+    // while later history still existed, and callers advance their cursor from
+    // the last event they were handed — so an empty page reads as "the end"
+    // and silently truncates the Session. Keep pulling until the page is full
+    // or the rows run out.
+    const wanted = query.limit;
+    let cursor = afterSequence;
+    for (;;) {
+      const remaining = wanted === undefined ? undefined : wanted - decoded.length;
+      if (remaining !== undefined && remaining <= 0) break;
+      const rows = statement.all({
+        sessionId: query.sessionId,
+        afterSequence: cursor,
+        limit: remaining,
+      }) as unknown[];
+      for (const row of rows) {
+        // Advanced from the row, not from the decoded event, so a dropped row
+        // still moves the cursor past itself.
+        const sequence = (row as SqlRow).sequence;
+        if (typeof sequence === "number") cursor = Math.max(cursor, sequence);
+        try {
+          decoded.push(decodeEvent(row, "session_events row"));
+        } catch (error) {
+          if (!(error instanceof UnknownPayloadKindError)) throw error;
+          dropped += 1;
+          retiredKinds.add(error.payloadKind);
+        }
+      }
+      // No limit means the single pass already read every matching row. With a
+      // limit, a short page is the only honest signal that nothing is left;
+      // a full one means at least one row was consumed, so the cursor moved
+      // and the next pass makes progress.
+      if (remaining === undefined || rows.length < remaining) break;
+    }
+    if (dropped > 0) {
+      // Named, not just counted: the whole point of dropping is that this build
+      // no longer knows the kind, so the kind is the only thing that identifies
+      // what a reader is missing.
+      const names = [...retiredKinds].toSorted().join(", ");
+      console.warn(`[session-ledger] skipped ${dropped} event(s) of retired kind(s): ${names}`);
+    }
+    return decoded;
   }
 
   getCommand(commandId: string): SessionCommand | null {
@@ -691,7 +757,7 @@ function decodePayload(value: unknown, context: string): SessionEventPayload {
         native: decodeNativeDetail(record.native, `${context}.native`),
       };
     default:
-      throw new Error(`${context}.kind is not a known Session event payload`);
+      throw new UnknownPayloadKindError(kind, context);
   }
 }
 
