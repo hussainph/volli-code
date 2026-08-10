@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -23,10 +23,21 @@ function snapshot(overrides: Partial<AuthoritySnapshot> = {}): AuthoritySnapshot
   };
 }
 
+/**
+ * A workspace reached through a symlink, so the resolved root always differs
+ * from the path handed in. macOS gives that away for free — `tmpdir()` lives
+ * under `/var`, which resolves to `/private/var` — and Linux does not, so the
+ * link is made here rather than borrowed from whatever the platform happens to
+ * do with its temporary directory.
+ */
 function workspace(): { raw: string; real: string } {
-  const raw = mkdtempSync(join(tmpdir(), "volli-gate-"));
-  writeFileSync(join(raw, "MARKER.txt"), "x");
-  return { raw, real: realpathSync(raw) };
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "volli-gate-")));
+  const real = join(base, "tree");
+  mkdirSync(real);
+  writeFileSync(join(real, "MARKER.txt"), "x");
+  const raw = join(base, "link");
+  symlinkSync(real, raw);
+  return { raw, real };
 }
 
 describe("authorityRefusal", () => {
