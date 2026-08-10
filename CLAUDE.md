@@ -1,18 +1,17 @@
 # Volli Code
 
-A local-first macOS workspace for planning and running coding sessions, built with Electron, React, and TypeScript. The current app combines a Linear-style board, isolated ticket worktrees, durable local history, temporary OpenCode-backed structured chat, and embedded terminal harnesses. The product direction is one chat-first, Pi-backed Agent Runtime; external and bring-your-own TUI harnesses remain manual terminal companions, not structured execution surfaces.
+A local-first macOS workspace for planning and running coding sessions, built with Electron, React, and TypeScript. The current app combines a Linear-style board, isolated ticket worktrees, durable local history, Pi-backed structured chat, and embedded terminal harnesses. The product direction is one chat-first, Pi-backed Agent Runtime; external and bring-your-own TUI harnesses remain manual terminal companions, not structured execution surfaces.
 
 `CONTEXT.md` is the canonical domain glossary and `docs/DESIGN.md` is the living visual language. The code and tests are authoritative for current behavior. Treat future architecture described here as direction, not as already-implemented behavior.
 
 ## Structure
 
-- `apps/desktop/src/main/` — Electron main: SQLite, temporary OpenCode hosting, node-pty, git/worktree exec, the `volli` CLI socket, notifications. **The only place Electron APIs run.**
+- `apps/desktop/src/main/` — Electron main: SQLite, Pi runtime hosting, node-pty, git/worktree exec, the `volli` CLI socket, notifications. **The only place Electron APIs run.**
 - `apps/desktop/src/preload/` — the typed `contextBridge` API; the only door between renderer and main. Thin and explicit.
 - `apps/desktop/src/renderer/` — React UI + Zustand stores. UI state projects durable main-process state plus ephemeral view state. **No Node imports.**
 - `packages/shared/` (`@volli/shared`) — pure, unit-tested domain code (models, ticket rules, event types, Session semantics, branch/slug rules). **No Electron/Node/DOM imports.**
 - `packages/session-engine/` (`@volli/session-engine`) — plain TypeScript Session commands, durable projections, temporary native-executor migration contracts, committed streams, and AI SDK transcript vocabulary. **No transport/Node APIs.**
 - `packages/session-rpc/` (`@volli/session-rpc`) — thin tRPC Session edge plus sanitized diagnostics.
-- `packages/opencode-adapter/` (`@volli/opencode-adapter`) — temporary Node-hosted OpenCode HTTP/SSE mapping and loopback process supervision. Do not add structured OpenCode features; it is removed after the Pi runtime proves its replacement.
 - `packages/cli/` — the agent-facing `volli` CLI (built; Unix socket to main). App data lives under Electron's `userData` dir.
 - `apps/desktop/src/renderer/lab/` — the UI lab (`pnpm lab`): browser-only scratches for trying interactions against real components/tokens with fixture data, before they become app features. Dev-server only, never built; imports the app, never the reverse.
 
@@ -26,7 +25,7 @@ A local-first macOS workspace for planning and running coding sessions, built wi
 - Retry transient transport failures without duplicating accepted work. Authentication, permissions, configuration, and quota failures require explicit user recovery.
 - Existing hooks and terminal markers are compatibility evidence for TUI adapters, not the canonical source of Session truth.
 - A Session starts with one root Agent Thread. Each Thread has at most one live Thread Binding; Conversation Branches and Generation Attempts preserve edits and regeneration without rewriting history.
-- Current OpenCode `adapterId` and profile fields are migration scaffolding, not product architecture. Terminals are explicit manual companions and never silent structured fallbacks.
+- `adapterId` and `profileId` fields are migration scaffolding for the singular runtime, not product architecture: Pi is the one structured executor, and collapsing the registry into a single port is a deliberate follow-up. Terminals are explicit manual companions and never silent structured fallbacks.
 
 - Ticket rules + all auto-move logic: pure, tested TS in `@volli/shared`; the UI only observes it.
 - Terminal access goes through the `TerminalEngine` seam: node-pty never leaves `src/main`, restty (ghostty-derived WebGPU renderer, decision #26) never leaves the renderer's terminal components. Native modules (node-pty, better-sqlite3) need `pnpm -C apps/desktop run rebuild:native` after every install (Electron ABI).
@@ -47,7 +46,7 @@ A local-first macOS workspace for planning and running coding sessions, built wi
 - `vp run -r typecheck` · `vp run -r test` · `vp check` (= `vp fmt` + `vp lint`) — the quality stack. `vp` is the global toolchain CLI (Node/pnpm pinned in root `package.json`).
 - `vp run -r test:coverage` — **a separate gate, and CI runs it.** Holds `packages/shared` and a protected renderer surface at 100%; thresholds only evaluate under `--coverage`, so a green `vp run -r test` says nothing about it. Run it before pushing anything that adds a branch or a store action.
 - `vp install` / `pnpm install` for deps; `pnpm run ensure:electron` (`apps/desktop`) prefetches Electron's lazily-fetched binary.
-- CI: PRs run one lean Linux job and must be green before shipping. **Desktop e2e smokes (`apps/desktop/e2e/*.mjs`) do NOT run in CI — run the relevant ones locally before shipping any desktop-touching PR.** The macOS smoke lane is manual-only (`gh workflow run ci.yml -f desktop-smoke=true`); `act pull_request --container-architecture linux/amd64` mirrors the Linux job locally.
+- CI: PRs run one lean Linux job and must be green before shipping. **Desktop e2e smokes (`apps/desktop/e2e/*.mjs`) do NOT run in CI — run the relevant ones locally before shipping any desktop-touching PR.** The macOS smoke lane is manual-only (`gh workflow run ci.yml -f desktop-smoke=true`); `act pull_request --container-architecture linux/amd64` mirrors the Linux job locally. Anything touching the Pi runtime also runs `pnpm smoke:pi` locally (builds, then the three Pi smokes; needs a display and a real `~/.pi/agent/auth.json`).
 
 ## Retained foundations
 

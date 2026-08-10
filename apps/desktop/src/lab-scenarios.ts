@@ -1,7 +1,7 @@
 /**
  * The Session states the lab can put on screen on purpose.
  *
- * Every one of these is a state a live OpenCode server raises only when it
+ * Every one of these is a state a live Agent Runtime raises only when it
  * happens to: a permission with no tool call, a question with three prompts, a
  * rate limit that came without a `Retry-After`. Waiting for a provider to be in
  * the right mood is not a way to review a surface, and a fixture handed straight
@@ -117,7 +117,7 @@ const GATED_COMMAND = "rm -rf node_modules";
  * The call a permission is correlated to, still waiting on the reader.
  *
  * `approval.id` is the *permission's own native id*, not an id of the call's —
- * that is how OpenCode reports it and how the adapter stamps it, and it is the
+ * that is how a runtime reports it and how the adapter stamps it, and it is the
  * only thing pairing a gated row with the question that gates it. A fixture
  * that made one up would draw the card at the foot of the transcript and leave
  * the row waiting on a decision it could not name.
@@ -492,7 +492,7 @@ export const LAB_SCENARIOS: readonly LabScenario[] = [
         attention: {
           id: "lab:unrecoverable",
           kind: "adapter_unrecoverable",
-          detail: "The OpenCode server exited and cannot be restarted",
+          detail: "The agent runtime exited and cannot be restarted",
           diagnostic: null,
         },
       },

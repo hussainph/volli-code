@@ -105,10 +105,10 @@ const PI_TOOLS = { tools: ["read", "edit", "write", "execute"] } as const;
 /**
  * The root Thread id for a Session, and the one place the convention is written.
  *
- * Every transcript observation this Session ever carries — from this adapter or
- * OpenCode's — addresses the same root Thread and main Branch, derived from the
- * Session id. Main's runtime-context resolver mints the same value so the id Pi
- * records in its sidecar metadata is the id the transcript is filed under.
+ * Every transcript observation this Session ever carries addresses the same
+ * root Thread and main Branch, derived from the Session id. Main's
+ * runtime-context resolver mints the same value so the id Pi records in its
+ * sidecar metadata is the id the transcript is filed under.
  */
 export function piRootThreadId(sessionId: string): string {
   return `thread:${sessionId}:root`;
@@ -974,8 +974,12 @@ function settledParts(message: SettledAssistantMessage): TranscriptPart[] {
 }
 
 /**
- * The model and cost a settled message was produced under, in the shape
- * OpenCode's adapter already writes so a consumer reads one shape from both.
+ * The model and cost a settled message was produced under — the shape a
+ * transcript artifact's `metadata` carries, defined here because this adapter
+ * is the only thing that writes one.
+ *
+ * Every field is nullable and the key is omitted entirely when Pi reported
+ * nothing, so a reader never has to tell "free" from "not measured".
  */
 function messageMetadata(message: SettledAssistantMessage): { metadata?: unknown } {
   const usage = message.usage;

@@ -22,10 +22,16 @@ import { hydrateHarnessCatalog, useHarnessCatalogStore } from "@renderer/stores/
 
 /**
  * The composer footer: the paperclip file-ref picker, a "Create more" toggle,
- * a quiet "Choose agent" picker showing the active harness, the secondary
+ * a quiet "Terminal harness" picker showing the active one, the secondary
  * "Create" button, and the primary "Create & start" action
  * (`data-testid="composer-kickoff"`, its harness carried in the accessible
  * name).
+ *
+ * The picker names a TERMINAL, and that is the whole of what it picks. Kickoff
+ * boots a PTY and auto-launches the chosen TUI in it (`submit.ts`'s
+ * `runKickoff`); it starts no structured chat, and no entry in this list is an
+ * Agent Runtime. A user chooses Model Access, not an executor — a label saying
+ * "agent" here would have offered a choice the product does not make.
  *
  * The picker offers the built-ins and every harness the user has registered and
  * trusted, in one list and under one kind of name — a manifest's own label,
@@ -87,10 +93,10 @@ export function ComposerFooter({
       <div className="ml-auto flex items-center gap-2">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            {/* Never disabled by an empty title — picking the agent is
+            {/* Never disabled by an empty title — picking the terminal is
                 independent of whether the ticket is ready to submit. */}
             <Button
-              aria-label="Choose agent"
+              aria-label="Terminal harness"
               variant="ghost"
               size="sm"
               className="text-muted-foreground"

@@ -7,8 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { HARNESS_CHANNELS, HARNESS_EVENT_GRACE_MS, parseHarnessId } from "@volli/shared";
 import type {
   HarnessAdapter,
-  HarnessCommandGetResult,
-  HarnessCommandSetResult,
   HarnessId,
   HarnessPendingResult,
   HarnessRegisteredResult,
@@ -38,7 +36,6 @@ import {
   scanHarnessManifests,
 } from "./harness-registry";
 import { recordHarnessChannelEvent, recordHarnessLaunch } from "./db/harness-channel-repo";
-import { storedHarnessCommand } from "./db/harness-command-repo";
 import { getRegisteredHarness } from "./db/harness-registry-repo";
 import { openTestDb, type TestDb } from "./db/test-helpers";
 
@@ -102,7 +99,6 @@ function setup(
     regenerateRuntime?: () => Promise<void>;
     launchableHarnesses?: readonly HarnessAdapter[];
     now?: number;
-    invalidateNativeBinary?: (harnessId: string) => void;
   } = {},
 ): void {
   regenerateRuntime = vi.fn(options.regenerateRuntime ?? (() => Promise.resolve()));
@@ -116,9 +112,6 @@ function setup(
       regenerateRuntime,
       launchableHarnesses: () => options.launchableHarnesses ?? [],
       now: () => options.now ?? 1000,
-      ...(options.invalidateNativeBinary
-        ? { invalidateNativeBinary: options.invalidateNativeBinary }
-        : {}),
     },
   );
 }
@@ -585,199 +578,6 @@ describe("volli:harness-registered", () => {
 
     expect(registered()).toMatchObject({
       channels: [{ harnessId: "my-harness", state: "unproven" }],
-    });
-  });
-});
-
-describe("volli:harness-command-get / volli:harness-command-set", () => {
-  const getCommand = (harnessId: string): HarnessCommandGetResult =>
-    invoke<HarnessCommandGetResult>("volli:harness-command-get", { harnessId });
-  const setCommand = (
-    harnessId: string,
-    command: string | null,
-  ): Promise<HarnessCommandSetResult> =>
-    invoke<Promise<HarnessCommandSetResult>>("volli:harness-command-set", { harnessId, command });
-
-  it("is unset until something is stored", () => {
-    setup();
-
-    expect(getCommand("opencode")).toEqual({ ok: true, command: null });
-  });
-
-  it("validates an explicit path, stores the raw value, and answers with the canonical path", async () => {
-    setup();
-    const binary = process.execPath;
-
-    const result = await setCommand("opencode", binary);
-
-    expect(result.ok).toBe(true);
-    expect(result.ok && typeof result.resolvedPath).toBe("string");
-    // Stored verbatim, not the realpath — resolution happens live at attach time.
-    expect(getCommand("opencode")).toEqual({ ok: true, command: binary });
-  });
-
-  it("refuses, and stores nothing for, a candidate that fails validation", async () => {
-    setup();
-    const notExecutable = join(root, "not-executable");
-    await writeFile(notExecutable, "#!/bin/sh\necho hi\n");
-
-    const result = await setCommand("opencode", notExecutable);
-
-    expect(result).toEqual({
-      ok: false,
-      reason: "not-executable",
-      error: `${notExecutable} is not an executable file`,
-    });
-    expect(getCommand("opencode")).toEqual({ ok: true, command: null });
-  });
-
-  it("leaves a previously-stored override in place when a later set is refused", async () => {
-    setup();
-    await setCommand("opencode", process.execPath);
-    const notExecutable = join(root, "not-executable");
-    await writeFile(notExecutable, "#!/bin/sh\n");
-
-    await setCommand("opencode", notExecutable);
-
-    expect(getCommand("opencode")).toEqual({ ok: true, command: process.execPath });
-  });
-
-  it("clears a stored override and reports no resolved path", async () => {
-    setup();
-    await setCommand("opencode", process.execPath);
-
-    const result = await setCommand("opencode", null);
-
-    expect(result).toEqual({ ok: true, resolvedPath: null });
-    expect(getCommand("opencode")).toEqual({ ok: true, command: null });
-  });
-
-  it("clearing an already-unset override is a no-op success", async () => {
-    setup();
-
-    await expect(setCommand("opencode", null)).resolves.toEqual({ ok: true, resolvedPath: null });
-  });
-
-  it("keys the override by harness id", async () => {
-    setup();
-    await setCommand("opencode", process.execPath);
-
-    expect(getCommand("claude-code")).toEqual({ ok: true, command: null });
-  });
-
-  it("invalidates a live native adapter's cached binary after storing a new override", async () => {
-    const invalidated: string[] = [];
-    setup({ invalidateNativeBinary: (harnessId) => invalidated.push(harnessId) });
-
-    await setCommand("opencode", process.execPath);
-
-    expect(invalidated).toEqual(["opencode"]);
-  });
-
-  it("invalidates a live native adapter's cached binary after clearing an override", async () => {
-    const invalidated: string[] = [];
-    setup({ invalidateNativeBinary: (harnessId) => invalidated.push(harnessId) });
-    await setCommand("opencode", process.execPath);
-    invalidated.length = 0;
-
-    await setCommand("opencode", null);
-
-    expect(invalidated).toEqual(["opencode"]);
-  });
-
-  it("does not invalidate anything when a candidate fails validation", async () => {
-    setup({
-      invalidateNativeBinary: () => {
-        throw new Error("must not be called");
-      },
-    });
-    const notExecutable = join(root, "not-executable");
-    await writeFile(notExecutable, "#!/bin/sh\n");
-
-    await expect(setCommand("opencode", notExecutable)).resolves.toMatchObject({ ok: false });
-  });
-});
-
-// The UI only ever offers this control for `opencode`, but the channel is the
-// contract and the id it takes is spliced into an `app_state` key — so an id no
-// launch path will ever read back must not be able to buy a row.
-describe("volli:harness-command-get / -set — an id this host cannot launch", () => {
-  const getCommand = (harnessId: string): HarnessCommandGetResult =>
-    invoke<HarnessCommandGetResult>("volli:harness-command-get", { harnessId });
-  const setCommand = (
-    harnessId: string,
-    command: string | null,
-  ): Promise<HarnessCommandSetResult> =>
-    invoke<Promise<HarnessCommandSetResult>>("volli:harness-command-set", { harnessId, command });
-
-  it("refuses to read an override for a harness nothing registered", () => {
-    setup();
-
-    expect(getCommand("ghost")).toEqual({
-      ok: false,
-      error: "ghost isn't a harness this host can launch.",
-    });
-  });
-
-  it("refuses to store an override for a harness nothing registered, and writes no row", async () => {
-    setup({
-      invalidateNativeBinary: () => {
-        throw new Error("must not be called");
-      },
-    });
-
-    await expect(setCommand("ghost", process.execPath)).resolves.toEqual({
-      ok: false,
-      error: "ghost isn't a harness this host can launch.",
-    });
-    expect(storedHarnessCommand(fixture.db, "ghost")).toBeNull();
-  });
-
-  // The check has to run before the clear, or an unknown id still reaches the
-  // delete and the channel answers `{ ok: true }` about a harness it cannot name.
-  it("refuses to clear an override for a harness nothing registered", async () => {
-    setup();
-
-    await expect(setCommand("ghost", null)).resolves.toEqual({
-      ok: false,
-      error: "ghost isn't a harness this host can launch.",
-    });
-  });
-
-  it("refuses an id that is not even a well-formed harness slug", async () => {
-    setup();
-
-    expect(getCommand("../../etc/passwd")).toEqual({
-      ok: false,
-      error: "../../etc/passwd isn't a harness this host can launch.",
-    });
-    await expect(setCommand("../../etc/passwd", process.execPath)).resolves.toEqual({
-      ok: false,
-      error: "../../etc/passwd isn't a harness this host can launch.",
-    });
-  });
-
-  // A registered manifest is a legitimate id that is not first-class — gating on
-  // the built-ins alone would lock every bring-your-own harness out of its own
-  // override.
-  it("accepts a registered harness the launch path resolved", async () => {
-    setup({ launchableHarnesses: [adapter(registeredSlug("my-harness"))] });
-
-    await expect(setCommand("my-harness", process.execPath)).resolves.toMatchObject({ ok: true });
-    expect(getCommand("my-harness")).toEqual({ ok: true, command: process.execPath });
-  });
-
-  it("stops accepting a registered harness once the launch path stops resolving it", async () => {
-    setup({ launchableHarnesses: [adapter(registeredSlug("my-harness"))] });
-    await setCommand("my-harness", process.execPath);
-
-    // The manifest was untrusted or removed, so this launch resolved nothing for
-    // it — the same set `volli:harness-registered` answers from.
-    setup();
-
-    expect(getCommand("my-harness")).toEqual({
-      ok: false,
-      error: "my-harness isn't a harness this host can launch.",
     });
   });
 });

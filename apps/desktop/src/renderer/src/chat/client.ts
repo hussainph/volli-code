@@ -725,7 +725,7 @@ export class ChatSessionClient {
    * Drains the queue, one message at a time.
    *
    * The rule the composer used to own, moved to the only thing that survives the
-   * view: a queued message written while OpenCode was still coming up has to
+   * view: a queued message written while the runtime was still coming up has to
    * leave when it is ready, and closing the tab in between must not strand it.
    *
    * `#draining` is the latch, and it is a boolean rather than the released id it

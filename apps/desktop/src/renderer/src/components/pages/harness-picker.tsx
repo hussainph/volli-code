@@ -31,7 +31,7 @@ import { cn } from "@renderer/lib/utils";
  * no preload bridge — the built-in half of the list is compiled in, so the pane
  * still renders every first-class harness with nothing to fetch.
  */
-export function preloadApi(): Window["api"] | undefined {
+function preloadApi(): Window["api"] | undefined {
   return typeof window === "undefined" ? undefined : window.api;
 }
 
@@ -74,11 +74,11 @@ export function useHarnessListings(): readonly HarnessListing[] {
 /**
  * The master list, as one row of pills above the detail it selects.
  *
- * Above rather than beside: a settings pane is one 608px reading column, and the
- * OpenCode detail already spends it on a provider/model master-detail of its
- * own — a second vertical rail in front of that leaves the model rows too narrow
- * to read their own ids. Above, the selector costs one row and the detail keeps
- * the full width.
+ * Above rather than beside: a settings pane is one 608px reading column, and it
+ * already sits behind Settings' own category rail. A second vertical rail in
+ * front of that is two rails deep to reach one card, and it spends the column's
+ * width on chrome rather than on the command a launch resolves. Above, the
+ * selector costs one row and the detail keeps the full width.
  *
  * Every harness is listed, including the ones with nothing to configure. A list
  * pruned to the configurable one would quietly claim this host can launch
@@ -126,16 +126,14 @@ export function HarnessSelector({
  * The selected harness's identity card: the executable a launch resolves, and
  * where the harness came from.
  *
- * Deliberately spare, and the same two facts at both scopes — they are what is
- * true and knowable about a harness Volli has nothing else to change about, and
- * padding a pane out to a matching size would state things nobody can act on.
- * `children` is where a scope adds the rows it alone owns (Settings puts the
- * binary override here; Configure has none to add).
+ * Deliberately spare — these are what is true and knowable about a harness
+ * Volli has nothing else to change about, and padding a pane out to a matching
+ * size would state things nobody can act on. There is nothing else to show:
+ * the one row that ever sat under these, the binary override, was retired once
+ * its only launch-time reader went, and a launch resolves its binary off the
+ * login-shell PATH the generated wrapper walks.
  */
-export function HarnessIdentitySection({
-  listing,
-  children,
-}: React.PropsWithChildren<{ listing: HarnessListing }>) {
+export function HarnessIdentitySection({ listing }: { listing: HarnessListing }) {
   return (
     <SettingsSection
       title={listing.label}
@@ -147,7 +145,6 @@ export function HarnessIdentitySection({
           {listing.command}
         </code>
       </SettingsRow>
-      {children}
     </SettingsSection>
   );
 }

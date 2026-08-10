@@ -160,17 +160,6 @@ export function rejectedReceipt(result: unknown): string | null {
   return typeof receipt.code === "string" ? receipt.code : "rejected";
 }
 
-/**
- * The one sentence a failed start says, wherever in the start it failed.
- *
- * A refusal, a dropped attach and a `session.create` that never answered are
- * three different faults with one recovery, and the surface renders one error
- * row for all of them. Written once so they cannot drift into three phrasings.
- */
-export function startFailure(detail: string): string {
-  return `Could not start OpenCode: ${detail}`;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }

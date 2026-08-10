@@ -39,6 +39,7 @@ import { getTicket } from "./db/tickets-repo";
 import { listAttachments } from "./db/attachments-repo";
 import { createDesktopSessionEngine } from "./session-control";
 import { createDesktopSessionRuntime } from "./session-runtime";
+import { closeStaleAttachments } from "./session-runtime/boot-recovery";
 import { createPiRuntimeHost, piRootThreadId } from "./session-runtime/pi-adapter";
 import { createTicketSessions } from "./session-runtime/ticket-sessions";
 import { createProjectSessions } from "./session-runtime/project-sessions";
@@ -48,7 +49,6 @@ import {
   writeDefaultModelSelection,
 } from "./session-runtime/model-access-preferences";
 import { registerSessionRpcIpcHandlers } from "./session-rpc-ipc";
-import { createOpenCodeNativeAdapter } from "@volli/opencode-adapter";
 import { piAuthFilePath } from "@volli/agent-runtime";
 import { listRegisteredHarnesses } from "./db/harness-registry-repo";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
@@ -88,8 +88,6 @@ import type { RefusedWrapper } from "./harness-runtime";
 import { ensureShellInit } from "./shell-init";
 import { startAgentSocket, type AgentSocketServer } from "./agent-socket";
 import { loginShellPath } from "./login-path";
-import { resolveOpenCodeBinary } from "./opencode-binary";
-import { storedHarnessCommand } from "./db/harness-command-repo";
 import { piLoginLaunch, verifiedPiCliResource } from "./pi-cli-resource";
 import {
   detectHarnesses,
@@ -408,31 +406,6 @@ app.whenReady().then(async () => {
     console.error("[volli] failed to open database:", dbHandle.error);
   }
   const sessionEngine = dbHandle.ok ? createDesktopSessionEngine(dbHandle.db) : null;
-  // Native Session RPC shares the same durable Session Engine as terminal and
-  // planner paths. The OpenCode process stays dormant until a caller explicitly
-  // attaches its native profile; registering the transport never launches it.
-  const nativeAdapter = dbHandle.ok
-    ? createOpenCodeNativeAdapter({
-        // Resolve only when a native Session attaches. Finder launches do not
-        // inherit the user's toolchain PATH, and doing this at boot could make
-        // every launch wait on an interactive shell for an adapter it never
-        // uses. A stored per-harness override wins, read at resolution time
-        // rather than captured here — but the adapter caches the binary it
-        // verified (`#verifiedBinary`) for the rest of the launch, so a
-        // Settings change drops that cache immediately via
-        // `invalidateBinary()` (wired below, into `volli:harness-command-set`)
-        // rather than waiting for the next relaunch.
-        resolveCommand: (command) =>
-          resolveOpenCodeBinary(storedHarnessCommand(dbHandle.db, "opencode") ?? command),
-        // The server child inherits the user's login-shell PATH, not
-        // Electron's Finder/Dock environment — the same authority the harness
-        // wrapper and trust-prompt resolution below already defer to.
-        resolveEnv: async (): Promise<Record<string, string>> => {
-          const pathValue = await loginShellPath();
-          return pathValue === null ? {} : { PATH: pathValue };
-        },
-      })
-    : null;
   // The Pi-backed Agent Runtime is the structured product's one target
   // executor, for Ticket Sessions and ticketless project chats alike. Model
   // access and selection come from this Pi host.
@@ -488,11 +461,11 @@ app.whenReady().then(async () => {
       })
     : null;
   const sessionRuntime =
-    dbHandle.ok && sessionEngine !== null && nativeAdapter !== null && piRuntimeHost !== null
+    dbHandle.ok && sessionEngine !== null && piRuntimeHost !== null
       ? createDesktopSessionRuntime({
           db: dbHandle.db,
           transcriptDirectory: join(app.getPath("userData"), "session-transcripts"),
-          adapters: [nativeAdapter, piRuntimeHost.adapter],
+          adapters: [piRuntimeHost.adapter],
           sessionEngine,
         })
       : null;
@@ -540,46 +513,24 @@ app.whenReady().then(async () => {
           startProjectSession: projectSessions?.start,
           attachProjectSession: projectSessions?.attach,
         });
-  // Boot recovery: no PTY survives a relaunch. Close only stale local terminal
-  // attachments; the durable Session itself intentionally remains open.
+  // Boot recovery: no PTY and no OpenCode binding survives a relaunch. The
+  // durable Session itself intentionally remains open; only the binding ends.
   if (dbHandle.ok && sessionEngine !== null) {
     try {
-      for (const project of listProjects(dbHandle.db)) {
-        const sessions = await sessionEngine.listSessions({ projectId: project.id, scope: "all" });
-        for (const projection of sessions) {
-          for (const attachment of projection.attachments) {
-            if (
-              attachment.adapterId === "terminal" &&
-              attachment.venue.kind === "local" &&
-              attachment.status === "open"
-            ) {
-              try {
-                await sessionEngine.observe({
-                  id: randomUUID(),
-                  kind: "attachment.closed",
-                  sessionId: projection.session.id,
-                  attachmentId: attachment.id,
-                  occurredAt: Date.now(),
-                  provenance: {
-                    source: { kind: "system", id: "desktop-recovery", detail: null },
-                    venue: { id: "local", kind: "local" },
-                  },
-                  outcome: "interrupted",
-                });
-              } catch (error) {
-                // One malformed or concurrently-closed attachment must not
-                // leave every later stale terminal falsely open after relaunch.
-                console.error(
-                  `[volli] failed to recover attachment ${attachment.id}:`,
-                  errorMessage(error),
-                );
-              }
-            }
-          }
-        }
-      }
+      await closeStaleAttachments({
+        engine: sessionEngine,
+        projectIds: listProjects(dbHandle.db).map((project) => project.id),
+        newId: randomUUID,
+        now: Date.now,
+        onError: (attachmentId, error) => {
+          console.error(
+            `[volli] failed to recover attachment ${attachmentId}:`,
+            errorMessage(error),
+          );
+        },
+      });
     } catch (error) {
-      console.error("[volli] failed to recover stale terminal attachments:", errorMessage(error));
+      console.error("[volli] failed to recover stale attachments:", errorMessage(error));
     }
   }
   // Read fresh per call rather than once at boot: `activate` can re-create the
@@ -908,15 +859,6 @@ app.whenReady().then(async () => {
     // offer a harness the launch would then refuse.
     launchableHarnesses: () => agentRuntime.adapters ?? [],
     now: Date.now,
-    // Only the native OpenCode adapter caches a verified binary across a
-    // launch's lifetime; every other harness resolves fresh on each attach
-    // and has nothing to drop. `nativeAdapter` is null on the db-failed boot
-    // path, where this is never called anyway (no db, no stored overrides).
-    invalidateNativeBinary: (harnessId) => {
-      if (nativeAdapter !== null && harnessId === nativeAdapter.manifest.id) {
-        nativeAdapter.invalidateBinary();
-      }
-    },
   });
 
   // Renders hand-edited managed files that were preserved (never overwritten)
@@ -1220,7 +1162,7 @@ app.whenReady().then(async () => {
     // the local Session control plane has released its streams and child.
     event.preventDefault();
     nativeSessionShutdownInFlight = true;
-    void Promise.allSettled([sessionRpc?.close(), sessionRuntime?.close(), nativeAdapter?.close()])
+    void Promise.allSettled([sessionRpc?.close(), sessionRuntime?.close()])
       .then((results) => {
         for (const result of results) {
           if (result.status === "rejected") {

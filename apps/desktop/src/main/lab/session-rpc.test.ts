@@ -4,7 +4,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { tmpdir } from "node:os";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import { createOpenCodeNativeAdapter } from "@volli/opencode-adapter";
+
+import { createLabScenarioAdapter } from "./scenario-adapter";
 
 import { LAB_SESSION_PROJECT_ID, LAB_SESSION_TICKET_ID } from "../../lab-session-rpc-path";
 import {
@@ -142,7 +143,7 @@ describe("Lab Session RPC server", () => {
       createAdapter: () => {
         attempts += 1;
         if (attempts === 1) throw new Error("adapter unavailable");
-        return createOpenCodeNativeAdapter();
+        return createLabScenarioAdapter();
       },
     });
     servers.push(lab);
@@ -178,12 +179,6 @@ describe("Lab task workspace", () => {
       await expect(readFile(`${workspace}/src/greeting.ts`, "utf8")).resolves.toContain(
         "export function greeting",
       );
-      // The workspace asks before it runs anything, so the Lab can reach the
-      // approval gate without a developer editing their own OpenCode config.
-      await expect(readFile(`${workspace}/opencode.json`, "utf8")).resolves.toContain(
-        '"bash": "ask"',
-      );
-
       const status = await new Promise<string>((resolve, reject) => {
         execFile("git", ["status", "--short"], { cwd: workspace }, (error, stdout) => {
           if (error) reject(error);

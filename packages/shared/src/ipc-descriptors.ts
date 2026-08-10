@@ -730,23 +730,6 @@ export const HARNESS_IPC: { readonly [C in HarnessIpcChannel]: IpcRequestDescrip
     guard: (args): args is [] => args.length === 0,
     invalidError: "Invalid request",
   },
-  "volli:harness-command-get": {
-    guard: (args): args is IpcArgs<"volli:harness-command-get"> =>
-      args.length === 1 && isRecord(args[0]) && typeof args[0]["harnessId"] === "string",
-    invalidError: "Invalid harness id",
-  },
-  "volli:harness-command-set": {
-    guard: (args): args is IpcArgs<"volli:harness-command-set"> => {
-      if (args.length !== 1) return false;
-      const [input] = args;
-      return (
-        isRecord(input) &&
-        typeof input["harnessId"] === "string" &&
-        (input["command"] === null || typeof input["command"] === "string")
-      );
-    },
-    invalidError: "Invalid harness command",
-  },
 };
 
 /** Every channel the harness-trust surface owns, derived — never hand-synced. */

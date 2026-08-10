@@ -693,7 +693,8 @@ export function createSessionRouter() {
 
 /**
  * Capability inventories remain durable server evidence. Renderer clients get
- * feature state only; model and tool discovery belongs to Runtime Catalog Settings.
+ * feature state only; naming models is `modelAccess`'s job, over its own
+ * sanitized snapshot, and nothing reads a catalog off a capability any more.
  */
 function rendererCapabilitySnapshot(
   snapshot: SessionRuntimeSnapshot["projection"]["capabilities"][number],

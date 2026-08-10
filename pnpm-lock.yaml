@@ -106,9 +106,6 @@ importers:
       '@volli/agent-runtime':
         specifier: workspace:*
         version: link:../../packages/agent-runtime
-      '@volli/opencode-adapter':
-        specifier: workspace:*
-        version: link:../../packages/opencode-adapter
       '@volli/session-engine':
         specifier: workspace:*
         version: link:../../packages/session-engine
@@ -329,25 +326,6 @@ importers:
 
   packages/cli:
     dependencies:
-      '@volli/shared':
-        specifier: workspace:*
-        version: link:../shared
-    devDependencies:
-      '@types/node':
-        specifier: 'catalog:'
-        version: 26.1.1
-      typescript:
-        specifier: 'catalog:'
-        version: 7.0.2
-      vite-plus:
-        specifier: 'catalog:'
-        version: 0.2.5(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(esbuild@0.28.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0)
-
-  packages/opencode-adapter:
-    dependencies:
-      '@volli/session-engine':
-        specifier: workspace:*
-        version: link:../session-engine
       '@volli/shared':
         specifier: workspace:*
         version: link:../shared

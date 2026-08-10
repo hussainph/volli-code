@@ -5,7 +5,7 @@
 Volli Code brings tickets, isolated worktrees, coding harnesses, and local history into one macOS app.
 
 > [!NOTE]
-> Volli Code is under active development. The current app is terminal-first; the planned architecture is a chat-first Session UI backed by structured SDK/ACP adapters, with the terminal retained as a secondary surface and bring-your-own TUI fallback.
+> Volli Code is under active development. The current app is terminal-first; the planned architecture is a chat-first Session UI backed by a Pi-backed `@volli/agent-runtime`, with external and bring-your-own TUI harnesses retained as manual terminal companions rather than a structured fallback.
 
 ![Volli Code kanban board](docs/assets/volli-code-board.png)
 
@@ -19,7 +19,7 @@ Volli Code brings tickets, isolated worktrees, coding harnesses, and local histo
 
 ## Where it is going
 
-The target Session model is durable independently of any live executor. A Session will own its local ordered event history before an adapter connects; SDK, ACP, and TUI adapters will attach according to their real capabilities rather than pretending to have feature parity.
+The target Session model is durable independently of any live executor. A Session will own its local ordered event history before the Pi-backed `@volli/agent-runtime` attaches; external and bring-your-own TUI harnesses run only as manual terminal companions, never a structured fallback pretending to have feature parity.
 
 That redesign still needs an immutable Session event ledger, idempotent command delivery and receipts, retry reconciliation, and structured attention states. The existing terminal infrastructure remains useful compatibility machinery, but it is not the future source of Session truth.
 

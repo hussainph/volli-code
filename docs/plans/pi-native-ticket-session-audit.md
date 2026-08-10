@@ -65,10 +65,10 @@ the authoritative migration direction until roadmap ownership is resolved.
    store and existing transcript/activity/interaction components.
 7. The same OpenCode adapter feeds Runtime Catalog discovery and its saved
    provider/model/agent preferences through
-   [runtime-catalog.ts](../../apps/desktop/src/main/runtime-catalog.ts) and
+   `apps/desktop/src/main/runtime-catalog.ts` (deleted in Session 7) and
    [session-rpc/index.ts](../../packages/session-rpc/src/index.ts). Settings
    owns exhaustive discovery; chat receives a bounded saved selection.
-8. [session-chat-smoke.mjs](../../apps/desktop/e2e/session-chat-smoke.mjs)
+8. `apps/desktop/e2e/session-chat-smoke.mjs` (deleted in Session 7)
    exercises the packaged desktop path against a fake OpenCode producer,
    including Ticket worktree binding, turn streaming, recovery, and relaunch.
 

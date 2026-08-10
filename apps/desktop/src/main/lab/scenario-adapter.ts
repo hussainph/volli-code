@@ -2,8 +2,8 @@
  * A harness that only ever plays a script.
  *
  * It is a `NativeHarnessAdapter` and nothing else — the Session runtime cannot
- * tell it from OpenCode, so a scripted permission travels the same road a real
- * one does: observation, durable event, projection, tRPC frame, renderer. That
+ * tell it from Pi's, so a scripted permission travels the same road a real one
+ * does: observation, durable event, projection, tRPC frame, renderer. That
  * is the whole point of hosting scenarios here rather than handing the chat
  * surface a hand-built projection. A fixture that skips the ledger proves the
  * component renders; it proves nothing about what reaches the component.

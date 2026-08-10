@@ -1,5 +1,11 @@
 # Delta frames
 
+> **Historical design record since 2026-08-10.** The OpenCode adapter this
+> document measures was removed in Session 7; see
+> [`pi-native-ticket-session.md`](pi-native-ticket-session.md). The
+> delta-frame concepts — a transient overlay over durable settle points — live
+> on in the Session Engine.
+
 The stream frame shape changes from full-snapshot-per-chunk to a transient delta
 overlay on top of durable settle-point snapshots. This is Workstream 3's first
 item in `session-ui-migration-readiness.md` (settled decision 3 there: land it

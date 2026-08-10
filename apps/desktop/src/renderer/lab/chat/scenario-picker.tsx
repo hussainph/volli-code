@@ -15,9 +15,8 @@ import * as React from "react";
 import { LAB_SCENARIOS } from "../../../lab-scenarios";
 
 export interface LabScenarioPickerProps {
-  /** Null is the live harness. */
-  value: string | null;
-  onChange(next: string | null): void;
+  value: string;
+  onChange(next: string): void;
 }
 
 export function LabScenarioPicker({ value, onChange }: LabScenarioPickerProps) {
@@ -27,11 +26,10 @@ export function LabScenarioPicker({ value, onChange }: LabScenarioPickerProps) {
       <label htmlFor={id}>Scenario</label>
       <select
         id={id}
-        value={value ?? ""}
-        onChange={(event) => onChange(event.currentTarget.value || null)}
+        value={value}
+        onChange={(event) => onChange(event.currentTarget.value)}
         className="bg-transparent text-foreground outline-none"
       >
-        <option value="">Live OpenCode</option>
         {LAB_SCENARIOS.map((scenario) => (
           <option key={scenario.id} value={scenario.id}>
             {scenario.label}

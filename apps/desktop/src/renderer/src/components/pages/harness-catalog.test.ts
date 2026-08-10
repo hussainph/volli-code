@@ -1,25 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
-import {
-  FIRST_CLASS_HARNESS_IDS,
-  type HarnessAdapter,
-  type HarnessCommandFailureReason,
-  type HarnessId,
-} from "@volli/shared";
+import { FIRST_CLASS_HARNESS_IDS, type HarnessAdapter, type HarnessId } from "@volli/shared";
 
-import {
-  activeHarness,
-  harnessCommandFailureLine,
-  harnessListings,
-  isHarnessCommandFailureReason,
-} from "./harness-catalog";
-
-/** Every reason `volli:harness-command-set` can refuse a candidate with. */
-const REFUSAL_REASONS: readonly HarnessCommandFailureReason[] = [
-  "not-found",
-  "not-executable",
-  "not-resolvable",
-  "path-unavailable",
-];
+import { activeHarness, harnessListings } from "./harness-catalog";
 
 /** A registered manifest's adapter — the BYO half of the list. */
 const adapter = (overrides: Partial<HarnessAdapter> = {}): HarnessAdapter => ({
@@ -90,45 +72,5 @@ describe("activeHarness", () => {
 
   it("is null only when there is nothing to select", () => {
     expect(activeHarness([], "cursor")).toBeNull();
-  });
-});
-
-describe("harnessCommandFailureLine", () => {
-  it("gives every typed reason a distinct line", () => {
-    const lines = REFUSAL_REASONS.map(harnessCommandFailureLine);
-
-    expect(new Set(lines).size).toBe(lines.length);
-    expect(lines.every((line) => line.length > 0)).toBe(true);
-  });
-
-  it("tells a retryable host failure apart from a name that is simply wrong", () => {
-    expect(harnessCommandFailureLine("path-unavailable")).toContain("try again");
-    expect(harnessCommandFailureLine("not-found")).toContain("check the name");
-    expect(harnessCommandFailureLine("not-executable")).toContain("check the path");
-    expect(harnessCommandFailureLine("not-resolvable")).toContain("Broken link");
-  });
-});
-
-describe("isHarnessCommandFailureReason", () => {
-  it("accepts every reason that has a line", () => {
-    expect(REFUSAL_REASONS.every(isHarnessCommandFailureReason)).toBe(true);
-  });
-
-  it("rejects a refusal the ipc envelope composed without a reason", () => {
-    // `registerGuardedIpcHandlers` (guard miss, handler throw) and
-    // `registerDegradedIpcHandlers` (db-failed boot) both answer this channel
-    // `{ ok: false, error }`. `HarnessCommandSetResult` says `reason` is
-    // required, so nothing but this narrowing stands between `undefined` and a
-    // failure line rendered as an empty string.
-    expect(isHarnessCommandFailureReason(undefined)).toBe(false);
-    expect(isHarnessCommandFailureReason(null)).toBe(false);
-    expect(isHarnessCommandFailureReason("")).toBe(false);
-  });
-
-  it("rejects a string that only looks like a reason", () => {
-    expect(isHarnessCommandFailureReason("not-permitted")).toBe(false);
-    // Inherited keys are not verdicts: `Object.hasOwn`, never `in`.
-    expect(isHarnessCommandFailureReason("toString")).toBe(false);
-    expect(isHarnessCommandFailureReason("constructor")).toBe(false);
   });
 });

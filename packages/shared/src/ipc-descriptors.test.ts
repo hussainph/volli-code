@@ -1648,61 +1648,6 @@ describe("HARNESS_IPC descriptor table", () => {
     });
   });
 
-  describe("volli:harness-command-get", () => {
-    const { guard, invalidError } = HARNESS_IPC["volli:harness-command-get"];
-
-    it("accepts a bare harness id", () => {
-      expect(guard([{ harnessId: "opencode" }])).toBe(true);
-    });
-
-    it("refuses a missing or non-string harnessId", () => {
-      expect(guard([{}])).toBe(false);
-      expect(guard([{ harnessId: 1 }])).toBe(false);
-    });
-
-    it("refuses a payload that is not a record, or the wrong arity", () => {
-      expect(guard([null])).toBe(false);
-      expect(guard([])).toBe(false);
-      expect(guard([{ harnessId: "opencode" }, {}])).toBe(false);
-    });
-
-    it("carries the handler's exact invalid-input message", () => {
-      expect(invalidError).toBe("Invalid harness id");
-    });
-  });
-
-  describe("volli:harness-command-set", () => {
-    const { guard, invalidError } = HARNESS_IPC["volli:harness-command-set"];
-
-    it("accepts a string command", () => {
-      expect(guard([{ harnessId: "opencode", command: "/opt/homebrew/bin/opencode" }])).toBe(true);
-    });
-
-    it("accepts a null command — clearing the override", () => {
-      expect(guard([{ harnessId: "opencode", command: null }])).toBe(true);
-    });
-
-    it("refuses a missing harnessId", () => {
-      expect(guard([{ command: "opencode" }])).toBe(false);
-    });
-
-    it("refuses a command that is neither a string nor null", () => {
-      expect(guard([{ harnessId: "opencode", command: undefined }])).toBe(false);
-      expect(guard([{ harnessId: "opencode", command: 1 }])).toBe(false);
-      expect(guard([{ harnessId: "opencode" }])).toBe(false);
-    });
-
-    it("refuses a payload that is not a record, or the wrong arity", () => {
-      expect(guard([null])).toBe(false);
-      expect(guard([])).toBe(false);
-      expect(guard([{ harnessId: "opencode", command: null }, {}])).toBe(false);
-    });
-
-    it("carries the handler's exact invalid-input message", () => {
-      expect(invalidError).toBe("Invalid harness command");
-    });
-  });
-
   describe("HARNESS_CHANNELS derivation", () => {
     it("derives from the descriptor table's keys", () => {
       expect(HARNESS_CHANNELS).toEqual(Object.keys(HARNESS_IPC));
@@ -1713,8 +1658,6 @@ describe("HARNESS_IPC descriptor table", () => {
         "volli:harness-pending",
         "volli:harness-trust-set",
         "volli:harness-registered",
-        "volli:harness-command-get",
-        "volli:harness-command-set",
       ]);
     });
   });

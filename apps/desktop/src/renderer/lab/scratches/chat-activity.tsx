@@ -2,7 +2,7 @@
  * The transcript's component gallery.
  *
  * Every shape the chat surface can render, against fixture parts, with no
- * OpenCode process and no Electron. That is the point: the transcript's hard
+ * agent runtime and no Electron. That is the point: the transcript's hard
  * cases are streaming states, failure states and the rolling tail, and those
  * are exactly the ones you cannot summon on demand from a live adapter — you
  * wait for a tool to fail, or you never see the row you changed.

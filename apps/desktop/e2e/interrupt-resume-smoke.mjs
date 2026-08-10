@@ -183,7 +183,7 @@ async function waitForSessionEnded(page, ticketId, sessionId) {
  * Doing with a live fake agent session. Returns the ticket's identity plus the
  * live session's id (resolved via the durable record, not scraped from the UI).
  *
- * `opts.agentLabel` picks a harness from the composer's "Choose agent" menu
+ * `opts.agentLabel` picks a harness from the composer's "Terminal harness" menu
  * (composer-kickoff-smoke.mjs's same path) and `opts.command` names the fake
  * binary that choice must reach. The picker's choice is STICKY (`lastHarnessId`),
  * so every scenario that cares which harness it booted names one rather than
@@ -197,7 +197,7 @@ async function kickoffTicket(page, projectId, title, body, opts = {}) {
     throw new Error("composer / kickoff button missing");
   }
   if (opts.agentLabel !== undefined) {
-    await composer(page).getByRole("button", { name: "Choose agent" }).click();
+    await composer(page).getByRole("button", { name: "Terminal harness" }).click();
     await sleep(200);
     await page.getByRole("menuitem", { name: opts.agentLabel, exact: true }).click();
     await sleep(200);

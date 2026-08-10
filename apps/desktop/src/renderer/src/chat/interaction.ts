@@ -134,15 +134,15 @@ export type InteractionFieldRole = "answer" | "note" | "redirection";
  *
  * Every question gets a box. What differs is where the words go:
  *
- * - `answer` — the prompt declared `custom`, so OpenCode takes free text as an
- *   ordinary entry in *that question's own* answer array. The words are a real
- *   answer on the wire and travel with the rest of the submission.
+ * - `answer` — the prompt declared `custom`, so free text is an ordinary entry
+ *   in *that question's own* answer array. The words are a real answer on the
+ *   wire and travel with the rest of the submission.
  * - `note` — the prompt declares a refusal among its options, which makes it a
- *   permission; `POST /permission/{id}/reply` carries a `message` beside the
- *   verdict, so the words ride the decision itself.
+ *   permission; a permission reply carries a `message` beside the verdict, so
+ *   the words ride the decision itself.
  * - `message` — nothing on the wire takes them. `answers` is an array of
  *   *selected labels* and has no custom field, so words here would claim a
- *   choice OpenCode never offered and the adapter would drop them. They travel
+ *   choice the prompt never offered and an adapter would drop them. They travel
  *   instead as what they are: the ask is refused, and the words are sent as the
  *   next message, so the agent acts on them immediately.
  *
@@ -155,10 +155,10 @@ export type InteractionTextCarrier = "answer" | "note" | "message";
 
 export function promptTextCarrier(prompt: SessionInteractionPrompt): InteractionTextCarrier {
   // A declared refusal is read *before* `custom`, because a prompt carrying both
-  // is still a permission and `POST /permission/{id}/reply` has no free-text
-  // answer slot: it takes a verdict and a `message` beside it. Reading that
-  // prompt as `answer` promised the words a place in an answer array the
-  // endpoint never sends, and the note went with them.
+  // is still a permission, and a permission reply has no free-text answer slot:
+  // it takes a verdict and a `message` beside it. Reading that prompt as
+  // `answer` promised the words a place in an answer array the reply never
+  // sends, and the note went with them.
   if (prompt.options.some((option) => optionPolarity(option) === "reject")) return "note";
   if (prompt.custom) return "answer";
   return "message";
@@ -210,8 +210,8 @@ export function promptFieldOpen(
  * refuses, and a refusal is the empty resolution. The card dims what the refusal
  * discards rather than leaving it live and silently throwing it away at submit.
  *
- * **Card-wide, because the refusal is.** OpenCode takes one `answers` array per
- * request, so there is no partial resolution to send: words typed on the second
+ * **Card-wide, because the refusal is.** A resolution carries one `answers`
+ * array, so there is no partial resolution to send: words typed on the second
  * question of three discard the first and third as surely as their own. Asked
  * per prompt, this dimmed only the question in view, so a reader answered Q1 and
  * Q3, typed into Q2, and submitted an all-empty resolution while two ticked
@@ -257,7 +257,7 @@ export function isPromptAnswered(
 }
 
 /**
- * Submit is atomic: OpenCode takes one `answers` array per request, so a
+ * Submit is atomic: a resolution carries one `answers` array, so a
  * half-filled card has nothing to send and the button stays inert until every
  * question has been given something.
  *
@@ -466,8 +466,8 @@ export function interactionAnswers(
 /**
  * The answers, plus the flat pair every stored resolution still carries.
  *
- * The flat `optionIds` are the union in prompt order, which is exactly what the
- * OpenCode adapter decodes back into `answers: string[][]` — the option ids
+ * The flat `optionIds` are the union in prompt order, which is exactly what an
+ * adapter decodes back into per-question answers — the option ids
  * encode their own question index, so flattening is lossless rather than a
  * lossy convenience. `answers` rides along for the readers that understand it.
  */
@@ -515,8 +515,8 @@ export function interactionQuestions(
  *
  * **Movement is free.** Stepping never requires an answer and never advances on
  * one: a reader may skip the hard question, answer the last two and come back.
- * What is *not* free is submitting — OpenCode takes one `answers` array per
- * request, so the card is atomic and {@link canSubmitInteraction} still holds
+ * What is *not* free is submitting — a resolution carries one `answers` array,
+ * so the card is atomic and {@link canSubmitInteraction} still holds
  * the button until every question has been given something.
  *
  * Null for a single question, which must not grow chrome for a position it
@@ -554,7 +554,7 @@ export function interactionCarousel(
 /**
  * The open interaction a gated call is waiting on.
  *
- * Matched on the id the harness put on both sides: OpenCode keys a permission
+ * Matched on the id the harness put on both sides: a harness keys a permission
  * by its own request id, the adapter stamps that id onto the gated part's
  * `approval` and mints the interaction as `permission:<id>` with the same value
  * in `native.id`. So the correlation is the harness's own, never a guess from

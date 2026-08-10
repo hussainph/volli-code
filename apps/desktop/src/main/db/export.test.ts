@@ -12,7 +12,6 @@ import { addTicketLabel, getOrCreateLabel } from "./labels-repo";
 import { MIGRATIONS } from "./migrations";
 import {
   insertProject,
-  setProjectRuntimeRecord,
   updateProjectAppearance,
   updateProjectCanvas,
   updateProjectThemeOverride,
@@ -124,8 +123,13 @@ describe("buildExportDocument — populated db", () => {
     updateProjectCanvas(ctx.db, project.id, exportedCanvas, 61);
     updateProjectAppearance(ctx.db, project.id, "auto", 62);
     // Migration 019's one. Same stance as the canvas: the STORED string, and
-    // the global half of the same setting rides `app_state` beside it.
-    setProjectRuntimeRecord(ctx.db, project.id, "opencode", '{"recordVersion":1}', 63);
+    // the global half of the same setting rides `app_state` beside it. Written
+    // here in SQL because nothing in the app writes this column any more — a
+    // row like this can only have been left behind by a build that still had
+    // the Runtime Catalog, which is exactly what an export must not drop.
+    ctx.db
+      .prepare("UPDATE projects SET runtime_preferences = ? WHERE id = ?")
+      .run('{"opencode":{"recordVersion":1}}', project.id);
 
     const liveTicket = testTicket(project.id, {
       id: "ticket-live",
@@ -224,10 +228,11 @@ describe("buildExportDocument — populated db", () => {
         runtimePreferences: '{"opencode":{"recordVersion":1}}',
         colorIndex: project.colorIndex,
         sortOrder: project.sortOrder,
-        // Bumped by the three theme writes above plus the runtime one.
-        rowVersion: 5,
+        // Bumped by the three theme writes above; the leftover
+        // `runtime_preferences` row is seeded in raw SQL and moves neither.
+        rowVersion: 4,
         createdAt: project.createdAt,
-        updatedAt: 63,
+        updatedAt: 62,
       },
     ]);
 
