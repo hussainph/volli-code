@@ -8,6 +8,8 @@ export * from "./harness-command";
 export * from "./harness";
 export * from "./agent-surface";
 export * from "./agent-runtime";
+export * from "./authority";
+export * from "./authority-policy";
 export * from "./session-activity";
 export * from "./ticket-branch";
 export * from "./ticket-comment";

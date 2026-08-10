@@ -2,11 +2,6 @@
 
 export type SessionRole = "project" | "ticket" | "subagent";
 
-/** Ticket Sessions persist Auto authority in the first Pi migration slice. */
-export interface AuthoritySnapshot {
-  mode: "auto";
-}
-
 /** Volli's reasoning policy, independent of any provider's type names. */
 export const REASONING_LEVELS = [
   "off",
