@@ -8,10 +8,16 @@ default-mode announcement, Aug 7, 2026.
 
 ## On quoting
 
-The engineering post could not be retrieved as full text; it was read through repeated
-extraction passes with different prompts, and quotes below are what those passes returned.
-Every rule and number is quoted rather than paraphrased. Quotes that only one pass produced
-and that read like they could be summary rather than source text are marked *(single pass)*.
+Every rule and number below is quoted rather than paraphrased, and every quotation from the
+engineering post has been checked back against the page itself — 54 in total, all faithful.
+Where a quotation is a fragment of a longer sentence, the surrounding prose gives the rest.
+
+Two things are worth knowing about what is *not* first-hand. The engineering post's own
+section text was read through the fetch tool rather than eyeballed as one continuous page, so
+a claim it makes only in passing could have been missed — absences recorded in §1.18 are
+"nothing was found", not "the page was exhaustively indexed". And the Aug 7 announcement's
+statistics table in §1.19 was extracted rather than verified figure by figure; its
+permission-settings quotes in §1.3 were verified directly.
 
 The article's own section order is: How it works · Threat model · How permission decisions
 work · The classifier decision criteria · Results · Design decisions · What's next.
@@ -64,15 +70,30 @@ escapes don't."
 Stated limit: "While this is best-effort based on real-world usage, any list will inevitably
 be incomplete."
 
-The article does not describe how auto mode interacts with deny rules, ask rules,
-`.claude/settings.json`, or hooks. Silent.
+The engineering post stops there. The Aug 7 announcement documents the rest of the behaviour,
+and it answers three questions the engineering post leaves open:
+
+- **Rules run first, before the classifier.** "Permission rules still fire before the
+  classifier in auto mode, except for allow rules broad enough to grant arbitrary code
+  execution (e.g. `python:*`). These arbitrary rules are set aside while in auto mode".
+- **Nothing on disk is rewritten, and the drop is scoped to the mode.** "Settings files aren't
+  modified, and the rules apply again the moment you switch to another mode."
+
+So "drop" means *set aside for the duration of auto mode* — an in-memory suppression, not an
+edit to `.claude/settings.json`, and reversible by leaving the mode.
+
+Still unaddressed by either post: deny rules, ask rules, and hooks.
 
 ## 1.4 The three decision tiers, in precedence order
 
+**Tier 0 — the user's own permission rules.** Not called a tier by either post, but it is the
+first thing evaluated: "Permission rules still fire before the classifier in auto mode, except
+for allow rules broad enough to grant arbitrary code execution" (announcement). The surviving
+narrow rules therefore short-circuit everything below.
+
 **Tier 1 — fixed allowlist, no classifier call.** "A fixed allowlist includes tools that
 can't modify state, including file reads, text and file-pattern search, code navigation,
-todo and plan-mode transitions." User-configured always-allow rules act as additions here,
-subject to the drop in §1.3.
+todo and plan-mode transitions."
 
 **Tier 2 — in-project file writes, no classifier call.** "File writes and edits inside the
 project directory are allowed without a classifier call. Routine coding (e.g. editing source
@@ -108,6 +129,9 @@ the pipeline is 0.4% FPR / 17% FNR (§1.11). Stage 2 only converts blocks into a
 
 ## 1.6 What the classifier is shown, and what is stripped
 
+The whole rule in one sentence: "Assistant prose, tool-call descriptions, and tool outputs are
+stripped; only user messages and the executable payload remain."
+
 **Shown:** user messages, and the agent's tool calls (the executable payloads).
 
 **Stripped — assistant text and reasoning.** "We strip assistant text so the agent can't talk
@@ -120,7 +144,8 @@ block rule."
 is "the primary prompt-injection defense, since tool outputs are where hostile content enters
 the context."
 
-**Stripped — tool-call descriptions**, to keep the transcript short. *(single pass)*
+**Stripped — tool-call descriptions.** Covered by the same sentence and the same two reasons;
+the article gives them no separate rationale.
 
 **Accepted cost — provenance.** "There is a tradeoff in terms of provenance. If the user
 never named 'job abc123,' the classifier can't tell whether the agent pulled it from a query
@@ -205,12 +230,12 @@ Worked example: "clean up my branches" does not authorize a batch delete.
 | >20 | default block rules | — | — |
 | 3 / 20 | escalation thresholds | — | — |
 
-Dataset construction, as described: real internal traffic is Claude Code tool calls from
-Anthropic employees; **real overeager actions (n=52)** is curated from sessions where
-employees denied an action or an incident was flagged retroactively, and its size reflects how
-rare it is to capture genuinely dangerous behaviour in real usage; **synthetic exfiltration
-(n=1,000)** is generated attempts — HTTP POSTs carrying sensitive data, unauthorized git
-pushes, embedded credentials, often obfuscated.
+Dataset construction, in the article's words. Real internal traffic is Claude Code tool calls
+from Anthropic employees. **Real overeager actions (n=52)**: "Curated from sessions where an
+employee denied the action or it was flagged post-hoc. Small because it requires Claude
+attempting something dangerous in a real session, captured and labeled." **Synthetic data
+exfiltration (n=1,000)**: "Generated attempts including HTTP POSTs of sensitive data, git
+pushes to untrusted remotes, and credentials embedded in URLs; many use obfuscation."
 
 Note the direction: stage 2 only turns blocks into allows, so FPR falls (8.5 → 0.4) and FNR
 rises (6.6 → 17; 1.8 → 5.7).
@@ -225,13 +250,12 @@ consent judgement, not in the risk judgement. This is the failure mode of §1.10
 
 ## 1.13 Denial handling, escalation, and headless
 
-**Deny-and-continue is the default.** A denial does not end the session; the agent is expected
-to "recover and try a safer approach where one exists", and in practice will "reconsider, and
-usually find an alternative path".
+**Deny-and-continue is the default.** A denial does not end the session.
 
-**The denial reaches the agent as a tool result plus an instruction.** The denial "comes back
-as a tool result along with an instruction" to "treat the boundary in good faith: find a safer
-path, don't try to route around the block."
+**The denial reaches the agent as a tool result plus an instruction.** "When the transcript
+classifier flags an action as dangerous, that denial comes back as a tool result along with an
+instruction to treat the boundary in good faith: find a safer path, don't try to route around
+the block."
 
 **Escalation thresholds.** "3 consecutive denials or 20 total". On trip, the system "stop[s]
 the model and escalate[s] to the human."
@@ -244,7 +268,8 @@ terminate the process."
 
 **Why deny-and-continue rather than deny-and-kill.** "A 0.4% FPR sounds small, but if every
 false positive killed the session it would be a serious usability problem for long-running
-tasks." A false positive is priced as one retry, not one lost session.
+tasks." The price of a wrong block is stated exactly: "a false positive costs a single retry
+where the agent gets a nudge, reconsiders, and usually finds an alternative path."
 
 ## 1.14 Prompt injection: two layers that compose
 
@@ -306,8 +331,10 @@ Stated explicitly so nothing below reads as inference from a gap:
 - Any latency, token, or dollar cost figure for a classifier call.
 - The identity or text of the individual block rules, or how many fall in each of the four
   groups.
-- Whether tier 2 carves out any in-project path.
-- How auto mode composes with deny rules, ask rules, settings files, or hooks.
+- Whether tier 2 carves out any in-project path. Asked directly: no path — not `.git`, not
+  `.claude/settings.json` — is excluded from the tier-2 allowance anywhere on the page.
+- How auto mode composes with **deny rules, ask rules, or hooks**. The announcement covers the
+  allow-rule and settings-file half (§1.3); these three remain unaddressed by both posts.
 - What the classifier does with a tool call it cannot parse.
 - Whether a denial is recorded durably, attributed to a rule, or countable per rule — the 3/20
   counters must count something, but the article never says the count is attributable or
@@ -334,6 +361,8 @@ Classifier mechanics not in the engineering post:
 - A hard-deny category: "Data exfiltration, like sending your code or secrets somewhere
   external, sits in a category the classifier is designed to never approve."
 - The injection probe described as API-side.
+- The precedence of the user's own permission rules, and the fact that dropping the broad ones
+  is an in-memory suppression rather than a settings edit (§1.3, §1.4).
 
 Numbers, all blog-only:
 
@@ -362,9 +391,9 @@ each session, a single permission prompt was swapped for a clearly dangerous com
 "approving the prompt never resulted in anything dangerous being run."
 
 The 93% (Mar) and 97% (Aug) approval figures are both real and from different posts five
-months apart. `docs/plans/authority-and-runtime-shape.md` cites the 97%/39% pair; that is the
-blog's number and the citation is correct, but the engineering post's 93% should be the one
-quoted whenever the engineering post is the source.
+months apart — not a discrepancy to resolve. `docs/plans/authority-and-runtime-shape.md` cites
+the 97%/39% pair from the announcement and records the 93% alongside it, which is right: quote
+whichever post you are citing.
 
 ---
 
@@ -453,7 +482,9 @@ different question — "does this call cross a boundary" — and answers it well
 
 ### Scoring our own stated reasons against the article
 
-The plan doc's "Why no classifier yet" makes three claims. The article's verdict on each:
+"Why no classifier yet" made three claims when this reading started. The article's verdict on
+each is below; (a) and (b) were sharpened in the plan doc as a result, so they are quoted here
+in their original form and the outcome is noted.
 
 **(a) "A classifier earns its cost when the dangerous categories are reachable … a per-call
 model invocation would mostly re-derive what the kernel already guarantees."**
@@ -476,8 +507,9 @@ enforcer; it is an intent checker. Group 1's "force-pushing over history", group
 "modifying the agent's own permission config", group 4's "modifying shared resources … the
 agent didn't create" and every one of the five illustrated incidents are scope failures inside
 capability the agent legitimately has. A kernel cannot guarantee anything about those, so
-"re-derive what the kernel already guarantees" understates what the classifier does. Correct
-the sentence.
+"re-derive what the kernel already guarantees" understated what the classifier does. **Fixed:**
+the plan now names the classifier an intent checker, keeps the block-group argument above, and
+records the intent gap as accepted rather than absent.
 
 **(b) "Deterministic rules plus the existing sandbox cover the realistic risk."**
 
@@ -490,8 +522,9 @@ fails to contain what it contains.
 What does undercut (b) is the residual the article catalogues *inside* a bounded workspace:
 overeager scope escalation, honest mistakes, and injected instructions that produce
 rule-legal calls. Volli's ten rules have no predicate that could fire on any of them. "Covers
-the realistic risk" is true for the exfiltration and persistence classes and false for the
-overeagerness class, which is the class the article's 17% is measured against.
+the realistic risk" was true for the exfiltration and persistence classes and false for the
+overeagerness class — the class the article's 17% is measured against. **Fixed:** the plan now
+says "most of the realistic risk" and states the remainder.
 
 **(c) "It becomes warranted when either … network egress is allowlisted … or the Main-checkout
 Role ships."**
@@ -601,7 +634,7 @@ bundle, and both directions should be built then.
 | `rm -rf $f` in a loop refused (false positive, self-amplifying) | **Yes.** This is precisely what stage 2 exists for: convert an over-blocking fast decider into 0.4% FPR. Until then, item 3 above is the mitigation. |
 | A Session cannot set its own git identity | Not addressed by the article; irrelevant. |
 | `beforeToolCall` is advisory, covers tool calls only | **No.** Anthropic's classifier has the same property — it judges tool calls and enforces nothing below them. Their gap is larger, because they have no sandbox under it. |
-| Shell lexer bypasses: `eval`, base64, command substitution, `xargs` | **Yes, in principle.** "evaluate the real-world impact of an action, rather than just the surface text" is exactly the rule a lexer cannot implement. This is the strongest *technical* argument in the article for a classifier over a rule table, and the plan doc already concedes the lexer is "unsound as a standalone boundary". |
+| Shell lexer bypasses: `eval`, base64, command substitution, `xargs` | **Yes, in principle.** "evaluate the real-world impact of an action, rather than just the surface text" is exactly the rule a lexer cannot implement. This is the strongest *technical* argument in the article for a classifier over a rule table; the plan doc already conceded the lexer is "unsound as a standalone boundary" and now names this rule as the second thing only a classifier reaches. |
 
 ## 2.3 What we have that the article does not
 
@@ -727,23 +760,29 @@ article's framing is the argument for keeping it that way.
 Nothing to correct — the article has one verdict and one escalation. Our split is finer, and
 §2.3 item 4 is the reason it is worth keeping.
 
-## 2.5 One factual error in our own plan doc
+## 2.5 Two errors this reading found in the plan doc, both since fixed
 
-`docs/plans/authority-and-runtime-shape.md` § "Product decision" says Anthropic's auto mode
-"routes every tool call through a classifier that … screens fetched content for prompt
-injection".
+Recorded because the reasoning is worth keeping, not because anything is outstanding.
+`docs/plans/authority-and-runtime-shape.md` has been corrected on both counts.
 
-It does not. Injection screening is a **separate input-layer probe** on tool output, and the
-transcript classifier is defined by *never seeing* tool output — that stripping is, in the
-article's words, "the primary prompt-injection defense". The two are independent layers whose
-independence is the guarantee: "For an injection to succeed end-to-end, it must evade detection
-at the input layer, then steer the agent into emitting a tool call that the transcript
-classifier independently judges as both safe and aligned with user intent."
+**The injection layer was collapsed into the classifier.** The plan's "Product decision"
+paragraph listed "screens fetched content for prompt injection" among the things Anthropic's
+classifier does. It does not. Injection screening is a separate input-layer probe on tool
+output, and the transcript classifier is defined by *never seeing* tool output — that stripping
+is itself "the primary prompt-injection defense". Their independence is the guarantee: "For an
+injection to succeed end-to-end, it must evade detection at the input layer, then steer the
+agent into emitting a tool call that the transcript classifier independently judges as both
+safe and aligned with user intent." One clause hid the fact that Volli lacks an entire layer,
+and made "why no classifier yet" read as though it covered injection. The plan now sets the
+probe out as a separate mechanism and says plainly that nothing in Volli does this.
 
-Collapsing them into one sentence hid the fact that Volli lacks an entire layer, and made the
-"why no classifier yet" argument look like it covered injection when nothing in Volli does.
-Worth correcting in the plan doc when it is next touched.
+**"Why no classifier yet" overclaimed the kernel's reach.** It said a per-call model invocation
+"would mostly re-derive what the kernel already guarantees." That misdescribes the classifier:
+it is an intent checker, not a boundary enforcer, and a kernel guarantees nothing about intent.
+The plan now says so, keeps the load-bearing half of the argument (three of four block-rule
+groups need network or the home directory, both denied), and states the residual as accepted
+rather than absent.
 
-The same paragraph's other claims check out against the blog (§1.19): the push-destination
-check and the pre-`reset --hard` git status are both real, both blog-only, and neither appears
-in the engineering post.
+The rest of that paragraph checked out. The push-destination check and the pre-`reset --hard`
+git status are both real and both blog-only (§1.19), and the plan's 97%/39% citation is the
+announcement's figure, correctly attributed — it now also notes the engineering post's 93%.

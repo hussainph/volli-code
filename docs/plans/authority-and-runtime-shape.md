@@ -458,6 +458,29 @@ and keeps refusing. That is a real question with a real consequence, which is wh
 it is an interaction rather than an Attention — and it avoids widening the
 Attention reason union for a state none of its members describes.
 
+**We park where Anthropic terminates, and that is deliberate.** Their rule is
+that in headless mode "there is no UI to ask the human, so we instead terminate
+the process." Volli has no headless mode and no manual-approval mode to fall back
+*to*, so terminating would destroy a Session to avoid asking a question the
+product can hold open indefinitely. `sessionAwaitsUser()` already surfaces an
+unanswered interaction in the sidebar and the chat listing, so a parked Session is
+visible rather than silently stuck. Their word "fallback" should stop being
+borrowed for this: ours is a check-in that re-arms auto, not a demotion to manual.
+
+**The thresholds are inherited, not earned.** 3-consecutive and 20-per-Session
+were tuned against a decider measured at 0.4% false positives over 10,000 real
+sessions. A deterministic rule table is not that decider and its false-positive
+rate here is unmeasured — the Part I record above documents one narrowly avoided
+case where `2>/dev/null` alone would have tripped three-in-a-row. Slice 3 makes
+the rate measurable for the first time. Ship 3/20 as provisional and read the
+ledger before defending them.
+
+**An unreadable call counts toward the streak.** A command the lexer cannot parse
+is refused like any other and pushes the Session toward being asked. That is
+right — the agent genuinely cannot proceed and the user genuinely should know —
+but it means a parser limitation, not a policy judgement, is what interrupts
+someone. Recorded here so it is a decision rather than a side effect.
+
 **No new event kind for an override.** The `authority.denied` emit moves to
 *after* the ask resolves and fires only when the call is actually refused;
 otherwise history would record a denial for a call that ran. What the user
