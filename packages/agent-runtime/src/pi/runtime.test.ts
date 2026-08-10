@@ -23,6 +23,7 @@ import {
   type Models,
   type ToolCall,
 } from "@earendil-works/pi-ai";
+import { BUILTIN_RULE_PACK_HASH, BUILTIN_RULE_PACK_ID } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { RuntimeObservation, SessionRuntimeSpec } from "../contracts";
 import { ScopedExecutionEnv, type SessionExecutionEnv } from "./scoped-execution-env";
@@ -190,30 +191,41 @@ function fixture(overrides: Partial<SessionRuntimeSpec> = {}): Attachment {
   writeFileSync(join(worktreePath, "MARKER.txt"), "volli-marker-42\n");
 
   const observations: RuntimeObservation[] = [];
+  const spec: SessionRuntimeSpec = {
+    identity: {
+      role: "ticket",
+      sessionId: "session-1",
+      rootThreadId: "thread-1",
+      attachmentId: "attachment-1",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+    },
+    workspacePath: worktreePath,
+    venue: "local",
+    model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
+    authority: {
+      mode: "auto",
+      location: "worktree",
+      tools: [],
+      rulePackId: BUILTIN_RULE_PACK_ID,
+      rulePackHash: BUILTIN_RULE_PACK_HASH,
+      classifierModel: null,
+      fallback: { consecutiveDenials: 3, sessionDenials: 20 },
+    },
+    brief: { text: "VC-12 — read the marker." },
+    tools: { tools: ["read"] },
+    observer: async (observation) => {
+      observations.push(observation);
+    },
+    ...overrides,
+  };
   return {
     observations,
     worktreePath,
     sessionDataDir,
-    spec: {
-      identity: {
-        role: "ticket",
-        sessionId: "session-1",
-        rootThreadId: "thread-1",
-        attachmentId: "attachment-1",
-        projectId: "project-1",
-        ticketId: "ticket-1",
-      },
-      workspacePath: worktreePath,
-      venue: "local",
-      model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
-      authority: { mode: "auto" },
-      brief: { text: "VC-12 — read the marker." },
-      tools: { tools: ["read"] },
-      observer: async (observation) => {
-        observations.push(observation);
-      },
-      ...overrides,
-    },
+    // The Snapshot names the bundle the attachment actually loads. A fixture
+    // that let the two drift would describe a Session that cannot exist.
+    spec: { ...spec, authority: { ...spec.authority, tools: spec.tools.tools } },
   };
 }
 
@@ -885,6 +897,59 @@ describe("startSession", () => {
 
     await handle.close();
     expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      what: "a command the Session's authority denies",
+      command: "git reset --hard",
+      expected: "discards uncommitted work",
+    },
+    {
+      what: "a command that cannot be normalized at all",
+      command: `cat ${"x".repeat(400)}`,
+      expected: "could not be checked against the Session's authority",
+    },
+  ])("refuses $what before the process is spawned", async ({ command, expected }) => {
+    // A Main checkout, because that is where discarding a person's uncommitted
+    // work is the refusal worth making.
+    const attachment = fixture({ tools: { tools: ["execute"] } });
+    attachment.spec.authority = { ...attachment.spec.authority, location: "main-checkout" };
+    const exec = vi.fn(async () => ({
+      ok: true as const,
+      value: { stdout: "", stderr: "", exitCode: 0 },
+    }));
+    const containedEnv = {
+      cwd: attachment.worktreePath,
+      prepareProcessExecution: async () => ({ ok: true as const, value: undefined }),
+      exec,
+      cleanup: async () => undefined,
+    } as unknown as SessionExecutionEnv;
+    let toolResultContext: Context | undefined;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      executionEnvFactory: async () => containedEnv,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("bash", { command });
+            emit.finish();
+          },
+          (emit, context) => {
+            toolResultContext = context;
+            emit.text("Understood.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("Do it.");
+    await handle.close();
+
+    expect(exec).not.toHaveBeenCalled();
+    expect(JSON.stringify(toolResultContext?.messages)).toContain(expected);
   });
 
   it("runs the real Pi loop against the worktree and settles durable history", async () => {

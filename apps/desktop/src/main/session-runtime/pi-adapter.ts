@@ -73,10 +73,13 @@ import type {
 import { NativeAttachmentError } from "@volli/session-engine";
 import {
   ACTIVITY_METADATA_KEY,
+  BUILTIN_RULE_PACK_HASH,
+  BUILTIN_RULE_PACK_ID,
   errorMessage,
   type ModelSelection,
   type SessionNativeDetail,
   type SessionNativeReference,
+  type WorkLocationKind,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 
@@ -126,6 +129,13 @@ interface PiRuntimeContextFields {
   brief: string;
   /** Durable product policy selected before this attachment starts. */
   model: ModelSelection;
+  /**
+   * Which tree the Session runs in. Not derivable from the Role here: a Ticket
+   * that never took a worktree is bound to the project's Main checkout by
+   * `location.ts`, and policy that assumed otherwise would treat a person's
+   * uncommitted work as a disposable branch.
+   */
+  location: WorkLocationKind;
 }
 
 /**
@@ -424,7 +434,18 @@ class PiBinding implements BindingHandle {
       workspacePath: this.#spec.directory,
       venue: "local",
       model: this.#context.model,
-      authority: { mode: "auto" },
+      // The pack is pinned by identity, not by value: a Settings edit must not
+      // change what a running Session may do, while the facts its rules read
+      // stay live.
+      authority: {
+        mode: "auto",
+        location: context.location,
+        tools: [...PI_TOOLS.tools],
+        rulePackId: BUILTIN_RULE_PACK_ID,
+        rulePackHash: BUILTIN_RULE_PACK_HASH,
+        classifierModel: null,
+        fallback: { consecutiveDenials: 3, sessionDenials: 20 },
+      },
       brief: { text: this.#context.brief },
       tools: { tools: [...PI_TOOLS.tools] },
       ...(this.#recovery === undefined ? {} : { recovery: this.#recovery }),

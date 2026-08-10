@@ -15,7 +15,12 @@ import type {
   ObservationSink,
 } from "@volli/session-engine";
 import { NativeAttachmentError } from "@volli/session-engine";
-import { ACTIVITY_METADATA_KEY, type ModelAccessSnapshot } from "@volli/shared";
+import {
+  ACTIVITY_METADATA_KEY,
+  BUILTIN_RULE_PACK_HASH,
+  BUILTIN_RULE_PACK_ID,
+  type ModelAccessSnapshot,
+} from "@volli/shared";
 import type { UIMessage } from "ai";
 
 import {
@@ -32,6 +37,7 @@ const ATTACHMENT_ID = "attachment-1";
 
 const context: PiRuntimeContext = {
   role: "ticket",
+  location: "worktree",
   projectId: "project-1",
   ticketId: "ticket-1",
   rootThreadId: piRootThreadId(SESSION_ID),
@@ -291,7 +297,15 @@ describe("Pi native adapter attach", () => {
     expect(spec.venue).toBe("local");
     expect(spec.workspacePath).toBe("/work/volli/.worktrees/VC-12");
     expect(spec.model).toEqual(context.model);
-    expect(spec.authority).toEqual({ mode: "auto" });
+    expect(spec.authority).toEqual({
+      mode: "auto",
+      location: "worktree",
+      tools: ["read", "edit", "write", "execute"],
+      rulePackId: BUILTIN_RULE_PACK_ID,
+      rulePackHash: BUILTIN_RULE_PACK_HASH,
+      classifierModel: null,
+      fallback: { consecutiveDenials: 3, sessionDenials: 20 },
+    });
     expect(spec.tools).toEqual({ tools: ["read", "edit", "write", "execute"] });
     expect(spec.brief).toEqual({ text: "VC-12: Host the Pi runtime" });
     expect(spec.signal?.aborted).toBe(false);
@@ -330,6 +344,7 @@ describe("Pi native adapter attach", () => {
       {
         resolveRuntimeContext: async () => ({
           role: "project",
+          location: "main-checkout",
           projectId: "project-1",
           ticketId: null,
           rootThreadId: piRootThreadId(SESSION_ID),
