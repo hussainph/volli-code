@@ -46,6 +46,34 @@ function count(value: string, character: string): number {
 }
 
 /**
+ * Shell keywords that can stand at the head of a command without being one.
+ *
+ * `if true; then rm -rf ~; fi` splits on `;` into a segment beginning `then`,
+ * and a segment whose program reads as `then` misses every rule that dispatches
+ * on the program. A conditional is the most ordinary thing an agent writes, so
+ * these are stripped the way grouping punctuation is. Only a leading run is
+ * removed: `echo then` still passes `then` as an argument.
+ */
+const KEYWORDS = new Set([
+  "!",
+  "case",
+  "do",
+  "done",
+  "elif",
+  "else",
+  "esac",
+  "fi",
+  "for",
+  "function",
+  "if",
+  "in",
+  "select",
+  "then",
+  "until",
+  "while",
+]);
+
+/**
  * Strip the grouping punctuation a subshell or brace group leaves welded to its
  * neighbours, so `( rm -rf ~ )` and `(rm -rf ~)` both report `rm` and `~`.
  *
@@ -67,6 +95,7 @@ function splitSegments(command: string): string[] {
   let current = "";
   let quote: "'" | '"' | "`" | undefined;
   let escaped = false;
+  let depth = 0;
 
   const flush = () => {
     if (current.trim() !== "") segments.push(current.trim());
@@ -111,6 +140,17 @@ function splitSegments(command: string): string[] {
     if (char === "&" && next === ">") {
       current += char;
       continue;
+    }
+    if (char === "(") depth += 1;
+    // An unbalanced `)` closes something this segment never opened, which is
+    // `case pattern)` starting its command list. A balanced one belongs to a
+    // subshell or `$(…)` and is left for `stripGrouping`.
+    if (char === ")") {
+      if (depth === 0) {
+        flush();
+        continue;
+      }
+      depth -= 1;
     }
     if (char === ";" || char === "\n" || char === "|" || char === "&") {
       flush();
@@ -203,6 +243,7 @@ export function lexCommandLine(command: string): LexedSegment[] {
       if (token.endsWith("&") && /^\d+$/.test(target)) continue;
       (token.includes(">") ? writeTargets : readTargets).push(stripGrouping(target));
     }
+    while (words.length > 0 && KEYWORDS.has(words[0].toLowerCase())) words.shift();
     return { text, words, writeTargets, readTargets };
   });
 }

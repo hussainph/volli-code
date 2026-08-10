@@ -104,13 +104,28 @@ to path resolution.
 
 ## Known limits
 
-Inherited from upstream and not fixed here: `eval`, `base64`, command
-substitution, and `xargs` all defeat the lexer, and heredocs are mangled into
-two `<` operators. Transparent-prefix unwrapping (`../normalize.ts`) skips a
-wrapper's flags without knowing them, so a flag taking a _separate_ value
-(`env -u NAME cmd`) still hides the program that follows it. This layer is
-defence in depth beneath the Seatbelt process sandbox, never the boundary
-itself.
+Considered and accepted, not overlooked.
+
+**The eval family.** `eval`, `base64 -d | sh`, command substitution, `xargs`,
+and every interpreter that takes a program on its command line — `python3 -c`,
+`node -e`, `perl -e`, `ruby -e` — hand the real command to a parser this lexer
+is not. `sh -c` and `env -S` are unwrapped because their argument is a _shell_
+script this lexer can re-read; a Python string is not, and pretending to
+understand one would be worse than declining to. The Seatbelt sandbox beneath
+does not care which interpreter asked.
+
+**Function definitions.** `f() { rm -rf ~; }; f` defines a body that nothing
+executes at definition time, then calls it under a name no rule knows. The same
+limit as `eval`, reached a different way.
+
+**Wrapper flags.** Transparent-prefix unwrapping (`../normalize.ts`) steps over
+each wrapper's known value-taking flags. One added upstream after that table was
+written would again hide the program behind its value.
+
+**Heredocs** are mangled into two `<` operators.
+
+This layer is defence in depth beneath the Seatbelt process sandbox, never the
+boundary itself.
 
 ## License
 

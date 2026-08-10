@@ -179,6 +179,8 @@ describe("normalizeToolCall, for execution", () => {
     "RM -rf $TMPDIR",
     "git -C $ELSEWHERE status",
     "GIT -C ~someone status",
+    "git --git-dir $ELSEWHERE log",
+    "git --work-tree ~someone status",
     "/usr/bin/rm -rf $TMPDIR",
     "echo x > $TARGET",
     "echo x >> ~someone/notes",
@@ -198,6 +200,11 @@ describe("normalizeToolCall, for execution", () => {
     "node $SCRIPT --flag",
     "sh -c 'echo $FOO && ls $BAR'",
     "cp $SOURCE $DEST",
+    // Near-universal in agent scripts. `git` is strict only where a path is
+    // expected, so a commit message carrying a variable is not a refusal.
+    'git commit -m "$MSG"',
+    "git log --grep=$PATTERN",
+    "git checkout $BRANCH",
   ])("drops the unresolvable operand in %j, which no rule reads", (command) => {
     const segments = bash(command, workspace().raw).segments;
     expect(segments.flatMap((segment) => segment.paths)).not.toContain(undefined);
@@ -281,6 +288,57 @@ describe("normalizeToolCall, for execution", () => {
     ]);
     // No `-c` means the shell is just a program.
     expect(bash("bash script.sh", raw).segments.map((s) => s.program)).toEqual(["bash"]);
+  });
+
+  // macOS resolves `ENV` and `RM` on a case-insensitive volume, and the rule
+  // table folds, so a table here that did not fold would let the spelling past.
+  it.each(["ENV rm -rf build", "/usr/bin/ENV rm -rf build", "NOHUP rm -rf build"])(
+    "folds case when matching a wrapper in %j",
+    (command) => {
+      const [segment] = bash(command, workspace().raw).segments;
+      expect(segment?.program).toBe("rm");
+    },
+  );
+
+  it("folds case when matching a shell, and re-lexes what it was handed", () => {
+    const { raw } = workspace();
+    expect(bash("SH -c 'rm -rf build'", raw).segments.map((s) => s.program)).toEqual(["SH", "rm"]);
+  });
+
+  // `--` used to become the script, so the payload was never lexed — worse than
+  // not unwrapping at all, because the retained outer segment reports `sh`.
+  it.each([
+    "bash -c -- 'rm -rf build'",
+    "sh -c -- 'git reset --hard'",
+    "bash --norc -c -- 'rm -rf build'",
+  ])("looks past the end-of-options marker in %j", (command) => {
+    const programs = bash(command, workspace().raw).segments.map((s) => s.program);
+    expect(programs.length).toBe(2);
+    expect(programs[1]).not.toBe("--");
+  });
+
+  // BSD `env -S` is `sh -c` without the shell, and `-P` takes a path list.
+  it("re-lexes an env -S script and steps over -P's value", () => {
+    const { raw } = workspace();
+    expect(bash("env -S 'rm -rf build'", raw).segments.map((s) => s.program)).toEqual([
+      "env",
+      "rm",
+    ]);
+    expect(bash("env -P /bin rm -rf build", raw).segments.map((s) => s.program)).toEqual(["rm"]);
+  });
+
+  // Verified present on stock macOS and verified to run their argument.
+  it.each([
+    "arch -arm64 rm -rf build",
+    "arch -arch arm64 rm -rf build",
+    "caffeinate rm -rf build",
+    "caffeinate -t 5 rm -rf build",
+    "script -q /dev/null rm -rf build",
+    "xcrun rm -rf build",
+    "sandbox-exec -p profile rm -rf build",
+  ])("unwraps the macOS wrapper in %j", (command) => {
+    const [segment] = bash(command, workspace().raw).segments;
+    expect(segment?.program).toBe("rm");
   });
 
   it("keeps a prefix as the program when nothing follows it to run", () => {

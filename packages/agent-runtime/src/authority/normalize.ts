@@ -19,8 +19,8 @@
  * the answer costs something. Refusing every one of them would deny `echo $PATH`
  * and any script that mentions a variable, and a boundary that fires on ordinary
  * work is one people learn to route around. So the refusal is scoped to the
- * positions a rule actually reads — see {@link OPERAND_READING_PROGRAMS} — and
- * elsewhere the operand is dropped.
+ * positions a rule actually reads — see {@link judgedOperands} — and elsewhere
+ * the operand is dropped.
  */
 
 import type {
@@ -120,12 +120,17 @@ interface Wrapper {
   /** Bare operands of the wrapper's own that come before the command: `timeout 5 cmd`. */
   operands: number;
   /**
-   * Short flags that take the next token as their value. Without them the value
+   * Flags that take the *next token* as their value. Without them the value
    * reads as the program — `nice -n 5 rm -rf ~` reported `5` and missed `rm`.
-   * Long options are absent because they carry their value with `=`.
+   * Matched whole, so `-n 5` is a value and `-n5` carries its own.
    */
-  valueFlags: string;
+  valueFlags: Set<string>;
 }
+
+const wrapper = (operands: number, ...valueFlags: string[]): Wrapper => ({
+  operands,
+  valueFlags: new Set(valueFlags),
+});
 
 /**
  * Programs whose own job is to run another program.
@@ -133,24 +138,35 @@ interface Wrapper {
  * Every rule dispatches on the segment's program, so an unstripped `env rm -rf ~`
  * reports `env` and clears rules 6 through 11 in one word. `env`'s assignments
  * are lifted into the segment's environment on the way past, where the
- * TLS-weakening rule already looks for them.
+ * TLS-weakening rule already looks for them. The table is macOS-first: entries
+ * were checked against what actually ships on the target platform, not against
+ * a general-Unix memory.
  */
 const TRANSPARENT_PREFIXES = new Map<string, Wrapper>([
-  ["env", { operands: 0, valueFlags: "u" }],
-  ["nohup", { operands: 0, valueFlags: "" }],
-  ["time", { operands: 0, valueFlags: "" }],
-  ["nice", { operands: 0, valueFlags: "n" }],
-  ["ionice", { operands: 0, valueFlags: "cnpPu" }],
-  ["stdbuf", { operands: 0, valueFlags: "ioe" }],
-  ["command", { operands: 0, valueFlags: "" }],
-  ["builtin", { operands: 0, valueFlags: "" }],
-  ["exec", { operands: 0, valueFlags: "a" }],
-  ["timeout", { operands: 1, valueFlags: "sk" }],
+  // BSD env's `-S` is `sh -c` without the shell; `nestedScript` re-lexes it.
+  ["env", wrapper(0, "-u", "-P", "-S")],
+  ["nohup", wrapper(0)],
+  ["time", wrapper(0)],
+  ["nice", wrapper(0, "-n")],
+  ["stdbuf", wrapper(0, "-i", "-o", "-e")],
+  ["command", wrapper(0)],
+  ["builtin", wrapper(0)],
+  ["exec", wrapper(0, "-a")],
+  // Stock macOS, all verified to run their argument.
+  ["arch", wrapper(0, "-arch")],
+  ["caffeinate", wrapper(0, "-t", "-w")],
+  ["script", wrapper(1, "-F", "-t")],
+  ["xcrun", wrapper(0, "--sdk", "--toolchain", "-sdk", "-toolchain")],
+  ["sandbox-exec", wrapper(0, "-p", "-f", "-D")],
+  // Not stock macOS. Retained because the sandbox's PATH keeps `/opt/homebrew`
+  // and `/usr/local`, so either can be present; an entry for an absent program
+  // costs nothing, while a missing entry for a present one is a bypass.
+  ["timeout", wrapper(1, "-s", "-k", "--signal", "--kill-after")],
+  ["ionice", wrapper(0, "-c", "-n", "-p", "-P", "-u")],
 ]);
 
-/** `-n` swallows the next token; `-n5` carries its value and does not. */
-function takesSeparateValue(arg: string, valueFlags: string): boolean {
-  return /^-[A-Za-z]+$/.test(arg) && valueFlags.includes(arg.charAt(arg.length - 1));
+function takesSeparateValue(arg: string, wrapping: Wrapper): boolean {
+  return wrapping.valueFlags.has(arg);
 }
 
 const SHELL_PROGRAMS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
@@ -163,9 +179,15 @@ const SHELL_PROGRAMS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
  */
 const MAX_COMMAND_DEPTH = 4;
 
-/** The last path component of a program token, so `/usr/bin/env` reads as `env`. */
+/**
+ * The last path component of a program token, folded — `/usr/bin/ENV` is `env`.
+ *
+ * Folded because the rule table folds, and because macOS resolves `ENV` and
+ * `RM` on a case-insensitive volume. A comparison here that did not fold would
+ * let an uppercase spelling through a table the rules then read case-blind.
+ */
 function programName(program: string): string {
-  return program.slice(program.lastIndexOf("/") + 1);
+  return program.slice(program.lastIndexOf("/") + 1).toLowerCase();
 }
 
 interface Invocation {
@@ -183,18 +205,18 @@ interface Invocation {
  * table was written would hide its value's successor once more.
  */
 function unwrapPrefixes(invocation: Invocation, depth: number): Invocation {
-  const wrapper = TRANSPARENT_PREFIXES.get(programName(invocation.program));
-  if (wrapper === undefined) return invocation;
+  const wrapping = TRANSPARENT_PREFIXES.get(programName(invocation.program));
+  if (wrapping === undefined) return invocation;
   if (depth === MAX_COMMAND_DEPTH) {
     throw new Error(`"${invocation.program}" wraps commands deeper than policy will follow.`);
   }
   const env = [...invocation.env];
   let index = 0;
-  let operands = wrapper.operands;
+  let operands = wrapping.operands;
   while (index < invocation.args.length) {
     const arg = invocation.args[index];
     if (isAssignment(arg)) env.push(arg);
-    else if (takesSeparateValue(arg, wrapper.valueFlags)) index += 1;
+    else if (takesSeparateValue(arg, wrapping)) index += 1;
     else if (!arg.startsWith("-")) {
       if (operands === 0) break;
       operands -= 1;
@@ -208,17 +230,38 @@ function unwrapPrefixes(invocation: Invocation, depth: number): Invocation {
   );
 }
 
-/** The script a shell was asked to run, for `sh -c` and its combined-flag spellings. */
-function shellScript(invocation: Invocation): string | undefined {
-  if (!SHELL_PROGRAMS.has(programName(invocation.program))) return undefined;
-  const index = invocation.args.findIndex(
-    (arg) => arg.startsWith("-") && !arg.startsWith("--") && arg.includes("c"),
+/**
+ * The command line a program was handed to run as text, rather than exec.
+ *
+ * Two spellings: a shell's `-c`, and BSD `env -S`, which is `sh -c` without the
+ * shell. Both throw when the script is missing, and that matters more than it
+ * looks — the outer segment is retained and reports `sh`, a program no rule
+ * refuses, so falling back to it would file the payload where nothing reads it.
+ */
+function nestedScript(invocation: Invocation): string | undefined {
+  const { program, args } = invocation;
+  if (programName(program) === "env") return valueAfter(invocation, args.indexOf("-S"));
+  if (!SHELL_PROGRAMS.has(programName(program))) return undefined;
+  return valueAfter(
+    invocation,
+    args.findIndex((arg) => arg.startsWith("-") && !arg.startsWith("--") && arg.includes("c")),
   );
+}
+
+/**
+ * The flag's value, skipping the `--` end-of-options marker.
+ *
+ * `bash -c -- 'rm -rf ~'` used to hand `--` back as the whole script, so the
+ * real command was never lexed at all.
+ */
+function valueAfter(invocation: Invocation, index: number): string | undefined {
   if (index === -1) return undefined;
-  if (index + 1 === invocation.args.length) {
+  const rest = invocation.args.slice(index + 1);
+  const script = rest[0] === "--" ? rest[1] : rest[0];
+  if (script === undefined) {
     throw new Error(`"${invocation.program} ${invocation.args[index]}" names no script to run.`);
   }
-  return invocation.args[index + 1];
+  return script;
 }
 
 function lexCommand(raw: string, workspacePath: string): PolicyCommand {
@@ -242,21 +285,34 @@ function policySegments(
   for (const lexed of lexCommandLine(commandLine)) {
     const invocation = unwrapPrefixes(splitProgram(lexed.words), 0);
     segments.push(policySegment(invocation, lexed, workspacePath));
-    const script = shellScript(invocation);
+    const script = nestedScript(invocation);
     if (script !== undefined) segments.push(...policySegments(script, workspacePath, depth + 1));
   }
   return segments;
 }
 
+/** git's flags whose value is a tree, and the only git operands a rule resolves. */
+const GIT_PATH_FLAGS = new Set(["-C", "--git-dir", "--work-tree", "--exec-path"]);
+
 /**
- * Programs whose resolved operands a rule actually reads, folded to agree with
- * the rule table's own case folding.
+ * Which of a segment's operands must resolve or refuse.
  *
- * This list is a coupling to `authority-policy.ts` and has to grow with it: if
- * a rule starts resolving operands for another program, that program belongs
- * here or its unresolvable operands will be dropped instead of refused.
+ * A coupling to `authority-policy.ts`, and it has to move with it. `rm` is
+ * strict everywhere, because every operand is a deletion target. `git` is strict
+ * only where a path is actually expected: `git commit -m "$MSG"` is close to
+ * universal in agent scripts, and refusing it three times would exhaust the
+ * Session's fallback budget over a commit message. Everything else is strict
+ * nowhere — no rule resolves its operands, so an unexpandable one is dropped.
  */
-const OPERAND_READING_PROGRAMS = new Set(["rm", "git"]);
+function judgedOperands(invocation: Invocation): (token: string) => boolean {
+  const name = programName(invocation.program);
+  if (name === "rm") return () => true;
+  if (name !== "git") return () => false;
+  const trees = new Set(
+    invocation.args.filter((_arg, index) => GIT_PATH_FLAGS.has(invocation.args[index - 1] ?? "")),
+  );
+  return (token) => trees.has(token);
+}
 
 function policySegment(
   invocation: Invocation,
@@ -264,14 +320,17 @@ function policySegment(
   workspacePath: string,
 ): PolicyCommandSegment {
   const { env, program, args } = invocation;
-  const read = OPERAND_READING_PROGRAMS.has(programName(program).toLowerCase());
   return {
     program,
     args,
-    paths: operandPaths([program, ...args, ...lexed.readTargets], workspacePath, read),
+    paths: operandPaths(
+      [program, ...args, ...lexed.readTargets],
+      workspacePath,
+      judgedOperands(invocation),
+    ),
     // A redirect target is always judged — it is the one operand position every
     // path rule reads, whatever the program.
-    writes: operandPaths(lexed.writeTargets, workspacePath, true),
+    writes: operandPaths(lexed.writeTargets, workspacePath, () => true),
     env,
   };
 }
@@ -284,21 +343,25 @@ function policySegment(
  * them cannot refuse them. Over-inclusion costs nothing, because a bare word
  * like `status` resolves inside the workspace, where no path rule fires.
  *
- * `judged` says whether a rule will read what comes back. When it will, an
+ * `judged` says whether a rule will read a given operand. Where one will, an
  * operand this process cannot expand — `$TMPDIR`, `~someone` — has to refuse:
- * dropping it would hand the rule a shorter list and a false clean bill. When
- * no rule will read it, dropping is not a concession but the honest answer, and
- * refusing instead would deny `echo $PATH` and every script that mentions a
- * variable, spending the Session's whole fallback budget on nothing.
+ * dropping it would hand the rule a shorter list and a false clean bill. Where
+ * none will, dropping is not a concession but the honest answer, and refusing
+ * instead would deny `echo $PATH` and every script that mentions a variable,
+ * spending the Session's whole fallback budget on nothing.
  */
-function operandPaths(tokens: readonly string[], workspacePath: string, judged: boolean): string[] {
+function operandPaths(
+  tokens: readonly string[],
+  workspacePath: string,
+  judged: (token: string) => boolean,
+): string[] {
   const paths = new Set<string>();
   for (const token of tokens) {
     if (token.startsWith("-") || isAssignment(token)) continue;
     const operand = shellPathTokenToPath(token, workspacePath);
     if (operand.kind === "no-location") continue;
     if (operand.kind === "unresolvable") {
-      if (judged) throw new Error(operand.reason);
+      if (judged(token)) throw new Error(operand.reason);
       continue;
     }
     paths.add(realPath(operand.path, token));

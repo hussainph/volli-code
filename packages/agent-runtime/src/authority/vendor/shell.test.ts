@@ -106,6 +106,28 @@ describe("lexCommandLine", () => {
     }
   });
 
+  // Splitting on `;` leaves the next segment beginning with a keyword, and a
+  // segment whose program reads as `then` misses every program rule.
+  it.each([
+    ["if true; then rm -rf ~; fi", 1],
+    ["for f in x; do rm -rf ~; done", 1],
+    ["while true; do rm -rf ~; done", 1],
+    ["until false; do rm -rf ~; done", 1],
+    ["case x in y) rm -rf ~;; esac", 1],
+    ["if true; then if true; then rm -rf ~; fi; fi", 2],
+    ["! rm -rf ~", 0],
+  ])("strips the leading keywords of %j", (command, index) => {
+    expect(shape(command)[index]?.words.slice(0, 3)).toEqual(["rm", "-rf", "~"]);
+  });
+
+  it("strips only a leading run, so a keyword used as an argument survives", () => {
+    expect(shape("echo then").map((segment) => segment.words)).toEqual([["echo", "then"]]);
+    expect(shape("grep -w in file").map((segment) => segment.words)).toEqual([
+      ["grep", "-w", "in", "file"],
+    ]);
+    expect(shape("IF true").map((segment) => segment.words)).toEqual([["true"]]);
+  });
+
   it("leaves a token's own balanced braces and parens alone", () => {
     expect(shape("echo ${HOME}/x").map((segment) => segment.words)).toEqual([
       ["echo", "${HOME}/x"],

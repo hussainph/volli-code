@@ -192,14 +192,25 @@ describe.skipIf(!enabled)(
           value: undefined,
         });
         await writeFile(join(checkout, "evil.sh"), "#!/bin/sh\necho pwned\n");
-        for (const destination of [".git/hooks/pre-commit", ".git/config"]) {
+        // A submodule's hooks execute exactly like the superproject's, and live
+        // under a path the two literal entries above do not cover.
+        await mkdir(join(checkout, ".git", "modules", "sub", "hooks"), { recursive: true });
+        for (const destination of [
+          ".git/hooks/pre-commit",
+          ".git/config",
+          ".git/modules/sub/hooks/pre-commit",
+          ".git/modules/sub/config",
+        ]) {
           const copied = await env.exec(`cp evil.sh ${destination}`);
-          expect(copied.ok && copied.value.exitCode === 0).toBe(false);
-          expect(await readFile(join(checkout, ".git", "config"), "utf8")).not.toContain("pwned");
-          expect(existsSync(join(checkout, ".git", "hooks", "pre-commit"))).toBe(false);
+          expect(copied.ok && copied.value.exitCode === 0, destination).toBe(false);
+          // `.git/config` already exists, so the proof is that it was not
+          // overwritten; the hooks must not have been created at all.
+          const landed = join(checkout, destination);
+          const contents = existsSync(landed) ? await readFile(landed, "utf8") : "";
+          expect(contents, destination).not.toContain("pwned");
         }
 
-        // The denial is two paths, not the repository: committing writes the
+        // The denial is four patterns, not the repository: committing writes the
         // index, refs, and objects, and a Session that cannot do that is broken.
         await expect(
           env.exec("git add evil.sh && git commit --quiet -m contained"),

@@ -260,11 +260,65 @@ describe("path.git-internals", () => {
     expect(decision.outcome === "deny" && decision.reason).toContain("git config --list");
   });
 
+  it("reaches submodule plumbing, whose hooks execute the same way", () => {
+    for (const target of [
+      ".git/modules/sub/hooks/pre-commit",
+      ".git/modules/sub/config",
+      ".GIT/MODULES/sub/HOOKS/pre-commit",
+      ".git/modules/outer/modules/inner/hooks/pre-push",
+    ]) {
+      expect(
+        ruleOf(
+          exec(
+            segment("cp", ["evil.sh", target], {
+              paths: [`${WORKSPACE}/evil.sh`, `${WORKSPACE}/${target}`],
+            }),
+          ),
+        ),
+      ).toBe("path.git-internals");
+    }
+  });
+
   it("leaves the rest of .git nameable, since git takes such operands routinely", () => {
-    for (const target of [".git/HEAD", ".git/refs/heads/main", ".git", ".git/configuration"]) {
+    for (const target of [
+      ".git/HEAD",
+      ".git/refs/heads/main",
+      ".git",
+      ".git/configuration",
+      ".git/modules",
+      ".git/modules/sub/refs/heads/main",
+    ]) {
       expect(ruleOf(exec(segment("cat", [target], { paths: [`${WORKSPACE}/${target}`] })))).toBe(
         "allow",
       );
+    }
+  });
+
+  it("refuses inline config that makes git run something unlexed", () => {
+    const decision = decide(exec(segment("git", ["-c", "alias.zz=!rm -rf ~", "zz"])));
+    expect(decision).toMatchObject({ outcome: "deny", rule: "path.git-internals" });
+    expect(decision.outcome === "deny" && decision.reason).toContain("never inspected");
+
+    for (const args of [
+      ["-c", "credential.helper=!leak", "fetch"],
+      ["-c", "core.hooksPath=/elsewhere", "status"],
+      ["-c", "core.HOOKSPATH=./evil", "commit"],
+      ["--config-env=alias.zz=EVIL", "zz"],
+      ["--config-env", "alias.zz=EVIL", "zz"],
+    ]) {
+      expect(ruleOf(exec(segment("git", args)))).toBe("path.git-internals");
+    }
+  });
+
+  it("allows inline config that only changes how git presents itself", () => {
+    for (const args of [
+      ["-c", "core.pager=cat", "log"],
+      ["-c", "user.name=Agent", "commit", "-m", "x"],
+      ["-c", "advice.detachedHead=false", "checkout", "abc123"],
+      ["-c", "novalue", "status"],
+      ["-c"],
+    ]) {
+      expect(ruleOf(exec(segment("git", args)))).toBe("allow");
     }
   });
 
@@ -321,6 +375,23 @@ describe("case folding", () => {
   it("still distinguishes genuinely different names", () => {
     expect(ruleOf(call({ tool: "write", writes: [`${WORKSPACE}/.GITIGNORE`] }))).toBe("allow");
     expect(ruleOf(exec(segment("SUDOKU", ["--solve"])))).toBe("allow");
+  });
+
+  it("does not fold workspace containment, where folding would under-deny", () => {
+    // A case-variant sibling of the workspace is a different directory on a
+    // case-sensitive volume, and must not be mistaken for the workspace itself.
+    expect(ruleOf(call({ tool: "read", reads: [`${WORKSPACE.toUpperCase()}/secret`] }))).toBe(
+      "path.outside-workspace",
+    );
+    expect(
+      ruleOf(exec(segment("echo", ["x"], { writes: [`${WORKSPACE.toUpperCase()}/out`] }))),
+    ).toBe("path.outside-workspace");
+    expect(
+      ruleOf(exec(segment("rm", ["-rf", "x"], { paths: [`${WORKSPACE.toUpperCase()}/build`] }))),
+    ).toBe("command.destructive-removal");
+    expect(ruleOf(exec(segment("git", ["-C", `${WORKSPACE.toUpperCase()}/sub`, "status"])))).toBe(
+      "command.git-escapes-workspace",
+    );
   });
 });
 

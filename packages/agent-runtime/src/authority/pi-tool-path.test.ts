@@ -1,4 +1,8 @@
-import { createEditTool, createWriteTool } from "@earendil-works/pi-agent-core/node";
+import {
+  createEditTool,
+  createReadTool,
+  createWriteTool,
+} from "@earendil-works/pi-agent-core/node";
 import { describe, expect, it } from "vite-plus/test";
 import { normalizeToolPath } from "./pi-tool-path";
 
@@ -60,6 +64,29 @@ describe("normalizeToolPath", () => {
   it("agrees for the edit tool too, which resolves through the same helper", async () => {
     const path = "@.git/hooks/pre-commit";
     expect(normalizeToolPath(path)).toBe(await whatPiWouldOpen(createEditTool(), path));
+  });
+
+  /**
+   * `read` goes through `resolveReadToolPath`, which calls the same
+   * `normalizeToolPath` and only then tries NFD and typographic variants of the
+   * *result* to find a file that exists. Those variants are a lookup, not a
+   * normalization, and `read` never writes — but the shared first step is worth
+   * pinning, because it is the step policy depends on.
+   */
+  it("agrees for the read tool, whose extra variants come after this step", async () => {
+    let seen: string | undefined;
+    const env = {
+      absolutePath: async (candidate: string) => {
+        seen = candidate;
+        throw new Error("recorded");
+      },
+    };
+    await expect(
+      createReadTool().execute("tool-call-1", { path: "@a\u3000b.txt" }, undefined, undefined, {
+        env,
+      } as never),
+    ).rejects.toThrow("recorded");
+    expect(seen).toBe(normalizeToolPath("@a\u3000b.txt"));
   });
 
   it("strips exactly one leading @ and collapses the Unicode spaces", () => {

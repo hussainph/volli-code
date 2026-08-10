@@ -31,16 +31,25 @@
  * for a *strict* descendant of the workspace, so `rm -rf .` at the root of a
  * Main checkout is refused too — destroying the tree is never a coding action.
  *
- * `path.git-internals` reads operands too, for exactly two paths, and the reason
- * is a seam between two layers rather than anything about policy. The sandbox
- * denies writes to `<workspace>/.git/hooks` and `.git/config` by subpath
- * literal, and those literals are case-sensitive while APFS is not — so
+ * `path.git-internals` reads operands too, for two names only, and the reason is
+ * a seam between two layers rather than anything about policy. The sandbox
+ * denies writes to `.git/hooks` and `.git/config` by subpath literal, and those
+ * literals are case-sensitive while APFS is not — so
  * `cp evil.sh .GIT/hooks/pre-commit` writes the real hook the kernel meant to
  * protect, and enumerating case variants downstairs is 2^n hopeless. Folded
- * comparison up here collapses every spelling at once. It stays at those two
- * paths deliberately: `git` takes `.git`-relative operands in ordinary use, and
- * the cost of this clause is that `cat .git/config` is refused — which costs
- * nothing, because `git config --list` reads the same thing and is allowed.
+ * comparison up here collapses every spelling at once, and it reaches submodule
+ * plumbing at `.git/modules/<name>/hooks`, which executes exactly like the
+ * superproject's. It stays at those two names deliberately: `git` takes other
+ * `.git`-relative operands in ordinary use, and the cost of this clause is that
+ * `cat .git/config` is refused — which costs nothing, because `git config
+ * --list` reads the same thing and is allowed.
+ *
+ * The same rule owns `-c`, which is not a path at all. It is the one global flag
+ * whose value git always interprets, and the only one the subcommand scan skips
+ * whole — so `git -c alias.zz='!rm -rf ~' zz` executes a shell command that
+ * never becomes a segment for any rule to see. Refusing git's `!` escape and
+ * `core.hooksPath` keeps the lexer's view of a command honest, which every rule
+ * below depends on.
  *
  * A shell-profile rule and a launch-directory path check used to live here and
  * were deleted, for a reason that generalizes to any rule proposed for this
@@ -77,48 +86,77 @@ import {
 } from "./authority";
 
 /**
- * Every security comparison folds case, unconditionally.
+ * Case folding, and the one class of comparison that must not fold.
  *
  * macOS is case-insensitive by default and `realpathSync` does not canonicalize
  * case, so a resolved `<workspace>/.GIT/hooks/pre-commit` names the real hook
  * directory while comparing unequal to `.git`; `RM` and `SUDO` resolve the same
  * way through `PATH`. Probing the volume would be the precise answer and the
- * wrong one — it makes a security decision depend on a filesystem attribute the
- * policy layer is forbidden to read. Folding always means a genuinely distinct
- * `.GIT` directory on a case-sensitive volume is refused too. That is
- * over-denial, which is the safe direction, and it is deliberate: do not
- * "correct" it into a case-sensitive comparison.
+ * wrong one — it makes a security decision depend on a filesystem attribute this
+ * layer is forbidden to read.
+ *
+ * So the rule is directional, and the direction is what matters. A comparison
+ * whose *true* answer is "denied" folds: a guarded location, a program name, a
+ * git subcommand. Folding can only widen a deny-list, and on a case-sensitive
+ * volume the cost is refusing a genuinely distinct `.GIT` — over-denial, the
+ * safe direction, and deliberate.
+ *
+ * A comparison whose *true* answer is "allowed" must not fold, and workspace
+ * containment is exactly that one. Folding it would let a genuinely distinct
+ * `/Users/x/WS/secret` read as inside `/Users/x/ws` on a case-sensitive volume,
+ * which is under-denial — the unsafe direction — and it would do so in the rule
+ * that is the whole reason the others can assume they are looking at this
+ * Session's tree. Hence {@link containsPath} compares literally and
+ * {@link guardsPath} folds. They are not interchangeable; do not collapse them.
  */
 function fold(value: string): string {
   return value.toLowerCase();
 }
 
-/** The non-empty path components, so containment compares directories, never string prefixes. */
+/** The non-empty path components, compared as written. */
 function pathSegments(path: string): string[] {
-  return path
-    .split("/")
-    .filter((segment) => segment.length > 0)
-    .map(fold);
+  return path.split("/").filter((segment) => segment.length > 0);
 }
 
-/** True when `candidate` is `root` or lies under it. `/ws-evil` is not under `/ws`. */
-function isAtOrUnder(root: string, candidate: string): boolean {
-  const rootParts = pathSegments(root);
-  const candidateParts = pathSegments(candidate);
+/** The same components, case-folded, for the deny-list side of the split above. */
+function foldedSegments(path: string): string[] {
+  return pathSegments(path).map(fold);
+}
+
+function containsSegments(root: readonly string[], candidate: readonly string[]): boolean {
+  return candidate.length >= root.length && root.every((part, index) => candidate[index] === part);
+}
+
+/**
+ * Literal containment, for every test whose *true* answer is "allowed".
+ *
+ * `/ws-evil` is not inside `/ws`, and on a case-sensitive volume neither is
+ * `/WS/secret`.
+ */
+function containsPath(root: string, candidate: string): boolean {
+  return containsSegments(pathSegments(root), pathSegments(candidate));
+}
+
+/** Literal containment excluding the root itself. */
+function strictlyContainsPath(root: string, candidate: string): boolean {
   return (
-    candidateParts.length >= rootParts.length &&
-    rootParts.every((part, index) => candidateParts[index] === part)
+    containsPath(root, candidate) && pathSegments(candidate).length > pathSegments(root).length
   );
 }
 
-/** True when `candidate` lies strictly below `root`; the root itself does not count. */
-function isUnder(root: string, candidate: string): boolean {
-  return isAtOrUnder(root, candidate) && pathSegments(candidate).length > pathSegments(root).length;
+/**
+ * Folded containment, for every test whose *true* answer is "denied".
+ *
+ * `<workspace>/.GIT/hooks` names the real hook directory on APFS, so a guarded
+ * location has to cover every spelling of itself.
+ */
+function guardsPath(guarded: string, candidate: string): boolean {
+  return containsSegments(foldedSegments(guarded), foldedSegments(candidate));
 }
 
-/** The last path component, folded: `/usr/bin/SUDO` is `sudo`. */
+/** The last path component, folded: `/usr/bin/SUDO` is `sudo`. A deny-list comparison. */
 function baseName(path: string): string {
-  return pathSegments(path).slice(-1).join("");
+  return foldedSegments(path).slice(-1).join("");
 }
 
 /** The argument after `index`, or `""` past the end — a missing flag value denotes nothing. */
@@ -151,6 +189,23 @@ function volliDirOf(context: PolicyContext): string {
   return `${context.workspacePath}/.volli`;
 }
 
+/**
+ * True when `path` is the repository's `config` or anything under its `hooks`,
+ * for the superproject or for any submodule.
+ *
+ * A submodule's plumbing lives at `.git/modules/<name>/` and its hooks execute
+ * exactly like the superproject's, so the `modules/<name>` prefixes are stripped
+ * — repeatedly, since submodules nest — and the same two names checked
+ * underneath. Only those two: `git` names other `.git`-relative paths in
+ * ordinary use, and this is the arm that reads command operands.
+ */
+function isGitExecutablePath(gitDir: string, path: string): boolean {
+  if (!guardsPath(gitDir, path)) return false;
+  let below = foldedSegments(path).slice(foldedSegments(gitDir).length);
+  while (below[0] === "modules" && below.length >= 2) below = below.slice(2);
+  return below[0] === "config" || below[0] === "hooks";
+}
+
 /** Every path the call would create, modify, or delete. */
 function writtenPaths(call: PolicyToolCall): string[] {
   return [...call.writes, ...segmentsOf(call).flatMap((segment) => segment.writes)];
@@ -165,7 +220,7 @@ function writtenPaths(call: PolicyToolCall): string[] {
 const DEVICE_SINKS = new Set(["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/zero"]);
 
 function isDeviceSink(path: string): boolean {
-  return DEVICE_SINKS.has(fold(path)) || isAtOrUnder("/dev/fd", path);
+  return DEVICE_SINKS.has(path) || containsPath("/dev/fd", path);
 }
 
 /** Every path `path.outside-workspace` judges. Command operands are not among them. */
@@ -242,6 +297,7 @@ const GIT_GLOBAL_VALUE_FLAGS = new Set([
   "--work-tree",
   "--namespace",
   "--exec-path",
+  "--config-env",
 ]);
 
 interface GitInvocation {
@@ -317,8 +373,46 @@ function gitConfigWrites(rest: readonly string[]): boolean {
  * climb out at all — `sub` stays here by construction, `../other` does not.
  */
 function pointsOutside(value: string, workspacePath: string): boolean {
-  if (value.startsWith("/")) return !isAtOrUnder(workspacePath, value);
+  if (value.startsWith("/")) return !containsPath(workspacePath, value);
   return pathSegments(value).includes("..");
+}
+
+/**
+ * Config keys that decide what git *runs*, rather than how it runs it.
+ *
+ * Deliberately just the one. `core.pager`, `core.editor`, `core.sshCommand` and
+ * `core.fsmonitor` also name programs, but a `-c` assignment lasts for a single
+ * invocation, so setting them runs a local program the model could equally have
+ * run directly — no new capability, and refusing them would break
+ * `git -c core.pager=cat log`, which agents type constantly. `core.hooksPath` is
+ * different in kind: it is the thing `path.git-internals` exists to protect,
+ * stated as a flag instead of a file.
+ */
+const GIT_EXEC_CONFIG_KEYS = new Set(["core.hookspath"]);
+
+/**
+ * The inline-config argument that makes git run something unlexed, or null.
+ *
+ * `-c` is the one global flag whose value is always semantically live — rule 6
+ * already reads it for `http.sslVerify` — and the subcommand scan skips it
+ * wholesale, which is how `git -c alias.zz='!rm -rf ~' zz` runs a shell command
+ * that never appears as a segment. Git's `!` prefix is that escape, honoured for
+ * `alias.*` and `credential.helper` alike, so it is matched on any key rather
+ * than a list of them. `--config-env` is refused outright: it sources the value
+ * from the environment, where policy cannot see it, and nothing an agent
+ * legitimately does needs it.
+ */
+function gitInlineConfigHazard(args: readonly string[]): string | null {
+  for (const [index, arg] of args.entries()) {
+    if (arg.startsWith("--config-env")) return arg;
+    if (arg !== "-c") continue;
+    const assignment = argAfter(args, index);
+    const separator = assignment.indexOf("=");
+    if (separator === -1) continue;
+    if (assignment.slice(separator + 1).startsWith("!")) return `-c ${assignment}`;
+    if (GIT_EXEC_CONFIG_KEYS.has(fold(assignment.slice(0, separator)))) return `-c ${assignment}`;
+  }
+  return null;
 }
 
 /**
@@ -431,7 +525,7 @@ const RULE_CHECKS: Record<AuthorityRuleId, RuleCheck> = {
 
   "path.outside-workspace": (call, _snapshot, context) => {
     for (const path of containedPaths(call)) {
-      if (!isAtOrUnder(context.workspacePath, path)) {
+      if (!containsPath(context.workspacePath, path)) {
         return `${path} is outside the Session workspace ${context.workspacePath}; every read and write must stay inside it.`;
       }
     }
@@ -441,18 +535,21 @@ const RULE_CHECKS: Record<AuthorityRuleId, RuleCheck> = {
   "path.git-internals": (call, _snapshot, context) => {
     const gitDir = gitDirOf(context);
     for (const path of writtenPaths(call)) {
-      if (isAtOrUnder(gitDir, path)) {
+      if (guardsPath(gitDir, path)) {
         return `Writing ${path} is not permitted; hand-editing the repository's plumbing changes what later commands do. Reading it is fine.`;
       }
     }
-    const executable = [`${gitDir}/config`, `${gitDir}/hooks`];
     for (const segment of segmentsOf(call)) {
       for (const path of segment.paths) {
-        if (executable.some((root) => isAtOrUnder(root, path))) {
+        if (isGitExecutablePath(gitDir, path)) {
           return `${path} cannot be a command operand; policy cannot tell a read there from a write, and a write would change what later commands do. Read configuration with \`git config --list\`.`;
         }
       }
       if (baseName(segment.program) !== "git") continue;
+      const inlineConfig = gitInlineConfigHazard(segment.args);
+      if (inlineConfig !== null) {
+        return `git ${inlineConfig} makes git run something this policy never inspected; drop it and run the command directly.`;
+      }
       const invocation = gitInvocation(segment.args);
       if (invocation === null) continue;
       if (invocation.subcommand === "config" && gitConfigWrites(invocation.rest)) {
@@ -464,7 +561,7 @@ const RULE_CHECKS: Record<AuthorityRuleId, RuleCheck> = {
 
   "path.volli-internals": (call, _snapshot, context) => {
     for (const path of writtenPaths(call)) {
-      if (isAtOrUnder(volliDirOf(context), path)) {
+      if (guardsPath(volliDirOf(context), path)) {
         return `Writing ${path} is not permitted; .volli holds Volli's own state, not the project's.`;
       }
     }
@@ -511,10 +608,10 @@ const RULE_CHECKS: Record<AuthorityRuleId, RuleCheck> = {
         // are defended against deletion: a single `rm .git/index` corrupts the
         // repository, and `writtenPaths` never sees an rm operand, so the path
         // rules above cannot see this at all.
-        if (internals.some((dir) => isAtOrUnder(dir, path))) {
+        if (internals.some((dir) => guardsPath(dir, path))) {
           return `Removing ${path} would destroy state this Session depends on; .git and .volli are not the Session's to delete.`;
         }
-        if (recursive && !isUnder(context.workspacePath, path)) {
+        if (recursive && !strictlyContainsPath(context.workspacePath, path)) {
           return `Recursive removal of ${path} would delete the Session workspace itself or something outside it; remove only paths inside ${context.workspacePath}.`;
         }
       }
