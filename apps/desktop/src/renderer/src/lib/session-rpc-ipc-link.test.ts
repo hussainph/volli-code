@@ -112,9 +112,9 @@ describe("query and mutation", () => {
       { procedure: "session.projection", input: { sessionId: "session-1" } },
     ]);
 
-    bridge.reply({ ok: true, data: { projection: { capabilities: [] }, throughSequence: 4 } });
+    bridge.reply({ ok: true, data: { projection: {}, throughSequence: 4 } });
     await expect(answer).resolves.toEqual({
-      projection: { capabilities: [] },
+      projection: {},
       throughSequence: 4,
     });
   });

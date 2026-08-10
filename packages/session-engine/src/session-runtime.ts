@@ -1867,6 +1867,11 @@ class DefaultSessionRuntime implements SessionRuntime {
     locationReaffirmed: boolean,
   ): Promise<BindingRecord> {
     const attachment = projection.attachments.find(({ id }) => id === attachmentId);
+    // `!attachment` is defence in depth and no longer reachable: `reconcile`
+    // pre-guards on the same condition, the delivery paths are routed by the
+    // engine, which refuses an unknown attachment before delivery, and the
+    // replayed attach takes its id from an event in the same fold. Retiring the
+    // capability probe removed the last caller that arrived here unchecked.
     if (!attachment || attachment.status !== "open") {
       throw new SessionRuntimeNotFoundError(`Attachment ${attachmentId} is not open`);
     }
