@@ -49,16 +49,24 @@ to path resolution.
 
 ## Divergences from upstream
 
-- **No leading-`@` stripping in `resolveInputPath`.** Upstream treats `@foo` as
-  `foo`. Pi's file tools do not: they hand `path` straight to `path.resolve`. A
-  repository full of `@types/…` and `@scope/…` directories would therefore have
-  policy inspect one file while the tool opens another, which is a soundness
-  hole, not a convenience.
-- **Bare `~` expands.** Upstream's `shellPathTokenToPath` expands `~/x` and
-  `$HOME` but leaves a lone `~` to resolve against the working directory, so
-  `rm -rf ~` produced `<cwd>/~` and missed the home root its own comment claims
-  to protect. Here `~`, `$HOME`, and `${HOME}` all resolve to the home
-  directory.
+- **No path normalization inside `resolveInputPath`.** Upstream strips a leading
+  `@` here, as a guess at what its host does. Guessing is the bug: Pi's file
+  tools really do strip `@`, and they also collapse five Unicode spaces, and an
+  approximation of someone else's normalization is a hole waiting to reopen —
+  `write { path: "@.git/hooks/pre-commit" }` reads as `<ws>/@.git/…` to a rule
+  and lands on `<ws>/.git/hooks/…` on disk. So this function stays a plain
+  resolve and `../pi-tool-path.ts` reproduces Pi's `normalizeToolPath` exactly,
+  pinned to the Pi version and held to it by a differential test.
+- **Bare `~` expands, and the expansions nobody can perform are reported as
+  such.** Upstream's `shellPathTokenToPath` expands `~/x` and `$HOME` but leaves
+  a lone `~` to resolve against the working directory, so `rm -rf ~` produced
+  `<cwd>/~` and missed the home root its own comment claims to protect. It
+  resolves `~someone` and `$TMPDIR` the same way, to a literal inside the
+  workspace, where no rule fires. Here `~`, `$HOME` and `${HOME}` expand, and
+  the function returns a tagged result instead of a bare string: a token that
+  denotes no location and one whose location cannot be computed are different
+  facts, and only the caller knows whether the second is fatal. `../normalize.ts`
+  refuses it in the positions a rule reads and drops it everywhere else.
 - **`resolvePathForPolicy` refuses instead of falling back.** Upstream callers
   write `resolvePathForPolicy(p) ?? p`, so an unresolvable path is checked in
   its raw form. Here undefined propagates and the call is blocked: the
@@ -77,13 +85,32 @@ to path resolution.
 - **Dead operator branches removed.** Upstream's segment splitter tests
   `char === "|" && next === "|"` after `char === "|"` has already matched;
   `&>` appears in a redirect regex its own tokenizer cannot produce.
+- **A single `&` separates commands.** Upstream splits on `;`, `|`, `&&` and
+  `||` but not on `&`, so `true & rm -rf ~` lexed as one command whose program
+  was `true` and whose `rm` was an argument no rule inspects. The three redirect
+  spellings that contain the character — `2>&1`, `&>log`, `>&log` — are held
+  together explicitly rather than by leaving `&` alone.
+- **`>|` is a redirect operator.** POSIX noclobber-override. Upstream split on
+  the `|` first, leaving `echo x >` with its target on the far side, and then
+  discarded the operator as having no target — so the write vanished and the
+  command was allowed. Splitting is suppressed after `<`/`>`.
+- **A redirect with no target throws.** Upstream skips it. Reporting a command
+  as writing nowhere is the answer that gets it allowed, which is the one
+  outcome this layer must never produce by accident.
+- **Grouping punctuation is stripped.** `( rm -rf ~ )` gave the program `"("`,
+  `(rm -rf ~)` gave `"(rm"`, and `{ rm -rf ~; }` gave `"{"` — all of which miss
+  every program rule. Unbalanced leading `(`/`{` and trailing `)`/`}` are
+  removed per token, counted so `${HOME}` and `$(date)` keep their own braces.
 
 ## Known limits
 
 Inherited from upstream and not fixed here: `eval`, `base64`, command
 substitution, and `xargs` all defeat the lexer, and heredocs are mangled into
-two `<` operators. This layer is defence in depth beneath the Seatbelt process
-sandbox, never the boundary itself.
+two `<` operators. Transparent-prefix unwrapping (`../normalize.ts`) skips a
+wrapper's flags without knowing them, so a flag taking a _separate_ value
+(`env -u NAME cmd`) still hides the program that follows it. This layer is
+defence in depth beneath the Seatbelt process sandbox, never the boundary
+itself.
 
 ## License
 

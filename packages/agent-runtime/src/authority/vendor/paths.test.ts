@@ -17,7 +17,10 @@ describe("resolveInputPath", () => {
     expect(resolveInputPath("/work/ticket", "/etc/hosts")).toBe("/etc/hosts");
   });
 
-  it("does not strip a leading @, because Pi's own tools do not", () => {
+  // Pi's tools DO strip a leading `@`; replicating that guess here is what let
+  // `@.git/hooks/pre-commit` past. `normalizeToolPath` owns it now, and runs
+  // before this function, so this one resolves exactly what it is handed.
+  it("normalizes nothing of its own, leaving a leading @ to Pi's normalization", () => {
     expect(resolveInputPath("/work", "@types/node/index.d.ts")).toBe(
       "/work/@types/node/index.d.ts",
     );
@@ -30,26 +33,53 @@ describe("resolveInputPath", () => {
 });
 
 describe("shellPathTokenToPath", () => {
-  it("expands every spelling of the home directory, bare tilde included", () => {
-    expect(shellPathTokenToPath("~", "/work")).toBe(HOME);
-    expect(shellPathTokenToPath("$HOME", "/work")).toBe(HOME);
-    expect(shellPathTokenToPath("${HOME}", "/work")).toBe(HOME);
-    expect(shellPathTokenToPath("~/.zshrc", "/work")).toBe(resolve(HOME, ".zshrc"));
-    expect(shellPathTokenToPath("$HOME/.ssh", "/work")).toBe(resolve(HOME, ".ssh"));
-    expect(shellPathTokenToPath("${HOME}/.ssh", "/work")).toBe(resolve(HOME, ".ssh"));
+  it.each([
+    ["~", HOME],
+    ["$HOME", HOME],
+    ["${HOME}", HOME],
+    ["~/.zshrc", resolve(HOME, ".zshrc")],
+    ["$HOME/.ssh", resolve(HOME, ".ssh")],
+    ["${HOME}/.ssh", resolve(HOME, ".ssh")],
+  ])("expands %j, bare tilde included", (token, path) => {
+    expect(shellPathTokenToPath(token, "/work")).toEqual({ kind: "path", path });
   });
 
-  it("resolves ordinary operands against the workspace", () => {
-    expect(shellPathTokenToPath("build", "/work")).toBe("/work/build");
-    expect(shellPathTokenToPath("  ./build  ", "/work")).toBe("/work/build");
-    expect(shellPathTokenToPath("/etc/hosts", "/work")).toBe("/etc/hosts");
+  it.each([
+    ["build", "/work/build"],
+    ["  ./build  ", "/work/build"],
+    ["/etc/hosts", "/etc/hosts"],
+  ])("resolves %j against the workspace", (token, path) => {
+    expect(shellPathTokenToPath(token, "/work")).toEqual({ kind: "path", path });
   });
 
-  it("reports tokens that denote no location", () => {
-    expect(shellPathTokenToPath("", "/work")).toBeUndefined();
-    expect(shellPathTokenToPath("   ", "/work")).toBeUndefined();
-    expect(shellPathTokenToPath("-", "/work")).toBeUndefined();
-    expect(shellPathTokenToPath("&1", "/work")).toBeUndefined();
+  it.each(["", "   ", "-", "&1"])("reports %j as denoting no location", (token) => {
+    expect(shellPathTokenToPath(token, "/work")).toEqual({ kind: "no-location" });
+  });
+
+  // Resolving these against the workspace is what made `rm -rf ~someone` read
+  // as `<ws>/~someone` — inside the tree, and allowed. Reporting them as
+  // unresolvable leaves the caller to decide, which depends on the position.
+  it.each([
+    ["~hussain", "names another user's home directory"],
+    ["~root/.ssh", "names another user's home directory"],
+    ["$TMPDIR", "expands through a variable only the shell can read"],
+    ["$HOMEBREW/bin", "expands through a variable only the shell can read"],
+    ["$(date)", "expands through a variable only the shell can read"],
+  ])("reports %j as unresolvable rather than guessing", (token, reason) => {
+    expect(shellPathTokenToPath(token, "/work")).toEqual({
+      kind: "unresolvable",
+      reason: expect.stringContaining(reason),
+    });
+  });
+
+  // A `$` that is not the head of the token is ordinary text — a regex anchor, a
+  // sed script, an awk field. Refusing those would refuse most real commands.
+  it("leaves a mid-token $ alone", () => {
+    expect(shellPathTokenToPath("^foo$", "/work")).toEqual({
+      kind: "path",
+      path: "/work/^foo$",
+    });
+    expect(shellPathTokenToPath("s/$/x/", "/work")).toEqual({ kind: "path", path: "/work/s/$/x" });
   });
 });
 

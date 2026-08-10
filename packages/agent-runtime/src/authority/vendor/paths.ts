@@ -37,20 +37,54 @@ export function resolveInputPath(cwd: string, value: string): string | undefined
 }
 
 /**
+ * What a shell operand denotes, when the answer is not always a path.
+ *
+ * Three outcomes rather than two, because "this token is not a location" and
+ * "this token is a location I cannot compute" are different facts and the
+ * caller acts on them differently. Collapsing them is how `~someone` came to
+ * resolve to `<workspace>/~someone` and be allowed.
+ */
+export type ShellOperand =
+  | { kind: "path"; path: string }
+  | { kind: "no-location" }
+  | { kind: "unresolvable"; reason: string };
+
+const NO_LOCATION: ShellOperand = { kind: "no-location" };
+
+/**
  * Resolve a shell operand, where `~` and `$HOME` are the shell's job to expand.
  *
- * Returns undefined for tokens that denote no location at all: the bare `-`
- * stdin/stdout convention, and anything beginning with `&`, which is a file
- * descriptor or a job-control operator the lexer left behind.
+ * `no-location` covers tokens that denote nothing: the bare `-` stdin/stdout
+ * convention, and anything beginning with `&`, which is a file descriptor or a
+ * job-control operator the lexer left behind.
+ *
+ * `unresolvable` covers the two expansions only a real shell can perform.
+ * Another user's home cannot be derived without inventing a path, and an
+ * arbitrary variable cannot be read from an environment this process does not
+ * have. Whether that is fatal depends on where the operand sits, which is the
+ * caller's question, not this function's.
  */
-export function shellPathTokenToPath(token: string, cwd: string): string | undefined {
+export function shellPathTokenToPath(token: string, cwd: string): ShellOperand {
   const trimmed = token.trim();
-  if (trimmed === "" || trimmed === "-" || trimmed.startsWith("&")) return undefined;
-  if (trimmed === "~" || trimmed === "$HOME" || trimmed === "${HOME}") return HOME;
-  const expanded = trimmed.startsWith("~/")
-    ? resolve(HOME, trimmed.slice(2))
-    : trimmed.replace(/^\$(?:HOME|\{HOME\})(?=\/)/, HOME);
-  return isAbsolute(expanded) ? resolve(expanded) : resolve(cwd, expanded);
+  if (trimmed === "" || trimmed === "-" || trimmed.startsWith("&")) return NO_LOCATION;
+  if (trimmed === "~" || trimmed === "$HOME" || trimmed === "${HOME}") {
+    return { kind: "path", path: HOME };
+  }
+  if (trimmed.startsWith("~/")) return { kind: "path", path: resolve(HOME, trimmed.slice(2)) };
+  if (trimmed.startsWith("~")) {
+    return {
+      kind: "unresolvable",
+      reason: `"${trimmed}" names another user's home directory, which cannot be resolved.`,
+    };
+  }
+  const expanded = trimmed.replace(/^\$(?:HOME|\{HOME\})(?=\/)/, HOME);
+  if (expanded.startsWith("$")) {
+    return {
+      kind: "unresolvable",
+      reason: `"${trimmed}" expands through a variable only the shell can read.`,
+    };
+  }
+  return { kind: "path", path: isAbsolute(expanded) ? resolve(expanded) : resolve(cwd, expanded) };
 }
 
 /**

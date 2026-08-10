@@ -158,6 +158,22 @@ function isSafeTempFragment(value: string): boolean {
   return true;
 }
 
+/**
+ * The boundary one command runs behind: no network, the workspace as the only
+ * writable root, and two carve-outs from that root.
+ *
+ * The `.git` entries are deliberately not the whole of `.git` — a Session that
+ * cannot write the index, refs, and objects cannot commit. Hooks and config are
+ * the paths ordinary git operation never writes and the only ones that change
+ * what *later* commands do, which is what makes them worth denying. They close
+ * what the rule pack cannot reach: `path.git-internals` sees file-tool writes,
+ * shell redirects, and `git config`, so a plain `cp evil.sh .git/hooks/pre-commit`
+ * passes it as an opaque operand. Neither layer is complete alone.
+ *
+ * Only a Main checkout is affected. A Ticket worktree's `.git` is a file
+ * pointing into the main repository, whose real hooks and config lie outside the
+ * workspace that `allowWrite` already limits this to.
+ */
 function perCommandSandboxConfig(
   workspace: string,
   homeDir: string,
@@ -181,17 +197,6 @@ function perCommandSandboxConfig(
       // SRT adds these compatibility defaults. Deny its home and temporary
       // Claude scratch paths so the Session workspace remains the only writable
       // agent-controlled location.
-      //
-      // The two `.git` entries are the writable root's own carve-out, and they
-      // are deliberately not the whole of `.git`: a Session that cannot write
-      // the index, refs, and objects cannot commit. Hooks and config are the
-      // paths ordinary git operation never writes and the only ones that change
-      // what *later* commands do. This closes what the rule pack cannot reach —
-      // `path.git-internals` sees file-tool writes, shell redirects, and `git
-      // config`, so a plain `cp evil.sh .git/hooks/pre-commit` passes it as an
-      // opaque operand. Neither layer is complete alone. Only a Main checkout is
-      // affected: a Ticket worktree's `.git` is a file pointing into the main
-      // repository, whose real hooks and config `allowWrite` already excludes.
       denyWrite: [
         join(homeDir, ".npm", "_logs"),
         join(homeDir, ".claude", "debug"),

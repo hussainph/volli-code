@@ -1,5 +1,5 @@
 import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   BUILTIN_RULE_PACK_HASH,
@@ -98,6 +98,89 @@ describe("authorityRefusal", () => {
         workspacePath: raw,
       }),
     ).toContain("discards uncommitted work");
+  });
+
+  // Payloads from the adversarial review, each of which reached ALLOW. They are
+  // asserted here rather than at the normalizer because a bypass is only a
+  // bypass end to end — the rules and the normalization have to agree.
+  it.each([
+    { tool: "write", args: { path: "@.git/hooks/pre-commit" } },
+    { tool: "write", args: { path: "@.volli/state.json" } },
+    { tool: "edit", args: { path: "@.git/config" } },
+    { tool: "bash", args: { command: "env rm -rf ~" } },
+    { tool: "bash", args: { command: "nohup rm -rf ~" } },
+    { tool: "bash", args: { command: "time rm -rf ~" } },
+    { tool: "bash", args: { command: "timeout 5 rm -rf ~" } },
+    { tool: "bash", args: { command: "sh -c 'rm -rf ~'" } },
+    { tool: "bash", args: { command: "bash -lc 'csrutil disable'" } },
+    { tool: "bash", args: { command: "env csrutil disable" } },
+    { tool: "bash", args: { command: "env GIT_SSL_NO_VERIFY=1 curl https://x" } },
+    { tool: "bash", args: { command: "true & rm -rf ~" } },
+    { tool: "bash", args: { command: "( rm -rf ~ )" } },
+    { tool: "bash", args: { command: "(rm -rf ~)" } },
+    { tool: "bash", args: { command: "{ rm -rf ~; }" } },
+    { tool: "bash", args: { command: "rm -rf ~someone" } },
+    { tool: "bash", args: { command: "rm -rf $TMPDIR" } },
+    { tool: "bash", args: { command: "git -C $ELSEWHERE status" } },
+    { tool: "bash", args: { command: "echo x > $TARGET" } },
+  ])("refuses $tool $args", ({ tool, args }) => {
+    const { raw } = workspace();
+    expect(authorityRefusal({ tool, args, authority: snapshot(), workspacePath: raw })).toBeTypeOf(
+      "string",
+    );
+  });
+
+  it("refuses a noclobber redirect at a shell profile, as the plain one already was", () => {
+    const { raw } = workspace();
+    const profile = join(homedir(), ".zshrc");
+    for (const operator of [">", ">|"]) {
+      expect(
+        authorityRefusal({
+          tool: "bash",
+          args: { command: `echo pwned ${operator} ${profile}` },
+          authority: snapshot(),
+          workspacePath: raw,
+        }),
+      ).toContain("outside the Session workspace");
+    }
+  });
+
+  // The counterweight: over-refusing spends the same fallback budget as a real
+  // denial, so ordinary shell shapes have to survive all of the above.
+  it.each([
+    "pnpm test",
+    "git status",
+    "printf hi > out.txt",
+    "grep '^foo$' README.md",
+    "sed 's/$/x/' README.md",
+    "awk '{print $1}' README.md",
+    "echo ${HOME}/x",
+    "ls | wc -l",
+    "echo a && echo b",
+    "echo a || echo b",
+    "cmd 2>&1",
+    "cmd &> all.log",
+    "cmd >& all.log",
+    "true & rm -rf ./build",
+    "git commit -m 'cost $5'",
+    "env FOO=1 pnpm test",
+    // Ordinary diagnostics. Refusing these spends the same three-consecutive
+    // fallback budget as a real attack, which is why an unresolvable operand is
+    // only fatal where a rule reads it.
+    "echo $PATH",
+    "ls $TMPDIR",
+    "cat $CONFIG",
+    "sh -c 'echo $FOO && ls $BAR'",
+  ])("still allows %j", (command) => {
+    const { raw } = workspace();
+    expect(
+      authorityRefusal({
+        tool: "bash",
+        args: { command },
+        authority: snapshot(),
+        workspacePath: raw,
+      }),
+    ).toBeUndefined();
   });
 
   it("blocks a call it cannot describe rather than letting it through unchecked", () => {

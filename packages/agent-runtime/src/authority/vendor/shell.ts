@@ -33,8 +33,33 @@ export interface LexedSegment {
 /** A leading `NAME=value` assignment, which scopes an environment variable to one command. */
 const ASSIGNMENT = /^\w+=/;
 
+/** Whether a token sets an environment variable rather than naming an operand. */
+export function isAssignment(token: string): boolean {
+  return ASSIGNMENT.test(token);
+}
+
 /** Redirect operators this tokenizer can emit, with the optional file descriptor. */
-const REDIRECT = /^\d*(?:>>|>&|>|<&|<)$/;
+const REDIRECT = /^\d*(?:>>|>&|>\||>|<&|<)$/;
+
+function count(value: string, character: string): number {
+  return [...value].filter((each) => each === character).length;
+}
+
+/**
+ * Strip the grouping punctuation a subshell or brace group leaves welded to its
+ * neighbours, so `( rm -rf ~ )` and `(rm -rf ~)` both report `rm` and `~`.
+ *
+ * Counted rather than trimmed, because `${HOME}` closes its own brace and
+ * `$(date)` its own paren; only unbalanced punctuation is the group's.
+ */
+function stripGrouping(token: string): string {
+  let value = token;
+  while (value.startsWith("(") && count(value, "(") > count(value, ")")) value = value.slice(1);
+  while (value.startsWith("{") && count(value, "{") > count(value, "}")) value = value.slice(1);
+  while (value.endsWith(")") && count(value, ")") > count(value, "(")) value = value.slice(0, -1);
+  while (value.endsWith("}") && count(value, "}") > count(value, "{")) value = value.slice(0, -1);
+  return value;
+}
 
 /** Split a command line on the operators that start a new command. */
 function splitSegments(command: string): string[] {
@@ -76,7 +101,18 @@ function splitSegments(command: string): string[] {
       index += 1;
       continue;
     }
-    if (char === ";" || char === "\n" || char === "|") {
+    // `>|`, `2>&1` and `&>log` each spell one redirect operator. Splitting
+    // inside one would strand its target on the far side, and a stranded target
+    // is a write the caller is never told about.
+    if ((char === "|" || char === "&") && /[<>]$/.test(current.trimEnd())) {
+      current += char;
+      continue;
+    }
+    if (char === "&" && next === ">") {
+      current += char;
+      continue;
+    }
+    if (char === ";" || char === "\n" || char === "|" || char === "&") {
       flush();
       continue;
     }
@@ -123,7 +159,7 @@ function tokenize(text: string): string[] {
       if (/^\d+$/.test(current)) operator = current + char;
       else if (current !== "") tokens.push(current);
       const following = text.charAt(index + 1);
-      if (following === ">" || following === "&") {
+      if (following === ">" || following === "&" || following === "|") {
         operator += following;
         index += 1;
       }
@@ -137,7 +173,13 @@ function tokenize(text: string): string[] {
   return tokens;
 }
 
-/** Lex a command line into its segments, in the order the shell would run them. */
+/**
+ * Lex a command line into its segments, in the order the shell would run them.
+ *
+ * Throws on a redirect whose target it cannot see. Dropping one is the exact
+ * fail-open this layer promises not to have — the caller would be told the
+ * command writes nowhere, which is the answer that gets it allowed.
+ */
 export function lexCommandLine(command: string): LexedSegment[] {
   return splitSegments(command).map((text) => {
     const words: string[] = [];
@@ -147,16 +189,19 @@ export function lexCommandLine(command: string): LexedSegment[] {
     for (let index = 0; index < tokens.length; index += 1) {
       const token = tokens[index];
       if (!REDIRECT.test(token)) {
-        words.push(token);
+        const word = stripGrouping(token);
+        if (word !== "") words.push(word);
         continue;
       }
       index += 1;
-      if (index === tokens.length) continue;
+      if (index === tokens.length) {
+        throw new Error(`Redirect "${token}" in "${text}" names no target.`);
+      }
       const target = tokens[index];
       // `2>&1` and `0<&3` name a descriptor, not a file, and duplicating one
       // opens nothing this policy can be asked about.
       if (token.endsWith("&") && /^\d+$/.test(target)) continue;
-      (token.includes(">") ? writeTargets : readTargets).push(target);
+      (token.includes(">") ? writeTargets : readTargets).push(stripGrouping(target));
     }
     return { text, words, writeTargets, readTargets };
   });

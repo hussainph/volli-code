@@ -65,10 +65,54 @@ describe("lexCommandLine", () => {
     ]);
   });
 
-  it("records nothing for a descriptor duplication or a redirect with no target", () => {
+  it("records nothing for a descriptor duplication, which opens no file", () => {
     expect(shape("cmd 2>&1")).toEqual([{ words: ["cmd"], writeTargets: [], readTargets: [] }]);
     expect(shape("cmd 0<&3")).toEqual([{ words: ["cmd"], writeTargets: [], readTargets: [] }]);
-    expect(shape("cmd >")).toEqual([{ words: ["cmd"], writeTargets: [], readTargets: [] }]);
+  });
+
+  // Previously reported as "writes nothing", which is the answer that gets a
+  // command allowed. A target the lexer cannot see is a refusal, not an absence.
+  it("refuses a redirect whose target it cannot see", () => {
+    expect(() => shape("cmd >")).toThrow('Redirect ">" in "cmd >" names no target.');
+    expect(() => shape("cmd 2>>")).toThrow("names no target");
+  });
+
+  it("keeps >| whole instead of splitting it into a redirect and a pipe", () => {
+    expect(shape("echo pwned >| ~/.zshrc")).toEqual([
+      { words: ["echo", "pwned"], writeTargets: ["~/.zshrc"], readTargets: [] },
+    ]);
+    expect(shape("cmd 2>| errors.log")).toEqual([
+      { words: ["cmd"], writeTargets: ["errors.log"], readTargets: [] },
+    ]);
+    // A real pipe after a redirect target still separates two commands.
+    expect(shape("cmd > out.txt | wc").map((segment) => segment.words)).toEqual([["cmd"], ["wc"]]);
+  });
+
+  // `true & rm -rf ~` used to lex as one command whose program was `true`.
+  it("treats a single & as a separator without breaking && or the & redirects", () => {
+    expect(shape("true & rm -rf ~").map((segment) => segment.words)).toEqual([
+      ["true"],
+      ["rm", "-rf", "~"],
+    ]);
+    expect(shape("a & b & c").map((segment) => segment.words)).toEqual([["a"], ["b"], ["c"]]);
+    expect(shape("a && b").map((segment) => segment.words)).toEqual([["a"], ["b"]]);
+  });
+
+  // Every grouping spelling used to become the program, and miss every rule.
+  it("strips grouping punctuation so the real program surfaces", () => {
+    for (const command of ["( rm -rf ~ )", "(rm -rf ~)", "{ rm -rf ~; }", "{rm -rf ~;}"]) {
+      const [first] = shape(command);
+      expect(first?.words.slice(0, 3), command).toEqual(["rm", "-rf", "~"]);
+    }
+  });
+
+  it("leaves a token's own balanced braces and parens alone", () => {
+    expect(shape("echo ${HOME}/x").map((segment) => segment.words)).toEqual([
+      ["echo", "${HOME}/x"],
+    ]);
+    expect(shape("awk '{print $1}' f").map((segment) => segment.words)).toEqual([
+      ["awk", "{print $1}", "f"],
+    ]);
   });
 
   it("sees the risky suffix behind a safe prefix", () => {
