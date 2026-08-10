@@ -1,22 +1,22 @@
 # Agent authority and runtime shape
 
-**Status:** Part I decision complete, ready for implementation. Part II is a
-candidate menu awaiting selection.
+**Status:** Parts I and III decision complete, ready for implementation. Part II
+is a candidate menu awaiting selection.
 
 **Date:** 2026-08-10
 
-**Scope:** The policy a Session executes under, and the shape of the seam the
-Agent Runtime sits behind.
+**Scope:** The policy a Session executes under, the shape of the seam the Agent
+Runtime sits behind, and how a user signs in to Model Access.
 
 ## Why this plan exists
 
-Two efforts follow the Pi migration. They are recorded here rather than in
+Three efforts follow the Pi migration. They are recorded here rather than in
 `pi-native-ticket-session.md` because that document describes a migration that is
 finished: its Sessions 1–7 shipped, OpenCode is gone, and the singular Pi-backed
 `@volli/agent-runtime` is the only structured executor. What follows is new
 product work, not migration residue.
 
-The two parts interlock, which is why they share a document:
+The parts interlock, which is why they share a document:
 
 - Part I makes auto mode honest. Its last step gives the `SessionInteraction`
   surface a producer, which is a question Part II would otherwise have to answer
@@ -24,8 +24,16 @@ The two parts interlock, which is why they share a document:
 - Part II collapses the adapter registry into a single runtime port. That port is
   where Part I's evaluation seam belongs, so the order in which they land changes
   where the code goes.
+- Part III moves sign-in into the app. It is independent of Part I in code, but
+  it removes one of the two ways packaging currently breaks things that work
+  today — the other being Part I's sandbox note — so it belongs in the same
+  conversation.
 
-Do Part I first. It is a decision already made; Part II is a menu.
+Do Part I and Part III first; they are decisions already made. Part II is a menu.
+
+**One thing Part III must not do:** reuse Part I's `SessionInteraction` channel
+for auth prompts. The two look alike and are not. See "The interaction channel"
+below.
 
 ## Part I — Agent authority
 
@@ -414,6 +422,170 @@ also the only candidate whose answer is genuinely in doubt — the Pi migration
 called this scaffolding temporary, and the code has carried it as though
 permanent through seven sessions.
 
+## Part III — In-app Model Access sign-in
+
+### Product decision
+
+Signing in to a provider happens inside Volli. The bundled `pi` CLI, the terminal
+handoff it exists for, and the integrity machinery that guards it are all deleted
+in the same effort.
+
+### What is true today
+
+"Auth" covers three separate things here, and only one of them is missing.
+
+- **Credentials are not bundled and never were.** `PiFileCredentialStore` reads
+  and writes `~/.pi/agent/auth.json` — the same file, in the same place, in the
+  same shape the `pi` CLI uses.
+- **Token refresh already happens in-process.** `piOwnedModels()` calls
+  `registerBunOAuthFlows()`, and `Models.getAuth()` runs the refresh itself
+  under the credential store's lock. Staying signed in is solved.
+- **Initial sign-in is a terminal handoff.** There is no login IPC anywhere in
+  the tree. Model Access Settings' "Sign in" calls `openExternalSignIn` →
+  `createModelAccessTerminal` → a `shell` terminal running the bundled binary
+  under `RESTRICTED_LOGIN_FLAGS` with `PI_OFFLINE=1`, `PI_TELEMETRY=0` and
+  `PI_CODING_AGENT_DIR` pointed at Volli's auth directory.
+
+The binary itself is bundled by mechanism only. `verifiedPiCliResource` resolves
+`resources/pi-cli/<target>/pi` and gates it on a `sha256` **and** a `treeSha256`
+recorded in a tracked `manifest.json` (Pi 0.84.1). The binaries are gitignored;
+only the manifest is in the repo. They arrive via `pnpm prepare:pi-cli`, which is
+**not** part of `postinstall`. Targets are `darwin-arm64` and `darwin-x64` only.
+
+### Why it must change
+
+1. **Sign-in is broken out of the box.** A fresh clone has no binary, so
+   `modelAccessTerminal` stays `null` and the button fails with "Bundled Pi CLI
+   is unavailable".
+2. **It is macOS-only.** There is no Windows or Linux target, so there is no
+   sign-in path on those platforms at all.
+3. **It is large** — roughly 66MB of archives across two targets, more unpacked,
+   to provide one interactive flow.
+4. **The first signed build will break it, silently.** `codesign` rewrites
+   Mach-O bytes, so a `treeSha256` computed before signing cannot match after.
+   The gate fails closed, `modelAccessTerminal` becomes `null`, and the user is
+   told the CLI is unavailable — a true statement with a misleading cause.
+5. **It leaves the product surface.** Model Access is a Settings page; sign-in
+   drops the user into a terminal to finish a Settings task.
+
+### The API is public and sufficient
+
+Verified against `@earendil-works/pi-ai` 0.84.1:
+
+- `Models.login(providerId, type: AuthType, interaction: AuthInteraction): Promise<Credential>`
+- `Models.logout(providerId, options?): Promise<void>`
+- `AuthType = "api_key" | "oauth"`
+- `AuthInteraction { signal?; prompt(AuthPrompt): Promise<string>; notify(AuthEvent): void }`
+- `AuthPrompt` is `text`, `secret`, `select` (options of `{ id, label, description? }`)
+  or `manual_code`, each with an optional per-prompt `signal`
+- `AuthEvent` is `info` (message plus links), `auth_url` (url plus instructions),
+  `device_code` (user code, verification URI, interval, expiry) or `progress`
+- `prompt()` resolves with the entered or selected string — `select` returns the
+  option id — and rejects on cancel or abort
+- OAuth flows shipped in 0.84.1: anthropic, github-copilot, kimi-coding,
+  openai-codex, openrouter, radius, xai
+- `OAuthAuth` carries `loginLabel` and `isSubscription`, which is what a provider
+  picker should render
+
+pi-ai's own documentation states the division plainly: "Login/logout
+orchestration is app-owned." Nothing here requires a CLI.
+
+### Target architecture
+
+**Where it runs.** Main. The credential never round-trips through the renderer
+except in the one direction a human types it.
+
+**The interaction channel.** `AuthInteraction` is a request/response protocol:
+main starts a login, and the flow blocks on an answer only the renderer can
+supply. That is structurally identical to a `SessionInteraction`, and it must not
+be one:
+
+- it is not Session history — it belongs to Model Access, not to any Session
+- a `secret` prompt carries an API key, and the Session ledger is durable
+
+Build a **separate ephemeral channel**, correlated by a login-attempt id,
+cancellable from either end, never persisted and never logged. `CONTEXT.md`
+already requires that the credential owner never exposes secrets to the renderer,
+prompt, transcript, or Session ledger.
+
+**Secret direction.** An `api_key` login means the user types a key into the
+renderer and it crosses IPC to main. That is inbound and one-way: main writes it
+through `credentials.modify` and never reads it back out. `CredentialInfo`
+(`providerId` plus `type`) stays the only credential shape the renderer sees.
+
+**Use `piOwnedModels()`, never `builtinModels()` directly.** `piOwnedModels`
+calls `registerBunOAuthFlows()` first, which imports the OAuth flows statically.
+Reaching for `builtinModels()` re-takes pi-ai's variable-specifier dynamic import
+path, which does not survive the Electron bundle. This landmine is already
+defused in exactly one place; keep it that way.
+
+**Cross-process safety needs nothing new.** `PiFileCredentialStore` serializes
+the whole file under an advisory lock and re-reads on each pass, so a credential
+the `pi` CLI refreshed concurrently is carried forward rather than clobbered.
+Login persists through the same `modify` path.
+
+**UI.** Model Access Settings gains per-provider sign-in and sign-out. The four
+prompt kinds and four event kinds are the entire surface. The repo's UI copy rule
+applies — labels are nouns and the control is the explanation. `auth_url` and
+`device_code` are the one justified exception: they need an openable link and a
+copyable code, which cannot be expressed by a label alone.
+
+**There is no API-key validation call.** A wrong key surfaces on first use as a
+`ModelsError` with code `auth`. The UI must not imply it verified anything.
+
+### What gets deleted
+
+Once in-app sign-in works, in the same effort:
+
+- `apps/desktop/resources/pi-cli/**` and its `manifest.json`
+- `apps/desktop/scripts/prepare-pi-cli.mjs` and the `prepare:pi-cli` script
+- `apps/desktop/src/main/pi-cli-resource.ts` — `verifiedPiCliResource`,
+  `piLoginLaunch`, and the release-identity helpers
+- the bundle-marker integrity module and its `.volli-pi-bundle.json`
+- both `model-access` branches in `apps/desktop/src/main/pty/scope.ts`, the
+  guards in `pty/ipc.ts`, and the `purpose` field in `packages/shared/src/terminal.ts`
+- `createModelAccessTerminal` and `openProjectModelAccess`
+- the `.gitignore` entry for the gitignored binaries
+
+Keep the **recovery concept** — a provider still needs to distinguish "sign in"
+from "retry". Rename the `external-sign-in` kind, since after this it is not
+external.
+
+### Implementation slices
+
+1. Main-process login and logout over `piOwnedModels()`, driven by a headless
+   `AuthInteraction`. No UI. Prove one real OAuth provider and one real API-key
+   provider land in `auth.json`.
+2. The ephemeral main↔renderer interaction channel, correlated per attempt, with
+   cancellation from both ends.
+3. Model Access Settings sign-in and sign-out over the four prompt kinds and four
+   event kinds.
+4. Delete the bundle and everything listed above.
+
+### Testing and evidence
+
+- Mapping `AuthPrompt` and `AuthEvent` to the surface model is pure — unit test.
+- Login orchestration is testable with a fake `AuthInteraction` and no network.
+- A test asserting no secret reaches the Session ledger, a transcript, or a log.
+- A live sign-in is manual, paid evidence like the Pi smokes — a sibling of
+  `pnpm smoke:pi` rather than a CI gate.
+- After slice 4, a fresh-clone check: sign-in works with no prepare step.
+
+### Risks and unverified assumptions
+
+- **`device_code` and `manual_code` are what a terminal did for free.** The
+  owner accepted deleting the escape hatch; verify each shipped provider's flow
+  can be expressed in-app *before* slice 4, not after.
+- pi-ai owns the flows. A pinned-revision bump can change prompt or event shapes.
+- The API key crosses IPC. That path needs an explicit audit, and it is the one
+  place this design widens secret exposure relative to the terminal.
+- **"Works in the packaged app" stays unproven until a packaging lane exists.**
+  `registerBunOAuthFlows` is precisely the thing that makes OAuth work there, and
+  no packaged build has ever run.
+- Deleting the CLI removes the only way to inspect or repair auth state outside
+  Volli. A corrupted `auth.json` currently has a manual fix; afterwards it needs
+  an in-app one.
+
 ## Open decisions
 
 - Whether the Main-checkout Role ships with the pre-image commit or waits.
@@ -421,7 +593,11 @@ permanent through seven sessions.
 - Whether candidate 1 lands before Part I, changing where the evaluation seam is
   wired.
 - Packaging: an App-Sandboxed build cannot nest `sandbox-exec`, so distribution
-  strategy and this boundary are the same decision.
+  strategy and Part I's boundary are the same decision. Part III removes the
+  *other* packaging hazard (the `codesign`/`treeSha256` gate), so doing it first
+  leaves packaging with one problem instead of two.
+- Whether any shipped provider's `device_code` or `manual_code` flow resists an
+  in-app expression. That answer gates Part III slice 4, not the whole part.
 
 ## Research record
 
@@ -436,3 +612,7 @@ permanent through seven sessions.
   paths carved from writable roots.
 - Goose, Aider and OpenHands — respectively the granularity failure mode, the
   dirty-work pre-image commit, and model-self-reported risk.
+- `@earendil-works/pi-ai` 0.84.1 `dist/auth/types.d.ts` and `dist/models.d.ts` —
+  `Models.login`/`logout`, `AuthInteraction`, `AuthPrompt`, `AuthEvent`,
+  `CredentialStore`, and the shipped OAuth provider set. Read directly from the
+  pinned dependency rather than from documentation.
