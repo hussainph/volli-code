@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { SessionLedgerIds } from "@volli/shared";
+import type { RuntimeObservation, SessionLedgerIds } from "@volli/shared";
 import type { UIMessage } from "ai";
 import {
   canonicalJson,
@@ -8,8 +8,9 @@ import {
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamOverlay,
+  sessionMainBranchId,
+  sessionRootThreadId,
   type BindingHandle,
-  type HarnessObservation,
   type NativeHarnessAdapter,
   type ObservationSink,
   type SessionEngine,
@@ -31,20 +32,19 @@ import {
  * purpose: `transcript.message` keeps its meaning and only the adapter's
  * emission cadence moved.
  *
- * The first test below feeds the observation mix a real adapter emits: one
- * `transcript.delta` reset, 38 `part.append` deltas, one durable
- * `transcript.message` settle (1 reset + 38 appends = the same 39-frame
- * shape). The removed `@volli/opencode-adapter`'s own probe measured that mix
- * straight from the adapter and is where these numbers came from. No adapter
- * or timers here — this probe only needs the engine's own side of the
- * contract, built directly against `@volli/session-engine`'s vocabulary. This
- * is what settle-count persistence actually costs: one artifact write, one
- * ledger event, for the whole answer.
+ * The first test below feeds the observation mix an executor really reports:
+ * one turn, 39 text deltas, two completed activities and one settled assistant
+ * message. What each of those costs is the Engine's own translation to decide
+ * — 41 overlays and no artifact at all, while each of the three durable
+ * messages costs exactly one artifact and one ledger event. That is what
+ * settle-count persistence buys: durability per message, never per chunk. The
+ * removed `@volli/opencode-adapter`'s own probe measured the same 39-piece
+ * answer and is where these numbers came from.
  *
- * The second test keeps the old per-chunk feed this file used to run
- * exclusively, relabeled honestly: no adapter emits `transcript.message` once
- * per chunk any more, but sessions recorded before this change have that
- * shape sitting on disk, and `snapshot()`'s latest-wins fold has to keep
+ * The second test keeps the old per-chunk shape this file used to feed, stated
+ * honestly: nothing can report it and no translation produces it any more, so
+ * it is written straight to the ledger — which is what "history an older build
+ * left on disk" actually is. `snapshot()`'s latest-wins fold has to keep
  * reading it correctly. That is a compatibility guarantee, not a cost this
  * probe still prices — so it asserts the folded outcome, not the bytes.
  *
@@ -144,6 +144,7 @@ function runtimeIds(prefix = "") {
 
 class FakeAdapter implements NativeHarnessAdapter {
   readonly id = "fake";
+  readonly durableIdNamespace = "fake";
   readonly adapterVersion = "1.0.0";
   readonly runtime = { path: "/trusted/fake", version: "1.0.0", fingerprint: "sha256:fake" };
   sink: ObservationSink | null = null;
@@ -166,7 +167,7 @@ class FakeAdapter implements NativeHarnessAdapter {
     };
   }
 
-  emit(observation: HarnessObservation): Promise<void> {
+  emit(observation: RuntimeObservation): Promise<void> {
     if (!this.sink) throw new Error("Fake adapter is not attached");
     return this.sink.emit(observation);
   }
@@ -247,85 +248,51 @@ function toolPart(callId: string, path: string, content: string): UIMessage["par
 }
 
 // ---------------------------------------------------------------------------
-// Scenario 1: the real adapter's observed mix — one reset, 38 appends, one
-// durable settle carrying the full text plus two tool parts on the tail.
+// Scenario 1: the mix an executor really reports — one turn, 39 text deltas,
+// two completed activities, one settled assistant message. What each of those
+// costs in artifacts and on the wire is the Session Engine's own translation
+// to decide, which is exactly what this prices.
 // ---------------------------------------------------------------------------
 
-const MESSAGE_ID = "assistant-1";
-const THREAD_ID = "thread:probe-session:root";
-const BRANCH_ID = "branch:probe-session:main";
-const ATTEMPT_ID = "attempt:assistant-1";
 const TURN_ID = "turn-1";
-const TEXT_KEY = "text-1";
-/** Matches the wire probe's measured shape exactly: 1 reset + 38 part.append. */
+/** Matches the wire probe's measured shape exactly: 39 text deltas. */
 const DELTA_PIECE_COUNT = 39;
 
-function resetObservation(text: string): HarnessObservation {
+function textDelta(text: string): RuntimeObservation {
+  return { kind: "delta", turnId: TURN_ID, channel: "text", text };
+}
+
+function completedActivity(callId: string, path: string, content: string): RuntimeObservation {
   return {
-    id: "delta-reset",
-    kind: "transcript.delta",
-    occurredAt: 1234,
-    threadId: THREAD_ID,
-    branchId: BRANCH_ID,
-    attemptId: ATTEMPT_ID,
+    kind: "activity",
+    state: "completed",
     turnId: TURN_ID,
-    messageId: MESSAGE_ID,
-    delta: {
-      op: "reset",
-      message: {
-        id: MESSAGE_ID,
-        role: "assistant",
-        parts: [{ key: TEXT_KEY, part: { type: "text", text } }],
-      },
+    activityId: callId,
+    descriptor: {
+      kind: "read-file",
+      nativeToolName: "read",
+      subject: { label: path, path, lineRange: null },
+      outcome: null,
+      startedAt: 10,
+      endedAt: 20,
     },
+    input: { path },
+    output: { content },
+    occurredAt: 1234,
   };
 }
 
-function appendObservation(index: number, text: string): HarnessObservation {
+function settled(fullText: string): RuntimeObservation {
   return {
-    id: `delta-append-${index}`,
-    kind: "transcript.delta",
-    occurredAt: 1234,
-    threadId: THREAD_ID,
-    branchId: BRANCH_ID,
-    attemptId: ATTEMPT_ID,
+    kind: "message-settled",
     turnId: TURN_ID,
-    messageId: MESSAGE_ID,
-    delta: { op: "part.append", key: TEXT_KEY, text },
-  };
-}
-
-function settleObservation(fullText: string): HarnessObservation {
-  return {
-    id: "settle-final",
-    kind: "transcript.message",
+    message: { entryId: "entry-final", role: "assistant", text: fullText },
     occurredAt: 1234,
-    turnId: TURN_ID,
-    threadId: THREAD_ID,
-    branchId: BRANCH_ID,
-    attemptId: ATTEMPT_ID,
-    message: {
-      id: MESSAGE_ID,
-      role: "assistant",
-      parts: [
-        { type: "text", text: fullText },
-        toolPart(
-          "call-read-1",
-          "packages/session-engine/src/session-runtime.ts",
-          'case "transcript.message"',
-        ),
-        toolPart(
-          "call-read-2",
-          "packages/session-engine/src/projection.ts",
-          "STREAM_DELTA_DELAY_MS",
-        ),
-      ],
-    },
   };
 }
 
 describe("session-engine stream-cost probe", () => {
-  it("measures settle-count persistence and subscriber wire cost for the adapter's real delta+settle mix", async () => {
+  it("measures settle-count persistence and subscriber wire cost for a real turn's observation mix", async () => {
     const fixtureText = buildFixtureText();
     expect(fixtureText.length).toBeGreaterThanOrEqual(16_000);
     expect(fixtureText.length).toBeLessThanOrEqual(20_000);
@@ -333,7 +300,6 @@ describe("session-engine stream-cost probe", () => {
     const pieces = splitIntoPieces(fixtureText, DELTA_PIECE_COUNT);
     expect(pieces).toHaveLength(DELTA_PIECE_COUNT);
     expect(pieces.join("")).toBe(fixtureText);
-    const [baseline, ...appends] = pieces;
 
     const { runtime, adapter, counting } = buildRuntime();
     const sessionId = await createAndAttach(runtime);
@@ -349,19 +315,44 @@ describe("session-engine stream-cost probe", () => {
       },
     );
 
-    await adapter.emit(resetObservation(baseline!));
-    for (const [index, text] of appends.entries()) {
-      await adapter.emit(appendObservation(index, text));
-    }
-    await adapter.emit(settleObservation(fixtureText));
+    await adapter.emit({ kind: "turn", state: "started", turnId: TURN_ID });
+    for (const piece of pieces) await adapter.emit(textDelta(piece!));
+    await adapter.emit(
+      completedActivity(
+        "call-read-1",
+        "packages/session-engine/src/session-runtime.ts",
+        'case "transcript.message"',
+      ),
+    );
+    await adapter.emit(
+      completedActivity(
+        "call-read-2",
+        "packages/session-engine/src/projection.ts",
+        "STREAM_DELTA_DELAY_MS",
+      ),
+    );
+    await adapter.emit(settled(fixtureText));
     unsubscribe();
 
-    // The mix fed matches the wire probe's measured shape exactly.
-    expect(overlays).toHaveLength(DELTA_PIECE_COUNT);
+    // Every overlay the turn puts on the wire, and the total is asserted
+    // exhaustively: the per-op counts below are what the probe explains, but
+    // only a length pin can catch an emission that is none of them, and the
+    // published bytes are summed over the whole array.
+    //
+    // The first delta opens the message before it grows it, which is the one
+    // emission the raw piece count does not predict. The settle adds the last
+    // one: a settled message is named by the runtime's own entry id while its
+    // deltas were addressed to an id minted before that name existed, so the
+    // transient claim is always withdrawn rather than superseded in place. The
+    // two activities settle straight to durable messages and never claim an
+    // overlay at all.
     expect(overlays.filter((overlay) => overlay.delta.op === "reset")).toHaveLength(1);
+    expect(overlays.filter((overlay) => overlay.delta.op === "part.upsert")).toHaveLength(1);
     expect(overlays.filter((overlay) => overlay.delta.op === "part.append")).toHaveLength(
       DELTA_PIECE_COUNT - 1,
     );
+    expect(overlays.filter((overlay) => overlay.delta.op === "message.remove")).toHaveLength(1);
+    expect(overlays).toHaveLength(DELTA_PIECE_COUNT + 2);
 
     const referencedFrames = durableFrames.filter(
       (frame) => frame.event.payload.kind === "transcript.referenced",
@@ -371,16 +362,18 @@ describe("session-engine stream-cost probe", () => {
     const finalArtifact = finalSnapshot.transcript.at(-1)!;
     const finalTextPart = finalArtifact.message.parts.find((part) => part.type === "text");
     expect(finalTextPart).toMatchObject({ type: "text", text: fixtureText });
-    expect(finalArtifact.message.parts.filter((part) => part.type === "dynamic-tool")).toHaveLength(
-      2,
-    );
+    expect(
+      finalSnapshot.transcript.flatMap((artifact) =>
+        artifact.message.parts.filter((part) => part.type === "dynamic-tool"),
+      ),
+    ).toHaveLength(2);
 
-    // Phase 3 ceilings (docs/plans/delta-frames.md, "after"): settle-count
-    // persistence — one artifact write and one ledger event for the whole
-    // answer, not one per chunk. A regression to per-chunk durability would
-    // blow both straight past 1.
-    expect(counting.writes()).toBe(1);
-    expect(referencedFrames).toHaveLength(1);
+    // Settle-count persistence, which is the ceiling this probe guards: one
+    // artifact and one ledger event per durable MESSAGE — the answer plus its
+    // two activities — never one per delta. A regression to per-chunk
+    // durability would blow both straight past three.
+    expect(counting.writes()).toBe(3);
+    expect(referencedFrames).toHaveLength(3);
 
     const artifactBytes = counting.bytesTotal();
     const durableFrameBytes = durableFrames.reduce(
@@ -395,9 +388,9 @@ describe("session-engine stream-cost probe", () => {
     const finalMessageBytes = byteLength(
       canonicalJson({
         version: 1,
-        threadId: THREAD_ID,
-        branchId: BRANCH_ID,
-        attemptId: ATTEMPT_ID,
+        threadId: finalArtifact.threadId,
+        branchId: finalArtifact.branchId,
+        attemptId: finalArtifact.attemptId,
         turnId: TURN_ID,
         message: finalArtifact.message,
       } satisfies SessionTranscriptArtifact),
@@ -409,10 +402,10 @@ describe("session-engine stream-cost probe", () => {
         "",
         "[stream-cost probe 2] session-engine persistence + subscriber wire (settle-count cadence)",
         `  fixture length:              ${fixtureText.length} chars`,
-        `  transcript.delta fed:        ${DELTA_PIECE_COUNT} (1 reset + ${DELTA_PIECE_COUNT - 1} part.append)`,
-        `  transcript.message fed:      1 (the settle)`,
+        `  text deltas fed:             ${DELTA_PIECE_COUNT}`,
+        `  durable messages fed:        3 (one settle, two activities)`,
         `  artifact writes:             ${counting.writes()}`,
-        `  artifact bytes (single settle): ${artifactBytes}`,
+        `  artifact bytes (all settles): ${artifactBytes}`,
         `  ledger events appended:      ${referencedFrames.length}`,
         `  subscriber durable frame bytes: ${durableFrameBytes}`,
         `  subscriber overlay bytes:       ${overlayBytes}`,
@@ -425,14 +418,15 @@ describe("session-engine stream-cost probe", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Scenario 2: the old per-chunk feed this file used to run exclusively —
-  // now the shape a session recorded before this change actually has on
-  // disk, not a reading of what the adapter emits today. `snapshot()`'s
-  // latest-wins fold has to keep resolving that history to the right content,
-  // so this asserts the folded outcome, not what the redundant writes cost.
+  // Scenario 2: the old per-chunk cadence, which is now only a shape sitting on
+  // disk. No executor can report it and no translation produces it, so it is
+  // written straight to the ledger — which is the honest way to state "history
+  // an older build left behind". `snapshot()`'s latest-wins fold has to keep
+  // resolving it to the right content, so this asserts the folded outcome, not
+  // what the redundant writes cost.
   // -------------------------------------------------------------------------
 
-  it("historical worst case / old-session replay still folds correctly under per-chunk transcript.message", async () => {
+  it("historical worst case / old-session replay still folds correctly under per-chunk snapshots", async () => {
     const OLD_REPLAY_MESSAGE_ID = "assistant-old-replay";
     const OLD_REPLAY_CHUNKS = [
       "Hel",
@@ -447,41 +441,47 @@ describe("session-engine stream-cost probe", () => {
       "frames landed.",
     ] as const;
 
-    const { runtime, adapter } = buildRuntime();
+    const { runtime, engine, counting } = buildRuntime();
     const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    const provenance = {
+      source: { kind: "adapter" as const, id: "fake", detail: null },
+      venue,
+    };
+    const record = async (parts: UIMessage["parts"], id: string) => {
+      const reference = await counting.store.write({
+        version: 1,
+        threadId: sessionRootThreadId(sessionId),
+        branchId: sessionMainBranchId(sessionId),
+        attemptId: `attempt:${OLD_REPLAY_MESSAGE_ID}`,
+        turnId: TURN_ID,
+        message: { id: OLD_REPLAY_MESSAGE_ID, role: "assistant", parts },
+      });
+      await engine.observe({
+        id,
+        sessionId,
+        attachmentId,
+        occurredAt: 1234,
+        provenance,
+        kind: "transcript.referenced",
+        turnId: TURN_ID,
+        reference,
+      });
+    };
 
     let text = "";
     for (const [index, chunk] of OLD_REPLAY_CHUNKS.entries()) {
       text += chunk;
-      await adapter.emit({
-        id: `old-snapshot-${index}`,
-        kind: "transcript.message",
-        occurredAt: 1234,
-        turnId: TURN_ID,
-        threadId: THREAD_ID,
-        branchId: BRANCH_ID,
-        attemptId: ATTEMPT_ID,
-        message: { id: OLD_REPLAY_MESSAGE_ID, role: "assistant", parts: [{ type: "text", text }] },
-      });
+      await record([{ type: "text", text }], `old-snapshot-${index}`);
     }
     const finalText = text;
-    await adapter.emit({
-      id: "old-snapshot-final",
-      kind: "transcript.message",
-      occurredAt: 1234,
-      turnId: TURN_ID,
-      threadId: THREAD_ID,
-      branchId: BRANCH_ID,
-      attemptId: ATTEMPT_ID,
-      message: {
-        id: OLD_REPLAY_MESSAGE_ID,
-        role: "assistant",
-        parts: [
-          { type: "text", text: finalText },
-          toolPart("call-replay-1", "old/replayed-path.ts", "old tool output"),
-        ],
-      },
-    });
+    await record(
+      [
+        { type: "text", text: finalText },
+        toolPart("call-replay-1", "old/replayed-path.ts", "old tool output"),
+      ],
+      "old-snapshot-final",
+    );
 
     // Latest-wins on replay: many redundant durable snapshots for the same
     // message id, and `snapshot()` still resolves to exactly the last one —

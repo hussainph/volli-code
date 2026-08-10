@@ -743,6 +743,59 @@ two-store attention migration and the state-free replay path, none of which the
 lab was load-bearing for — but anyone re-opening candidate 1's first half should
 know that its sharpest argument was retired rather than answered.
 
+**Re-opened and settled (2026-08-11).** `RuntimeObservation` is the only
+observation vocabulary *any layer names across a boundary*, and the altitude
+crossing moved into `packages/session-engine/src/observation-translation.ts` —
+the layer that owns Session facts — where the durable ids it mints are now
+covered at 100%.
+
+Worth stating precisely, because "deleted" would overclaim: the 12 Session-shaped
+arms survive as `TranslatedObservation`, in the same package `HarnessObservation`
+already lived in (`native-adapter.ts`). What changed is that they are no longer
+exported from the package index and no longer cross a boundary — the Engine's
+own intermediate shape between a runtime observation and a durable fact, rather
+than a contract Electron main and the Engine both had to agree on. The altitude
+crossing the 2026-08-10 correction identified is real and still here; what the
+correction got wrong was that it had to be a *published* vocabulary. The 450
+lines of translation that left Electron main are the actual win. The four blockers held up, and each has an answer rather than a
+workaround: the frozen `session_events.id` derivations moved verbatim, with the
+`pi:` namespace supplied by the adapter through `NativeHarnessAdapter.durableIdNamespace`
+so the Engine mints ids it does not name; the replay path stayed separate from
+the live one, sharing only the id counter, because `reconcile` is not gated on
+the binding being idle; per-attachment translator state lives on the observation
+sink, whose lifetime is the attach rather than the binding record's, which is
+dropped early on close; and the two-store attention question never arose,
+because `attention.reason` was not widened.
+
+Three shapes changed rather than moved. An `interaction` arm was **added** to
+`RuntimeObservation` instead of deleting the Engine's two interaction arms —
+safe in a way widening `reason` is not, since the recovery sidecar validates by
+`kind` and never sees a kind it does not know, whereas a new `reason` is
+re-validated against every marker already on disk. And the `rate_limited`,
+`quota_exhausted`, `transport_retrying` and `adapter_disconnected` Attention
+kinds lost their writer, all four the same way: the surviving union is derived
+from `AttentionObservation["reason"]` through the `ATTENTION_KINDS` map, and
+`reason` has five members, so a kind no reason maps to has nothing that can
+write it. Nothing could reach any of the four before either — the nine-kind
+union already sat over the same five-member map — and reaching them needs the
+widening above. `retryAt` and `resetAt` went with them: both existed only to
+time a `rate_limited` or a `quota_exhausted`, so they outlive nothing once
+neither kind has a writer.
+
+The third is `attachment.closed.outcome`, now `completed` alone where the
+harness vocabulary admitted `completed`, `failed` and `interrupted`. A
+translation cannot say how the work inside an attachment went; it observes
+only that the attachment closed. What narrowed is the translation pipeline
+and not the durable event kind, which still carries all three, and the other
+two keep their producers: a native failure arrives as `attachment.failed`,
+which `#recordFact` writes down as `attachment.closed` with
+`outcome: "failed"`, and `interrupted` is written directly by the boot sweep
+that retires the local attachments a relaunch cannot reconnect to, where a
+terminal companion's PTY died with the process that owned it and the work
+inside it was cut off rather than finished. It is also the defect listed
+under candidate 1 — `outcome` hardcoded `"completed"` — resolved by making
+the type say what the only emitter already said.
+
 ## Part III — In-app Model Access sign-in
 
 ### Product decision

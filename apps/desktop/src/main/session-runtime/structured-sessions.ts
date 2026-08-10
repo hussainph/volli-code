@@ -1,9 +1,9 @@
 /**
  * What every structured Session start shares, whatever Role it runs under.
  *
- * There is one executor, so there is one adapter id and one profile; keeping
- * them here rather than in each facade is what stops a second copy from quietly
- * naming a different runtime. The model rule is shared for the same reason: a
+ * There is one executor, so there is one adapter id; keeping it here rather
+ * than in each facade is what stops a second copy from quietly naming a
+ * different runtime. The model rule is shared for the same reason: a
  * Session records the configured default as its own durable, observable event
  * before any attachment exists.
  *
@@ -22,7 +22,11 @@ import type { ModelSelection, SessionStartResult } from "@volli/shared";
  * The one adapter id the structured product attaches under.
  *
  * The runtime supplies it to the command itself; this constant is what every
- * *other* reader of a durable attachment compares against.
+ * *other* reader of a durable attachment compares against — including the boot
+ * sweep, which retires every local open attachment that does not match. It is
+ * declared in this module, which carries no runtime dependency, so those
+ * readers can name the id without importing Pi; `PI_ADAPTER_ID` aliases it so
+ * the two cannot drift.
  */
 export const STRUCTURED_ADAPTER_ID = "pi";
 

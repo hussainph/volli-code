@@ -116,9 +116,9 @@ op applies — never a `partOrder` position. Projection elides parts
 unknown tool states, and empty text parts between tool calls are common), so
 buffer order and projected order disagree routinely.
 
-The observation arm deliberately does **not** extend `HarnessObservationBase`:
+The observation arm deliberately does **not** extend `TranslatedObservationBase`:
 the base carries `cursor`, and the runtime advances the reconcile cursor for
-any observation that has one (`session-runtime.ts:1290-1291`). A delta that
+any observation that has one (`session-runtime.ts`, `#recordFact`). A delta that
 moved it would make a later reconcile ask the provider for events after
 content that was never made durable. The arm has its own base — `id`,
 `occurredAt`, no `cursor` — and the runtime's handling of it returns before

@@ -1,5 +1,6 @@
 import type {
   ModelSelection,
+  RuntimeObservation,
   SessionAttachmentContinuity,
   SessionInteraction,
   SessionInteractionResolution,
@@ -7,7 +8,6 @@ import type {
   SessionNativeReference,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
-import type { TranscriptDelta } from "./transcript-overlay";
 
 export interface NativeRuntimeIdentity {
   path: string;
@@ -98,131 +98,14 @@ export type DeliveryReceipt =
       native: SessionNativeReference | null;
     };
 
-interface HarnessObservationBase {
-  /** Stable native event identity; repeats must retain the same id and content. */
-  id: string;
-  occurredAt: number;
-  cursor?: SessionNativeDetail | null;
-}
-
-/**
- * The envelope for a fact that is never made durable, and deliberately not
- * {@link HarnessObservationBase}.
- *
- * The base carries `cursor`, and the runtime advances the reconcile cursor for
- * any observation that has one. A transient delta that moved it would make a
- * later reconcile ask the provider for events *after* content this Session
- * never wrote down — so the arm has no cursor to advance, and the runtime's
- * handling of it returns before the advance.
- */
-interface TransientObservationBase {
-  id: string;
-  occurredAt: number;
-}
-
-export type HarnessObservation =
-  | (HarnessObservationBase & {
-      /** The native binding ended after it was already attached. */
-      kind: "attachment.closed";
-      outcome: "completed" | "failed" | "interrupted";
-    })
-  | (HarnessObservationBase & {
-      /** Native failure after attachment; it closes the durable binding as failed. */
-      kind: "attachment.failed";
-      detail: string | null;
-    })
-  | (HarnessObservationBase & {
-      /** The durable record: a message as it stands at a settle point. */
-      kind: "transcript.message";
-      threadId: string;
-      branchId: string;
-      attemptId: string;
-      turnId: string | null;
-      message: UIMessage;
-    })
-  | (TransientObservationBase & {
-      /**
-       * A message mid-word. View state, not a Session fact: it is folded into an
-       * in-memory overlay and published to live subscribers, and nothing about
-       * it is written down. The durable record of the same message arrives as
-       * `transcript.message` when it settles.
-       */
-      kind: "transcript.delta";
-      threadId: string;
-      branchId: string;
-      attemptId: string;
-      turnId: string | null;
-      messageId: string;
-      delta: TranscriptDelta;
-    })
-  | (HarnessObservationBase & { kind: "turn.started"; turnId: string })
-  | (HarnessObservationBase & { kind: "turn.completed"; turnId: string })
-  | (HarnessObservationBase & { kind: "turn.interrupted"; turnId: string })
-  /**
-   * The Session's authority refused a call. The adapter reports it rather than
-   * minting it: only the runtime sees the call, and only the Session Engine owns
-   * the attachment the fact belongs to.
-   */
-  | (HarnessObservationBase & {
-      kind: "authority.denied";
-      turnId: string | null;
-      tool: string;
-      cause: string;
-      reason: string;
-    })
-  | (HarnessObservationBase & {
-      kind: "interaction.opened";
-      interaction: Omit<SessionInteraction, "attachmentId">;
-    })
-  | (HarnessObservationBase & {
-      kind: "interaction.resolved";
-      interactionId: string;
-      resolution: SessionInteractionResolution;
-    })
-  | (HarnessObservationBase & {
-      kind: "attention.raised";
-      attention: {
-        id: string;
-        kind:
-          | "auth_required"
-          | "configuration_invalid"
-          | "rate_limited"
-          | "quota_exhausted"
-          | "context_limit_reached"
-          | "transport_retrying"
-          | "partial_turn_interrupted"
-          | "adapter_disconnected"
-          | "adapter_unrecoverable";
-        detail: string | null;
-        diagnostic: SessionNativeDetail | null;
-        retryAt?: number | null;
-        resetAt?: number | null;
-      };
-    })
-  | (HarnessObservationBase & { kind: "attention.cleared"; attentionId: string });
-
-/**
- * The reconcile cursor an observation carries, for a caller holding one whose
- * kind it has not narrowed yet.
- *
- * `undefined` means the observation names no position to resume from — either
- * because its kind has no cursor at all, or because a durable kind left it
- * unset — and a caller that stores cursors must leave the one it has alone.
- */
-export function observationCursor(
-  observation: HarnessObservation,
-): SessionNativeDetail | null | undefined {
-  return "cursor" in observation ? observation.cursor : undefined;
-}
-
 export interface ObservationSink {
   /** Resolves only after the observation's durable Session facts commit. */
-  emit(observation: HarnessObservation): Promise<void>;
+  emit(observation: RuntimeObservation): Promise<void>;
 }
 
 export interface Reconciliation {
   cursor: SessionNativeDetail | null;
-  observations: readonly HarnessObservation[];
+  observations: readonly RuntimeObservation[];
   receipts: readonly DeliveryReceipt[];
 }
 
@@ -249,6 +132,18 @@ export interface BindingHandle {
  */
 export interface NativeHarnessAdapter {
   readonly id: string;
+  /**
+   * The leading segment of every durable observation id derived from this
+   * adapter's observations — the `pi:` in `pi:turn:…`.
+   *
+   * Frozen, and stated here rather than in the Session Engine because the ids
+   * belong to whoever's events they are. The Engine mints them, since it is the
+   * layer that decides what a Session writes down, but it must not invent the
+   * name they are minted under: every relaunch re-derives these ids from live
+   * data and dedupes them by exact string match, so a changed namespace does not
+   * fail — it writes a second copy of every fact in the Session's history.
+   */
+  readonly durableIdNamespace: string;
   readonly adapterVersion: string;
   readonly runtime: NativeRuntimeIdentity;
   attach(spec: NativeAttachmentSpec, sink: ObservationSink): Promise<BindingHandle>;

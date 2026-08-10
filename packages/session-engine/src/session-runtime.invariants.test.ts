@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { SessionLedgerIds } from "@volli/shared";
+import type { RuntimeObservation, SessionLedgerIds } from "@volli/shared";
 import type { UIMessage } from "ai";
 import {
   createInMemorySessionLedger,
@@ -8,7 +8,6 @@ import {
   createSessionRuntime,
   isSessionStreamOverlay,
   type BindingHandle,
-  type HarnessObservation,
   type NativeHarnessAdapter,
   type ObservationSink,
   type SessionEngine,
@@ -43,6 +42,7 @@ function message(id = "message", text = "hello"): UIMessage {
 
 class Adapter implements NativeHarnessAdapter {
   readonly id = "invariant-adapter";
+  readonly durableIdNamespace = "invariant";
   readonly adapterVersion = "1.0.0";
   readonly runtime = { path: "/trusted/adapter", version: "1", fingerprint: "sha256:adapter" };
   attaches = 0;
@@ -50,7 +50,7 @@ class Adapter implements NativeHarnessAdapter {
   reconciles = 0;
   releases = 0;
   attachGate: Promise<void> | null = null;
-  attachObservation: HarnessObservation | null = null;
+  attachObservation: RuntimeObservation | null = null;
   reconcileReceipts: Awaited<ReturnType<BindingHandle["reconcile"]>>["receipts"] = [];
   dispatchReceipt: Awaited<ReturnType<BindingHandle["dispatch"]>> | null = null;
   sink: ObservationSink | null = null;
@@ -85,7 +85,7 @@ class Adapter implements NativeHarnessAdapter {
     } satisfies BindingHandle;
   }
 
-  emit(observation: HarnessObservation): Promise<void> {
+  emit(observation: RuntimeObservation): Promise<void> {
     if (!this.sink) throw new Error("not attached");
     return this.sink.emit(observation);
   }
@@ -162,10 +162,9 @@ describe("SessionRuntime durable boundary invariants", () => {
       .liveExecutor!.id;
 
     await adapter.emit({
-      id: "provider-lost",
-      kind: "attachment.failed",
-      occurredAt: 10,
-      detail: "provider disconnected",
+      kind: "attachment",
+      state: "failed",
+      failure: { reason: "unknown", message: "provider disconnected" },
     });
 
     expect(
@@ -196,10 +195,10 @@ describe("SessionRuntime durable boundary invariants", () => {
       releaseAttach = resolve;
     });
     first.adapter.attachObservation = {
-      id: "rehydrated-turn",
-      kind: "turn.started",
-      occurredAt: 20,
+      kind: "turn",
+      state: "started",
       turnId: "turn-rehydrated",
+      occurredAt: 20,
     };
     const recovered = composition({
       engine: first.engine,
@@ -298,8 +297,8 @@ describe("SessionRuntime durable boundary invariants", () => {
     const created = await create(runtime);
     await attach(runtime, created.sessionId);
     await adapter.emit({
-      id: "permission-1",
-      kind: "interaction.opened",
+      kind: "interaction",
+      state: "opened",
       occurredAt: 300,
       interaction: {
         id: "permission-1",
@@ -788,7 +787,7 @@ describe("SessionRuntime durable boundary invariants", () => {
     });
 
     await expect(
-      adapter.emit({ id: "after-poison", kind: "turn.started", occurredAt: 30, turnId: "turn" }),
+      adapter.emit({ kind: "turn", state: "started", turnId: "turn", occurredAt: 30 }),
     ).resolves.toBeUndefined();
     expect(failures).toEqual([expect.objectContaining({ message: "client frame failed" })]);
   });
@@ -807,10 +806,10 @@ describe("SessionRuntime durable boundary invariants", () => {
     await attach(runtime, created.sessionId);
     for (let index = 0; index <= 500; index += 1) {
       await adapter.emit({
-        id: `paged-turn-${index}`,
-        kind: "turn.started",
-        occurredAt: 1_000 + index,
+        kind: "turn",
+        state: "started",
         turnId: `turn-${index}`,
+        occurredAt: 1_000 + index,
       });
     }
 
@@ -832,8 +831,8 @@ describe("SessionRuntime durable boundary invariants", () => {
     const attachmentId = (await first.runtime.snapshot({ sessionId: created.sessionId })).projection
       .liveExecutor!.id;
     await first.adapter.emit({
-      id: "ambiguous-interaction",
-      kind: "interaction.opened",
+      kind: "interaction",
+      state: "opened",
       occurredAt: 70,
       interaction: {
         id: "ambiguous-interaction",
@@ -1003,23 +1002,13 @@ describe("SessionRuntime durable boundary invariants", () => {
       received.push(emission.event.payload.kind);
     });
     failPeer = true;
-    await adapter.emit({
-      id: "peer-failure",
-      kind: "turn.started",
-      occurredAt: 90,
-      turnId: "turn",
-    });
-    await adapter.emit({
-      id: "ordinary-close",
-      kind: "attachment.closed",
-      occurredAt: 91,
-      outcome: "interrupted",
-    });
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn", occurredAt: 90 });
+    await adapter.emit({ kind: "attachment", state: "closed" });
 
     expect(received).toContain("attachment.closed");
     expect(
       (await runtime.snapshot({ sessionId: created.sessionId })).projection.attachments,
-    ).toMatchObject([{ id: attachmentId, status: "closed", outcome: "interrupted" }]);
+    ).toMatchObject([{ id: attachmentId, status: "closed", outcome: "completed" }]);
   });
 
   it("records replayed attach recovery failures", async () => {

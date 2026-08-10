@@ -9,12 +9,14 @@
  * the Session Attachment, and sanitized diagnostic strings. Nothing above the
  * runtime may dispatch on Pi tool or event names.
  *
- * Later migration sessions add activity and interaction observations only
- * after their canonical vocabulary exists in `@volli/shared`.
+ * {@link RuntimeObservation} is the only observation vocabulary. What a Session
+ * writes down is derived from it in `@volli/session-engine`, which owns Session
+ * facts; an executor states what happened and never what to record.
  */
 
 import type { ActivityDescriptor } from "./session-activity";
 import type { AuthorityDenialCause, AuthoritySnapshot, CodingToolId } from "./authority";
+import type { SessionInteraction, SessionInteractionResolution } from "./session-ledger";
 
 export type SessionRole = "project" | "ticket" | "subagent";
 
@@ -192,7 +194,8 @@ export type RuntimeObservation =
   | SettledMessageObservation
   | RuntimeActivityObservation
   | AuthorityObservation
-  | AttentionObservation;
+  | AttentionObservation
+  | InteractionObservation;
 
 /**
  * The Session's authority refused a call, before the tool ran.
@@ -277,6 +280,17 @@ export type RuntimeActivityObservation =
       error?: string;
     });
 
+/**
+ * Attention's `reason` is frozen, unlike the arms of this union.
+ *
+ * Pi's recovery sidecar validates a persisted marker by switching on `kind` and
+ * then whitelisting this exact set — and it throws rather than skipping what it
+ * does not recognise. Adding a whole new observation kind is therefore safe: the
+ * sidecar never sees one, so no marker already on disk changes how it validates.
+ * Adding a `reason` is not: every attention marker written by an older build is
+ * re-validated against the new list on the next recovery, and a Session whose
+ * marker no longer matches fails to attach outright.
+ */
 export interface AttentionObservation {
   kind: "attention";
   state: "raised" | "cleared";
@@ -285,6 +299,30 @@ export interface AttentionObservation {
   occurredAt?: number;
   recoveryCursor?: string;
 }
+
+/**
+ * The executor is waiting on a person and will wait until it is answered.
+ *
+ * The runtime owns everything about the ask except which attachment is doing the
+ * asking: the Session Engine injects `attachmentId` when it records the fact, so
+ * the runtime cannot name an attachment other than its own. Nothing produces
+ * this arm yet — the Pi runtime raises no interactions — and the producer
+ * arrives with the port that can answer one.
+ */
+export type InteractionObservation =
+  | {
+      kind: "interaction";
+      state: "opened";
+      interaction: Omit<SessionInteraction, "attachmentId">;
+      occurredAt?: number;
+    }
+  | {
+      kind: "interaction";
+      state: "resolved";
+      interactionId: string;
+      resolution: SessionInteractionResolution;
+      occurredAt?: number;
+    };
 
 export type RuntimeMessageDelivery = "queue" | "steer" | "replace";
 
