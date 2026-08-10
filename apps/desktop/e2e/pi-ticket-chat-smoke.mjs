@@ -3,8 +3,9 @@
  * against the BUILT app. New ticket chats on this branch attach the `pi`
  * manifest (`apps/desktop/src/main/session-runtime/pi-adapter.ts`, pinned
  * model `openai-codex`/`gpt-5.6-luna`) instead of OpenCode — see that file's
- * module doc comment. Unlike `session-chat-smoke.mjs`, there is no fake
- * server: Pi runs in-process in Electron main and this smoke drives ONE real
+ * module doc comment. There is no fake server anywhere in this probe (the
+ * retired `session-chat-smoke.mjs` had one): Pi runs in-process in Electron
+ * main and this smoke drives ONE real
  * turn against a real provider, billed to a ChatGPT subscription ($0
  * marginal — keep it to one short prompt, never loop turns speculatively).
  *
@@ -106,18 +107,17 @@ async function ensurePiAuthInto(homeDir) {
   await fs.copyFile(REAL_PI_AUTH, dest);
 }
 
-/** The tab strip's own "+" (there are two identical mounts — tab strip and rail; this scopes to the strip). */
-function tabStripNewSessionButton(page) {
+/** The tab strip's direct Chat control (the rail has its own copy). */
+function tabStripNewChatButton(page) {
   return page
     .locator('[role="tablist"]')
     .locator("xpath=..")
-    .getByRole("button", { name: "New session", exact: true });
+    .getByRole("button", { name: "New chat", exact: true });
 }
 
 async function openNewChatTab(page) {
   const tabsBefore = await page.locator('[role="tab"]').count();
-  await tabStripNewSessionButton(page).click();
-  await page.getByRole("menuitem", { name: "Chat", exact: true }).click();
+  await tabStripNewChatButton(page).click();
   await waitUntil(
     "a new chat tab to appear",
     async () => (await page.locator('[role="tab"]').count()) > tabsBefore,
@@ -162,7 +162,7 @@ async function userMessageTexts(page) {
 /**
  * The absolute path of a directory named `<needle>-*` (or exactly `needle`)
  * anywhere under `root`, or null — mirrors the same helper in
- * session-chat-smoke.mjs / worktree-smoke.mjs.
+ * worktree-smoke.mjs.
  */
 async function findWorktreeDir(root, needle) {
   let entries;
@@ -237,7 +237,7 @@ async function main() {
       return { ok: chatTabLabel !== null, detail: chatTabLabel };
     });
 
-    // Carried over from session-chat-smoke.mjs's regression check: a chat on
+    // Carried over from the retired session-chat-smoke.mjs: a chat on
     // a worktree ticket must attach against the materialized worktree, not
     // a directory that was never provisioned.
     await attempt(4, "creating the chat materialized the ticket's worktree", async () => {

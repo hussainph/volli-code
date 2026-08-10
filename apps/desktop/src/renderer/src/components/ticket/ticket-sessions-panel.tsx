@@ -7,7 +7,6 @@ import { errorMessage, type SessionListingRow, type SessionRecord } from "@volli
 
 import { renameChatSession } from "@renderer/chat/rename";
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
-import { NewSessionMenu } from "@renderer/components/sessions/new-session-menu";
 import { resumeTicketSession } from "@renderer/components/sessions/session-create";
 import {
   ContextMenu,
@@ -17,6 +16,7 @@ import {
 } from "@renderer/components/ui/context-menu";
 import { Input } from "@renderer/components/ui/input";
 import { RailDrawer } from "@renderer/components/ticket/rail-drawer";
+import { TicketSessionActions } from "@renderer/components/ticket/ticket-session-actions";
 import {
   buildTicketChatSessionRows,
   buildTicketSessionRows,
@@ -335,8 +335,8 @@ function SessionList({
 
 /**
  * The right rail's session content: a scrollable "Sessions" working set (a
- * "New session" button that boots a ticket-scoped terminal, plus one row per
- * live session from the unified store) and a bottom-pinned History drawer (a
+ * direct Chat and Terminal controls, plus one row per live session from the
+ * unified store) and a bottom-pinned History drawer (a
  * `RailDrawer` sibling of Details) holding ended/closed durable records —
  * searchable past 4 entries — so the working set stays unlabeled and flat.
  * The durable list (`api.sessions.listForTicket`) is re-read whenever the live
@@ -369,7 +369,7 @@ export function TicketSessionsPanel({
   const worktreePhase = useWorktreeStore((state) => phaseFor(state.phases, ticketId));
   // `creating`/`copying` haven't booted a PTY yet, so there's no session row to
   // chip — they reuse the existing pre-boot "starting" affordance (disables
-  // "New session" the same way an in-flight `starting[ticketId]` create does)
+  // the direct controls the same way an in-flight `starting[ticketId]` create does)
   // rather than inventing a second loading state.
   const effectiveCreating = creating || worktreePhase === "creating" || worktreePhase === "copying";
   // The durable list is a shared cache (stores/ticket-session-records.ts), not
@@ -451,7 +451,7 @@ export function TicketSessionsPanel({
   };
 
   // The shared boot pipeline (session-create.ts) — starting-flag guard, engine
-  // pre-create, structured-error toast — same as "New session", just with a
+  // pre-create, structured-error toast — same as a fresh terminal create, just with a
   // resume intent instead of a fresh kickoff. Lands as a NEW tab; the ended
   // record's own row stays put in History.
   const handleResume = (record: SessionRecord) => {
@@ -503,11 +503,10 @@ export function TicketSessionsPanel({
         <div className="flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <h2 className="text-label font-medium text-muted-foreground uppercase">Sessions</h2>
-            <NewSessionMenu
+            <TicketSessionActions
               disabled={effectiveCreating}
-              align="end"
-              onNewSession={onNewSession}
               onNewChat={onNewChat}
+              onNewTerminal={onNewSession}
             />
           </div>
           {current.length === 0 ? (

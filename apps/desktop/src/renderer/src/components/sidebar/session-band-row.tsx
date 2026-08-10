@@ -139,8 +139,8 @@ export function ActiveBandRow({
         size="lg"
         isActive={selected}
         onClick={onSelect}
-        // Two lines at the tighter padding the shell-density probe settled on:
-        // long titles stay readable and the band stops out-massing the board.
+        // Two lines at the tighter padding: long titles stay readable and the
+        // band stops out-massing the board it sits beside.
         className="h-auto min-h-9 items-start gap-2 py-1 [&:hover_.session-row-dim]:text-sidebar-accent-foreground [&[data-active=true]_.session-row-dim]:text-sidebar-accent-foreground"
       >
         <span

@@ -26,20 +26,6 @@ import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 
 /**
- * The only harness Volli can browse a model catalog for. OpenCode is the one
- * adapter with native discovery behind it (`main/runtime-catalog-hub.ts`), so it
- * is the only one whose pane has models to offer — at either scope.
- *
- * Deliberately NOT `harness-settings.tsx`'s `OVERRIDABLE_BINARY_HARNESS_ID`,
- * however equal the two strings are today. That one answers "whose executable
- * path will Volli store?", which is a global-only question; this one answers
- * "whose models can be listed?", which Configure asks per project. Folding them
- * into one constant would weld the two facts together exactly where the surfaces
- * diverge — Configure offers the models and never the binary.
- */
-export const MODEL_CATALOG_HARNESS_ID = "opencode";
-
-/**
  * `window.api` where there is one. The settings surfaces render under
  * `renderToStaticMarkup` in unit tests, where there is no `window` at all and
  * no preload bridge — the built-in half of the list is compiled in, so the pane

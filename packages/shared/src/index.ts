@@ -30,7 +30,6 @@ export * from "./session-rpc-wire";
 export * from "./park";
 export * from "./volli-dir";
 export * from "./retention";
-export * from "./runtime-catalog";
 export * from "./theme/tokens";
 export * from "./theme/definition";
 export * from "./theme/color";

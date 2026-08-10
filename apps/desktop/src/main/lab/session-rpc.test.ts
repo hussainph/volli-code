@@ -127,40 +127,6 @@ describe("Lab Session RPC server", () => {
     }
   });
 
-  // In the app a `runtimeCatalog.*` request's `projectId` picks WHICH checkout
-  // is probed and whose preferences a save writes, and the hub throws on an id
-  // it does not know instead of quietly answering with another project's
-  // catalog. The Lab holds one catalog, so the only way it can mean the same
-  // thing by an accepted id is to refuse the ones that catalog does not stand
-  // for — otherwise a Session UI written here against `ghost-project` gets a
-  // success back and only meets `NOT_FOUND` once it is running over IPC.
-  it("resolves the runtime catalog for its own project and for none, and refuses any other project as not found", async () => {
-    const lab = new LabSessionRpcServer();
-    servers.push(lab);
-    const server = createServer((req, res) => {
-      void lab.handle(req, res);
-    });
-    await listen(server);
-    try {
-      const refused = await saveRuntimePreferences(server, "ghost-project");
-      expect(refused.status).toBe(404);
-      expect(refused.body).toContain("NOT_FOUND");
-      expect(refused.body).toContain("ghost-project");
-
-      // Both accepted ids reach the single catalog, which refuses a save that
-      // no inspect preceded — its own complaint, not the router's, which is
-      // what makes it evidence that resolution happened at all. Neither probes:
-      // the refusal lands before any discovery would spawn a provider.
-      for (const projectId of [LAB_SESSION_PROJECT_ID, undefined]) {
-        const accepted = await saveRuntimePreferences(server, projectId);
-        expect(accepted.status).not.toBe(404);
-        expect(accepted.body).toContain("Inspect the Runtime Catalog before saving");
-      }
-    } finally {
-      await closeServer(server);
-    }
-  });
-
   it("does not initialize a database for rejected requests", async () => {
     const before = new Set(await labDirectories());
     const lab = new LabSessionRpcServer();
@@ -308,32 +274,6 @@ async function createSession(server: ReturnType<typeof createServer>): Promise<v
     },
   );
   expect(response.status).toBe(200);
-}
-
-/** Posts the smallest valid `runtimeCatalog.save`, optionally scoped to a project. */
-async function saveRuntimePreferences(
-  server: ReturnType<typeof createServer>,
-  projectId?: string,
-): Promise<{ status: number; body: string }> {
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("Expected a TCP test server");
-  const response = await fetch(
-    `http://127.0.0.1:${address.port}${LAB_SESSION_RPC_PATH}/runtimeCatalog.save`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        ...(projectId === undefined ? {} : { projectId }),
-        adapterId: "opencode",
-        preferences: {
-          version: 1,
-          enabledModels: [],
-          defaults: { providerId: "", modelId: "", variant: "", agent: "" },
-        },
-      }),
-    },
-  );
-  return { status: response.status, body: await response.text() };
 }
 
 class TestExitLifecycle implements LabProcessExitLifecycle {

@@ -114,6 +114,7 @@ export default defineConfig(({ mode }) => ({
         "src/components/ticket/activity.ts",
         "src/components/ticket/session-history.ts",
         "src/components/ticket/ticket-chat-tab.ts",
+        "src/components/ticket/ticket-environment-inspector-model.ts",
         "src/lib/project-shortcut.ts",
         "src/lib/new-ticket-shortcut.ts",
         "src/lib/relative-time.ts",
@@ -164,7 +165,6 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/db/export.ts",
         "**/src/main/db/theme-repo.ts",
         "**/src/main/db/harness-command-repo.ts",
-        "**/src/main/runtime-catalog-hub.ts",
         "**/src/main/session-rpc-ipc.ts",
       ],
       // Global bar only — vitest applies global thresholds to every included

@@ -45,10 +45,4 @@ describe("Session RPC wire protocol", () => {
       SESSION_RPC_IPC_PROCEDURES.some((procedure) => procedure.startsWith("labDiagnostics.")),
     ).toBe(false);
   });
-
-  it("withholds the Lab-only Runtime Catalog namespace", () => {
-    expect(
-      SESSION_RPC_IPC_PROCEDURES.some((procedure) => procedure.startsWith("runtimeCatalog.")),
-    ).toBe(false);
-  });
 });

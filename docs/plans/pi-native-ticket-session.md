@@ -600,8 +600,8 @@ Session 5 implementation decisions (2026-08-09):
   the restricted launch flags and absolute credential directory, and leaves
   `/login` plus the existing explicit Retry to the user.
 - Ticketless project Chats temporarily keep OpenCode through a private
-  main-owned route. Runtime Catalog remains available to the development Lab,
-  but is not exposed over production renderer IPC or settings.
+  main-owned route. Runtime Catalog was Lab-only under this slice and never
+  exposed over production renderer IPC or settings.
 - There is no production provider slash-command inventory to migrate in this
   slice. The existing Lab-only Volli/Skill affordance remains unchanged.
 
@@ -614,26 +614,69 @@ Bounded follow-ups deferred from this slice:
   loose app build prepares and verifies the resource now.
 - In-app OAuth/API-key entry remains separate from the proven manual Pi
   terminal handoff. Credentials continue to be owned by Pi.
-- Full deletion of the Lab Runtime Catalog, OpenCode adapter, and migration
-  scaffolding remains Session 7 work.
+- Full deletion of the OpenCode adapter and migration scaffolding remains
+  Session 7 work. The Runtime Catalog was pulled forward into Session 6 once it
+  proved to be already dead in the shipped app (see that session's notes).
 
 ### Session 6 — Environment inspector and terminal hierarchy
 
 - Implement the compact Environment/Sources inspector using existing Change Set,
-  branch, attachment, and navigation primitives.
+  branch, navigation, and Ticket Body file-reference primitives.
 - Omit Delegation until durable child Sessions exist.
 - Keep terminal panes as persistent companion tabs and remove any Chat creation
   hierarchy that presents them as structured alternatives.
 - Validate normal, narrow, long-content, dark/light, reduced-motion, failure, and
   empty states according to `docs/DESIGN.md`.
 
+Session 6 implementation decisions (2026-08-09):
+
+- Pin the compact inspector at the top of the existing Ticket right rail rather
+  than creating a floating chat overlay or a second responsive layout system.
+- Replace Ticket-surface `+` create menus with direct Chat and Terminal controls.
+  Existing terminal split behavior remains available; Browser creation and a new
+  split-control surface are separate product work.
+- The renderer currently has no attachment-list transport. This slice exposes
+  Ticket Body source references and reuses Files navigation; attachment
+  transport or management is deferred rather than added incidentally.
+- The pinned inspector revalidates when consulted rather than owning a second
+  worktree watch. A shared Change Set/status projection, publish readiness,
+  and CI lifecycle status would otherwise duplicate the existing exclusive
+  Changes/Details watch owners, so that deeper consolidation is deferred.
+- URL and Skill context do not yet have a Ticket-renderer source contract.
+  This slice deliberately shows only existing `@file` Body references; URL and
+  Skill inventory are deferred with attachment transport rather than guessed
+  from free-form Markdown.
+
+Session 6 also absorbed two subtractions that review made unavoidable:
+
+- **The Runtime Catalog surface is deleted** (23 files, ~2,200 lines). It was
+  not merely orphaned — production never passed `resolveRuntimeCatalog` to
+  `registerSessionRpcIpcHandlers`, so every `runtimeCatalog.*` call in the
+  shipped app already threw `"Runtime Catalog is unavailable on this
+  transport"`. Its Settings pane had no importer. Removing it changes nothing a
+  user could observe, which is why it did not need to wait for Session 7.
+- **Four e2e smokes are deleted** and two trimmed. Every one of them failed on a
+  stale premise, not a regression: they drove the `"Show … in chat"` switches
+  that only ever existed in the deleted catalog pane, or they asserted the fake
+  OpenCode answer string against a ticket chat that is now Pi. A red smoke that
+  cannot pass trains people to ignore red.
+
+Two behaviours lost their only proof and need Pi-backed replacements when
+ticketless chats move to Pi — they are **not** covered elsewhere today:
+
+- scratch-chat streaming, restart-resume, and tab-close retirement (was
+  `session-chat-smoke.mjs`);
+- the "Cleaned up" band toggle and the ticket-orphan sidebar reopen (was
+  `sessions-chat-host-smoke.mjs`).
+
 **Exit:** the Ticket Session feels product-owned at rest and while working; no
 empty future-feature chrome dominates the view.
 
 ### Session 7 — Remove OpenCode and collapse the platform
 
-- Remove the OpenCode package, structured process supervision, native catalog
-  wiring, chat defaults, test fixtures, and package dependencies.
+- Remove the OpenCode package, structured process supervision, chat defaults,
+  test fixtures, and package dependencies. (The Runtime Catalog wiring is
+  already gone — Session 6 removed it.)
 - Retire generic adapter/profile machinery that has no remaining terminal or
   migration value.
 - Mark old live OpenCode attachments history-only or archive their Sessions;

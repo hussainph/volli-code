@@ -1,7 +1,7 @@
 /**
  * The ticket detail's tab strip (ticket-detail-mvp decision #6, restyled to the
  * Chrome-browser metaphor): a full-width row at the very top of the detail view
- * — `<TicketId> | <file tabs…> | <session tabs…> | +` — spanning above both the
+ * — `<TicketId> | <file tabs…> | <session tabs…> | Chat / Terminal` — spanning above both the
  * main column and the right rail. The active tab is a raised surface on the
  * content background with rounded top corners so it reads as physically
  * connected to the content below; inactive tabs are flat on the recessed rail
@@ -20,7 +20,7 @@ import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
-import { NewSessionMenu } from "@renderer/components/sessions/new-session-menu";
+import { TicketSessionActions } from "@renderer/components/ticket/ticket-session-actions";
 import { Button } from "@renderer/components/ui/button";
 import {
   ContextMenu,
@@ -115,7 +115,7 @@ export interface TicketTabDescriptor {
 interface TicketTabStripProps {
   tabs: readonly TicketTabDescriptor[];
   activeTabId: string;
-  /** Disables the "+" control while a session of either kind is booting. */
+  /** Disables the direct Chat and Terminal controls while a session is booting. */
   creating: boolean;
   onSelectTab(tabId: string): void;
   /** Closes a session, chat, file, or diff tab. Doc has no close affordance. */
@@ -131,7 +131,7 @@ interface TicketTabStripProps {
    * Doc/file/diff tabs, which never raise it.
    */
   onRenameSessionTab(tabId: string, title: string): void;
-  /** Boots a terminal session tab — the same path as the rail's New-session button. */
+  /** Boots a terminal session tab — the same path as the rail's Terminal control. */
   onNewSession(): void;
   /** Mints a chat Session and opens its tab. */
   onNewChat(): void;
@@ -334,9 +334,9 @@ export function TicketTabStrip({
 
   return (
     <div className="flex shrink-0 items-end border-b border-border bg-rail pt-1.5">
-      {/* Tabs and their creation affordance scroll as one cluster, keeping +
-          immediately beside the last tab instead of pinning it away from its
-          destination. The focus control owns a stable slot at the far right. */}
+      {/* Tabs and their direct Chat / Terminal controls scroll as one cluster,
+          keeping creation beside the last tab instead of pinning it away from
+          its destination. The focus control owns a stable slot at the far right. */}
       <div className="flex min-w-0 flex-1 items-end overflow-x-auto px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <div role="tablist" aria-orientation="horizontal" className="flex items-end gap-0.5">
           {tabs.map((tab) => (
@@ -361,11 +361,11 @@ export function TicketTabStrip({
             />
           ))}
         </div>
-        <NewSessionMenu
+        <TicketSessionActions
           disabled={creating}
           className="mb-1 ml-0.5 shrink-0"
-          onNewSession={onNewSession}
           onNewChat={onNewChat}
+          onNewTerminal={onNewSession}
         />
       </div>
       {/* Full-height corner control: self-stretch ignores the parent's items-end

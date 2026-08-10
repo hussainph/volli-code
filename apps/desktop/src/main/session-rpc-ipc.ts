@@ -29,13 +29,12 @@ import type {
  *
  * This read `session.${...}` alone, and that was the hole. The check below
  * subtracts the allow-list from this union, so a namespace the union cannot
- * name is a namespace the check cannot miss: `runtimeCatalog.*` and
- * `labDiagnostics.*` were never absent from the guard, they were invisible to
- * it. Which is how the app came to have no production route to the runtime
- * catalog at all — no model list, so no model id, so no message can be sent —
- * with a compile-time assertion sitting directly above the gap reporting
- * success. A guard scoped to one namespace only guards one namespace, and it
- * still reads like it guards the router.
+ * name is a namespace the check cannot miss: `labDiagnostics.*` was never
+ * absent from the guard, it was invisible to it. A whole namespace once went
+ * unrouted in production that way — no IPC path to it at all — with a
+ * compile-time assertion sitting directly above the gap reporting success. A
+ * guard scoped to one namespace only guards one namespace, and it still reads
+ * like it guards the router.
  *
  * Widened, every namespace has to be spoken for below: routed, deliberately
  * withheld, or declared missing.
@@ -77,12 +76,7 @@ type PublishedProcedure<Procedure extends SessionRouterProcedure> = Procedure;
  * a diagnostic log over the same channel it runs Sessions on.
  */
 type DeliberatelyMainOnlyProcedure = PublishedProcedure<
-  | "labDiagnostics.list"
-  | "labDiagnostics.subscribe"
-  | "runtimeCatalog.inspect"
-  | "runtimeCatalog.save"
-  | "runtimeCatalog.clear"
-  | "runtimeCatalog.resolve"
+  "labDiagnostics.list" | "labDiagnostics.subscribe"
 >;
 
 /**

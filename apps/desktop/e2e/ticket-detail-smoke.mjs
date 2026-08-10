@@ -25,7 +25,7 @@
  *      highest-signal event ("created the ticket") with a "+N more" caret BEFORE
  *      the timestamp; expanding reveals the indented `renamed to "…"` one-liner.
  *      Comments still post (⌘↵) as "You", edit inline, and delete via confirm.
- *   5. Ticket session — the rail's "New session" boots a ticket-scoped PTY; env
+ *   5. Ticket session — the rail's direct Terminal control boots a ticket-scoped PTY; env
  *      injection is proven with the file-probe pattern ($VOLLI_TICKET == display
  *      id, $VOLLI_ARTIFACTS_DIR == the project's `.volli/artifacts` path — the
  *      global-artifacts env contract; VOLLI_TICKET_DIR is gone); switching
@@ -825,16 +825,13 @@ async function main() {
     // ===================================================================
     await attempt(
       5,
-      "Ticket session: rail New session boots a PTY, env injection ($VOLLI_TICKET/$VOLLI_ARTIFACTS_DIR), keep-alive across tabs, truthful Shell metadata",
+      "Ticket session: rail Terminal control boots a PTY, env injection ($VOLLI_TICKET/$VOLLI_ARTIFACTS_DIR), keep-alive across tabs, truthful Shell metadata",
       async () => {
         await fs.rm(PROBE_ENV, { force: true });
         await fs.rm(PROBE_ALIVE, { force: true });
 
         const aside = page.locator("aside");
-        // "New session" is a menu since the chat surface landed (PR #179):
-        // Terminal / Chat. This flow boots the terminal kind.
-        await aside.getByRole("button", { name: "New session" }).click();
-        await page.getByRole("menuitem", { name: "Terminal" }).click();
+        await aside.getByRole("button", { name: "New terminal", exact: true }).click();
 
         const sessionTab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
         await waitUntil("session tab to appear", async () => (await sessionTab.count()) === 1);

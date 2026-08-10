@@ -91,13 +91,18 @@ const PI_RUNTIME_PACKAGE = "@earendil-works/pi-agent-core";
 const PI_RUNTIME_VERSION = "0.84.1";
 
 /**
- * The model this slice runs on, pinned rather than selected.
+ * A model literal with exactly one reader left: the probe's declared catalog.
  *
- * The composer's model picker is still fed by the Runtime Catalog's OpenCode
- * probe, so a submitted `command.model` names a provider Pi has never heard of.
- * Ignoring it and pinning here is the honest reading: one executor, one model,
- * until the picker is Pi's. `openai-codex` is the provider this machine holds
- * OAuth for; Luna is its lightweight coding model at the full 272k context.
+ * It is no longer the model a Ticket Session runs on, and nothing below reads
+ * it to decide what to run. The picker is Pi's own now — it reads Model Access
+ * ({@link PiRuntimeHost.inspectModelAccess}), the choice it makes is recorded
+ * as a durable per-Session selection, and `attach` carries that selection in
+ * through {@link PiTicketContext.model}, which main resolves from the Session's
+ * projection and refuses to attach without. So what survives here is the single
+ * entry `probe` declares in its capability catalog, which the Session Engine
+ * records and no product surface consults: a residual pending removal rather
+ * than a policy. `openai-codex` is the provider this machine holds OAuth for;
+ * Luna is its lightweight coding model at the full 272k context.
  */
 export const PI_MODEL: ModelSelection = {
   providerId: "openai-codex",
@@ -544,9 +549,13 @@ class PiBinding implements BindingHandle {
     handle: RuntimeAttachmentHandle,
     command: Extract<HarnessCommand, { kind: "message.submit" }>,
   ): Promise<DeliveryReceipt> {
-    // `command.model`, `agent` and `variant` are deliberately dropped: the
-    // composer's picker is still OpenCode-fed this slice, so whatever it names
-    // is not a provider Pi can reach. The pinned model is the honest answer.
+    // `command.model`, `agent` and `variant` go nowhere, and nothing is lost
+    // by that. They are contract scaffolding no Volli surface fills — the chat
+    // client's `message.submit` carries a message and a delivery, so the
+    // runtime hands all three down as `null` — and a per-message override is
+    // not this product's model semantics in the first place. A Session's model
+    // is durable: chosen through `model.select`, and applied at attach from
+    // the Session's own projected selection.
     const text = messageText(command.message);
     if (text.trim().length === 0) {
       return this.#rejected(
