@@ -20,6 +20,7 @@ A local-first macOS workspace for planning and running coding sessions, built wi
 - A Session is durable and owns identity and ordered local history before any live executor attaches. The temporary native-adapter contract, processes, terminal panes, and UI views never own Session lifetime.
 - Commands are explicit user intent. Persist intent before delivery; make acceptance idempotent and observable through durable receipts.
 - Events are immutable facts. Local durable history is canonical; renderer stores project it into UI state and structured attention.
+- **Session Events are exhaustive on write, tolerant on read.** Adding a kind must fail to compile until every writer handles it; reading durable history must never fail a whole Session over one kind this build no longer knows. History outlives the build that wrote it, so a category we can add but cannot retire is permanent by accident. Only an unrecognised `kind` is dropped — a malformed field inside a known kind is corruption and still fails loudly.
 - The structured product has one target executor: `@volli/agent-runtime`, initially backed by Pi. Do not introduce SDK/ACP adapters, structured executor selection, capability parity work, or new provider-shaped product semantics.
 - Resume, terminal recreation, and history navigation are distinct semantics.
 - Retry transient transport failures without duplicating accepted work. Authentication, permissions, configuration, and quota failures require explicit user recovery.
