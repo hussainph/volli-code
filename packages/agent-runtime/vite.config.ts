@@ -8,7 +8,7 @@ export default defineConfig({
     include: ["src/**/*.test.ts"],
     setupFiles: ["./vitest.setup.ts"],
     coverage: {
-      include: ["src/**"],
+      include: ["src/**/*.ts"],
       thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
     },
   },

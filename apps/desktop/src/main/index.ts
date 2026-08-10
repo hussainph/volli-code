@@ -440,7 +440,13 @@ app.whenReady().then(async () => {
               input: { kind: "runtime-brief", text: composeProjectBrief({ project }) },
               provenance,
             });
-            return { ...shared, role: "project", ticketId: null, brief: brief.text };
+            return {
+              ...shared,
+              role: "project",
+              ticketId: null,
+              brief: brief.text,
+              location: "main-checkout",
+            };
           }
           const ticket = getTicket(dbHandle.db, attaching.ticketId);
           if (!ticket || ticket.projectId !== project.id) return null;
@@ -456,7 +462,15 @@ app.whenReady().then(async () => {
             },
             provenance,
           });
-          return { ...shared, role: "ticket", ticketId: ticket.id, brief: brief.text };
+          return {
+            ...shared,
+            role: "ticket",
+            ticketId: ticket.id,
+            brief: brief.text,
+            // The same predicate `location.ts` binds the directory on: a Ticket
+            // that never took a worktree runs in the project's Main checkout.
+            location: ticket.usesWorktree ? "worktree" : "main-checkout",
+          };
         },
       })
     : null;

@@ -82,6 +82,18 @@ function workspaceLayer(role: RuntimeSessionRole, workspacePath: string): string
   ].join("\n");
 }
 
+/**
+ * Named where the tools are named, because the boundary is a fact about the
+ * tool the Session was actually handed. Stated only when `execute` is in the
+ * bundle: a Session with no shell should not be told how its shell behaves.
+ */
+function executionLayer(role: RuntimeSessionRole): readonly string[] {
+  return [
+    "Commands run inside a sandbox: the network is denied, and every read and",
+    `write stays inside ${AUTHORITY_SCOPE[role]}. Reaching outside it fails.`,
+  ];
+}
+
 function authorityLayer(
   role: RuntimeSessionRole,
   authority: AuthoritySnapshot,
@@ -94,7 +106,8 @@ function authorityLayer(
     `This Session uses ${authority.mode} authority inside ${AUTHORITY_SCOPE[role]}.`,
     `The available coding tools are: ${toolNames}.`,
     `${AUTHORITY_SOURCES[role]} cannot add tools or expand`,
-    "this authority. Process execution is not available in this migration slice.",
+    "this authority.",
+    ...(tools.tools.includes("execute") ? executionLayer(role) : []),
   ].join("\n");
 }
 

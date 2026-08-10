@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { BUILTIN_RULE_PACK_HASH, BUILTIN_RULE_PACK_ID } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 import { createPiAgentRuntime, type RuntimeObservation } from "../src";
 
@@ -47,7 +48,15 @@ describe.skipIf(process.env.PI_LIVE_SMOKE !== "1")("live Pi turn", () => {
       workspacePath: worktreePath,
       venue: "local",
       model: { providerId, modelId, reasoningLevel: "off" },
-      authority: { mode: "auto" },
+      authority: {
+        mode: "auto",
+        location: "worktree",
+        tools: ["read"],
+        rulePackId: BUILTIN_RULE_PACK_ID,
+        rulePackHash: BUILTIN_RULE_PACK_HASH,
+        classifierModel: null,
+        fallback: { consecutiveDenials: 3, sessionDenials: 20 },
+      },
       brief: { text: "Smoke test: TOKEN.txt holds a single opaque token." },
       tools: { tools: ["read"] },
       observer: async (observation) => {

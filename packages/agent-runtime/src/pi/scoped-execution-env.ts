@@ -158,6 +158,24 @@ function isSafeTempFragment(value: string): boolean {
   return true;
 }
 
+/**
+ * The boundary one command runs behind: no network, the workspace as the only
+ * writable root, and two carve-outs from that root.
+ *
+ * The `.git` entries are deliberately not the whole of `.git` — a Session that
+ * cannot write the index, refs, and objects cannot commit. Hooks and config are
+ * the paths ordinary git operation never writes and the only ones that change
+ * what *later* commands do, which is what makes them worth denying, and a
+ * submodule's copies under `.git/modules/<name>/` execute exactly the same way.
+ * They close what the rule pack cannot reach: `path.git-internals` sees
+ * file-tool writes, shell redirects, and `git config`, so a plain
+ * `cp evil.sh .git/hooks/pre-commit` passes it as an opaque operand. Neither
+ * layer is complete alone.
+ *
+ * Only a Main checkout is affected. A Ticket worktree's `.git` is a file
+ * pointing into the main repository, whose real hooks and config lie outside the
+ * workspace that `allowWrite` already limits this to.
+ */
 function perCommandSandboxConfig(
   workspace: string,
   homeDir: string,
@@ -186,6 +204,19 @@ function perCommandSandboxConfig(
         join(homeDir, ".claude", "debug"),
         "/tmp/claude",
         "/private/tmp/claude",
+        join(workspace, ".git", "hooks"),
+        join(workspace, ".git", "config"),
+        // A submodule's hooks live at `.git/modules/<name>/hooks` and execute
+        // exactly like the superproject's. SRT compiles a pattern containing
+        // glob characters into a Seatbelt regex, so the whole family is one
+        // entry rather than a scan of whatever submodules existed at attach.
+        //
+        // The trailing `/*` is load-bearing: SRT strips a trailing `/**` before
+        // compiling, which would anchor the regex to the directory itself and
+        // let every file inside it through.
+        join(workspace, ".git", "modules", "**", "hooks"),
+        join(workspace, ".git", "modules", "**", "hooks", "**", "*"),
+        join(workspace, ".git", "modules", "**", "config"),
       ],
     },
     allowAppleEvents: false,

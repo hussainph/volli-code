@@ -12,6 +12,7 @@ import {
   type UserMessage,
 } from "@earendil-works/pi-ai";
 import { isActivityKind } from "@volli/shared";
+import { authorityRefusal } from "../authority/gate";
 import type {
   AgentRuntime,
   DeliveryOutcome,
@@ -584,6 +585,18 @@ async function attachSession(
       streamFn: models.streamSimple.bind(models),
       sessionId: sidecarMetadata.id,
       toolExecution: "sequential",
+      // `terminate` is left unset on purpose: Pi only ends the run early when
+      // every finalized result in the batch asks for it, which is not what one
+      // refused call means.
+      beforeToolCall: async ({ toolCall, args }) => {
+        const refusal = authorityRefusal({
+          tool: toolCall.name,
+          args,
+          authority: spec.authority,
+          workspacePath: spec.workspacePath,
+        });
+        return refusal === undefined ? undefined : { block: true, reason: refusal };
+      },
     });
     agent.steeringMode = "one-at-a-time";
     agent.followUpMode = "one-at-a-time";

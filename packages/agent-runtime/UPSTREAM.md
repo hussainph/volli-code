@@ -50,6 +50,27 @@ path; and record any policy or API divergence here before bumping the pin.
 
 None.
 
+## Replicated Pi code
+
+`src/authority/pi-tool-path.ts` reproduces `normalizeToolPath` from
+`dist/harness/tools/path-utils.js`: it collapses the Unicode spaces
+`U+00A0`, `U+2000`–`U+200A`, `U+202F`, `U+205F` and `U+3000` to an ASCII
+space and strips one leading `@`. Every Pi
+file tool runs its `path` through it before opening anything, so policy that
+reads the raw argument judges a different file than the tool touches —
+`write { path: "@.git/hooks/pre-commit" }` lands on `.git/hooks/pre-commit`.
+
+Copied rather than imported because the package `exports` map is closed to `.`,
+`./node` and `./session/testing`, and the function is module-private within a
+file none of those re-export.
+
+A copy is a divergence waiting to happen, so it is not trusted on inspection:
+`pi-tool-path.test.ts` drives Pi's real `createWriteTool`/`createEditTool`
+against a stub `ExecutionEnv` that records the string Pi passes to
+`absolutePath`, and asserts the replica agrees for every transformation. Bumping
+the pin fails that test if Pi changes the normalization. Re-check it, and this
+section, on every version bump.
+
 ## Credentials
 
 Pi owns provider credentials and refresh behavior. `@earendil-works/pi-ai`
