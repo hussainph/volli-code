@@ -1,7 +1,7 @@
 # Agent authority and runtime shape
 
-**Status:** Parts I and III decision complete, ready for implementation. Part II
-is a candidate menu awaiting selection.
+**Status:** Part I slices 1–2 shipped; slices 3–4 remain. Part III decision
+complete, not started. Part II is a candidate menu awaiting selection.
 
 **Date:** 2026-08-10
 
@@ -159,8 +159,13 @@ current agent context, and may return `{ block, reason, terminate }`. It require
 no Pi CLI and no extension host.
 
 Wire it inside `@volli/agent-runtime` to a pure evaluation function in
-`@volli/shared` — `evaluate(call, snapshot, location)` — so the policy is
+`@volli/shared` — `evaluate(call, snapshot, context)` — so the policy is
 testable without a runtime, a process, or a model.
+
+Only the decision is pure. Resolving a path, following a symlink and lexing a
+command line all need `node:fs`, which `@volli/shared` may not import, so they
+belong in `@volli/agent-runtime`, which normalizes a runtime tool call into the
+value the pure function judges.
 
 #### Denials as durable facts
 
@@ -283,6 +288,71 @@ packs, and data-aware git rules.
   with no knowledge of how they were tuned. Treat them as a starting point.
 - Denials becoming durable facts is a new event kind; its downstream projection
   assumptions have not been checked.
+
+### Part I implementation record (2026-08-10)
+
+Slices 1 and 2 shipped. Slices 3 and 4 — denials as durable facts, and
+escalation through the interaction channel — are not built.
+
+**Sequenced before Part II candidate 1, and the reason is now evidence rather
+than preference.** `AuthoritySnapshot` already travelled from `@volli/shared`
+through `SessionRuntimeSpec.authority` into `@volli/agent-runtime`, so the
+registry never sees it and enforcement landed without touching the facade at
+all. The `AgentRuntime` port the collapse is meant to produce already exists at
+`packages/agent-runtime/src/contracts.ts`; candidate 1 deletes
+`NativeHarnessAdapter` *above* that port rather than creating it. Only slices 3
+and 4 pay a facade tax, because only they mint new observation kinds.
+
+**Where the plan above was wrong, corrected in the build:**
+
+- The vendored hard-deny layer could not sit in `@volli/shared` beside
+  `evaluate`, because `paths.ts` needs `node:fs`. Pure policy lives in shared;
+  path and shell resolution live in `agent-runtime`.
+- Only pi-automode's lexer and path helpers were vendored, not its rule body and
+  not `permissions.ts`. Porting `segmentHardDeny` would have left the product
+  with two rule tables able to disagree and no way to say which refused, and
+  `permissions.ts` matches configured patterns like `bash(git push *)` against a
+  call — a question Volli does not ask, so every function in it would have been
+  dead code beneath a 100% coverage gate. The `ToolPattern` transitive import of
+  `@earendil-works` is moot as a result.
+- Work location is not derivable from the Session Role: a Ticket that never took
+  a worktree runs in the Main checkout. `PiRuntimeContext` carries a required
+  `location` field set from `ticket.usesWorktree`. Making it optional with a
+  default would have marked every Session a Main checkout and rotted quietly.
+- `packages/agent-runtime/src/prompt.ts` told the model "Process execution is not
+  available in this migration slice" while `pi-adapter.ts` shipped `execute` in
+  the bundle. The Authority layer now states the real boundary.
+
+**Two boundary decisions worth not relitigating:**
+
+- `path.outside-workspace` judges writes, not every command operand. The
+  per-command Seatbelt policy denies the home directory and deliberately leaves
+  `/usr`, `/etc` and `/opt/homebrew` readable so ordinary build and test commands
+  work. A first pass checked every operand and thereby denied `ls /usr/bin`,
+  `cat /etc/hosts`, `2>/dev/null` and any explicitly-pathed toolchain binary — a
+  rule layer stricter than the boundary it backs up is a second, worse boundary,
+  and `2>/dev/null` alone would have tripped the three-consecutive fallback on
+  ordinary work. Rules 9 and 10 still read operands, because destructive removal
+  and a git flag aimed at another tree are intent-level cases the kernel permits.
+- `cp evil.sh <workspace>/.git/hooks/pre-commit` cannot be caught in the rule
+  table without per-program positional parsing, which is how bugs get into
+  security rules. It is closed one layer down instead: the per-command sandbox
+  denies writes to `<workspace>/.git/hooks` and `<workspace>/.git/config`, the
+  two paths normal git operation never writes and the two that change what later
+  commands do. Rule 3 stops file tools and `git config`; the sandbox stops every
+  other writer. Neither is complete alone.
+
+**Accepted residual:** `cp <workspace>/secret /tmp/leak` is not refused. With the
+network denied outright, that is a file elsewhere on a machine the user already
+owns, not exfiltration, and the sandbox's `denyWrite` already covers the
+agent-controllable scratch paths.
+
+**A Session can no longer set its own git identity.** `~/.gitconfig` was already
+unreadable under `denyRead: [homeDir]`, and denying `.git/config` writes removes
+the workaround of the agent setting a local identity itself. This costs nothing,
+because the agent is not the commit path: `apps/desktop/src/main/worktree/publish.ts`
+resolves identity in main and runs `add`/`commit` outside the sandbox. It would
+matter only if a Session were ever expected to commit through its own bash.
 
 ## Part II — Runtime shape
 
@@ -590,8 +660,7 @@ external.
 
 - Whether the Main-checkout Role ships with the pre-image commit or waits.
 - Whether the fallback thresholds stay at 3 / 20 or are tuned against real usage.
-- Whether candidate 1 lands before Part I, changing where the evaluation seam is
-  wired.
+  Nothing counts denials yet, so there is no usage to tune against until slice 3.
 - Packaging: an App-Sandboxed build cannot nest `sandbox-exec`, so distribution
   strategy and Part I's boundary are the same decision. Part III removes the
   *other* packaging hazard (the `codesign`/`treeSha256` gate), so doing it first
