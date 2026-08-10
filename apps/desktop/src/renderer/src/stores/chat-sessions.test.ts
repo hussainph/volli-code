@@ -53,6 +53,7 @@ const projection: SessionProjection = {
   signal: null,
   modelSelection: null,
   turnActive: false,
+  authorityDenials: 0,
   lastActivityAt: SESSION.createdAt,
   bornTicketless: SESSION.ticketId === null,
 };

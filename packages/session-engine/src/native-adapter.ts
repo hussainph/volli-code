@@ -196,6 +196,18 @@ export type HarnessObservation =
   | (HarnessObservationBase & { kind: "turn.started"; turnId: string })
   | (HarnessObservationBase & { kind: "turn.completed"; turnId: string })
   | (HarnessObservationBase & { kind: "turn.interrupted"; turnId: string })
+  /**
+   * The Session's authority refused a call. The adapter reports it rather than
+   * minting it: only the runtime sees the call, and only the Session Engine owns
+   * the attachment the fact belongs to.
+   */
+  | (HarnessObservationBase & {
+      kind: "authority.denied";
+      turnId: string | null;
+      tool: string;
+      cause: string;
+      reason: string;
+    })
   | (HarnessObservationBase & {
       kind: "interaction.opened";
       interaction: Omit<SessionInteraction, "attachmentId">;

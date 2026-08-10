@@ -1834,6 +1834,16 @@ class DefaultSessionRuntime implements SessionRuntime {
           if (release !== undefined) this.#releaseMessageAdmission(spec.sessionId, release);
         }
         break;
+      case "authority.denied":
+        event = await this.ports.engine.observe({
+          ...base,
+          kind: observation.kind,
+          turnId: observation.turnId,
+          tool: observation.tool,
+          cause: observation.cause,
+          reason: observation.reason,
+        });
+        break;
       case "interaction.opened":
         event = await this.ports.engine.observe({
           ...base,

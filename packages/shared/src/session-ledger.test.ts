@@ -227,6 +227,32 @@ describe("observationPayload", () => {
     });
   });
 
+  it("round-trips an authority.denied observation into its matching payload", () => {
+    const observation: SessionObservation = {
+      id: "authority-denied-1",
+      sessionId: session.id,
+      occurredAt: 1,
+      provenance: systemProvenance,
+      kind: "authority.denied",
+      attachmentId: "attachment-1",
+      turnId: "turn-1",
+      tool: "execute",
+      cause: "command.destructive-removal",
+      reason: "rm -rf resolves under a home directory",
+    };
+
+    expect(observationPayload(observation)).toEqual({
+      kind: "authority.denied",
+      attachmentId: "attachment-1",
+      turnId: "turn-1",
+      tool: "execute",
+      cause: "command.destructive-removal",
+      reason: "rm -rf resolves under a home directory",
+    });
+    // A denial before any turn opened carries no turn to blame it on.
+    expect(observationPayload({ ...observation, turnId: null })).toMatchObject({ turnId: null });
+  });
+
   it("maps every externally observed fact without inventing a command", () => {
     const attachment = {
       id: "attachment-1",
@@ -1086,6 +1112,43 @@ describe("projectSession bornTicketless", () => {
       event(1, { kind: "session.created", session: { ...session, ticketId: "ticket-1" } }),
     ]);
     expect(projection.bornTicketless).toBe(false);
+  });
+});
+
+describe("projectSession authorityDenials", () => {
+  it("counts zero denials for a Session that has never been refused", () => {
+    expect(projectSession(session, []).authorityDenials).toBe(0);
+  });
+
+  it("counts every authority.denied event over the Session's whole life", () => {
+    const projection = projectSession(session, [
+      event(1, {
+        kind: "authority.denied",
+        attachmentId: "attachment-1",
+        turnId: "turn-1",
+        tool: "execute",
+        cause: "command.destructive-removal",
+        reason: "rm -rf resolves under a home directory",
+      }),
+      event(2, {
+        kind: "authority.denied",
+        attachmentId: "attachment-1",
+        turnId: "turn-1",
+        tool: "execute",
+        cause: "command.git-discards-work",
+        reason: "git reset --hard discards uncommitted work",
+      }),
+      event(3, {
+        kind: "authority.denied",
+        attachmentId: "attachment-1",
+        turnId: null,
+        tool: "write",
+        cause: "call.unreadable",
+        reason: "the write target could not be resolved",
+      }),
+    ]);
+
+    expect(projection.authorityDenials).toBe(3);
   });
 });
 

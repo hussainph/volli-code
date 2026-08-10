@@ -8,7 +8,7 @@ import {
   type CodingToolId,
 } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
-import { authorityRefusal } from "./gate";
+import { authorityVerdict } from "./gate";
 
 function snapshot(overrides: Partial<AuthoritySnapshot> = {}): AuthoritySnapshot {
   return {
@@ -40,75 +40,83 @@ function workspace(): { raw: string; real: string } {
   return { raw, real };
 }
 
-describe("authorityRefusal", () => {
+describe("authorityVerdict", () => {
   it("stands aside for work the Session's authority permits", () => {
     const { raw } = workspace();
     expect(
-      authorityRefusal({
+      authorityVerdict({
         tool: "read",
         args: { path: "MARKER.txt" },
         authority: snapshot(),
         workspacePath: raw,
       }),
-    ).toBeUndefined();
+    ).toEqual({ outcome: "allow" });
     expect(
-      authorityRefusal({
+      authorityVerdict({
         tool: "bash",
         args: { command: "printf hi > out.txt" },
         authority: snapshot(),
         workspacePath: raw,
       }),
-    ).toBeUndefined();
+    ).toEqual({ outcome: "allow" });
   });
 
   it("compares operands against the resolved root, not the symlink the caller passed", () => {
     const { raw, real } = workspace();
     expect(raw).not.toBe(real);
     expect(
-      authorityRefusal({
+      authorityVerdict({
         tool: "read",
         args: { path: join(real, "MARKER.txt") },
         authority: snapshot(),
         workspacePath: raw,
       }),
-    ).toBeUndefined();
+    ).toEqual({ outcome: "allow" });
   });
 
-  it("returns the refusing rule's own words, which the model reads as the tool result", () => {
+  it("returns the refusing rule's own words and name, which the model reads as the tool result", () => {
     const { raw, real } = workspace();
     expect(
-      authorityRefusal({
+      authorityVerdict({
         tool: "read",
         args: { path: "../SECRET.txt" },
         authority: snapshot(),
         workspacePath: raw,
       }),
-    ).toBe(
-      `${join(real, "../SECRET.txt")} is outside the Session workspace ${real}; every read and write must stay inside it.`,
-    );
-    expect(
-      authorityRefusal({
-        tool: "grep",
-        args: { pattern: "secret" },
-        authority: snapshot(),
-        workspacePath: raw,
-      }),
-    ).toContain('"grep" is not one of this Session\'s tools');
+    ).toEqual({
+      outcome: "deny",
+      cause: "path.outside-workspace",
+      reason: `${join(real, "../SECRET.txt")} is outside the Session workspace ${real}; every read and write must stay inside it.`,
+    });
+    const grepVerdict = authorityVerdict({
+      tool: "grep",
+      args: { pattern: "secret" },
+      authority: snapshot(),
+      workspacePath: raw,
+    });
+    expect(grepVerdict.outcome).toBe("deny");
+    expect(grepVerdict).toMatchObject({ cause: "tool.not-bundled" });
+    if (grepVerdict.outcome === "deny") {
+      expect(grepVerdict.reason).toContain('"grep" is not one of this Session\'s tools');
+    }
   });
 
   it("reads the Snapshot's own work location rather than assuming a worktree", () => {
     const { raw } = workspace();
     const call = { tool: "bash", args: { command: "git reset --hard" } } as const;
-    expect(
-      authorityRefusal({ ...call, authority: snapshot(), workspacePath: raw }),
-    ).toBeUndefined();
-    expect(
-      authorityRefusal({
-        ...call,
-        authority: snapshot({ location: "main-checkout" }),
-        workspacePath: raw,
-      }),
-    ).toContain("discards uncommitted work");
+    expect(authorityVerdict({ ...call, authority: snapshot(), workspacePath: raw })).toEqual({
+      outcome: "allow",
+    });
+    const denied = authorityVerdict({
+      ...call,
+      authority: snapshot({ location: "main-checkout" }),
+      workspacePath: raw,
+    });
+    expect(denied.outcome).toBe("deny");
+    expect(denied).toMatchObject({ cause: "command.git-discards-work" });
+    if (denied.outcome === "deny") {
+      expect(denied.reason).toContain("discards uncommitted work");
+    }
   });
 
   // Payloads from the adversarial review, each of which reached ALLOW. They are
@@ -136,23 +144,26 @@ describe("authorityRefusal", () => {
     { tool: "bash", args: { command: "echo x > $TARGET" } },
   ])("refuses $tool $args", ({ tool, args }) => {
     const { raw } = workspace();
-    expect(authorityRefusal({ tool, args, authority: snapshot(), workspacePath: raw })).toBeTypeOf(
-      "string",
-    );
+    expect(
+      authorityVerdict({ tool, args, authority: snapshot(), workspacePath: raw }).outcome,
+    ).toBe("deny");
   });
 
   it("refuses a noclobber redirect at a shell profile, as the plain one already was", () => {
     const { raw } = workspace();
     const profile = join(homedir(), ".zshrc");
     for (const operator of [">", ">|"]) {
-      expect(
-        authorityRefusal({
-          tool: "bash",
-          args: { command: `echo pwned ${operator} ${profile}` },
-          authority: snapshot(),
-          workspacePath: raw,
-        }),
-      ).toContain("outside the Session workspace");
+      const verdict = authorityVerdict({
+        tool: "bash",
+        args: { command: `echo pwned ${operator} ${profile}` },
+        authority: snapshot(),
+        workspacePath: raw,
+      });
+      expect(verdict.outcome).toBe("deny");
+      expect(verdict).toMatchObject({ cause: "path.outside-workspace" });
+      if (verdict.outcome === "deny") {
+        expect(verdict.reason).toContain("outside the Session workspace");
+      }
     }
   });
 
@@ -185,42 +196,57 @@ describe("authorityRefusal", () => {
   ])("still allows %j", (command) => {
     const { raw } = workspace();
     expect(
-      authorityRefusal({
+      authorityVerdict({
         tool: "bash",
         args: { command },
         authority: snapshot(),
         workspacePath: raw,
       }),
-    ).toBeUndefined();
+    ).toEqual({ outcome: "allow" });
   });
 
-  it("blocks a call it cannot describe rather than letting it through unchecked", () => {
+  it("blocks a call it cannot describe rather than letting it through unchecked, citing no rule for it", () => {
     const { raw } = workspace();
+    const unreadablePath = authorityVerdict({
+      tool: "read",
+      args: { path: "x".repeat(400) },
+      authority: snapshot(),
+      workspacePath: raw,
+    });
+    expect(unreadablePath.outcome).toBe("deny");
+    expect(unreadablePath).toMatchObject({ cause: "call.unreadable" });
+    if (unreadablePath.outcome === "deny") {
+      expect(unreadablePath.reason).toContain(
+        "could not be checked against the Session's authority",
+      );
+    }
+
     expect(
-      authorityRefusal({
-        tool: "read",
-        args: { path: "x".repeat(400) },
-        authority: snapshot(),
-        workspacePath: raw,
-      }),
-    ).toContain("could not be checked against the Session's authority");
-    expect(
-      authorityRefusal({
+      authorityVerdict({
         tool: "bash",
         args: {},
         authority: snapshot(),
         workspacePath: raw,
       }),
-    ).toBe(
-      "This call could not be checked against the Session's authority, so it was refused: Pi tool bash was called without a command argument.",
-    );
-    expect(
-      authorityRefusal({
-        tool: "read",
-        args: { path: "MARKER.txt" },
-        authority: snapshot(),
-        workspacePath: join(raw, "x".repeat(400)),
-      }),
-    ).toContain("could not be checked against the Session's authority");
+    ).toEqual({
+      outcome: "deny",
+      cause: "call.unreadable",
+      reason:
+        "This call could not be checked against the Session's authority, so it was refused: Pi tool bash was called without a command argument.",
+    });
+
+    const unresolvableWorkspace = authorityVerdict({
+      tool: "read",
+      args: { path: "MARKER.txt" },
+      authority: snapshot(),
+      workspacePath: join(raw, "x".repeat(400)),
+    });
+    expect(unresolvableWorkspace.outcome).toBe("deny");
+    expect(unresolvableWorkspace).toMatchObject({ cause: "call.unreadable" });
+    if (unresolvableWorkspace.outcome === "deny") {
+      expect(unresolvableWorkspace.reason).toContain(
+        "could not be checked against the Session's authority",
+      );
+    }
   });
 });

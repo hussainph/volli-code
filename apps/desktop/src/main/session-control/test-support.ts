@@ -224,6 +224,7 @@ export function getSession(db: Database.Database, sessionId: string): SessionRec
     signal: null,
     modelSelection: null,
     turnActive: false,
+    authorityDenials: 0,
     lastActivityAt: session.created_at,
     // This helper reads the ledger tables directly rather than replaying
     // `session.created` (see the module doc comment) — the live `ticket_id`

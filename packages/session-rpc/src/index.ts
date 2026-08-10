@@ -836,8 +836,40 @@ function rendererFrame(frame: SessionStreamFrame): SessionStreamFrame {
         ...safeFrame,
         event: { ...safeFrame.event, payload: { ...payload, native: null } },
       };
-    default:
+    // Payload kinds this edge deliberately forwards untouched — none of them
+    // carry adapter-native detail, a recovery locator, or another field a case
+    // above exists to strip. Listed rather than caught by a `default`, with a
+    // `never` fallback, so a new `SessionEventPayload` kind is a compile error
+    // here instead of a kind that reaches the renderer unscrubbed by simply
+    // falling through. Mirrors `session-ledger.ts`'s own listed-not-defaulted
+    // switch, for the same reason: silence is not the safe default at a
+    // product/renderer boundary.
+    case "session.created":
+    case "session.archived":
+    case "session.retitled":
+    case "model.selected":
+    case "session.input.recorded":
+    case "session.signaled":
+    case "attachment.closed":
+    case "run.started":
+    case "run.completed":
+    case "turn.started":
+    case "turn.completed":
+    case "turn.interrupted":
+    case "transcript.referenced":
+    case "attention.cleared":
+    case "interaction.resolved":
+    case "interaction.cancelled":
+    case "command.receipt.recorded":
+    // `authority.denied` carries no adapter-native detail of its own — `tool`,
+    // `cause` and `reason` are Volli's own vocabulary already, not a harness's.
+    case "authority.denied":
       return safeFrame;
+    /* v8 ignore next 4 -- unreachable while the union is exhausted above; it exists to stop being so at compile time. */
+    default: {
+      const unhandled: never = payload;
+      return unhandled;
+    }
   }
 }
 

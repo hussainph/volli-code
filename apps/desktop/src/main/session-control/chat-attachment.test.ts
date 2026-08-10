@@ -33,6 +33,7 @@ function projectionWith(
     interactions: { active: [], resolved: [] },
     signal: null,
     turnActive: false,
+    authorityDenials: 0,
     lastActivityAt: 1,
     bornTicketless: true,
     ...overrides,

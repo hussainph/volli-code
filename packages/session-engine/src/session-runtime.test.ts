@@ -763,6 +763,35 @@ describe("SessionRuntime native adapter contract", () => {
     expect(snapshot.frames.map(({ event }) => event.payload.kind)).toContain("turn.interrupted");
   });
 
+  it("records a durable authority.denied event with the attachment id filled in from the spec", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+
+    await adapter.emit({
+      id: "denied-1",
+      kind: "authority.denied",
+      occurredAt: 160,
+      turnId: "turn-1",
+      tool: "execute",
+      cause: "command.destructive-removal",
+      reason: "rm -rf resolves under a home directory",
+    });
+
+    const snapshot = await runtime.snapshot({ sessionId });
+    const denial = snapshot.frames.find(({ event }) => event.payload.kind === "authority.denied");
+    expect(denial?.event.attachmentId).toBe(attachmentId);
+    expect(denial?.event.payload).toEqual({
+      kind: "authority.denied",
+      attachmentId,
+      turnId: "turn-1",
+      tool: "execute",
+      cause: "command.destructive-removal",
+      reason: "rm -rf resolves under a home directory",
+    });
+    expect(snapshot.projection.authorityDenials).toBe(1);
+  });
+
   it("probes, attaches, snapshots dynamic capabilities, and releases through the narrow binding", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);

@@ -399,6 +399,28 @@ export type SessionEventPayload =
       reason: SessionInteractionCancelReason;
     }
   | { kind: "command.receipt.recorded"; receipt: CommandReceipt }
+  /**
+   * The Session's authority refused one call before it ran.
+   *
+   * A fact of its own rather than a failed activity, because the tool never
+   * executed and nothing went wrong: Volli decided. Recording it durably is what
+   * makes a refusal countable against {@link AuthorityFallback}, readable in the
+   * transcript as Volli's own act, and available to Attention.
+   *
+   * `cause` is a bare string, not {@link AuthorityDenialCause}. History outlives
+   * the rule pack that wrote it, and a decoder that rejected a retired rule id
+   * would make an old Session unreadable rather than merely quaint.
+   */
+  | {
+      kind: "authority.denied";
+      attachmentId: string;
+      turnId: string | null;
+      /** The runtime tool name as requested, which may not be a tool Volli offers. */
+      tool: string;
+      cause: string;
+      /** The refusing rule's own words, as the model received them. */
+      reason: string;
+    }
   | {
       kind: "adapter.observed";
       attachmentId: string | null;
@@ -509,6 +531,14 @@ export type SessionObservation =
       reason: SessionInteractionCancelReason;
     })
   | (SessionObservationBase & {
+      kind: "authority.denied";
+      attachmentId: string;
+      turnId: string | null;
+      tool: string;
+      cause: string;
+      reason: string;
+    })
+  | (SessionObservationBase & {
       kind: "adapter.observed";
       attachmentId: string | null;
       name: string;
@@ -585,6 +615,15 @@ export function observationPayload(observation: SessionObservation): SessionEven
       };
     case "command.receipt":
       throw new Error("Command receipt observations require Session Engine stamping");
+    case "authority.denied":
+      return {
+        kind: observation.kind,
+        attachmentId: observation.attachmentId,
+        turnId: observation.turnId,
+        tool: observation.tool,
+        cause: observation.cause,
+        reason: observation.reason,
+      };
     case "adapter.observed":
       return {
         kind: observation.kind,
@@ -785,6 +824,18 @@ export interface SessionProjection {
   modelSelection: ModelSelection | null;
   /** Whether a turn is open right now — the durable half of "the agent is working". */
   turnActive: boolean;
+  /**
+   * How many calls this Session's authority has refused, over its whole life.
+   *
+   * Projected rather than counted in the runtime because the per-Session half of
+   * {@link AuthorityFallback} is a fact about the Session, not about the
+   * attachment that happens to be live: a Session that was refused nineteen times
+   * yesterday is one refusal from escalating today, and a counter that reset on
+   * every attach would never reach twenty. The consecutive half has no such
+   * projection and cannot have one — an *allowed* call is not an event, so only
+   * the runtime that sees both answers can know a run was broken.
+   */
+  authorityDenials: number;
   /** Epoch milliseconds of the newest thing that happened here; seeded from the Session's creation. */
   lastActivityAt: number;
   /**
@@ -837,6 +888,7 @@ export function projectSession(
   let signal: SessionProjection["signal"] = null;
   let modelSelection: ModelSelection | null = null;
   let turnActive = false;
+  let authorityDenials = 0;
   let lastActivityAt = session.createdAt;
   // Seeded from the live session row so a fold given no `session.created`
   // event (a degenerate/partial event list) still has an honest answer;
@@ -1011,6 +1063,9 @@ export function projectSession(
       // transcript's shape, read from the event stream directly;
       // `adapter.observed` is adapter evidence that no projected field is
       // derived from.
+      case "authority.denied":
+        authorityDenials += 1;
+        break;
       case "run.started":
       case "run.completed":
       case "transcript.referenced":
@@ -1046,6 +1101,7 @@ export function projectSession(
     signal,
     modelSelection,
     turnActive,
+    authorityDenials,
     lastActivityAt,
     bornTicketless,
   };

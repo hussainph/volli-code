@@ -107,6 +107,7 @@ function projectionFor(attachmentId: string | null, adapterId = "pi"): SessionPr
     signal: null,
     modelSelection: MODEL_POLICY,
     turnActive: false,
+    authorityDenials: 0,
     lastActivityAt: SESSION.createdAt,
     bornTicketless: SESSION.ticketId === null,
   };

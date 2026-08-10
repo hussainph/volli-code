@@ -12,7 +12,7 @@ import {
   type UserMessage,
 } from "@earendil-works/pi-ai";
 import { isActivityKind } from "@volli/shared";
-import { authorityRefusal } from "../authority/gate";
+import { authorityVerdict } from "../authority/gate";
 import type {
   AgentRuntime,
   DeliveryOutcome,
@@ -589,13 +589,29 @@ async function attachSession(
       // every finalized result in the batch asks for it, which is not what one
       // refused call means.
       beforeToolCall: async ({ toolCall, args }) => {
-        const refusal = authorityRefusal({
+        const verdict = authorityVerdict({
           tool: toolCall.name,
           args,
           authority: spec.authority,
           workspacePath: spec.workspacePath,
         });
-        return refusal === undefined ? undefined : { block: true, reason: refusal };
+        if (verdict.outcome === "allow") return undefined;
+        // Recorded before refused, through the same ordered queue as every other
+        // observation: a refusal that overtook the turn it belongs to would be
+        // filed against the wrong turn, and one that raced the activity stream
+        // would print out of order. `commitObservation` resolves at the consumer
+        // boundary and never rejects — a ledger that cannot be written is not a
+        // reason to let the call through, and the failure it holds is consumed at
+        // the next command boundary like any other.
+        await commitObservation({
+          kind: "authority",
+          state: "denied",
+          turnId,
+          tool: toolCall.name,
+          cause: verdict.cause,
+          reason: verdict.reason,
+        });
+        return { block: true, reason: verdict.reason };
       },
     });
     agent.steeringMode = "one-at-a-time";
