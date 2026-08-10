@@ -1095,8 +1095,10 @@ describe("SessionRuntime native adapter contract", () => {
     // The sibling of the configuration case above, and it used to be the one
     // that never ended: the clear path named `configuration_invalid` alone, so
     // a Session that failed recovery once wore the Attention for good. Nothing
-    // else clears an attach-failure id — the per-attachment `:recovery` ids
-    // have their own lifecycle and are not these.
+    // else clears an attach-failure id. The per-attachment `:recovery` ids
+    // share the kind and are therefore retired by this same clear — see
+    // "retires a released attachment's recovery Attention", which pins that as
+    // the only exit they have once their attachment is gone.
     const unrecoverable = composition();
     const session = await unrecoverable.runtime.command({
       commandId: "unrecoverable-create",
@@ -1430,6 +1432,65 @@ describe("SessionRuntime native adapter contract", () => {
       (await recovered.runtime.snapshot({ sessionId })).projection.attention.primary,
     ).toBeNull();
     expect(first.adapter.commands.filter(({ kind }) => kind === "executor.retry")).toHaveLength(1);
+  });
+
+  it("retires a released attachment's recovery Attention on the next successful attach", async () => {
+    // The per-attachment `:recovery` Attention is raised under
+    // `adapter_unrecoverable`, so the clear keyed by
+    // `ATTACH_FAILURE_ATTENTION_KINDS` retires it as well as the Session-level
+    // attach failure. That is deliberate, and it is the only exit this
+    // Attention has once its attachment is released: `release` does not clear
+    // it, and the retry that would needs the attachment it just closed. A
+    // clear narrowed back to `attachmentId === null` would leave it active for
+    // the life of the Session — the same stranding the widening was written to
+    // end, one id along.
+    const first = composition();
+    const sessionId = await createAndAttach(first.runtime);
+    const attachmentId = (await first.runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    await first.runtime.close();
+    first.adapter.attachFailure = new NativeAttachmentError(
+      "The Pi sidecar is missing",
+      "PI_RECOVERY_FAILED",
+      "adapter_unrecoverable",
+    );
+    const recovered = composition({
+      engine: first.engine,
+      adapter: first.adapter,
+      runtimeIdPrefix: "released-recovery-",
+    });
+    await recovered.runtime.command({
+      commandId: "released-recovery-retry",
+      sessionId,
+      command: { kind: "executor.retry", attachmentId },
+    });
+    expect(
+      (await recovered.runtime.snapshot({ sessionId })).projection.attention.primary,
+    ).toMatchObject({ id: `${attachmentId}:recovery`, attachmentId });
+
+    first.adapter.attachFailure = null;
+    await recovered.runtime.command({
+      commandId: "released-recovery-release",
+      sessionId,
+      command: { kind: "adapter.release", attachmentId },
+    });
+    // Releasing is not an exit. Pinned, because it is what makes the clear below
+    // load-bearing rather than incidental.
+    expect(
+      (await recovered.runtime.snapshot({ sessionId })).projection.attention.active.map(
+        ({ id }) => id,
+      ),
+    ).toEqual([`${attachmentId}:recovery`]);
+
+    await expect(
+      recovered.runtime.command({
+        commandId: "released-recovery-attach",
+        sessionId,
+        command: { kind: "adapter.attach", continuity: "fresh" },
+      }),
+    ).resolves.toMatchObject({ receipt: { status: "accepted" } });
+    expect(
+      (await recovered.runtime.snapshot({ sessionId })).projection.attention.active,
+    ).toHaveLength(0);
   });
 
   it("settles a cold retry whose native binding cannot be recovered", async () => {

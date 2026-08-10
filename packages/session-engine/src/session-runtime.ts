@@ -172,6 +172,14 @@ type AttachFailureAttentionKind = "configuration_invalid" | "adapter_unrecoverab
  *
  * Both kinds are claims about whether this executor can run this Session here,
  * and an attach that just opened is the direct evidence against either.
+ *
+ * It reaches further than the ids {@link freshAttachAttentionId} mints, and
+ * deliberately: a per-attachment `${attachmentId}:recovery` Attention is raised
+ * under `adapter_unrecoverable` too, and once its attachment is released this
+ * is the only thing that retires it — `adapter.release` does not, and the retry
+ * that would needs the attachment it just closed. Narrowing the filter by
+ * `attachmentId === null` would read as tidier and would strand that Attention
+ * for the life of the Session.
  */
 const ATTACH_FAILURE_ATTENTION_KINDS: Readonly<Record<AttachFailureAttentionKind, true>> = {
   configuration_invalid: true,
@@ -776,7 +784,9 @@ class DefaultSessionRuntime implements SessionRuntime {
       });
       const clearedAttachFailures = await Promise.all(
         projection.attention.active
-          .filter(({ kind }) => kind in ATTACH_FAILURE_ATTENTION_KINDS)
+          // `hasOwn`, not `in`: the kind arrives from durable history, and `in`
+          // would answer true for `toString` and every other prototype key.
+          .filter(({ kind }) => Object.hasOwn(ATTACH_FAILURE_ATTENTION_KINDS, kind))
           .map(({ id: attentionId }) =>
             this.ports.engine.observe({
               id: this.#id("event"),
@@ -1403,10 +1413,12 @@ class DefaultSessionRuntime implements SessionRuntime {
     if (recovered) return recovered;
     await binding.handle.release("requested");
     // The binding stops speaking before this Session records that it stopped.
-    // A released executor is owed the chance to drain — everything it finished
-    // saying while `release` was resolving is already durable — but the moment
-    // that resolves, the attachment is over, and the ledger refuses a fact
-    // about a closed attachment rather than filing it late.
+    // What `release` resolving guarantees is narrow, and worth stating exactly:
+    // an observation whose own `emit` already resolved is durable. One still
+    // queued behind the serializing tail is not, and is dropped here rather
+    // than filed against an attachment that is over — the ledger would refuse
+    // it and throw back out through the executor's own observer. Dropping is
+    // the Session's guarantee; draining first would only move the race.
     binding.sink.discard();
     const closed = await this.ports.engine.observe({
       id: this.#id("event"),
@@ -2479,6 +2491,11 @@ class DefaultSessionRuntime implements SessionRuntime {
     return history;
   }
 
+  /** How a durable attachment's adapter is stamped on a fact, whoever wrote it. */
+  #adapterIdentityFor(adapterId: string): AdapterIdentity {
+    return adapterId === this.ports.executor.id ? this.ports.executor : adapterIdentity(adapterId);
+  }
+
   /**
    * The executor an attachment recorded, or a refusal.
    *
@@ -2488,11 +2505,6 @@ class DefaultSessionRuntime implements SessionRuntime {
    * that into an honest recovery failure rather than a live binding pointed at
    * someone else's native identity.
    */
-  /** How a durable attachment's adapter is stamped on a fact, whoever wrote it. */
-  #adapterIdentityFor(adapterId: string): AdapterIdentity {
-    return adapterId === this.ports.executor.id ? this.ports.executor : adapterIdentity(adapterId);
-  }
-
   #requireExecutorFor(adapterId: string): NativeHarnessAdapter {
     if (adapterId !== this.ports.executor.id) {
       throw new SessionRuntimeNotFoundError(`Native adapter ${adapterId} was not found`);

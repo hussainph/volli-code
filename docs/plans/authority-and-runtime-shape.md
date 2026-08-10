@@ -743,11 +743,21 @@ two-store attention migration and the state-free replay path, none of which the
 lab was load-bearing for — but anyone re-opening candidate 1's first half should
 know that its sharpest argument was retired rather than answered.
 
-**Re-opened and settled (2026-08-11).** `HarnessObservation` is deleted.
-`RuntimeObservation` is the only observation vocabulary, and the altitude
+**Re-opened and settled (2026-08-11).** `RuntimeObservation` is the only
+observation vocabulary *any layer names across a boundary*, and the altitude
 crossing moved into `packages/session-engine/src/observation-translation.ts` —
 the layer that owns Session facts — where the durable ids it mints are now
-covered at 100%. The four blockers held up, and each has an answer rather than a
+covered at 100%.
+
+Worth stating precisely, because "deleted" would overclaim: the 12 Session-shaped
+arms survive as `TranslatedObservation`, in the same package `HarnessObservation`
+already lived in (`native-adapter.ts`). What changed is that they are no longer
+exported from the package index and no longer cross a boundary — the Engine's
+own intermediate shape between a runtime observation and a durable fact, rather
+than a contract Electron main and the Engine both had to agree on. The altitude
+crossing the 2026-08-10 correction identified is real and still here; what the
+correction got wrong was that it had to be a *published* vocabulary. The 450
+lines of translation that left Electron main are the actual win. The four blockers held up, and each has an answer rather than a
 workaround: the frozen `session_events.id` derivations moved verbatim, with the
 `pi:` namespace supplied by the adapter through `NativeHarnessAdapter.durableIdNamespace`
 so the Engine mints ids it does not name; the replay path stayed separate from

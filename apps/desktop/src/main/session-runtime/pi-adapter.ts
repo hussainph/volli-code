@@ -67,9 +67,20 @@ import {
   type WorkLocationKind,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
+import { STRUCTURED_ADAPTER_ID } from "./structured-sessions";
 
-/** The one adapter id. Pi is the structured product's single target executor. */
-export const PI_ADAPTER_ID = "pi";
+/**
+ * The one adapter id. Pi is the structured product's single target executor.
+ *
+ * Aliased rather than re-declared, and the boot sweep is why. It retires every
+ * local open attachment whose `adapterId` is not
+ * {@link STRUCTURED_ADAPTER_ID} — so two literals that merely happen to read
+ * the same would, the day one is renamed, durably close every live Pi
+ * attachment in the database on the next launch. That predicate is
+ * fail-destructive, so the agreement is held by the compiler rather than by
+ * whoever edits second.
+ */
+export const PI_ADAPTER_ID = STRUCTURED_ADAPTER_ID;
 
 /**
  * The namespace every durable id derived from Pi's observations is minted under.
