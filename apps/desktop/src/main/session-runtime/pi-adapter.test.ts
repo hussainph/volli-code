@@ -6,7 +6,7 @@ import type {
   DeliveryOutcome,
   RuntimeAttachmentHandle,
   RuntimeObservation,
-  TicketRuntimeSpec,
+  SessionRuntimeSpec,
 } from "@volli/agent-runtime";
 import type {
   BindingHandle,
@@ -23,15 +23,15 @@ import {
   createPiRuntimeHost,
   piRootThreadId,
   PI_ADAPTER_ID,
-  PI_MODEL,
   type PiAdapterOptions,
-  type PiTicketContext,
+  type PiRuntimeContext,
 } from "./pi-adapter";
 
 const SESSION_ID = "session-1";
 const ATTACHMENT_ID = "attachment-1";
 
-const context: PiTicketContext = {
+const context: PiRuntimeContext = {
+  role: "ticket",
   projectId: "project-1",
   ticketId: "ticket-1",
   rootThreadId: piRootThreadId(SESSION_ID),
@@ -91,14 +91,14 @@ class RecordingSink implements ObservationSink {
 /** A runtime that records what it was asked to do and hands its observer back to the test. */
 class FakeRuntime implements AgentRuntime {
   readonly modelAccessInputs: Array<{ refresh?: boolean; signal?: AbortSignal } | undefined> = [];
-  readonly specs: TicketRuntimeSpec[] = [];
+  readonly specs: SessionRuntimeSpec[] = [];
   readonly submissions: string[] = [];
   readonly deliveries: Array<Parameters<RuntimeAttachmentHandle["submitUserMessage"]>[1]> = [];
   readonly submissionCommandIds: Array<
     Parameters<RuntimeAttachmentHandle["submitUserMessage"]>[2]
   > = [];
   readonly outcomes: DeliveryOutcome[] = [];
-  readonly modelSelections: TicketRuntimeSpec["model"][] = [];
+  readonly modelSelections: SessionRuntimeSpec["model"][] = [];
   readonly modelSelectionOutcomes: ModelSelectionOutcome[] = [];
   modelSelectionFailure: unknown = null;
   interrupts = 0;
@@ -115,7 +115,7 @@ class FakeRuntime implements AgentRuntime {
     sessionId: "pi-session-9",
     sessionFilePath: "/data/pi-sessions/pi-session-9.jsonl",
   };
-  #observe: TicketRuntimeSpec["observer"] | null = null;
+  #observe: SessionRuntimeSpec["observer"] | null = null;
 
   async inspectModelAccess(input?: {
     refresh?: boolean;
@@ -125,7 +125,7 @@ class FakeRuntime implements AgentRuntime {
     return { observedAt: 0, providers: [], models: [] };
   }
 
-  async startTicketSession(spec: TicketRuntimeSpec): Promise<RuntimeAttachmentHandle> {
+  async startSession(spec: SessionRuntimeSpec): Promise<RuntimeAttachmentHandle> {
     this.specs.push(spec);
     this.#observe = spec.observer;
     if (this.startFailure !== null) throw this.startFailure;
@@ -166,7 +166,7 @@ class FakeRuntime implements AgentRuntime {
     };
   }
 
-  get spec(): TicketRuntimeSpec {
+  get spec(): SessionRuntimeSpec {
     const spec = this.specs.at(-1);
     if (!spec) throw new Error("The runtime was never started");
     return spec;
@@ -186,7 +186,7 @@ function composition(overrides: Partial<PiAdapterOptions> = {}): {
   let clock = 1_000;
   const adapter = createPiNativeAdapter({
     sessionDataDir: "/data/pi-sessions",
-    resolveTicketContext: async () => context,
+    resolveRuntimeContext: async () => context,
     createRuntime: () => runtime,
     now: () => clock++,
     ...overrides,
@@ -220,7 +220,7 @@ describe("Pi runtime host", () => {
     let creations = 0;
     const host = createPiRuntimeHost({
       sessionDataDir: "/data/pi-sessions",
-      resolveTicketContext: async () => context,
+      resolveRuntimeContext: async () => context,
       createRuntime: () => {
         creations += 1;
         return runtime;
@@ -253,16 +253,10 @@ describe("Pi native adapter probe", () => {
         .filter((feature) => feature.state === "available")
         .map((f) => f.id),
     ).toEqual(["message.submit", "executor.interrupt"]);
-    expect(result.capabilities.catalog).toEqual([
-      {
-        kind: "model",
-        id: `${PI_MODEL.providerId}/${PI_MODEL.modelId}`,
-        label: `${PI_MODEL.providerId}/${PI_MODEL.modelId}`,
-        state: "available",
-        evidence: "declared",
-        detail: null,
-      },
-    ]);
+    // The adapter has no model of its own to declare, and what a probe declares
+    // becomes a durable `capabilities.updated` fact — so it declares nothing
+    // rather than a literal the running Session may not match.
+    expect(result.capabilities.catalog).toEqual([]);
   });
 
   it("refuses a profile it does not have", async () => {
@@ -287,15 +281,15 @@ describe("Pi native adapter attach", () => {
 
     const spec = runtime.spec;
     expect(spec.identity).toEqual({
+      role: "ticket",
       sessionId: SESSION_ID,
       rootThreadId: piRootThreadId(SESSION_ID),
       attachmentId: ATTACHMENT_ID,
       projectId: "project-1",
       ticketId: "ticket-1",
     });
-    expect(spec.role).toBe("ticket");
     expect(spec.venue).toBe("local");
-    expect(spec.worktreePath).toBe("/work/volli/.worktrees/VC-12");
+    expect(spec.workspacePath).toBe("/work/volli/.worktrees/VC-12");
     expect(spec.model).toEqual(context.model);
     expect(spec.authority).toEqual({ mode: "auto" });
     expect(spec.tools).toEqual({ tools: ["read", "edit", "write", "execute"] });
@@ -319,7 +313,7 @@ describe("Pi native adapter attach", () => {
     >;
     const adapter = createPiNativeAdapter({
       sessionDataDir: "/data/pi-sessions",
-      resolveTicketContext: async () => context,
+      resolveRuntimeContext: async () => context,
       models,
       createRuntime: (options) => {
         seen.push({ sessionDataDir: options.sessionDataDir, models: options.models });
@@ -331,11 +325,41 @@ describe("Pi native adapter attach", () => {
     expect(seen).toEqual([{ sessionDataDir: "/data/pi-sessions", models }]);
   });
 
-  it("fails a Session that lacks its Ticket runtime context", async () => {
-    const { adapter, runtime } = composition({ resolveTicketContext: async () => null });
+  it("starts a ticketless project Session in the project root under the project Role", async () => {
+    const { runtime } = await attached(
+      {
+        resolveRuntimeContext: async () => ({
+          role: "project",
+          projectId: "project-1",
+          ticketId: null,
+          rootThreadId: piRootThreadId(SESSION_ID),
+          brief: "A project-scoped chat Session.",
+          model: context.model,
+        }),
+      },
+      attachmentSpec({ directory: "/work/volli" }),
+    );
+
+    const spec = runtime.spec;
+    expect(spec.identity).toEqual({
+      role: "project",
+      sessionId: SESSION_ID,
+      rootThreadId: piRootThreadId(SESSION_ID),
+      attachmentId: ATTACHMENT_ID,
+      projectId: "project-1",
+      ticketId: null,
+    });
+    expect(spec.workspacePath).toBe("/work/volli");
+    expect(spec.brief).toEqual({ text: "A project-scoped chat Session." });
+    expect(spec.model).toEqual(context.model);
+    expect(spec.tools).toEqual({ tools: ["read", "edit", "write", "execute"] });
+  });
+
+  it("fails a Session that lacks its runtime context", async () => {
+    const { adapter, runtime } = composition({ resolveRuntimeContext: async () => null });
 
     await expect(adapter.attach(attachmentSpec(), new RecordingSink())).rejects.toThrow(
-      /Ticket Session with a selected model and Runtime Brief/,
+      /Session with a selected model and Runtime Brief/,
     );
     expect(runtime.specs).toHaveLength(0);
   });
@@ -430,7 +454,7 @@ describe("Pi native adapter attach", () => {
     runtime.recovery = undefined;
     const adapter = createPiNativeAdapter({
       sessionDataDir: "/data/pi-sessions",
-      resolveTicketContext: async () => context,
+      resolveRuntimeContext: async () => context,
       createRuntime: () => runtime,
     });
 

@@ -35,16 +35,16 @@ describe.skipIf(process.env.PI_LIVE_SMOKE !== "1")("live Pi turn", () => {
     const observations: RuntimeObservation[] = [];
     const runtime = createPiAgentRuntime({ sessionDataDir });
 
-    const handle = await runtime.startTicketSession({
+    const handle = await runtime.startSession({
       identity: {
+        role: "ticket",
         sessionId: "smoke-session",
         rootThreadId: "smoke-thread",
         attachmentId: "smoke-attachment",
         projectId: "smoke-project",
         ticketId: "smoke-ticket",
       },
-      role: "ticket",
-      worktreePath,
+      workspacePath: worktreePath,
       venue: "local",
       model: { providerId, modelId, reasoningLevel: "off" },
       authority: { mode: "auto" },

@@ -21,7 +21,7 @@ import type {
   RuntimeFailure,
   SettledMessageObservation,
   AttentionObservation,
-  TicketRuntimeSpec,
+  SessionRuntimeSpec,
   TurnObservation,
 } from "../contracts";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
@@ -29,7 +29,7 @@ import { mapPiActivity } from "./activity";
 import { inspectPiModelAccess } from "./model-access";
 import { piOwnedModels } from "./models";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
-import { ScopedExecutionEnv, type TicketExecutionEnv } from "./scoped-execution-env";
+import { ScopedExecutionEnv, type SessionExecutionEnv } from "./scoped-execution-env";
 import { createPiTools } from "./tools";
 import { attentionReasonFor, classifyAssistantMessage, recoveryRefFor } from "./transcript";
 
@@ -45,15 +45,15 @@ export interface PiRuntimeHostOptions {
   /** Host clock for runtime observations; injectable for deterministic tests. */
   now?: () => number;
   /** Internal contained-environment factory for deterministic Node runtime tests. */
-  executionEnvFactory?: (worktreePath: string) => Promise<TicketExecutionEnv>;
+  executionEnvFactory?: (workspacePath: string) => Promise<SessionExecutionEnv>;
 }
 
-/** Everything {@link attachTicketSession} needs, with the default already chosen. */
+/** Everything {@link attachSession} needs, with the default already chosen. */
 interface PiRuntimeHost {
   sessionDataDir: string;
   models: Models;
   now: () => number;
-  executionEnvFactory: (worktreePath: string) => Promise<TicketExecutionEnv>;
+  executionEnvFactory: (workspacePath: string) => Promise<SessionExecutionEnv>;
 }
 
 /**
@@ -72,7 +72,7 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
   };
   return {
     inspectModelAccess: (input) => inspectPiModelAccess(host.models, host.now, input),
-    startTicketSession: (spec) => attachTicketSession(host, spec),
+    startSession: (spec) => attachSession(host, spec),
   };
 }
 
@@ -319,7 +319,7 @@ function isAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
 }
 
-async function rejectUnavailableModel(spec: TicketRuntimeSpec): Promise<never> {
+async function rejectUnavailableModel(spec: SessionRuntimeSpec): Promise<never> {
   const message = `Model ${spec.model.providerId}/${spec.model.modelId} is not available.`;
   await spec.observer({
     kind: "attachment",
@@ -329,7 +329,7 @@ async function rejectUnavailableModel(spec: TicketRuntimeSpec): Promise<never> {
   throw new Error(message);
 }
 
-async function rejectCancelledAttachment(spec: TicketRuntimeSpec): Promise<never> {
+async function rejectCancelledAttachment(spec: SessionRuntimeSpec): Promise<never> {
   const message = "Runtime attachment was cancelled before it started.";
   await spec.observer({
     kind: "attachment",
@@ -341,9 +341,9 @@ async function rejectCancelledAttachment(spec: TicketRuntimeSpec): Promise<never
 
 const CONTAINED_EXECUTION_UNAVAILABLE = "Contained process execution is unavailable.";
 
-async function attachTicketSession(
+async function attachSession(
   host: PiRuntimeHost,
-  spec: TicketRuntimeSpec,
+  spec: SessionRuntimeSpec,
 ): Promise<RuntimeAttachmentHandle> {
   if (isAborted(spec.signal)) {
     return rejectCancelledAttachment(spec);
@@ -358,7 +358,7 @@ async function attachTicketSession(
 
   const sidecarEnv = new NodeExecutionEnv({ cwd: host.sessionDataDir });
   let sidecarPath: string | undefined;
-  let toolEnv: TicketExecutionEnv | undefined;
+  let toolEnv: SessionExecutionEnv | undefined;
   let unsubscribe: (() => void) | undefined;
   let abortListener: (() => void) | undefined;
   let createdSidecar = false;
@@ -373,13 +373,13 @@ async function attachTicketSession(
     const inputRecovery = spec.recovery;
     const sidecar =
       inputRecovery === undefined
-        ? await sidecars.create({ cwd: spec.worktreePath, metadata: expectedMetadata })
+        ? await sidecars.create({ cwd: spec.workspacePath, metadata: expectedMetadata })
         : await (async () => {
-            const candidates = (await sidecars.list({ cwd: spec.worktreePath })).filter(
+            const candidates = (await sidecars.list({ cwd: spec.workspacePath })).filter(
               (candidate) => candidate.id === inputRecovery.sessionId,
             );
             if (candidates.length !== 1) {
-              throw new Error("Pi recovery sidecar was not found uniquely for this worktree.");
+              throw new Error("Pi recovery sidecar was not found uniquely for this workspace.");
             }
             const candidate = candidates[0]!;
             if (resolve(candidate.path) !== resolve(inputRecovery.sessionFilePath)) {
@@ -499,7 +499,7 @@ async function attachTicketSession(
       await persistObservation({ kind: "turn", state: "interrupted", turnId: recoveredTurnId });
     }
     try {
-      toolEnv = await host.executionEnvFactory(spec.worktreePath);
+      toolEnv = await host.executionEnvFactory(spec.workspacePath);
       if (spec.tools.tools.includes("execute")) {
         const prepared = await toolEnv.prepareProcessExecution();
         if (!prepared.ok) {
@@ -570,7 +570,7 @@ async function attachTicketSession(
     >();
 
     const observationDelivery = new OrderedObservationDelivery(observe);
-    const commitObservation = (observation: Parameters<TicketRuntimeSpec["observer"]>[0]) =>
+    const commitObservation = (observation: Parameters<SessionRuntimeSpec["observer"]>[0]) =>
       observationDelivery.deliver(observation);
 
     const agent = new Agent({
@@ -755,7 +755,9 @@ async function attachTicketSession(
           return { kind: "delivered", delivery };
         }
         const delivered =
-          agent.state.messages.length === 0 ? composeFirstUserMessage(spec.brief, text) : text;
+          agent.state.messages.length === 0
+            ? composeFirstUserMessage(spec.identity.role, spec.brief, text)
+            : text;
         const message = queuedUserMessage(delivered);
         observationDelivery.consumeFailure();
         pendingRunDelivery = {

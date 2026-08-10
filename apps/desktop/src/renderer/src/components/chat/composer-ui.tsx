@@ -61,7 +61,6 @@ export interface SessionComposerProps {
   /** Lets a decision elsewhere in the Session hand the cursor back to the reader. */
   textareaRef?: React.Ref<HTMLTextAreaElement>;
   models: readonly ComposerModel[];
-  offersModelChoice?: boolean;
   selection: ComposerModelSelection;
   onSelectionChange(next: ComposerModelSelection): void;
   /** Model policy is immutable during an active turn. */
@@ -82,7 +81,6 @@ export function SessionComposer({
   onValueChange,
   textareaRef,
   models,
-  offersModelChoice = true,
   selection,
   onSelectionChange,
   modelChoiceDisabled = false,
@@ -185,14 +183,12 @@ export function SessionComposer({
 
       <PromptInputFooter className="border-t border-border/70 pt-2">
         <PromptInputTools className="min-w-0">
-          {offersModelChoice ? (
-            <ModelPill
-              models={models}
-              selection={selection}
-              disabled={modelChoiceDisabled}
-              onChange={onSelectionChange}
-            />
-          ) : null}
+          <ModelPill
+            models={models}
+            selection={selection}
+            disabled={modelChoiceDisabled}
+            onChange={onSelectionChange}
+          />
         </PromptInputTools>
         <div className="ml-auto flex shrink-0 items-center gap-1">
           {working ? (

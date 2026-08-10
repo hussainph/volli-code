@@ -112,6 +112,13 @@ interface DiagnosticSubscriber {
 
 const MAX_DIAGNOSTIC_FIELD_LENGTH = 1_000;
 const MAX_IDENTIFIER_LENGTH = 512;
+/**
+ * Display text is prose from someone else's catalog, not an identifier this app
+ * minted, so it gets its own bound rather than borrowing the identifier one.
+ * The two happen to agree today; they answer to different contracts, and a
+ * later change to either must not silently move the other.
+ */
+const MAX_DISPLAY_LABEL_LENGTH = 512;
 
 /**
  * Small in-process, lossless-within-capacity diagnostic log. It records route
@@ -221,6 +228,35 @@ const nonEmptyString = z
     (value) => value.trim() === value,
     "Expected an identifier without surrounding whitespace",
   );
+/**
+ * Free-text display text from a catalog Volli does not control (a Model
+ * Access provider's or model's own `label`) — sanitized, never rejected.
+ * `nonEmptyString`'s "no surrounding whitespace" refinement is an identifier
+ * contract for values THIS app mints (`providerId`, `modelId`, session/operation
+ * ids); a live upstream model catalog is under no such obligation, and a
+ * genuinely large one (Pi's `builtinModels()` currently lists 1000+ entries) has
+ * already been observed shipping a handful of whitespace-padded display names.
+ * Rejecting the whole snapshot over one cosmetic label crashes every Model
+ * Access caller — the composer's catalog, Settings, and
+ * `modelAccess.setDefault`'s own availability check.
+ *
+ * So this schema only trims: it neither bounds nor refuses, because either
+ * would put the whole catalog back at the mercy of one entry. The bound and
+ * the answer to an unusable label live in {@link usableLabel}, which the
+ * enclosing objects apply once they can see the ids to fall back to.
+ */
+const displayLabel = z.string().transform((value) => value.trim());
+/**
+ * The label to show, or the entry's own identity when the catalog's is unusable.
+ *
+ * Empty, whitespace-only and absurdly long all mean the same thing here — there
+ * is no display text worth showing — and all three answer the same way. A
+ * provider/model identity pair is not pretty, but it names the exact thing the
+ * row selects, which is the property a label has to keep.
+ */
+function usableLabel(label: string, fallback: string): string {
+  return label.length > 0 && label.length <= MAX_DISPLAY_LABEL_LENGTH ? label : fallback;
+}
 const nonNegativeSafeInteger = z
   .number()
   .int()
@@ -246,23 +282,37 @@ const modelAccessStateSchema = z.enum(["available", "authentication-required", "
 const modelAccessSnapshotSchema = z.object({
   observedAt: z.number().finite(),
   providers: z.array(
-    z.object({
-      id: nonEmptyString,
-      label: nonEmptyString,
-      state: modelAccessStateSchema,
-      accountLabel: nullableString,
-      billingSource: z.enum(["subscription", "api-key", "gateway", "local", "ambient", "unknown"]),
-      recovery: z.union([z.object({ kind: z.enum(["external-sign-in", "retry"]) }), z.null()]),
-    }),
+    z
+      .object({
+        id: nonEmptyString,
+        label: displayLabel,
+        state: modelAccessStateSchema,
+        accountLabel: nullableString,
+        billingSource: z.enum([
+          "subscription",
+          "api-key",
+          "gateway",
+          "local",
+          "ambient",
+          "unknown",
+        ]),
+        recovery: z.union([z.object({ kind: z.enum(["external-sign-in", "retry"]) }), z.null()]),
+      })
+      .transform((provider) => ({ ...provider, label: usableLabel(provider.label, provider.id) })),
   ),
   models: z.array(
-    z.object({
-      providerId: nonEmptyString,
-      modelId: nonEmptyString,
-      label: nonEmptyString,
-      state: modelAccessStateSchema,
-      reasoningLevels: z.array(z.enum(REASONING_LEVELS)),
-    }),
+    z
+      .object({
+        providerId: nonEmptyString,
+        modelId: nonEmptyString,
+        label: displayLabel,
+        state: modelAccessStateSchema,
+        reasoningLevels: z.array(z.enum(REASONING_LEVELS)),
+      })
+      .transform((model) => ({
+        ...model,
+        label: usableLabel(model.label, `${model.providerId}/${model.modelId}`),
+      })),
   ),
 });
 /** One prompt's answer, as `SessionInteractionAnswer` declares it. */

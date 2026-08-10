@@ -323,16 +323,16 @@ describe("piOwnedModels", () => {
     // No credential for the pinned provider, so the attach reports the
     // configuration it could not satisfy rather than starting a turn.
     await expect(
-      runtime.startTicketSession({
+      runtime.startSession({
         identity: {
+          role: "ticket",
           sessionId: "s",
           rootThreadId: "t",
           attachmentId: "a",
           projectId: "p",
           ticketId: "k",
         },
-        role: "ticket",
-        worktreePath: scratch(),
+        workspacePath: scratch(),
         venue: "local",
         model: { providerId: "openai-codex", modelId: "not-a-model", reasoningLevel: "off" },
         authority: { mode: "auto" },

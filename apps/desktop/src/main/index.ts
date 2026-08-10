@@ -71,7 +71,11 @@ import {
 import { startOrphanSweep } from "./orphan-sweep";
 import { worktreeDeps } from "./worktree-runtime";
 import { getRetentionWatcher } from "./retention-runtime";
-import { composeTicketBrief, createAgentCommandService } from "./agent-commands";
+import {
+  composeProjectBrief,
+  composeTicketBrief,
+  createAgentCommandService,
+} from "./agent-commands";
 import { acquireVolliAppProfile, ensureVolliCliShim, volliRuntimePaths } from "./agent-runtime";
 import {
   decideRegisteredHarnesses,
@@ -429,25 +433,44 @@ app.whenReady().then(async () => {
         },
       })
     : null;
-  // The Pi-backed Agent Runtime is the structured Ticket product's one target
-  // executor. OpenCode remains only behind the temporary ticketless project
-  // facade; Ticket model access and selection come from this Pi host.
+  // The Pi-backed Agent Runtime is the structured product's one target
+  // executor, for Ticket Sessions and ticketless project chats alike. Model
+  // access and selection come from this Pi host.
   const piRuntimeHost = dbHandle.ok
     ? createPiRuntimeHost({
         sessionDataDir: join(app.getPath("userData"), "pi-sessions"),
-        // The runtime needs the Ticket a Session runs for, which a directory
-        // cannot say. The generated Brief is recorded once before the first
-        // runtime construction; every later attach reuses those exact bytes.
-        resolveTicketContext: async (sessionId) => {
+        // The runtime needs the Role a Session runs under and the Ticket it
+        // implies, which a directory cannot say. The generated Brief is
+        // recorded once before the first runtime construction; every later
+        // attach reuses those exact bytes.
+        resolveRuntimeContext: async (sessionId) => {
           if (sessionEngine === null) return null;
           const projection = await sessionEngine.getSession({ sessionId });
           const attaching = projection?.session;
-          if (!attaching || attaching.ticketId === null || projection.modelSelection === null) {
-            return null;
-          }
+          if (!attaching || projection.modelSelection === null) return null;
           const project = getProjectById(dbHandle.db, attaching.projectId);
+          if (!project) return null;
+          const provenance = {
+            source: { kind: "system", id: "pi-runtime", detail: null },
+            venue: { id: "local", kind: "local" },
+          } as const;
+          const shared = {
+            projectId: project.id,
+            rootThreadId: piRootThreadId(sessionId),
+            model: projection.modelSelection,
+          };
+          // A ticketless Session is a Role, not a Ticket lookup that failed:
+          // it briefs on the project root it already runs in.
+          if (attaching.ticketId === null) {
+            const brief = await sessionEngine.getOrRecordSessionInput({
+              sessionId,
+              input: { kind: "runtime-brief", text: composeProjectBrief({ project }) },
+              provenance,
+            });
+            return { ...shared, role: "project", ticketId: null, brief: brief.text };
+          }
           const ticket = getTicket(dbHandle.db, attaching.ticketId);
-          if (!project || !ticket || ticket.projectId !== project.id) return null;
+          if (!ticket || ticket.projectId !== project.id) return null;
           const brief = await sessionEngine.getOrRecordSessionInput({
             sessionId,
             input: {
@@ -458,18 +481,9 @@ app.whenReady().then(async () => {
                 attachments: listAttachments(dbHandle.db, ticket.id),
               }),
             },
-            provenance: {
-              source: { kind: "system", id: "pi-runtime", detail: null },
-              venue: { id: "local", kind: "local" },
-            },
+            provenance,
           });
-          return {
-            projectId: project.id,
-            ticketId: ticket.id,
-            rootThreadId: piRootThreadId(sessionId),
-            brief: brief.text,
-            model: projection.modelSelection,
-          };
+          return { ...shared, role: "ticket", ticketId: ticket.id, brief: brief.text };
         },
       })
     : null;
@@ -495,11 +509,14 @@ app.whenReady().then(async () => {
         })
       : null;
   const projectSessions =
-    sessionRuntime !== null && nativeAdapter !== null
+    sessionRuntime !== null && piRuntimeHost !== null && sessionDb !== null
       ? createProjectSessions({
           runtime: sessionRuntime,
+          readDefaultModel: () => readDefaultModelSelection(sessionDb),
           readBornTicketless: async (sessionId) =>
             (await sessionRuntime.projection({ sessionId })).projection.bornTicketless,
+          readModelSelection: async (sessionId) =>
+            (await sessionRuntime.projection({ sessionId })).projection.modelSelection,
         })
       : null;
   const sessionRpc =

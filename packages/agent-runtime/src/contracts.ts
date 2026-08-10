@@ -20,17 +20,38 @@ import type {
   SessionRole,
 } from "@volli/shared";
 
-/** Volli identities for one Ticket Session runtime attachment. All opaque. */
-export interface TicketRuntimeIdentity {
+/** The Roles that attach a runtime. Subagent Sessions have no attachment of their own. */
+export type RuntimeSessionRole = Extract<SessionRole, "ticket" | "project">;
+
+/** Volli identities every runtime attachment carries, whatever its Role. All opaque. */
+interface RuntimeIdentityFields {
   sessionId: string;
   rootThreadId: string;
   attachmentId: string;
   projectId: string;
+}
+
+/** A Ticket Session's identity: the Role is what guarantees the Ticket is there. */
+export interface TicketRuntimeIdentity extends RuntimeIdentityFields {
+  role: Extract<RuntimeSessionRole, "ticket">;
   ticketId: string;
 }
 
-/** Only the Ticket Role ships in this migration. */
-export type RuntimeSessionRole = Extract<SessionRole, "ticket">;
+/** A project-scoped Session's identity: ticketless by construction, never by omission. */
+export interface ProjectRuntimeIdentity extends RuntimeIdentityFields {
+  role: Extract<RuntimeSessionRole, "project">;
+  ticketId: null;
+}
+
+/**
+ * Role and identity are one value, not two agreeing fields.
+ *
+ * The Role decides what the runtime may assume about the Session — a Ticket to
+ * work, or a project root and nothing else — so a spec that named the Role
+ * separately from the identity could state a Ticket Session with no Ticket. Here
+ * that shape does not typecheck.
+ */
+export type RuntimeSessionIdentity = TicketRuntimeIdentity | ProjectRuntimeIdentity;
 
 /** Where execution happens. Local is the only venue built today. */
 export type ExecutionVenue = "local";
@@ -67,12 +88,14 @@ export interface RuntimeRecoveryRef {
   sessionFilePath: string;
 }
 
-/** Everything the Agent Runtime needs to start one Ticket Session. */
-export interface TicketRuntimeSpec {
-  identity: TicketRuntimeIdentity;
-  role: RuntimeSessionRole;
-  /** Immutable ticket-worktree root; all filesystem and process work stays inside it. */
-  worktreePath: string;
+/** Everything the Agent Runtime needs to start one Session, whatever its Role. */
+export interface SessionRuntimeSpec {
+  identity: RuntimeSessionIdentity;
+  /**
+   * Immutable execution root — a Ticket's isolated worktree, or a project root
+   * for a ticketless Session. All filesystem and process work stays inside it.
+   */
+  workspacePath: string;
   venue: ExecutionVenue;
   model: ModelSelection;
   authority: AuthoritySnapshot;
@@ -241,5 +264,5 @@ export interface AgentRuntime {
     refresh?: boolean;
     signal?: AbortSignal;
   }): Promise<ModelAccessSnapshot>;
-  startTicketSession(spec: TicketRuntimeSpec): Promise<RuntimeAttachmentHandle>;
+  startSession(spec: SessionRuntimeSpec): Promise<RuntimeAttachmentHandle>;
 }

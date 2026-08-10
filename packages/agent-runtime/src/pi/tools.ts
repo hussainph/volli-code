@@ -17,11 +17,11 @@ import {
 } from "@earendil-works/pi-agent-core/node";
 import type { TSchema } from "@earendil-works/pi-ai";
 import type { CodingToolId, RuntimeToolBundle } from "../contracts";
-import type { TicketExecutionEnv } from "./scoped-execution-env";
+import type { SessionExecutionEnv } from "./scoped-execution-env";
 
 function bindContext<TParameters extends TSchema, TDetails>(
   tool: AgentHarnessTool<ExecutionToolContext, TParameters, TDetails>,
-  env: TicketExecutionEnv,
+  env: SessionExecutionEnv,
 ): AgentTool<TParameters, TDetails> {
   return {
     ...tool,
@@ -30,7 +30,7 @@ function bindContext<TParameters extends TSchema, TDetails>(
   };
 }
 
-function createTool(tool: CodingToolId, env: TicketExecutionEnv): AgentTool {
+function createTool(tool: CodingToolId, env: SessionExecutionEnv): AgentTool {
   switch (tool) {
     case "read":
       return bindContext(createReadTool(), env);
@@ -44,6 +44,6 @@ function createTool(tool: CodingToolId, env: TicketExecutionEnv): AgentTool {
 }
 
 /** Explicit contained Pi tool allowlist, in the order the product declared it. */
-export function createPiTools(bundle: RuntimeToolBundle, env: TicketExecutionEnv): AgentTool[] {
+export function createPiTools(bundle: RuntimeToolBundle, env: SessionExecutionEnv): AgentTool[] {
   return bundle.tools.map((tool) => createTool(tool, env));
 }

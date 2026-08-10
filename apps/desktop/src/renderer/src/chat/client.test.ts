@@ -8,7 +8,12 @@
  * message that leaves exactly once — are all about *when* things happen, and
  * none of them is observable through a component.
  */
-import type { CommandReceipt, SessionAttachmentProjection, SessionProjection } from "@volli/shared";
+import type {
+  CommandReceipt,
+  ModelSelection,
+  SessionAttachmentProjection,
+  SessionProjection,
+} from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -48,7 +53,7 @@ const REJECTED_RECEIPT: CommandReceipt = {
   commandId: "command-rejected",
   status: "rejected",
   code: "adapter_unavailable",
-  detail: "OpenCode is unavailable",
+  detail: "Pi is unavailable",
   recordedAt: 0,
   sequence: 1,
 };
@@ -58,7 +63,19 @@ const REFUSED = {
   receipt: REJECTED_RECEIPT,
 };
 
-function attachmentFor(id: string, adapterId = "opencode"): SessionAttachmentProjection {
+/**
+ * The durable policy every structured Session records before anything attaches
+ * — a project chat's from the app default, a Ticket Session's the same. A
+ * projection without one is a Session whose model has not been written down,
+ * which is what the deliverability tests below vary.
+ */
+const MODEL_POLICY: ModelSelection = {
+  providerId: "openai-codex",
+  modelId: "gpt-5.6-sol",
+  reasoningLevel: "high",
+};
+
+function attachmentFor(id: string, adapterId = "pi"): SessionAttachmentProjection {
   return {
     id,
     sessionId: SESSION.id,
@@ -74,7 +91,7 @@ function attachmentFor(id: string, adapterId = "opencode"): SessionAttachmentPro
   };
 }
 
-function projectionFor(attachmentId: string | null, adapterId = "opencode"): SessionProjection {
+function projectionFor(attachmentId: string | null, adapterId = "pi"): SessionProjection {
   const attachment = attachmentId === null ? null : attachmentFor(attachmentId, adapterId);
   return {
     session: SESSION,
@@ -88,7 +105,7 @@ function projectionFor(attachmentId: string | null, adapterId = "opencode"): Ses
     capabilities: [],
     interactions: { active: [], resolved: [] },
     signal: null,
-    modelSelection: null,
+    modelSelection: MODEL_POLICY,
     turnActive: false,
     lastActivityAt: SESSION.createdAt,
     bornTicketless: SESSION.ticketId === null,
@@ -494,27 +511,26 @@ describe("session derivations", () => {
     expect(isWorking(sliceOf({ transcript: turning }))).toBe(false);
   });
 
-  it("lets the private ticketless compatibility route use its main-owned default", () => {
-    const live = projectionFor("attach-1");
+  it("asks the same durable model policy of a project chat and a Ticket Session", () => {
+    // The carve-out that used to live here read birth as a licence to deliver
+    // without one. Both Roles record the app default before anything attaches
+    // now, so an absent selection means the same thing on either.
+    const ticketless = projectionFor("attach-1");
+    const ticketed = { ...ticketless, bornTicketless: false };
 
-    expect(isDeliverable(sliceOf({ projection: live }))).toBe(true);
-    expect(isDeliverable(sliceOf())).toBe(false);
+    expect(isDeliverable(sliceOf({ projection: ticketless }))).toBe(true);
+    expect(isDeliverable(sliceOf({ projection: ticketed }))).toBe(true);
+    expect(isDeliverable(sliceOf({ projection: { ...ticketless, modelSelection: null } }))).toBe(
+      false,
+    );
+    expect(isDeliverable(sliceOf({ projection: { ...ticketed, modelSelection: null } }))).toBe(
+      false,
+    );
   });
 
-  it("uses durable Ticket model policy rather than executor identity for delivery", () => {
-    const ticket = { ...projectionFor("attach-1"), bornTicketless: false };
-    const selected = {
-      ...ticket,
-      modelSelection: {
-        providerId: "openai-codex",
-        modelId: "gpt-5.6-sol",
-        reasoningLevel: "high" as const,
-      },
-    };
-
-    expect(isDeliverable(sliceOf({ projection: selected }))).toBe(true);
-    expect(isDeliverable(sliceOf({ projection: ticket }))).toBe(false);
-    expect(isDeliverable(sliceOf({ projection: { ...selected, liveExecutor: null } }))).toBe(false);
+  it("has nowhere to deliver without a live executor, whatever model is recorded", () => {
+    expect(isDeliverable(sliceOf({ projection: projectionFor(null) }))).toBe(false);
+    expect(isDeliverable(sliceOf())).toBe(false);
   });
 
   it("holds starting and error against anything the stream says", () => {
@@ -794,7 +810,7 @@ describe("product-owned attach", () => {
 
     await expect(client.retryAttach()).resolves.toBe(false);
     expect(slice()!.lifecycle).toBe("error");
-    expect(slice()!.sessionError).toBe("Could not start Session: OpenCode is unavailable");
+    expect(slice()!.sessionError).toBe("Could not start Session: Pi is unavailable");
   });
 
   it("reports a transport failure the same way", async () => {
@@ -915,7 +931,7 @@ describe("recover", () => {
 describe("retryRuntime", () => {
   it("sends an explicit retry to the live attachment without another message", async () => {
     const { client, rpc, sessionId } = await adopted((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1", "pi");
+      fake.snapshotProjection = projectionFor("attach-1");
     });
 
     await expect(client.retryRuntime()).resolves.toBe(true);
@@ -931,7 +947,7 @@ describe("retryRuntime", () => {
 
   it("refuses runtime retry when the Session has no live attachment", async () => {
     const { client, rpc } = await adopted((fake) => {
-      fake.snapshotProjection = projectionFor(null, "pi");
+      fake.snapshotProjection = projectionFor(null);
     });
 
     await expect(client.retryRuntime()).resolves.toBe(false);
@@ -1082,7 +1098,7 @@ describe("submit", () => {
     });
 
     await expect(client.submit("go", "queue")).resolves.toBe(false);
-    expect(slice()!.sessionError).toBe("Message not delivered: OpenCode is unavailable");
+    expect(slice()!.sessionError).toBe("Message not delivered: Pi is unavailable");
   });
 
   it("reports a message the transport dropped", async () => {
@@ -1249,7 +1265,7 @@ describe("commands addressed to an attachment", () => {
     });
 
     await expect(client.cancelInteraction("ask-1")).resolves.toBe(false);
-    expect(slice()!.sessionError).toBe("Decision not cancelled: OpenCode is unavailable");
+    expect(slice()!.sessionError).toBe("Decision not cancelled: Pi is unavailable");
   });
 
   it("reports a command the transport dropped", async () => {

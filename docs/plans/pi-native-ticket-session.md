@@ -282,7 +282,20 @@ Pi owns provider credentials and refresh behavior in v1.
 The first slice loads only an explicit Volli-selected coding tool set. User,
 project, and globally installed Pi extensions do not auto-load.
 
-- All filesystem and process work is rooted in the Ticket worktree.
+- All filesystem and process work is rooted in the Session workspace: the Ticket
+  worktree for a Ticket Session, the project's Main checkout for a project
+  Session or a Ticket that never took a worktree.
+- Every bash call runs under the Seatbelt sandbox with all network denied
+  (`deniedDomains: ["*"]`, `strictAllowlist`), a `denyRead` covering the user
+  home, and an environment sanitized of every credential.
+- File tools reject paths outside the root, and reject symlinks on the way to
+  one.
+- The process-global sandbox configuration names no workspace path at all. Each
+  root travels with its own command, so two Sessions rooted differently do not
+  reach into each other.
+- A project Session's root is the user's real checkout, uncommitted work
+  included. That is weaker isolation than a worktree — the containment above is
+  what it has instead of one, not a substitute for it.
 - Tool policy is enforced before execution, not inferred from UI presentation.
 - The v1 migration does not ship classifier Auto Mode; it preserves the future
   Authority Snapshot seam.

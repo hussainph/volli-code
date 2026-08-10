@@ -242,7 +242,7 @@ function snapshot(): SessionRuntimeSnapshot {
 function capabilitySnapshot(): CapabilitySnapshot {
   return {
     id: "capabilities-1",
-    adapterId: "opencode",
+    adapterId: "pi",
     attachmentId: "attachment-1",
     profileId: "native",
     revision: 1,
@@ -344,7 +344,7 @@ function runtimeFixture(): {
     },
     refreshCapabilities: async () => ({
       id: "capability-1",
-      adapterId: "opencode",
+      adapterId: "pi",
       attachmentId: "attachment-1",
       profileId: "native",
       revision: 1,
@@ -799,6 +799,119 @@ describe("Session tRPC router", () => {
       "state",
     ]);
     expect(JSON.stringify(access)).not.toMatch(/adapter|profile|credential|token/i);
+  });
+
+  it("sanitizes a whitespace-padded catalog label instead of rejecting the whole snapshot", async () => {
+    // A live upstream model catalog is not an identifier Volli minted — it is
+    // under no obligation to trim its own display text, and a large one
+    // (observed: 1000+ entries) has shipped labels with incidental
+    // surrounding whitespace. `nonEmptyString`'s "no surrounding whitespace"
+    // refinement is the right contract for providerId/modelId (Volli's own
+    // identifiers); reusing it for `label` used to fail `.parse()` on the
+    // ENTIRE snapshot over one cosmetic entry, which broke every Model
+    // Access caller (composer, Settings, `setDefault`'s availability check).
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      inspectModelAccess: async () => ({
+        observedAt: 42,
+        providers: [
+          {
+            id: "openai-codex",
+            label: "  OpenAI Codex  ",
+            state: "available" as const,
+            accountLabel: "OAuth",
+            billingSource: "ambient" as const,
+            recovery: null,
+          },
+        ],
+        models: [
+          {
+            providerId: "openai-codex",
+            modelId: "gpt-5.6-sol",
+            label: "  GPT-5.6 Sol  ",
+            state: "available" as const,
+            reasoningLevels: ["off", "low", "medium", "high"] as const,
+          },
+        ],
+      }),
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    const access = await caller.modelAccess.inspect({});
+
+    expect(access.providers[0]?.label).toBe("OpenAI Codex");
+    expect(access.models[0]?.label).toBe("GPT-5.6 Sol");
+  });
+
+  it("names an entry whose label is unusable rather than dropping the catalog", async () => {
+    // Trimming alone still left one bad entry able to take the whole snapshot
+    // down: an empty, whitespace-only or absurdly long label failed the
+    // length bound and `.parse()` threw for all 1000+ of them. There is no
+    // label worth showing in any of the three cases, so all three answer the
+    // same way — the entry's own identity — and the catalog survives.
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      inspectModelAccess: async () => ({
+        observedAt: 42,
+        providers: [
+          {
+            id: "openai-codex",
+            label: "",
+            state: "available" as const,
+            accountLabel: null,
+            billingSource: "ambient" as const,
+            recovery: null,
+          },
+          {
+            id: "anthropic",
+            label: "x".repeat(513),
+            state: "available" as const,
+            accountLabel: null,
+            billingSource: "api-key" as const,
+            recovery: null,
+          },
+        ],
+        models: [
+          {
+            providerId: "openai-codex",
+            modelId: "gpt-5.6-sol",
+            label: "   ",
+            state: "available" as const,
+            reasoningLevels: ["off", "high"] as const,
+          },
+          {
+            providerId: "anthropic",
+            modelId: "claude-opus-5",
+            label: "y".repeat(513),
+            state: "available" as const,
+            reasoningLevels: ["off"] as const,
+          },
+          {
+            providerId: "anthropic",
+            modelId: "claude-sonnet-5",
+            label: "Claude Sonnet 5",
+            state: "available" as const,
+            reasoningLevels: ["off"] as const,
+          },
+        ],
+      }),
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    const access = await caller.modelAccess.inspect({});
+
+    expect(access.providers.map((provider) => provider.label)).toEqual([
+      "openai-codex",
+      "anthropic",
+    ]);
+    expect(access.models.map((model) => model.label)).toEqual([
+      "openai-codex/gpt-5.6-sol",
+      "anthropic/claude-opus-5",
+      // The good entries beside them are untouched, which is the whole point.
+      "Claude Sonnet 5",
+    ]);
   });
 
   it("reads and writes the user-configured default model through an exact safe shape", async () => {

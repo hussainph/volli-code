@@ -11,14 +11,16 @@
  * Three things the two contracts genuinely disagree about, and how they join:
  *
  * 1. **Identity.** `NativeAttachmentSpec` carries a Session and a directory,
- *    and the runtime needs a project, a ticket, a root Thread and a Runtime
- *    Brief. None of those are derivable from a directory, and reading SQLite
- *    here would drag Electron-adjacent state into a module the tests run in
- *    plain Node — so identity arrives through {@link PiAdapterOptions.resolveTicketContext},
- *    which main implements over the same composition the `volli ticket brief`
- *    CLI verb uses. A Session with no ticket has no brief to give, and the
- *    attach fails saying exactly that rather than starting an agent that would
- *    be told nothing about why it exists.
+ *    and the runtime needs a Role, a project, possibly a Ticket, a root Thread
+ *    and a Runtime Brief. None of those are derivable from a directory, and
+ *    reading SQLite here would drag Electron-adjacent state into a module the
+ *    tests run in plain Node — so identity arrives through
+ *    {@link PiAdapterOptions.resolveRuntimeContext}, which main implements over
+ *    the same composition the `volli ticket brief` CLI verb uses. A ticketless
+ *    Session is a Role, not a missing Ticket: it resolves a project Brief and
+ *    attaches. What still fails the attach is a Session with no recorded model
+ *    or no Brief to give, rather than starting an agent that would be told
+ *    nothing about why it exists.
  *
  * 2. **Message identity.** Pi names a settled message only once it has settled
  *    (`entryId`), while its deltas name only the turn they belong to — but the
@@ -50,7 +52,7 @@ import {
   type RuntimeObservation,
   type RuntimeRecoveryRef,
   type SettledAssistantMessage,
-  type TicketRuntimeSpec,
+  type SessionRuntimeSpec,
   type TranscriptDeltaObservation,
 } from "@volli/agent-runtime";
 import type {
@@ -90,26 +92,6 @@ const ACTIVITY_TOOL_NAME = "volli.activity";
 const PI_RUNTIME_PACKAGE = "@earendil-works/pi-agent-core";
 const PI_RUNTIME_VERSION = "0.84.1";
 
-/**
- * A model literal with exactly one reader left: the probe's declared catalog.
- *
- * It is no longer the model a Ticket Session runs on, and nothing below reads
- * it to decide what to run. The picker is Pi's own now — it reads Model Access
- * ({@link PiRuntimeHost.inspectModelAccess}), the choice it makes is recorded
- * as a durable per-Session selection, and `attach` carries that selection in
- * through {@link PiTicketContext.model}, which main resolves from the Session's
- * projection and refuses to attach without. So what survives here is the single
- * entry `probe` declares in its capability catalog, which the Session Engine
- * records and no product surface consults: a residual pending removal rather
- * than a policy. `openai-codex` is the provider this machine holds OAuth for;
- * Luna is its lightweight coding model at the full 272k context.
- */
-export const PI_MODEL: ModelSelection = {
-  providerId: "openai-codex",
-  modelId: "gpt-5.6-luna",
-  reasoningLevel: "medium",
-};
-
 const PI_MANIFEST: NativeHarnessManifest = {
   id: PI_ADAPTER_ID,
   displayName: "Pi",
@@ -125,7 +107,7 @@ const PI_TOOLS = { tools: ["read", "edit", "write", "execute"] } as const;
  *
  * Every transcript observation this Session ever carries — from this adapter or
  * OpenCode's — addresses the same root Thread and main Branch, derived from the
- * Session id. Main's ticket-context resolver mints the same value so the id Pi
+ * Session id. Main's runtime-context resolver mints the same value so the id Pi
  * records in its sidecar metadata is the id the transcript is filed under.
  */
 export function piRootThreadId(sessionId: string): string {
@@ -136,16 +118,26 @@ function piMainBranchId(sessionId: string): string {
   return `branch:${sessionId}:main`;
 }
 
-/** Everything about a Ticket Session that a directory cannot tell the runtime. */
-export interface PiTicketContext {
+/** Everything about a Session that a directory cannot tell the runtime. */
+interface PiRuntimeContextFields {
   projectId: string;
-  ticketId: string;
   rootThreadId: string;
   /** The generated Runtime Brief; the runtime prepends it to the first user message. */
   brief: string;
   /** Durable product policy selected before this attachment starts. */
   model: ModelSelection;
 }
+
+/**
+ * The Role a Session attaches under, resolved with the identity it implies.
+ *
+ * Mirrors the runtime's own identity union rather than carrying an optional
+ * Ticket: "ticketless" is what a project Session *is*, and a resolver that
+ * returned a Ticket Session with a null Ticket would not typecheck here.
+ */
+export type PiRuntimeContext =
+  | (PiRuntimeContextFields & { role: "ticket"; ticketId: string })
+  | (PiRuntimeContextFields & { role: "project"; ticketId: null });
 
 export interface PiAdapterOptions {
   /**
@@ -154,8 +146,8 @@ export interface PiAdapterOptions {
    * run in plain Node.
    */
   sessionDataDir: string;
-  /** Resolves durable Session identity to the Ticket it runs for; `null` when it runs for none. */
-  resolveTicketContext: (sessionId: string) => Promise<PiTicketContext | null>;
+  /** Resolves durable Session identity to the Role it runs under; `null` when it cannot. */
+  resolveRuntimeContext: (sessionId: string) => Promise<PiRuntimeContext | null>;
   /** Injectable Pi model collection, for deterministic tests and host-owned credentials. */
   models?: PiRuntimeHostOptions["models"];
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */
@@ -306,7 +298,10 @@ function piNativeAdapter(
               id: "interaction.permission",
               state: "unavailable",
               evidence: "declared",
-              detail: "Pi runs under Auto authority inside the worktree and asks for nothing",
+              // One probe answers for every Role, so this cannot name a
+              // worktree: a project Session's workspace is the Main checkout.
+              detail:
+                "Pi runs under Auto authority inside the Session workspace and asks for nothing",
             },
             {
               id: "interaction.question",
@@ -315,16 +310,15 @@ function piNativeAdapter(
               detail: "Pi asks no questions in this migration slice",
             },
           ],
-          catalog: [
-            {
-              kind: "model",
-              id: `${PI_MODEL.providerId}/${PI_MODEL.modelId}`,
-              label: `${PI_MODEL.providerId}/${PI_MODEL.modelId}`,
-              state: "available",
-              evidence: "declared",
-              detail: null,
-            },
-          ],
+          // Empty, and honestly so. A probe answers for the adapter, which has
+          // no model of its own: the model a Session runs is the durable
+          // selection `attach` resolves per Session ({@link PiRuntimeContext}),
+          // and Model Access is where the models a person can pick are listed.
+          // A literal declared here could name a different model than the one
+          // actually running, and the Session Engine writes what a probe says
+          // into durable history as a `capabilities.updated` fact — so the
+          // literal was not a policy, it was a false fact about the Session.
+          catalog: [],
         },
       };
     },
@@ -341,21 +335,21 @@ function piNativeAdapter(
           "adapter_unrecoverable",
         );
       }
-      const context = await options.resolveTicketContext(spec.sessionId);
+      const context = await options.resolveRuntimeContext(spec.sessionId);
       if (context === null) {
         // Thrown, not emitted: the runtime discards this attach's sink when the
         // attach rejects, so the error message is the only channel that
         // survives — and it becomes the `attach_failed` receipt's detail, which
         // is where a user looks.
         throw new NativeAttachmentError(
-          "Pi requires a Ticket Session with a selected model and Runtime Brief.",
+          "Pi requires a Session with a selected model and Runtime Brief.",
           "PI_CONFIGURATION_INVALID",
           "configuration_invalid",
         );
       }
       const binding = new PiBinding({ spec, sink, context, recovery, now });
       try {
-        binding.bind(await runtime.startTicketSession(binding.ticketSpec()));
+        binding.bind(await runtime.startSession(binding.runtimeSpec()));
       } catch (error) {
         throw new NativeAttachmentError(
           errorMessage(error),
@@ -371,7 +365,7 @@ function piNativeAdapter(
 interface PiBindingOptions {
   spec: NativeAttachmentSpec;
   sink: ObservationSink;
-  context: PiTicketContext;
+  context: PiRuntimeContext;
   recovery: RuntimeRecoveryRef | undefined;
   now: () => number;
 }
@@ -379,7 +373,7 @@ interface PiBindingOptions {
 class PiBinding implements BindingHandle {
   readonly #spec: NativeAttachmentSpec;
   readonly #sink: ObservationSink;
-  readonly #context: PiTicketContext;
+  readonly #context: PiRuntimeContext;
   readonly #recovery: RuntimeRecoveryRef | undefined;
   readonly #now: () => number;
   readonly #abort = new AbortController();
@@ -411,19 +405,23 @@ class PiBinding implements BindingHandle {
     return this.#native;
   }
 
-  ticketSpec(): TicketRuntimeSpec {
+  runtimeSpec(): SessionRuntimeSpec {
+    const context = this.#context;
+    const identity = {
+      sessionId: this.#spec.sessionId,
+      rootThreadId: context.rootThreadId,
+      attachmentId: this.#spec.attachmentId,
+      projectId: context.projectId,
+    };
     return {
-      identity: {
-        sessionId: this.#spec.sessionId,
-        rootThreadId: this.#context.rootThreadId,
-        attachmentId: this.#spec.attachmentId,
-        projectId: this.#context.projectId,
-        ticketId: this.#context.ticketId,
-      },
-      role: "ticket",
-      // The directory the Session Engine PREPARED, which for a worktree ticket
-      // is the isolated checkout — never the main one.
-      worktreePath: this.#spec.directory,
+      identity:
+        context.role === "ticket"
+          ? { ...identity, role: "ticket", ticketId: context.ticketId }
+          : { ...identity, role: "project", ticketId: null },
+      // The directory the Session Engine PREPARED: for a worktree ticket the
+      // isolated checkout — never the main one — and for a ticketless Session
+      // the project root, which is the only place it was ever going to run.
+      workspacePath: this.#spec.directory,
       venue: "local",
       model: this.#context.model,
       authority: { mode: "auto" },

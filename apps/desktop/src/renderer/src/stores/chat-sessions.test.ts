@@ -29,7 +29,7 @@ const REJECTED_RECEIPT: CommandReceipt = {
   commandId: "command-rejected",
   status: "rejected",
   code: "adapter_unavailable",
-  detail: "OpenCode is unavailable",
+  detail: "Pi is unavailable",
   recordedAt: 0,
   sequence: 1,
 };
@@ -168,7 +168,7 @@ describe("createChatSession", () => {
     expect(getChatClient(SESSION.id)).toBeDefined();
   });
 
-  it("keeps ticketless compatibility behind the private project route", async () => {
+  it("starts a ticketless chat through the product project route", async () => {
     const { commands, projectStarts, store } = fixture();
 
     await store.getState().createChatSession({
@@ -196,7 +196,7 @@ describe("createChatSession", () => {
     expect(sessionId).toBe(SESSION.id);
     expect(store.getState().sessions[SESSION.id]).toMatchObject({
       lifecycle: "error",
-      sessionError: "Could not start Session: OpenCode is unavailable",
+      sessionError: "Could not start Session: Pi is unavailable",
     });
   });
 
@@ -248,6 +248,30 @@ describe("createChatSession", () => {
       "Could not start Session: socket hang up",
       expect.anything(),
     );
+  });
+
+  it("reports a start refused for want of a default model the same way on either route", async () => {
+    // Both Roles record the app default before anything attaches, so both
+    // refuse before a Session exists when there is none — with one wording, and
+    // a refusal with no id to carry it has one road out whichever route asked.
+    const { state, store } = fixture();
+    const refusal = "Choose a default model in Settings before starting a Session.";
+
+    state.startAnswer = () => {
+      throw new Error(refusal);
+    };
+    await expect(
+      store.getState().createChatSession({ projectId: "p1", ticketId: null, title: null }),
+    ).resolves.toBeNull();
+    await expect(
+      store.getState().createChatSession({ projectId: "p1", ticketId: "t1", title: null }),
+    ).resolves.toBeNull();
+
+    expect(store.getState().sessions).toEqual({});
+    expect(vi.mocked(toast.error).mock.calls.map(([message]) => message)).toEqual([
+      `Could not start Session: ${refusal}`,
+      `Could not start Session: ${refusal}`,
+    ]);
   });
 });
 

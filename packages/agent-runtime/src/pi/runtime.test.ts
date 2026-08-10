@@ -24,8 +24,8 @@ import {
   type ToolCall,
 } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { RuntimeObservation, TicketRuntimeSpec } from "../contracts";
-import { ScopedExecutionEnv, type TicketExecutionEnv } from "./scoped-execution-env";
+import type { RuntimeObservation, SessionRuntimeSpec } from "../contracts";
+import { ScopedExecutionEnv, type SessionExecutionEnv } from "./scoped-execution-env";
 import { createPiTools } from "./tools";
 import { createPiAgentRuntime } from "./runtime";
 
@@ -175,13 +175,13 @@ function haltOnAbort(delta: string, onStreaming: () => void): ScriptStep {
 // --- fixtures --------------------------------------------------------------
 
 interface Attachment {
-  spec: TicketRuntimeSpec;
+  spec: SessionRuntimeSpec;
   observations: RuntimeObservation[];
   worktreePath: string;
   sessionDataDir: string;
 }
 
-function fixture(overrides: Partial<TicketRuntimeSpec> = {}): Attachment {
+function fixture(overrides: Partial<SessionRuntimeSpec> = {}): Attachment {
   const root = mkdtempSync(join(tmpdir(), "volli-ticket-"));
   const worktreePath = join(root, "worktree");
   const sessionDataDir = join(root, "sessions");
@@ -196,14 +196,14 @@ function fixture(overrides: Partial<TicketRuntimeSpec> = {}): Attachment {
     sessionDataDir,
     spec: {
       identity: {
+        role: "ticket",
         sessionId: "session-1",
         rootThreadId: "thread-1",
         attachmentId: "attachment-1",
         projectId: "project-1",
         ticketId: "ticket-1",
       },
-      role: "ticket",
-      worktreePath,
+      workspacePath: worktreePath,
       venue: "local",
       model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
       authority: { mode: "auto" },
@@ -629,7 +629,7 @@ describe("tool mapping", () => {
   });
 });
 
-describe("startTicketSession", () => {
+describe("startSession", () => {
   it("fails attachment before advertising bash when contained execution cannot prepare", async () => {
     const attachment = fixture({ tools: { tools: ["execute"] } });
     const cleanup = vi.fn(async () => undefined);
@@ -640,14 +640,14 @@ describe("startTicketSession", () => {
         error: new Error("host-specific sandbox failure"),
       }),
       cleanup,
-    } as unknown as TicketExecutionEnv;
+    } as unknown as SessionExecutionEnv;
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(scriptedStream([])),
       executionEnvFactory: async () => unavailableEnv,
     });
 
-    await expect(runtime.startTicketSession(attachment.spec)).rejects.toThrow(
+    await expect(runtime.startSession(attachment.spec)).rejects.toThrow(
       "Contained process execution is unavailable.",
     );
     expect(attachment.observations).toEqual([
@@ -675,7 +675,7 @@ describe("startTicketSession", () => {
       },
     });
 
-    await expect(runtime.startTicketSession(attachment.spec)).rejects.toThrow(
+    await expect(runtime.startSession(attachment.spec)).rejects.toThrow(
       "Contained process execution is unavailable.",
     );
     expect(attachment.observations).toEqual([
@@ -702,7 +702,7 @@ describe("startTicketSession", () => {
       cwd: attachment.worktreePath,
       prepareProcessExecution,
       cleanup,
-    } as unknown as TicketExecutionEnv;
+    } as unknown as SessionExecutionEnv;
     const stream = vi.fn(scriptedStream([]));
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
@@ -710,7 +710,7 @@ describe("startTicketSession", () => {
       executionEnvFactory: async () => containedEnv,
     });
 
-    await expect(runtime.startTicketSession(attachment.spec)).rejects.toThrow(
+    await expect(runtime.startSession(attachment.spec)).rejects.toThrow(
       "Contained process execution is unavailable.",
     );
     expect(prepareProcessExecution).toHaveBeenCalledOnce();
@@ -738,7 +738,7 @@ describe("startTicketSession", () => {
         throw new Error("host sandbox implementation detail");
       },
       cleanup,
-    } as unknown as TicketExecutionEnv;
+    } as unknown as SessionExecutionEnv;
     const stream = vi.fn(scriptedStream([]));
     attachment.spec.observer = async (observation) => {
       attachment.observations.push(observation);
@@ -750,7 +750,7 @@ describe("startTicketSession", () => {
       executionEnvFactory: async () => containedEnv,
     });
 
-    await expect(runtime.startTicketSession(attachment.spec)).rejects.toThrow(
+    await expect(runtime.startSession(attachment.spec)).rejects.toThrow(
       "attachment failure persistence rejected",
     );
     expect(cleanup).toHaveBeenCalledOnce();
@@ -777,7 +777,7 @@ describe("startTicketSession", () => {
       cwd: attachment.worktreePath,
       prepareProcessExecution: vi.fn(async () => ({ ok: true as const, value: undefined })),
       cleanup,
-    } as unknown as TicketExecutionEnv;
+    } as unknown as SessionExecutionEnv;
     attachment.spec.observer = async (observation) => {
       attachment.observations.push(observation);
       if (observation.kind === "attachment" && observation.state === "started") {
@@ -790,7 +790,7 @@ describe("startTicketSession", () => {
       executionEnvFactory: async () => containedEnv,
     });
 
-    await expect(runtime.startTicketSession(attachment.spec)).rejects.toThrow(
+    await expect(runtime.startSession(attachment.spec)).rejects.toThrow(
       "durable attachment start failed",
     );
     expect(cleanup).toHaveBeenCalledOnce();
@@ -814,7 +814,7 @@ describe("startTicketSession", () => {
       prepareProcessExecution: vi.fn(async () => ({ ok: true as const, value: undefined })),
       exec,
       cleanup,
-    } as unknown as TicketExecutionEnv;
+    } as unknown as SessionExecutionEnv;
     let secondCallContext: Context | undefined;
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
@@ -834,7 +834,7 @@ describe("startTicketSession", () => {
       ),
     });
 
-    const handle = await runtime.startTicketSession(attachment.spec);
+    const handle = await runtime.startSession(attachment.spec);
     await expect(handle.submitUserMessage("Run the marker command.")).resolves.toEqual({
       kind: "delivered",
       delivery: "prompt",
@@ -910,7 +910,7 @@ describe("startTicketSession", () => {
       ),
     });
 
-    const handle = await runtime.startTicketSession(spec);
+    const handle = await runtime.startSession(spec);
     const outcome = await handle.submitUserMessage("Read MARKER.txt and report the token.");
 
     expect(outcome).toEqual({ kind: "delivered", delivery: "prompt" });
@@ -1067,13 +1067,13 @@ describe("startTicketSession", () => {
         ]),
       ),
     });
-    const handle = await runtime.startTicketSession(spec);
+    const handle = await runtime.startSession(spec);
 
     await handle.submitUserMessage("Read the file outside this worktree.");
     await handle.close();
 
     const serialized = JSON.stringify(toolResultContext?.messages);
-    expect(serialized).toContain("outside the Ticket worktree");
+    expect(serialized).toContain("outside the Session workspace");
     expect(serialized).not.toContain("outside-secret-value");
     expect(observations.filter((observation) => observation.kind === "message-settled")).toEqual([
       expect.objectContaining({
@@ -1104,7 +1104,7 @@ describe("startTicketSession", () => {
         ]),
       ),
     });
-    const handle = await runtime.startTicketSession(attachment.spec);
+    const handle = await runtime.startSession(attachment.spec);
     let delivered = false;
 
     const delivery = handle.submitUserMessage("go").then((outcome) => {
@@ -1145,7 +1145,7 @@ describe("startTicketSession", () => {
         ),
       ),
     });
-    const handle = await runtime.startTicketSession(attachment.spec);
+    const handle = await runtime.startSession(attachment.spec);
 
     await expect(handle.submitUserMessage("go")).rejects.toThrow("durable commit failed");
     await expect(handle.submitUserMessage("retry after repair")).resolves.toEqual({
@@ -1165,7 +1165,7 @@ describe("startTicketSession", () => {
         sessionDataDir: attachment.sessionDataDir,
         models: modelsWithStream(scriptedStream(steps)),
       });
-      const handle = await runtime.startTicketSession(attachment.spec);
+      const handle = await runtime.startSession(attachment.spec);
 
       await expect(handle.submitUserMessage("go")).resolves.toEqual({
         kind: "delivered",
@@ -1185,16 +1185,16 @@ describe("startTicketSession", () => {
       models: modelsWithStream(scriptedStream([])),
     });
 
-    await expect(unusableRuntime.startTicketSession(unusableHost.spec)).rejects.toThrow();
+    await expect(unusableRuntime.startSession(unusableHost.spec)).rejects.toThrow();
 
     const missingWorktree = fixture();
-    missingWorktree.spec.worktreePath = join(missingWorktree.worktreePath, "missing");
+    missingWorktree.spec.workspacePath = join(missingWorktree.worktreePath, "missing");
     const missingRuntime = createPiAgentRuntime({
       sessionDataDir: missingWorktree.sessionDataDir,
       models: modelsWithStream(scriptedStream([])),
     });
 
-    await expect(missingRuntime.startTicketSession(missingWorktree.spec)).rejects.toThrow();
+    await expect(missingRuntime.startSession(missingWorktree.spec)).rejects.toThrow();
     expect(jsonlFiles(missingWorktree.sessionDataDir)).toEqual([]);
 
     const rejectedObserver = fixture();
@@ -1208,7 +1208,7 @@ describe("startTicketSession", () => {
       models: modelsWithStream(scriptedStream([])),
     });
 
-    await expect(observerRuntime.startTicketSession(rejectedObserver.spec)).rejects.toThrow(
+    await expect(observerRuntime.startSession(rejectedObserver.spec)).rejects.toThrow(
       "attachment commit failed",
     );
     expect(jsonlFiles(rejectedObserver.sessionDataDir)).toEqual([]);
@@ -1227,7 +1227,7 @@ describe("startTicketSession", () => {
       sessionDataDir,
       models: modelsWithStream(scriptedStream([reply, reply])),
     });
-    const handle = await runtime.startTicketSession(spec);
+    const handle = await runtime.startSession(spec);
 
     await handle.submitUserMessage("first");
     await handle.submitUserMessage("second");
@@ -1252,7 +1252,7 @@ describe("startTicketSession", () => {
         ]),
       ),
     });
-    const firstHandle = await firstRuntime.startTicketSession(attachment.spec);
+    const firstHandle = await firstRuntime.startSession(attachment.spec);
     await firstHandle.submitUserMessage("remember this");
     const recovery = firstHandle.recovery;
     const firstReplay = await firstHandle.reconcile(null);
@@ -1276,7 +1276,7 @@ describe("startTicketSession", () => {
         ]),
       ),
     });
-    const secondHandle = await secondRuntime.startTicketSession({
+    const secondHandle = await secondRuntime.startSession({
       ...attachment.spec,
       recovery,
     });
@@ -1308,7 +1308,7 @@ describe("startTicketSession", () => {
         ]),
       ),
     });
-    const firstHandle = await firstRuntime.startTicketSession(attachment.spec);
+    const firstHandle = await firstRuntime.startSession(attachment.spec);
     await firstHandle.submitUserMessage("authenticate", "queue", "command-prompt");
     await firstHandle.retry("command-retry");
     const replay = await firstHandle.reconcile(null);
@@ -1340,7 +1340,7 @@ describe("startTicketSession", () => {
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(scriptedStream([])),
     });
-    const reopened = await reopenedRuntime.startTicketSession({ ...attachment.spec, recovery });
+    const reopened = await reopenedRuntime.startSession({ ...attachment.spec, recovery });
     expect((await reopened.reconcile(replay.cursor)).receipts).toEqual(replay.receipts);
     await reopened.close();
   });
@@ -1352,7 +1352,7 @@ describe("startTicketSession", () => {
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(scriptedStream([haltOnAbort("partial", streaming.resolve)])),
     });
-    const handle = await runtime.startTicketSession(attachment.spec);
+    const handle = await runtime.startSession(attachment.spec);
     const delivery = handle.submitUserMessage("start", "queue", "command-interrupted");
     await streaming.promise;
     await handle.interrupt();
@@ -1373,7 +1373,7 @@ describe("startTicketSession", () => {
         scriptedStream([haltOnAbort("half-written private thought", streaming.resolve)]),
       ),
     });
-    const firstHandle = await firstRuntime.startTicketSession(attachment.spec);
+    const firstHandle = await firstRuntime.startSession(attachment.spec);
     const firstDelivery = firstHandle.submitUserMessage("start", "queue", "command-recovered-user");
     await streaming.promise;
     await firstHandle.interrupt();
@@ -1403,7 +1403,7 @@ describe("startTicketSession", () => {
         ]),
       ),
     });
-    const secondHandle = await secondRuntime.startTicketSession({ ...attachment.spec, recovery });
+    const secondHandle = await secondRuntime.startSession({ ...attachment.spec, recovery });
     await secondHandle.submitUserMessage("continue");
 
     expect(JSON.stringify(recoveredContext?.messages)).not.toContain(
@@ -1427,7 +1427,7 @@ describe("startTicketSession", () => {
         ]),
       ),
     });
-    const firstHandle = await firstRuntime.startTicketSession(attachment.spec);
+    const firstHandle = await firstRuntime.startSession(attachment.spec);
     await firstHandle.submitUserMessage("start", "queue", "command-partial-turn");
     const recovery = firstHandle.recovery!;
     await firstHandle.close();
@@ -1455,7 +1455,7 @@ describe("startTicketSession", () => {
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(scriptedStream([])),
     });
-    const secondHandle = await secondRuntime.startTicketSession({ ...attachment.spec, recovery });
+    const secondHandle = await secondRuntime.startSession({ ...attachment.spec, recovery });
     const replay = await secondHandle.reconcile(null);
 
     expect(kinds([...replay.observations])).toEqual([
@@ -1488,7 +1488,7 @@ describe("startTicketSession", () => {
         ]),
       ),
     });
-    const firstHandle = await firstRuntime.startTicketSession(attachment.spec);
+    const firstHandle = await firstRuntime.startSession(attachment.spec);
     await firstHandle.submitUserMessage("start");
     const recovery = firstHandle.recovery!;
     await firstHandle.close();
@@ -1526,7 +1526,7 @@ describe("startTicketSession", () => {
         ]),
       ),
     });
-    const secondHandle = await secondRuntime.startTicketSession({ ...attachment.spec, recovery });
+    const secondHandle = await secondRuntime.startSession({ ...attachment.spec, recovery });
     expect((await secondHandle.reconcile(null)).observations).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -1556,7 +1556,7 @@ describe("startTicketSession", () => {
         ]),
       ),
     });
-    const firstHandle = await runtime.startTicketSession(attachment.spec);
+    const firstHandle = await runtime.startSession(attachment.spec);
     await firstHandle.submitUserMessage("start");
     const recovery = firstHandle.recovery!;
     await firstHandle.close();
@@ -1568,7 +1568,7 @@ describe("startTicketSession", () => {
     entries.push({ ...marker, id: `${String(marker["id"])}-duplicate` });
     writeLinearJsonl(recovery.sessionFilePath, entries);
 
-    const reopened = await runtime.startTicketSession({ ...attachment.spec, recovery });
+    const reopened = await runtime.startSession({ ...attachment.spec, recovery });
     const replay = await reopened.reconcile(null);
 
     expect(replay.observations.some((observation) => observation.kind === "message-settled")).toBe(
@@ -1599,7 +1599,7 @@ describe("startTicketSession", () => {
         ]),
       ),
     });
-    const firstHandle = await runtime.startTicketSession(attachment.spec);
+    const firstHandle = await runtime.startSession(attachment.spec);
     await firstHandle.submitUserMessage("start");
     const recovery = firstHandle.recovery!;
     await firstHandle.close();
@@ -1609,7 +1609,7 @@ describe("startTicketSession", () => {
     });
     writeLinearJsonl(recovery.sessionFilePath, entries);
 
-    const reopened = await runtime.startTicketSession({ ...attachment.spec, recovery });
+    const reopened = await runtime.startSession({ ...attachment.spec, recovery });
     const replay = await reopened.reconcile(null);
 
     expect(replay.observations.some((observation) => observation.kind === "message-settled")).toBe(
@@ -1633,7 +1633,7 @@ describe("startTicketSession", () => {
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(scriptedStream([])),
     });
-    const firstHandle = await firstRuntime.startTicketSession(attachment.spec);
+    const firstHandle = await firstRuntime.startSession(attachment.spec);
     const recovery = firstHandle.recovery!;
     await firstHandle.close();
     const lines = readFileSync(recovery.sessionFilePath, "utf8").trimEnd().split("\n");
@@ -1809,7 +1809,7 @@ describe("startTicketSession", () => {
       };
       writeFileSync(recovery.sessionFilePath, `${header}\n${JSON.stringify(malformed)}\n`);
       try {
-        const unexpected = await secondRuntime.startTicketSession({
+        const unexpected = await secondRuntime.startSession({
           ...attachment.spec,
           recovery,
         });
@@ -1831,7 +1831,7 @@ describe("startTicketSession", () => {
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(scriptedStream([])),
     });
-    const firstHandle = await runtime.startTicketSession(attachment.spec);
+    const firstHandle = await runtime.startSession(attachment.spec);
     const recovery = firstHandle.recovery!;
     await firstHandle.close();
     const [header] = readFileSync(recovery.sessionFilePath, "utf8").trimEnd().split("\n");
@@ -1896,7 +1896,7 @@ describe("startTicketSession", () => {
       `${header}\n${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
     );
 
-    const reopened = await runtime.startTicketSession({ ...attachment.spec, recovery });
+    const reopened = await runtime.startSession({ ...attachment.spec, recovery });
     expect((await reopened.reconcile(null)).observations).toHaveLength(2);
     await reopened.close();
   });
@@ -1911,7 +1911,7 @@ describe("startTicketSession", () => {
         sessionDataDir: attachment.sessionDataDir,
         models: modelsWithStream(scriptedStream([])),
       });
-      const firstHandle = await runtime.startTicketSession(attachment.spec);
+      const firstHandle = await runtime.startSession(attachment.spec);
       const recovery = firstHandle.recovery!;
       await firstHandle.close();
       const [header] = readFileSync(recovery.sessionFilePath, "utf8").trimEnd().split("\n");
@@ -1937,7 +1937,7 @@ describe("startTicketSession", () => {
         `${header}\n${markers.map((marker) => JSON.stringify(marker)).join("\n")}\n`,
       );
 
-      await expect(runtime.startTicketSession({ ...attachment.spec, recovery })).rejects.toThrow(
+      await expect(runtime.startSession({ ...attachment.spec, recovery })).rejects.toThrow(
         "Pi recovery delivery markers conflict.",
       );
       expect(existsSync(recovery.sessionFilePath)).toBe(true);
@@ -1950,14 +1950,14 @@ describe("startTicketSession", () => {
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(scriptedStream([])),
     });
-    const firstHandle = await runtime.startTicketSession(attachment.spec);
+    const firstHandle = await runtime.startSession(attachment.spec);
     const recovery = firstHandle.recovery!;
     await firstHandle.close();
     const foreignPath = join(attachment.worktreePath, "foreign.jsonl");
     writeFileSync(foreignPath, "foreign bytes\n");
 
     await expect(
-      runtime.startTicketSession({
+      runtime.startSession({
         ...attachment.spec,
         recovery: { ...recovery, sessionFilePath: foreignPath },
       }),
@@ -1972,12 +1972,12 @@ describe("startTicketSession", () => {
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(scriptedStream([])),
     });
-    const firstHandle = await runtime.startTicketSession(attachment.spec);
+    const firstHandle = await runtime.startSession(attachment.spec);
     const recovery = firstHandle.recovery!;
     await firstHandle.close();
 
     await expect(
-      runtime.startTicketSession({
+      runtime.startSession({
         ...attachment.spec,
         recovery: { ...recovery, sessionId: "missing-session" },
       }),
@@ -1991,7 +1991,7 @@ describe("startTicketSession", () => {
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(scriptedStream([])),
     });
-    const firstHandle = await runtime.startTicketSession(attachment.spec);
+    const firstHandle = await runtime.startSession(attachment.spec);
     const recovery = firstHandle.recovery!;
     await firstHandle.close();
     const foreignPath = join(attachment.worktreePath, "foreign-sidecar.jsonl");
@@ -1999,7 +1999,7 @@ describe("startTicketSession", () => {
     unlinkSync(recovery.sessionFilePath);
     symlinkSync(foreignPath, recovery.sessionFilePath);
 
-    await expect(runtime.startTicketSession({ ...attachment.spec, recovery })).rejects.toThrow(
+    await expect(runtime.startSession({ ...attachment.spec, recovery })).rejects.toThrow(
       "outside the runtime-owned session directory",
     );
     expect(readFileSync(foreignPath, "utf8")).toContain(recovery.sessionId);
@@ -2011,12 +2011,12 @@ describe("startTicketSession", () => {
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(scriptedStream([])),
     });
-    const firstHandle = await runtime.startTicketSession(attachment.spec);
+    const firstHandle = await runtime.startSession(attachment.spec);
     const recovery = firstHandle.recovery!;
     await firstHandle.close();
 
     await expect(
-      runtime.startTicketSession({
+      runtime.startSession({
         ...attachment.spec,
         identity: { ...attachment.spec.identity, attachmentId: "attachment-2" },
         recovery,
@@ -2031,7 +2031,7 @@ describe("startTicketSession", () => {
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(scriptedStream([])),
     });
-    const firstHandle = await firstRuntime.startTicketSession(attachment.spec);
+    const firstHandle = await firstRuntime.startSession(attachment.spec);
     const recovery = firstHandle.recovery!;
     await firstHandle.close();
 
@@ -2043,7 +2043,7 @@ describe("startTicketSession", () => {
       },
     });
     await expect(
-      failingRuntime.startTicketSession({
+      failingRuntime.startSession({
         ...attachment.spec,
         tools: { tools: ["execute"] },
         recovery,
@@ -2061,7 +2061,7 @@ describe("startTicketSession", () => {
       sessionDataDir,
       models: modelsWithStream(scriptedStream([haltOnAbort("working", streaming.resolve)])),
     });
-    const handle = await runtime.startTicketSession(spec);
+    const handle = await runtime.startSession(spec);
 
     const first = handle.submitUserMessage("go");
     await streaming.promise;
@@ -2104,7 +2104,7 @@ describe("startTicketSession", () => {
         ]),
       ),
     });
-    const handle = await runtime.startTicketSession(spec);
+    const handle = await runtime.startSession(spec);
 
     const first = handle.submitUserMessage("first", "queue", "command-first");
     await started.promise;
@@ -2164,7 +2164,7 @@ describe("startTicketSession", () => {
         ]),
       ),
     });
-    const handle = await runtime.startTicketSession(spec);
+    const handle = await runtime.startSession(spec);
 
     const first = handle.submitUserMessage("first", "queue", "command-first");
     await started.promise;
@@ -2201,7 +2201,7 @@ describe("startTicketSession", () => {
       sessionDataDir,
       models: modelsWithStream(scriptedStream([haltOnAbort("half a thought", streaming.resolve)])),
     });
-    const handle = await runtime.startTicketSession(spec);
+    const handle = await runtime.startSession(spec);
 
     const delivery = handle.submitUserMessage("go");
     await streaming.promise;
@@ -2228,7 +2228,7 @@ describe("startTicketSession", () => {
       sessionDataDir,
       models: modelsWithStream(scriptedStream([haltOnAbort("half a thought", streaming.resolve)])),
     });
-    const handle = await runtime.startTicketSession({ ...spec, signal: controller.signal });
+    const handle = await runtime.startSession({ ...spec, signal: controller.signal });
 
     const delivery = handle.submitUserMessage("go");
     await streaming.promise;
@@ -2254,7 +2254,7 @@ describe("startTicketSession", () => {
     });
 
     await expect(
-      runtime.startTicketSession({ ...attachment.spec, signal: controller.signal }),
+      runtime.startSession({ ...attachment.spec, signal: controller.signal }),
     ).rejects.toThrow("Runtime attachment was cancelled before it started.");
     expect(attachment.observations).toEqual([
       {
@@ -2288,7 +2288,7 @@ describe("startTicketSession", () => {
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(scriptedStream([])),
     });
-    const handle = await runtime.startTicketSession(attachment.spec);
+    const handle = await runtime.startSession(attachment.spec);
 
     expect(await handle.submitUserMessage("too late")).toEqual({
       kind: "rejected",
@@ -2304,7 +2304,7 @@ describe("startTicketSession", () => {
       sessionDataDir,
       models: modelsWithStream(scriptedStream([])),
     });
-    const handle = await runtime.startTicketSession(spec);
+    const handle = await runtime.startSession(spec);
 
     await handle.close();
     await handle.close();
@@ -2340,7 +2340,7 @@ describe("startTicketSession", () => {
     const handle = await createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       models,
-    }).startTicketSession(attachment.spec);
+    }).startSession(attachment.spec);
 
     await expect(
       handle.selectModel({
@@ -2363,7 +2363,7 @@ describe("startTicketSession", () => {
     const handle = await createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(scriptedStream([haltOnAbort("working", streaming.resolve)])),
-    }).startTicketSession(attachment.spec);
+    }).startSession(attachment.spec);
     const delivery = handle.submitUserMessage("start");
     await streaming.promise;
 
@@ -2391,7 +2391,7 @@ describe("startTicketSession", () => {
     const handle = await createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(scriptedStream([])),
-    }).startTicketSession(attachment.spec);
+    }).startSession(attachment.spec);
 
     await expect(
       handle.selectModel({
@@ -2418,7 +2418,7 @@ describe("startTicketSession", () => {
     const handle = await createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       models,
-    }).startTicketSession(attachment.spec);
+    }).startSession(attachment.spec);
 
     await handle.selectModel({
       providerId: PROVIDER_ID,
@@ -2439,7 +2439,7 @@ describe("startTicketSession", () => {
     const handle = await createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       models,
-    }).startTicketSession(attachment.spec);
+    }).startSession(attachment.spec);
 
     const selected = await handle.selectModel({
       providerId: PROVIDER_ID,
@@ -2471,7 +2471,7 @@ describe("startTicketSession", () => {
     const handle = await createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       models,
-    }).startTicketSession(attachment.spec);
+    }).startSession(attachment.spec);
 
     const selected = handle.selectModel({
       providerId: PROVIDER_ID,
@@ -2506,7 +2506,7 @@ describe("startTicketSession", () => {
     const handle = await createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       models,
-    }).startTicketSession(attachment.spec);
+    }).startSession(attachment.spec);
 
     const selected = handle.selectModel({
       providerId: PROVIDER_ID,
@@ -2529,7 +2529,7 @@ describe("startTicketSession", () => {
       models: modelsWithStream(scriptedStream([])),
     });
 
-    await expect(runtime.startTicketSession(spec)).rejects.toThrow(
+    await expect(runtime.startSession(spec)).rejects.toThrow(
       "Model anthropic/claude-not-a-model is not available.",
     );
     expect(observations).toEqual([
@@ -2552,7 +2552,7 @@ describe("startTicketSession", () => {
         scriptedStream([(emit) => emit.fail("invalid x-api-key sk-ant-0123456789abcdef")]),
       ),
     });
-    const handle = await runtime.startTicketSession(spec);
+    const handle = await runtime.startSession(spec);
 
     await handle.submitUserMessage("go");
 
@@ -2577,7 +2577,7 @@ describe("startTicketSession", () => {
       sessionDataDir,
       models: modelsWithStream(scriptedStream([(emit) => emit.fail("malformed provider payload")])),
     });
-    const handle = await runtime.startTicketSession(spec);
+    const handle = await runtime.startSession(spec);
 
     await handle.submitUserMessage("go");
 
@@ -2598,7 +2598,7 @@ describe("startTicketSession", () => {
       sessionDataDir: idle.sessionDataDir,
       models: modelsWithStream(scriptedStream([])),
     });
-    const idleHandle = await idleRuntime.startTicketSession(idle.spec);
+    const idleHandle = await idleRuntime.startSession(idle.spec);
     await expect(idleHandle.retry()).resolves.toMatchObject({
       kind: "rejected",
       reason: "retry-unavailable",
@@ -2612,7 +2612,7 @@ describe("startTicketSession", () => {
       sessionDataDir: busy.sessionDataDir,
       models: modelsWithStream(scriptedStream([haltOnAbort("working", streaming.resolve)])),
     });
-    const busyHandle = await busyRuntime.startTicketSession(busy.spec);
+    const busyHandle = await busyRuntime.startSession(busy.spec);
     const delivery = busyHandle.submitUserMessage("start");
     await streaming.promise;
     await expect(busyHandle.retry()).resolves.toMatchObject({
@@ -2646,7 +2646,7 @@ describe("startTicketSession", () => {
         ]),
       ),
     });
-    const handle = await runtime.startTicketSession(attachment.spec);
+    const handle = await runtime.startSession(attachment.spec);
     await handle.submitUserMessage("start");
     failRetryCommit = true;
 
@@ -2668,7 +2668,7 @@ describe("startTicketSession", () => {
         ]),
       ),
     });
-    const handle = await runtime.startTicketSession(spec);
+    const handle = await runtime.startSession(spec);
     await handle.submitUserMessage("first");
     expect(observations.filter((observation) => observation.kind === "attention")).toHaveLength(1);
 
@@ -2697,7 +2697,7 @@ describe("startTicketSession", () => {
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(scriptedStream([(emit) => emit.fail("invalid api key")])),
     });
-    const firstHandle = await firstRuntime.startTicketSession(attachment.spec);
+    const firstHandle = await firstRuntime.startSession(attachment.spec);
     await firstHandle.submitUserMessage("authenticate this request");
     const recovery = firstHandle.recovery;
     await firstHandle.close();
@@ -2715,7 +2715,7 @@ describe("startTicketSession", () => {
         ]),
       ),
     });
-    const secondHandle = await secondRuntime.startTicketSession({ ...attachment.spec, recovery });
+    const secondHandle = await secondRuntime.startSession({ ...attachment.spec, recovery });
 
     await expect(secondHandle.retry()).resolves.toEqual({ kind: "delivered", delivery: "retry" });
     expect(JSON.stringify(recoveredContext?.messages)).toContain("authenticate this request");
@@ -2733,7 +2733,7 @@ describe("startTicketSession", () => {
     // Agent represents provider refusal as a failed assistant turn.
     const { spec, observations, sessionDataDir } = fixture();
     const runtime = createPiAgentRuntime({ sessionDataDir });
-    const handle = await runtime.startTicketSession(spec);
+    const handle = await runtime.startSession(spec);
 
     await expect(handle.submitUserMessage("go")).resolves.toEqual({
       kind: "delivered",
