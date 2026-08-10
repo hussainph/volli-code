@@ -1045,6 +1045,46 @@ describe("SessionRuntime native adapter contract", () => {
     ).resolves.toMatchObject({ receipt: { detail: "socket disappeared" } });
   });
 
+  it("retires an unrecoverable attach Attention once an attach succeeds", async () => {
+    // The sibling of the configuration case above, and it used to be the one
+    // that never ended: the clear path named `configuration_invalid` alone, so
+    // a Session that failed recovery once wore the Attention for good. Nothing
+    // else clears an attach-failure id — the per-attachment `:recovery` ids
+    // have their own lifecycle and are not these.
+    const unrecoverable = composition();
+    const session = await unrecoverable.runtime.command({
+      commandId: "unrecoverable-create",
+      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+    });
+    unrecoverable.adapter.attachFailure = new NativeAttachmentError(
+      "Pi recovery sidecar identity does not match this attachment",
+      "PI_RECOVERY_FAILED",
+      "adapter_unrecoverable",
+    );
+    await expect(
+      unrecoverable.runtime.command({
+        commandId: "unrecoverable-attach",
+        sessionId: session.sessionId,
+        command: { kind: "adapter.attach", continuity: "fresh" },
+      }),
+    ).resolves.toMatchObject({ receipt: { status: "rejected", code: "PI_RECOVERY_FAILED" } });
+    expect(
+      (await unrecoverable.runtime.snapshot({ sessionId: session.sessionId })).projection.attention
+        .primary,
+    ).toMatchObject({ attachmentId: null, kind: "adapter_unrecoverable" });
+
+    unrecoverable.adapter.attachFailure = null;
+    await unrecoverable.runtime.command({
+      commandId: "unrecoverable-retry",
+      sessionId: session.sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+    expect(
+      (await unrecoverable.runtime.snapshot({ sessionId: session.sessionId })).projection.attention
+        .active,
+    ).toHaveLength(0);
+  });
+
   it("refuses the attach when the host cannot produce the directory", async () => {
     // The adapter is never asked. A binding made against a directory that is
     // not there is the failure the reader gets per prompt instead of once, and

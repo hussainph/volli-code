@@ -153,6 +153,24 @@ type DeliveryResultKind =
   | "model.selected"
   | "interaction.resolved";
 type AttachFailureAttentionKind = "configuration_invalid" | "adapter_unrecoverable";
+/**
+ * The Attention kinds a successful attach retires.
+ *
+ * A record rather than a set, and keyed by the union rather than by string, so
+ * that adding a way for an attach to fail fails to compile until this decides
+ * whether success disproves it. It did not, once: `adapter_unrecoverable` was
+ * added for Pi's recovery failures while the clear path still named
+ * `configuration_invalid` alone, so a Session that failed to attach once
+ * carried the Attention for good — nothing else clears an id minted by
+ * {@link freshAttachAttentionId}.
+ *
+ * Both kinds are claims about whether this executor can run this Session here,
+ * and an attach that just opened is the direct evidence against either.
+ */
+const ATTACH_FAILURE_ATTENTION_KINDS: Readonly<Record<AttachFailureAttentionKind, true>> = {
+  configuration_invalid: true,
+  adapter_unrecoverable: true,
+};
 interface FailAttachInput {
   request: AttachCommandRequest;
   submitted: SubmitSessionCommandResult;
@@ -693,9 +711,9 @@ class DefaultSessionRuntime implements SessionRuntime {
         kind: "attachment.opened",
         attachment,
       });
-      const clearedConfiguration = await Promise.all(
+      const clearedAttachFailures = await Promise.all(
         projection.attention.active
-          .filter(({ kind }) => kind === "configuration_invalid")
+          .filter(({ kind }) => kind in ATTACH_FAILURE_ATTENTION_KINDS)
           .map(({ id: attentionId }) =>
             this.ports.engine.observe({
               id: this.#id("event"),
@@ -716,7 +734,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         cursor: null,
         reconcileInFlight: null,
       });
-      await this.#publish([opened, ...clearedConfiguration]);
+      await this.#publish([opened, ...clearedAttachFailures]);
       await sink.activate();
       const receipt = await this.#recordDelivery(
         request.sessionId,
@@ -2502,10 +2520,15 @@ function resultKindFor(command: SessionCommand): DeliveryResultKind {
  * The durable id of an attach-failure Attention, deduped by exact string match.
  *
  * `"native"` is a frozen durable value, not a live parameter: it was the profile
- * id of every structured attach before profiles were deleted. An Attention
- * raised under the old derivation and still on disk would not be recognised as
- * the same one under a shorter id, and `adapter_unrecoverable` is cleared by
- * nothing — a second copy would sit beside the first for good.
+ * id of every structured attach before profiles were deleted. The id is the
+ * dedupe identity for a repeated failure, so a Session failing to attach twice
+ * under two derivations would raise two Attentions for one condition, and a row
+ * an older build left on disk would not be recognised as the same one.
+ *
+ * A successful attach does now clear both kinds — see
+ * {@link ATTACH_FAILURE_ATTENTION_KINDS} — but it clears by the id it reads
+ * back from the projection, which is exactly why that path never needed the
+ * derivation and is no argument for changing it.
  */
 const FROZEN_ATTACH_ATTENTION_PROFILE_SEGMENT = "native";
 
