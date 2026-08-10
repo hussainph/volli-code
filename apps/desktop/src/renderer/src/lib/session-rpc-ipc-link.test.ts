@@ -36,10 +36,6 @@ function assertPresentationClient(client: SessionRpcClient): void {
           // @ts-expect-error Streamed presentation frames omit executor identity.
           void data.event.payload.attachment.adapterId;
         }
-        if ("sequence" in data && data.event.payload.kind === "capabilities.updated") {
-          // @ts-expect-error Streamed presentation frames omit executor profile identity.
-          void data.event.payload.snapshot.profileId;
-        }
       },
     },
   );

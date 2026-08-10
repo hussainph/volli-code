@@ -15,7 +15,6 @@ import {
   type HarnessCommand,
   type HarnessObservation,
   type NativeHarnessAdapter,
-  type NativeProbeResult,
   type ObservationSink,
   type SessionEngine,
   type SessionLocationResolver,
@@ -72,9 +71,15 @@ class FakeAdapter implements NativeHarnessAdapter {
     id: "fake",
     displayName: "Fake",
     adapterVersion: "1.0.0",
-    profiles: [{ id: "native", label: "Native", transport: "native" as const }],
+    profiles: [
+      {
+        id: "native",
+        label: "Native",
+        transport: "native" as const,
+        runtime: { path: "/trusted/fake", version: "1.0.0", fingerprint: "sha256:fake" },
+      },
+    ],
   };
-  probes = 0;
   attaches = 0;
   dispatches = 0;
   reconciles = 0;
@@ -87,7 +92,6 @@ class FakeAdapter implements NativeHarnessAdapter {
   reconcileGate: Promise<void> | null = null;
   reconcileFailure: unknown = null;
   reconcileStarted: () => void = () => undefined;
-  probeResult: NativeProbeResult | null = null;
   attachFailure: unknown = null;
   attachGate: Promise<void> | null = null;
   attachStarted: () => void = () => undefined;
@@ -100,36 +104,6 @@ class FakeAdapter implements NativeHarnessAdapter {
   specs: Parameters<NativeHarnessAdapter["attach"]>[0][] = [];
   attachObservation: HarnessObservation | null = null;
   releaseReasons: string[] = [];
-
-  async probe() {
-    this.probes += 1;
-    return (
-      this.probeResult ?? {
-        status: "available" as const,
-        runtime: { path: "/trusted/fake", version: "1.0.0", fingerprint: "sha256:fake" },
-        capabilities: {
-          features: [
-            {
-              id: "message.submit",
-              state: "available" as const,
-              evidence: "verified" as const,
-              detail: null,
-            },
-          ],
-          catalog: [
-            {
-              kind: "model" as const,
-              id: "fake/model",
-              label: "Fake Model",
-              state: "available" as const,
-              evidence: "reported" as const,
-              detail: null,
-            },
-          ],
-        },
-      }
-    );
-  }
 
   async attach(
     spec: Parameters<NativeHarnessAdapter["attach"]>[0],
@@ -729,7 +703,7 @@ describe("SessionRuntime native adapter contract", () => {
     const snapshot = await runtime.snapshot({ sessionId });
 
     expect(snapshot.frames.map(({ event }) => event.payload.kind)).toEqual(
-      expect.arrayContaining(["attachment.opened", "turn.started", "capabilities.updated"]),
+      expect.arrayContaining(["attachment.opened", "turn.started"]),
     );
     expect(
       snapshot.frames.find(({ event }) => event.payload.kind === "turn.started")?.event.sequence,
@@ -792,23 +766,23 @@ describe("SessionRuntime native adapter contract", () => {
     expect(snapshot.projection.authorityDenials).toBe(1);
   });
 
-  it("probes, attaches, snapshots dynamic capabilities, and releases through the narrow binding", async () => {
+  it("attaches and releases through the narrow binding", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);
     const snapshot = await runtime.snapshot({ sessionId });
 
-    expect(adapter.probes).toBe(1);
     expect(adapter.attaches).toBe(1);
     expect(snapshot.projection.liveExecutor).toMatchObject({
       adapterId: "fake",
       native: {
         id: "native-session-1",
-        detail: { kind: "volli.native-binding.v1", profileId: "native" },
+        detail: {
+          kind: "volli.native-binding.v1",
+          profileId: "native",
+          runtime: { path: "/trusted/fake", version: "1.0.0", fingerprint: "sha256:fake" },
+        },
       },
     });
-    expect(snapshot.projection.capabilities).toMatchObject([
-      { adapterId: "fake", profileId: "native", revision: 1 },
-    ]);
 
     await runtime.command({
       commandId: "command-release",
@@ -817,43 +791,6 @@ describe("SessionRuntime native adapter contract", () => {
     });
     expect(adapter.releases).toBe(1);
     expect((await runtime.snapshot({ sessionId })).projection.liveExecutor).toBeNull();
-  });
-
-  it("keeps unavailable catalog inventory out of the durable Session stream", async () => {
-    const { runtime, adapter } = composition();
-    adapter.probeResult = {
-      status: "available",
-      runtime: { path: "/trusted/fake", version: "1.0.0", fingerprint: "sha256:fake" },
-      capabilities: {
-        features: [],
-        catalog: [
-          {
-            kind: "model",
-            id: "provider/usable",
-            label: "Usable",
-            state: "available",
-            evidence: "reported",
-            detail: null,
-          },
-          {
-            kind: "model",
-            id: "provider/exhaustive-inventory",
-            label: "Exhaustive inventory",
-            state: "unavailable",
-            evidence: "reported",
-            detail: { payload: "does not belong in every Session snapshot" },
-          },
-        ],
-      },
-    };
-
-    const sessionId = await createAndAttach(runtime);
-    const snapshot = await runtime.snapshot({ sessionId });
-
-    expect(snapshot.projection.capabilities.at(-1)?.catalog).toEqual([
-      expect.objectContaining({ id: "provider/usable" }),
-    ]);
-    expect(JSON.stringify(snapshot.frames)).not.toContain("exhaustive-inventory");
   });
 
   it("coalesces duplicate submissions and never dispatches an accepted command twice", async () => {
@@ -1039,33 +976,7 @@ describe("SessionRuntime native adapter contract", () => {
     expect(sequences).toEqual([...new Set(sequences)].toSorted((left, right) => left - right));
   });
 
-  it("rejects unavailable profiles and failed native attachment probes as durable outcomes", async () => {
-    const unavailable = composition();
-    const unavailableSession = await unavailable.runtime.command({
-      commandId: "unavailable-create",
-      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
-    });
-    unavailable.adapter.probeResult = {
-      status: "unavailable",
-      runtime: null,
-      reason: "OpenCode is not installed",
-    };
-    const result = await unavailable.runtime.command({
-      commandId: "unavailable-attach",
-      sessionId: unavailableSession.sessionId,
-      command: {
-        kind: "adapter.attach",
-        adapterId: "fake",
-        profileId: "native",
-        continuity: "fresh",
-      },
-    });
-    expect(result.receipt).toMatchObject({ status: "rejected", code: "adapter_unavailable" });
-    expect(
-      (await unavailable.runtime.snapshot({ sessionId: unavailableSession.sessionId })).projection
-        .attachments,
-    ).toMatchObject([{ status: "failed", failure: { code: "adapter_unavailable" } }]);
-
+  it("rejects unavailable profiles and failed native attachments as durable outcomes", async () => {
     const missing = composition();
     const missingSession = await missing.runtime.command({
       commandId: "missing-create",
@@ -1234,7 +1145,7 @@ describe("SessionRuntime native adapter contract", () => {
     ).resolves.toMatchObject({
       receipt: { status: "rejected", code: "location_unavailable", detail },
     });
-    expect(adapter.probes).toBe(0);
+    expect(adapter.attaches).toBe(0);
     expect((await runtime.snapshot({ sessionId: session.sessionId })).projection).toMatchObject({
       liveExecutor: null,
       attachments: [{ status: "failed", failure: { code: "location_unavailable", detail } }],
@@ -1856,10 +1767,9 @@ describe("SessionRuntime native adapter contract", () => {
     });
   });
 
-  it("normalizes attention facts and advances capability revisions only after a healthy probe", async () => {
+  it("normalizes attention facts", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);
-    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
     for (const attention of [
       { id: "rate", kind: "rate_limited" as const, retryAt: 999 },
       { id: "quota", kind: "quota_exhausted" as const, resetAt: 1000 },
@@ -1880,35 +1790,12 @@ describe("SessionRuntime native adapter contract", () => {
       occurredAt: 301,
       attentionId: "auth",
     });
-    const refreshed = await runtime.refreshCapabilities({ sessionId, attachmentId });
-    expect(refreshed.revision).toBe(2);
     expect((await runtime.snapshot({ sessionId })).projection.attention.active).toMatchObject([
       { id: "rate", retryAt: 999 },
       { id: "quota", resetAt: 1000 },
       { id: "rate-null", retryAt: null },
       { id: "quota-null", resetAt: null },
     ]);
-
-    adapter.probeResult = { status: "incompatible", runtime: null, reason: "unsupported protocol" };
-    await expect(runtime.refreshCapabilities({ sessionId, attachmentId })).rejects.toMatchObject({
-      message: "unsupported protocol",
-    });
-  });
-
-  it("continues capability revisions after rebuilding the runtime", async () => {
-    const first = composition();
-    const sessionId = await createAndAttach(first.runtime);
-    const attachmentId = (await first.runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
-    await first.runtime.close();
-
-    const second = composition({
-      engine: first.engine,
-      adapter: first.adapter,
-      runtimeIdPrefix: "restart-",
-    });
-    const refreshed = await second.runtime.refreshCapabilities({ sessionId, attachmentId });
-
-    expect(refreshed.revision).toBe(2);
   });
 
   it("reconciles native observations and known receipts without inventing receipts for unknown commands", async () => {
@@ -2159,7 +2046,7 @@ describe("SessionRuntime native adapter contract", () => {
       },
     });
     await expect(
-      malformed.runtime.refreshCapabilities({
+      malformed.runtime.reconcile({
         sessionId: createdMalformed.sessionId,
         attachmentId: "malformed-attachment",
       }),
@@ -2382,7 +2269,7 @@ describe("SessionRuntime native adapter contract", () => {
     // is a cursored read now, so the replay-hostile engine above fails it
     // before any binding is looked up.
     await expect(
-      base.runtime.refreshCapabilities({ sessionId, attachmentId: "missing-binding" }),
+      base.runtime.reconcile({ sessionId, attachmentId: "missing-binding" }),
     ).rejects.toBeInstanceOf(SessionRuntimeNotFoundError);
 
     const corrupt = composition();
@@ -2406,7 +2293,7 @@ describe("SessionRuntime native adapter contract", () => {
       },
     });
     await expect(
-      corrupt.runtime.refreshCapabilities({
+      corrupt.runtime.reconcile({
         sessionId: created.sessionId,
         attachmentId: "corrupt-attachment",
       }),
@@ -2649,7 +2536,7 @@ describe("SessionRuntime native adapter contract", () => {
     const failingEngine: SessionEngine = {
       ...failingBase.engine,
       observe: async (input) => {
-        if (input.kind === "capabilities.updated") throw new Error("capabilities unavailable");
+        if (input.kind === "command.receipt") throw new Error("receipt unavailable");
         return failingBase.engine.observe(input);
       },
     };
@@ -2669,7 +2556,7 @@ describe("SessionRuntime native adapter contract", () => {
           continuity: "fresh",
         },
       }),
-    ).rejects.toThrow("capabilities unavailable");
+    ).rejects.toThrow("receipt unavailable");
     expect(failure.adapter.releaseReasons).toEqual([]);
   });
 
@@ -2725,11 +2612,12 @@ describe("SessionRuntime native adapter contract", () => {
       },
     });
     await expect(
-      restored.runtime.refreshCapabilities({
+      restored.runtime.reconcile({
         sessionId: created.sessionId,
         attachmentId: "locator-attachment",
       }),
-    ).resolves.toMatchObject({ revision: 1 });
+    ).resolves.toBeUndefined();
+    expect(restored.adapter.reconciles).toBe(1);
   });
 
   it("publishes an externally recovered receipt even when its command event is absent from the stream", async () => {
@@ -2823,81 +2711,6 @@ describe("SessionRuntime native adapter contract", () => {
     expect(appended.projection.attention.primary?.id).toBe("attention-cached");
     expect(appended.throughSequence).toBeGreaterThan(folded.throughSequence);
     expect(reads).toEqual([sessionId]);
-  });
-
-  it("re-folds a history that only the clock made stale", async () => {
-    let now = 1_000;
-    const { runtime } = composition({ clock: { now: () => now } });
-    const sessionId = await createAndAttach(runtime);
-
-    const observed = await runtime.projection({ sessionId });
-    expect(observed.projection.capabilities.map(({ expiresAt }) => expiresAt)).toEqual([61_000]);
-
-    // Nothing was appended: the snapshot simply expired. A cache watching only
-    // the ledger would still be offering a capability the harness lost.
-    now = 61_000;
-    const expired = await runtime.projection({ sessionId });
-
-    expect(expired.projection.capabilities).toEqual([]);
-    expect(expired.throughSequence).toBe(observed.throughSequence);
-  });
-
-  it("takes its deadline from the capability snapshot that expires first", async () => {
-    let now = 1_000;
-    const { runtime, engine } = composition({ clock: { now: () => now } });
-    const sessionId = await createAndAttach(runtime);
-    const attachmentId = (await runtime.projection({ sessionId })).projection.liveExecutor!.id;
-    // Scope is adapter/profile/attachment, so these are four live snapshots
-    // beside the attach's own — one of them with no expiry at all.
-    for (const [profileId, expiresAt] of [
-      ["soon", 30_000],
-      ["late", 90_000],
-      ["eternal", null],
-    ] as const) {
-      await engine.observe({
-        id: `deadline-${profileId}`,
-        sessionId,
-        attachmentId,
-        occurredAt: now,
-        provenance: { source: { kind: "adapter", id: "fake", detail: null }, venue },
-        kind: "capabilities.updated",
-        snapshot: {
-          id: `deadline-capabilities-${profileId}`,
-          adapterId: "fake",
-          attachmentId,
-          profileId,
-          revision: 1,
-          observedAt: now,
-          expiresAt,
-          features: [],
-          catalog: [],
-        },
-      });
-    }
-
-    const observed = await runtime.projection({ sessionId });
-    expect(observed.projection.capabilities.map(({ profileId }) => profileId)).toEqual([
-      "native",
-      "soon",
-      "late",
-      "eternal",
-    ]);
-
-    // The earliest expiry is the deadline: at it, the fold has to run again
-    // even though the other three are still good and nothing was appended.
-    now = 30_000;
-    expect(
-      (await runtime.projection({ sessionId })).projection.capabilities.map(
-        ({ profileId }) => profileId,
-      ),
-    ).toEqual(["native", "late", "eternal"]);
-
-    now = 90_000;
-    expect(
-      (await runtime.projection({ sessionId })).projection.capabilities.map(
-        ({ profileId }) => profileId,
-      ),
-    ).toEqual(["eternal"]);
   });
 
   it("bounds how many folded histories it keeps", async () => {

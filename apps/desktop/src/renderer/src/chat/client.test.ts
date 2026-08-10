@@ -102,7 +102,6 @@ function projectionFor(attachmentId: string | null, adapterId = "pi"): SessionPr
     attachments: attachment === null ? [] : [attachment],
     liveExecutor: attachment,
     attention: { active: [], primary: null },
-    capabilities: [],
     interactions: { active: [], resolved: [] },
     signal: null,
     modelSelection: MODEL_POLICY,
@@ -726,7 +725,7 @@ describe("stream folding", () => {
     });
 
     stream().send("1", frameOf(1, "turn.started"));
-    stream().send("2", frameOf(2, "capabilities.updated"));
+    stream().send("2", frameOf(2, "attention.raised"));
     stream().send("3", frameOf(3, "interaction.opened"));
     gate.release();
     await settle();

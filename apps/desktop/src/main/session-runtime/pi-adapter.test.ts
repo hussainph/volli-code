@@ -211,11 +211,20 @@ async function attached(
 }
 
 describe("Pi native adapter manifest", () => {
-  it("declares one id and exactly one native profile", () => {
+  it("declares one id, one native profile, and the pinned runtime identity", () => {
     const { adapter } = composition();
     expect(adapter.manifest.id).toBe(PI_ADAPTER_ID);
     expect(adapter.manifest.profiles).toEqual([
-      { id: "native", label: "Native", transport: "native" },
+      {
+        id: "native",
+        label: "Native",
+        transport: "native",
+        runtime: {
+          path: "@earendil-works/pi-agent-core",
+          version: "0.84.1",
+          fingerprint: "npm:@earendil-works/pi-agent-core@0.84.1",
+        },
+      },
     ]);
   });
 });
@@ -242,46 +251,25 @@ describe("Pi runtime host", () => {
   });
 });
 
-describe("Pi native adapter probe", () => {
-  it("reports the pinned runtime and the features the engine gates delivery on", async () => {
-    const { adapter } = composition();
-
-    const result = await adapter.probe(
-      { profileId: "native", directory: "/work" },
-      new AbortController().signal,
-    );
-
-    expect(result.status).toBe("available");
-    if (result.status !== "available") return;
-    expect(result.runtime.version).toBe("0.84.1");
-    expect(
-      result.capabilities.features
-        .filter((feature) => feature.state === "available")
-        .map((f) => f.id),
-    ).toEqual(["message.submit", "executor.interrupt"]);
-    // The adapter has no model of its own to declare, and what a probe declares
-    // becomes a durable `capabilities.updated` fact — so it declares nothing
-    // rather than a literal the running Session may not match.
-    expect(result.capabilities.catalog).toEqual([]);
-  });
-
+describe("Pi native adapter attach", () => {
   it("refuses a profile it does not have", async () => {
     const { adapter } = composition();
 
-    const result = await adapter.probe(
-      { profileId: "terminal", directory: "/work" },
-      new AbortController().signal,
-    );
-
-    expect(result).toEqual({
-      status: "unavailable",
-      runtime: null,
-      reason: "Unknown Pi profile terminal",
-    });
+    await expect(
+      adapter.attach(
+        {
+          sessionId: "session-1",
+          attachmentId: "attachment-1",
+          profileId: "terminal",
+          directory: "/work",
+          continuity: "fresh",
+          native: null,
+        },
+        { emit: async () => undefined },
+      ),
+    ).rejects.toThrow("Unknown Pi profile terminal");
   });
-});
 
-describe("Pi native adapter attach", () => {
   it("starts a ticket session in the prepared directory with the pinned model and brief", async () => {
     const { runtime, binding } = await attached();
 

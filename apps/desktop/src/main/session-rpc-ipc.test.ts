@@ -101,7 +101,6 @@ function runtimeFixture(): {
         calls.cancelled.push(request);
         return undefined;
       },
-      refreshCapabilities: async () => ({}) as never,
       reconcile: async () => undefined,
       close: async () => undefined,
     },
@@ -238,15 +237,6 @@ describe("registerSessionRpcIpcHandlers", () => {
         },
       }),
     ).resolves.toEqual({ ok: true, data: {} });
-    await expect(
-      invoke(sender(), {
-        procedure: "session.refreshCapabilities",
-        input: { sessionId: "session-1", attachmentId: "attachment-1" },
-      }),
-    ).resolves.toEqual({
-      ok: true,
-      data: { catalog: [] },
-    });
     await expect(
       invoke(sender(), {
         procedure: "session.reconcile",

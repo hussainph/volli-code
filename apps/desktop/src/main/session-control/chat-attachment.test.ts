@@ -29,7 +29,6 @@ function projectionWith(
     attachments,
     liveExecutor: null,
     attention: { active: [], primary: null },
-    capabilities: [],
     interactions: { active: [], resolved: [] },
     signal: null,
     turnActive: false,

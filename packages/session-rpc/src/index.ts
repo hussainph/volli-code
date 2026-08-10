@@ -562,8 +562,8 @@ export function createSessionRouter() {
           const unsubscribe = await ctx.runtime.subscribe(
             { sessionId: input.sessionId, afterSequence },
             // An overlay passes through untouched: `rendererFrame` exists to
-            // keep a durable capability inventory behind the server boundary,
-            // and a transient message part carries none.
+            // keep runtime identity and recovery locators behind the server
+            // boundary, and a transient message part carries neither.
             (emission) =>
               queue.push(isSessionStreamOverlay(emission) ? emission : rendererFrame(emission)),
           );
@@ -631,11 +631,6 @@ export function createSessionRouter() {
         .mutation(({ ctx, input }) =>
           ctx.runtime.cancelInteraction({ ...input, reason: "abandoned" }),
         ),
-      refreshCapabilities: instrumentedProcedure
-        .input(z.object({ sessionId: nonEmptyString, attachmentId: nonEmptyString }))
-        .mutation(async ({ ctx, input }) =>
-          rendererCapabilitySnapshot(await ctx.runtime.refreshCapabilities(input)),
-        ),
       reconcile: instrumentedProcedure
         .input(z.object({ sessionId: nonEmptyString, attachmentId: nonEmptyString }))
         .mutation(({ ctx, input }) => ctx.runtime.reconcile(input)),
@@ -689,21 +684,6 @@ export function createSessionRouter() {
         }),
     }),
   });
-}
-
-/**
- * Capability inventories remain durable server evidence. Renderer clients get
- * feature state only; naming models is `modelAccess`'s job, over its own
- * sanitized snapshot, and nothing reads a catalog off a capability any more.
- */
-function rendererCapabilitySnapshot(
-  snapshot: SessionRuntimeSnapshot["projection"]["capabilities"][number],
-): SessionRuntimeSnapshot["projection"]["capabilities"][number] {
-  const { adapterId: _adapterId, profileId: _profileId, ...presentation } = snapshot;
-  return {
-    ...presentation,
-    catalog: [],
-  } as unknown as SessionRuntimeSnapshot["projection"]["capabilities"][number];
 }
 
 /** Runtime identity and recovery locators stay behind the product edge. */
@@ -810,17 +790,6 @@ function rendererFrame(frame: SessionStreamFrame): SessionStreamFrame {
         event: {
           ...safeFrame.event,
           payload: { ...payload, attention: rendererAttention(payload.attention) },
-        },
-      };
-    case "capabilities.updated":
-      return {
-        ...safeFrame,
-        event: {
-          ...safeFrame.event,
-          payload: {
-            kind: "capabilities.updated",
-            snapshot: rendererCapabilitySnapshot(payload.snapshot),
-          },
         },
       };
     case "interaction.opened":

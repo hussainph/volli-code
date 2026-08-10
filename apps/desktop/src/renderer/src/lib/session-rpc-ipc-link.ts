@@ -48,10 +48,7 @@ type AppSessionSubscribeParameters = Parameters<AppSessionProcedures["subscribe"
 type AppSessionSubscribeOptions = NonNullable<AppSessionSubscribeParameters[1]>;
 
 export type SessionRpcClient = Omit<AppSessionRpcClient, "session"> & {
-  session: Omit<
-    AppSessionProcedures,
-    "snapshot" | "projection" | "subscribe" | "command" | "refreshCapabilities"
-  > & {
+  session: Omit<AppSessionProcedures, "snapshot" | "projection" | "subscribe" | "command"> & {
     snapshot: {
       query(
         input: { sessionId: string },

@@ -32,7 +32,6 @@ describe("Session RPC wire protocol", () => {
       "session.subscribe",
       "session.command",
       "session.cancelInteraction",
-      "session.refreshCapabilities",
       "session.reconcile",
     ]);
   });
