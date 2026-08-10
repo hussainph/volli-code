@@ -333,6 +333,8 @@ describe("ScopedExecutionEnv", () => {
             join(homeDir, ".claude", "debug"),
             "/tmp/claude",
             "/private/tmp/claude",
+            join(env.cwd, ".git", "hooks"),
+            join(env.cwd, ".git", "config"),
           ],
         },
       },
@@ -364,6 +366,29 @@ describe("ScopedExecutionEnv", () => {
       expect(spawns[0]!.options.env).not.toHaveProperty(hook);
     }
     expect(srt.calls.cleanups).toBe(1);
+  });
+
+  // The composed config only; the kernel's own refusal is proved against a real
+  // Main checkout in `scoped-execution-env.srt.integration.test.ts`.
+  it("composes a denial of .git hooks and config alone, leaving the rest of .git writable", async () => {
+    const { worktree } = roots();
+    const srt = sandbox();
+    const running = child();
+    const env = await ScopedExecutionEnv.create(worktree, {
+      sandbox: srt,
+      spawn: (() => running) as never,
+    });
+    const execution = env.exec("git commit -m x");
+    await vi.waitFor(() => expect(srt.calls.wraps).toHaveLength(1));
+    running.emit("close", 0);
+    await execution;
+
+    const [, , composed] = srt.calls.wraps[0] as [string, string, SandboxRuntimeConfig];
+    expect(composed.filesystem.denyWrite).toEqual(
+      expect.arrayContaining([join(env.cwd, ".git", "hooks"), join(env.cwd, ".git", "config")]),
+    );
+    // A Session that cannot write the index, refs, and objects cannot commit.
+    expect(composed.filesystem.denyWrite).not.toContain(join(env.cwd, ".git"));
   });
 
   it("encodes callback failure and abort while terminating the host child group", async () => {

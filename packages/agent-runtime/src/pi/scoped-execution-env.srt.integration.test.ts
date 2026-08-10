@@ -4,12 +4,14 @@
  *
  *   VOLLI_SRT_INTEGRATION=1 vp test run packages/agent-runtime/src/pi/scoped-execution-env.srt.integration.test.ts
  */
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:net";
+import { promisify } from "node:util";
 import { SandboxManager } from "@anthropic-ai/sandbox-runtime";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { ScopedExecutionEnv } from "./scoped-execution-env";
@@ -17,6 +19,9 @@ import { ScopedExecutionEnv } from "./scoped-execution-env";
 const enabled = process.env.VOLLI_SRT_INTEGRATION === "1";
 const credentialName = "VOLLI_SRT_INTEGRATION_CREDENTIAL";
 const hookName = "BASH_ENV";
+
+/** Host-side git, deliberately outside the sandbox this test is about. */
+const git = (cwd: string, ...args: string[]) => promisify(execFile)("git", args, { cwd });
 
 function outputOf(result: Awaited<ReturnType<ScopedExecutionEnv["exec"]>>): string {
   return result.ok ? `${result.value.stdout}\n${result.value.stderr}` : result.error.message;
@@ -150,6 +155,55 @@ describe.skipIf(!enabled)(
             server.close((error) => (error ? reject(error) : resolve())),
           );
         }
+      } finally {
+        await env.cleanup();
+      }
+    });
+
+    /**
+     * A project Session, because only a Main checkout has this hole. In a Ticket
+     * worktree `.git` is a file pointing into the main repository, so the real
+     * hooks and config live outside the workspace and `allowWrite` already
+     * refuses them; here `.git/` is a real directory inside the writable root.
+     *
+     * The rule pack cannot close it: `path.git-internals` reads file-tool
+     * writes, shell redirects, and `git config`, and a plain `cp` names its
+     * destination as an ordinary operand. So the kernel does, and the commit
+     * case below is what keeps the fix from being "deny all of `.git`".
+     */
+    it("refuses a copy into a Main checkout's .git hooks and config, and still lets git commit", async () => {
+      expect(process.platform).toBe("darwin");
+      expect(SandboxManager.isSupportedPlatform()).toBe(true);
+
+      parent = await mkdtemp(join(homedir(), ".volli-srt-integration-"));
+      const checkout = join(parent, "main-checkout");
+      await mkdir(checkout);
+      // Built on the host, as a Main checkout always is: the repository and its
+      // committer identity pre-date the Session. Doing it through `env.exec`
+      // would fail on this very denial, since `git config` writes `.git/config`.
+      await git(checkout, "init", "--quiet");
+      await git(checkout, "config", "user.email", "session@volli.test");
+      await git(checkout, "config", "user.name", "Volli Session");
+
+      const env = await ScopedExecutionEnv.create(checkout, { sandbox: SandboxManager });
+      try {
+        await expect(env.prepareProcessExecution()).resolves.toEqual({
+          ok: true,
+          value: undefined,
+        });
+        await writeFile(join(checkout, "evil.sh"), "#!/bin/sh\necho pwned\n");
+        for (const destination of [".git/hooks/pre-commit", ".git/config"]) {
+          const copied = await env.exec(`cp evil.sh ${destination}`);
+          expect(copied.ok && copied.value.exitCode === 0).toBe(false);
+          expect(await readFile(join(checkout, ".git", "config"), "utf8")).not.toContain("pwned");
+          expect(existsSync(join(checkout, ".git", "hooks", "pre-commit"))).toBe(false);
+        }
+
+        // The denial is two paths, not the repository: committing writes the
+        // index, refs, and objects, and a Session that cannot do that is broken.
+        await expect(
+          env.exec("git add evil.sh && git commit --quiet -m contained"),
+        ).resolves.toMatchObject({ ok: true, value: { exitCode: 0 } });
       } finally {
         await env.cleanup();
       }
