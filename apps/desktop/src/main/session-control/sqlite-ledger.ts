@@ -33,6 +33,24 @@ import {
 type SqlRow = Record<string, unknown>;
 
 /**
+ * Thrown when durable history carries a payload kind this build does not know.
+ *
+ * Separate from every other decode failure on purpose: a retired kind is an
+ * expected consequence of removing a Session Event, while a malformed field
+ * inside a known kind is corruption. The read path drops the first and still
+ * fails loudly on the second.
+ */
+export class UnknownPayloadKindError extends Error {
+  constructor(
+    readonly payloadKind: string,
+    context: string,
+  ) {
+    super(`${context}.kind is not a known Session event payload`);
+    this.name = "UnknownPayloadKindError";
+  }
+}
+
+/**
  * The desktop's sole durable Session writer.  Although better-sqlite3 is
  * synchronous, a Session Engine transaction may await host work, so this queue
  * holds BEGIN IMMEDIATE ownership across that await and never lets a second
@@ -200,7 +218,13 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
            FROM session_events WHERE id = ?`,
       )
       .get(eventId) as unknown;
-    return row === undefined ? null : decodeEvent(row, "session_events row");
+    if (row === undefined) return null;
+    try {
+      return decodeEvent(row, "session_events row");
+    } catch (error) {
+      if (error instanceof UnknownPayloadKindError) return null;
+      throw error;
+    }
   }
 
   appendEvent(event: SessionEvent): void {
@@ -288,7 +312,26 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
           ORDER BY sequence ASC${limit}`,
       )
       .all({ sessionId: query.sessionId, afterSequence, limit: query.limit }) as unknown[];
-    return rows.map((row) => decodeEvent(row, "session_events row"));
+    const decoded: SessionEvent[] = [];
+    let dropped = 0;
+    const retiredKinds = new Set<string>();
+    for (const row of rows) {
+      try {
+        decoded.push(decodeEvent(row, "session_events row"));
+      } catch (error) {
+        if (!(error instanceof UnknownPayloadKindError)) throw error;
+        dropped += 1;
+        retiredKinds.add(error.payloadKind);
+      }
+    }
+    if (dropped > 0) {
+      // Named, not just counted: the whole point of dropping is that this build
+      // no longer knows the kind, so the kind is the only thing that identifies
+      // what a reader is missing.
+      const names = [...retiredKinds].toSorted().join(", ");
+      console.warn(`[session-ledger] skipped ${dropped} event(s) of retired kind(s): ${names}`);
+    }
+    return decoded;
   }
 
   getCommand(commandId: string): SessionCommand | null {
@@ -691,7 +734,7 @@ function decodePayload(value: unknown, context: string): SessionEventPayload {
         native: decodeNativeDetail(record.native, `${context}.native`),
       };
     default:
-      throw new Error(`${context}.kind is not a known Session event payload`);
+      throw new UnknownPayloadKindError(kind, context);
   }
 }
 
