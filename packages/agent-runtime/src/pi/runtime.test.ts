@@ -23,9 +23,13 @@ import {
   type Models,
   type ToolCall,
 } from "@earendil-works/pi-ai";
-import { BUILTIN_RULE_PACK_HASH, BUILTIN_RULE_PACK_ID } from "@volli/shared";
+import {
+  BUILTIN_RULE_PACK_HASH,
+  BUILTIN_RULE_PACK_ID,
+  type RuntimeObservation,
+  type SessionRuntimeSpec,
+} from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { RuntimeObservation, SessionRuntimeSpec } from "../contracts";
 import { ScopedExecutionEnv, type SessionExecutionEnv } from "./scoped-execution-env";
 import { createPiTools } from "./tools";
 import { createPiAgentRuntime } from "./runtime";

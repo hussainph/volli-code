@@ -16,7 +16,7 @@ import {
   type ExecutionToolContext,
 } from "@earendil-works/pi-agent-core/node";
 import type { TSchema } from "@earendil-works/pi-ai";
-import type { CodingToolId, RuntimeToolBundle } from "../contracts";
+import type { CodingToolId, RuntimeToolBundle } from "@volli/shared";
 import type { SessionExecutionEnv } from "./scoped-execution-env";
 
 function bindContext<TParameters extends TSchema, TDetails>(

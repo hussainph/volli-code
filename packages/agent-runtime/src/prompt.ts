@@ -13,14 +13,14 @@
  * because a ticketless chat is not a more trusted place to run an agent.
  */
 
-import type { AuthoritySnapshot } from "@volli/shared";
 import type {
+  AuthoritySnapshot,
   PromptResource,
   RuntimeBrief,
   RuntimeSessionRole,
   RuntimeToolBundle,
   SessionRuntimeSpec,
-} from "./contracts";
+} from "@volli/shared";
 
 const OPERATING_LAYER = [
   "# Operating",

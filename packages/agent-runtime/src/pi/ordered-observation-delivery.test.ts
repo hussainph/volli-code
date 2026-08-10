@@ -1,5 +1,5 @@
+import type { RuntimeActivityObservation } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
-import type { RuntimeActivityObservation } from "../contracts";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
 
 function progress(activityId: string): RuntimeActivityObservation {

@@ -1,4 +1,3 @@
-export * from "./contracts";
 export {
   piAuthFilePath,
   piOwnedModels,

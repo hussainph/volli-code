@@ -1,14 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import type {
-  ModelSelectionOutcome,
-  AgentRuntime,
-  DeliveryOutcome,
-  RuntimeAttachmentHandle,
-  RuntimeObservation,
-  SessionRuntimeSpec,
-} from "@volli/agent-runtime";
-import type {
   BindingHandle,
   HarnessObservation,
   NativeAttachmentSpec,
@@ -19,7 +11,13 @@ import {
   ACTIVITY_METADATA_KEY,
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
+  type AgentRuntime,
+  type DeliveryOutcome,
   type ModelAccessSnapshot,
+  type ModelSelectionOutcome,
+  type RuntimeAttachmentHandle,
+  type RuntimeObservation,
+  type SessionRuntimeSpec,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 

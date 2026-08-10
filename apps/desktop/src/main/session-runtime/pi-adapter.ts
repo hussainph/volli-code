@@ -40,21 +40,7 @@
  *    AbortController stays what `release` pulls.
  */
 
-import {
-  createPiAgentRuntime,
-  type AgentRuntime,
-  type AttentionObservation,
-  type DeliveryOutcome,
-  type ModelSelectionOutcome,
-  type PiRuntimeHostOptions,
-  type RuntimeAttachmentHandle,
-  type RuntimeActivityObservation,
-  type RuntimeObservation,
-  type RuntimeRecoveryRef,
-  type SettledAssistantMessage,
-  type SessionRuntimeSpec,
-  type TranscriptDeltaObservation,
-} from "@volli/agent-runtime";
+import { createPiAgentRuntime, type PiRuntimeHostOptions } from "@volli/agent-runtime";
 import type {
   BindingHandle,
   DeliveryReceipt,
@@ -74,9 +60,20 @@ import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   errorMessage,
+  type AgentRuntime,
+  type AttentionObservation,
+  type DeliveryOutcome,
   type ModelSelection,
+  type ModelSelectionOutcome,
+  type RuntimeAttachmentHandle,
+  type RuntimeActivityObservation,
+  type RuntimeObservation,
+  type RuntimeRecoveryRef,
+  type SettledAssistantMessage,
   type SessionNativeDetail,
   type SessionNativeReference,
+  type SessionRuntimeSpec,
+  type TranscriptDeltaObservation,
   type WorkLocationKind,
 } from "@volli/shared";
 import type { UIMessage } from "ai";

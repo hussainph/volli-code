@@ -6,8 +6,13 @@
  * renderer consumption.
  */
 
-import type { ActivityDescriptor, ActivityKind, ActivityOutcome } from "@volli/shared";
-import type { RuntimeActivityObservation, RuntimeActivityValue } from "../contracts";
+import type {
+  ActivityDescriptor,
+  ActivityKind,
+  ActivityOutcome,
+  RuntimeActivityObservation,
+  RuntimeActivityValue,
+} from "@volli/shared";
 import { sanitizeDiagnostic } from "./transcript";
 
 /** Maximum characters retained in a user-facing activity summary or error. */

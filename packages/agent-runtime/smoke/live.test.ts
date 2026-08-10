@@ -13,9 +13,13 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BUILTIN_RULE_PACK_HASH, BUILTIN_RULE_PACK_ID } from "@volli/shared";
+import {
+  BUILTIN_RULE_PACK_HASH,
+  BUILTIN_RULE_PACK_ID,
+  type RuntimeObservation,
+} from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
-import { createPiAgentRuntime, type RuntimeObservation } from "../src";
+import { createPiAgentRuntime } from "../src";
 
 const DEFAULT_MODEL = "anthropic/claude-haiku-4-5";
 
