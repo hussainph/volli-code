@@ -208,9 +208,11 @@ describe("SessionRuntime durable boundary invariants", () => {
       (await runtime.snapshot({ sessionId: created.sessionId })).projection.attachments,
     ).toMatchObject([{ id: attachmentId, status: "closed", outcome: "failed" }]);
     // The binding went with the attachment: a later operation on it fails
-    // rather than quietly attaching a second one.
+    // rather than quietly attaching a second one, and it fails saying why.
+    // Raising the recovery Attention against the closed attachment is rejected
+    // too, and that rejection must not stand in for this one.
     await expect(runtime.reconcile({ sessionId: created.sessionId, attachmentId })).rejects.toThrow(
-      "closed",
+      "is not open",
     );
     expect(adapter.attaches).toBe(1);
   });

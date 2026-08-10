@@ -1499,22 +1499,32 @@ class DefaultSessionRuntime implements SessionRuntime {
       if (this.#closed) throw error;
       if (projection.attention.active.some(({ id }) => id === recoveryAttentionId)) throw error;
       const detail = `Recovery failed: ${errorMessage(error)}`;
-      const attention = await this.ports.engine.observe({
-        id: this.#id("event"),
-        sessionId: input.sessionId,
-        attachmentId: input.attachmentId,
-        occurredAt: this.ports.clock.now(),
-        provenance: adapterProvenance(adapterIdentity(attachment.adapterId), location.venue),
-        kind: "attention.raised",
-        attention: {
-          id: recoveryAttentionId,
+      // Raising the Attention is best effort, and deliberately cannot displace
+      // the failure it describes. An attachment that is already closed rejects
+      // the observation, and letting that rejection propagate would replace
+      // "the binding could not be reconstructed" with "it is already closed" —
+      // the second is true and the first is the one worth reading. Nothing is
+      // swallowed: `error` is still thrown, and it is the better diagnostic.
+      try {
+        const attention = await this.ports.engine.observe({
+          id: this.#id("event"),
+          sessionId: input.sessionId,
           attachmentId: input.attachmentId,
-          kind: "adapter_unrecoverable",
-          detail,
-          diagnostic: null,
-        },
-      });
-      await this.#publish([attention]);
+          occurredAt: this.ports.clock.now(),
+          provenance: adapterProvenance(adapterIdentity(attachment.adapterId), location.venue),
+          kind: "attention.raised",
+          attention: {
+            id: recoveryAttentionId,
+            attachmentId: input.attachmentId,
+            kind: "adapter_unrecoverable",
+            detail,
+            diagnostic: null,
+          },
+        });
+        await this.#publish([attention]);
+      } catch {
+        // Deliberately empty: `error` below is the diagnostic worth keeping.
+      }
       throw error;
     }
     await this.#assertBindingOperationOpen();
