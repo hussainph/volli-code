@@ -347,6 +347,16 @@ network denied outright, that is a file elsewhere on a machine the user already
 owns, not exfiltration, and the sandbox's `denyWrite` already covers the
 agent-controllable scratch paths.
 
+**`rm` is strict on every operand, and that has a priced cost.** An unresolvable
+`$VAR` fails closed as an `rm` operand, so `for f in build dist; do rm -rf $f; done`
+is refused — an ordinary cleanup loop, and a self-amplifying one, because the
+natural retry is another `rm` in the same loop and three of them trip the
+consecutive-denial threshold. `git` was narrowed away from this cost, to the
+values of its path-bearing flags; `rm` was not, because every one of its
+operands is a deletion target. The refusal names the remedy — write the paths
+literally — so the model has a next move rather than a dead end. Resolving
+`$PWD`, which is derivable, would shrink this further if it proves noisy.
+
 **A Session can no longer set its own git identity.** `~/.gitconfig` was already
 unreadable under `denyRead: [homeDir]`, and denying `.git/config` writes removes
 the workaround of the agent setting a local identity itself. This costs nothing,

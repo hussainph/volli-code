@@ -81,7 +81,7 @@ export function shellPathTokenToPath(token: string, cwd: string): ShellOperand {
   if (expanded.startsWith("$")) {
     return {
       kind: "unresolvable",
-      reason: `"${trimmed}" expands through a variable only the shell can read.`,
+      reason: `"${trimmed}" expands through a variable only the shell can read; name the paths literally so they can be checked.`,
     };
   }
   return { kind: "path", path: isAbsolute(expanded) ? resolve(expanded) : resolve(cwd, expanded) };
