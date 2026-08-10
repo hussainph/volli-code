@@ -189,6 +189,47 @@ export const AUTHORITY_RULE_IDS = [
 
 export type AuthorityRuleId = (typeof AUTHORITY_RULE_IDS)[number];
 
+/**
+ * Why a call was refused, once a refusal is a durable fact rather than a string.
+ *
+ * Wider than {@link AuthorityRuleId} by exactly one member, because the gate can
+ * refuse before any rule runs: an operand it cannot resolve, or a tool argument
+ * it cannot read, is refused on the principle that a caller which cannot say
+ * what a call does must not allow it. That is a real denial and it must be
+ * countable, but no rule cited it, so it cannot borrow a rule's name.
+ */
+export type AuthorityDenialCause = AuthorityRuleId | "call.unreadable";
+
+/**
+ * The rules a person may overrule when Volli stops and asks.
+ *
+ * The test is not how alarming a rule sounds — it is whether an answer of "yes"
+ * could do anything. A rule is overridable when the sandbox would carry the call
+ * out if the policy stood aside, *and* a reasonable person could want it: writing
+ * a `pre-commit` hook is ordinary work, and so is a `git reset --hard` in a
+ * checkout the person owns.
+ *
+ * Everything else only reports. Two different reasons for that, both worth
+ * keeping straight. `path.outside-workspace`, `command.git-escapes-workspace` and
+ * `tool.not-bundled` are refusals an override cannot honour — Seatbelt denies the
+ * first two whatever this layer decides, and a tool that is not loaded cannot be
+ * called into existence by consent. The hard-deny rules are the opposite case:
+ * they are perfectly grantable and must not be granted, because a login item, a
+ * disabled certificate check or a weakened SIP outlives the Session that asked
+ * for it, and a person answering a question mid-task is not in a position to
+ * weigh that.
+ */
+export const OVERRIDABLE_AUTHORITY_RULES = [
+  "path.git-internals",
+  "path.volli-internals",
+  "command.git-discards-work",
+] as const satisfies readonly AuthorityRuleId[];
+
+/** Whether a refusal is one a person can overrule, or one that only reports. */
+export function isOverridableAuthorityRule(cause: AuthorityDenialCause): boolean {
+  return (OVERRIDABLE_AUTHORITY_RULES as readonly string[]).includes(cause);
+}
+
 export const BUILTIN_RULE_PACK_ID = "volli.builtin";
 
 /**

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { AUTHORITY_RULE_IDS, BUILTIN_RULE_PACK_HASH, hashRulePack } from "./authority";
+import {
+  AUTHORITY_RULE_IDS,
+  BUILTIN_RULE_PACK_HASH,
+  hashRulePack,
+  isOverridableAuthorityRule,
+  OVERRIDABLE_AUTHORITY_RULES,
+} from "./authority";
 
 describe("hashRulePack", () => {
   it("is stable for the same rule list", () => {
@@ -28,5 +34,24 @@ describe("hashRulePack", () => {
   it("always returns eight hex digits", () => {
     expect(BUILTIN_RULE_PACK_HASH).toMatch(/^[0-9a-f]{8}$/);
     expect(hashRulePack(["path.outside-workspace"])).toMatch(/^[0-9a-f]{8}$/);
+  });
+});
+
+describe("isOverridableAuthorityRule", () => {
+  it("is true for every rule a person may overrule when Volli stops and asks", () => {
+    for (const rule of OVERRIDABLE_AUTHORITY_RULES) {
+      expect(isOverridableAuthorityRule(rule)).toBe(true);
+    }
+  });
+
+  it("is false for a hard-deny rule and for a call the gate could not even read", () => {
+    expect(isOverridableAuthorityRule("command.persistence")).toBe(false);
+    expect(isOverridableAuthorityRule("call.unreadable")).toBe(false);
+  });
+
+  it("keeps every overridable rule inside the built-in pack, so the pack cannot drift from what it lets a person overrule", () => {
+    for (const rule of OVERRIDABLE_AUTHORITY_RULES) {
+      expect(AUTHORITY_RULE_IDS).toContain(rule);
+    }
   });
 });
