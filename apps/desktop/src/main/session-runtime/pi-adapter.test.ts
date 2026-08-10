@@ -1,14 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import type {
-  BindingHandle,
-  HarnessObservation,
-  NativeAttachmentSpec,
-  ObservationSink,
-} from "@volli/session-engine";
-import { NativeAttachmentError } from "@volli/session-engine";
+import type { BindingHandle, NativeAttachmentSpec, ObservationSink } from "@volli/session-engine";
+import { NativeAttachmentError, sessionRootThreadId } from "@volli/session-engine";
 import {
-  ACTIVITY_METADATA_KEY,
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   type AgentRuntime,
@@ -24,7 +18,6 @@ import type { UIMessage } from "ai";
 import {
   createPiNativeAdapter,
   createPiRuntimeHost,
-  piRootThreadId,
   PI_ADAPTER_ID,
   type PiAdapterOptions,
   type PiRuntimeContext,
@@ -38,7 +31,7 @@ const context: PiRuntimeContext = {
   location: "worktree",
   projectId: "project-1",
   ticketId: "ticket-1",
-  rootThreadId: piRootThreadId(SESSION_ID),
+  rootThreadId: sessionRootThreadId(SESSION_ID),
   brief: "VC-12: Host the Pi runtime",
   model: {
     providerId: "openai-codex",
@@ -62,32 +55,12 @@ function userMessage(text: string, id = "message-1"): UIMessage {
   return { id, role: "user", parts: [{ type: "text", text }] };
 }
 
+/** Records what the binding forwards; translating it is the Session Engine's job. */
 class RecordingSink implements ObservationSink {
-  readonly observations: HarnessObservation[] = [];
-  #nextFailure: Error | null = null;
+  readonly observations: RuntimeObservation[] = [];
 
-  failNext(): void {
-    this.#nextFailure = new Error("sink unavailable");
-  }
-
-  async emit(observation: HarnessObservation): Promise<void> {
-    const failure = this.#nextFailure;
-    this.#nextFailure = null;
-    if (failure !== null) throw failure;
+  async emit(observation: RuntimeObservation): Promise<void> {
     this.observations.push(observation);
-  }
-
-  kinds(): string[] {
-    return this.observations.map((observation) => observation.kind);
-  }
-
-  of<Kind extends HarnessObservation["kind"]>(
-    kind: Kind,
-  ): Extract<HarnessObservation, { kind: Kind }>[] {
-    return this.observations.filter(
-      (observation): observation is Extract<HarnessObservation, { kind: Kind }> =>
-        observation.kind === kind,
-    );
   }
 }
 
@@ -108,6 +81,7 @@ class FakeRuntime implements AgentRuntime {
   retries = 0;
   closes = 0;
   startFailure: unknown = null;
+  readonly startupObservations: RuntimeObservation[] = [];
   submitFailure: unknown = null;
   reconciliationCursor: string | null = null;
   readonly reconciliationObservations: RuntimeObservation[] = [];
@@ -131,6 +105,9 @@ class FakeRuntime implements AgentRuntime {
   async startSession(spec: SessionRuntimeSpec): Promise<RuntimeAttachmentHandle> {
     this.specs.push(spec);
     this.#observe = spec.observer;
+    // Reported while `startSession` is still running, which is the only window
+    // in which the binding has no handle yet.
+    for (const observation of this.startupObservations) await spec.observer(observation);
     if (this.startFailure !== null) throw this.startFailure;
     return {
       submitUserMessage: async (text, delivery, commandId): Promise<DeliveryOutcome> => {
@@ -220,6 +197,17 @@ describe("Pi native adapter identity", () => {
       fingerprint: "npm:@earendil-works/pi-agent-core@0.84.1",
     });
   });
+
+  /**
+   * Spelled out here because this is the one link that fails silently.
+   * `observation-translation.test.ts` asserts the ids this namespace prefixes,
+   * but it supplies its own `"pi"`, so only this catches a change to the value
+   * the Engine is actually handed — which would not error, it would write a
+   * second copy of every fact in every Session's history.
+   */
+  it("declares the frozen namespace every durable id derived from Pi is minted under", () => {
+    expect(composition().adapter.durableIdNamespace).toBe("pi");
+  });
 });
 
 describe("Pi runtime host", () => {
@@ -252,7 +240,7 @@ describe("Pi native adapter attach", () => {
     expect(spec.identity).toEqual({
       role: "ticket",
       sessionId: SESSION_ID,
-      rootThreadId: piRootThreadId(SESSION_ID),
+      rootThreadId: sessionRootThreadId(SESSION_ID),
       attachmentId: ATTACHMENT_ID,
       projectId: "project-1",
       ticketId: "ticket-1",
@@ -310,7 +298,7 @@ describe("Pi native adapter attach", () => {
           location: "main-checkout",
           projectId: "project-1",
           ticketId: null,
-          rootThreadId: piRootThreadId(SESSION_ID),
+          rootThreadId: sessionRootThreadId(SESSION_ID),
           brief: "A project-scoped chat Session.",
           model: context.model,
         }),
@@ -322,7 +310,7 @@ describe("Pi native adapter attach", () => {
     expect(spec.identity).toEqual({
       role: "project",
       sessionId: SESSION_ID,
-      rootThreadId: piRootThreadId(SESSION_ID),
+      rootThreadId: sessionRootThreadId(SESSION_ID),
       attachmentId: ATTACHMENT_ID,
       projectId: "project-1",
       ticketId: null,
@@ -411,12 +399,36 @@ describe("Pi native adapter attach", () => {
     expect(runtime.specs).toHaveLength(0);
   });
 
-  it("says nothing to the Session about the attachment the engine records itself", async () => {
+  it("says nothing about an attachment the binding does not hold yet", async () => {
+    const runtime = new FakeRuntime();
+    runtime.startupObservations.push(
+      { kind: "attachment", state: "started" },
+      { kind: "attachment", state: "failed", failure: { reason: "auth", message: "no" } },
+    );
+    const adapter = createPiNativeAdapter({
+      sessionDataDir: "/data/pi-sessions",
+      resolveRuntimeContext: async () => context,
+      createRuntime: () => runtime,
+    });
+    const sink = new RecordingSink();
+
+    await adapter.attach(attachmentSpec(), sink);
+
+    // `started` is the Session Engine's own `attachment.opened` said twice, and
+    // a pre-handle `failed` is the rejection `attach` throws.
+    expect(sink.observations).toEqual([]);
+  });
+
+  it("forwards an attachment fact the binding does hold, for the Engine to interpret", async () => {
     const { runtime, sink } = await attached();
 
     await runtime.observe({ kind: "attachment", state: "started" });
+    await runtime.observe({ kind: "attachment", state: "closed" });
 
-    expect(sink.observations).toEqual([]);
+    expect(sink.observations).toEqual([
+      { kind: "attachment", state: "started" },
+      { kind: "attachment", state: "closed" },
+    ]);
   });
 
   it("leaves a binding with no recovery reference addressable by nothing", async () => {
@@ -431,667 +443,6 @@ describe("Pi native adapter attach", () => {
     const binding = await adapter.attach(attachmentSpec(), new RecordingSink());
 
     expect(binding.native).toEqual({ id: null, detail: null });
-  });
-});
-
-describe("Pi native adapter observation translation", () => {
-  it("opens and closes a turn", async () => {
-    const { runtime, sink } = await attached();
-
-    await runtime.observe({ kind: "turn", state: "started", turnId: "turn-1" });
-    await runtime.observe({ kind: "turn", state: "completed", turnId: "turn-1" });
-
-    expect(sink.observations).toEqual([
-      { id: "pi:turn:turn-1:started", kind: "turn.started", occurredAt: 1000, turnId: "turn-1" },
-      {
-        id: "pi:turn:turn-1:completed",
-        kind: "turn.completed",
-        occurredAt: 1001,
-        turnId: "turn-1",
-      },
-    ]);
-  });
-
-  it("records an interrupted turn without pretending it completed", async () => {
-    const { runtime, sink } = await attached();
-
-    await runtime.observe({ kind: "turn", state: "interrupted", turnId: "turn-1" });
-
-    expect(sink.kinds()).toEqual(["turn.interrupted"]);
-  });
-
-  it("opens a streamed message with a reset and grows it with appends", async () => {
-    const { runtime, sink } = await attached();
-
-    await runtime.observe({ kind: "turn", state: "started", turnId: "turn-1" });
-    await runtime.observe({ kind: "delta", turnId: "turn-1", channel: "text", text: "He" });
-    await runtime.observe({ kind: "delta", turnId: "turn-1", channel: "text", text: "llo" });
-
-    const deltas = sink.of("transcript.delta");
-    const messageId = `pi:${ATTACHMENT_ID}:turn-1:0`;
-    expect(deltas.map((delta) => delta.messageId)).toEqual([messageId, messageId, messageId]);
-    expect(deltas.map((delta) => delta.delta)).toEqual([
-      { op: "reset", message: { id: messageId, role: "assistant", parts: [] } },
-      {
-        op: "part.upsert",
-        key: "text",
-        index: 0,
-        part: { type: "text", text: "He", state: "streaming" },
-      },
-      { op: "part.append", key: "text", text: "llo" },
-    ]);
-    expect(deltas[0].threadId).toBe(piRootThreadId(SESSION_ID));
-    expect(deltas[0].branchId).toBe(`branch:${SESSION_ID}:main`);
-    expect(deltas[0].attemptId).toBe(`attempt:${messageId}`);
-  });
-
-  it("carries a reasoning delta as the overlay's own reasoning part, ahead of the text", async () => {
-    const { runtime, sink } = await attached();
-
-    await runtime.observe({ kind: "turn", state: "started", turnId: "turn-1" });
-    await runtime.observe({ kind: "delta", turnId: "turn-1", channel: "reasoning", text: "think" });
-    await runtime.observe({ kind: "delta", turnId: "turn-1", channel: "reasoning", text: "ing" });
-    await runtime.observe({ kind: "delta", turnId: "turn-1", channel: "text", text: "done" });
-
-    expect(sink.of("transcript.delta").map((delta) => delta.delta)).toEqual([
-      {
-        op: "reset",
-        message: { id: `pi:${ATTACHMENT_ID}:turn-1:0`, role: "assistant", parts: [] },
-      },
-      {
-        op: "part.upsert",
-        key: "reasoning",
-        index: 0,
-        part: { type: "reasoning", text: "think", state: "streaming" },
-      },
-      { op: "part.append", key: "reasoning", text: "ing" },
-      {
-        op: "part.upsert",
-        key: "text",
-        index: 1,
-        part: { type: "text", text: "done", state: "streaming" },
-      },
-    ]);
-  });
-
-  it("projects execute lifecycle into a generic stamped tool and durable result", async () => {
-    const { runtime, sink } = await attached();
-
-    await runtime.observe({ kind: "turn", state: "started", turnId: "turn-1" });
-    await runtime.observe({
-      kind: "delta",
-      turnId: "turn-1",
-      channel: "reasoning",
-      text: "checking",
-    });
-    await runtime.observe({
-      kind: "activity",
-      turnId: "turn-1",
-      activityId: "call-7",
-      state: "started",
-      descriptor: {
-        kind: "run-command",
-        nativeToolName: "bash",
-        subject: { label: "vp test", path: null, lineRange: null },
-        outcome: null,
-        startedAt: 10,
-        endedAt: null,
-      },
-      input: { command: "vp test" },
-      output: null,
-    });
-    await runtime.observe({
-      kind: "activity",
-      turnId: "turn-1",
-      activityId: "call-7",
-      state: "progress",
-      descriptor: {
-        kind: "run-command",
-        nativeToolName: "bash",
-        subject: { label: "vp test", path: null, lineRange: null },
-        outcome: null,
-        startedAt: 10,
-        endedAt: null,
-      },
-      input: { command: "vp test" },
-      output: { content: "partial" },
-    });
-    await runtime.observe({
-      kind: "activity",
-      turnId: "turn-1",
-      activityId: "call-7",
-      state: "completed",
-      descriptor: {
-        kind: "run-command",
-        nativeToolName: "bash",
-        subject: { label: "vp test", path: null, lineRange: null },
-        outcome: {
-          exitCode: 0,
-          matchCount: null,
-          fileCount: null,
-          lineCount: 1,
-          bytes: 7,
-          addedLines: null,
-          removedLines: null,
-          diff: null,
-          summary: "partial",
-        },
-        startedAt: 10,
-        endedAt: 20,
-      },
-      input: { command: "vp test" },
-      output: { content: "complete" },
-    });
-    await runtime.observe({ kind: "delta", turnId: "turn-1", channel: "text", text: "Done." });
-
-    const activityMessageId = `pi:${ATTACHMENT_ID}:turn-1:activity:call-7`;
-    const activityDeltas = sink
-      .of("transcript.delta")
-      .filter((observation) => observation.messageId === activityMessageId);
-    expect(activityDeltas.map((observation) => observation.delta)).toEqual([
-      { op: "reset", message: { id: activityMessageId, role: "assistant", parts: [] } },
-      expect.objectContaining({
-        op: "part.upsert",
-        key: "activity:call-7",
-        index: 0,
-        part: expect.objectContaining({
-          type: "dynamic-tool",
-          toolName: "volli.activity",
-          toolCallId: "call-7",
-          state: "input-available",
-          input: { command: "vp test" },
-        }),
-      }),
-      expect.objectContaining({
-        op: "part.upsert",
-        key: "activity:call-7",
-        index: 0,
-        part: expect.objectContaining({
-          type: "dynamic-tool",
-          toolName: "volli.activity",
-          toolCallId: "call-7",
-          state: "output-available",
-          input: { command: "vp test" },
-          output: { content: "partial" },
-          preliminary: true,
-        }),
-      }),
-    ]);
-
-    const [settled] = sink.of("transcript.message");
-    expect(settled).toMatchObject({
-      id: `pi:activity:${ATTACHMENT_ID}:turn-1:call-7:completed`,
-      threadId: piRootThreadId(SESSION_ID),
-      branchId: `branch:${SESSION_ID}:main`,
-      attemptId: `attempt:${activityMessageId}`,
-      turnId: "turn-1",
-      message: {
-        id: activityMessageId,
-        role: "assistant",
-        parts: [
-          {
-            type: "dynamic-tool",
-            toolName: "volli.activity",
-            toolCallId: "call-7",
-            state: "output-available",
-            input: { command: "vp test" },
-            output: { content: "complete" },
-            toolMetadata: {
-              [ACTIVITY_METADATA_KEY]: expect.objectContaining({
-                kind: "run-command",
-                nativeToolName: "bash",
-              }),
-            },
-          },
-        ],
-      },
-    });
-    expect(settled.cursor).toBeUndefined();
-    expect(
-      sink.of("transcript.delta").map((observation) => [observation.messageId, observation.delta]),
-    ).toContainEqual([
-      `pi:${ATTACHMENT_ID}:turn-1:0`,
-      {
-        op: "part.upsert",
-        key: "text",
-        index: 1,
-        part: { type: "text", text: "Done.", state: "streaming" },
-      },
-    ]);
-  });
-
-  it("settles failed activity as a durable generic tool error", async () => {
-    const { runtime, sink } = await attached();
-
-    await runtime.observe({
-      kind: "activity",
-      turnId: "turn-1",
-      activityId: "call-8",
-      state: "failed",
-      descriptor: {
-        kind: "other",
-        nativeToolName: "custom_reader",
-        subject: { label: "config", path: null, lineRange: null },
-        outcome: null,
-        startedAt: 10,
-        endedAt: 20,
-      },
-      input: { file: "config" },
-      output: { message: "denied" },
-      error: "The file could not be read.",
-    });
-
-    const [settled] = sink.of("transcript.message");
-    expect(settled.id).toBe(`pi:activity:${ATTACHMENT_ID}:turn-1:call-8:failed`);
-    expect(settled.cursor).toBeUndefined();
-    expect(settled.message).toEqual({
-      id: `pi:${ATTACHMENT_ID}:turn-1:activity:call-8`,
-      role: "assistant",
-      parts: [
-        {
-          type: "dynamic-tool",
-          toolName: "volli.activity",
-          toolCallId: "call-8",
-          state: "output-error",
-          input: { file: "config" },
-          errorText: "The file could not be read.",
-          toolMetadata: {
-            [ACTIVITY_METADATA_KEY]: {
-              kind: "other",
-              nativeToolName: "custom_reader",
-              subject: { label: "config", path: null, lineRange: null },
-              outcome: null,
-              startedAt: 10,
-              endedAt: 20,
-            },
-          },
-        },
-      ],
-    });
-  });
-
-  it("withdraws activity overlays a completed or interrupted turn cannot settle", async () => {
-    const { runtime, sink } = await attached();
-
-    await runtime.observe({ kind: "turn", state: "started", turnId: "turn-1" });
-    await runtime.observe({
-      kind: "activity",
-      turnId: "turn-1",
-      activityId: "call-active",
-      state: "started",
-      descriptor: {
-        kind: "search",
-        nativeToolName: "grep",
-        subject: { label: "needle", path: null, lineRange: null },
-        outcome: null,
-        startedAt: 10,
-        endedAt: null,
-      },
-      input: { pattern: "needle" },
-      output: null,
-    });
-    await runtime.observe({ kind: "turn", state: "interrupted", turnId: "turn-1" });
-    await runtime.observe({ kind: "turn", state: "started", turnId: "turn-2" });
-    await runtime.observe({
-      kind: "activity",
-      turnId: "turn-2",
-      activityId: "call-complete",
-      state: "started",
-      descriptor: {
-        kind: "search",
-        nativeToolName: "grep",
-        subject: { label: "other", path: null, lineRange: null },
-        outcome: null,
-        startedAt: 20,
-        endedAt: null,
-      },
-      input: { pattern: "other" },
-      output: null,
-    });
-    await runtime.observe({ kind: "turn", state: "completed", turnId: "turn-2" });
-
-    expect(sink.of("transcript.message")).toEqual([]);
-    expect(
-      sink
-        .of("transcript.delta")
-        .filter((observation) => observation.delta.op === "message.remove")
-        .map((observation) => observation.messageId),
-    ).toEqual([
-      `pi:${ATTACHMENT_ID}:turn-1:activity:call-active`,
-      `pi:${ATTACHMENT_ID}:turn-2:activity:call-complete`,
-    ]);
-  });
-
-  it("keeps an activity overlay tracked until its reset, settlement, or removal reaches the Session", async () => {
-    const { runtime, sink } = await attached();
-    const started = {
-      kind: "activity" as const,
-      turnId: "turn-1",
-      activityId: "call-retry",
-      state: "started" as const,
-      descriptor: {
-        kind: "read-file" as const,
-        nativeToolName: "read",
-        subject: { label: "src/retry.ts", path: "src/retry.ts", lineRange: null },
-        outcome: null,
-        startedAt: 10,
-        endedAt: null,
-      },
-      input: { path: "src/retry.ts" },
-      output: null,
-    };
-
-    sink.failNext();
-    await expect(runtime.observe(started)).rejects.toThrow("sink unavailable");
-    await runtime.observe(started);
-
-    const activityMessageId = `pi:${ATTACHMENT_ID}:turn-1:activity:call-retry`;
-    expect(sink.of("transcript.delta").map((observation) => observation.delta.op)).toEqual([
-      "reset",
-      "part.upsert",
-    ]);
-
-    sink.failNext();
-    await expect(
-      runtime.observe({
-        ...started,
-        state: "completed",
-        descriptor: { ...started.descriptor, endedAt: 20 },
-        output: { content: "complete" },
-      }),
-    ).rejects.toThrow("sink unavailable");
-    await runtime.observe({ kind: "turn", state: "completed", turnId: "turn-1" });
-
-    expect(sink.of("transcript.delta").at(-1)).toMatchObject({
-      messageId: activityMessageId,
-      delta: { op: "message.remove" },
-    });
-  });
-
-  it("retries a failed closed-turn activity removal on the next turn without repeating it", async () => {
-    const { runtime, sink } = await attached();
-    const activityMessageId = `pi:${ATTACHMENT_ID}:turn-1:activity:call-retry-later`;
-
-    await runtime.observe({ kind: "turn", state: "started", turnId: "turn-1" });
-    await runtime.observe({
-      kind: "activity",
-      turnId: "turn-1",
-      activityId: "call-retry-later",
-      state: "started",
-      descriptor: {
-        kind: "read-file",
-        nativeToolName: "read",
-        subject: { label: "src/retry.ts", path: "src/retry.ts", lineRange: null },
-        outcome: null,
-        startedAt: 10,
-        endedAt: null,
-      },
-      input: { path: "src/retry.ts" },
-      output: null,
-    });
-
-    sink.failNext();
-    await expect(
-      runtime.observe({ kind: "turn", state: "completed", turnId: "turn-1" }),
-    ).rejects.toThrow("sink unavailable");
-
-    await runtime.observe({ kind: "turn", state: "started", turnId: "turn-2" });
-    await runtime.observe({ kind: "turn", state: "started", turnId: "turn-3" });
-
-    expect(
-      sink
-        .of("transcript.delta")
-        .filter((observation) => observation.delta.op === "message.remove")
-        .map((observation) => observation.messageId),
-    ).toEqual([activityMessageId]);
-  });
-
-  it("retires the provisional overlay before settling under the stable Pi entry id", async () => {
-    const { runtime, sink } = await attached();
-
-    await runtime.observe({ kind: "turn", state: "started", turnId: "turn-1" });
-    await runtime.observe({ kind: "delta", turnId: "turn-1", channel: "text", text: "Hello" });
-    await runtime.observe({
-      kind: "message-settled",
-      turnId: "turn-1",
-      message: {
-        entryId: "entry-7",
-        role: "assistant",
-        text: "Hello",
-        reasoning: "thinking",
-        model: { providerId: "openai-codex", modelId: "gpt-5.6-terra" },
-        usage: { inputTokens: 11, outputTokens: 3, costUsd: 0.5 },
-      },
-      occurredAt: 42,
-      recoveryCursor: "marker-7",
-    });
-
-    const [settled] = sink.of("transcript.message");
-    const provisionalId = `pi:${ATTACHMENT_ID}:turn-1:0`;
-    const messageId = `pi:${ATTACHMENT_ID}:entry:entry-7`;
-    expect(settled.id).toBe("pi:message:entry-7");
-    expect(settled.message.id).toBe(messageId);
-    expect(sink.of("transcript.delta").at(-1)).toMatchObject({
-      messageId: provisionalId,
-      delta: { op: "message.remove" },
-    });
-    expect(settled.threadId).toBe(piRootThreadId(SESSION_ID));
-    expect(settled.branchId).toBe(`branch:${SESSION_ID}:main`);
-    expect(settled.attemptId).toBe(`attempt:${messageId}`);
-    expect(settled.turnId).toBe("turn-1");
-    expect(settled.cursor).toEqual({ entryId: "marker-7" });
-    expect(settled.message.parts).toEqual([
-      { type: "reasoning", text: "thinking", state: "done" },
-      { type: "text", text: "Hello", state: "done" },
-    ]);
-    expect(settled.message.metadata).toEqual({
-      providerId: "openai-codex",
-      modelId: "gpt-5.6-terra",
-      cost: 0.5,
-      tokens: { input: 11, output: 3, reasoning: null, cacheRead: null, cacheWrite: null },
-    });
-  });
-
-  it("gives each message of a turn its own id, and starts over on the next turn", async () => {
-    const { runtime, sink } = await attached();
-
-    await runtime.observe({ kind: "turn", state: "started", turnId: "turn-1" });
-    await runtime.observe({ kind: "delta", turnId: "turn-1", channel: "text", text: "one" });
-    await runtime.observe({
-      kind: "message-settled",
-      turnId: "turn-1",
-      message: { entryId: "entry-1", role: "assistant", text: "one" },
-    });
-    await runtime.observe({ kind: "delta", turnId: "turn-1", channel: "text", text: "two" });
-    await runtime.observe({
-      kind: "message-settled",
-      turnId: "turn-1",
-      message: { entryId: "entry-2", role: "assistant", text: "two" },
-    });
-    await runtime.observe({ kind: "turn", state: "started", turnId: "turn-2" });
-    await runtime.observe({
-      kind: "message-settled",
-      turnId: "turn-2",
-      message: { entryId: "entry-3", role: "assistant", text: "three" },
-    });
-
-    expect(sink.of("transcript.message").map((message) => message.message.id)).toEqual([
-      `pi:${ATTACHMENT_ID}:entry:entry-1`,
-      `pi:${ATTACHMENT_ID}:entry:entry-2`,
-      `pi:${ATTACHMENT_ID}:entry:entry-3`,
-    ]);
-  });
-
-  it("omits metadata a settled message has nothing to say about", async () => {
-    const { runtime, sink } = await attached();
-
-    await runtime.observe({
-      kind: "message-settled",
-      turnId: "turn-1",
-      message: { entryId: "entry-1", role: "assistant", text: "bare" },
-    });
-
-    const [settled] = sink.of("transcript.message");
-    expect(settled.message.metadata).toBeUndefined();
-    expect(settled.message.parts).toEqual([{ type: "text", text: "bare", state: "done" }]);
-  });
-
-  it("withdraws a transient claim a settled message has nothing durable to replace", async () => {
-    const { runtime, sink } = await attached();
-
-    await runtime.observe({ kind: "delta", turnId: "turn-1", channel: "text", text: "..." });
-    await runtime.observe({
-      kind: "message-settled",
-      turnId: "turn-1",
-      message: { entryId: "entry-1", role: "assistant", text: "" },
-    });
-
-    expect(sink.of("transcript.message")).toEqual([]);
-    expect(sink.of("transcript.delta").at(-1)?.delta).toEqual({ op: "message.remove" });
-  });
-
-  it("withdraws an in-flight message no turn is left to finish", async () => {
-    const { runtime, sink } = await attached();
-
-    await runtime.observe({ kind: "turn", state: "started", turnId: "turn-1" });
-    await runtime.observe({ kind: "delta", turnId: "turn-1", channel: "text", text: "half" });
-    await runtime.observe({ kind: "turn", state: "interrupted", turnId: "turn-1" });
-
-    expect(sink.kinds()).toEqual([
-      "turn.started",
-      "transcript.delta",
-      "transcript.delta",
-      "transcript.delta",
-      "turn.interrupted",
-    ]);
-    expect(sink.of("transcript.delta").at(-1)?.delta).toEqual({ op: "message.remove" });
-  });
-
-  it("raises and clears attention under one id per reason", async () => {
-    const { runtime, sink } = await attached();
-
-    await runtime.observe({
-      kind: "attention",
-      state: "raised",
-      reason: "auth",
-      message: "Log in to openai-codex to continue.",
-    });
-    await runtime.observe({ kind: "attention", state: "cleared", reason: "auth", message: "" });
-
-    const attentionId = `pi:attention:${ATTACHMENT_ID}:auth`;
-    expect(sink.of("attention.raised")[0].attention).toEqual({
-      id: attentionId,
-      kind: "auth_required",
-      detail: "Log in to openai-codex to continue.",
-      diagnostic: null,
-    });
-    expect(sink.of("attention.cleared")[0].attentionId).toBe(attentionId);
-  });
-
-  it("maps every runtime attention reason onto product vocabulary", async () => {
-    const { runtime, sink } = await attached();
-
-    for (const reason of [
-      "auth",
-      "configuration",
-      "context",
-      "runtime-failure",
-      "partial-turn",
-    ] as const) {
-      await runtime.observe({ kind: "attention", state: "raised", reason, message: reason });
-    }
-
-    expect(sink.of("attention.raised").map((raised) => raised.attention.kind)).toEqual([
-      "auth_required",
-      "configuration_invalid",
-      "context_limit_reached",
-      "adapter_unrecoverable",
-      "partial_turn_interrupted",
-    ]);
-  });
-
-  it("reports a runtime failure that lands after the attachment opened", async () => {
-    const { runtime, sink } = await attached();
-
-    await runtime.observe({
-      kind: "attachment",
-      state: "failed",
-      failure: { reason: "model", message: "Model is unavailable." },
-    });
-
-    expect(sink.of("attachment.failed")[0].detail).toBe("Model is unavailable.");
-  });
-
-  it("reports a close the Session did not ask for", async () => {
-    const { runtime, sink } = await attached();
-
-    await runtime.observe({ kind: "attachment", state: "closed" });
-
-    expect(sink.of("attachment.closed")[0].outcome).toBe("completed");
-  });
-
-  it("ignores a recovery it did not perform", async () => {
-    const { runtime, sink } = await attached();
-
-    await runtime.observe({ kind: "attachment", state: "recovered" });
-
-    expect(sink.observations).toEqual([]);
-  });
-
-  it("translates a denied authority observation into a durable authority.denied fact", async () => {
-    const { runtime, sink } = await attached();
-
-    await runtime.observe({
-      kind: "authority",
-      state: "denied",
-      turnId: "turn-1",
-      tool: "bash",
-      cause: "command.destructive-removal",
-      reason: "rm -rf ~ discards more than this Session's workspace.",
-    });
-
-    expect(sink.of("authority.denied")).toEqual([
-      {
-        id: `pi:authority:${ATTACHMENT_ID}:1`,
-        kind: "authority.denied",
-        occurredAt: 1000,
-        turnId: "turn-1",
-        tool: "bash",
-        cause: "command.destructive-removal",
-        reason: "rm -rf ~ discards more than this Session's workspace.",
-      },
-    ]);
-  });
-
-  it("carries a refusal reported before any turn has opened with a null turnId", async () => {
-    const { runtime, sink } = await attached();
-
-    await runtime.observe({
-      kind: "authority",
-      state: "denied",
-      turnId: null,
-      tool: "read",
-      cause: "path.outside-workspace",
-      reason: "refused",
-    });
-
-    expect(sink.of("authority.denied")[0]?.turnId).toBeNull();
-  });
-
-  it("says nothing to the Session about a refusal reported after release", async () => {
-    const { runtime, sink, binding } = await attached();
-
-    await binding.release("requested");
-    await runtime.observe({
-      kind: "authority",
-      state: "denied",
-      turnId: "turn-1",
-      tool: "bash",
-      cause: "command.destructive-removal",
-      reason: "refused",
-    });
-
-    expect(sink.observations).toEqual([]);
   });
 });
 
@@ -1448,8 +799,14 @@ describe("Pi native adapter reconcile and release", () => {
     });
   });
 
-  it("maps a cold replay to byte-stable durable Session observations", async () => {
-    const { binding, runtime, sink } = await attached();
+  /**
+   * Which of these become Session facts, and under what ids, is the Engine's
+   * replay translation to decide — pinned in `observation-translation.test.ts`.
+   * What this binding owes is to hand them over unchanged, and to map only the
+   * two things it does own: the sidecar cursor, and Pi's delivery evidence.
+   */
+  it("hands Pi's own history back untranslated, mapping only the cursor and receipts", async () => {
+    const { binding, runtime } = await attached();
     const durable: RuntimeObservation[] = [
       {
         kind: "turn",
@@ -1466,43 +823,31 @@ describe("Pi native adapter reconcile and release", () => {
         recoveryCursor: "marker-2",
       },
       {
-        kind: "activity",
-        state: "completed",
-        turnId: "turn-1",
-        activityId: "tool-1",
-        descriptor: {
-          kind: "read-file",
-          nativeToolName: "read",
-          subject: { label: "README.md", path: "README.md", lineRange: null },
-          outcome: null,
-          startedAt: 90,
-          endedAt: 100,
-        },
-        input: { path: "README.md" },
-        output: "contents",
-        occurredAt: 103,
-        recoveryCursor: "marker-3",
-      },
-      {
         kind: "turn",
         state: "completed",
         turnId: "turn-1",
-        occurredAt: 104,
-        recoveryCursor: "marker-4",
+        occurredAt: 103,
+        recoveryCursor: "marker-3",
       },
     ];
-    for (const observation of durable) await runtime.observe(observation);
-    const live = [...sink.observations];
     runtime.reconciliationObservations.push(...durable);
-    runtime.reconciliationCursor = "marker-4";
+    runtime.reconciliationCursor = "marker-3";
+    runtime.reconciliationReceipts.push({ commandId: "command-crashed", acceptedAt: 456 });
 
     const replay = await binding.reconcile(null);
 
     expect(runtime.reconciledFrom).toEqual([null]);
     expect(replay).toEqual({
-      cursor: { entryId: "marker-4" },
-      observations: live,
-      receipts: [],
+      cursor: { entryId: "marker-3" },
+      observations: durable,
+      receipts: [
+        {
+          commandId: "command-crashed",
+          status: "accepted",
+          acceptedAt: 456,
+          native: binding.native,
+        },
+      ],
     });
   });
 

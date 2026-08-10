@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { SessionEvent, SessionLedgerIds } from "@volli/shared";
+import type { RuntimeObservation, SessionEvent, SessionLedgerIds } from "@volli/shared";
 import type { UIMessage } from "ai";
 import {
   createInMemorySessionLedger,
@@ -12,7 +12,6 @@ import {
   SessionRuntimeNotFoundError,
   type BindingHandle,
   type HarnessCommand,
-  type HarnessObservation,
   type NativeHarnessAdapter,
   type ObservationSink,
   type SessionEngine,
@@ -67,6 +66,7 @@ class Gate {
 
 class FakeAdapter implements NativeHarnessAdapter {
   readonly id = "fake";
+  readonly durableIdNamespace = "fake";
   readonly adapterVersion = "1.0.0";
   readonly runtime = { path: "/trusted/fake", version: "1.0.0", fingerprint: "sha256:fake" };
   attaches = 0;
@@ -77,7 +77,7 @@ class FakeAdapter implements NativeHarnessAdapter {
   releases = 0;
   sink: ObservationSink | null = null;
   reconcileReceipts: Awaited<ReturnType<BindingHandle["reconcile"]>>["receipts"] = [];
-  reconcileObservations: HarnessObservation[] = [];
+  reconcileObservations: RuntimeObservation[] = [];
   reconcileGate: Promise<void> | null = null;
   reconcileFailure: unknown = null;
   reconcileStarted: () => void = () => undefined;
@@ -91,7 +91,7 @@ class FakeAdapter implements NativeHarnessAdapter {
   commands: HarnessCommand[] = [];
   /** What each attach was actually pointed at — the live half of the directory contract. */
   specs: Parameters<NativeHarnessAdapter["attach"]>[0][] = [];
-  attachObservation: HarnessObservation | null = null;
+  attachObservation: RuntimeObservation | null = null;
   releaseReasons: string[] = [];
 
   async attach(
@@ -144,7 +144,7 @@ class FakeAdapter implements NativeHarnessAdapter {
     };
   }
 
-  emit(observation: HarnessObservation): Promise<void> {
+  emit(observation: RuntimeObservation): Promise<void> {
     if (!this.sink) throw new Error("Fake adapter is not attached");
     return this.sink.emit(observation);
   }
@@ -581,10 +581,10 @@ describe("SessionRuntime native adapter contract", () => {
     ]);
     expect(admission).toBe("pending");
     await adapter.emit({
-      id: "racing-turn-started",
-      kind: "turn.started",
-      occurredAt: 160,
+      kind: "turn",
+      state: "started",
       turnId: "turn-racing-model",
+      occurredAt: 160,
     });
     releaseDispatch.resolve();
 
@@ -618,10 +618,10 @@ describe("SessionRuntime native adapter contract", () => {
     expect(adapter.commands.map(({ kind }) => kind)).toEqual(["message.submit"]);
 
     await adapter.emit({
-      id: "long-turn-started",
-      kind: "turn.started",
-      occurredAt: 160,
+      kind: "turn",
+      state: "started",
       turnId: "turn-long-message",
+      occurredAt: 160,
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -649,10 +649,10 @@ describe("SessionRuntime native adapter contract", () => {
     });
     await dispatchStarted.promise;
     await adapter.emit({
-      id: "active-turn-started",
-      kind: "turn.started",
-      occurredAt: 160,
+      kind: "turn",
+      state: "started",
       turnId: "turn-active-message",
+      occurredAt: 160,
     });
 
     const steering = runtime.command({
@@ -676,10 +676,10 @@ describe("SessionRuntime native adapter contract", () => {
   it("buffers startup observations until the attachment is durable", async () => {
     const adapter = new FakeAdapter();
     adapter.attachObservation = {
-      id: "startup-turn",
-      kind: "turn.started",
-      occurredAt: 150,
+      kind: "turn",
+      state: "started",
       turnId: "turn-startup",
+      occurredAt: 150,
     };
     const { runtime } = composition({ adapter });
 
@@ -702,18 +702,18 @@ describe("SessionRuntime native adapter contract", () => {
     const sessionId = await createAndAttach(runtime);
 
     await adapter.emit({
-      id: "turn-started",
-      kind: "turn.started",
-      occurredAt: 160,
+      kind: "turn",
+      state: "started",
       turnId: "turn-1",
+      occurredAt: 160,
     });
     expect((await runtime.snapshot({ sessionId })).projection.turnActive).toBe(true);
 
     await adapter.emit({
-      id: "turn-interrupted",
-      kind: "turn.interrupted",
-      occurredAt: 161,
+      kind: "turn",
+      state: "interrupted",
       turnId: "turn-1",
+      occurredAt: 161,
     });
 
     const snapshot = await runtime.snapshot({ sessionId });
@@ -727,8 +727,8 @@ describe("SessionRuntime native adapter contract", () => {
     const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
 
     await adapter.emit({
-      id: "denied-1",
-      kind: "authority.denied",
+      kind: "authority",
+      state: "denied",
       occurredAt: 160,
       turnId: "turn-1",
       tool: "execute",
@@ -774,6 +774,60 @@ describe("SessionRuntime native adapter contract", () => {
     });
     expect(adapter.releases).toBe(1);
     expect((await runtime.snapshot({ sessionId })).projection.liveExecutor).toBeNull();
+  });
+
+  it("drops a released binding's tail instead of recording it against the closed attachment", async () => {
+    // The artifact write is the one await between accepting a settled message
+    // and recording it, so parking there holds a fan-out open and lets the
+    // release land in the middle of one.
+    const memory = createInMemoryTranscriptArtifactStore();
+    const writing = new Gate();
+    const released = new Gate();
+    const { runtime, adapter } = composition({
+      artifacts: {
+        write: async (record) => {
+          writing.resolve();
+          await released.promise;
+          return memory.write(record);
+        },
+        read: (reference) => memory.read(reference),
+      },
+    });
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+
+    // A delta first, so the settle below is a fan-out rather than a single
+    // fact: the streaming claim is withdrawn transiently, and only then is the
+    // durable message written. A settled message never reuses its stream's id,
+    // so the withdrawal is not incidental — every streamed answer fans out.
+    await adapter.emit(textDelta("Hi"));
+    const settling = adapter.emit(settledMessage("assistant-1", "Hi"));
+    await writing.promise;
+    // Admitted while the binding is still live, but queued behind that fan-out
+    // and so never translated at all.
+    const queued = adapter.emit({ kind: "turn", state: "completed", turnId: "turn-1" });
+
+    await runtime.command({
+      commandId: "command-release-mid-fanout",
+      sessionId,
+      command: { kind: "adapter.release", attachmentId },
+    });
+    released.resolve();
+
+    // Neither rejects. A tail that outlived its binding is dropped here, not
+    // refused by the ledger and thrown back out through the executor's own
+    // observer — which is what makes this the Session's guarantee rather than
+    // a side effect of the executor draining before it closes.
+    await expect(settling).resolves.toBeUndefined();
+    await expect(queued).resolves.toBeUndefined();
+
+    const after = await runtime.snapshot({ sessionId });
+    const kinds = after.frames.map((frame) => frame.event.payload.kind);
+    expect(after.projection.liveExecutor).toBeNull();
+    expect(kinds).toContain("attachment.closed");
+    expect(kinds).not.toContain("transcript.referenced");
+    expect(kinds).not.toContain("turn.completed");
+    expect(after.transcript).toEqual([]);
   });
 
   it("coalesces duplicate submissions and never dispatches an accepted command twice", async () => {
@@ -858,21 +912,17 @@ describe("SessionRuntime native adapter contract", () => {
     );
 
     await adapter.emit({
-      id: "native-message-1",
-      kind: "transcript.message",
-      occurredAt: 300,
+      kind: "message-settled",
       turnId: "turn-1",
-      threadId: `thread:${sessionId}:root`,
-      branchId: `branch:${sessionId}:main`,
-      attemptId: "attempt-1",
-      message: { id: "assistant-1", role: "assistant", parts: [{ type: "text", text: "Hi" }] },
+      occurredAt: 300,
+      message: { entryId: "assistant-1", role: "assistant", text: "Hi" },
     });
     unsubscribe();
 
     expect(steps).toEqual(["artifact", "published"]);
     expect(seen).toMatchObject([{ payload: { kind: "transcript.referenced" } }]);
     expect((await runtime.snapshot({ sessionId })).transcript).toMatchObject([
-      { message: { id: "assistant-1", parts: [{ text: "Hi" }] } },
+      { message: { parts: [{ text: "Hi" }] } },
     ]);
   });
 
@@ -900,14 +950,10 @@ describe("SessionRuntime native adapter contract", () => {
 
     await expect(
       adapter.emit({
-        id: "native-message-failed",
-        kind: "transcript.message",
-        occurredAt: 300,
+        kind: "message-settled",
         turnId: "turn-1",
-        threadId: `thread:${sessionId}:root`,
-        branchId: `branch:${sessionId}:main`,
-        attemptId: "attempt-1",
-        message: { id: "assistant-1", role: "assistant", parts: [{ type: "text", text: "Hi" }] },
+        occurredAt: 300,
+        message: { entryId: "assistant-1", role: "assistant", text: "Hi" },
       }),
     ).rejects.toThrow("disk full");
     unsubscribe();
@@ -1152,8 +1198,8 @@ describe("SessionRuntime native adapter contract", () => {
     const sessionId = await createAndAttach(runtime);
     const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
     await adapter.emit({
-      id: "permission-1",
-      kind: "interaction.opened",
+      kind: "interaction",
+      state: "opened",
       occurredAt: 300,
       interaction: {
         id: "permission-1",
@@ -1202,8 +1248,8 @@ describe("SessionRuntime native adapter contract", () => {
       }),
     );
     await adapter.emit({
-      id: "permission-resolved",
-      kind: "interaction.resolved",
+      kind: "interaction",
+      state: "resolved",
       occurredAt: 302,
       interactionId: "permission-1",
       resolution: { optionIds: ["allow"], response: null },
@@ -1623,8 +1669,8 @@ describe("SessionRuntime native adapter contract", () => {
     const sessionId = await createAndAttach(runtime);
     const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
     await adapter.emit({
-      id: "question-1",
-      kind: "interaction.opened",
+      kind: "interaction",
+      state: "opened",
       occurredAt: 300,
       interaction: {
         id: "question-1",
@@ -1698,8 +1744,8 @@ describe("SessionRuntime native adapter contract", () => {
     const sessionId = await createAndAttach(runtime);
     const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
     await adapter.emit({
-      id: "question-2",
-      kind: "interaction.opened",
+      kind: "interaction",
+      state: "opened",
       occurredAt: 300,
       interaction: {
         id: "question-2",
@@ -1711,12 +1757,7 @@ describe("SessionRuntime native adapter contract", () => {
         native: { id: "native-question-2", detail: null },
       },
     });
-    await adapter.emit({
-      id: "closed-under-question",
-      kind: "attachment.closed",
-      occurredAt: 301,
-      outcome: "interrupted",
-    });
+    await adapter.emit({ kind: "attachment", state: "closed" });
     const before = await runtime.snapshot({ sessionId });
     // Closing the binding does not answer what it asked, so the card outlives it.
     expect(before.projection.liveExecutor).toBeNull();
@@ -1740,34 +1781,40 @@ describe("SessionRuntime native adapter contract", () => {
     });
   });
 
-  it("normalizes attention facts", async () => {
+  it("records attention under one durable id per reason and clears the one it names", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);
-    for (const attention of [
-      { id: "rate", kind: "rate_limited" as const, retryAt: 999 },
-      { id: "quota", kind: "quota_exhausted" as const, resetAt: 1000 },
-      { id: "rate-null", kind: "rate_limited" as const },
-      { id: "quota-null", kind: "quota_exhausted" as const },
-      { id: "auth", kind: "auth_required" as const },
-    ]) {
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    for (const reason of ["auth", "context", "runtime-failure"] as const) {
       await adapter.emit({
-        id: `attention-${attention.id}`,
-        kind: "attention.raised",
+        kind: "attention",
+        state: "raised",
+        reason,
+        message: `${reason} needs you`,
         occurredAt: 300,
-        attention: { ...attention, detail: null, diagnostic: null },
       });
     }
     await adapter.emit({
-      id: "attention-clear",
-      kind: "attention.cleared",
+      kind: "attention",
+      state: "cleared",
+      reason: "auth",
+      message: "",
       occurredAt: 301,
-      attentionId: "auth",
     });
+
+    // The id is what the clearance above named — one standing claim per reason,
+    // and the reason the executor reported is what the Session filed it under.
     expect((await runtime.snapshot({ sessionId })).projection.attention.active).toMatchObject([
-      { id: "rate", retryAt: 999 },
-      { id: "quota", resetAt: 1000 },
-      { id: "rate-null", retryAt: null },
-      { id: "quota-null", resetAt: null },
+      {
+        id: `fake:attention:${attachmentId}:context`,
+        kind: "context_limit_reached",
+        detail: "context needs you",
+      },
+      {
+        id: `fake:attention:${attachmentId}:runtime-failure`,
+        kind: "adapter_unrecoverable",
+        detail: "runtime-failure needs you",
+      },
     ]);
   });
 
@@ -1777,13 +1824,13 @@ describe("SessionRuntime native adapter contract", () => {
     const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
     adapter.reconcileObservations = [
       {
-        id: "turn-start",
-        kind: "turn.started",
-        occurredAt: 400,
+        kind: "turn",
+        state: "started",
         turnId: "turn-reconciled",
-        cursor: { page: 2 },
+        occurredAt: 400,
+        recoveryCursor: "page-2",
       },
-      { id: "turn-complete", kind: "turn.completed", occurredAt: 401, turnId: "turn-reconciled" },
+      { kind: "turn", state: "completed", turnId: "turn-reconciled", occurredAt: 401 },
     ];
     adapter.reconcileReceipts = [
       {
@@ -1807,24 +1854,48 @@ describe("SessionRuntime native adapter contract", () => {
     );
   });
 
+  /**
+   * The durable id, composed end to end and spelled out.
+   *
+   * Every relaunch re-derives these from live data and the ledger dedupes them
+   * by exact string match on a primary key, so a changed derivation does not
+   * fail — it writes a second copy of every fact in the Session's history. The
+   * dedupe case below proves the derivation is *stable*; this one is what makes
+   * a change to it loud.
+   */
+  it("composes a durable observation id from the adapter, the Session, and the attachment", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-1", occurredAt: 160 });
+
+    const started = (await runtime.snapshot({ sessionId })).frames.find(
+      ({ event }) => event.payload.kind === "turn.started",
+    );
+    expect(started?.event.id).toBe(
+      `native-event:fake:${sessionId}:${attachmentId}:fake:turn:turn-1:started`,
+    );
+  });
+
   it("deduplicates the same stable reconciliation batch after a cold runtime rebuild", async () => {
     const first = composition();
     const sessionId = await createAndAttach(first.runtime);
     const attachmentId = (await first.runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
     first.adapter.reconcileObservations = [
       {
-        id: "pi:turn:stable:started",
-        kind: "turn.started",
-        occurredAt: 500,
+        kind: "turn",
+        state: "started",
         turnId: "stable",
-        cursor: { entryId: "marker-1" },
+        occurredAt: 500,
+        recoveryCursor: "marker-1",
       },
       {
-        id: "pi:turn:stable:completed",
-        kind: "turn.completed",
-        occurredAt: 501,
+        kind: "turn",
+        state: "completed",
         turnId: "stable",
-        cursor: { entryId: "marker-2" },
+        occurredAt: 501,
+        recoveryCursor: "marker-2",
       },
     ];
     await first.runtime.reconcile({ sessionId, attachmentId });
@@ -1856,10 +1927,10 @@ describe("SessionRuntime native adapter contract", () => {
     adapter.reconcileGate = release.promise;
     adapter.reconcileObservations = [
       {
-        id: "concurrent-turn",
-        kind: "turn.started",
-        occurredAt: 450,
+        kind: "turn",
+        state: "started",
         turnId: "turn-concurrent",
+        occurredAt: 450,
       },
     ];
 
@@ -1958,10 +2029,10 @@ describe("SessionRuntime native adapter contract", () => {
     const beforeStop = [...seen];
     stop();
     await adapter.emit({
-      id: "after-stop",
-      kind: "turn.started",
-      occurredAt: 500,
+      kind: "turn",
+      state: "started",
       turnId: "turn-after-stop",
+      occurredAt: 500,
     });
     expect(seen).toEqual(beforeStop);
 
@@ -2107,10 +2178,10 @@ describe("SessionRuntime native adapter contract", () => {
     };
     const adapter = new FakeAdapter();
     adapter.attachObservation = {
-      id: "discard-me",
-      kind: "turn.started",
-      occurredAt: 700,
+      kind: "turn",
+      state: "started",
       turnId: "discard-me",
+      occurredAt: 700,
     };
     adapter.releaseFailure = new Error("release also failed");
     const { runtime } = composition({ engine, adapter });
@@ -2127,10 +2198,10 @@ describe("SessionRuntime native adapter contract", () => {
       }),
     ).rejects.toThrow("ledger unavailable");
     await adapter.emit({
-      id: "discarded",
-      kind: "turn.completed",
-      occurredAt: 701,
+      kind: "turn",
+      state: "completed",
       turnId: "discard-me",
+      occurredAt: 701,
     });
 
     expect(adapter.releaseReasons).toEqual(["adapter_failure"]);
@@ -2154,8 +2225,8 @@ describe("SessionRuntime native adapter contract", () => {
     await runtime.command({ commandId: "receipt-interrupt", sessionId, command: interrupt });
     await runtime.command({ commandId: "receipt-interrupt", sessionId, command: interrupt });
     await adapter.emit({
-      id: "receipt-interaction",
-      kind: "interaction.opened",
+      kind: "interaction",
+      state: "opened",
       occurredAt: 750,
       interaction: {
         id: "receipt-interaction",
@@ -2247,8 +2318,8 @@ describe("SessionRuntime native adapter contract", () => {
     const sessionId = await createAndAttach(first.runtime);
     const attachmentId = (await first.runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
     await first.adapter.emit({
-      id: "resume-interaction",
-      kind: "interaction.opened",
+      kind: "interaction",
+      state: "opened",
       occurredAt: 800,
       interaction: {
         id: "resume-interaction",
@@ -2309,8 +2380,8 @@ describe("SessionRuntime native adapter contract", () => {
     const sessionId = await createAndAttach(first.runtime);
     const attachmentId = (await first.runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
     await first.adapter.emit({
-      id: "receipt-replay-interaction",
-      kind: "interaction.opened",
+      kind: "interaction",
+      state: "opened",
       occurredAt: 810,
       interaction: {
         id: "receipt-replay-interaction",
@@ -2695,15 +2766,16 @@ describe("SessionRuntime native adapter contract", () => {
     expect(cursors.at(-1)).toBe(folded.throughSequence);
 
     await base.adapter.emit({
-      id: "cached-attention",
-      kind: "attention.raised",
+      kind: "attention",
+      state: "raised",
+      reason: "auth",
+      message: "Sign in to continue.",
       occurredAt: 500,
-      attention: { id: "attention-cached", kind: "auth_required", detail: null, diagnostic: null },
     });
     const appended = await runtime.projection({ sessionId });
 
     expect(appended.projection).not.toBe(folded.projection);
-    expect(appended.projection.attention.primary?.id).toBe("attention-cached");
+    expect(appended.projection.attention.primary?.kind).toBe("auth_required");
     expect(appended.throughSequence).toBeGreaterThan(folded.throughSequence);
     expect(reads).toEqual([sessionId]);
   });
@@ -2748,48 +2820,76 @@ describe("SessionRuntime native adapter contract", () => {
 // right now, and only a settle point is what it said.
 // ---------------------------------------------------------------------------
 
-const OVERLAY_MESSAGE_ID = "assistant-1";
+/**
+ * The attachment `createAndAttach` opens, spelled out because the overlay cases
+ * below assert on message ids the translation derives from it.
+ */
+const OVERLAY_ATTACHMENT_ID = "runtime-attachment:attachment-1";
+const OVERLAY_MESSAGE_ID = `fake:${OVERLAY_ATTACHMENT_ID}:turn-1:0`;
 
-function deltaObservation(
-  id: string,
-  delta: TranscriptDelta,
-  messageId = OVERLAY_MESSAGE_ID,
-): HarnessObservation {
+function textDelta(text: string, turnId = "turn-1"): RuntimeObservation {
+  return { kind: "delta", turnId, channel: "text", text };
+}
+
+function settledMessage(entryId: string, text: string, turnId = "turn-1"): RuntimeObservation {
   return {
-    id,
-    kind: "transcript.delta",
-    occurredAt: 400,
-    threadId: "thread:overlay:root",
-    branchId: "branch:overlay:main",
-    attemptId: "attempt:overlay",
-    turnId: "turn-1",
-    messageId,
-    delta,
+    kind: "message-settled",
+    turnId,
+    occurredAt: 500,
+    message: { entryId, role: "assistant", text },
   };
 }
 
-function resetDelta(text: string, messageId = OVERLAY_MESSAGE_ID): TranscriptDelta {
+function startedTurn(turnId: string): RuntimeObservation {
+  return { kind: "turn", state: "started", turnId, occurredAt: 400 };
+}
+
+function readActivity(
+  activityId: string,
+  state: "started" | "completed",
+  turnId = "turn-1",
+): RuntimeObservation {
+  return {
+    kind: "activity",
+    state,
+    turnId,
+    activityId,
+    descriptor: {
+      kind: "read-file",
+      nativeToolName: "read",
+      subject: { label: "README.md", path: "README.md", lineRange: null },
+      outcome: null,
+      startedAt: 10,
+      endedAt: state === "completed" ? 20 : null,
+    },
+    input: { path: "README.md" },
+    output: state === "completed" ? { content: "read" } : null,
+    occurredAt: 450,
+  };
+}
+
+/** The two emissions a message's first delta fans out to: open it, then fill it. */
+function openedMessage(text: string, messageId = OVERLAY_MESSAGE_ID): TranscriptDelta[] {
+  return [
+    { op: "reset", message: { id: messageId, role: "assistant", parts: [] } },
+    { op: "part.upsert", key: "text", index: 0, part: { type: "text", text, state: "streaming" } },
+  ];
+}
+
+function appendedText(text: string): TranscriptDelta {
+  return { op: "part.append", key: "text", text };
+}
+
+/** What the engine's fold hands a late subscriber for a message still in flight. */
+function foldedMessage(text: string, messageId = OVERLAY_MESSAGE_ID): TranscriptDelta {
   return {
     op: "reset",
     message: {
       id: messageId,
       role: "assistant",
-      parts: [{ key: "text-1", part: { type: "text", text } }],
+      parts: [{ key: "text", part: { type: "text", text, state: "streaming" } }],
     },
   };
-}
-
-function settleObservation(id: string, text: string, messageId = OVERLAY_MESSAGE_ID) {
-  return {
-    id,
-    kind: "transcript.message",
-    occurredAt: 500,
-    turnId: "turn-1",
-    threadId: "thread:overlay:root",
-    branchId: "branch:overlay:main",
-    attemptId: "attempt:overlay",
-    message: { id: messageId, role: "assistant", parts: [{ type: "text", text }] },
-  } satisfies HarnessObservation;
 }
 
 function overlaysIn(emissions: readonly SessionStreamEmission[]): SessionStreamOverlay[] {
@@ -2807,7 +2907,7 @@ async function settleMicrotasks(): Promise<void> {
 }
 
 describe("SessionRuntime transient transcript overlay", () => {
-  it("publishes deltas without a durable trace, a dedupe window, or a cursor advance", async () => {
+  it("publishes deltas without a durable trace or a cursor advance", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);
     const before = await runtime.snapshot({ sessionId });
@@ -2820,34 +2920,23 @@ describe("SessionRuntime transient transcript overlay", () => {
       },
     );
 
-    // The same observation id twice: a delta carries no durable identity, so
-    // the id that dedupes Session facts must not swallow the second one.
-    await adapter.emit(deltaObservation("delta-1", resetDelta("Hel")));
-    await adapter.emit(
-      deltaObservation("delta-1", { op: "part.append", key: "text-1", text: "lo" }),
-    );
+    await adapter.emit(textDelta("Hel"));
+    await adapter.emit(textDelta("lo"));
     await runtime.reconcile({ sessionId, attachmentId });
     stop();
 
     const after = await runtime.snapshot({ sessionId });
     expect(after.throughSequence).toBe(before.throughSequence);
     expect(after.transcript).toEqual([]);
-    expect(emissions).toEqual([
-      {
+    expect(emissions).toEqual(
+      [...openedMessage("Hel"), appendedText("lo")].map((delta) => ({
         kind: "overlay",
         sessionId,
         throughSequence: before.throughSequence,
         messageId: OVERLAY_MESSAGE_ID,
-        delta: resetDelta("Hel"),
-      },
-      {
-        kind: "overlay",
-        sessionId,
-        throughSequence: before.throughSequence,
-        messageId: OVERLAY_MESSAGE_ID,
-        delta: { op: "part.append", key: "text-1", text: "lo" },
-      },
-    ]);
+        delta,
+      })),
+    );
     // No delta moved the reconcile cursor: the provider is still asked for
     // everything since the last fact this Session actually wrote down.
     expect(adapter.reconcileCursors).toEqual([null]);
@@ -2856,13 +2945,11 @@ describe("SessionRuntime transient transcript overlay", () => {
   it("serves a late subscriber the folded message as one reset baseline", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);
-    await adapter.emit(deltaObservation("delta-1", resetDelta("Hel")));
-    await adapter.emit(
-      deltaObservation("delta-2", { op: "part.append", key: "text-1", text: "lo" }),
-    );
-    await adapter.emit(
-      deltaObservation("delta-3", resetDelta("Second", "assistant-2"), "assistant-2"),
-    );
+    await adapter.emit(textDelta("Hel"));
+    await adapter.emit(textDelta("lo"));
+    // A new turn leaves the first message in flight and starts a second one.
+    await adapter.emit(startedTurn("turn-2"));
+    await adapter.emit(textDelta("Second", "turn-2"));
 
     const latest = (await runtime.snapshot({ sessionId })).throughSequence;
     const emissions: SessionStreamEmission[] = [];
@@ -2873,32 +2960,38 @@ describe("SessionRuntime transient transcript overlay", () => {
 
     // One baseline per in-flight message, each carrying the engine's fold —
     // not the deltas that built it.
+    const secondMessageId = `fake:${OVERLAY_ATTACHMENT_ID}:turn-2:0`;
     expect(overlaysIn(emissions)).toEqual([
       {
         kind: "overlay",
         sessionId,
         throughSequence: latest,
         messageId: OVERLAY_MESSAGE_ID,
-        delta: resetDelta("Hello"),
+        delta: foldedMessage("Hello"),
       },
       {
         kind: "overlay",
         sessionId,
         throughSequence: latest,
-        messageId: "assistant-2",
-        delta: resetDelta("Second", "assistant-2"),
+        messageId: secondMessageId,
+        delta: foldedMessage("Second", secondMessageId),
       },
     ]);
   });
 
+  /**
+   * An activity settles under the very id its overlay was opened with, so
+   * nothing withdraws that overlay explicitly — the durable snapshot landing is
+   * what retires it. A streamed assistant message cannot show this: it settles
+   * under a different id and is withdrawn by name.
+   */
   it("clears a message's overlay when its durable snapshot is processed", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);
-    await adapter.emit(deltaObservation("delta-1", resetDelta("Hello")));
-    await adapter.emit(
-      deltaObservation("delta-2", resetDelta("Other", "assistant-2"), "assistant-2"),
-    );
-    await adapter.emit(settleObservation("settle-1", "Hello"));
+    await adapter.emit(textDelta("Hello"));
+    await adapter.emit(readActivity("call-1", "started"));
+    const activityMessageId = `fake:${OVERLAY_ATTACHMENT_ID}:turn-1:activity:call-1`;
+    await adapter.emit(readActivity("call-1", "completed"));
 
     const emissions: SessionStreamEmission[] = [];
     const stop = await runtime.subscribe(
@@ -2909,16 +3002,17 @@ describe("SessionRuntime transient transcript overlay", () => {
     );
     stop();
 
-    expect(overlaysIn(emissions).map(({ messageId }) => messageId)).toEqual(["assistant-2"]);
+    // Only the still-streaming assistant message is left with a baseline.
+    expect(overlaysIn(emissions).map(({ messageId }) => messageId)).toEqual([OVERLAY_MESSAGE_ID]);
     expect((await runtime.snapshot({ sessionId })).transcript).toMatchObject([
-      { message: { id: OVERLAY_MESSAGE_ID, parts: [{ text: "Hello" }] } },
+      { message: { id: activityMessageId } },
     ]);
   });
 
   it("stamps a baseline with the durable sequence a later settle can be told from", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);
-    await adapter.emit(deltaObservation("delta-1", resetDelta("Hel")));
+    await adapter.emit(textDelta("Hel"));
 
     const emissions: SessionStreamEmission[] = [];
     const stop = await runtime.subscribe(
@@ -2927,7 +3021,7 @@ describe("SessionRuntime transient transcript overlay", () => {
         emissions.push(emission);
       },
     );
-    await adapter.emit(settleObservation("settle-1", "Hello"));
+    await adapter.emit(settledMessage("entry-1", "Hello"));
     stop();
 
     const [baseline] = overlaysIn(emissions);
@@ -2950,20 +3044,23 @@ describe("SessionRuntime transient transcript overlay", () => {
     const order: string[] = [];
     const entered = new Gate();
     const release = new Gate();
-    let blocked = false;
+    // Held on the delta's SECOND emission, not its first: a message opens and
+    // fills in one fan-out, and blocking on the open would stall the fill
+    // behind the very gate this case uses to let a durable publish in.
+    let overlays = 0;
     const stop = await runtime.subscribe(
       { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
       async (emission) => {
         order.push(isSessionStreamOverlay(emission) ? "overlay" : emission.event.payload.kind);
-        if (isSessionStreamOverlay(emission) && !blocked) {
-          blocked = true;
+        if (isSessionStreamOverlay(emission)) overlays += 1;
+        if (overlays === 2) {
           entered.resolve();
           await release.promise;
         }
       },
     );
 
-    const streaming = adapter.emit(deltaObservation("delta-1", resetDelta("Hel")));
+    const streaming = adapter.emit(textDelta("Hel"));
     await entered.promise;
     const submitting = runtime.command({
       commandId: "overlay-ordering-submit",
@@ -2975,8 +3072,10 @@ describe("SessionRuntime transient transcript overlay", () => {
     await Promise.all([streaming, submitting]);
     stop();
 
-    expect(order[0]).toBe("overlay");
-    expect(order.slice(1)).not.toContain("overlay");
+    // Both halves of the delta reached the client before the command that was
+    // submitted while they were in flight.
+    expect(order.slice(0, 2)).toEqual(["overlay", "overlay"]);
+    expect(order.slice(2)).not.toContain("overlay");
   });
 
   /**
@@ -3003,10 +3102,10 @@ describe("SessionRuntime transient transcript overlay", () => {
     );
 
     await adapter.emit({
-      id: "turn-open",
-      kind: "turn.started",
-      occurredAt: 800,
+      kind: "turn",
+      state: "started",
       turnId: "turn-1",
+      occurredAt: 800,
     });
     // Out of band, exactly as the rename IPC does it: durable, and invisible to
     // every live subscriber.
@@ -3017,10 +3116,10 @@ describe("SessionRuntime transient transcript overlay", () => {
       provenance: { source: { kind: "user", id: "renderer", detail: null }, venue },
     });
     await adapter.emit({
-      id: "turn-close",
-      kind: "turn.completed",
-      occurredAt: 801,
+      kind: "turn",
+      state: "completed",
       turnId: "turn-1",
+      occurredAt: 801,
     });
     stop();
 
@@ -3038,13 +3137,8 @@ describe("SessionRuntime transient transcript overlay", () => {
   it("drops the overlay when the attachment closes and when the adapter is released", async () => {
     const closing = composition();
     const closedSession = await createAndAttach(closing.runtime);
-    await closing.adapter.emit(deltaObservation("delta-1", resetDelta("Hel")));
-    await closing.adapter.emit({
-      id: "closed-1",
-      kind: "attachment.closed",
-      occurredAt: 600,
-      outcome: "completed",
-    });
+    await closing.adapter.emit(textDelta("Hel"));
+    await closing.adapter.emit({ kind: "attachment", state: "closed" });
     const afterClose: SessionStreamEmission[] = [];
     (
       await closing.runtime.subscribe(
@@ -3064,7 +3158,7 @@ describe("SessionRuntime transient transcript overlay", () => {
     const releasedSession = await createAndAttach(releasing.runtime);
     const attachmentId = (await releasing.runtime.snapshot({ sessionId: releasedSession }))
       .projection.liveExecutor!.id;
-    await releasing.adapter.emit(deltaObservation("delta-1", resetDelta("Hel")));
+    await releasing.adapter.emit(textDelta("Hel"));
     await releasing.runtime.command({
       commandId: "overlay-release",
       sessionId: releasedSession,
@@ -3104,7 +3198,7 @@ describe("SessionRuntime transient transcript overlay", () => {
         sessionId: created.sessionId,
         command: { kind: "adapter.attach", continuity: "fresh" },
       });
-      await adapter.emit(deltaObservation(`delta-${index}`, resetDelta(`Session ${index}`)));
+      await adapter.emit(textDelta(`Session ${index}`));
       sessions.push(created.sessionId);
     }
 
@@ -3140,11 +3234,12 @@ describe("SessionRuntime transient transcript overlay", () => {
     const sessionId = await createAndAttach(runtime);
 
     failListEvents = true;
-    await expect(adapter.emit(deltaObservation("delta-1", resetDelta("Hel")))).rejects.toThrow(
-      "ledger unavailable",
-    );
+    await expect(adapter.emit(textDelta("Hel"))).rejects.toThrow("ledger unavailable");
     failListEvents = false;
-    await adapter.emit(deltaObservation("delta-2", resetDelta("Hello")));
+    // A new turn is what puts the emitter back at a reset, which is the only
+    // delta a fold holding no entry for the message will act on.
+    await adapter.emit(startedTurn("turn-2"));
+    await adapter.emit(textDelta("Hello", "turn-2"));
 
     const latest = (await runtime.snapshot({ sessionId })).throughSequence;
     const emissions: SessionStreamEmission[] = [];
@@ -3154,13 +3249,14 @@ describe("SessionRuntime transient transcript overlay", () => {
       })
     )();
 
+    const messageId = `fake:${OVERLAY_ATTACHMENT_ID}:turn-2:0`;
     expect(overlaysIn(emissions)).toEqual([
       {
         kind: "overlay",
         sessionId,
         throughSequence: latest,
-        messageId: OVERLAY_MESSAGE_ID,
-        delta: resetDelta("Hello"),
+        messageId,
+        delta: foldedMessage("Hello", messageId),
       },
     ]);
   });
@@ -3168,7 +3264,7 @@ describe("SessionRuntime transient transcript overlay", () => {
   it("does not let one subscriber's cursor inflate the sequence other subscribers are stamped with", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);
-    await adapter.emit(deltaObservation("delta-1", resetDelta("Hel")));
+    await adapter.emit(textDelta("Hel"));
     const head = (await runtime.snapshot({ sessionId })).throughSequence;
 
     // A cursor names where one subscriber resumes. It is client input — an SSE
@@ -3182,9 +3278,7 @@ describe("SessionRuntime transient transcript overlay", () => {
     const stop = await runtime.subscribe({ sessionId, afterSequence: head }, (emission) => {
       emissions.push(emission);
     });
-    await adapter.emit(
-      deltaObservation("delta-2", { op: "part.append", key: "text-1", text: "lo" }),
-    );
+    await adapter.emit(textDelta("lo"));
     stopAhead();
     stop();
 
@@ -3228,7 +3322,7 @@ describe("SessionRuntime transient transcript overlay", () => {
         command: { kind: "message.submit", message: userMessage("overlay-seed-race") },
       });
     };
-    await adapter.emit(deltaObservation("delta-1", resetDelta("Hel")));
+    await adapter.emit(textDelta("Hel"));
     stop();
 
     // The number only ever moves forward, so the later of the two wins whichever
@@ -3238,6 +3332,7 @@ describe("SessionRuntime transient transcript overlay", () => {
     const durableHead = (await runtime.snapshot({ sessionId })).throughSequence;
     expect(durableHead).toBeGreaterThan(seededFrom);
     expect(overlaysIn(emissions).map(({ throughSequence }) => throughSequence)).toEqual([
+      durableHead,
       durableHead,
     ]);
   });
@@ -3268,7 +3363,7 @@ describe("SessionRuntime transient transcript overlay", () => {
         command: { kind: "adapter.release", attachmentId },
       });
     };
-    await adapter.emit(deltaObservation("delta-1", resetDelta("Hel")));
+    await adapter.emit(textDelta("Hel"));
 
     expect(adapter.releases).toBe(1);
     const emissions: SessionStreamEmission[] = [];
@@ -3306,8 +3401,8 @@ describe("SessionRuntime transient transcript overlay", () => {
         if (isSessionStreamOverlay(emission)) throw new Error("overlay client failed");
       },
     );
-    await failing.adapter.emit(deltaObservation("delta-1", resetDelta("Hel")));
-    await failing.adapter.emit(settleObservation("settle-1", "Hello"));
+    await failing.adapter.emit(textDelta("Hel"));
+    await failing.adapter.emit(settledMessage("entry-1", "Hello"));
 
     expect(delivered).toEqual(["overlay"]);
     expect(failures).toEqual([expect.objectContaining({ message: "overlay client failed" })]);
@@ -3316,7 +3411,7 @@ describe("SessionRuntime transient transcript overlay", () => {
     const leavingSession = await createAndAttach(leaving.runtime);
     // The record exists before the gated emit below, so that emit has only its
     // own awaits left to run before the overlay reaches the chain.
-    await leaving.adapter.emit(deltaObservation("delta-1", resetDelta("Hel")));
+    await leaving.adapter.emit(textDelta("Hel"));
     const seen: string[] = [];
     const entered = new Gate();
     const release = new Gate();
@@ -3340,9 +3435,7 @@ describe("SessionRuntime transient transcript overlay", () => {
       command: { kind: "message.submit", message: userMessage("overlay-leaving") },
     });
     await entered.promise;
-    const streaming = leaving.adapter.emit(
-      deltaObservation("delta-2", { op: "part.append", key: "text-1", text: "lo" }),
-    );
+    const streaming = leaving.adapter.emit(textDelta("lo"));
     await settleMicrotasks();
     stop();
     release.resolve();

@@ -3,12 +3,19 @@
  *
  * This is a desktop-private facade, not a second executor port. `@volli/agent-runtime`
  * already speaks product vocabulary; what it does not speak is the durable
- * Session's own seam — attachments, delivery receipts, transcript observations
- * — so everything here is translation and nothing here is policy. There is one
- * manifest id and one profile because there is one executor: no registry, no
- * catalog, no profile spread to grow into.
+ * Session's own seam — attachments, delivery receipts, commands — so everything
+ * here is translation and nothing here is policy. There is one manifest id and
+ * one profile because there is one executor: no registry, no catalog, no profile
+ * spread to grow into.
  *
- * Three things the two contracts genuinely disagree about, and how they join:
+ * Observations are the exception, and they cross untranslated: `RuntimeObservation`
+ * is the only observation vocabulary, and turning one into a Session fact is
+ * `@volli/session-engine`'s job, because a durable id and a transcript address
+ * are decisions about history rather than about Pi. What this file still owes
+ * that path is the two suppressions in {@link PiBinding.#observe}, which are
+ * facts about the binding's own lifecycle that no other layer can see.
+ *
+ * Two things the two contracts genuinely disagree about, and how they join:
  *
  * 1. **Identity.** `NativeAttachmentSpec` carries a Session and a directory,
  *    and the runtime needs a Role, a project, possibly a Ticket, a root Thread
@@ -22,17 +29,7 @@
  *    or no Brief to give, rather than starting an agent that would be told
  *    nothing about why it exists.
  *
- * 2. **Message identity.** Pi names a settled message only once it has settled
- *    (`entryId`), while its deltas name only the turn they belong to — but the
- *    Session Engine retires an overlay entry by the *durable* message's own id
- *    (`session-runtime.ts`, `#clearOverlayMessage`), so the transient and the
- *    durable halves have to agree on one id before the first delta is emitted.
- *    So the facade mints that id — attachment, turn, and the message's position
- *    within the turn — and carries Pi's `entryId` where it is actually needed:
- *    on the observation's own identity, which is what dedupes a replay, and on
- *    the reconcile cursor, which is what Session 4 resumes from.
- *
- * 3. **Interrupt.** Aborting the runtime signal is how an attachment *ends* —
+ * 2. **Interrupt.** Aborting the runtime signal is how an attachment *ends* —
  *    Pi's abort listener latches the attachment cancelled and every later
  *    submit is rejected as closed. An interrupted turn is not an ended Session,
  *    and the Session Engine keeps the binding live across one, so
@@ -45,35 +42,28 @@ import type {
   BindingHandle,
   DeliveryReceipt,
   HarnessCommand,
-  HarnessObservation,
   NativeAttachmentSpec,
   NativeHarnessAdapter,
   NativeRuntimeIdentity,
   ObservationSink,
   Reconciliation,
   ReleaseReason,
-  TranscriptDelta,
 } from "@volli/session-engine";
 import { NativeAttachmentError } from "@volli/session-engine";
 import {
-  ACTIVITY_METADATA_KEY,
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   errorMessage,
   type AgentRuntime,
-  type AttentionObservation,
   type DeliveryOutcome,
   type ModelSelection,
   type ModelSelectionOutcome,
   type RuntimeAttachmentHandle,
-  type RuntimeActivityObservation,
   type RuntimeObservation,
   type RuntimeRecoveryRef,
-  type SettledAssistantMessage,
   type SessionNativeDetail,
   type SessionNativeReference,
   type SessionRuntimeSpec,
-  type TranscriptDeltaObservation,
   type WorkLocationKind,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
@@ -81,8 +71,15 @@ import type { UIMessage } from "ai";
 /** The one adapter id. Pi is the structured product's single target executor. */
 export const PI_ADAPTER_ID = "pi";
 
-/** The one product tool identity for every runtime activity. */
-const ACTIVITY_TOOL_NAME = "volli.activity";
+/**
+ * The namespace every durable id derived from Pi's observations is minted under.
+ *
+ * A frozen literal, not `PI_ADAPTER_ID`: the two happen to read the same and
+ * mean different things — one names the executor an attachment was opened by,
+ * the other prefixes ids already written into history. Tying them together would
+ * make renaming the adapter silently re-key every fact on disk.
+ */
+const PI_DURABLE_ID_NAMESPACE = "pi";
 
 /** Pi's npm home and pinned release; both are recorded in `packages/agent-runtime/UPSTREAM.md`. */
 const PI_RUNTIME_PACKAGE = "@earendil-works/pi-agent-core";
@@ -105,25 +102,18 @@ const PI_RUNTIME_IDENTITY: NativeRuntimeIdentity = {
 /** The explicitly contained coding tools this slice loads. */
 const PI_TOOLS = { tools: ["read", "edit", "write", "execute"] } as const;
 
-/**
- * The root Thread id for a Session, and the one place the convention is written.
- *
- * Every transcript observation this Session ever carries addresses the same
- * root Thread and main Branch, derived from the Session id. Main's
- * runtime-context resolver mints the same value so the id Pi records in its
- * sidecar metadata is the id the transcript is filed under.
- */
-export function piRootThreadId(sessionId: string): string {
-  return `thread:${sessionId}:root`;
-}
-
-function piMainBranchId(sessionId: string): string {
-  return `branch:${sessionId}:main`;
-}
-
 /** Everything about a Session that a directory cannot tell the runtime. */
 interface PiRuntimeContextFields {
   projectId: string;
+  /**
+   * The Session's root Thread, from `sessionRootThreadId` and nowhere else.
+   *
+   * Pi writes this into its recovery sidecar and **throws** on recovery when
+   * what it finds there does not match what it was handed. The Session Engine
+   * files this Session's transcript under the same string, so a second
+   * derivation would not quietly disagree about an address — it would fail
+   * every existing Session's attach.
+   */
   rootThreadId: string;
   /** The generated Runtime Brief; the runtime prepends it to the first user message. */
   brief: string;
@@ -165,18 +155,6 @@ export interface PiAdapterOptions {
   now?: () => number;
 }
 
-/** Product attention vocabulary, per runtime reason. */
-const ATTENTION_KINDS = {
-  auth: "auth_required",
-  configuration: "configuration_invalid",
-  context: "context_limit_reached",
-  "runtime-failure": "adapter_unrecoverable",
-  "partial-turn": "partial_turn_interrupted",
-} as const satisfies Record<
-  AttentionObservation["reason"],
-  Extract<HarnessObservation, { kind: "attention.raised" }>["attention"]["kind"]
->;
-
 /** The rejection codes a caller can act on, per runtime rejection reason. */
 const REJECTION_CODES = {
   "busy-unsupported": "PI_BUSY",
@@ -191,19 +169,6 @@ const MODEL_SELECTION_REJECTION_CODES = {
   "model-unavailable": "PI_MODEL_UNAVAILABLE",
   "reasoning-unsupported": "PI_REASONING_UNSUPPORTED",
 } as const satisfies Record<Extract<ModelSelectionOutcome, { kind: "rejected" }>["reason"], string>;
-
-/** One in-flight assistant message: the id its deltas address and the parts it has opened. */
-interface StreamingMessage {
-  id: string;
-  /** Projected key order, so a `part.upsert` can state where the key lands. */
-  keys: TranscriptDeltaObservation["channel"][];
-}
-
-/** A transient activity awaiting its own durable activity message. */
-interface StreamingActivity {
-  turnId: string;
-  messageId: string;
-}
 
 function piRecoveryRef(spec: NativeAttachmentSpec): RuntimeRecoveryRef | undefined {
   if (spec.continuity !== "native_resume") return undefined;
@@ -241,10 +206,6 @@ function recoveryEntryId(cursor: SessionNativeDetail | null): string | null {
   return entryId;
 }
 
-function recoveryCursor(entryId: string | undefined): { cursor?: SessionNativeDetail } {
-  return entryId === undefined ? {} : { cursor: { entryId } };
-}
-
 export interface PiRuntimeHost {
   readonly adapter: NativeHarnessAdapter;
   inspectModelAccess: AgentRuntime["inspectModelAccess"];
@@ -277,6 +238,7 @@ function piNativeAdapter(
 ): NativeHarnessAdapter {
   return {
     id: PI_ADAPTER_ID,
+    durableIdNamespace: PI_DURABLE_ID_NAMESPACE,
     adapterVersion: PI_ADAPTER_VERSION,
     runtime: PI_RUNTIME_IDENTITY,
 
@@ -333,19 +295,9 @@ class PiBinding implements BindingHandle {
   readonly #recovery: RuntimeRecoveryRef | undefined;
   readonly #now: () => number;
   readonly #abort = new AbortController();
-  readonly #threadId: string;
-  readonly #branchId: string;
   #handle: RuntimeAttachmentHandle | null = null;
   #native: SessionNativeReference = { id: null, detail: null };
   #released = false;
-  #streaming: StreamingMessage | null = null;
-  #activityOverlays = new Map<string, StreamingActivity>();
-  /** Turns that closed before every transient activity removal reached the Session. */
-  #closedActivityTurns = new Set<string>();
-  /** Assistant overlays already opened in the current turn; the id's last segment. */
-  #messageSequence = 0;
-  /** Transient and synthetic observations carry no native identity, so a counter is the whole of it. */
-  #sequence = 0;
 
   constructor(options: PiBindingOptions) {
     this.#spec = options.spec;
@@ -353,8 +305,6 @@ class PiBinding implements BindingHandle {
     this.#context = options.context;
     this.#recovery = options.recovery;
     this.#now = options.now;
-    this.#threadId = options.context.rootThreadId;
-    this.#branchId = piMainBranchId(options.spec.sessionId);
   }
 
   get native(): SessionNativeReference {
@@ -396,7 +346,7 @@ class PiBinding implements BindingHandle {
       tools: { tools: [...PI_TOOLS.tools] },
       ...(this.#recovery === undefined ? {} : { recovery: this.#recovery }),
       signal: this.#abort.signal,
-      observer: (observation) => this.#translate(observation),
+      observer: (observation) => this.#observe(observation),
     };
   }
 
@@ -483,10 +433,12 @@ class PiBinding implements BindingHandle {
     const entryId = recoveryEntryId(cursor);
     const replay = await handle.reconcile(entryId);
     return {
+      // Pi's own history, offered whole. Which of these become Session facts,
+      // and under what ids, is the Engine's replay translation to decide — the
+      // same decision it makes for the live pass, which is what keeps one fact
+      // seen twice from being recorded twice.
       cursor: replay.cursor === null ? cursor : { entryId: replay.cursor },
-      observations: replay.observations.flatMap((observation) =>
-        this.#durableObservations(observation),
-      ),
+      observations: replay.observations,
       receipts: (replay.receipts ?? []).map(({ commandId, acceptedAt }) => ({
         commandId,
         status: "accepted",
@@ -560,448 +512,40 @@ class PiBinding implements BindingHandle {
     return { commandId, status: "unknown", detail: errorMessage(error), native: this.#native };
   }
 
-  #translate(observation: RuntimeObservation): Promise<void> {
-    // A released binding has no sink to speak into, and Pi's own close
-    // observation lands here on the way out of `release`.
-    if (this.#released) return Promise.resolve();
-    switch (observation.kind) {
-      case "attachment":
-        return this.#translateAttachment(observation);
-      case "turn":
-        return this.#translateTurn(observation);
-      case "delta":
-        return this.#translateDelta(observation);
-      case "message-settled":
-        return this.#translateSettled(observation);
-      case "activity":
-        return this.#translateActivity(observation);
-      case "authority":
-        return this.#translateAuthority(observation);
-      case "attention":
-        return this.#translateAttention(observation);
-    }
-  }
-
   /**
-   * A refusal reaches the Session before it reaches the model.
+   * Everything Pi says, forwarded once; the Session Engine decides what it means.
    *
-   * No handle guard, unlike the attachment arm: `beforeToolCall` cannot fire
-   * before `bind` — the Agent that calls it is the one the handle wraps — and a
-   * refusal that reached the sink and then dropped would leave the model told
-   * and the ledger silent, which is the one ordering this must never produce.
-   */
-  async #translateAuthority(
-    observation: Extract<RuntimeObservation, { kind: "authority" }>,
-  ): Promise<void> {
-    await this.#emit({
-      id: `pi:authority:${this.#spec.attachmentId}:${++this.#sequence}`,
-      kind: "authority.denied",
-      occurredAt: observation.occurredAt ?? this.#now(),
-      turnId: observation.turnId,
-      tool: observation.tool,
-      cause: observation.cause,
-      reason: observation.reason,
-    });
-  }
-
-  async #translateAttachment(
-    observation: Extract<RuntimeObservation, { kind: "attachment" }>,
-  ): Promise<void> {
-    // Nothing before the handle exists reaches the Session: `started` is the
-    // Session Engine's own `attachment.opened` said twice, and a pre-handle
-    // `failed` is the rejection `attach` is about to throw.
-    if (this.#handle === null) return;
-    if (observation.state === "failed") {
-      await this.#emit({
-        id: `pi:attachment:${this.#spec.attachmentId}:failed:${++this.#sequence}`,
-        kind: "attachment.failed",
-        occurredAt: this.#now(),
-        detail: observation.failure?.message ?? null,
-      });
-      return;
-    }
-    if (observation.state === "closed") {
-      await this.#emit({
-        id: `pi:attachment:${this.#spec.attachmentId}:closed`,
-        kind: "attachment.closed",
-        occurredAt: this.#now(),
-        outcome: "completed",
-      });
-    }
-  }
-
-  async #translateTurn(observation: Extract<RuntimeObservation, { kind: "turn" }>): Promise<void> {
-    if (observation.state === "started") {
-      await this.#retryClosedActivityWithdrawals();
-      this.#messageSequence = 0;
-      this.#streaming = null;
-      await this.#emit(this.#turnObservation(observation));
-      return;
-    }
-    // An interrupted turn is a closed turn. What made it stop is already said —
-    // by the attention Pi raises for a real failure, or by nothing at all when
-    // the user asked for it — and inventing a second story here would only give
-    // the two surfaces something to disagree about.
-    this.#closedActivityTurns.add(observation.turnId);
-    await this.#withdrawStreaming();
-    await this.#retryClosedActivityWithdrawals();
-    await this.#emit(this.#turnObservation(observation));
-  }
-
-  /**
-   * Grow the in-flight message, opening it on its first delta.
+   * Two things are suppressed here rather than there, because both are facts
+   * about this binding's own lifecycle that the Engine cannot see.
    *
-   * Reasoning is carried as the overlay's own reasoning part rather than
-   * dropped: it is text-bearing, it folds and appends exactly like assistant
-   * text, and the transcript already knows how to draw it. Nothing new is
-   * invented for it here — the richer reasoning vocabulary is Session 3's.
+   * **A released binding does not admit new observations.** Pi's own close
+   * lands here on the way out of `release`, and the Engine writes
+   * `attachment.closed` itself once `release` resolves; letting Pi's arrive
+   * first would delete the binding before that write and throw
+   * "already closed" out of every executor-stop command.
+   *
+   * This covers only what has not been admitted yet. An observation already
+   * past it fans out into several Session facts on the far side of this seam,
+   * and this flag cannot reach into that — a fan-out admitted a moment before
+   * `release` would otherwise write its tail after the close, where the ledger
+   * refuses it rather than files it late, and the rejection surfaces back
+   * through Pi's observer. The Session Engine stops its own observation
+   * pipeline for exactly that reason; the guarantee is enforced there, not
+   * inferred from `close()` happening to await `waitForIdle()`.
+   *
+   * **An attachment fact needs a binding to be about.** Before the handle
+   * exists, `started` is the Engine's own `attachment.opened` said twice and
+   * `failed` is the rejection `attach` is about to throw. The guard names that
+   * one kind because it is the only one that can arrive that early: everything
+   * else follows from a turn, and a turn needs the handle. Widening it would
+   * risk dropping a refusal that had already reached the model, which is the one
+   * ordering this must never produce.
    */
-  async #translateDelta(observation: TranscriptDeltaObservation): Promise<void> {
-    let streaming = this.#streaming;
-    if (streaming === null) {
-      streaming = { id: this.#openMessage(observation.turnId), keys: [] };
-      this.#streaming = streaming;
-      await this.#emitDelta(streaming.id, {
-        op: "reset",
-        message: { id: streaming.id, role: "assistant", parts: [] },
-      });
-    }
-    const key = observation.channel;
-    if (streaming.keys.includes(key)) {
-      await this.#emitDelta(streaming.id, { op: "part.append", key, text: observation.text });
-      return;
-    }
-    streaming.keys.push(key);
-    await this.#emitDelta(streaming.id, {
-      op: "part.upsert",
-      key,
-      index: streaming.keys.length - 1,
-      part: streamingPart(key, observation.text),
-    });
-  }
-
-  async #translateSettled(
-    observation: Extract<RuntimeObservation, { kind: "message-settled" }>,
-  ): Promise<void> {
-    const streamingId = this.#streaming?.id;
-    this.#streaming = null;
-    const settled = this.#settledObservation(observation);
-    if (settled === null) {
-      // Nothing durable to settle into — a tool-only assistant turn. The
-      // transient claim still has to be withdrawn explicitly or it outlives the
-      // message it stood for.
-      if (streamingId !== undefined) {
-        await this.#emitDelta(streamingId, { op: "message.remove" });
-      }
-      return;
-    }
-    if (streamingId !== undefined && streamingId !== settled.message.id) {
-      await this.#emitDelta(streamingId, { op: "message.remove" });
-    }
-    await this.#emit(settled);
-  }
-
-  /**
-   * Activity is a standalone assistant message while it runs, then settles to
-   * that same id. The shared descriptor is the only native-specific context
-   * the renderer needs; the SDK tool name stays product-owned.
-   */
-  async #translateActivity(observation: RuntimeActivityObservation): Promise<void> {
-    const messageId = this.#activityMessageId(observation.turnId, observation.activityId);
-    if (observation.state === "started" || observation.state === "progress") {
-      if (!this.#activityOverlays.has(messageId)) {
-        await this.#emitDelta(messageId, {
-          op: "reset",
-          message: { id: messageId, role: "assistant", parts: [] },
-        });
-        this.#activityOverlays.set(messageId, { turnId: observation.turnId, messageId });
-      }
-      await this.#emitDelta(messageId, {
-        op: "part.upsert",
-        key: activityPartKey(observation.activityId),
-        index: 0,
-        part: activityPart(observation),
-      });
-      return;
-    }
-
-    await this.#emit(this.#activityObservation(observation));
-    this.#activityOverlays.delete(messageId);
-  }
-
-  #translateAttention(observation: AttentionObservation): Promise<void> {
-    return this.#emit(this.#attentionObservation(observation));
-  }
-
-  #durableObservations(observation: RuntimeObservation): HarnessObservation[] {
-    switch (observation.kind) {
-      case "turn":
-        return [this.#turnObservation(observation)];
-      case "message-settled": {
-        const settled = this.#settledObservation(observation);
-        return settled === null ? [] : [settled];
-      }
-      case "activity":
-        return observation.state === "started" || observation.state === "progress"
-          ? []
-          : [this.#activityObservation(observation)];
-      case "attention":
-        return [this.#attentionObservation(observation)];
-      case "attachment":
-      case "delta":
-        return [];
-      // A refusal never lands in Pi's own recovery sidecar: `runtime.ts` commits
-      // it through the live observer only, never through `persistObservation`,
-      // because the durable fact belongs to the Session's ledger rather than to
-      // Pi's replay history. Reconcile therefore never actually offers one here
-      // — the case exists so this switch stays exhaustive against the type it
-      // is honestly wider than.
-      case "authority":
-        return [];
-    }
-  }
-
-  #turnObservation(
-    observation: Extract<RuntimeObservation, { kind: "turn" }>,
-  ): Extract<HarnessObservation, { kind: "turn.started" | "turn.completed" | "turn.interrupted" }> {
-    return {
-      id: `pi:turn:${observation.turnId}:${observation.state}`,
-      kind:
-        observation.state === "started"
-          ? "turn.started"
-          : observation.state === "interrupted"
-            ? "turn.interrupted"
-            : "turn.completed",
-      occurredAt: observation.occurredAt ?? this.#now(),
-      ...recoveryCursor(observation.recoveryCursor),
-      turnId: observation.turnId,
-    };
-  }
-
-  #settledObservation(
-    observation: Extract<RuntimeObservation, { kind: "message-settled" }>,
-  ): Extract<HarnessObservation, { kind: "transcript.message" }> | null {
-    const parts = settledParts(observation.message);
-    if (parts.length === 0) return null;
-    const messageId = `pi:${this.#spec.attachmentId}:entry:${observation.message.entryId}`;
-    return {
-      id: `pi:message:${observation.message.entryId}`,
-      kind: "transcript.message",
-      occurredAt: observation.occurredAt ?? this.#now(),
-      ...recoveryCursor(observation.recoveryCursor),
-      threadId: this.#threadId,
-      branchId: this.#branchId,
-      attemptId: `attempt:${messageId}`,
-      turnId: observation.turnId,
-      message: {
-        id: messageId,
-        role: "assistant",
-        parts,
-        ...messageMetadata(observation.message),
-      },
-    };
-  }
-
-  #activityObservation(
-    observation: RuntimeActivityObservation,
-  ): Extract<HarnessObservation, { kind: "transcript.message" }> {
-    const messageId = this.#activityMessageId(observation.turnId, observation.activityId);
-    return {
-      id: `pi:activity:${this.#spec.attachmentId}:${observation.turnId}:${observation.activityId}:${observation.state}`,
-      kind: "transcript.message",
-      occurredAt: observation.occurredAt ?? this.#now(),
-      ...recoveryCursor(observation.recoveryCursor),
-      threadId: this.#threadId,
-      branchId: this.#branchId,
-      attemptId: `attempt:${messageId}`,
-      turnId: observation.turnId,
-      message: {
-        id: messageId,
-        role: "assistant",
-        parts: [activityPart(observation)],
-      },
-    };
-  }
-
-  #attentionObservation(
-    observation: AttentionObservation,
-  ): Extract<HarnessObservation, { kind: "attention.raised" | "attention.cleared" }> {
-    const attentionId = `pi:attention:${this.#spec.attachmentId}:${observation.reason}`;
-    const eventIdentity = observation.recoveryCursor ?? `live:${++this.#sequence}`;
-    if (observation.state === "cleared") {
-      return {
-        id: `${attentionId}:cleared:${eventIdentity}`,
-        kind: "attention.cleared",
-        occurredAt: observation.occurredAt ?? this.#now(),
-        ...recoveryCursor(observation.recoveryCursor),
-        attentionId,
-      };
-    }
-    return {
-      id: `${attentionId}:raised:${eventIdentity}`,
-      kind: "attention.raised",
-      occurredAt: observation.occurredAt ?? this.#now(),
-      ...recoveryCursor(observation.recoveryCursor),
-      attention: {
-        id: attentionId,
-        kind: ATTENTION_KINDS[observation.reason],
-        detail: observation.message,
-        diagnostic: null,
-      },
-    };
-  }
-
-  /** Retire an in-flight message nothing is going to finish. */
-  async #withdrawStreaming(): Promise<void> {
-    const streaming = this.#streaming;
-    if (streaming === null) return;
-    this.#streaming = null;
-    await this.#emitDelta(streaming.id, { op: "message.remove" });
-  }
-
-  /**
-   * Retry only overlays from a turn Pi has closed. A rejected sink write leaves
-   * the row tracked, so the next lifecycle edge can retire it without deleting
-   * state before the Session observed the removal.
-   */
-  async #retryClosedActivityWithdrawals(): Promise<void> {
-    const active = [...this.#activityOverlays.values()].filter((activity) =>
-      this.#closedActivityTurns.has(activity.turnId),
-    );
-    for (const activity of active) {
-      await this.#emitDelta(activity.messageId, { op: "message.remove" });
-      this.#activityOverlays.delete(activity.messageId);
-    }
-    for (const turnId of this.#closedActivityTurns) {
-      if (![...this.#activityOverlays.values()].some((activity) => activity.turnId === turnId)) {
-        this.#closedActivityTurns.delete(turnId);
-      }
-    }
-  }
-
-  #openMessage(turnId: string): string {
-    const index = this.#messageSequence;
-    this.#messageSequence += 1;
-    return `pi:${this.#spec.attachmentId}:${turnId}:${index}`;
-  }
-
-  #activityMessageId(turnId: string, activityId: string): string {
-    return `pi:${this.#spec.attachmentId}:${turnId}:activity:${activityId}`;
-  }
-
-  #emitDelta(messageId: string, delta: TranscriptDelta): Promise<void> {
-    return this.#emit({
-      id: `pi:delta:${this.#spec.attachmentId}:${++this.#sequence}`,
-      kind: "transcript.delta",
-      occurredAt: this.#now(),
-      threadId: this.#threadId,
-      branchId: this.#branchId,
-      attemptId: `attempt:${messageId}`,
-      turnId: null,
-      messageId,
-      delta,
-    });
-  }
-
-  #emit(observation: HarnessObservation): Promise<void> {
+  #observe(observation: RuntimeObservation): Promise<void> {
     if (this.#released) return Promise.resolve();
+    if (observation.kind === "attachment" && this.#handle === null) return Promise.resolve();
     return this.#sink.emit(observation);
   }
-}
-
-type TranscriptPart = UIMessage["parts"][number];
-type DynamicToolPart = Extract<TranscriptPart, { type: "dynamic-tool" }>;
-type ToolMetadata = NonNullable<DynamicToolPart["toolMetadata"]>;
-
-function activityPartKey(activityId: string): string {
-  return `activity:${activityId}`;
-}
-
-function activityPart(observation: RuntimeActivityObservation): DynamicToolPart {
-  const base = {
-    type: "dynamic-tool" as const,
-    toolName: ACTIVITY_TOOL_NAME,
-    toolCallId: observation.activityId,
-    toolMetadata: { [ACTIVITY_METADATA_KEY]: observation.descriptor } as ToolMetadata,
-  };
-  switch (observation.state) {
-    case "started":
-      return { ...base, state: "input-available", input: observation.input };
-    case "progress":
-      return {
-        ...base,
-        state: "output-available",
-        input: observation.input,
-        output: observation.output,
-        preliminary: true,
-      };
-    case "completed":
-      return {
-        ...base,
-        state: "output-available",
-        input: observation.input,
-        output: observation.output,
-      };
-    case "failed":
-      return {
-        ...base,
-        state: "output-error",
-        input: observation.input,
-        errorText: observation.error ?? "Activity failed.",
-      };
-  }
-}
-
-function streamingPart(
-  channel: TranscriptDeltaObservation["channel"],
-  text: string,
-): TranscriptPart {
-  return channel === "reasoning"
-    ? { type: "reasoning", text, state: "streaming" }
-    : { type: "text", text, state: "streaming" };
-}
-
-function settledParts(message: SettledAssistantMessage): TranscriptPart[] {
-  const parts: TranscriptPart[] = [];
-  // Reasoning first: it is what the model did before it spoke, and the
-  // transcript reads it that way.
-  if (message.reasoning !== undefined && message.reasoning.length > 0) {
-    parts.push({ type: "reasoning", text: message.reasoning, state: "done" });
-  }
-  if (message.text.length > 0) parts.push({ type: "text", text: message.text, state: "done" });
-  return parts;
-}
-
-/**
- * The model and cost a settled message was produced under — the shape a
- * transcript artifact's `metadata` carries, defined here because this adapter
- * is the only thing that writes one.
- *
- * Every field is nullable and the key is omitted entirely when Pi reported
- * nothing, so a reader never has to tell "free" from "not measured".
- */
-function messageMetadata(message: SettledAssistantMessage): { metadata?: unknown } {
-  const usage = message.usage;
-  const tokens =
-    usage === undefined || (usage.inputTokens === undefined && usage.outputTokens === undefined)
-      ? null
-      : {
-          input: usage.inputTokens ?? null,
-          output: usage.outputTokens ?? null,
-          reasoning: null,
-          cacheRead: null,
-          cacheWrite: null,
-        };
-  const cost = usage?.costUsd ?? null;
-  if (message.model === undefined && cost === null && tokens === null) return {};
-  return {
-    metadata: {
-      providerId: message.model?.providerId ?? null,
-      modelId: message.model?.modelId ?? null,
-      cost,
-      tokens,
-    },
-  };
 }
 
 /** Pi takes one string; a `UIMessage` may carry several text parts. */

@@ -40,7 +40,8 @@ import { listAttachments } from "./db/attachments-repo";
 import { createDesktopSessionEngine } from "./session-control";
 import { createDesktopSessionRuntime } from "./session-runtime";
 import { closeStaleAttachments } from "./session-runtime/boot-recovery";
-import { createPiRuntimeHost, piRootThreadId } from "./session-runtime/pi-adapter";
+import { sessionRootThreadId } from "@volli/session-engine";
+import { createPiRuntimeHost } from "./session-runtime/pi-adapter";
 import { createTicketSessions } from "./session-runtime/ticket-sessions";
 import { createProjectSessions } from "./session-runtime/project-sessions";
 import {
@@ -429,7 +430,7 @@ app.whenReady().then(async () => {
           } as const;
           const shared = {
             projectId: project.id,
-            rootThreadId: piRootThreadId(sessionId),
+            rootThreadId: sessionRootThreadId(sessionId),
             model: projection.modelSelection,
           };
           // A ticketless Session is a Role, not a Ticket lookup that failed:

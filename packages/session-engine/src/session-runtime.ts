@@ -8,6 +8,7 @@ import type {
   SessionCommand,
   SessionEvent,
   SessionEventProvenance,
+  RuntimeObservation,
   SessionExecutionVenue,
   SessionInteractionCancelReason,
   SessionInteractionResolution,
@@ -22,7 +23,6 @@ import type { SessionEngine, SubmitSessionCommandResult } from "./session-engine
 import type {
   BindingHandle,
   DeliveryReceipt,
-  HarnessObservation,
   NativeAttachmentSpec,
   NativeHarnessAdapter,
   NativeMessageDelivery,
@@ -31,6 +31,12 @@ import type {
   Reconciliation,
 } from "./native-adapter";
 import { NativeAttachmentError } from "./native-adapter";
+import type { TranslatedObservation, TranslatedObservationSink } from "./observation-translation";
+import {
+  RuntimeObservationTranslator,
+  sessionMainBranchId,
+  sessionRootThreadId,
+} from "./observation-translation";
 import type { SessionTranscriptArtifact, TranscriptArtifactStore } from "./transcript-artifacts";
 import {
   applyTranscriptDelta,
@@ -308,6 +314,26 @@ interface BindingRecord {
   venue: SessionExecutionVenue;
   cursor: SessionNativeDetail | null;
   reconcileInFlight: Promise<void> | null;
+  /**
+   * The same translator the attachment's sink holds, for the replay path.
+   *
+   * A reference, not the owner: this record is deleted the moment an attachment
+   * closes or fails, and the translator has to outlive that so observations
+   * still draining behind the close keep minting ids from where they left off.
+   * The sink owns it; reconciliation borrows it so both passes over one fact
+   * derive the same id.
+   */
+  translator: RuntimeObservationTranslator;
+  /**
+   * The live observation pipeline, so whoever ends this binding can stop it.
+   *
+   * An executor is asked to stop and then reports that it stopped, and the two
+   * are not one event — the Session Engine writes `attachment.closed` itself
+   * once the release resolves. Between those, anything the executor is still
+   * mid-way through saying would be recorded against an attachment that is
+   * already closed, which the ledger refuses rather than tolerates.
+   */
+  sink: BufferedObservationSink;
 }
 
 type AdapterIdentity = Pick<NativeHarnessAdapter, "id" | "adapterVersion">;
@@ -339,19 +365,36 @@ interface SessionOverlayState {
 }
 
 /**
+ * One attachment's whole observation pipeline: what an executor says, on its
+ * way to being what this Session recorded.
+ *
  * Some SDKs synchronously report startup observations from `attach()`. Buffer
  * them until `attachment.opened` is durable, then serialize every later emit
  * behind that replay so provider order cannot overtake the ledger boundary.
+ *
+ * Translation lives inside rather than behind this, because {@link discard} has
+ * to be able to stop the pipeline and one observation is not one fact. A single
+ * runtime observation fans out — a settled streamed message withdraws its
+ * transient claim before it writes the durable one — so a gate only at the
+ * mouth would let a fan-out admitted a moment before the stop finish writing
+ * its tail on the far side of it. That tail does not merely land late: the
+ * Session Engine refuses every observation on an attachment it has already
+ * closed, so it throws back out through the executor's own observer. Holding
+ * the translator here is also what keeps it alive past the binding record,
+ * which is dropped the moment an attachment closes.
  */
 class BufferedObservationSink implements ObservationSink {
-  readonly #pending: HarnessObservation[] = [];
+  readonly #pending: RuntimeObservation[] = [];
   #tail: Promise<void> = Promise.resolve();
   #state: "buffering" | "active" | "discarded" = "buffering";
 
-  constructor(private readonly target: ObservationSink) {}
+  constructor(
+    private readonly translator: RuntimeObservationTranslator,
+    private readonly record: TranslatedObservationSink,
+  ) {}
 
-  emit(observation: HarnessObservation): Promise<void> {
-    if (this.#state === "discarded") return Promise.resolve();
+  emit(observation: RuntimeObservation): Promise<void> {
+    if (this.stopped) return Promise.resolve();
     if (this.#state === "buffering") {
       this.#pending.push(observation);
       return Promise.resolve();
@@ -365,17 +408,37 @@ class BufferedObservationSink implements ObservationSink {
     return Promise.all(emissions).then(() => undefined);
   }
 
+  /**
+   * Stop the pipeline: nothing from this binding reaches the ledger again.
+   *
+   * Every stage is gated, because each one can already be past the previous:
+   * an observation still buffered, one queued behind the serializing tail, a
+   * fan-out mid-flight, and — through {@link stopped} — a single fact already
+   * inside the recorder are four different places a fact can be waiting.
+   */
   discard(): void {
     this.#state = "discarded";
     this.#pending.length = 0;
   }
 
-  #enqueue(observation: HarnessObservation): Promise<void> {
-    const emission = this.#tail.then(() => this.target.emit(observation));
+  /** For the one durable write that can start before a stop and finish after it. */
+  get stopped(): boolean {
+    return this.#state === "discarded";
+  }
+
+  #enqueue(observation: RuntimeObservation): Promise<void> {
+    const emission = this.#tail.then(() => this.#translate(observation));
     // Preserve the caller-visible rejection while allowing later observations
     // to continue behind a failed durable write.
     this.#tail = emission.catch(() => undefined);
     return emission;
+  }
+
+  #translate(observation: RuntimeObservation): Promise<void> {
+    if (this.stopped) return Promise.resolve();
+    return this.translator.translate(observation, (fact) =>
+      this.stopped ? Promise.resolve() : this.record(fact),
+    );
   }
 }
 
@@ -666,7 +729,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       continuity: request.command.continuity,
       native: null,
     };
-    const sink = new BufferedObservationSink(this.#sink(adapter, spec, location.venue));
+    const { translator, sink } = this.#pipeline(adapter, spec, location.venue);
     let handle: BindingHandle;
     try {
       handle = await adapter.attach(spec, sink);
@@ -733,6 +796,8 @@ class DefaultSessionRuntime implements SessionRuntime {
         venue: location.venue,
         cursor: null,
         reconcileInFlight: null,
+        translator,
+        sink,
       });
       await this.#publish([opened, ...clearedAttachFailures]);
       await sink.activate();
@@ -899,8 +964,8 @@ class DefaultSessionRuntime implements SessionRuntime {
   ): Promise<SessionRuntimeCommandResult> {
     const artifact = await this.ports.artifacts.write({
       version: 1,
-      threadId: `thread:${request.sessionId}:root`,
-      branchId: `branch:${request.sessionId}:main`,
+      threadId: sessionRootThreadId(request.sessionId),
+      branchId: sessionMainBranchId(request.sessionId),
       attemptId: `attempt:${request.commandId}`,
       turnId: `turn:${request.commandId}`,
       message: request.command.message,
@@ -1178,8 +1243,8 @@ class DefaultSessionRuntime implements SessionRuntime {
     }
     const resolutionArtifact = await this.ports.artifacts.write({
       version: 1,
-      threadId: `thread:${request.sessionId}:root`,
-      branchId: `branch:${request.sessionId}:main`,
+      threadId: sessionRootThreadId(request.sessionId),
+      branchId: sessionMainBranchId(request.sessionId),
       attemptId: `attempt:${request.commandId}`,
       turnId: null,
       message: {
@@ -1337,6 +1402,12 @@ class DefaultSessionRuntime implements SessionRuntime {
     const recovered = await this.#recoverAdapterDelivery({ request, submitted, binding, existed });
     if (recovered) return recovered;
     await binding.handle.release("requested");
+    // The binding stops speaking before this Session records that it stopped.
+    // A released executor is owed the chance to drain — everything it finished
+    // saying while `release` was resolving is already durable — but the moment
+    // that resolves, the attachment is over, and the ledger refuses a fact
+    // about a closed attachment rather than filing it late.
+    binding.sink.discard();
     const closed = await this.ports.engine.observe({
       id: this.#id("event"),
       sessionId: request.sessionId,
@@ -1545,11 +1616,20 @@ class DefaultSessionRuntime implements SessionRuntime {
     await this.#releaseBindingsAfterClose();
   }
 
+  /**
+   * Shutdown's release, held to the same order as the requested one: drain,
+   * then stop. A release that threw stops the pipeline too — the runtime is
+   * going away either way, and this is the last caller that could.
+   */
   async #releaseBindingsAfterClose(): Promise<void> {
     if (!this.#closed) return;
     const bindings = [...this.#bindings.values()];
     this.#bindings.clear();
-    await Promise.allSettled(bindings.map(({ handle }) => handle.release("shutdown")));
+    await Promise.allSettled(
+      bindings.map((binding) =>
+        binding.handle.release("shutdown").finally(() => binding.sink.discard()),
+      ),
+    );
   }
 
   async #assertBindingOperationOpen(): Promise<void> {
@@ -1558,21 +1638,36 @@ class DefaultSessionRuntime implements SessionRuntime {
     this.#assertOpen();
   }
 
-  #sink(
+  /**
+   * One attachment's observation pipeline, and the translator it runs on.
+   *
+   * Both are returned because the binding record borrows the translator for the
+   * replay path while the sink owns it — see {@link BindingRecord.translator}.
+   */
+  #pipeline(
     adapter: NativeHarnessAdapter,
     spec: NativeAttachmentSpec,
     venue: SessionExecutionVenue,
-  ): ObservationSink {
-    return {
-      emit: (observation) => this.#recordObservation(adapter, spec, venue, observation),
-    };
+  ): { translator: RuntimeObservationTranslator; sink: BufferedObservationSink } {
+    const translator = new RuntimeObservationTranslator({
+      namespace: adapter.durableIdNamespace,
+      sessionId: spec.sessionId,
+      attachmentId: spec.attachmentId,
+      now: () => this.ports.clock.now(),
+    });
+    const sink: BufferedObservationSink = new BufferedObservationSink(translator, (fact) =>
+      this.#recordFact(adapter, spec, venue, fact, sink),
+    );
+    return { translator, sink };
   }
 
-  async #recordObservation(
+  async #recordFact(
     adapter: NativeHarnessAdapter,
     spec: NativeAttachmentSpec,
     venue: SessionExecutionVenue,
-    observation: HarnessObservation,
+    observation: TranslatedObservation,
+    /** The pipeline this fact came through, re-read for the one write that can outlast it. */
+    sink: BufferedObservationSink,
   ): Promise<void> {
     // A transient fact, and every durable step below is skipped on purpose: no
     // artifact write, no ledger event, and no observation-id dedupe — at ~31
@@ -1611,6 +1706,12 @@ class DefaultSessionRuntime implements SessionRuntime {
           turnId: observation.turnId,
           message: observation.message,
         });
+        // The one await in this method between accepting a fact and recording
+        // it, so the one place a release can land mid-fact. Artifacts are
+        // content-addressed and nothing yet points at these bytes, so
+        // abandoning them costs an inert file, where recording the event would
+        // be a fact about an attachment the ledger has already closed.
+        if (sink.stopped) return;
         event = await this.ports.engine.observe({
           ...base,
           kind: "transcript.referenced",
@@ -1672,39 +1773,34 @@ class DefaultSessionRuntime implements SessionRuntime {
           attentionId: observation.attentionId,
         });
         break;
-      case "attention.raised": {
-        const common = {
-          id: observation.attention.id,
-          attachmentId: spec.attachmentId,
-          detail: observation.attention.detail,
-          diagnostic: observation.attention.diagnostic,
-        };
-        const attention =
-          observation.attention.kind === "rate_limited"
-            ? {
-                ...common,
-                kind: observation.attention.kind,
-                retryAt: observation.attention.retryAt ?? null,
-              }
-            : observation.attention.kind === "quota_exhausted"
-              ? {
-                  ...common,
-                  kind: observation.attention.kind,
-                  resetAt: observation.attention.resetAt ?? null,
-                }
-              : { ...common, kind: observation.attention.kind };
+      // `rate_limited` and `quota_exhausted` are Attention kinds no executor can
+      // reach, so this arm no longer carries the `retryAt`/`resetAt` shapes they
+      // need. Reaching them means widening the runtime's attention `reason`,
+      // which the recovery sidecar re-validates against every marker already on
+      // disk — a schema migration, and its own piece of work.
+      case "attention.raised":
         event = await this.ports.engine.observe({
           ...base,
           kind: observation.kind,
-          attention,
+          attention: {
+            id: observation.attention.id,
+            attachmentId: spec.attachmentId,
+            kind: observation.attention.kind,
+            detail: observation.attention.detail,
+            diagnostic: observation.attention.diagnostic,
+          },
         });
         break;
-      }
     }
     const binding = this.#bindings.get(spec.attachmentId);
     if (binding && observation.cursor !== undefined) binding.cursor = observation.cursor;
     await this.#publish([event]);
     if (observation.kind === "attachment.closed" || observation.kind === "attachment.failed") {
+      // The executor closed itself, so the stop is the same one `#release`
+      // performs and belongs at the same point: after the closing fact is
+      // durable, before anything behind it in the pipeline can be recorded
+      // against the attachment it just closed.
+      binding?.sink.discard();
       this.#bindings.delete(spec.attachmentId);
       // Nothing is left to finish what the overlay holds, and its content was
       // never durable. Dropping it beside the binding keeps the two ends
@@ -1723,7 +1819,7 @@ class DefaultSessionRuntime implements SessionRuntime {
    */
   async #recordTranscriptDelta(
     sessionId: string,
-    observation: Extract<HarnessObservation, { kind: "transcript.delta" }>,
+    observation: Extract<TranslatedObservation, { kind: "transcript.delta" }>,
   ): Promise<void> {
     const overlay = await this.#overlay(sessionId);
     overlay.messages = applyTranscriptDelta(
@@ -1882,7 +1978,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       continuity: "native_resume",
       native: binding.native,
     };
-    const sink = new BufferedObservationSink(this.#sink(adapter, spec, attachment.venue));
+    const { translator, sink } = this.#pipeline(adapter, spec, attachment.venue);
     let handle: BindingHandle;
     try {
       handle = await adapter.attach(spec, sink);
@@ -1898,6 +1994,8 @@ class DefaultSessionRuntime implements SessionRuntime {
       venue: attachment.venue,
       cursor: null,
       reconcileInFlight: null,
+      translator,
+      sink,
     };
     this.#bindings.set(attachmentId, record);
     await sink.activate();
@@ -1926,7 +2024,9 @@ class DefaultSessionRuntime implements SessionRuntime {
     reconciliation: Reconciliation,
   ): Promise<void> {
     for (const observation of reconciliation.observations) {
-      await this.#recordObservation(binding.adapter, binding.spec, binding.venue, observation);
+      for (const fact of binding.translator.replay(observation)) {
+        await this.#recordFact(binding.adapter, binding.spec, binding.venue, fact, binding.sink);
+      }
     }
     const projection = await this.#requireSession(binding.spec.sessionId);
     const commands = new Map(projection.commands.map((command) => [command.id, command]));
