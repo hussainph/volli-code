@@ -27,6 +27,7 @@ function projectionWith(attachments: SessionAttachmentProjection[]): SessionProj
     signal: null,
     modelSelection: null,
     turnActive: false,
+    authorityDenials: 0,
     lastActivityAt: 1,
     bornTicketless: true,
   };

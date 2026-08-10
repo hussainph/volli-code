@@ -668,6 +668,19 @@ function decodePayload(value: unknown, context: string): SessionEventPayload {
         interactionId: readString(record.interactionId, `${context}.interactionId`),
         reason: enumValue(record.reason, SESSION_INTERACTION_CANCEL_REASONS, `${context}.reason`),
       };
+    // `cause` is read as a plain string, not checked against the live rule pack.
+    // History outlives the pack that wrote it, and a decoder that rejected a
+    // retired rule id would make an old Session unreadable — every later read of
+    // that Session, not just this event, because the decode throws.
+    case "authority.denied":
+      return {
+        kind,
+        attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
+        turnId: readNullableString(record.turnId, `${context}.turnId`),
+        tool: readString(record.tool, `${context}.tool`),
+        cause: readString(record.cause, `${context}.cause`),
+        reason: readString(record.reason, `${context}.reason`),
+      };
     case "command.receipt.recorded":
       return { kind, receipt: decodeReceipt(record.receipt, `${context}.receipt`) };
     case "adapter.observed":

@@ -52,9 +52,22 @@ This decision does not mean unbounded execution. Anthropic's auto mode routes
 every tool call through a classifier that blocks actions which are irreversible,
 destructive, or aimed outside the environment; keeps a category it will never
 approve; checks whether a git push destination is public, private, or trusted;
-reads repository state before a destructive git command; screens fetched content
-for prompt injection; and falls back to asking after three consecutive blocks or
-twenty in a session.
+reads repository state before a destructive git command; and escalates to the
+human after three consecutive denials or twenty in a session.
+
+Prompt injection is screened by a *different* mechanism, and the distinction
+matters because it is a layer Volli does not have. A server-side probe scans tool
+outputs before they enter the agent's context. The transcript classifier is
+defined by never seeing tool output at all — that stripping is itself the
+defence, since an injection would have to beat the probe and then steer the agent
+into a tool call the classifier independently judges safe. An earlier draft of
+this plan collapsed the two into one clause, which made "why no classifier yet"
+read as though it covered injection. It does not, and nothing in Volli does.
+
+The 97% and 39% figures above are from the product announcement; the engineering
+post states 93% for the same approval rate. Quote 93% when citing that post.
+`docs/research/claude-code-auto-mode-semantics.md` holds the full semantics and
+the mapping onto what Volli built.
 
 Volli's job is to earn the same default. What follows is what that requires here,
 which is less than it sounds, because much of the boundary already exists.
@@ -208,11 +221,27 @@ for agents working a checkout a human also uses.
 
 Keep `classifierModel: null`.
 
-A classifier earns its cost when the dangerous categories are reachable. With all
-network denied, no credentials in the child environment, and the filesystem
-scoped and symlink-proof, a per-call model invocation would mostly re-derive what
-the kernel already guarantees. Deterministic rules plus the existing sandbox
-cover the realistic risk.
+A classifier earns its cost when the dangerous categories are reachable. Three of
+Anthropic's four block-rule groups need the network or the home directory, and
+Seatbelt denies both outright. Their own tier 2 skips the classifier entirely for
+in-project file writes on the same blast-radius reasoning. Deterministic rules
+plus the existing sandbox cover most of the realistic risk here.
+
+**But not all of it, and an earlier draft of this section overclaimed.** It said a
+per-call model invocation "would mostly re-derive what the kernel already
+guarantees." That is wrong about what their classifier is for. It is an *intent*
+checker, not a boundary enforcer: its rules are anchored on the user's own
+messages, and "everything the agent chooses on its own is unauthorized until the
+user says otherwise." A kernel guarantees nothing about intent. A branch sweep, a
+`push --force`, or an over-broad `rm` entirely inside the workspace is legal under
+every rule we wrote and legal under Seatbelt, and only an intent check catches it.
+The honest statement is that we accept that gap for now, not that it does not
+exist.
+
+The second thing only a classifier reaches: "evaluate the real-world impact of an
+action, rather than just the surface text of the invocation." That is the rule a
+lexer cannot implement, and it is the same gap our `eval`, base64 and
+command-substitution residuals name.
 
 It becomes warranted when either of two things changes: network egress is
 allowlisted (which reopens exfiltration), or the Main-checkout Role ships to
@@ -291,8 +320,8 @@ packs, and data-aware git rules.
 
 ### Part I implementation record (2026-08-10)
 
-Slices 1 and 2 shipped. Slices 3 and 4 — denials as durable facts, and
-escalation through the interaction channel — are not built.
+Slices 1, 2 and 3 shipped. Slice 4 — escalation through the interaction channel
+— is scoped below and not built.
 
 **Sequenced before Part II candidate 1, and the reason is now evidence rather
 than preference.** `AuthoritySnapshot` already travelled from `@volli/shared`
@@ -363,6 +392,77 @@ the workaround of the agent setting a local identity itself. This costs nothing,
 because the agent is not the commit path: `apps/desktop/src/main/worktree/publish.ts`
 resolves identity in main and runs `add`/`commit` outside the sandbox. It would
 matter only if a Session were ever expected to commit through its own bash.
+
+### Slice 3 record (2026-08-10)
+
+`authority.denied` carries which tool, which rule, and the refusing rule's own
+words, from `beforeToolCall` through the adapter to SQLite. Three decisions in it
+are load-bearing.
+
+**`cause` is stored as a bare string, not the rule-id union.** History outlives
+the pack that wrote it. `sqlite-ledger.ts` decodes with `default: throw`, so a
+decoder that rejected a retired rule id would not degrade one event — it would
+make every later read of that Session fail.
+
+**The count is projected; the streak cannot be.** `SessionProjection.authorityDenials`
+exists because the per-Session half of the threshold is a fact about the Session,
+and a counter that reset on every attach would never reach twenty. The
+consecutive half has no projection and can never have one: an *allowed* call is
+not an event, so only the runtime that sees both answers can know a run was
+broken.
+
+**A refusal goes through the same ordered queue as everything else.** The first
+cut called `spec.observer` directly from `beforeToolCall`, bypassing
+`OrderedObservationDelivery`. A refusal that overtook the turn it belongs to
+would be filed against the wrong turn. `commitObservation` also never rejects, so
+the "record, then refuse" ordering holds without a `try`/`catch` deciding what a
+ledger failure means — a ledger that cannot be written is not a reason to let the
+call through.
+
+**One fail-open closed on the way past.** The renderer scrubbing switch in
+`packages/session-rpc` ended in `default: return safeFrame`, so any newly added
+payload kind reached the renderer unscrubbed with no compile error. It now lists
+its pass-throughs explicitly with a `never` guard, the way the projection reducer
+in `session-ledger.ts` already did.
+
+### Slice 4 — scope, settled
+
+Two stacked PRs. The escalation producer first, landing in today's interaction
+card so it works end to end; then the drawer above the composer, which is also
+where the existing card moves. The whole answer pipe — renderer, IPC, tRPC,
+engine, durable event, adapter dispatch — already exists and is tested; only the
+last hop into Pi is stubbed, which is why roughly 1400 renderer lines sit at 100%
+coverage verifying something nothing produces.
+
+**Counters.** `sessionDenials` seeds from `SessionProjection.authorityDenials`
+through `PiRuntimeContextFields`, the way `location` did in slice 2;
+`NativeAttachmentSpec` does not carry a projection and must not grow one.
+`consecutiveDenials` is runtime-only. After any escalation both trips move
+forward — consecutive to zero, the session trip to `total + sessionDenials` — so
+it fires every twenty rather than once and then on every call after.
+
+**The ask is a typed port, not an observation.** `SessionRuntimeSpec` gains
+`ask?: (request) => Promise<answer>`. The adapter implements it by emitting
+`interaction.opened` and parking the resolver against the interaction id, then
+resolving it from the `interaction.resolve` dispatch. That keeps
+`@volli/agent-runtime` free of ledger types. It blocks with no invented timeout:
+cancellation comes from the vocabulary that already exists — `abandoned`,
+`superseded`, `withdrawn` — and every parked resolver is cancelled on release and
+on abort.
+
+**Both causes ask; they differ in what they offer.** An overridable rule offers
+`[once, reject]` — no `always`, because there is no durable policy store to write
+it to and an option that silently means `once` is a lie. A rule that only reports
+offers `[stop, continue]`: stop interrupts the turn, continue resets the counters
+and keeps refusing. That is a real question with a real consequence, which is why
+it is an interaction rather than an Attention — and it avoids widening the
+Attention reason union for a state none of its members describes.
+
+**No new event kind for an override.** The `authority.denied` emit moves to
+*after* the ask resolves and fires only when the call is actually refused;
+otherwise history would record a denial for a call that ran. What the user
+permitted is already durable as `interaction.opened` plus `interaction.resolved`
+— the user's decision is an interaction fact, not a policy fact.
 
 ## Part II — Runtime shape
 
@@ -670,7 +770,8 @@ external.
 
 - Whether the Main-checkout Role ships with the pre-image commit or waits.
 - Whether the fallback thresholds stay at 3 / 20 or are tuned against real usage.
-  Nothing counts denials yet, so there is no usage to tune against until slice 3.
+  Slice 3 made denials countable, so there is a record to tune against; nothing
+  acts on the counts until slice 4, so tuning them costs nothing yet either.
 - Packaging: an App-Sandboxed build cannot nest `sandbox-exec`, so distribution
   strategy and Part I's boundary are the same decision. Part III removes the
   *other* packaging hazard (the `codesign`/`treeSha256` gate), so doing it first

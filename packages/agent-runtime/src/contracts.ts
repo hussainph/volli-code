@@ -14,6 +14,7 @@
 
 import type {
   ActivityDescriptor,
+  AuthorityDenialCause,
   AuthoritySnapshot,
   ModelAccessSnapshot,
   ModelSelection,
@@ -137,7 +138,28 @@ export type RuntimeObservation =
   | TranscriptDeltaObservation
   | SettledMessageObservation
   | RuntimeActivityObservation
+  | AuthorityObservation
   | AttentionObservation;
+
+/**
+ * The Session's authority refused a call, before the tool ran.
+ *
+ * Not an activity that failed: no tool executed, and the runtime is reporting
+ * Volli's own decision back to Volli. Emitted through the same observer as
+ * everything else so the refusal reaches durable history before the model is
+ * told — `observer` resolves only at the consumer boundary, which is what makes
+ * "recorded, then refused" an ordering the runtime can actually keep.
+ */
+export interface AuthorityObservation {
+  kind: "authority";
+  state: "denied";
+  /** Null before the first turn opens, which a refusal need not wait for. */
+  turnId: string | null;
+  tool: string;
+  cause: AuthorityDenialCause;
+  reason: string;
+  occurredAt?: number;
+}
 
 export interface AttachmentObservation {
   kind: "attachment";

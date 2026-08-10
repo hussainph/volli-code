@@ -952,6 +952,176 @@ describe("startSession", () => {
     expect(JSON.stringify(toolResultContext?.messages)).toContain(expected);
   });
 
+  it("commits exactly one authority observation, ahead of the turn's own completion, naming what refused the call", async () => {
+    const { spec, observations, worktreePath, sessionDataDir } = fixture();
+    const outsidePath = join(worktreePath, "..", "SECRET.txt");
+    writeFileSync(outsidePath, "outside-secret-value\n");
+    let toolResultContext: Context | undefined;
+
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("read", { path: outsidePath });
+            emit.finish();
+          },
+          (emit, context) => {
+            toolResultContext = context;
+            emit.text("The read was refused.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await handle.submitUserMessage("Read the file outside this worktree.");
+    await handle.close();
+
+    // Pi still opens and settles the tool's own activity lifecycle around a
+    // blocked call — it just settles as failed — and the authority fact lands
+    // between the two: recorded once the call is known refused, ahead of the
+    // failure Pi reports back to the model.
+    expect(kinds(observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "activity",
+      "authority",
+      "activity",
+      "delta",
+      "message-settled",
+      "turn:completed",
+      "attachment:closed",
+    ]);
+    const activities = observations.filter(
+      (observation): observation is Extract<RuntimeObservation, { kind: "activity" }> =>
+        observation.kind === "activity",
+    );
+    expect(activities.map((activity) => activity.state)).toEqual(["started", "failed"]);
+    const authority = observations.find(
+      (observation): observation is Extract<RuntimeObservation, { kind: "authority" }> =>
+        observation.kind === "authority",
+    );
+    expect(authority).toMatchObject({
+      kind: "authority",
+      state: "denied",
+      turnId: expect.any(String),
+      tool: "read",
+      cause: "path.outside-workspace",
+    });
+    // Not a paraphrase: the exact reason the model was refused with.
+    expect(JSON.stringify(toolResultContext?.messages)).toContain(authority?.reason);
+  });
+
+  it("does not return the block until the authority observation is durably committed", async () => {
+    const committed = Promise.withResolvers<void>();
+    const observed = Promise.withResolvers<void>();
+    const attachment = fixture({ tools: { tools: ["execute"] } });
+    attachment.spec.authority = { ...attachment.spec.authority, location: "main-checkout" };
+    const exec = vi.fn(async () => ({
+      ok: true as const,
+      value: { stdout: "", stderr: "", exitCode: 0 },
+    }));
+    const containedEnv = {
+      cwd: attachment.worktreePath,
+      prepareProcessExecution: async () => ({ ok: true as const, value: undefined }),
+      exec,
+      cleanup: async () => undefined,
+    } as unknown as SessionExecutionEnv;
+    attachment.spec.observer = async (observation) => {
+      attachment.observations.push(observation);
+      if (observation.kind === "authority") {
+        observed.resolve();
+        await committed.promise;
+      }
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      executionEnvFactory: async () => containedEnv,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("bash", { command: "git reset --hard" });
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("Understood.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    let delivered = false;
+
+    const delivery = handle.submitUserMessage("Reset the tree.").then((outcome) => {
+      delivered = true;
+      return outcome;
+    });
+    await observed.promise;
+    await Promise.resolve();
+    expect(delivered).toBe(false);
+    expect(exec).not.toHaveBeenCalled();
+
+    committed.resolve();
+    await expect(delivery).resolves.toEqual({ kind: "delivered", delivery: "prompt" });
+    expect(exec).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it("still blocks the call when the observer rejects, and surfaces the failure at the next command boundary", async () => {
+    const attachment = fixture({ tools: { tools: ["execute"] } });
+    attachment.spec.authority = { ...attachment.spec.authority, location: "main-checkout" };
+    const exec = vi.fn(async () => ({
+      ok: true as const,
+      value: { stdout: "", stderr: "", exitCode: 0 },
+    }));
+    const containedEnv = {
+      cwd: attachment.worktreePath,
+      prepareProcessExecution: async () => ({ ok: true as const, value: undefined }),
+      exec,
+      cleanup: async () => undefined,
+    } as unknown as SessionExecutionEnv;
+    let toolResultContext: Context | undefined;
+    attachment.spec.observer = async (observation) => {
+      attachment.observations.push(observation);
+      if (observation.kind === "authority") {
+        throw new Error("authority ledger write failed");
+      }
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      executionEnvFactory: async () => containedEnv,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("bash", { command: "git reset --hard" });
+            emit.finish();
+          },
+          (emit, context) => {
+            toolResultContext = context;
+            emit.text("Understood.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    // The queue never rejects into Pi — the run completes and the model is
+    // still told the call was refused — but the failed durable write is not
+    // forgotten: it surfaces once the command settles, same as any other
+    // observation failure.
+    await expect(handle.submitUserMessage("Reset the tree.")).rejects.toThrow(
+      "authority ledger write failed",
+    );
+
+    expect(exec).not.toHaveBeenCalled();
+    expect(JSON.stringify(toolResultContext?.messages)).toContain("discards uncommitted work");
+    await handle.close();
+  });
+
   it("runs the real Pi loop against the worktree and settles durable history", async () => {
     const { spec, observations, sessionDataDir } = fixture();
     let secondCallContext: Context | undefined;

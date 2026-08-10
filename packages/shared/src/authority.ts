@@ -75,9 +75,15 @@ export interface AuthoritySnapshot {
   /**
    * The model allowed to judge calls the deterministic rules cannot. Null, and
    * deliberately so: with the network denied, no credentials in the child
-   * environment, and the filesystem scoped and symlink-proof, a per-call model
-   * invocation would mostly re-derive what the kernel already guarantees. The
-   * field exists so the seam predates the need.
+   * environment, and the filesystem scoped and symlink-proof, the categories a
+   * classifier is best at are largely unreachable.
+   *
+   * Not *entirely* unreachable, and the field is null with that understood. What
+   * a classifier adds is an intent check — whether the user actually asked for
+   * this — and no kernel guarantees anything about intent. A branch sweep or an
+   * over-broad `rm` wholly inside the workspace passes every rule here and every
+   * sandbox rule too. The seam predates the need; the gap is accepted, not
+   * absent.
    */
   classifierModel: string | null;
   fallback: AuthorityFallback;

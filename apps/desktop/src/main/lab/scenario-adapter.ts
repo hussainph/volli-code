@@ -256,6 +256,8 @@ class LabScenarioBinding implements BindingHandle {
         return { ...beat, id, occurredAt };
       case "transcript.delta":
         return { ...beat, id, occurredAt };
+      case "authority.denied":
+        return { ...beat, id, occurredAt };
     }
   }
 }

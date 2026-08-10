@@ -1082,6 +1082,62 @@ describe("Pi native adapter observation translation", () => {
 
     expect(sink.observations).toEqual([]);
   });
+
+  it("translates a denied authority observation into a durable authority.denied fact", async () => {
+    const { runtime, sink } = await attached();
+
+    await runtime.observe({
+      kind: "authority",
+      state: "denied",
+      turnId: "turn-1",
+      tool: "bash",
+      cause: "command.destructive-removal",
+      reason: "rm -rf ~ discards more than this Session's workspace.",
+    });
+
+    expect(sink.of("authority.denied")).toEqual([
+      {
+        id: `pi:authority:${ATTACHMENT_ID}:1`,
+        kind: "authority.denied",
+        occurredAt: 1000,
+        turnId: "turn-1",
+        tool: "bash",
+        cause: "command.destructive-removal",
+        reason: "rm -rf ~ discards more than this Session's workspace.",
+      },
+    ]);
+  });
+
+  it("carries a refusal reported before any turn has opened with a null turnId", async () => {
+    const { runtime, sink } = await attached();
+
+    await runtime.observe({
+      kind: "authority",
+      state: "denied",
+      turnId: null,
+      tool: "read",
+      cause: "path.outside-workspace",
+      reason: "refused",
+    });
+
+    expect(sink.of("authority.denied")[0]?.turnId).toBeNull();
+  });
+
+  it("says nothing to the Session about a refusal reported after release", async () => {
+    const { runtime, sink, binding } = await attached();
+
+    await binding.release("requested");
+    await runtime.observe({
+      kind: "authority",
+      state: "denied",
+      turnId: "turn-1",
+      tool: "bash",
+      cause: "command.destructive-removal",
+      reason: "refused",
+    });
+
+    expect(sink.observations).toEqual([]);
+  });
 });
 
 describe("Pi native adapter dispatch", () => {

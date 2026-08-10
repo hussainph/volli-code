@@ -629,9 +629,33 @@ class PiBinding implements BindingHandle {
         return this.#translateSettled(observation);
       case "activity":
         return this.#translateActivity(observation);
+      case "authority":
+        return this.#translateAuthority(observation);
       case "attention":
         return this.#translateAttention(observation);
     }
+  }
+
+  /**
+   * A refusal reaches the Session before it reaches the model.
+   *
+   * No handle guard, unlike the attachment arm: `beforeToolCall` cannot fire
+   * before `bind` — the Agent that calls it is the one the handle wraps — and a
+   * refusal that reached the sink and then dropped would leave the model told
+   * and the ledger silent, which is the one ordering this must never produce.
+   */
+  async #translateAuthority(
+    observation: Extract<RuntimeObservation, { kind: "authority" }>,
+  ): Promise<void> {
+    await this.#emit({
+      id: `pi:authority:${this.#spec.attachmentId}:${++this.#sequence}`,
+      kind: "authority.denied",
+      occurredAt: observation.occurredAt ?? this.#now(),
+      turnId: observation.turnId,
+      tool: observation.tool,
+      cause: observation.cause,
+      reason: observation.reason,
+    });
   }
 
   async #translateAttachment(
@@ -779,6 +803,14 @@ class PiBinding implements BindingHandle {
         return [this.#attentionObservation(observation)];
       case "attachment":
       case "delta":
+        return [];
+      // A refusal never lands in Pi's own recovery sidecar: `runtime.ts` commits
+      // it through the live observer only, never through `persistObservation`,
+      // because the durable fact belongs to the Session's ledger rather than to
+      // Pi's replay history. Reconcile therefore never actually offers one here
+      // — the case exists so this switch stays exhaustive against the type it
+      // is honestly wider than.
+      case "authority":
         return [];
     }
   }

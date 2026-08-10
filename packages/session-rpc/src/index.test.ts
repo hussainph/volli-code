@@ -230,6 +230,7 @@ function snapshot(): SessionRuntimeSnapshot {
       signal: null,
       modelSelection: null,
       turnActive: false,
+      authorityDenials: 0,
       lastActivityAt: 10,
       bornTicketless: true,
     },

@@ -367,6 +367,83 @@ describe("SqliteSessionLedger", () => {
     });
   });
 
+  it("round-trips an authority denial as its own durable fact, before its turn has even opened", async () => {
+    const { ledger, control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-authority-denied",
+      projectId,
+      ticketId: null,
+      title: "Authority denied",
+      provenance,
+    });
+
+    await ledger.transaction((transaction) => {
+      transaction.appendEvent({
+        id: "authority-denied-event",
+        sessionId: created.session.id,
+        sequence: 4,
+        occurredAt: 200,
+        recordedAt: 201,
+        provenance,
+        payload: {
+          kind: "authority.denied",
+          attachmentId: "attachment-1",
+          // A refusal need not wait for the first turn to open.
+          turnId: null,
+          tool: "bash",
+          cause: "command.destructive-removal",
+          reason: "rm -rf ~ discards more than this Session's workspace.",
+        },
+      });
+    });
+
+    expect((await control.listEvents({ sessionId: created.session.id })).at(-1)?.payload).toEqual({
+      kind: "authority.denied",
+      attachmentId: "attachment-1",
+      turnId: null,
+      tool: "bash",
+      cause: "command.destructive-removal",
+      reason: "rm -rf ~ discards more than this Session's workspace.",
+    });
+  });
+
+  it("rejects an authority denial payload whose tool is not a string, like its readString neighbours", async () => {
+    const { ledger, control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-authority-malformed",
+      projectId,
+      ticketId: null,
+      title: "Authority malformed",
+      provenance,
+    });
+
+    await ledger.transaction((transaction) => {
+      transaction.appendEvent({
+        id: "authority-denied-malformed-event",
+        sessionId: created.session.id,
+        sequence: 4,
+        occurredAt: 200,
+        recordedAt: 201,
+        provenance,
+        payload: {
+          kind: "authority.denied",
+          attachmentId: "attachment-1",
+          turnId: "turn-1",
+          tool: "bash",
+          cause: "command.destructive-removal",
+          reason: "refused",
+        },
+      });
+    });
+    ctx.db
+      .prepare("UPDATE session_events SET payload = json_set(payload, '$.tool', 7) WHERE id = ?")
+      .run("authority-denied-malformed-event");
+
+    await expect(control.listEvents({ sessionId: created.session.id })).rejects.toThrow(
+      "tool must be a string",
+    );
+  });
+
   it("does not make an unrelated append transaction fail on pre-existing receipt corruption", async () => {
     const { control, projectId } = setup();
     const first = await control.createSession({
