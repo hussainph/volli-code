@@ -302,27 +302,50 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     if (query.limit !== undefined && (!Number.isInteger(query.limit) || query.limit < 0)) {
       throw new Error("Event pagination limit must be a non-negative integer");
     }
-    const limit = query.limit === undefined ? "" : " LIMIT @limit";
-    const rows = this.db
-      .prepare(
-        `SELECT id, session_id, sequence, occurred_at, recorded_at, provenance,
-                attachment_id, command_id, payload
-           FROM session_events
-          WHERE session_id = @sessionId AND sequence > @afterSequence
-          ORDER BY sequence ASC${limit}`,
-      )
-      .all({ sessionId: query.sessionId, afterSequence, limit: query.limit }) as unknown[];
+    const statement = this.db.prepare(
+      `SELECT id, session_id, sequence, occurred_at, recorded_at, provenance,
+              attachment_id, command_id, payload
+         FROM session_events
+        WHERE session_id = @sessionId AND sequence > @afterSequence
+        ORDER BY sequence ASC${query.limit === undefined ? "" : " LIMIT @limit"}`,
+    );
     const decoded: SessionEvent[] = [];
     let dropped = 0;
     const retiredKinds = new Set<string>();
-    for (const row of rows) {
-      try {
-        decoded.push(decodeEvent(row, "session_events row"));
-      } catch (error) {
-        if (!(error instanceof UnknownPayloadKindError)) throw error;
-        dropped += 1;
-        retiredKinds.add(error.payloadKind);
+    // The limit counts events this build can return, not rows SQLite matched.
+    // A page made entirely of retired kinds would otherwise come back empty
+    // while later history still existed, and callers advance their cursor from
+    // the last event they were handed — so an empty page reads as "the end"
+    // and silently truncates the Session. Keep pulling until the page is full
+    // or the rows run out.
+    const wanted = query.limit;
+    let cursor = afterSequence;
+    for (;;) {
+      const remaining = wanted === undefined ? undefined : wanted - decoded.length;
+      if (remaining !== undefined && remaining <= 0) break;
+      const rows = statement.all({
+        sessionId: query.sessionId,
+        afterSequence: cursor,
+        limit: remaining,
+      }) as unknown[];
+      for (const row of rows) {
+        // Advanced from the row, not from the decoded event, so a dropped row
+        // still moves the cursor past itself.
+        const sequence = (row as SqlRow).sequence;
+        if (typeof sequence === "number") cursor = Math.max(cursor, sequence);
+        try {
+          decoded.push(decodeEvent(row, "session_events row"));
+        } catch (error) {
+          if (!(error instanceof UnknownPayloadKindError)) throw error;
+          dropped += 1;
+          retiredKinds.add(error.payloadKind);
+        }
       }
+      // No limit means the single pass already read every matching row. With a
+      // limit, a short page is the only honest signal that nothing is left;
+      // a full one means at least one row was consumed, so the cursor moved
+      // and the next pass makes progress.
+      if (remaining === undefined || rows.length < remaining) break;
     }
     if (dropped > 0) {
       // Named, not just counted: the whole point of dropping is that this build

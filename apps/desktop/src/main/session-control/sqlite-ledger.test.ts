@@ -1156,6 +1156,56 @@ describe("SqliteSessionLedger", () => {
     ]);
   });
 
+  it("fills a page past retired rows instead of returning it short", async () => {
+    const { ledger, control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-retired-page",
+      projectId,
+      ticketId: null,
+      title: "Retired page",
+      provenance,
+    });
+    // A whole page of retired kinds. The limit counts events this build can
+    // return, so asking for one after sequence 3 must reach sequence 6 rather
+    // than come back empty — a caller advances its cursor from the last event
+    // it was handed, so an empty page would read as the end of the Session.
+    for (const sequence of [4, 5]) {
+      ctx.db
+        .prepare(
+          `INSERT INTO session_events
+             (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+           VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
+        )
+        .run(
+          `retired-page-${sequence}`,
+          created.session.id,
+          sequence,
+          sequence * 100,
+          sequence * 100,
+          JSON.stringify(provenance),
+          JSON.stringify({ kind: "capabilities.retired" }),
+        );
+    }
+    await ledger.transaction((transaction) => {
+      transaction.appendEvent({
+        id: "after-retired-page",
+        sessionId: created.session.id,
+        sequence: 6,
+        occurredAt: 600,
+        recordedAt: 600,
+        provenance,
+        payload: { kind: "session.archived" },
+      });
+    });
+
+    const page = await control.listEvents({
+      sessionId: created.session.id,
+      afterSequence: 3,
+      limit: 1,
+    });
+    expect(page.map((event) => event.sequence)).toEqual([6]);
+  });
+
   it("returns null from getEvent for a row whose payload kind this build does not recognise", async () => {
     const { ledger, control, projectId } = setup();
     const created = await control.createSession({
