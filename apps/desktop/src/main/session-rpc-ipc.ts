@@ -299,8 +299,6 @@ async function callProcedure(
       return caller.session.command(request.input as never);
     case "session.cancelInteraction":
       return caller.session.cancelInteraction(request.input as never);
-    case "session.refreshCapabilities":
-      return caller.session.refreshCapabilities(request.input as never);
     case "session.reconcile":
       return caller.session.reconcile(request.input as never);
     /* v8 ignore next 4 -- unreachable behind `isRequest`; it exists so a listed procedure this switch forgot fails to compile. */

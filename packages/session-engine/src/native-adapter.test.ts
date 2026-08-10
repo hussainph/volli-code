@@ -11,13 +11,15 @@ function adapter(id: string): NativeHarnessAdapter {
       id,
       displayName: id || "Nameless",
       adapterVersion: "1.0.0",
-      profiles: [{ id: "native", label: "Native", transport: "native" }],
+      profiles: [
+        {
+          id: "native",
+          label: "Native",
+          transport: "native",
+          runtime: { path: "/test/adapter", version: "1.0.0", fingerprint: "sha256:test" },
+        },
+      ],
     },
-    probe: async () => ({
-      status: "unavailable",
-      runtime: null,
-      reason: "test adapter",
-    }),
     attach: async () => {
       throw new Error("test adapter cannot attach");
     },

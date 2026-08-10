@@ -11,7 +11,6 @@ import {
   type BindingHandle,
   type HarnessObservation,
   type NativeHarnessAdapter,
-  type NativeProbeResult,
   type ObservationSink,
   type SessionEngine,
   type SessionLocationResolver,
@@ -48,35 +47,25 @@ class Adapter implements NativeHarnessAdapter {
     id: "invariant-adapter",
     displayName: "Invariant Adapter",
     adapterVersion: "1.0.0",
-    profiles: [{ id: "native", label: "Native", transport: "native" as const }],
+    profiles: [
+      {
+        id: "native",
+        label: "Native",
+        transport: "native" as const,
+        runtime: { path: "/trusted/adapter", version: "1", fingerprint: "sha256:adapter" },
+      },
+    ],
   };
   attaches = 0;
   dispatches = 0;
   reconciles = 0;
   releases = 0;
-  probeFailure: unknown = null;
-  probeResult: NativeProbeResult | null = null;
-  probeGate: Promise<void> | null = null;
-  probeStarted: () => void = () => undefined;
   attachGate: Promise<void> | null = null;
   attachObservation: HarnessObservation | null = null;
   reconcileReceipts: Awaited<ReturnType<BindingHandle["reconcile"]>>["receipts"] = [];
   dispatchReceipt: Awaited<ReturnType<BindingHandle["dispatch"]>> | null = null;
   sink: ObservationSink | null = null;
   specs: Parameters<NativeHarnessAdapter["attach"]>[0][] = [];
-
-  async probe(): Promise<NativeProbeResult> {
-    this.probeStarted();
-    await this.probeGate;
-    if (this.probeFailure) throw this.probeFailure;
-    return (
-      this.probeResult ?? {
-        status: "available",
-        runtime: { path: "/trusted/adapter", version: "1", fingerprint: "sha256:adapter" },
-        capabilities: { features: [], catalog: [] },
-      }
-    );
-  }
 
   async attach(spec: Parameters<NativeHarnessAdapter["attach"]>[0], sink: ObservationSink) {
     this.attaches += 1;
@@ -121,7 +110,6 @@ function composition(
     reaffirm?: SessionLocationResolver["reaffirm"];
     runtimeIdPrefix?: string;
     onSubscriberFailure?: (error: unknown) => void | Promise<void>;
-    probeTimeoutMs?: number;
   } = {},
 ) {
   let now = 1;
@@ -144,7 +132,6 @@ function composition(
       clock: { now: () => now++ },
       ids: runtimeIds(input.runtimeIdPrefix),
       ...(input.onSubscriberFailure ? { onSubscriberFailure: input.onSubscriberFailure } : {}),
-      ...(input.probeTimeoutMs !== undefined ? { probeTimeoutMs: input.probeTimeoutMs } : {}),
     }),
   };
 }
@@ -170,7 +157,7 @@ async function attach(runtime: SessionRuntime, sessionId: string, commandId = "a
 }
 
 describe("SessionRuntime durable boundary invariants", () => {
-  it("records missing adapters and thrown probes as rejected attachment outcomes", async () => {
+  it("records a missing adapter as a rejected attachment outcome", async () => {
     const base = composition();
     const missing = createSessionRuntime({
       engine: base.engine,
@@ -188,19 +175,6 @@ describe("SessionRuntime durable boundary invariants", () => {
       pendingExecutorStart: null,
       attachments: [{ status: "failed", failure: { code: "adapter_missing" } }],
     });
-
-    const probe = composition();
-    probe.adapter.probeFailure = new Error("probe transport broke");
-    const probeSession = await create(probe.runtime);
-    await expect(attach(probe.runtime, probeSession.sessionId)).resolves.toMatchObject({
-      receipt: { status: "rejected", code: "probe_failed", detail: "probe transport broke" },
-    });
-    expect(
-      (await probe.runtime.snapshot({ sessionId: probeSession.sessionId })).projection,
-    ).toMatchObject({
-      pendingExecutorStart: null,
-      attachments: [{ status: "failed", failure: { code: "probe_failed" } }],
-    });
   });
 
   it("publishes an engine-level rejection receipt without an adapter binding", async () => {
@@ -214,45 +188,6 @@ describe("SessionRuntime durable boundary invariants", () => {
         command: { kind: "adapter.release", attachmentId: "missing-attachment" },
       }),
     ).resolves.toMatchObject({ receipt: { status: "rejected" } });
-  });
-
-  it("bounds probes that ignore cancellation and aborts pending probes on close", async () => {
-    const deadlineAdapter = new Adapter();
-    deadlineAdapter.probeGate = new Promise<void>(() => undefined);
-    const deadline = composition({ adapter: deadlineAdapter, probeTimeoutMs: 1 });
-    const deadlineSession = await create(deadline.runtime);
-    await expect(attach(deadline.runtime, deadlineSession.sessionId)).resolves.toMatchObject({
-      receipt: { status: "rejected", code: "probe_failed" },
-    });
-    expect(deadlineAdapter.attaches).toBe(0);
-
-    const closeAdapter = new Adapter();
-    const probeStarted = new Promise<void>((resolve) => {
-      closeAdapter.probeStarted = resolve;
-    });
-    closeAdapter.probeGate = new Promise<void>(() => undefined);
-    const closing = composition({ adapter: closeAdapter });
-    const closingSession = await create(closing.runtime);
-    const attaching = attach(closing.runtime, closingSession.sessionId);
-    await probeStarted;
-    await closing.runtime.close();
-    await expect(attaching).resolves.toMatchObject({
-      receipt: { status: "rejected", code: "probe_failed" },
-    });
-    expect(closeAdapter.attaches).toBe(0);
-  });
-
-  it("records invalid host probe timeouts as a durable rejected attach", async () => {
-    const { runtime } = composition({ probeTimeoutMs: 0 });
-    const created = await create(runtime);
-
-    await expect(attach(runtime, created.sessionId)).resolves.toMatchObject({
-      receipt: {
-        status: "rejected",
-        code: "probe_failed",
-        detail: "Native adapter probe timeout must be a positive integer",
-      },
-    });
   });
 
   it("does not evict an adapter binding until its native terminal fact is durable", async () => {
@@ -272,9 +207,13 @@ describe("SessionRuntime durable boundary invariants", () => {
     expect(
       (await runtime.snapshot({ sessionId: created.sessionId })).projection.attachments,
     ).toMatchObject([{ id: attachmentId, status: "closed", outcome: "failed" }]);
-    await expect(
-      runtime.refreshCapabilities({ sessionId: created.sessionId, attachmentId }),
-    ).rejects.toThrow("is not open");
+    // The binding went with the attachment: a later operation on it fails
+    // rather than quietly attaching a second one, and it fails saying why.
+    // Raising the recovery Attention against the closed attachment is rejected
+    // too, and that rejection must not stand in for this one.
+    await expect(runtime.reconcile({ sessionId: created.sessionId, attachmentId })).rejects.toThrow(
+      "is not open",
+    );
     expect(adapter.attaches).toBe(1);
   });
 
@@ -304,14 +243,8 @@ describe("SessionRuntime durable boundary invariants", () => {
       directory: () => directory,
       runtimeIdPrefix: "recovered-",
     });
-    const left = recovered.runtime.refreshCapabilities({
-      sessionId: created.sessionId,
-      attachmentId,
-    });
-    const right = recovered.runtime.refreshCapabilities({
-      sessionId: created.sessionId,
-      attachmentId,
-    });
+    const left = recovered.runtime.reconcile({ sessionId: created.sessionId, attachmentId });
+    const right = recovered.runtime.reconcile({ sessionId: created.sessionId, attachmentId });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(first.adapter.attaches).toBe(2);
     releaseAttach();
@@ -477,7 +410,7 @@ describe("SessionRuntime durable boundary invariants", () => {
     });
 
     await expect(
-      recovered.runtime.refreshCapabilities({ sessionId: created.sessionId, attachmentId }),
+      recovered.runtime.reconcile({ sessionId: created.sessionId, attachmentId }),
     ).rejects.toThrow(
       "The Session's directory /ticket/original is gone and couldn't be recreated.",
     );
@@ -877,7 +810,7 @@ describe("SessionRuntime durable boundary invariants", () => {
     expect(absent.adapter.attaches).toBe(0);
   });
 
-  it("contains poisoned stream subscribers and serializes capability revisions", async () => {
+  it("contains poisoned stream subscribers", async () => {
     const failures: unknown[] = [];
     const { runtime, adapter } = composition({
       onSubscriberFailure: (error) => {
@@ -886,8 +819,6 @@ describe("SessionRuntime durable boundary invariants", () => {
     });
     const created = await create(runtime);
     await attach(runtime, created.sessionId);
-    const attachmentId = (await runtime.snapshot({ sessionId: created.sessionId })).projection
-      .liveExecutor!.id;
     await runtime.subscribe({ sessionId: created.sessionId, afterSequence: 0 }, () => {
       throw new Error("client frame failed");
     });
@@ -895,13 +826,6 @@ describe("SessionRuntime durable boundary invariants", () => {
     await expect(
       adapter.emit({ id: "after-poison", kind: "turn.started", occurredAt: 30, turnId: "turn" }),
     ).resolves.toBeUndefined();
-    const [first, second] = await Promise.all([
-      runtime.refreshCapabilities({ sessionId: created.sessionId, attachmentId }),
-      runtime.refreshCapabilities({ sessionId: created.sessionId, attachmentId }),
-    ]);
-    expect([first.revision, second.revision].toSorted((left, right) => left - right)).toEqual([
-      2, 3,
-    ]);
     expect(failures).toEqual([expect.objectContaining({ message: "client frame failed" })]);
   });
 
@@ -1060,7 +984,6 @@ describe("SessionRuntime durable boundary invariants", () => {
       .liveExecutor!.id;
     await first.runtime.close();
     first.adapter.attachGate = null;
-    first.adapter.probeResult = null;
     const attachFailure = new Error("native resume refused");
     const originalAttach = first.adapter.attach.bind(first.adapter);
     first.adapter.attach = async () => {
@@ -1068,7 +991,7 @@ describe("SessionRuntime durable boundary invariants", () => {
     };
     const recovering = composition({ engine: first.engine, adapter: first.adapter });
     await expect(
-      recovering.runtime.refreshCapabilities({ sessionId: created.sessionId, attachmentId }),
+      recovering.runtime.reconcile({ sessionId: created.sessionId, attachmentId }),
     ).rejects.toThrow("native resume refused");
     first.adapter.attach = originalAttach;
 
@@ -1093,7 +1016,7 @@ describe("SessionRuntime durable boundary invariants", () => {
       },
     });
     await expect(
-      missing.runtime.refreshCapabilities({
+      missing.runtime.reconcile({
         sessionId: missingSession.sessionId,
         attachmentId: "missing-adapter-open",
       }),
@@ -1135,7 +1058,7 @@ describe("SessionRuntime durable boundary invariants", () => {
     ).toMatchObject([{ id: attachmentId, status: "closed", outcome: "interrupted" }]);
   });
 
-  it("records replayed attach recovery failures and keeps a prior capability write from poisoning the next refresh", async () => {
+  it("records replayed attach recovery failures", async () => {
     const first = composition();
     const created = await create(first.runtime);
     await first.engine.submit({
@@ -1181,40 +1104,6 @@ describe("SessionRuntime durable boundary invariants", () => {
       },
     });
     first.adapter.attach = originalAttach;
-
-    let rejectFirstWrite!: (error: Error) => void;
-    let capabilityWrites = 0;
-    const writeGate = new Promise<never>((_resolve, reject) => {
-      rejectFirstWrite = reject;
-    });
-    const base = composition();
-    const engine: SessionEngine = {
-      ...base.engine,
-      observe: async (input) => {
-        if (input.kind === "capabilities.updated") {
-          capabilityWrites += 1;
-          if (capabilityWrites === 2) return writeGate;
-        }
-        return base.engine.observe(input);
-      },
-    };
-    const recovering = composition({ engine, adapter: base.adapter });
-    const capabilitySession = await create(recovering.runtime);
-    await attach(recovering.runtime, capabilitySession.sessionId);
-    const attachmentId = (
-      await recovering.runtime.snapshot({ sessionId: capabilitySession.sessionId })
-    ).projection.liveExecutor!.id;
-    const firstRefresh = recovering.runtime.refreshCapabilities({
-      sessionId: capabilitySession.sessionId,
-      attachmentId,
-    });
-    const secondRefresh = recovering.runtime.refreshCapabilities({
-      sessionId: capabilitySession.sessionId,
-      attachmentId,
-    });
-    rejectFirstWrite(new Error("first capability write failed"));
-    await expect(firstRefresh).rejects.toThrow("first capability write failed");
-    await expect(secondRefresh).resolves.toMatchObject({ revision: 2 });
   });
 
   it("keeps the durable attachment identity when an opened attach is replayed without a receipt", async () => {

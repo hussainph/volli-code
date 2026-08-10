@@ -148,17 +148,16 @@ class FakeAdapter implements NativeHarnessAdapter {
     id: "fake",
     displayName: "Fake",
     adapterVersion: "1.0.0",
-    profiles: [{ id: "native", label: "Native", transport: "native" as const }],
+    profiles: [
+      {
+        id: "native",
+        label: "Native",
+        transport: "native" as const,
+        runtime: { path: "/trusted/fake", version: "1.0.0", fingerprint: "sha256:fake" },
+      },
+    ],
   };
   sink: ObservationSink | null = null;
-
-  async probe() {
-    return {
-      status: "available" as const,
-      runtime: { path: "/trusted/fake", version: "1.0.0", fingerprint: "sha256:fake" },
-      capabilities: { features: [], catalog: [] },
-    };
-  }
 
   async attach(
     _spec: Parameters<NativeHarnessAdapter["attach"]>[0],

@@ -63,8 +63,6 @@ import type {
   NativeAttachmentSpec,
   NativeHarnessAdapter,
   NativeHarnessManifest,
-  NativeProbeContext,
-  NativeProbeResult,
   ObservationSink,
   Reconciliation,
   ReleaseReason,
@@ -99,7 +97,21 @@ const PI_MANIFEST: NativeHarnessManifest = {
   id: PI_ADAPTER_ID,
   displayName: "Pi",
   adapterVersion: "0.0.1",
-  profiles: [{ id: PI_PROFILE_ID, label: "Native", transport: "native" }],
+  profiles: [
+    {
+      id: PI_PROFILE_ID,
+      label: "Native",
+      transport: "native",
+      // Static, because there is nothing to interrogate: Pi is a library this
+      // process already holds, not a binary on a PATH that may be missing,
+      // stale or untrusted.
+      runtime: {
+        path: PI_RUNTIME_PACKAGE,
+        version: PI_RUNTIME_VERSION,
+        fingerprint: `npm:${PI_RUNTIME_PACKAGE}@${PI_RUNTIME_VERSION}`,
+      },
+    },
+  ],
 };
 
 /** The explicitly contained coding tools this slice loads. */
@@ -277,61 +289,6 @@ function piNativeAdapter(
 ): NativeHarnessAdapter {
   return {
     manifest: PI_MANIFEST,
-
-    /**
-     * Static, because there is nothing to interrogate: Pi is a library this
-     * process already holds, not a binary on a PATH that may be missing, stale
-     * or untrusted. Credentials are not probed either — a provider that refuses
-     * says so on the turn that needs it, as an attention the Session can act on,
-     * rather than as an attach this adapter guessed would fail.
-     */
-    async probe(context: NativeProbeContext): Promise<NativeProbeResult> {
-      if (context.profileId !== PI_PROFILE_ID) {
-        return {
-          status: "unavailable",
-          runtime: null,
-          reason: `Unknown Pi profile ${context.profileId}`,
-        };
-      }
-      return {
-        status: "available",
-        runtime: {
-          path: PI_RUNTIME_PACKAGE,
-          version: PI_RUNTIME_VERSION,
-          fingerprint: `npm:${PI_RUNTIME_PACKAGE}@${PI_RUNTIME_VERSION}`,
-        },
-        capabilities: {
-          features: [
-            { id: "message.submit", state: "available", evidence: "declared", detail: null },
-            { id: "executor.interrupt", state: "available", evidence: "declared", detail: null },
-            {
-              id: "interaction.permission",
-              state: "unavailable",
-              evidence: "declared",
-              // One probe answers for every Role, so this cannot name a
-              // worktree: a project Session's workspace is the Main checkout.
-              detail:
-                "Pi runs under Auto authority inside the Session workspace and asks for nothing",
-            },
-            {
-              id: "interaction.question",
-              state: "unavailable",
-              evidence: "declared",
-              detail: "Pi asks no questions in this migration slice",
-            },
-          ],
-          // Empty, and honestly so. A probe answers for the adapter, which has
-          // no model of its own: the model a Session runs is the durable
-          // selection `attach` resolves per Session ({@link PiRuntimeContext}),
-          // and Model Access is where the models a person can pick are listed.
-          // A literal declared here could name a different model than the one
-          // actually running, and the Session Engine writes what a probe says
-          // into durable history as a `capabilities.updated` fact — so the
-          // literal was not a policy, it was a false fact about the Session.
-          catalog: [],
-        },
-      };
-    },
 
     async attach(spec: NativeAttachmentSpec, sink: ObservationSink): Promise<BindingHandle> {
       if (spec.profileId !== PI_PROFILE_ID) throw new Error(`Unknown Pi profile ${spec.profileId}`);

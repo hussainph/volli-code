@@ -277,7 +277,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
             );
           }
 
-          const projection = projectSession(session, events, ports.clock.now());
+          const projection = projectSession(session, events);
           assertReceiptObservation(transaction, session, projection, observation);
           const sequence = nextSequence(events);
           const event = receiptRecordedEvent(
@@ -315,7 +315,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           return existingEvent;
         }
 
-        const projection = projectSession(session, events, ports.clock.now());
+        const projection = projectSession(session, events);
         assertObservableFact(projection, observation);
         assertPendingStartReservation(projection, observation);
         const event: SessionEvent = {
@@ -347,7 +347,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         if (existing) return replaySubmit(transaction, session, commandRequest);
 
         const events = transaction.listEvents({ sessionId: session.id });
-        const projection = projectSession(session, events, ports.clock.now());
+        const projection = projectSession(session, events);
         const routeResolution = resolveCommandRoute(projection, request.intent);
         const command: SessionCommand = {
           ...commandRequest,
@@ -532,11 +532,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       return ports.ledger.transaction((transaction) => {
         const session = transaction.getSession(query.sessionId);
         return session
-          ? projectSession(
-              session,
-              transaction.listEvents({ sessionId: session.id }),
-              ports.clock.now(),
-            )
+          ? projectSession(session, transaction.listEvents({ sessionId: session.id }))
           : null;
       });
     },
@@ -550,11 +546,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         transaction
           .listSessions(query)
           .map((session) =>
-            projectSession(
-              session,
-              transaction.listEvents({ sessionId: session.id }),
-              ports.clock.now(),
-            ),
+            projectSession(session, transaction.listEvents({ sessionId: session.id })),
           ),
       );
     },
@@ -946,18 +938,7 @@ function assertObservableFact(
   }
 
   const attachmentId = observationAttachmentId(observation);
-  if (!attachmentId) {
-    if (
-      observation.kind === "capabilities.updated" &&
-      (observation.provenance.source.kind !== "adapter" ||
-        observation.provenance.source.id !== observation.snapshot.adapterId)
-    ) {
-      throw new SessionEngineConflictError(
-        `Capability snapshot ${observation.snapshot.id} must be produced by adapter ${observation.snapshot.adapterId}`,
-      );
-    }
-    return;
-  }
+  if (!attachmentId) return;
   const attachment = projection.attachments.find((candidate) => candidate.id === attachmentId);
   if (!attachment) throw new SessionEngineConflictError(`Attachment ${attachmentId} is unknown`);
   // Every other observation asserts something a live binding did, and a closed
@@ -979,23 +960,12 @@ function assertObservableFact(
     );
   }
   if (
-    (observation.kind === "capabilities.updated" ||
-      observation.kind === "interaction.opened" ||
-      observation.kind === "interaction.resolved") &&
+    (observation.kind === "interaction.opened" || observation.kind === "interaction.resolved") &&
     (observation.provenance.source.kind !== "adapter" ||
       observation.provenance.source.id !== attachment.adapterId)
   ) {
     throw new SessionEngineConflictError(
       `${observation.kind} for attachment ${attachmentId} must be produced by adapter ${attachment.adapterId}`,
-    );
-  }
-  if (
-    observation.kind === "capabilities.updated" &&
-    (observation.snapshot.attachmentId !== attachment.id ||
-      observation.snapshot.adapterId !== attachment.adapterId)
-  ) {
-    throw new SessionEngineConflictError(
-      `Capability snapshot ${observation.snapshot.id} does not match attachment ${attachment.id}`,
     );
   }
   // Both verbs end an interaction, so both owe the same proof that it is theirs
@@ -1197,8 +1167,6 @@ function observationAttachmentId(observation: SessionObservation): string | null
       return observation.attachment.id;
     case "attention.raised":
       return observation.attention.attachmentId;
-    case "capabilities.updated":
-      return observation.snapshot.attachmentId;
     case "interaction.opened":
       return observation.interaction.attachmentId;
     default:

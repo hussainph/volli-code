@@ -36,10 +36,6 @@ function assertPresentationClient(client: SessionRpcClient): void {
           // @ts-expect-error Streamed presentation frames omit executor identity.
           void data.event.payload.attachment.adapterId;
         }
-        if ("sequence" in data && data.event.payload.kind === "capabilities.updated") {
-          // @ts-expect-error Streamed presentation frames omit executor profile identity.
-          void data.event.payload.snapshot.profileId;
-        }
       },
     },
   );
@@ -116,9 +112,9 @@ describe("query and mutation", () => {
       { procedure: "session.projection", input: { sessionId: "session-1" } },
     ]);
 
-    bridge.reply({ ok: true, data: { projection: { capabilities: [] }, throughSequence: 4 } });
+    bridge.reply({ ok: true, data: { projection: {}, throughSequence: 4 } });
     await expect(answer).resolves.toEqual({
-      projection: { capabilities: [] },
+      projection: {},
       throughSequence: 4,
     });
   });

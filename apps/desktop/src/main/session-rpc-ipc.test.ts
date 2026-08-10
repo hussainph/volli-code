@@ -80,7 +80,7 @@ function runtimeFixture(): {
       snapshot: async ({ sessionId }) => {
         calls.snapshot.push(sessionId);
         return {
-          projection: { capabilities: [] },
+          projection: {},
           throughSequence: 0,
           frames: [],
           transcript: [],
@@ -88,7 +88,7 @@ function runtimeFixture(): {
       },
       projection: async ({ sessionId }) => {
         calls.projection.push(sessionId);
-        return { projection: { capabilities: [] }, throughSequence: 4 } as never;
+        return { projection: {}, throughSequence: 4 } as never;
       },
       subscribe: async ({ afterSequence }, next) => {
         calls.subscribe.push(afterSequence);
@@ -101,7 +101,6 @@ function runtimeFixture(): {
         calls.cancelled.push(request);
         return undefined;
       },
-      refreshCapabilities: async () => ({}) as never,
       reconcile: async () => undefined,
       close: async () => undefined,
     },
@@ -238,15 +237,6 @@ describe("registerSessionRpcIpcHandlers", () => {
         },
       }),
     ).resolves.toEqual({ ok: true, data: {} });
-    await expect(
-      invoke(sender(), {
-        procedure: "session.refreshCapabilities",
-        input: { sessionId: "session-1", attachmentId: "attachment-1" },
-      }),
-    ).resolves.toEqual({
-      ok: true,
-      data: { catalog: [] },
-    });
     await expect(
       invoke(sender(), {
         procedure: "session.reconcile",

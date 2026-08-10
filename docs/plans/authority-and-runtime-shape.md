@@ -1,7 +1,8 @@
 # Agent authority and runtime shape
 
-**Status:** Part I slices 1–2 shipped; slices 3–4 remain. Part III decision
-complete, not started. Part II is a candidate menu awaiting selection.
+**Status:** Part I slices 1–3 shipped; slice 4 remains. Part II candidate 3
+shipped and the order revised — see below. Part III decision complete, not
+started.
 
 **Date:** 2026-08-10
 
@@ -568,6 +569,25 @@ elsewhere.
 Note the dependency: **Part I gives refusals a durable representation.** This
 candidate reads better after Part I than before it.
 
+**Shipped 2026-08-10.** The probe turned out to be doing three jobs, not one. It
+re-checked profile availability, which the profile lookup above it in the attach
+path already does; it supplied the runtime identity; and it declared
+capabilities. Only the third had no reader, so only the third and the redundant
+check were deleted. The runtime identity is a product fact rather than a claim
+about a model, so it survives as static data on the profile — the async call,
+its 15-second timeout and its AbortController set are gone, and
+`volli.native-binding.v1` is unchanged on the wire.
+
+Two consequences were not separable from it. `projectSession` lost its `now`
+parameter, capability expiry having been its only reader, so the fold is now the
+pure total function over the log its own comment already claimed; and
+`ProjectedHistory.staleAt` went with it, leaving `#history` to invalidate on the
+ledger cursor alone.
+
+Retiring a durable event kind also needed the read path to tolerate one it does
+not know — recorded as a convention in `CLAUDE.md`, since it is a property of
+the codec rather than of this kind.
+
 ### 4. The interaction modules have no producer
 
 **Strength: resolved by Part I — do not action independently.**
@@ -616,14 +636,41 @@ not for leverage. Lowest priority here.
 
 ### Recommended order
 
-1 → 3 → 2, with 5 available at any point as an independent slice.
+**Revised 2026-08-10, and candidate 3 is done.** The order is now
+**3 → 1 → 2 → 6**, with 5 available at any point as an independent slice.
 
-Candidate 1 first: collapsing the registry removes `profileId` from the ledger,
-the RPC schema and the scrub, which shrinks candidate 2's fan-out before the
-codec is written, and it retires candidate 3's pipeline as a side effect. It is
-also the only candidate whose answer is genuinely in doubt — the Pi migration
-called this scaffolding temporary, and the code has carried it as though
-permanent through seven sessions.
+Two things changed the sequence this section originally proposed.
+
+**Delete before you rewrite.** The probe was part of the adapter contract, so
+collapsing the registry first meant porting the probe and then deleting it.
+Candidate 3 first was strictly less work, and the reason this section gave for
+deferring it — that refusals need a durable representation, which Part I
+supplies — was already satisfied by slices 1–3.
+
+Candidate 3 also moved ahead of Part I slice 4. The probe declared
+`interaction.question` unavailable, which slice 4 makes false; retiring the
+probe first means slice 4 never has to hand-correct a declaration on its way to
+deleting it. Nothing read the declarations — the presentation projection
+omitted capabilities, the renderer's own typed client omitted
+`refreshCapabilities`, and only the lab scratch ever branched on a feature's
+state.
+
+**Candidate 6 is promoted, on a product direction rather than on leverage.**
+This section rated it speculative and lowest priority, which was right when the
+only argument for it was layer honesty. The stated intent to keep the surface
+open for a cloud-native or mobile client changes that: `@volli/session-rpc` is
+already transport-agnostic and can travel, while 129 raw Electron channels and
+their 2047-line contract sit inside `@volli/shared` — the one package such a
+client would import for domain types. The boundary is drawn in the wrong place,
+and candidate 6 is what moves it. Still last, because nothing depends on it,
+but no longer optional.
+
+Candidate 1 keeps its place as the next one to do, and its own reasoning is
+unchanged: it removes `profileId` from the ledger, the RPC schema and the
+scrub, shrinking candidate 2's fan-out before the codec is written. It remains
+the only candidate whose answer is genuinely in doubt — the Pi migration called
+this scaffolding temporary, and the code has carried it as though permanent
+through seven sessions.
 
 ## Part III — In-app Model Access sign-in
 
