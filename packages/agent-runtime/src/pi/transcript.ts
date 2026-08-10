@@ -15,7 +15,7 @@ import type {
   RuntimeRecoveryRef,
   SanitizedUsage,
   SettledAssistantMessage,
-} from "../contracts";
+} from "@volli/shared";
 
 export type AssistantMessageOutcome =
   | { kind: "settled"; message: SettledAssistantMessage }

@@ -1,6 +1,9 @@
-import { BUILTIN_RULE_PACK_HASH, BUILTIN_RULE_PACK_ID } from "@volli/shared";
+import {
+  BUILTIN_RULE_PACK_HASH,
+  BUILTIN_RULE_PACK_ID,
+  type SessionRuntimeSpec,
+} from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
-import type { SessionRuntimeSpec } from "./contracts";
 import { composeFirstUserMessage, composeSystemPrompt } from "./prompt";
 
 function spec(overrides: Partial<SessionRuntimeSpec> = {}): SessionRuntimeSpec {

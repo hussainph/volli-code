@@ -11,20 +11,20 @@ import {
   type Models,
   type UserMessage,
 } from "@earendil-works/pi-ai";
-import { isActivityKind } from "@volli/shared";
+import {
+  isActivityKind,
+  type AgentRuntime,
+  type DeliveryOutcome,
+  type RuntimeAttachmentHandle,
+  type RuntimeActivityObservation,
+  type RuntimeActivityValue,
+  type RuntimeFailure,
+  type SettledMessageObservation,
+  type AttentionObservation,
+  type SessionRuntimeSpec,
+  type TurnObservation,
+} from "@volli/shared";
 import { authorityVerdict } from "../authority/gate";
-import type {
-  AgentRuntime,
-  DeliveryOutcome,
-  RuntimeAttachmentHandle,
-  RuntimeActivityObservation,
-  RuntimeActivityValue,
-  RuntimeFailure,
-  SettledMessageObservation,
-  AttentionObservation,
-  SessionRuntimeSpec,
-  TurnObservation,
-} from "../contracts";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
 import { mapPiActivity } from "./activity";
 import { inspectPiModelAccess } from "./model-access";
