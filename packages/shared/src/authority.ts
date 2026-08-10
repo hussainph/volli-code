@@ -49,13 +49,22 @@ export interface AuthorityFallback {
 }
 
 /**
- * The policy granted to one Session when it starts, recorded durably.
+ * The policy one Session executes under, in the shape its durable record will
+ * take.
  *
- * The rule pack is pinned by identity rather than by value. A Session must not
- * have its authority changed under it by an unrelated Settings edit, but the
- * facts the rules read — resolved paths, the current branch, how many denials
- * have accrued — are machine state, not policy, and stay live. Freezing those
- * would record a lie within seconds of writing it.
+ * Nothing persists it yet. It is constructed per attach and lives as long as the
+ * attachment does, so {@link rulePackId} and {@link rulePackHash} are presently
+ * ceremony: both ends compute them from the same compile-time constant inside
+ * one process, and no reader compares them against anything older. They are here
+ * because the denial ledger is the next phase and a record is easier to write
+ * than to retrofit — but until that lands, the hash pins nothing and would
+ * detect nothing.
+ *
+ * What the pinning is *for*, once there is something to pin against: a Session
+ * must not have its authority changed under it by an unrelated Settings edit,
+ * while the facts the rules read — resolved paths, the current branch, how many
+ * denials have accrued — stay live, because they are machine state rather than
+ * policy and freezing them would record a lie within seconds.
  */
 export interface AuthoritySnapshot {
   mode: "auto";
@@ -149,25 +158,24 @@ export type PolicyDecision =
  * Every rule the built-in pack can cite, in pack order.
  *
  * The list is the pack's identity: {@link BUILTIN_RULE_PACK_HASH} is computed
- * from it, so adding, removing, or reordering a rule changes the hash that
- * running Sessions recorded. Renaming a rule's behaviour without renaming the
- * rule does not, which is the honest limit of pinning by id — it tightens when
- * per-project packs arrive and the pack becomes data rather than code.
+ * from it, so adding, removing, or reordering a rule changes the hash. Renaming
+ * a rule's behaviour without renaming the rule does not, which is the honest
+ * limit of pinning by id — it tightens when per-project packs arrive and the
+ * pack becomes data rather than code. Note that no Session persists the hash it
+ * ran under yet, so today a changed pack is undetectable in either direction.
  */
 export const AUTHORITY_RULE_IDS = [
   /** A tool outside the Session's bundle, including one Volli does not offer at all. */
   "tool.not-bundled",
   /** Any path resolving outside the Session workspace root. */
   "path.outside-workspace",
-  /** Repository plumbing that rewrites what later commands will do: hooks and config. */
+  /** Repository plumbing that rewrites what later commands will do. */
   "path.git-internals",
   /** Volli's own state inside the tree. */
   "path.volli-internals",
-  /** Writes to a shell profile, which outlive the Session. */
-  "command.shell-profile-write",
   /** Disabling certificate verification, in flags or in the environment. */
   "command.tls-weakening",
-  /** Login items, launch agents, and cron: execution that survives the Session. */
+  /** Login items and cron: scheduling execution that survives the Session. */
   "command.persistence",
   /** SIP, Gatekeeper, and the other macOS platform guarantees. */
   "command.platform-weakening",
@@ -187,7 +195,7 @@ export const BUILTIN_RULE_PACK_ID = "volli.builtin";
  * FNV-1a over the pack's rule ids, as eight lowercase hex digits.
  *
  * A content hash and not a version counter, so the pack cannot change without
- * the recorded hash changing. Chosen for being pure and dependency-free —
+ * the hash changing. Chosen for being pure and dependency-free —
  * `@volli/shared` may not import `node:crypto` — and it guards against drift,
  * not against an adversary.
  */

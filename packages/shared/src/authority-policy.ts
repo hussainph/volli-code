@@ -1,5 +1,5 @@
 /**
- * The built-in rule pack: eleven total predicates over one normalized call.
+ * The built-in rule pack: ten total predicates over one normalized call.
  *
  * Ordered evaluation is load-bearing rather than incidental. The rules overlap —
  * `git config http.sslVerify false` writes repository plumbing *and* weakens TLS
@@ -31,12 +31,27 @@
  * for a *strict* descendant of the workspace, so `rm -rf .` at the root of a
  * Main checkout is refused too — destroying the tree is never a coding action.
  *
- * The same "does this rule guard anything" test is why
- * `command.shell-profile-write` and `command.persistence` read only a command's
- * own writes and never `call.writes`. A `.zshrc` or a `Library/LaunchAgents/`
- * path *inside* the workspace is not the user's real profile or a real launch
- * agent; the real ones live in the home directory, which the sandbox denies
- * outright.
+ * `path.git-internals` reads operands too, for exactly two paths, and the reason
+ * is a seam between two layers rather than anything about policy. The sandbox
+ * denies writes to `<workspace>/.git/hooks` and `.git/config` by subpath
+ * literal, and those literals are case-sensitive while APFS is not — so
+ * `cp evil.sh .GIT/hooks/pre-commit` writes the real hook the kernel meant to
+ * protect, and enumerating case variants downstairs is 2^n hopeless. Folded
+ * comparison up here collapses every spelling at once. It stays at those two
+ * paths deliberately: `git` takes `.git`-relative operands in ordinary use, and
+ * the cost of this clause is that `cat .git/config` is refused — which costs
+ * nothing, because `git config --list` reads the same thing and is allowed.
+ *
+ * A shell-profile rule and a launch-directory path check used to live here and
+ * were deleted, for a reason that generalizes to any rule proposed for this
+ * pack. Both read only a command's redirects, and `path.outside-workspace` has
+ * already refused every redirect outside the tree — so they could fire only on a
+ * `<workspace>/.bashrc` or `<workspace>/Library/LaunchAgents/…`, which is not
+ * the user's real profile or a real launch agent but an ordinary file in a
+ * dotfiles or container-image repo. A rule that cannot reach the thing it names,
+ * and can refuse the thing it doesn't, is worse than no rule: it spends the
+ * fallback budget to protect nothing. `command.persistence` keeps its program
+ * clause, which reaches `launchctl` and `crontab` for real.
  *
  * Reasons are written for the model, not for a log. A denial becomes the text of
  * an error tool result, so it names the offending path or flag and says what to
@@ -61,9 +76,29 @@ import {
   type PolicyToolCall,
 } from "./authority";
 
+/**
+ * Every security comparison folds case, unconditionally.
+ *
+ * macOS is case-insensitive by default and `realpathSync` does not canonicalize
+ * case, so a resolved `<workspace>/.GIT/hooks/pre-commit` names the real hook
+ * directory while comparing unequal to `.git`; `RM` and `SUDO` resolve the same
+ * way through `PATH`. Probing the volume would be the precise answer and the
+ * wrong one — it makes a security decision depend on a filesystem attribute the
+ * policy layer is forbidden to read. Folding always means a genuinely distinct
+ * `.GIT` directory on a case-sensitive volume is refused too. That is
+ * over-denial, which is the safe direction, and it is deliberate: do not
+ * "correct" it into a case-sensitive comparison.
+ */
+function fold(value: string): string {
+  return value.toLowerCase();
+}
+
 /** The non-empty path components, so containment compares directories, never string prefixes. */
 function pathSegments(path: string): string[] {
-  return path.split("/").filter((segment) => segment.length > 0);
+  return path
+    .split("/")
+    .filter((segment) => segment.length > 0)
+    .map(fold);
 }
 
 /** True when `candidate` is `root` or lies under it. `/ws-evil` is not under `/ws`. */
@@ -81,15 +116,7 @@ function isUnder(root: string, candidate: string): boolean {
   return isAtOrUnder(root, candidate) && pathSegments(candidate).length > pathSegments(root).length;
 }
 
-/** True when `path` contains `run` as consecutive segments, at any depth. */
-function hasSegmentRun(path: string, run: readonly string[]): boolean {
-  const parts = pathSegments(path);
-  return parts.some((_part, index) =>
-    run.every((segment, offset) => parts[index + offset] === segment),
-  );
-}
-
-/** The last path component: `/usr/bin/sudo` is `sudo`, `<workspace>/.zshrc` is `.zshrc`. */
+/** The last path component, folded: `/usr/bin/SUDO` is `sudo`. */
 function baseName(path: string): string {
   return pathSegments(path).slice(-1).join("");
 }
@@ -119,6 +146,11 @@ function gitDirOf(context: PolicyContext): string {
   return `${context.workspacePath}/.git`;
 }
 
+/** Volli's own state inside the tree, guarded on the same terms as `.git`. */
+function volliDirOf(context: PolicyContext): string {
+  return `${context.workspacePath}/.volli`;
+}
+
 /** Every path the call would create, modify, or delete. */
 function writtenPaths(call: PolicyToolCall): string[] {
   return [...call.writes, ...segmentsOf(call).flatMap((segment) => segment.writes)];
@@ -133,7 +165,7 @@ function writtenPaths(call: PolicyToolCall): string[] {
 const DEVICE_SINKS = new Set(["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/zero"]);
 
 function isDeviceSink(path: string): boolean {
-  return DEVICE_SINKS.has(path) || isAtOrUnder("/dev/fd", path);
+  return DEVICE_SINKS.has(fold(path)) || isAtOrUnder("/dev/fd", path);
 }
 
 /** Every path `path.outside-workspace` judges. Command operands are not among them. */
@@ -143,21 +175,6 @@ function containedPaths(call: PolicyToolCall): string[] {
     ...call.writes,
     ...segmentsOf(call).flatMap((segment) => segment.writes.filter((path) => !isDeviceSink(path))),
   ];
-}
-
-const SHELL_PROFILE_FILES = new Set([
-  ".zshrc",
-  ".zprofile",
-  ".zshenv",
-  ".bashrc",
-  ".bash_profile",
-  ".profile",
-]);
-
-const FISH_PROFILE = [".config", "fish", "config.fish"];
-
-function isShellProfile(path: string): boolean {
-  return SHELL_PROFILE_FILES.has(baseName(path)) || hasSegmentRun(path, FISH_PROFILE);
 }
 
 /** Everything git and npm read as "off"; matching only `false` would leave `0` a bypass. */
@@ -211,11 +228,6 @@ function tlsWeakening(segment: PolicyCommandSegment): string | null {
 
 const PERSISTENCE_PROGRAMS = new Set(["launchctl", "crontab", "systemctl", "at"]);
 
-const LAUNCH_DIRECTORIES = [
-  ["Library", "LaunchAgents"],
-  ["Library", "LaunchDaemons"],
-];
-
 const PLATFORM_PROGRAMS = new Set(["csrutil", "spctl", "nvram", "dscl", "sudo", "doas"]);
 
 function isRecursiveRemoval(args: readonly string[]): boolean {
@@ -250,7 +262,7 @@ function gitInvocation(args: readonly string[]): GitInvocation | null {
       index += 1;
       continue;
     }
-    return { subcommand: arg, rest: args.slice(index + 1) };
+    return { subcommand: fold(arg), rest: args.slice(index + 1) };
   }
   return null;
 }
@@ -267,15 +279,31 @@ const GIT_CONFIG_WRITE_FLAGS = new Set([
 
 const GIT_CONFIG_READ_FLAGS = new Set(["--get", "--get-all", "--get-regexp", "--list"]);
 
+const GIT_CONFIG_WRITE_SUBCOMMANDS = new Set([
+  "set",
+  "unset",
+  "edit",
+  "remove-section",
+  "rename-section",
+]);
+
+const GIT_CONFIG_READ_SUBCOMMANDS = new Set(["get", "list"]);
+
 /**
  * Whether a `git config` invocation writes rather than reads.
  *
- * The bare forms are told apart by operand count, since `git config <name>`
- * prints a value and `git config <name> <value>` sets one. Everything not in
- * either flag set — `--local`, `--global` — is a scope, and a scope alone still
- * reads.
+ * Three spellings coexist and are checked in that order. Git 2.46's
+ * `config get|set|…` subcommand form is unambiguous, so it is read first —
+ * without it, `git config get user.name` looks like the old two-operand *set*
+ * form and a plain read gets refused. Then the classic flags. Only if neither
+ * appears does operand count decide, since `git config <name>` prints a value
+ * and `git config <name> <value>` assigns one. Everything else — `--local`,
+ * `--global` — is a scope, and a scope alone still reads.
  */
 function gitConfigWrites(rest: readonly string[]): boolean {
+  const leading = fold(rest.find((arg) => !arg.startsWith("-")) ?? "");
+  if (GIT_CONFIG_WRITE_SUBCOMMANDS.has(leading)) return true;
+  if (GIT_CONFIG_READ_SUBCOMMANDS.has(leading)) return false;
   if (rest.some((arg) => GIT_CONFIG_WRITE_FLAGS.has(arg))) return true;
   if (rest.some((arg) => GIT_CONFIG_READ_FLAGS.has(arg))) return false;
   return rest.filter((arg) => !arg.startsWith("-")).length >= 2;
@@ -293,18 +321,32 @@ function pointsOutside(value: string, workspacePath: string): boolean {
   return pathSegments(value).includes("..");
 }
 
-const GIT_TREE_FLAGS = ["--git-dir=", "--work-tree="];
+/**
+ * Global flags whose value is a path git will operate from.
+ *
+ * `--exec-path` belongs here with the two tree flags: it decides which directory
+ * git runs its helper programs out of, so pointing it elsewhere is arbitrary
+ * execution dressed as configuration.
+ */
+const GIT_PATH_FLAGS = new Set(["-C", "--git-dir", "--work-tree", "--exec-path"]);
 
-const GIT_TREE_SUBCOMMANDS = new Set(["worktree", "clone", "submodule"]);
+/** The path a git global flag carries, in either the `--flag=value` or `--flag value` spelling. */
+function gitPathFlagValue(args: readonly string[], index: number): string | null {
+  const arg = args[index];
+  const separator = arg.indexOf("=");
+  if (separator === -1) return GIT_PATH_FLAGS.has(arg) ? argAfter(args, index) : null;
+  return GIT_PATH_FLAGS.has(arg.slice(0, separator)) ? arg.slice(separator + 1) : null;
+}
+
+const GIT_TREE_SUBCOMMANDS = new Set(["worktree", "clone", "submodule", "init"]);
 
 /** The fragment of a git invocation that aims it at another tree, or null. */
 function gitTreeEscape(args: readonly string[], workspacePath: string): string | null {
   for (const [index, arg] of args.entries()) {
-    if (arg === "-C" && pointsOutside(argAfter(args, index), workspacePath)) {
-      return `-C ${argAfter(args, index)}`;
+    const value = gitPathFlagValue(args, index);
+    if (value !== null && pointsOutside(value, workspacePath)) {
+      return arg.includes("=") ? arg : `${arg} ${value}`;
     }
-    const flag = GIT_TREE_FLAGS.find((candidate) => arg.startsWith(candidate));
-    if (flag !== undefined && pointsOutside(arg.slice(flag.length), workspacePath)) return arg;
   }
   const invocation = gitInvocation(args);
   if (invocation === null || !GIT_TREE_SUBCOMMANDS.has(invocation.subcommand)) return null;
@@ -316,11 +358,39 @@ function gitTreeEscape(args: readonly string[], workspacePath: string): string |
 
 const GIT_REBASE_CONTINUATIONS = new Set(["--abort", "--continue", "--skip", "--quit"]);
 
+/** `--keep` and `--merge` refuse *some* clobbering; neither refuses all of it. */
+const GIT_RESET_DISCARDS = new Set(["--hard", "--keep", "--merge"]);
+
+/**
+ * Whether a `git checkout` would overwrite the working tree.
+ *
+ * A pathspec is the tell, and `--` is the only spelling of one this can trust:
+ * without it, `git checkout feature/x` and `git checkout src/x` are the same
+ * shape, and refusing every slash-bearing argument would refuse branch switching
+ * — the most ordinary thing an agent does. So `--` with anything after it, an
+ * explicit force, and the bare `.` everyone actually types.
+ */
+function checkoutDiscards(rest: readonly string[]): boolean {
+  if (isForced(rest)) return true;
+  const separator = rest.indexOf("--");
+  if (separator !== -1) return rest.length > separator + 1;
+  return rest.includes(".");
+}
+
+/** `git restore` writes the working tree unless it was told to touch only the index. */
+function restoreDiscards(rest: readonly string[]): boolean {
+  if (rest.includes("--worktree") || hasShortFlag(rest, "W")) return true;
+  return !rest.includes("--staged") && !hasShortFlag(rest, "S");
+}
+
 /** The fragment of a git invocation that throws uncommitted work away, or null. */
 function gitDiscard({ subcommand, rest }: GitInvocation): string | null {
-  if (subcommand === "reset" && rest.includes("--hard")) return "reset --hard";
-  if (subcommand === "checkout" && rest.filter((arg) => arg !== "--").join(" ") === ".") {
-    return "checkout .";
+  const reset = rest.find((arg) => GIT_RESET_DISCARDS.has(arg));
+  if (subcommand === "reset" && reset !== undefined) return `reset ${reset}`;
+  if (subcommand === "checkout" && checkoutDiscards(rest)) return "checkout";
+  if (subcommand === "restore" && restoreDiscards(rest)) return "restore";
+  if (subcommand === "switch" && (rest.includes("--discard-changes") || isForced(rest))) {
+    return "switch --discard-changes";
   }
   if (subcommand === "clean" && isForced(rest)) return "clean -f";
   if (subcommand === "stash" && (rest[0] === "drop" || rest[0] === "clear")) {
@@ -375,7 +445,13 @@ const RULE_CHECKS: Record<AuthorityRuleId, RuleCheck> = {
         return `Writing ${path} is not permitted; hand-editing the repository's plumbing changes what later commands do. Reading it is fine.`;
       }
     }
+    const executable = [`${gitDir}/config`, `${gitDir}/hooks`];
     for (const segment of segmentsOf(call)) {
+      for (const path of segment.paths) {
+        if (executable.some((root) => isAtOrUnder(root, path))) {
+          return `${path} cannot be a command operand; policy cannot tell a read there from a write, and a write would change what later commands do. Read configuration with \`git config --list\`.`;
+        }
+      }
       if (baseName(segment.program) !== "git") continue;
       const invocation = gitInvocation(segment.args);
       if (invocation === null) continue;
@@ -388,19 +464,8 @@ const RULE_CHECKS: Record<AuthorityRuleId, RuleCheck> = {
 
   "path.volli-internals": (call, _snapshot, context) => {
     for (const path of writtenPaths(call)) {
-      if (isAtOrUnder(`${context.workspacePath}/.volli`, path)) {
+      if (isAtOrUnder(volliDirOf(context), path)) {
         return `Writing ${path} is not permitted; .volli holds Volli's own state, not the project's.`;
-      }
-    }
-    return null;
-  },
-
-  "command.shell-profile-write": (call) => {
-    for (const segment of segmentsOf(call)) {
-      for (const path of segment.writes) {
-        if (isShellProfile(path)) {
-          return `Writing ${path} is not permitted; a shell profile outlives this Session and changes every command run after it.`;
-        }
       }
     }
     return null;
@@ -422,11 +487,6 @@ const RULE_CHECKS: Record<AuthorityRuleId, RuleCheck> = {
       if (PERSISTENCE_PROGRAMS.has(program)) {
         return `${program} schedules work that outlives this Session; do the work now instead of installing it.`;
       }
-      for (const path of segment.writes) {
-        if (LAUNCH_DIRECTORIES.some((run) => hasSegmentRun(path, run))) {
-          return `Writing ${path} installs a launch item that outlives this Session; do the work now instead.`;
-        }
-      }
     }
     return null;
   },
@@ -442,15 +502,17 @@ const RULE_CHECKS: Record<AuthorityRuleId, RuleCheck> = {
   },
 
   "command.destructive-removal": (call, _snapshot, context) => {
-    const gitDir = gitDirOf(context);
+    const internals = [gitDirOf(context), volliDirOf(context)];
     for (const segment of segmentsOf(call)) {
       if (baseName(segment.program) !== "rm") continue;
       const recursive = isRecursiveRemoval(segment.args);
       for (const path of segment.paths) {
-        // Not a recursive-only case: a single `rm .git/index` is enough to
-        // corrupt the repository, and `writtenPaths` never sees an rm operand.
-        if (isAtOrUnder(gitDir, path)) {
-          return `Removing ${path} would damage the repository; .git is not the Session's to delete.`;
+        // Not a recursive-only case, and the only place these two directories
+        // are defended against deletion: a single `rm .git/index` corrupts the
+        // repository, and `writtenPaths` never sees an rm operand, so the path
+        // rules above cannot see this at all.
+        if (internals.some((dir) => isAtOrUnder(dir, path))) {
+          return `Removing ${path} would destroy state this Session depends on; .git and .volli are not the Session's to delete.`;
         }
         if (recursive && !isUnder(context.workspacePath, path)) {
           return `Recursive removal of ${path} would delete the Session workspace itself or something outside it; remove only paths inside ${context.workspacePath}.`;

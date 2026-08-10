@@ -231,6 +231,97 @@ describe("path.git-internals", () => {
       expect(ruleOf(exec(segment("git", args)))).toBe("allow");
     }
   });
+
+  it("refuses hooks and config as command operands, in every case spelling", () => {
+    for (const target of [
+      ".git/hooks/pre-commit",
+      ".GIT/hooks/pre-commit",
+      ".git/HOOKS/pre-commit",
+      ".git/config",
+      ".GIT/CONFIG",
+      ".git/hooks",
+    ]) {
+      const decision = decide(
+        exec(
+          segment("cp", ["evil.sh", target], {
+            paths: [`${WORKSPACE}/evil.sh`, `${WORKSPACE}/${target}`],
+          }),
+        ),
+      );
+      expect(decision).toMatchObject({ outcome: "deny", rule: "path.git-internals" });
+    }
+  });
+
+  it("refuses reading config by path, which is the accepted cost of that clause", () => {
+    const decision = decide(
+      exec(segment("cat", [".git/config"], { paths: [`${WORKSPACE}/.git/config`] })),
+    );
+    expect(decision).toMatchObject({ outcome: "deny", rule: "path.git-internals" });
+    expect(decision.outcome === "deny" && decision.reason).toContain("git config --list");
+  });
+
+  it("leaves the rest of .git nameable, since git takes such operands routinely", () => {
+    for (const target of [".git/HEAD", ".git/refs/heads/main", ".git", ".git/configuration"]) {
+      expect(ruleOf(exec(segment("cat", [target], { paths: [`${WORKSPACE}/${target}`] })))).toBe(
+        "allow",
+      );
+    }
+  });
+
+  it("reads git 2.46's subcommand form rather than counting its operands", () => {
+    expect(ruleOf(exec(segment("git", ["config", "get", "user.name"])))).toBe("allow");
+    expect(ruleOf(exec(segment("git", ["config", "list", "--show-origin"])))).toBe("allow");
+    expect(ruleOf(exec(segment("git", ["config", "--global", "get", "user.name"])))).toBe("allow");
+
+    for (const form of ["set", "unset", "edit", "remove-section", "rename-section"]) {
+      expect(ruleOf(exec(segment("git", ["config", form, "core.hooksPath", "x"])))).toBe(
+        "path.git-internals",
+      );
+    }
+  });
+});
+
+describe("case folding", () => {
+  it("refuses .GIT and .VOLLI, which name the real directories on macOS", () => {
+    expect(ruleOf(call({ tool: "write", writes: [`${WORKSPACE}/.GIT/hooks/pre-commit`] }))).toBe(
+      "path.git-internals",
+    );
+    expect(ruleOf(call({ tool: "write", writes: [`${WORKSPACE}/.VOLLI/state.json`] }))).toBe(
+      "path.volli-internals",
+    );
+    expect(ruleOf(exec(segment("rm", ["-rf", ".GIT"], { paths: [`${WORKSPACE}/.GIT`] })))).toBe(
+      "command.destructive-removal",
+    );
+  });
+
+  it("refuses uppercase program names, which PATH resolves the same", () => {
+    expect(ruleOf(exec(segment("RM", ["-rf", "/Users/dev"], { paths: ["/Users/dev"] })))).toBe(
+      "command.destructive-removal",
+    );
+    expect(ruleOf(exec(segment("GIT", ["-C", "/Users/dev/other", "status"])))).toBe(
+      "command.git-escapes-workspace",
+    );
+    expect(ruleOf(exec(segment("SUDO", ["ls"])))).toBe("command.platform-weakening");
+    expect(ruleOf(exec(segment("CSRUTIL", ["disable"])))).toBe("command.platform-weakening");
+    expect(ruleOf(exec(segment("LAUNCHCTL", ["load", "x"])))).toBe("command.persistence");
+    expect(ruleOf(exec(segment("CURL", ["-k", "https://example.com"])))).toBe(
+      "command.tls-weakening",
+    );
+  });
+
+  it("folds git subcommands too", () => {
+    expect(ruleOf(exec(segment("git", ["REBASE", "main"])), { location: "main-checkout" })).toBe(
+      "command.git-discards-work",
+    );
+    expect(ruleOf(exec(segment("git", ["CONFIG", "SET", "core.hooksPath", "x"])))).toBe(
+      "path.git-internals",
+    );
+  });
+
+  it("still distinguishes genuinely different names", () => {
+    expect(ruleOf(call({ tool: "write", writes: [`${WORKSPACE}/.GITIGNORE`] }))).toBe("allow");
+    expect(ruleOf(exec(segment("SUDOKU", ["--solve"])))).toBe("allow");
+  });
 });
 
 describe("path.volli-internals", () => {
@@ -251,31 +342,44 @@ describe("path.volli-internals", () => {
   });
 });
 
-describe("command.shell-profile-write", () => {
-  it("refuses a redirect into a shell profile that lives inside the workspace", () => {
-    const decision = decide(exec(segment("echo", ["evil"], { writes: [`${WORKSPACE}/.zshrc`] })));
-    expect(decision).toMatchObject({ outcome: "deny", rule: "command.shell-profile-write" });
-    expect(decision.outcome === "deny" && decision.reason).toContain("outlives this Session");
-  });
-
-  it("refuses a fish profile at its three-segment path", () => {
-    expect(
-      ruleOf(exec(segment("echo", ["x"], { writes: [`${WORKSPACE}/.config/fish/config.fish`] }))),
-    ).toBe("command.shell-profile-write");
-  });
-
-  it("refuses each of the other profile names", () => {
-    for (const name of [".zprofile", ".zshenv", ".bashrc", ".bash_profile", ".profile"]) {
+describe("deleted rules", () => {
+  it("allows writing dotfiles inside the workspace, which are project files here", () => {
+    for (const name of [
+      ".zshrc",
+      ".zprofile",
+      ".zshenv",
+      ".bashrc",
+      ".bash_profile",
+      ".profile",
+      ".config/fish/config.fish",
+    ]) {
       expect(ruleOf(exec(segment("echo", ["x"], { writes: [`${WORKSPACE}/${name}`] })))).toBe(
-        "command.shell-profile-write",
+        "allow",
       );
     }
   });
 
-  it("allows a redirect into an ordinary file", () => {
+  it("allows writing a launch directory inside the workspace", () => {
     expect(
-      ruleOf(exec(segment("echo", ["x"], { writes: [`${WORKSPACE}/.config/fish/notes.txt`] }))),
+      ruleOf(
+        exec(
+          segment("cp", ["a", "b"], {
+            writes: [`${WORKSPACE}/Library/LaunchAgents/com.example.plist`],
+          }),
+        ),
+      ),
     ).toBe("allow");
+  });
+
+  it("still refuses the same paths in the home directory, via path.outside-workspace", () => {
+    expect(ruleOf(exec(segment("echo", ["x"], { writes: ["/Users/dev/.zshrc"] })))).toBe(
+      "path.outside-workspace",
+    );
+    expect(
+      ruleOf(
+        exec(segment("cp", ["a", "b"], { writes: ["/Users/dev/Library/LaunchAgents/x.plist"] })),
+      ),
+    ).toBe("path.outside-workspace");
   });
 });
 
@@ -359,32 +463,14 @@ describe("command.persistence", () => {
     expect(ruleOf(exec(segment("/bin/launchctl", ["load", "x"])))).toBe("command.persistence");
   });
 
-  it("refuses a write into a launch directory inside the workspace", () => {
-    const decision = decide(
-      exec(
-        segment("cp", ["a", "b"], {
-          writes: [`${WORKSPACE}/Library/LaunchAgents/com.evil.plist`],
-        }),
-      ),
-    );
+  it("names the program in the reason", () => {
+    const decision = decide(exec(segment("crontab", ["-e"])));
     expect(decision).toMatchObject({ outcome: "deny", rule: "command.persistence" });
-    expect(
-      ruleOf(
-        exec(
-          segment("cp", ["a", "b"], {
-            writes: [`${WORKSPACE}/Library/LaunchDaemons/com.evil.plist`],
-          }),
-        ),
-      ),
-    ).toBe("command.persistence");
+    expect(decision.outcome === "deny" && decision.reason).toContain("crontab");
   });
 
-  it("allows a write elsewhere under Library", () => {
-    expect(
-      ruleOf(
-        exec(segment("cp", ["a", "b"], { writes: [`${WORKSPACE}/Library/Preferences/app.plist`] })),
-      ),
-    ).toBe("allow");
+  it("allows a program whose name merely contains one", () => {
+    expect(ruleOf(exec(segment("attach", ["--to", "x"])))).toBe("allow");
   });
 });
 
@@ -429,20 +515,31 @@ describe("command.destructive-removal", () => {
     expect(ruleOf(exec(segment("rm", ["-f", "."], { paths: [WORKSPACE] })))).toBe("allow");
   });
 
-  it("refuses removing .git, recursive flag or not", () => {
+  it("refuses removing .git or .volli, recursive flag or not", () => {
     const decision = decide(
       exec(segment("rm", [".git/index"], { paths: [`${WORKSPACE}/.git/index`] })),
     );
     expect(decision).toMatchObject({ outcome: "deny", rule: "command.destructive-removal" });
-    expect(decision.outcome === "deny" && decision.reason).toContain("repository");
-    expect(ruleOf(exec(segment("rm", ["-rf", ".git"], { paths: [`${WORKSPACE}/.git`] })))).toBe(
-      "command.destructive-removal",
-    );
+    expect(decision.outcome === "deny" && decision.reason).toContain(".volli");
+
+    for (const dir of [".git", ".volli"]) {
+      expect(ruleOf(exec(segment("rm", ["-rf", dir], { paths: [`${WORKSPACE}/${dir}`] })))).toBe(
+        "command.destructive-removal",
+      );
+      expect(ruleOf(exec(segment("rm", [dir], { paths: [`${WORKSPACE}/${dir}/x`] })))).toBe(
+        "command.destructive-removal",
+      );
+    }
   });
 
-  it("allows removing a path that merely starts with .git", () => {
+  it("allows removing a path that merely starts with .git or .volli", () => {
     expect(
       ruleOf(exec(segment("rm", [".gitignore"], { paths: [`${WORKSPACE}/.gitignore`] }))),
+    ).toBe("allow");
+    expect(
+      ruleOf(
+        exec(segment("rm", ["-rf", ".vollibration"], { paths: [`${WORKSPACE}/.vollibration`] })),
+      ),
     ).toBe("allow");
   });
 
@@ -482,20 +579,50 @@ describe("command.git-escapes-workspace", () => {
     expect(ruleOf(exec(segment("git", ["-C"])))).toBe("allow");
   });
 
-  it("refuses --git-dir and --work-tree aimed elsewhere", () => {
+  it("refuses --git-dir and --work-tree aimed elsewhere, in either spelling", () => {
     expect(ruleOf(exec(segment("git", ["--git-dir=/Users/dev/other/.git", "log"])))).toBe(
       "command.git-escapes-workspace",
     );
     expect(ruleOf(exec(segment("git", ["--work-tree=../other", "status"])))).toBe(
       "command.git-escapes-workspace",
     );
+    expect(
+      ruleOf(
+        exec(
+          segment("git", [
+            "--git-dir",
+            "/Users/dev/other/.git",
+            "--work-tree",
+            "/Users/dev/other",
+            "status",
+          ]),
+        ),
+      ),
+    ).toBe("command.git-escapes-workspace");
+    expect(ruleOf(exec(segment("git", ["--work-tree", "../other", "status"])))).toBe(
+      "command.git-escapes-workspace",
+    );
   });
 
-  it("allows --git-dir pointing at this tree", () => {
+  it("refuses --exec-path, which relocates the helpers git runs", () => {
+    expect(ruleOf(exec(segment("git", ["--exec-path=/tmp/evil", "status"])))).toBe(
+      "command.git-escapes-workspace",
+    );
+    expect(ruleOf(exec(segment("git", ["--exec-path", "/tmp/evil", "status"])))).toBe(
+      "command.git-escapes-workspace",
+    );
+  });
+
+  it("allows those flags pointing at this tree", () => {
     expect(ruleOf(exec(segment("git", ["--git-dir=.git", "log"])))).toBe("allow");
+    expect(ruleOf(exec(segment("git", ["--git-dir", ".git", "log"])))).toBe("allow");
   });
 
-  it("refuses worktree, clone and submodule landing outside", () => {
+  it("allows an unrelated flag carrying a value that looks like a path", () => {
+    expect(ruleOf(exec(segment("git", ["--namespace=/tmp/ns", "status"])))).toBe("allow");
+  });
+
+  it("refuses worktree, clone, submodule and init landing outside", () => {
     expect(ruleOf(exec(segment("git", ["worktree", "add", "../other"])))).toBe(
       "command.git-escapes-workspace",
     );
@@ -505,6 +632,9 @@ describe("command.git-escapes-workspace", () => {
     expect(
       ruleOf(exec(segment("git", ["submodule", "add", "https://example.com/x", "../vendor"]))),
     ).toBe("command.git-escapes-workspace");
+    expect(ruleOf(exec(segment("git", ["init", "/elsewhere/newrepo"])))).toBe(
+      "command.git-escapes-workspace",
+    );
   });
 
   it("allows those subcommands when everything lands inside", () => {
@@ -512,6 +642,7 @@ describe("command.git-escapes-workspace", () => {
     expect(ruleOf(exec(segment("git", ["clone", "https://example.com/x", "vendor/x"])))).toBe(
       "allow",
     );
+    expect(ruleOf(exec(segment("git", ["init"])))).toBe("allow");
   });
 
   it("allows an ordinary subcommand, and git with no subcommand at all", () => {
@@ -537,19 +668,65 @@ describe("command.git-discards-work", () => {
     expect(ruleOf(exec(segment("git", ["reset", "--hard"])))).toBe("allow");
   });
 
+  it("refuses the other resets that can clobber the tree", () => {
+    for (const flag of ["--keep", "--merge"]) {
+      expect(ruleOf(exec(segment("git", ["reset", flag, "HEAD~1"])), MAIN)).toBe(
+        "command.git-discards-work",
+      );
+    }
+  });
+
   it("allows a reset that keeps the work", () => {
     expect(ruleOf(exec(segment("git", ["reset", "--soft", "HEAD~1"])), MAIN)).toBe("allow");
+    expect(ruleOf(exec(segment("git", ["reset", "HEAD~1"])), MAIN)).toBe("allow");
   });
 
   it("refuses discarding the working tree with checkout", () => {
-    expect(ruleOf(exec(segment("git", ["checkout", "--", "."])), MAIN)).toBe(
-      "command.git-discards-work",
-    );
-    expect(ruleOf(exec(segment("git", ["checkout", "."])), MAIN)).toBe("command.git-discards-work");
+    for (const args of [
+      ["checkout", "--", "."],
+      ["checkout", "."],
+      ["checkout", "--", "src/"],
+      ["checkout", "HEAD", "--", "."],
+      ["checkout", "-f", "main"],
+      ["checkout", "--force", "main"],
+    ]) {
+      expect(ruleOf(exec(segment("git", args)), MAIN)).toBe("command.git-discards-work");
+    }
   });
 
   it("allows switching branches with checkout", () => {
     expect(ruleOf(exec(segment("git", ["checkout", "main"])), MAIN)).toBe("allow");
+    expect(ruleOf(exec(segment("git", ["checkout", "-b", "feature/x"])), MAIN)).toBe("allow");
+    expect(ruleOf(exec(segment("git", ["checkout", "--"])), MAIN)).toBe("allow");
+  });
+
+  it("refuses restoring the working tree", () => {
+    for (const args of [
+      ["restore", "."],
+      ["restore", "--worktree", "src/app.ts"],
+      ["restore", "-W", "src/app.ts"],
+      ["restore", "--staged", "--worktree", "src/app.ts"],
+    ]) {
+      expect(ruleOf(exec(segment("git", args)), MAIN)).toBe("command.git-discards-work");
+    }
+  });
+
+  it("allows a restore that only unstages", () => {
+    expect(ruleOf(exec(segment("git", ["restore", "--staged", "src/app.ts"])), MAIN)).toBe("allow");
+    expect(ruleOf(exec(segment("git", ["restore", "-S", "src/app.ts"])), MAIN)).toBe("allow");
+  });
+
+  it("refuses a switch that discards changes", () => {
+    expect(ruleOf(exec(segment("git", ["switch", "--discard-changes", "main"])), MAIN)).toBe(
+      "command.git-discards-work",
+    );
+    expect(ruleOf(exec(segment("git", ["switch", "-f", "main"])), MAIN)).toBe(
+      "command.git-discards-work",
+    );
+  });
+
+  it("allows an ordinary switch", () => {
+    expect(ruleOf(exec(segment("git", ["switch", "main"])), MAIN)).toBe("allow");
   });
 
   it("refuses a forced clean, with or without -d", () => {
@@ -641,9 +818,6 @@ describe("rule order", () => {
     expect(
       ruleOf(exec(segment("ls"), segment("git", ["config", "--unset", "core.hooksPath"]))),
     ).toBe("path.git-internals");
-    expect(
-      ruleOf(exec(segment("ls"), segment("echo", ["x"], { writes: [`${WORKSPACE}/.bashrc`] }))),
-    ).toBe("command.shell-profile-write");
     expect(ruleOf(exec(segment("ls"), segment("csrutil", ["disable"])))).toBe(
       "command.platform-weakening",
     );
