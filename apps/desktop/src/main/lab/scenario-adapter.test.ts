@@ -125,11 +125,18 @@ describe("lab scenarios", () => {
   it("refuses a scenario that does not exist rather than attaching an empty stream", async () => {
     const adapter = createLabScenarioAdapter({ beatDelayMs: 0 });
     await expect(
-      adapter.probe(
-        { profileId: "not-a-scenario", directory: "/lab" },
-        new AbortController().signal,
+      adapter.attach(
+        {
+          sessionId: "session-1",
+          attachmentId: "attachment-1",
+          profileId: "not-a-scenario",
+          directory: "/lab",
+          continuity: "fresh",
+          native: null,
+        },
+        { emit: async () => undefined },
       ),
-    ).resolves.toMatchObject({ status: "unavailable" });
+    ).rejects.toThrow("Lab scenario not-a-scenario does not exist");
   });
 
   it("puts a permission on the call it gates, and settles that row when answered", async () => {

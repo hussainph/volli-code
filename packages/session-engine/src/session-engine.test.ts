@@ -1121,7 +1121,7 @@ describe("SessionEngine creation and explicit commands", () => {
     ).resolves.toEqual([]);
   });
 
-  it("records adapter-owned capability and interaction facts and rejects mismatched evidence", async () => {
+  it("records adapter-owned interaction facts and rejects mismatched evidence", async () => {
     const { plane } = composition();
     const { session } = await plane.createSession(createRequest());
     const opened = attachment(session.id);
@@ -1132,25 +1132,6 @@ describe("SessionEngine creation and explicit commands", () => {
       provenance: adapterProvenance,
       kind: "attachment.opened",
       attachment: opened,
-    });
-    const snapshot = {
-      id: "capabilities-1",
-      adapterId: opened.adapterId,
-      attachmentId: opened.id,
-      profileId: "native",
-      revision: 1,
-      observedAt: 201,
-      expiresAt: null,
-      features: [],
-      catalog: [],
-    };
-    await plane.observe({
-      id: "observation-capabilities",
-      sessionId: session.id,
-      occurredAt: 201,
-      provenance: adapterProvenance,
-      kind: "capabilities.updated",
-      snapshot,
     });
     const interaction = {
       id: "permission-1",
@@ -1182,7 +1163,6 @@ describe("SessionEngine creation and explicit commands", () => {
     });
 
     await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
-      capabilities: [snapshot],
       interactions: {
         active: [],
         resolved: [{ interaction, resolution: { optionIds: ["once"], response: null } }],
@@ -1190,42 +1170,17 @@ describe("SessionEngine creation and explicit commands", () => {
     });
     await expect(
       plane.observe({
-        id: "observation-capabilities-wrong-adapter",
+        id: "observation-interaction-opened-wrong-adapter",
         sessionId: session.id,
         occurredAt: 204,
         provenance: {
           ...adapterProvenance,
           source: { ...adapterProvenance.source, id: "codex" },
         },
-        kind: "capabilities.updated",
-        snapshot: { ...snapshot, id: "capabilities-2" },
+        kind: "interaction.opened",
+        interaction: { ...interaction, id: "permission-2" },
       }),
     ).rejects.toThrow("must be produced by adapter opencode");
-    await expect(
-      plane.observe({
-        id: "observation-capabilities-wrong-binding",
-        sessionId: session.id,
-        occurredAt: 205,
-        provenance: adapterProvenance,
-        kind: "capabilities.updated",
-        snapshot: { ...snapshot, id: "capabilities-3", adapterId: "codex" },
-      }),
-    ).rejects.toThrow("does not match attachment");
-    await expect(
-      plane.observe({
-        id: "observation-session-capabilities-wrong-adapter",
-        sessionId: session.id,
-        occurredAt: 206,
-        provenance: {
-          ...adapterProvenance,
-          source: { ...adapterProvenance.source, id: "codex" },
-        },
-        kind: "capabilities.updated",
-        snapshot: { ...snapshot, id: "capabilities-session", attachmentId: null },
-      }),
-    ).rejects.toThrow(
-      "Capability snapshot capabilities-session must be produced by adapter opencode",
-    );
     await expect(
       plane.observe({
         id: "observation-interaction-resolved-twice",

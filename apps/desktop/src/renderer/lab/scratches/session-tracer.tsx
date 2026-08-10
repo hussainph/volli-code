@@ -9,7 +9,6 @@
 import * as React from "react";
 import type {
   SessionAttention,
-  SessionCapabilitySnapshot,
   SessionInteraction,
   SessionPresentationProjection,
 } from "@volli/shared";
@@ -28,21 +27,6 @@ export const note = "Real Session RPC over HTTP + SSE; inspection only";
 const DIAGNOSTIC_LIMIT = 100;
 
 type CommandAction = (client: SessionRpcClient, sessionId: string) => Promise<unknown>;
-
-interface ModelCatalogEntry {
-  id: string;
-  label: string;
-  state: "available" | "unavailable" | "unknown";
-  providerId: string;
-  modelId: string;
-  variants: readonly string[];
-}
-
-interface AgentCatalogEntry {
-  id: string;
-  label: string;
-  state: "available" | "unavailable" | "unknown";
-}
 
 /**
  * The RPC boundary serializes AI SDK message parts. Keep the inspection view
@@ -87,50 +71,6 @@ function formatJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
-function latestCapabilities(
-  capabilities: readonly SessionCapabilitySnapshot[],
-  attachmentId: string | undefined,
-): SessionCapabilitySnapshot | null {
-  return (
-    capabilities
-      .filter(
-        (capability) =>
-          (capability.expiresAt === null || capability.expiresAt > Date.now()) &&
-          (!attachmentId || capability.attachmentId === attachmentId),
-      )
-      .toSorted(
-        (left, right) => left.observedAt - right.observedAt || left.revision - right.revision,
-      )
-      .at(-1) ?? null
-  );
-}
-
-function catalogModels(snapshot: SessionCapabilitySnapshot | null): ModelCatalogEntry[] {
-  if (!snapshot) return [];
-  return snapshot.catalog.flatMap((item) => {
-    if (item.kind !== "model" || !isRecord(item.detail)) return [];
-    const providerId = recordString(item.detail, "providerId");
-    const modelId = recordString(item.detail, "modelId");
-    if (!providerId || !modelId) return [];
-    return [
-      {
-        id: item.id,
-        label: item.label,
-        state: item.state,
-        providerId,
-        modelId,
-        variants: recordStrings(item.detail, "variants"),
-      },
-    ];
-  });
-}
-
-function catalogAgents(snapshot: SessionCapabilitySnapshot | null): AgentCatalogEntry[] {
-  return (snapshot?.catalog ?? []).flatMap((item) =>
-    item.kind === "agent" ? [{ id: item.id, label: item.label, state: item.state }] : [],
-  );
-}
-
 function receiptStatus(result: unknown): string {
   if (!isRecord(result) || !isRecord(result.receipt)) return "completed";
   const status = recordString(result.receipt, "status") ?? "unknown";
@@ -172,26 +112,6 @@ function AttentionList({ attention }: { attention: readonly SessionAttention[] }
             className="overflow-x-auto whitespace-pre-wrap text-label text-foreground"
           >
             {formatJson(item)}
-          </pre>
-        );
-      }}
-    />
-  );
-}
-
-function CapabilityList({ capabilities }: { capabilities: readonly SessionCapabilitySnapshot[] }) {
-  return (
-    <ProjectionList
-      label="Capabilities"
-      values={capabilities}
-      render={(value) => {
-        const capability = value as SessionCapabilitySnapshot;
-        return (
-          <pre
-            key={capability.id}
-            className="overflow-x-auto whitespace-pre-wrap text-label text-foreground"
-          >
-            {formatJson(capability)}
           </pre>
         );
       }}
@@ -262,7 +182,6 @@ export default function SessionTracerScratch() {
   const [sessionId, setSessionId] = React.useState("");
   const [prompt, setPrompt] = React.useState("Explain the current Session state.");
   const [projection, setProjection] = React.useState<SessionPresentationProjection | null>(null);
-  const [capabilities, setCapabilities] = React.useState<readonly SessionCapabilitySnapshot[]>([]);
   const [frames, setFrames] = React.useState<ReadonlyMap<number, LabSessionStreamFrame>>(new Map());
   const [diagnostics, setDiagnostics] = React.useState<readonly RpcDiagnosticEntry[]>([]);
   const [status, setStatus] = React.useState("Idle");
@@ -309,7 +228,6 @@ export default function SessionTracerScratch() {
   React.useEffect(() => {
     if (!sessionId || !client.current) {
       setProjection(null);
-      setCapabilities([]);
       setFrames(new Map());
       return;
     }
@@ -427,47 +345,6 @@ export default function SessionTracerScratch() {
 
   const frameList = orderedFrames(frames);
   const liveAttachmentId = projection?.liveExecutor?.id;
-  const capabilitySnapshot = latestCapabilities(capabilities, liveAttachmentId);
-  const models = React.useMemo(() => catalogModels(capabilitySnapshot), [capabilitySnapshot]);
-  const providers = React.useMemo(
-    () => [...new Set(models.map((model) => model.providerId))],
-    [models],
-  );
-  const providerModels = React.useMemo(
-    () => models.filter((model) => model.providerId === providerId),
-    [models, providerId],
-  );
-  const selectedModel = React.useMemo(
-    () => providerModels.find((model) => model.modelId === modelId) ?? null,
-    [modelId, providerModels],
-  );
-  const agents = React.useMemo(() => catalogAgents(capabilitySnapshot), [capabilitySnapshot]);
-
-  React.useEffect(() => {
-    setProviderId((current) => (providers.includes(current) ? current : (providers[0] ?? "")));
-  }, [providers]);
-
-  React.useEffect(() => {
-    setModelId((current) =>
-      providerModels.some((model) => model.modelId === current)
-        ? current
-        : (providerModels.find((model) => model.state === "available")?.modelId ??
-          providerModels[0]?.modelId ??
-          ""),
-    );
-  }, [providerModels]);
-
-  React.useEffect(() => {
-    setVariant((current) =>
-      selectedModel?.variants.includes(current) ? current : (selectedModel?.variants[0] ?? ""),
-    );
-  }, [selectedModel]);
-
-  React.useEffect(() => {
-    setAgent((current) => (agents.some((entry) => entry.id === current) ? current : ""));
-  }, [agents]);
-
-  const selectedModelUnavailable = selectedModel?.state !== "available";
 
   return (
     <div className="space-y-4 font-mono text-label">
@@ -523,64 +400,33 @@ export default function SessionTracerScratch() {
           onChange={(event) => setPrompt(event.target.value)}
           placeholder="Prompt"
         />
-        <select
+        <Input
           aria-label="Provider"
-          className="h-8 border border-input bg-background px-2 text-ui text-foreground"
-          disabled={providers.length === 0}
           value={providerId}
           onChange={(event) => setProviderId(event.target.value)}
-        >
-          {providers.length === 0 ? <option value="">No reported providers</option> : null}
-          {providers.map((provider) => (
-            <option key={provider} value={provider}>
-              {provider}
-            </option>
-          ))}
-        </select>
-        <select
+          placeholder="Provider"
+        />
+        <Input
           aria-label="Model"
-          className="h-8 border border-input bg-background px-2 text-ui text-foreground"
-          disabled={providerModels.length === 0}
           value={modelId}
           onChange={(event) => setModelId(event.target.value)}
-        >
-          {providerModels.length === 0 ? <option value="">No reported models</option> : null}
-          {providerModels.map((model) => (
-            <option key={model.id} value={model.modelId} disabled={model.state !== "available"}>
-              {model.label} {model.state === "available" ? "" : `(${model.state})`}
-            </option>
-          ))}
-        </select>
-        <select
+          placeholder="Model"
+        />
+        <Input
           aria-label="Variant"
-          className="h-8 border border-input bg-background px-2 text-ui text-foreground"
-          disabled={!selectedModel}
           value={variant}
           onChange={(event) => setVariant(event.target.value)}
-        >
-          <option value="">Reported default</option>
-          {selectedModel?.variants.map((entry) => (
-            <option key={entry} value={entry}>
-              {entry}
-            </option>
-          ))}
-        </select>
-        <select
+          placeholder="Variant"
+        />
+        <Input
           aria-label="Agent"
-          className="h-8 border border-input bg-background px-2 text-ui text-foreground"
           value={agent}
           onChange={(event) => setAgent(event.target.value)}
-        >
-          <option value="">Reported default</option>
-          {agents.map((entry) => (
-            <option key={entry.id} value={entry.id} disabled={entry.state !== "available"}>
-              {entry.label} {entry.state === "available" ? "" : `(${entry.state})`}
-            </option>
-          ))}
-        </select>
+          placeholder="Agent"
+        />
         <Button
           type="button"
-          disabled={!sessionId || !prompt || !selectedModel || selectedModelUnavailable}
+          disabled={!sessionId || !prompt || !providerId || !modelId}
           onClick={() =>
             void run("Submit", async (rpc, activeSessionId) => {
               return rpc.session.command.mutate({
@@ -618,21 +464,6 @@ export default function SessionTracerScratch() {
           }
         >
           Interrupt
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={!sessionId || !liveAttachmentId}
-          onClick={() =>
-            liveAttachmentId &&
-            void run("Refresh capabilities", (rpc, activeSessionId) =>
-              rpc.session.refreshCapabilities
-                .mutate({ sessionId: activeSessionId, attachmentId: liveAttachmentId })
-                .then((snapshot) => setCapabilities((current) => [...current, snapshot])),
-            )
-          }
-        >
-          Refresh caps
         </Button>
         <Button
           type="button"
@@ -683,7 +514,6 @@ export default function SessionTracerScratch() {
           <SessionMessageList frames={frameList} />
         </section>
         <AttentionList attention={projection?.attention.active ?? []} />
-        <CapabilityList capabilities={capabilities} />
         <section className="border border-border bg-card p-3">
           <h2 className="mb-2 font-mono text-label uppercase text-muted-foreground">
             Active interactions
@@ -804,11 +634,4 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function recordString(record: Record<string, unknown>, key: string): string | null {
   const value = record[key];
   return typeof value === "string" ? value : null;
-}
-
-function recordStrings(record: Record<string, unknown>, key: string): string[] {
-  const value = record[key];
-  return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === "string")
-    : [];
 }

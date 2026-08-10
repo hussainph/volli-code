@@ -1,8 +1,6 @@
 import type {
   ModelSelection,
   SessionAttachmentContinuity,
-  SessionCapabilityCatalogItem,
-  SessionCapabilityFeature,
   SessionInteraction,
   SessionInteractionResolution,
   SessionNativeDetail,
@@ -11,10 +9,17 @@ import type {
 import type { UIMessage } from "ai";
 import type { TranscriptDelta } from "./transcript-overlay";
 
+export interface NativeRuntimeIdentity {
+  path: string;
+  version: string;
+  fingerprint: string;
+}
+
 export interface NativeHarnessProfile {
   id: string;
   label: string;
   transport: "native" | "terminal";
+  runtime: NativeRuntimeIdentity;
 }
 
 export interface NativeHarnessManifest {
@@ -23,34 +28,6 @@ export interface NativeHarnessManifest {
   adapterVersion: string;
   profiles: readonly NativeHarnessProfile[];
 }
-
-export interface NativeProbeContext {
-  profileId: string;
-  directory: string;
-}
-
-export interface NativeRuntimeIdentity {
-  path: string;
-  version: string;
-  fingerprint: string;
-}
-
-export interface NativeCapabilityReport {
-  features: readonly SessionCapabilityFeature[];
-  catalog: readonly SessionCapabilityCatalogItem[];
-}
-
-export type NativeProbeResult =
-  | {
-      status: "available";
-      runtime: NativeRuntimeIdentity;
-      capabilities: NativeCapabilityReport;
-    }
-  | {
-      status: "unavailable" | "incompatible";
-      runtime: NativeRuntimeIdentity | null;
-      reason: string;
-    };
 
 export interface NativeAttachmentSpec {
   sessionId: string;
@@ -277,7 +254,6 @@ export interface BindingHandle {
 
 export interface NativeHarnessAdapter {
   readonly manifest: NativeHarnessManifest;
-  probe(context: NativeProbeContext, signal: AbortSignal): Promise<NativeProbeResult>;
   attach(spec: NativeAttachmentSpec, sink: ObservationSink): Promise<BindingHandle>;
 }
 

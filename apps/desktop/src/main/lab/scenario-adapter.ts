@@ -22,8 +22,6 @@ import type {
   HarnessObservation,
   NativeAttachmentSpec,
   NativeHarnessAdapter,
-  NativeProbeContext,
-  NativeProbeResult,
   ObservationSink,
 } from "@volli/session-engine";
 
@@ -67,29 +65,12 @@ export function createLabScenarioAdapter(
         id: scenario.id,
         label: scenario.label,
         transport: "native" as const,
-      })),
-    },
-
-    async probe(context: NativeProbeContext): Promise<NativeProbeResult> {
-      const scenario = labScenario(context.profileId);
-      if (!scenario) {
-        return {
-          status: "unavailable",
-          runtime: null,
-          reason: `Lab scenario ${context.profileId} does not exist`,
-        };
-      }
-      return {
-        status: "available",
         runtime: {
           path: "lab://scenarios",
           version: "1.0.0",
           fingerprint: `${LAB_SCENARIO_ADAPTER_ID}:${scenario.id}`,
         },
-        // Deliberately empty. A scripted harness has no models to offer and
-        // claiming some would put a lab fixture in the composer's model pill.
-        capabilities: { features: [], catalog: [] },
-      };
+      })),
     },
 
     async attach(spec: NativeAttachmentSpec, sink: ObservationSink): Promise<BindingHandle> {

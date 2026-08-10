@@ -381,40 +381,6 @@ describe("observationPayload", () => {
         native: ["opaque", true],
       },
       {
-        id: "11-capabilities",
-        sessionId: session.id,
-        occurredAt: 11,
-        provenance,
-        kind: "capabilities.updated",
-        snapshot: {
-          id: "capabilities-1",
-          adapterId: "opencode",
-          attachmentId: attachment.id,
-          profileId: "native",
-          revision: 1,
-          observedAt: 11,
-          expiresAt: 71,
-          features: [
-            {
-              id: "message.submit",
-              state: "available",
-              evidence: "verified",
-              detail: null,
-            },
-          ],
-          catalog: [
-            {
-              kind: "model",
-              id: "openai/gpt-5",
-              label: "GPT-5",
-              state: "available",
-              evidence: "reported",
-              detail: null,
-            },
-          ],
-        },
-      },
-      {
         id: "12-interaction-opened",
         sessionId: session.id,
         occurredAt: 12,
@@ -472,7 +438,6 @@ describe("observationPayload", () => {
       "attention.raised",
       "attention.cleared",
       "adapter.observed",
-      "capabilities.updated",
       "interaction.opened",
       "interaction.resolved",
       "interaction.cancelled",
@@ -506,32 +471,7 @@ describe("observationPayload", () => {
     ).toThrow("require Session Engine stamping");
   });
 
-  it("projects the latest binding capabilities and unresolved interactions", () => {
-    const firstSnapshot = {
-      id: "capabilities-1",
-      adapterId: "opencode",
-      attachmentId: "attachment-1",
-      profileId: "native",
-      revision: 1,
-      observedAt: 10,
-      expiresAt: null,
-      features: [
-        {
-          id: "message.submit",
-          state: "available" as const,
-          evidence: "verified" as const,
-          detail: null,
-        },
-      ],
-      catalog: [],
-    };
-    const latestSnapshot = { ...firstSnapshot, id: "capabilities-2", revision: 2, observedAt: 20 };
-    const sessionSnapshot = {
-      ...latestSnapshot,
-      id: "capabilities-session",
-      attachmentId: null,
-      revision: 1,
-    };
+  it("projects unresolved interactions", () => {
     const interaction = {
       id: "permission-1",
       attachmentId: "attachment-1",
@@ -544,14 +484,7 @@ describe("observationPayload", () => {
     };
     const remaining = { ...interaction, id: "question-1", kind: "question" as const };
 
-    const reorderedSnapshot = {
-      ...latestSnapshot,
-      id: "capabilities-3",
-      revision: 3,
-      observedAt: 30,
-    };
     const projection = projectSession(session, [
-      event(1, { kind: "capabilities.updated", snapshot: firstSnapshot }),
       event(2, { kind: "interaction.opened", interaction }),
       event(3, { kind: "interaction.opened", interaction: remaining }),
       event(4, {
@@ -560,18 +493,14 @@ describe("observationPayload", () => {
         interactionId: interaction.id,
         resolution: { optionIds: ["once"], response: null },
       }),
-      event(5, { kind: "capabilities.updated", snapshot: latestSnapshot }),
-      event(6, { kind: "capabilities.updated", snapshot: sessionSnapshot }),
       event(7, {
         kind: "interaction.resolved",
         attachmentId: "attachment-1",
         interactionId: "missing",
         resolution: { optionIds: [], response: null },
       }),
-      event(8, { kind: "capabilities.updated", snapshot: reorderedSnapshot }),
     ]);
 
-    expect(projection.capabilities).toEqual([sessionSnapshot, reorderedSnapshot]);
     expect(projection.interactions.active).toEqual([remaining]);
     expect(projection.interactions.resolved).toEqual([
       {
@@ -619,24 +548,6 @@ describe("observationPayload", () => {
 
   it("keeps every cancel reason in the vocabulary", () => {
     expect(SESSION_INTERACTION_CANCEL_REASONS).toEqual(["abandoned", "superseded", "withdrawn"]);
-  });
-
-  it("does not project an expired capability snapshot", () => {
-    const expired = {
-      id: "capabilities-expired",
-      adapterId: "opencode",
-      attachmentId: "attachment-1",
-      profileId: "native",
-      revision: 1,
-      observedAt: 10,
-      expiresAt: 20,
-      features: [],
-      catalog: [],
-    };
-
-    expect(
-      projectSession(session, [event(1, { kind: "capabilities.updated", snapshot: expired })], 20),
-    ).toMatchObject({ capabilities: [] });
   });
 });
 

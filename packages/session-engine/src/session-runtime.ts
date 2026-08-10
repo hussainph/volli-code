@@ -5,7 +5,6 @@ import type {
   Session,
   SessionAttachment,
   SessionAttachmentContinuity,
-  SessionCapabilitySnapshot,
   SessionCommand,
   SessionEvent,
   SessionEventProvenance,
@@ -26,10 +25,9 @@ import type {
   HarnessObservation,
   NativeAdapterRegistry,
   NativeAttachmentSpec,
-  NativeCapabilityReport,
   NativeHarnessAdapter,
   NativeMessageDelivery,
-  NativeProbeResult,
+  NativeRuntimeIdentity,
   ObservationSink,
   Reconciliation,
 } from "./native-adapter";
@@ -82,7 +80,7 @@ export interface SessionRuntimeClock {
 }
 
 export interface SessionRuntimeIds {
-  next(kind: "attachment" | "capabilities" | "event" | "receipt" | "attention"): string;
+  next(kind: "attachment" | "event" | "receipt" | "attention"): string;
 }
 
 export interface SessionRuntimePorts {
@@ -94,8 +92,6 @@ export interface SessionRuntimePorts {
   ids: SessionRuntimeIds;
   /** Host diagnostics seam for a failing client stream; failures are isolated. */
   onSubscriberFailure?: (error: unknown) => void | Promise<void>;
-  /** Bounded host probe deadline; tests may inject a shorter value. */
-  probeTimeoutMs?: number;
 }
 
 export type SessionClientCommand =
@@ -268,10 +264,6 @@ export interface SessionRuntime {
     listener: (emission: SessionStreamEmission) => void | Promise<void>,
   ): Promise<() => void>;
   cancelInteraction(request: CancelInteractionRequest): Promise<void>;
-  refreshCapabilities(input: {
-    sessionId: string;
-    attachmentId: string;
-  }): Promise<SessionCapabilitySnapshot>;
   reconcile(input: { sessionId: string; attachmentId: string }): Promise<void>;
   close(): Promise<void>;
 }
@@ -387,18 +379,8 @@ interface ProjectedHistory {
   projection: SessionProjection;
   events: readonly SessionEvent[];
   throughSequence: number;
-  /**
-   * When this fold stops being true on its own, or null if it never does.
-   *
-   * `now` is the single non-durable input to `projectSession`: a capability
-   * snapshot leaves the projection the moment it expires, with no event to
-   * announce it. This is the earliest such moment among the snapshots the fold
-   * kept, and reaching it invalidates the entry as surely as a new event does.
-   */
-  staleAt: number | null;
 }
 
-const ADAPTER_PROBE_TIMEOUT_MS = 15_000;
 const EVENT_PAGE_SIZE = 500;
 /**
  * How many Sessions keep a folded history. A Session's events are held for as
@@ -423,13 +405,10 @@ class DefaultSessionRuntime implements SessionRuntime {
   readonly #sessionAdmissionTails = new Map<string, Promise<void>>();
   readonly #messageAdmissions = new Map<string, () => void>();
   readonly #subscribers = new Map<string, Set<Subscriber>>();
-  readonly #capabilityRevisions = new Map<string, number>();
-  readonly #capabilityWrites = new Map<string, Promise<SessionCapabilitySnapshot>>();
   /** Insertion-ordered, so the first key is the least recently read Session. */
   readonly #histories = new Map<string, ProjectedHistory>();
   /** Insertion-ordered too, so the first key is the least recently folded Session. */
   readonly #overlays = new Map<string, SessionOverlayState>();
-  readonly #probeControllers = new Set<AbortController>();
   #closed = false;
 
   constructor(private readonly ports: SessionRuntimePorts) {}
@@ -669,9 +648,9 @@ class DefaultSessionRuntime implements SessionRuntime {
       });
     }
 
-    // The directory has to be real before it is probed, let alone bound: an
-    // adapter handed one that is not there fails per prompt, deep inside the
-    // harness, wearing whatever name that harness gives a missing path.
+    // The directory has to be real before it is bound: an adapter handed one
+    // that is not there fails per prompt, deep inside the harness, wearing
+    // whatever name that harness gives a missing path.
     let site: SessionLocation;
     try {
       site = await this.ports.locations.prepare(projection.session);
@@ -683,33 +662,6 @@ class DefaultSessionRuntime implements SessionRuntime {
         location,
         code: "location_unavailable",
         detail: errorMessage(error),
-      });
-    }
-
-    let probe: NativeProbeResult;
-    try {
-      probe = await this.#probe(adapter, {
-        profileId: request.command.profileId,
-        directory: site.directory,
-      });
-    } catch (error) {
-      return this.#failAttach({
-        request,
-        submitted,
-        adapter,
-        location,
-        code: "probe_failed",
-        detail: errorMessage(error),
-      });
-    }
-    if (probe.status !== "available") {
-      return this.#failAttach({
-        request,
-        submitted,
-        adapter,
-        location,
-        code: `adapter_${probe.status}`,
-        detail: probe.reason,
       });
     }
 
@@ -756,7 +708,12 @@ class DefaultSessionRuntime implements SessionRuntime {
         // the main checkout — writing that down would hand every later resume
         // the fallback this attach exists to refuse (#38), because
         // `#rehydrateBinding` trusts the persisted directory over a fresh read.
-        native: wrapNativeBinding(request.command.profileId, site.directory, probe, handle.native),
+        native: wrapNativeBinding(
+          request.command.profileId,
+          site.directory,
+          profile.runtime,
+          handle.native,
+        ),
       };
       const opened = await this.ports.engine.observe({
         id: this.#id("event"),
@@ -792,14 +749,6 @@ class DefaultSessionRuntime implements SessionRuntime {
       });
       await this.#publish([opened, ...clearedConfiguration]);
       await sink.activate();
-      await this.#recordCapabilities(
-        request.sessionId,
-        attachmentId,
-        request.command.profileId,
-        adapter,
-        probe.capabilities,
-        location.venue,
-      );
       const receipt = await this.#recordDelivery(
         request.sessionId,
         attachmentId,
@@ -1332,8 +1281,8 @@ class DefaultSessionRuntime implements SessionRuntime {
    * making it stop waiting is to tell it a decision. Reaching for one to clear
    * the gate would print a choice nobody made, which is the exact failure
    * `interaction.cancelled` exists to avoid. Whether a harness can be told to
-   * withdraw is therefore the adapter's question to answer, declared as a
-   * capability; a negative answer is a real one, and does not belong here.
+   * withdraw is therefore the adapter's question to answer; a negative answer
+   * is a real one, and does not belong here.
    *
    * The attachment may be closed by now, and this is the one Session fact that
    * still lands when it is. Nothing can be delivered to a closed binding — but
@@ -1529,35 +1478,6 @@ class DefaultSessionRuntime implements SessionRuntime {
     await this.#cancelInteraction(request);
   }
 
-  async refreshCapabilities(input: {
-    sessionId: string;
-    attachmentId: string;
-  }): Promise<SessionCapabilitySnapshot> {
-    this.#assertOpen();
-    const projection = await this.#requireSession(input.sessionId);
-    this.#assertOpen();
-    const location = await this.ports.locations.resolve(projection.session);
-    this.#assertOpen();
-    const binding = await this.#bindingForAttachment(input.attachmentId, projection, location);
-    await this.#assertBindingOperationOpen();
-    const probe = await this.#probe(binding.adapter, {
-      profileId: binding.spec.profileId,
-      directory: binding.spec.directory,
-    });
-    await this.#assertBindingOperationOpen();
-    if (probe.status !== "available") {
-      throw new SessionRuntimeConflictError(probe.reason);
-    }
-    return this.#recordCapabilities(
-      input.sessionId,
-      input.attachmentId,
-      binding.spec.profileId,
-      binding.adapter,
-      probe.capabilities,
-      binding.venue,
-    );
-  }
-
   async reconcile(input: { sessionId: string; attachmentId: string }): Promise<void> {
     this.#assertOpen();
     const projection = await this.#requireSession(input.sessionId);
@@ -1617,9 +1537,6 @@ class DefaultSessionRuntime implements SessionRuntime {
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
-    for (const controller of this.#probeControllers)
-      controller.abort(new Error("Session runtime closed"));
-    this.#probeControllers.clear();
     for (const subscribers of this.#subscribers.values()) {
       for (const subscriber of subscribers) subscriber.active = false;
     }
@@ -1640,111 +1557,6 @@ class DefaultSessionRuntime implements SessionRuntime {
     if (!this.#closed) return;
     await this.#releaseBindingsAfterClose();
     this.#assertOpen();
-  }
-
-  async #probe(
-    adapter: NativeHarnessAdapter,
-    context: { profileId: string; directory: string },
-  ): Promise<NativeProbeResult> {
-    const controller = new AbortController();
-    const timeoutMs = this.ports.probeTimeoutMs ?? ADAPTER_PROBE_TIMEOUT_MS;
-    if (!Number.isInteger(timeoutMs) || timeoutMs < 1)
-      throw new Error("Native adapter probe timeout must be a positive integer");
-    const deadline = AbortSignal.timeout(timeoutMs);
-    const signal = AbortSignal.any([controller.signal, deadline]);
-    this.#probeControllers.add(controller);
-    let onAbort!: () => void;
-    try {
-      const aborted = new Promise<never>((_resolve, reject) => {
-        onAbort = () => reject(signal.reason);
-        signal.addEventListener("abort", onAbort, { once: true });
-      });
-      return await Promise.race([adapter.probe(context, signal), aborted]);
-    } finally {
-      signal.removeEventListener("abort", onAbort);
-      this.#probeControllers.delete(controller);
-    }
-  }
-
-  async #recordCapabilities(
-    sessionId: string,
-    attachmentId: string,
-    profileId: string,
-    adapter: AdapterIdentity,
-    report: NativeCapabilityReport,
-    venue: SessionExecutionVenue,
-  ): Promise<SessionCapabilitySnapshot> {
-    const scope = `${sessionId}\u0000${attachmentId}\u0000${adapter.manifest.id}\u0000${profileId}`;
-    const previous = this.#capabilityWrites.get(scope) ?? Promise.resolve();
-    const write = previous
-      .catch(() => undefined)
-      .then(() =>
-        this.#recordCapabilitiesNow(
-          sessionId,
-          attachmentId,
-          profileId,
-          adapter,
-          report,
-          venue,
-          scope,
-        ),
-      );
-    this.#capabilityWrites.set(scope, write);
-    try {
-      return await write;
-    } finally {
-      if (this.#capabilityWrites.get(scope) === write) this.#capabilityWrites.delete(scope);
-    }
-  }
-
-  async #recordCapabilitiesNow(
-    sessionId: string,
-    attachmentId: string,
-    profileId: string,
-    adapter: AdapterIdentity,
-    report: NativeCapabilityReport,
-    venue: SessionExecutionVenue,
-    scope: string,
-  ): Promise<SessionCapabilitySnapshot> {
-    let previousRevision = this.#capabilityRevisions.get(scope);
-    if (previousRevision === undefined) {
-      const projection = await this.#requireSession(sessionId);
-      previousRevision =
-        projection.capabilities.find(
-          (snapshot) =>
-            snapshot.attachmentId === attachmentId &&
-            snapshot.adapterId === adapter.manifest.id &&
-            snapshot.profileId === profileId,
-        )?.revision ?? 0;
-    }
-    const revision = previousRevision + 1;
-    const observedAt = this.ports.clock.now();
-    const snapshot: SessionCapabilitySnapshot = {
-      id: this.#id("capabilities"),
-      adapterId: adapter.manifest.id,
-      attachmentId,
-      profileId,
-      revision,
-      observedAt,
-      expiresAt: observedAt + 60_000,
-      features: report.features,
-      // Exhaustive provider inventory belongs behind the Runtime Catalog
-      // Module, not in every immutable Session event and renderer snapshot.
-      // Keep only entries this attachment can actually offer now.
-      catalog: report.catalog.filter((item) => item.state !== "unavailable"),
-    };
-    const event = await this.ports.engine.observe({
-      id: this.#id("event"),
-      sessionId,
-      attachmentId,
-      occurredAt: observedAt,
-      provenance: adapterProvenance(adapter, venue),
-      kind: "capabilities.updated",
-      snapshot,
-    });
-    this.#capabilityRevisions.set(scope, revision);
-    await this.#publish([event]);
-    return snapshot;
   }
 
   #sink(
@@ -2508,9 +2320,8 @@ class DefaultSessionRuntime implements SessionRuntime {
    * This keeps the fold's *result* and the events behind it, and asks the
    * ledger only for what arrived after `throughSequence`.
    *
-   * The entry is served unchanged only when both of its inputs are unchanged:
-   * the ledger returned no event past the cursor, and the clock has not reached
-   * `staleAt`. Otherwise the log it holds is extended and re-folded from the
+   * The entry is served unchanged only when the ledger returned no event past
+   * the cursor. Otherwise the log it holds is extended and re-folded from the
    * top, so `projection` is never a partial fold and `projectSession` is never
    * asked to resume from one.
    *
@@ -2540,7 +2351,6 @@ class DefaultSessionRuntime implements SessionRuntime {
    * its cursor is behind — so the next read picks the difference back up.
    */
   async #history(sessionId: string): Promise<ProjectedHistory> {
-    const now = this.ports.clock.now();
     const cached = this.#histories.get(sessionId);
     if (!cached) {
       // The base row, not `getSession`'s projection: that would fold the whole
@@ -2549,17 +2359,17 @@ class DefaultSessionRuntime implements SessionRuntime {
       const known = await this.ports.engine.getBaseSession({ sessionId });
       if (!known) throw new SessionRuntimeNotFoundError(`Session ${sessionId} was not found`);
       const events = await this.#listEventsPaged({ sessionId });
-      return this.#keepHistory(sessionId, foldHistory(known, events, now));
+      return this.#keepHistory(sessionId, foldHistory(known, events));
     }
     const appended = await this.#listEventsPaged({
       sessionId,
       afterSequence: cached.throughSequence,
     });
-    if (appended.length === 0 && (cached.staleAt === null || now < cached.staleAt)) {
-      return this.#keepHistory(sessionId, cached);
-    }
-    const events = appended.length === 0 ? cached.events : [...cached.events, ...appended];
-    return this.#keepHistory(sessionId, foldHistory(cached.projection.session, events, now));
+    if (appended.length === 0) return this.#keepHistory(sessionId, cached);
+    return this.#keepHistory(
+      sessionId,
+      foldHistory(cached.projection.session, [...cached.events, ...appended]),
+    );
   }
 
   #keepHistory(sessionId: string, history: ProjectedHistory): ProjectedHistory {
@@ -2596,29 +2406,12 @@ export function createSessionRuntime(ports: SessionRuntimePorts): HostedSessionR
   return new DefaultSessionRuntime(ports);
 }
 
-function foldHistory(
-  session: Session,
-  events: readonly SessionEvent[],
-  now: number,
-): ProjectedHistory {
-  const projection = projectSession(session, events, now);
+function foldHistory(session: Session, events: readonly SessionEvent[]): ProjectedHistory {
   return {
-    projection,
+    projection: projectSession(session, events),
     events,
     throughSequence: events.at(-1)?.sequence ?? 0,
-    staleAt: earliestCapabilityExpiry(projection.capabilities),
   };
-}
-
-function earliestCapabilityExpiry(
-  capabilities: readonly SessionCapabilitySnapshot[],
-): number | null {
-  let earliest: number | null = null;
-  for (const snapshot of capabilities) {
-    if (snapshot.expiresAt === null) continue;
-    if (earliest === null || snapshot.expiresAt < earliest) earliest = snapshot.expiresAt;
-  }
-  return earliest;
 }
 
 function userProvenance(venue: SessionExecutionVenue | null): SessionEventProvenance {
@@ -2653,7 +2446,7 @@ function adapterIdentity(adapterId: string): AdapterIdentity {
 function wrapNativeBinding(
   profileId: string,
   directory: string,
-  probe: Extract<NativeProbeResult, { status: "available" }>,
+  runtime: NativeRuntimeIdentity,
   native: SessionNativeReference,
 ): SessionNativeReference {
   return {
@@ -2663,9 +2456,9 @@ function wrapNativeBinding(
       profileId,
       directory,
       runtime: {
-        path: probe.runtime.path,
-        version: probe.runtime.version,
-        fingerprint: probe.runtime.fingerprint,
+        path: runtime.path,
+        version: runtime.version,
+        fingerprint: runtime.fingerprint,
       },
       locator: native.detail,
     },
