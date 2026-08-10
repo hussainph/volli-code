@@ -44,9 +44,9 @@ type RendererSafeValue<Value> = Value extends readonly (infer Item)[]
   ? readonly RendererSafeValue<Item>[]
   : Value extends object
     ? {
-        [Key in keyof Value as Key extends "adapterId" | "profileId"
-          ? never
-          : Key]: RendererSafeValue<Value[Key]>;
+        [Key in keyof Value as Key extends "adapterId" ? never : Key]: RendererSafeValue<
+          Value[Key]
+        >;
       }
     : Value;
 
@@ -350,8 +350,6 @@ const commandSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("adapter.attach"),
-    adapterId: nonEmptyString,
-    profileId: nonEmptyString,
     continuity: z.enum(["fresh", "native_resume", "context_replay", "recreate"]),
   }),
   z.object({

@@ -35,19 +35,6 @@ interface ProjectRow {
    * read it.
    */
   next_ticket_number: number;
-  /**
-   * Migration 019 — `{[adapterId]: storedRuntimeRecord}` as JSON; NULL =
-   * inherit the global `app_state` record for every adapter.
-   *
-   * DEAD, and deliberately still here. The Runtime Catalog that was its only
-   * interpreter went with the singular Pi runtime, so nothing in the app writes
-   * this column or reads a record out of it any more; the accessors that did
-   * are gone. The column stays because migrations are append-only, SQLite
-   * `DROP COLUMN` is not safe on the versions we support, and a user's stored
-   * overrides are their data — `db/export.ts` still carries the raw string out
-   * so a rescue export loses nothing.
-   */
-  runtime_preferences: string | null;
 }
 
 /**

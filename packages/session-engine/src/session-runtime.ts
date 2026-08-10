@@ -23,7 +23,6 @@ import type {
   BindingHandle,
   DeliveryReceipt,
   HarnessObservation,
-  NativeAdapterRegistry,
   NativeAttachmentSpec,
   NativeHarnessAdapter,
   NativeMessageDelivery,
@@ -85,7 +84,8 @@ export interface SessionRuntimeIds {
 
 export interface SessionRuntimePorts {
   engine: SessionEngine;
-  adapters: NativeAdapterRegistry;
+  /** The one structured executor this runtime attaches. */
+  executor: NativeHarnessAdapter;
   artifacts: TranscriptArtifactStore;
   locations: SessionLocationResolver;
   clock: SessionRuntimeClock;
@@ -101,12 +101,7 @@ export type SessionClientCommand =
       ticketId: string | null;
       title: string | null;
     }
-  | {
-      kind: "adapter.attach";
-      adapterId: string;
-      profileId: string;
-      continuity: SessionAttachmentContinuity;
-    }
+  | { kind: "adapter.attach"; continuity: SessionAttachmentContinuity }
   | {
       kind: "message.submit";
       message: UIMessage;
@@ -158,17 +153,16 @@ type DeliveryResultKind =
   | "model.selected"
   | "interaction.resolved";
 type AttachFailureAttentionKind = "configuration_invalid" | "adapter_unrecoverable";
-type FailAttachInput = {
+interface FailAttachInput {
   request: AttachCommandRequest;
   submitted: SubmitSessionCommandResult;
+  adapter: NativeHarnessAdapter;
   location: SessionLocation;
   code: string;
   detail: string;
   attachmentId?: string;
-} & (
-  | { adapter: null; attentionKind?: never }
-  | { adapter: NativeHarnessAdapter; attentionKind?: AttachFailureAttentionKind }
-);
+  attentionKind?: AttachFailureAttentionKind;
+}
 type ResolveInteractionCommandRequest = ExistingSessionCommandRequest & {
   command: Extract<SessionClientCommand, { kind: "interaction.resolve" }>;
 };
@@ -298,7 +292,7 @@ interface BindingRecord {
   reconcileInFlight: Promise<void> | null;
 }
 
-type AdapterIdentity = Pick<NativeHarnessAdapter, "manifest">;
+type AdapterIdentity = Pick<NativeHarnessAdapter, "id" | "adapterVersion">;
 
 interface InFlightCommand {
   signature: string;
@@ -609,12 +603,16 @@ class DefaultSessionRuntime implements SessionRuntime {
     location: SessionLocation,
     existed: boolean,
   ): Promise<SessionRuntimeCommandResult> {
+    const adapter = this.ports.executor;
     const submitted = await this.ports.engine.submit({
       commandId: request.commandId,
       sessionId: request.sessionId,
+      // The route is this runtime's own executor, never a client-supplied id.
+      // The Session Engine holds the route and the attachment to the same
+      // adapter id, so anything else would be a conflict thrown mid-attach.
       intent: {
         kind: "executor.start",
-        adapterId: request.command.adapterId,
+        adapterId: adapter.id,
         continuity: request.command.continuity,
       },
       provenance: userProvenance(location.venue),
@@ -623,30 +621,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     if (submitted.receipt && submitted.receipt.status !== "unreconciled")
       return this.#result(request.sessionId, submitted.command, submitted.receipt);
 
-    const adapter = this.ports.adapters.get(request.command.adapterId);
-    if (!adapter) {
-      return this.#failAttach({
-        request,
-        submitted,
-        adapter: null,
-        location,
-        code: "adapter_missing",
-        detail: `Native adapter ${request.command.adapterId} was not found`,
-      });
-    }
     if (existed) return this.#recoverReplayedAttach(request, submitted, adapter, location);
-
-    const profile = adapter.manifest.profiles.find(({ id }) => id === request.command.profileId);
-    if (!profile || profile.transport !== "native") {
-      return this.#failAttach({
-        request,
-        submitted,
-        adapter,
-        location,
-        code: "profile_unavailable",
-        detail: `Native profile ${request.command.profileId} is unavailable`,
-      });
-    }
 
     // The directory has to be real before it is bound: an adapter handed one
     // that is not there fails per prompt, deep inside the harness, wearing
@@ -669,7 +644,6 @@ class DefaultSessionRuntime implements SessionRuntime {
     const spec: NativeAttachmentSpec = {
       sessionId: request.sessionId,
       attachmentId,
-      profileId: request.command.profileId,
       directory: site.directory,
       continuity: request.command.continuity,
       native: null,
@@ -700,7 +674,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       const attachment: SessionAttachment = {
         id: attachmentId,
         sessionId: request.sessionId,
-        adapterId: adapter.manifest.id,
+        adapterId: adapter.id,
         venue: location.venue,
         continuity: request.command.continuity,
         // The directory that was PREPARED, never the one that was resolved. On a
@@ -708,12 +682,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         // the main checkout — writing that down would hand every later resume
         // the fallback this attach exists to refuse (#38), because
         // `#rehydrateBinding` trusts the persisted directory over a fresh read.
-        native: wrapNativeBinding(
-          request.command.profileId,
-          site.directory,
-          profile.runtime,
-          handle.native,
-        ),
+        native: wrapNativeBinding(site.directory, adapter.runtime, handle.native),
       };
       const opened = await this.ports.engine.observe({
         id: this.#id("event"),
@@ -849,16 +818,13 @@ class DefaultSessionRuntime implements SessionRuntime {
       id: this.#id("event"),
       sessionId: input.request.sessionId,
       occurredAt: this.ports.clock.now(),
-      provenance: adapterProvenance(
-        input.adapter ?? adapterIdentity(input.request.command.adapterId),
-        input.location.venue,
-      ),
+      provenance: adapterProvenance(input.adapter, input.location.venue),
       commandId: input.request.commandId,
       kind: "attachment.failed",
       attachment: {
         id: attachmentId,
         sessionId: input.request.sessionId,
-        adapterId: input.adapter?.manifest.id ?? input.request.command.adapterId,
+        adapterId: input.adapter.id,
         venue: input.location.venue,
         continuity: input.request.command.continuity,
         native: null,
@@ -877,8 +843,7 @@ class DefaultSessionRuntime implements SessionRuntime {
             attention: {
               id: freshAttachAttentionId(
                 input.request.sessionId,
-                input.adapter.manifest.id,
-                input.request.command.profileId,
+                input.adapter.id,
                 input.attentionKind,
               ),
               // The attachment attempt is already a closed fact. This Attention
@@ -894,7 +859,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     const receipt = await this.#recordDelivery(
       input.request.sessionId,
       null,
-      input.adapter ?? adapterIdentity(input.request.command.adapterId),
+      input.adapter,
       input.location.venue,
       {
         commandId: input.request.commandId,
@@ -1083,7 +1048,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     } catch (error) {
       if (this.#closed) throw error;
       const detail = `Retry recovery failed: ${errorMessage(error)}`;
-      const adapter = adapterIdentity(attachment.adapterId);
+      const adapter = this.#adapterIdentityFor(attachment.adapterId);
       const recoveryAttentionId = `${attachmentId}:recovery`;
       if (!projection.attention.active.some(({ id }) => id === recoveryAttentionId)) {
         const attention = await this.ports.engine.observe({
@@ -1511,7 +1476,10 @@ class DefaultSessionRuntime implements SessionRuntime {
           sessionId: input.sessionId,
           attachmentId: input.attachmentId,
           occurredAt: this.ports.clock.now(),
-          provenance: adapterProvenance(adapterIdentity(attachment.adapterId), location.venue),
+          provenance: adapterProvenance(
+            this.#adapterIdentityFor(attachment.adapterId),
+            location.venue,
+          ),
           kind: "attention.raised",
           attention: {
             id: recoveryAttentionId,
@@ -1536,7 +1504,10 @@ class DefaultSessionRuntime implements SessionRuntime {
         sessionId: input.sessionId,
         attachmentId: input.attachmentId,
         occurredAt: this.ports.clock.now(),
-        provenance: adapterProvenance(adapterIdentity(attachment.adapterId), location.venue),
+        provenance: adapterProvenance(
+          this.#adapterIdentityFor(attachment.adapterId),
+          location.venue,
+        ),
         kind: "attention.cleared",
         attentionId: recoveryAttentionId,
       });
@@ -1597,12 +1568,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       return;
     }
     const base = {
-      id: nativeObservationId(
-        adapter.manifest.id,
-        spec.sessionId,
-        spec.attachmentId,
-        observation.id,
-      ),
+      id: nativeObservationId(adapter.id, spec.sessionId, spec.attachmentId, observation.id),
       sessionId: spec.sessionId,
       attachmentId: spec.attachmentId,
       occurredAt: observation.occurredAt,
@@ -1876,7 +1842,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       throw new SessionRuntimeNotFoundError(`Attachment ${attachmentId} is not open`);
     }
     const binding = unwrapNativeBinding(attachment.native);
-    const adapter = this.#requireAdapter(attachment.adapterId);
+    const adapter = this.#requireExecutorFor(attachment.adapterId);
     // The other half of the same guarantee, for the attach that never runs
     // `prepare`: a binding rebuilt from history — a replayed attach command, or
     // the first command after a relaunch — takes its directory from the durable
@@ -1892,7 +1858,6 @@ class DefaultSessionRuntime implements SessionRuntime {
     const spec: NativeAttachmentSpec = {
       sessionId: projection.session.id,
       attachmentId,
-      profileId: binding.profileId,
       directory,
       // A persisted binding is always a resume operation. A malformed empty
       // provider id fails honestly in the adapter; it must never create fresh.
@@ -2023,7 +1988,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         ...adapterProvenance(adapter, venue),
         source: {
           kind: "adapter",
-          id: adapter.manifest.id,
+          id: adapter.id,
           detail: receipt.native?.detail ?? null,
         },
       },
@@ -2070,8 +2035,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       );
       return null;
     } catch (error) {
-      const adapter =
-        this.ports.adapters.get(attachment.adapterId) ?? adapterIdentity(attachment.adapterId);
+      const adapter = this.#adapterIdentityFor(attachment.adapterId);
       return this.#recordDelivery(
         sessionId,
         attachmentId,
@@ -2397,11 +2361,25 @@ class DefaultSessionRuntime implements SessionRuntime {
     return history;
   }
 
-  #requireAdapter(adapterId: string): NativeHarnessAdapter {
-    const adapter = this.ports.adapters.get(adapterId);
-    if (!adapter)
+  /**
+   * The executor an attachment recorded, or a refusal.
+   *
+   * A durable attachment names the adapter that opened it, and history outlives
+   * the executor that wrote it: a Session bound under a runtime this build no
+   * longer ships cannot be rehydrated by the one it does. Refusing is what turns
+   * that into an honest recovery failure rather than a live binding pointed at
+   * someone else's native identity.
+   */
+  /** How a durable attachment's adapter is stamped on a fact, whoever wrote it. */
+  #adapterIdentityFor(adapterId: string): AdapterIdentity {
+    return adapterId === this.ports.executor.id ? this.ports.executor : adapterIdentity(adapterId);
+  }
+
+  #requireExecutorFor(adapterId: string): NativeHarnessAdapter {
+    if (adapterId !== this.ports.executor.id) {
       throw new SessionRuntimeNotFoundError(`Native adapter ${adapterId} was not found`);
-    return adapter;
+    }
+    return this.ports.executor;
   }
 
   #commandExists(projection: SessionProjection, commandId: string): boolean {
@@ -2440,26 +2418,19 @@ function adapterProvenance(
   return {
     source: {
       kind: "adapter",
-      id: adapter.manifest.id,
-      detail: { adapterVersion: adapter.manifest.adapterVersion },
+      id: adapter.id,
+      detail: { adapterVersion: adapter.adapterVersion },
     },
     venue,
   };
 }
 
+/** Names an adapter this runtime does not host — a historical attachment's own id. */
 function adapterIdentity(adapterId: string): AdapterIdentity {
-  return {
-    manifest: {
-      id: adapterId,
-      displayName: adapterId,
-      adapterVersion: "unavailable",
-      profiles: [],
-    },
-  };
+  return { id: adapterId, adapterVersion: "unavailable" };
 }
 
 function wrapNativeBinding(
-  profileId: string,
   directory: string,
   runtime: NativeRuntimeIdentity,
   native: SessionNativeReference,
@@ -2468,7 +2439,6 @@ function wrapNativeBinding(
     id: native.id,
     detail: {
       kind: "volli.native-binding.v1",
-      profileId,
       directory,
       runtime: {
         path: runtime.path,
@@ -2480,8 +2450,16 @@ function wrapNativeBinding(
   };
 }
 
+/**
+ * Reads a persisted binding envelope, at the version every build has written.
+ *
+ * Tolerant of a `profileId` the writer no longer emits: rows written before
+ * profiles were deleted still carry one, they still rehydrate on every app
+ * start, and refusing them would strand every Session that has ever attached.
+ * The envelope is not versioned past v1 for the same reason — nothing about
+ * what a reader needs from it changed.
+ */
 function unwrapNativeBinding(reference: SessionNativeReference | null): {
-  profileId: string;
   directory: string | null;
   native: SessionNativeReference;
 } {
@@ -2489,15 +2467,10 @@ function unwrapNativeBinding(reference: SessionNativeReference | null): {
     throw new SessionRuntimeConflictError("Attachment has no native binding metadata");
   }
   const detail = reference.detail as { readonly [key: string]: SessionNativeDetail };
-  if (
-    typeof detail !== "object" ||
-    detail.kind !== "volli.native-binding.v1" ||
-    typeof detail.profileId !== "string"
-  ) {
+  if (typeof detail !== "object" || detail.kind !== "volli.native-binding.v1") {
     throw new SessionRuntimeConflictError("Attachment has invalid native binding metadata");
   }
   return {
-    profileId: detail.profileId,
     directory: typeof detail.directory === "string" ? detail.directory : null,
     native: { id: reference.id, detail: detail.locator ?? null },
   };
@@ -2525,13 +2498,25 @@ function resultKindFor(command: SessionCommand): DeliveryResultKind {
   }
 }
 
+/**
+ * The durable id of an attach-failure Attention, deduped by exact string match.
+ *
+ * `"native"` is a frozen durable value, not a live parameter: it was the profile
+ * id of every structured attach before profiles were deleted. An Attention
+ * raised under the old derivation and still on disk would not be recognised as
+ * the same one under a shorter id, and `adapter_unrecoverable` is cleared by
+ * nothing — a second copy would sit beside the first for good.
+ */
+const FROZEN_ATTACH_ATTENTION_PROFILE_SEGMENT = "native";
+
 function freshAttachAttentionId(
   sessionId: string,
   adapterId: string,
-  profileId: string,
   kind: AttachFailureAttentionKind,
 ): string {
-  return ["attach", sessionId, adapterId, profileId, kind].map(encodeURIComponent).join(":");
+  return ["attach", sessionId, adapterId, FROZEN_ATTACH_ATTENTION_PROFILE_SEGMENT, kind]
+    .map(encodeURIComponent)
+    .join(":");
 }
 
 function nativeObservationId(

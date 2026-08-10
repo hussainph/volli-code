@@ -912,12 +912,7 @@ describe("Session tRPC router", () => {
       caller.session.command({
         commandId: "forged-attach",
         sessionId: "session-1",
-        command: {
-          kind: "adapter.attach",
-          adapterId: "pi",
-          profileId: "native",
-          continuity: "fresh",
-        },
+        command: { kind: "adapter.attach", continuity: "fresh" },
       }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(fixture.calls.command).toEqual([]);

@@ -48,7 +48,7 @@ import type {
   HarnessObservation,
   NativeAttachmentSpec,
   NativeHarnessAdapter,
-  NativeHarnessManifest,
+  NativeRuntimeIdentity,
   ObservationSink,
   Reconciliation,
   ReleaseReason,
@@ -81,8 +81,6 @@ import type { UIMessage } from "ai";
 /** The one adapter id. Pi is the structured product's single target executor. */
 export const PI_ADAPTER_ID = "pi";
 
-const PI_PROFILE_ID = "native";
-
 /** The one product tool identity for every runtime activity. */
 const ACTIVITY_TOOL_NAME = "volli.activity";
 
@@ -90,25 +88,18 @@ const ACTIVITY_TOOL_NAME = "volli.activity";
 const PI_RUNTIME_PACKAGE = "@earendil-works/pi-agent-core";
 const PI_RUNTIME_VERSION = "0.84.1";
 
-const PI_MANIFEST: NativeHarnessManifest = {
-  id: PI_ADAPTER_ID,
-  displayName: "Pi",
-  adapterVersion: "0.0.1",
-  profiles: [
-    {
-      id: PI_PROFILE_ID,
-      label: "Native",
-      transport: "native",
-      // Static, because there is nothing to interrogate: Pi is a library this
-      // process already holds, not a binary on a PATH that may be missing,
-      // stale or untrusted.
-      runtime: {
-        path: PI_RUNTIME_PACKAGE,
-        version: PI_RUNTIME_VERSION,
-        fingerprint: `npm:${PI_RUNTIME_PACKAGE}@${PI_RUNTIME_VERSION}`,
-      },
-    },
-  ],
+const PI_ADAPTER_VERSION = "0.0.1";
+
+/**
+ * Static, because there is nothing to interrogate: Pi is a library this process
+ * already holds, not a binary on a PATH that may be missing, stale or untrusted.
+ * These three strings are recorded in every attachment's durable binding
+ * envelope, so they must stay exactly what past builds wrote.
+ */
+const PI_RUNTIME_IDENTITY: NativeRuntimeIdentity = {
+  path: PI_RUNTIME_PACKAGE,
+  version: PI_RUNTIME_VERSION,
+  fingerprint: `npm:${PI_RUNTIME_PACKAGE}@${PI_RUNTIME_VERSION}`,
 };
 
 /** The explicitly contained coding tools this slice loads. */
@@ -285,10 +276,11 @@ function piNativeAdapter(
   now: () => number,
 ): NativeHarnessAdapter {
   return {
-    manifest: PI_MANIFEST,
+    id: PI_ADAPTER_ID,
+    adapterVersion: PI_ADAPTER_VERSION,
+    runtime: PI_RUNTIME_IDENTITY,
 
     async attach(spec: NativeAttachmentSpec, sink: ObservationSink): Promise<BindingHandle> {
-      if (spec.profileId !== PI_PROFILE_ID) throw new Error(`Unknown Pi profile ${spec.profileId}`);
       let recovery: RuntimeRecoveryRef | undefined;
       try {
         recovery = piRecoveryRef(spec);

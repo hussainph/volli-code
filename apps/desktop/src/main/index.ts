@@ -479,7 +479,7 @@ app.whenReady().then(async () => {
       ? createDesktopSessionRuntime({
           db: dbHandle.db,
           transcriptDirectory: join(app.getPath("userData"), "session-transcripts"),
-          adapters: [piRuntimeHost.adapter],
+          executor: piRuntimeHost.adapter,
           sessionEngine,
         })
       : null;

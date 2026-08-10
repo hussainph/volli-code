@@ -731,6 +731,18 @@ now lives in `@volli/shared` (PR #205) so `@volli/session-engine`, which the
 renderer imports and which therefore may never take a Node dependency, can name
 the type it holds.
 
+**The lab's half of that argument is gone (2026-08-10, same session).** The UI
+lab became a frontend-only prototyping surface and is no longer wired to the
+Session ledger: the scripted harness, the lab's Session RPC server, the scenario
+vocabulary and the three scratches that drove them were deleted with the
+registry. `HarnessObservation` therefore has one producer and one consumer, and
+the "a state that cannot be written here is a state a harness cannot report"
+evidence no longer exists. The two vocabularies still stand on the rest of the
+correction — the altitude crossing, the frozen `session_events.id`, the
+two-store attention migration and the state-free replay path, none of which the
+lab was load-bearing for — but anyone re-opening candidate 1's first half should
+know that its sharpest argument was retired rather than answered.
+
 ## Part III — In-app Model Access sign-in
 
 ### Product decision

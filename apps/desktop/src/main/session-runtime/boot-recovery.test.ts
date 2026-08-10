@@ -83,30 +83,30 @@ describe("closeStaleAttachments", () => {
     ]);
   });
 
-  // The structured OpenCode runtime is gone, so nothing can answer for that
-  // native identity again: left open, it projects live forever and a lazy
-  // rehydration throws instead of reconnecting.
-  it("retires an old open OpenCode attachment so it becomes history", async () => {
-    const target = recorder({
-      "project-1": [
-        session("session-1", [attachment({ id: "opencode-1", adapterId: "opencode" })]),
-      ],
-    });
-
-    await expect(sweep(target, ["project-1"]).run).resolves.toBe(1);
-    expect(target.observed).toMatchObject([
-      { attachmentId: "opencode-1", kind: "attachment.closed", outcome: "interrupted" },
-    ]);
-  });
-
-  it("leaves every other adapter alone, including the live structured executor", async () => {
+  // Nothing can answer for a departed runtime's native identity again: left
+  // open, it projects live forever and a lazy rehydration refuses it instead of
+  // reconnecting. The rule is the adapter id, not a list of names — a build
+  // that retires another executor gets the same sweep without editing it.
+  it("retires an open attachment of any runtime this build no longer hosts", async () => {
     const target = recorder({
       "project-1": [
         session("session-1", [
-          attachment({ id: "pi-1", adapterId: "pi" }),
-          attachment({ id: "lab-1", adapterId: "lab-scenario" }),
+          attachment({ id: "opencode-1", adapterId: "opencode" }),
+          attachment({ id: "retired-1", adapterId: "some-future-retiree" }),
         ]),
       ],
+    });
+
+    await expect(sweep(target, ["project-1"]).run).resolves.toBe(2);
+    expect(target.observed).toMatchObject([
+      { attachmentId: "opencode-1", kind: "attachment.closed", outcome: "interrupted" },
+      { attachmentId: "retired-1", kind: "attachment.closed", outcome: "interrupted" },
+    ]);
+  });
+
+  it("leaves the one structured executor alone, because it owns its own recovery", async () => {
+    const target = recorder({
+      "project-1": [session("session-1", [attachment({ id: "pi-1", adapterId: "pi" })])],
     });
 
     await expect(sweep(target, ["project-1"]).run).resolves.toBe(0);

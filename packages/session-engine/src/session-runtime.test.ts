@@ -4,7 +4,6 @@ import type { UIMessage } from "ai";
 import {
   createInMemorySessionLedger,
   createInMemoryTranscriptArtifactStore,
-  createNativeAdapterRegistry,
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamOverlay,
@@ -67,19 +66,9 @@ class Gate {
 }
 
 class FakeAdapter implements NativeHarnessAdapter {
-  readonly manifest = {
-    id: "fake",
-    displayName: "Fake",
-    adapterVersion: "1.0.0",
-    profiles: [
-      {
-        id: "native",
-        label: "Native",
-        transport: "native" as const,
-        runtime: { path: "/trusted/fake", version: "1.0.0", fingerprint: "sha256:fake" },
-      },
-    ],
-  };
+  readonly id = "fake";
+  readonly adapterVersion = "1.0.0";
+  readonly runtime = { path: "/trusted/fake", version: "1.0.0", fingerprint: "sha256:fake" };
   attaches = 0;
   dispatches = 0;
   reconciles = 0;
@@ -188,7 +177,7 @@ function composition(
     adapter,
     runtime: createSessionRuntime({
       engine,
-      adapters: createNativeAdapterRegistry([adapter]),
+      executor: adapter,
       artifacts: options.artifacts ?? createInMemoryTranscriptArtifactStore(),
       locations: options.locations ?? fixedLocation("/projects/fake"),
       clock,
@@ -211,12 +200,7 @@ async function createAndAttach(runtime: SessionRuntime) {
   await runtime.command({
     commandId: "command-attach",
     sessionId: created.sessionId,
-    command: {
-      kind: "adapter.attach",
-      adapterId: "fake",
-      profileId: "native",
-      continuity: "fresh",
-    },
+    command: { kind: "adapter.attach", continuity: "fresh" },
   });
   return created.sessionId;
 }
@@ -778,7 +762,6 @@ describe("SessionRuntime native adapter contract", () => {
         id: "native-session-1",
         detail: {
           kind: "volli.native-binding.v1",
-          profileId: "native",
           runtime: { path: "/trusted/fake", version: "1.0.0", fingerprint: "sha256:fake" },
         },
       },
@@ -976,27 +959,7 @@ describe("SessionRuntime native adapter contract", () => {
     expect(sequences).toEqual([...new Set(sequences)].toSorted((left, right) => left - right));
   });
 
-  it("rejects unavailable profiles and failed native attachments as durable outcomes", async () => {
-    const missing = composition();
-    const missingSession = await missing.runtime.command({
-      commandId: "missing-create",
-      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
-    });
-    const missingResult = await missing.runtime.command({
-      commandId: "missing-attach",
-      sessionId: missingSession.sessionId,
-      command: {
-        kind: "adapter.attach",
-        adapterId: "fake",
-        profileId: "terminal",
-        continuity: "fresh",
-      },
-    });
-    expect(missingResult.receipt).toMatchObject({
-      status: "rejected",
-      code: "profile_unavailable",
-    });
-
+  it("records failed native attachments as durable outcomes", async () => {
     const misconfigured = composition();
     const misconfiguredSession = await misconfigured.runtime.command({
       commandId: "misconfigured-create",
@@ -1010,12 +973,7 @@ describe("SessionRuntime native adapter contract", () => {
     const misconfiguredResult = await misconfigured.runtime.command({
       commandId: "misconfigured-attach",
       sessionId: misconfiguredSession.sessionId,
-      command: {
-        kind: "adapter.attach",
-        adapterId: "fake",
-        profileId: "native",
-        continuity: "fresh",
-      },
+      command: { kind: "adapter.attach", continuity: "fresh" },
     });
     expect(misconfiguredResult.receipt).toMatchObject({
       status: "rejected",
@@ -1036,12 +994,7 @@ describe("SessionRuntime native adapter contract", () => {
     await misconfigured.runtime.command({
       commandId: "misconfigured-attach-again",
       sessionId: misconfiguredSession.sessionId,
-      command: {
-        kind: "adapter.attach",
-        adapterId: "fake",
-        profileId: "native",
-        continuity: "fresh",
-      },
+      command: { kind: "adapter.attach", continuity: "fresh" },
     });
     const repeatedConfigurationAttention = (
       await misconfigured.runtime.snapshot({ sessionId: misconfiguredSession.sessionId })
@@ -1056,12 +1009,7 @@ describe("SessionRuntime native adapter contract", () => {
     await misconfigured.runtime.command({
       commandId: "misconfigured-retry",
       sessionId: misconfiguredSession.sessionId,
-      command: {
-        kind: "adapter.attach",
-        adapterId: "fake",
-        profileId: "native",
-        continuity: "fresh",
-      },
+      command: { kind: "adapter.attach", continuity: "fresh" },
     });
     expect(
       (await misconfigured.runtime.snapshot({ sessionId: misconfiguredSession.sessionId }))
@@ -1078,12 +1026,7 @@ describe("SessionRuntime native adapter contract", () => {
       failed.runtime.command({
         commandId: "failed-attach",
         sessionId: failedSession.sessionId,
-        command: {
-          kind: "adapter.attach",
-          adapterId: "fake",
-          profileId: "native",
-          continuity: "fresh",
-        },
+        command: { kind: "adapter.attach", continuity: "fresh" },
       }),
     ).resolves.toMatchObject({ receipt: { status: "rejected", code: "attach_failed" } });
 
@@ -1097,12 +1040,7 @@ describe("SessionRuntime native adapter contract", () => {
       plainFailure.runtime.command({
         commandId: "plain-failure-attach",
         sessionId: plainSession.sessionId,
-        command: {
-          kind: "adapter.attach",
-          adapterId: "fake",
-          profileId: "native",
-          continuity: "fresh",
-        },
+        command: { kind: "adapter.attach", continuity: "fresh" },
       }),
     ).resolves.toMatchObject({ receipt: { detail: "socket disappeared" } });
   });
@@ -1135,12 +1073,7 @@ describe("SessionRuntime native adapter contract", () => {
       runtime.command({
         commandId: "unprepared-attach",
         sessionId: session.sessionId,
-        command: {
-          kind: "adapter.attach",
-          adapterId: "fake",
-          profileId: "native",
-          continuity: "fresh",
-        },
+        command: { kind: "adapter.attach", continuity: "fresh" },
       }),
     ).resolves.toMatchObject({
       receipt: { status: "rejected", code: "location_unavailable", detail },
@@ -1998,33 +1931,11 @@ describe("SessionRuntime native adapter contract", () => {
     await expect(runtime.snapshot({ sessionId })).rejects.toThrow("Session runtime is closed");
   });
 
-  it("reports missing sessions, adapters, bindings, and invalid persisted binding metadata explicitly", async () => {
+  it("reports missing sessions, bindings, and invalid persisted binding metadata explicitly", async () => {
     const { runtime } = composition();
     await expect(runtime.snapshot({ sessionId: "missing" })).rejects.toBeInstanceOf(
       SessionRuntimeNotFoundError,
     );
-    const created = await runtime.command({
-      commandId: "metadata-create",
-      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
-    });
-    await expect(
-      runtime.command({
-        commandId: "unknown-adapter",
-        sessionId: created.sessionId,
-        command: {
-          kind: "adapter.attach",
-          adapterId: "missing",
-          profileId: "native",
-          continuity: "fresh",
-        },
-      }),
-    ).resolves.toMatchObject({
-      receipt: {
-        commandId: "unknown-adapter",
-        status: "rejected",
-        code: "adapter_missing",
-      },
-    });
     const malformed = composition();
     const createdMalformed = await malformed.runtime.command({
       commandId: "malformed-create",
@@ -2087,12 +1998,7 @@ describe("SessionRuntime native adapter contract", () => {
     const replayedAttach = await first.runtime.command({
       commandId: "command-attach",
       sessionId,
-      command: {
-        kind: "adapter.attach",
-        adapterId: "fake",
-        profileId: "native",
-        continuity: "fresh",
-      },
+      command: { kind: "adapter.attach", continuity: "fresh" },
     });
     expect(replayedAttach.receipt).toMatchObject({ status: "accepted" });
 
@@ -2177,12 +2083,7 @@ describe("SessionRuntime native adapter contract", () => {
       runtime.command({
         commandId: "rollback-attach",
         sessionId: created.sessionId,
-        command: {
-          kind: "adapter.attach",
-          adapterId: "fake",
-          profileId: "native",
-          continuity: "fresh",
-        },
+        command: { kind: "adapter.attach", continuity: "fresh" },
       }),
     ).rejects.toThrow("ledger unavailable");
     await adapter.emit({
@@ -2549,12 +2450,7 @@ describe("SessionRuntime native adapter contract", () => {
       failure.runtime.command({
         commandId: "late-failure-attach",
         sessionId: failureSession.sessionId,
-        command: {
-          kind: "adapter.attach",
-          adapterId: "fake",
-          profileId: "native",
-          continuity: "fresh",
-        },
+        command: { kind: "adapter.attach", continuity: "fresh" },
       }),
     ).rejects.toThrow("receipt unavailable");
     expect(failure.adapter.releaseReasons).toEqual([]);
@@ -2618,6 +2514,65 @@ describe("SessionRuntime native adapter contract", () => {
       }),
     ).resolves.toBeUndefined();
     expect(restored.adapter.reconciles).toBe(1);
+  });
+
+  /**
+   * The envelope is written once and read on every app start, so both shapes
+   * are live at the same time on a machine that has run more than one build.
+   */
+  it("writes the binding envelope without a profile and reads back both shapes", async () => {
+    const fresh = composition();
+    const sessionId = await createAndAttach(fresh.runtime);
+    const written = (await fresh.runtime.snapshot({ sessionId })).projection.liveExecutor!.native!
+      .detail as Record<string, unknown>;
+    expect(written).not.toHaveProperty("profileId");
+    expect(written).toMatchObject({
+      kind: "volli.native-binding.v1",
+      directory: "/projects/fake",
+    });
+
+    const shapes = {
+      "written before profiles were deleted": {
+        kind: "volli.native-binding.v1",
+        profileId: "native",
+        directory: "/projects/fake",
+        locator: { provider: "fake" },
+      },
+      "written by this build": {
+        kind: "volli.native-binding.v1",
+        directory: "/projects/fake",
+        locator: { provider: "fake" },
+      },
+    } as const;
+    for (const [label, detail] of Object.entries(shapes)) {
+      const persisted = composition();
+      const created = await persisted.runtime.command({
+        commandId: `envelope-create-${label}`,
+        command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+      });
+      await persisted.engine.observe({
+        id: `envelope-attachment-${label}`,
+        sessionId: created.sessionId,
+        occurredAt: 1000,
+        provenance: { source: { kind: "adapter", id: "fake", detail: null }, venue },
+        kind: "attachment.opened",
+        attachment: {
+          id: `envelope-attachment-${label}`,
+          sessionId: created.sessionId,
+          adapterId: "fake",
+          venue,
+          continuity: "native_resume",
+          native: { id: `envelope-native-${label}`, detail },
+        },
+      });
+      await expect(
+        persisted.runtime.reconcile({
+          sessionId: created.sessionId,
+          attachmentId: `envelope-attachment-${label}`,
+        }),
+      ).resolves.toBeUndefined();
+      expect(persisted.adapter.reconciles).toBe(1);
+    }
   });
 
   it("publishes an externally recovered receipt even when its command event is absent from the stream", async () => {
@@ -3107,12 +3062,7 @@ describe("SessionRuntime transient transcript overlay", () => {
       await runtime.command({
         commandId: `overlay-attach-${index}`,
         sessionId: created.sessionId,
-        command: {
-          kind: "adapter.attach",
-          adapterId: "fake",
-          profileId: "native",
-          continuity: "fresh",
-        },
+        command: { kind: "adapter.attach", continuity: "fresh" },
       });
       await adapter.emit(deltaObservation(`delta-${index}`, resetDelta(`Session ${index}`)));
       sessions.push(created.sessionId);

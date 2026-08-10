@@ -5,6 +5,7 @@ import type {
 } from "@volli/session-engine";
 import type { SessionCommand } from "@volli/shared";
 
+import { STRUCTURED_ADAPTER_ID } from "./structured-sessions";
 import { createTicketSessions } from "./ticket-sessions";
 
 function result(
@@ -66,7 +67,7 @@ function intentFor(request: SessionRuntimeCommandRequest): SessionCommand["inten
   if (request.command.kind === "adapter.attach") {
     return {
       kind: "executor.start",
-      adapterId: request.command.adapterId,
+      adapterId: STRUCTURED_ADAPTER_ID,
       continuity: request.command.continuity,
     };
   }

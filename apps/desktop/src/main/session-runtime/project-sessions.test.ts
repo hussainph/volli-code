@@ -6,6 +6,7 @@ import type {
 import type { ModelSelection, SessionCommand } from "@volli/shared";
 
 import { createProjectSessions, type ProjectSessionsOptions } from "./project-sessions";
+import { STRUCTURED_ADAPTER_ID } from "./structured-sessions";
 
 const MODEL: ModelSelection = {
   providerId: "openai-codex",
@@ -297,7 +298,7 @@ function intentFor(request: SessionRuntimeCommandRequest): SessionCommand["inten
   if (request.command.kind === "adapter.attach") {
     return {
       kind: "executor.start",
-      adapterId: request.command.adapterId,
+      adapterId: STRUCTURED_ADAPTER_ID,
       continuity: request.command.continuity,
     };
   }

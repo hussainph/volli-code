@@ -2,15 +2,9 @@ import "vite-plus/test/config";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
-import type { Plugin, ViteDevServer } from "vite";
 import { defineConfig } from "vite-plus";
 
-import { LAB_SESSION_RPC_PATH } from "./src/lab-session-rpc-path";
 import { RENDERER_DEV_PORT } from "./scripts/dev-constants.mjs";
-
-const labSessionRpcModule = fileURLToPath(
-  new URL("./src/main/lab/session-rpc.ts", import.meta.url),
-);
 
 // Launch Electron after a pack only when BOTH hold:
 //  1. dev.mjs opted in by injecting VOLLI_DESKTOP_DEV=1 into the pack child's
@@ -54,7 +48,7 @@ export default defineConfig(({ mode }) => ({
   // CRITICAL: assets stay relative so the built index and worker chunks resolve
   // beneath volli-app://bundle/ in packaged builds. Plain Vite defaults to "/".
   base: "./",
-  plugins: [tailwindcss(), react(), ...(mode === "lab" ? [labSessionRpcPlugin()] : [])],
+  plugins: [tailwindcss(), react()],
   resolve: {
     alias: {
       "@ai-elements": fileURLToPath(new URL("./src/components/ai-elements", import.meta.url)),
@@ -240,65 +234,3 @@ export default defineConfig(({ mode }) => ({
     },
   },
 }));
-
-function labSessionRpcPlugin(): Plugin {
-  return {
-    name: "volli:lab-session-rpc",
-    configureServer(server: ViteDevServer) {
-      let lab: Promise<
-        InstanceType<typeof import("./src/main/lab/session-rpc").LabSessionRpcServer>
-      > | null = null;
-      let labInstance: InstanceType<
-        typeof import("./src/main/lab/session-rpc").LabSessionRpcServer
-      > | null = null;
-      const getLab = (): Promise<
-        InstanceType<typeof import("./src/main/lab/session-rpc").LabSessionRpcServer>
-      > => {
-        let pending = lab;
-        if (pending === null) {
-          pending = server.ssrLoadModule(labSessionRpcModule).then(({ LabSessionRpcServer }) => {
-            const instance = new LabSessionRpcServer();
-            labInstance = instance;
-            return instance;
-          });
-          lab = pending;
-        }
-        return pending;
-      };
-      server.middlewares.use(LAB_SESSION_RPC_PATH, (req, res) => {
-        void getLab().then(
-          (instance) => instance.handle(req, res),
-          (error: unknown) => {
-            res.statusCode = 500;
-            res.end(error instanceof Error ? error.message : "Lab Session RPC failed to load");
-          },
-        );
-      });
-      const terminationSignals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
-      const terminationHandlers = new Map<NodeJS.Signals, () => void>();
-      const close = () => {
-        for (const [signal, handler] of terminationHandlers) process.off(signal, handler);
-        // Vite does not await an HTTP `close` listener. Reap the already-loaded
-        // backend synchronously before its process can finish handling SIGINT.
-        if (labInstance) {
-          labInstance.emergencyClose();
-        } else if (lab) {
-          void lab.then(
-            (instance) => instance.emergencyClose(),
-            () => undefined,
-          );
-        }
-      };
-      const terminate = (signal: NodeJS.Signals) => {
-        close();
-        process.kill(process.pid, signal);
-      };
-      for (const signal of terminationSignals) {
-        const handler = () => terminate(signal);
-        terminationHandlers.set(signal, handler);
-        process.once(signal, handler);
-      }
-      server.httpServer?.once("close", close);
-    },
-  };
-}

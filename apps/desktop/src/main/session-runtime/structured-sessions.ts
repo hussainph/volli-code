@@ -18,9 +18,13 @@
 import type { SessionRuntime, SessionRuntimeCommandResult } from "@volli/session-engine";
 import type { ModelSelection, SessionStartResult } from "@volli/shared";
 
-/** The one adapter id and profile the structured product attaches. */
+/**
+ * The one adapter id the structured product attaches under.
+ *
+ * The runtime supplies it to the command itself; this constant is what every
+ * *other* reader of a durable attachment compares against.
+ */
 export const STRUCTURED_ADAPTER_ID = "pi";
-export const STRUCTURED_PROFILE_ID = "native";
 
 /**
  * The refusal, once, for both Roles. Two wordings of one rule would read as two
@@ -92,12 +96,7 @@ export async function attachStructuredSession(
   const attached = await runtime.command({
     commandId: `${operationId}:start`,
     sessionId,
-    command: {
-      kind: "adapter.attach",
-      adapterId: STRUCTURED_ADAPTER_ID,
-      profileId: STRUCTURED_PROFILE_ID,
-      continuity: "fresh",
-    },
+    command: { kind: "adapter.attach", continuity: "fresh" },
   });
   return {
     sessionId,
