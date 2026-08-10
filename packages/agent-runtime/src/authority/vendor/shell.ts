@@ -39,7 +39,7 @@ export function isAssignment(token: string): boolean {
 }
 
 /** Redirect operators this tokenizer can emit, with the optional file descriptor. */
-const REDIRECT = /^\d*(?:>>|>&|>\||>|<&|<)$/;
+const REDIRECT = /^(?:\d*|&)(?:>>|>&|>\||>|<&|<)$/;
 
 function count(value: string, character: string): number {
   return [...value].filter((each) => each === character).length;
@@ -196,7 +196,9 @@ function tokenize(text: string): string[] {
     }
     if (char === ">" || char === "<") {
       let operator = char;
-      if (/^\d+$/.test(current)) operator = current + char;
+      // `2>` and `&>` are one operator each. Leaving the `&` behind as a word
+      // would make it the segment's program in `&> log`.
+      if (/^\d+$/.test(current) || current === "&") operator = current + char;
       else if (current !== "") tokens.push(current);
       const following = text.charAt(index + 1);
       if (following === ">" || following === "&" || following === "|") {

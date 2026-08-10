@@ -83,13 +83,13 @@ to path resolution.
   its target, so the only token that could reach that regex is a _quoted_
   `">out"` — a literal argument being misread as a redirect.
 - **Dead operator branches removed.** Upstream's segment splitter tests
-  `char === "|" && next === "|"` after `char === "|"` has already matched;
-  `&>` appears in a redirect regex its own tokenizer cannot produce.
+  `char === "|" && next === "|"` after `char === "|"` has already matched.
 - **A single `&` separates commands.** Upstream splits on `;`, `|`, `&&` and
   `||` but not on `&`, so `true & rm -rf ~` lexed as one command whose program
   was `true` and whose `rm` was an argument no rule inspects. The three redirect
   spellings that contain the character — `2>&1`, `&>log`, `>&log` — are held
-  together explicitly rather than by leaving `&` alone.
+  together explicitly rather than by leaving `&` alone, and `&>` is tokenized as
+  one operator so no stray `&` is left to be read as the segment's program.
 - **`>|` is a redirect operator.** POSIX noclobber-override. Upstream split on
   the `|` first, leaving `echo x >` with its target on the far side, and then
   discarded the operator as having no target — so the write vanished and the

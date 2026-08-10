@@ -52,6 +52,18 @@ export type ShellOperand =
 const NO_LOCATION: ShellOperand = { kind: "no-location" };
 
 /**
+ * A `$` that begins a variable reference, wherever it sits in the token.
+ *
+ * Discriminating on what follows the `$` rather than on position is what lets
+ * `build$SUFFIX` and `out$DIR/y` be caught — the shell expands those to
+ * somewhere this layer never judged — while `^foo$`, `s/foo$/bar/` and
+ * `cost $5` stay ordinary text. A trailing `$`, or one before a digit or most
+ * punctuation, names no variable. `(` counts, because `$(…)` is command
+ * substitution — the shell expands that too.
+ */
+const VARIABLE_REFERENCE = /\$[A-Za-z_{(]/;
+
+/**
  * Resolve a shell operand, where `~` and `$HOME` are the shell's job to expand.
  *
  * `no-location` covers tokens that denote nothing: the bare `-` stdin/stdout
@@ -63,6 +75,10 @@ const NO_LOCATION: ShellOperand = { kind: "no-location" };
  * arbitrary variable cannot be read from an environment this process does not
  * have. Whether that is fatal depends on where the operand sits, which is the
  * caller's question, not this function's.
+ *
+ * Quoting is already lost by the time a token arrives, so `'$literal'` — which
+ * a shell would not expand — reads the same as `$literal` and is reported
+ * unresolvable too. Over-refusal, in the one direction that is safe.
  */
 export function shellPathTokenToPath(token: string, cwd: string): ShellOperand {
   const trimmed = token.trim();
@@ -78,7 +94,7 @@ export function shellPathTokenToPath(token: string, cwd: string): ShellOperand {
     };
   }
   const expanded = trimmed.replace(/^\$(?:HOME|\{HOME\})(?=\/)/, HOME);
-  if (expanded.startsWith("$")) {
+  if (VARIABLE_REFERENCE.test(expanded)) {
     return {
       kind: "unresolvable",
       reason: `"${trimmed}" expands through a variable only the shell can read; name the paths literally so they can be checked.`,

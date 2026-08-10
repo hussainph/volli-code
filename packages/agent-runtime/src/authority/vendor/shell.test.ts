@@ -51,8 +51,15 @@ describe("lexCommandLine", () => {
     expect(shape("cmd 2> errors.log")).toEqual([
       { words: ["cmd"], writeTargets: ["errors.log"], readTargets: [] },
     ]);
+    // `&>` is one operator: no stray `&` is left to become the program.
     expect(shape("cmd &> all.log")).toEqual([
-      { words: ["cmd", "&"], writeTargets: ["all.log"], readTargets: [] },
+      { words: ["cmd"], writeTargets: ["all.log"], readTargets: [] },
+    ]);
+    expect(shape("cmd &>> all.log")).toEqual([
+      { words: ["cmd"], writeTargets: ["all.log"], readTargets: [] },
+    ]);
+    expect(shape("&> all.log")).toEqual([
+      { words: [], writeTargets: ["all.log"], readTargets: [] },
     ]);
     expect(shape("cmd >& all.log")).toEqual([
       { words: ["cmd"], writeTargets: ["all.log"], readTargets: [] },

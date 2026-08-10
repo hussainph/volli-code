@@ -176,6 +176,12 @@ describe("normalizeToolCall, for execution", () => {
   it.each([
     "rm -rf $TMPDIR",
     "rm -rf ~someone",
+    // A variable anywhere in the token, not only at its head: the shell expands
+    // these to somewhere this layer never judged.
+    "rm -rf build$SUFFIX",
+    "rm -rf ${FOO}bar",
+    "rm -rf pre$HOME/z",
+    "echo x > out$DIR/y",
     "RM -rf $TMPDIR",
     "git -C $ELSEWHERE status",
     "GIT -C ~someone status",
@@ -192,29 +198,20 @@ describe("normalizeToolCall, for execution", () => {
     );
   });
 
+  // Asserted by value: the resolvable operands are all still there and the
+  // unexpandable one is gone. A membership check would pass whatever happened.
   it.each([
-    "echo $PATH",
-    "ls $TMPDIR",
-    "cat $CONFIG",
-    "echo ~someone",
-    "node $SCRIPT --flag",
-    "sh -c 'echo $FOO && ls $BAR'",
-    "cp $SOURCE $DEST",
-    // Near-universal in agent scripts. `git` is strict only where a path is
-    // expected, so a commit message carrying a variable is not a refusal.
-    'git commit -m "$MSG"',
-    "git log --grep=$PATTERN",
-    "git checkout $BRANCH",
-  ])("drops the unresolvable operand in %j, which no rule reads", (command) => {
-    const segments = bash(command, workspace().raw).segments;
-    expect(segments.flatMap((segment) => segment.paths)).not.toContain(undefined);
-    expect(segments.length).toBeGreaterThan(0);
-  });
-
-  it("keeps the resolvable operands of a command that also carries a variable", () => {
+    { command: "echo $PATH", paths: ["echo"] },
+    { command: "ls $TMPDIR", paths: ["ls"] },
+    { command: "cat $CONFIG MARKER.txt", paths: ["cat", "MARKER.txt"] },
+    { command: "echo ~someone", paths: ["echo"] },
+    { command: "node $SCRIPT --flag", paths: ["node"] },
+    { command: "cp $SOURCE build", paths: ["cp", "build"] },
+    { command: "cp build$SUFFIX out", paths: ["cp", "out"] },
+  ])("drops only the unexpandable operand in $command", ({ command, paths }) => {
     const { raw, real } = workspace();
-    const [segment] = bash("cat $CONFIG MARKER.txt", raw).segments;
-    expect(segment?.paths).toEqual([join(real, "cat"), join(real, "MARKER.txt")]);
+    const [segment] = bash(command, raw).segments;
+    expect(segment?.paths).toEqual(paths.map((name) => join(real, name)));
   });
 
   it("refuses a command line carrying an operand with no real path", () => {

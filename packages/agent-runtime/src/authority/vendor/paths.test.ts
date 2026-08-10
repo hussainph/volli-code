@@ -65,6 +65,11 @@ describe("shellPathTokenToPath", () => {
     ["$TMPDIR", "expands through a variable only the shell can read"],
     ["$HOMEBREW/bin", "expands through a variable only the shell can read"],
     ["$(date)", "expands through a variable only the shell can read"],
+    ["build$SUFFIX", "expands through a variable only the shell can read"],
+    ["out$DIR/y", "expands through a variable only the shell can read"],
+    ["pre$HOME/z", "expands through a variable only the shell can read"],
+    ["${FOO}bar", "expands through a variable only the shell can read"],
+    ["a$_b", "expands through a variable only the shell can read"],
   ])("reports %j as unresolvable rather than guessing", (token, reason) => {
     expect(shellPathTokenToPath(token, "/work")).toEqual({
       kind: "unresolvable",
@@ -74,12 +79,17 @@ describe("shellPathTokenToPath", () => {
 
   // A `$` that is not the head of the token is ordinary text — a regex anchor, a
   // sed script, an awk field. Refusing those would refuse most real commands.
-  it("leaves a mid-token $ alone", () => {
-    expect(shellPathTokenToPath("^foo$", "/work")).toEqual({
-      kind: "path",
-      path: "/work/^foo$",
-    });
-    expect(shellPathTokenToPath("s/$/x/", "/work")).toEqual({ kind: "path", path: "/work/s/$/x" });
+  // The discriminator is what follows the `$`, not where it sits. A trailing
+  // `$`, or one before punctuation or a digit, names no variable.
+  it.each([
+    ["^foo$", "/work/^foo$"],
+    ["s/$/x/", "/work/s/$/x"],
+    ["s/foo$/bar/", "/work/s/foo$/bar"],
+    ["$", "/work/$"],
+    ["cost $5", "/work/cost $5"],
+    ["{print $1}", "/work/{print $1}"],
+  ])("treats the $ in %j as ordinary text", (token, path) => {
+    expect(shellPathTokenToPath(token, "/work")).toEqual({ kind: "path", path });
   });
 });
 
