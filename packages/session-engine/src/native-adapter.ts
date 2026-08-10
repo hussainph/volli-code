@@ -15,24 +15,9 @@ export interface NativeRuntimeIdentity {
   fingerprint: string;
 }
 
-export interface NativeHarnessProfile {
-  id: string;
-  label: string;
-  transport: "native" | "terminal";
-  runtime: NativeRuntimeIdentity;
-}
-
-export interface NativeHarnessManifest {
-  id: string;
-  displayName: string;
-  adapterVersion: string;
-  profiles: readonly NativeHarnessProfile[];
-}
-
 export interface NativeAttachmentSpec {
   sessionId: string;
   attachmentId: string;
-  profileId: string;
   directory: string;
   continuity: SessionAttachmentContinuity;
   native: SessionNativeReference | null;
@@ -252,29 +237,19 @@ export interface BindingHandle {
   release(reason: ReleaseReason): Promise<void>;
 }
 
+/**
+ * The one structured executor a Session runtime holds.
+ *
+ * `id` is durable: it is written onto every attachment this adapter opens, as
+ * the discriminator between a terminal companion and the structured executor,
+ * and history outlives the build that wrote it — so it is read back from disk
+ * long after the adapter that wrote it is gone. `adapterVersion` and `runtime`
+ * are the identity every durable fact this adapter produces is stamped with,
+ * and `runtime` in particular is recorded inside each binding envelope.
+ */
 export interface NativeHarnessAdapter {
-  readonly manifest: NativeHarnessManifest;
+  readonly id: string;
+  readonly adapterVersion: string;
+  readonly runtime: NativeRuntimeIdentity;
   attach(spec: NativeAttachmentSpec, sink: ObservationSink): Promise<BindingHandle>;
-}
-
-export interface NativeAdapterRegistry {
-  get(adapterId: string): NativeHarnessAdapter | null;
-  list(): readonly NativeHarnessAdapter[];
-}
-
-export function createNativeAdapterRegistry(
-  adapters: readonly NativeHarnessAdapter[],
-): NativeAdapterRegistry {
-  const byId = new Map<string, NativeHarnessAdapter>();
-  for (const adapter of adapters) {
-    if (!adapter.manifest.id) throw new Error("Native adapter id cannot be empty");
-    if (byId.has(adapter.manifest.id)) {
-      throw new Error(`Native adapter ${adapter.manifest.id} is registered more than once`);
-    }
-    byId.set(adapter.manifest.id, adapter);
-  }
-  return {
-    get: (adapterId) => byId.get(adapterId) ?? null,
-    list: () => [...byId.values()],
-  };
 }

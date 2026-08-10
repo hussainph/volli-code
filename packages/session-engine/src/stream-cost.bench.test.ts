@@ -5,7 +5,6 @@ import {
   canonicalJson,
   createInMemorySessionLedger,
   createInMemoryTranscriptArtifactStore,
-  createNativeAdapterRegistry,
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamOverlay,
@@ -144,19 +143,9 @@ function runtimeIds(prefix = "") {
 }
 
 class FakeAdapter implements NativeHarnessAdapter {
-  readonly manifest = {
-    id: "fake",
-    displayName: "Fake",
-    adapterVersion: "1.0.0",
-    profiles: [
-      {
-        id: "native",
-        label: "Native",
-        transport: "native" as const,
-        runtime: { path: "/trusted/fake", version: "1.0.0", fingerprint: "sha256:fake" },
-      },
-    ],
-  };
+  readonly id = "fake";
+  readonly adapterVersion = "1.0.0";
+  readonly runtime = { path: "/trusted/fake", version: "1.0.0", fingerprint: "sha256:fake" };
   sink: ObservationSink | null = null;
 
   async attach(
@@ -221,7 +210,7 @@ function buildRuntime(): {
   const counting = countingArtifactStore(createInMemoryTranscriptArtifactStore());
   const runtime = createSessionRuntime({
     engine,
-    adapters: createNativeAdapterRegistry([adapter]),
+    executor: adapter,
     artifacts: counting.store,
     locations: fixedLocation("/projects/fake"),
     clock,
@@ -240,8 +229,6 @@ async function createAndAttach(runtime: SessionRuntime) {
     sessionId: created.sessionId,
     command: {
       kind: "adapter.attach",
-      adapterId: "fake",
-      profileId: "native",
       continuity: "fresh",
     },
   });

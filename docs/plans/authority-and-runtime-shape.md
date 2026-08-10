@@ -527,6 +527,58 @@ and drop `profileId` and the registry.
 **Deletion test: concentrates.** Translation moves into the module that already
 owns Session facts, and a routing key leaves five layers that only pass it along.
 
+#### Correction (2026-08-10): the two vocabularies stay; the registry goes
+
+"Near-isomorphic" was wrong, and a design review before implementation is what
+caught it. The two vocabularies sit at different altitudes.
+`RuntimeObservation` has 7 runtime-shaped arms; `HarnessObservation` has 12
+Session-shaped ones carrying `threadId`, `branchId`, `attemptId` and a whole
+`UIMessage`. The facade is an altitude crossing, not a rename table.
+
+**The lab is what settles it.** `LabScenarioBeat = Unstamped<HarnessObservation>`
+— the Session-shaped vocabulary *is* the lab's scenario language, and its own
+docstring states the intent: "a state that cannot be written here is a state a
+harness cannot report either." It authors one message carrying both a text part
+and a gated tool call, tool states `approval-requested` and `output-denied`, and
+its own attention ids. No runtime arm can express any of those. So the
+Session-shaped vocabulary has a reason to exist that does not depend on how many
+runtimes there are, and deleting it would relocate complexity while costing the
+permission and interaction scenarios.
+
+Three further findings, each verified against the code:
+
+- **Widening the runtime's attention arm is a two-store migration.** Its
+  `reason` is an input to the frozen `session_events.id`
+  (`pi:attention:${attachmentId}:${reason}`), *and*
+  `isRecoverableObservation` in `pi/runtime.ts` whitelists exactly the five
+  values and **throws** on anything else. Markers already on disk would be
+  rejected, `recoveredObservation` throws rather than skipping, and the failure
+  surfaces as `PI_RECOVERY_FAILED` — the attach dies rather than degrading.
+  That is why 4 of the 9 durable attention kinds remain unreachable: reaching
+  them is a sidecar schema change, not a type widening.
+- **`#durableObservations` is a second, deliberately state-free translation
+  path**, not a filter over the live one. Merging the two switches would route
+  replay through the live translator, where a reconcile during an active turn
+  resets `messageSequence` to 0, re-mints the same message id and emits `reset`
+  over accumulated text. `SessionRuntime.reconcile` is public and is not gated
+  on the binding being idle.
+- **`pi-adapter.ts` is not in the desktop coverage include list.** Moving 250
+  lines of it into `packages/session-engine` is a coverage tightening, not a
+  neutral relocation.
+
+The economics decide the rest. Adding one observation kind touches nine places;
+collapsing the vocabularies would have made it seven, against a
+history-duplication risk and a sidecar migration. Candidate 2 collapses four of
+the nine and does not touch the runtime boundary at all. So candidate 1 keeps
+only its second half — the registry, the manifest, the profiles and
+`profileId` — and candidate 2 becomes the larger win.
+
+Defects this review surfaced that outlive the decision, none of them blocking:
+`attachment.closed.outcome` is hardcoded `"completed"`, so `failed` and
+`interrupted` are unreachable on that kind; `RuntimeFailure.reason` is dropped
+in translation; `transcript.delta` ids are computed and never read;
+`observationCursor()` is exported with no production caller.
+
 ### 2. One codec for the Session Event
 
 **Strength: strong.** `packages/shared/src/session-ledger.ts`,
@@ -671,6 +723,25 @@ scrub, shrinking candidate 2's fan-out before the codec is written. It remains
 the only candidate whose answer is genuinely in doubt — the Pi migration called
 this scaffolding temporary, and the code has carried it as though permanent
 through seven sessions.
+
+**Doubt resolved, half each way (2026-08-10).** The registry, manifest,
+profiles and `profileId` are scaffolding and go. The second observation
+vocabulary is not, and stays — see the correction under candidate 1. The port
+now lives in `@volli/shared` (PR #205) so `@volli/session-engine`, which the
+renderer imports and which therefore may never take a Node dependency, can name
+the type it holds.
+
+**The lab's half of that argument is gone (2026-08-10, same session).** The UI
+lab became a frontend-only prototyping surface and is no longer wired to the
+Session ledger: the scripted harness, the lab's Session RPC server, the scenario
+vocabulary and the three scratches that drove them were deleted with the
+registry. `HarnessObservation` therefore has one producer and one consumer, and
+the "a state that cannot be written here is a state a harness cannot report"
+evidence no longer exists. The two vocabularies still stand on the rest of the
+correction — the altitude crossing, the frozen `session_events.id`, the
+two-store attention migration and the state-free replay path, none of which the
+lab was load-bearing for — but anyone re-opening candidate 1's first half should
+know that its sharpest argument was retired rather than answered.
 
 ## Part III — In-app Model Access sign-in
 

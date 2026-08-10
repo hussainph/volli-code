@@ -1,19 +1,24 @@
 /**
  * The attachments a relaunch has to retire before anything reads the ledger.
  *
- * Two kinds cannot survive a quit, and both would otherwise project as live
- * forever. A local terminal's PTY died with the process that owned it. An
- * `opencode` attachment is stranger: the structured OpenCode runtime is gone,
- * so no adapter can ever answer for that native identity again — a lazy
- * rehydration would raise `Native adapter opencode was not found` rather than
- * reconnect anything.
+ * One executor can answer for a local attachment after a quit, and it is the
+ * structured one: Pi rehydrates from its own recovery sidecar. Everything else
+ * is over the moment the process is. A terminal companion's PTY died with the
+ * process that owned it. A binding written under any other adapter id — the
+ * departed `opencode` runtime, or whatever a future build retires — names a
+ * native identity nothing left in this build can reconnect to; a lazy
+ * rehydration would refuse it as an adapter that was not found rather than
+ * reconnect anything, and the attachment would meanwhile project as live.
  *
  * Closing them is the durable, observable transition that turns them into
- * history. The invariant, in both cases: the Session itself stays open and its
- * transcript stays readable; only the binding is over. Pi never attaches under
- * an OpenCode native identity — a later attach is a fresh binding of its own.
+ * history. The invariant is the same in every case: the Session itself stays
+ * open and its transcript stays readable; only the binding is over. The
+ * structured executor never attaches under someone else's native identity — a
+ * later attach is a fresh binding of its own.
  */
 import type { SessionExecutionVenue, SessionObservation } from "@volli/shared";
+
+import { STRUCTURED_ADAPTER_ID } from "./structured-sessions";
 
 /** Exactly what the sweep reads of an attachment; a full projection satisfies it. */
 export interface BootRecoveryAttachment {
@@ -48,15 +53,6 @@ export interface BootRecoveryOptions {
   onError: (attachmentId: string, error: unknown) => void;
 }
 
-/**
- * Adapter ids whose open local attachments a relaunch always retires.
- *
- * Only these two. Every other adapter is a live executor that owns its own
- * recovery, and closing one here would forge the end of a binding that may
- * still be running.
- */
-const STALE_ON_BOOT_ADAPTER_IDS: ReadonlySet<string> = new Set(["terminal", "opencode"]);
-
 /** Closes every stale open attachment across the given projects; returns how many. */
 export async function closeStaleAttachments(options: BootRecoveryOptions): Promise<number> {
   let closed = 0;
@@ -90,7 +86,7 @@ export async function closeStaleAttachments(options: BootRecoveryOptions): Promi
 
 function isStaleOnBoot(attachment: BootRecoveryAttachment): boolean {
   return (
-    STALE_ON_BOOT_ADAPTER_IDS.has(attachment.adapterId) &&
+    attachment.adapterId !== STRUCTURED_ADAPTER_ID &&
     attachment.venue.kind === "local" &&
     attachment.status === "open"
   );

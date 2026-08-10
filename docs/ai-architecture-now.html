@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Volli AI architecture — now</title>
+    <style>
+      :root { color-scheme: dark light; --ink: #f4f0ec; --muted: #bcb5ad; --line: #413c38; --surface: #24211f; --canvas: #171513; --accent: #e8652a; --green: #8cc784; --blue: #85b8e8; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--canvas); color: var(--ink); font: 16px/1.55 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      main { max-width: 860px; margin: 0 auto; padding: 52px 24px 80px; }
+      h1 { max-width: 680px; margin: 0 0 10px; font-size: clamp(30px, 5vw, 48px); line-height: 1.05; letter-spacing: -.04em; }
+      h2 { margin: 0; font-size: 18px; letter-spacing: -.015em; }
+      p { margin: 10px 0 0; }
+      .lede { max-width: 660px; color: var(--muted); font-size: 18px; }
+      .now { display: inline-block; margin-top: 26px; padding: 5px 10px; border: 1px solid color-mix(in srgb, var(--green) 55%, var(--line)); border-radius: 999px; color: var(--green); font-size: 13px; font-weight: 650; }
+      .map { display: grid; gap: 2px; margin: 32px 0; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: var(--line); }
+      .node { padding: 16px 18px; background: var(--surface); }
+      .node strong { display: block; color: var(--blue); font-size: 13px; letter-spacing: .04em; text-transform: uppercase; }
+      .node span { display: block; margin-top: 3px; }
+      .arrow { color: var(--accent); font-size: 21px; text-align: center; background: var(--canvas); height: 24px; line-height: 20px; }
+      .rule { height: 1px; margin: 32px 0; background: var(--line); }
+      .cards { display: grid; gap: 10px; }
+      details { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+      summary { cursor: pointer; padding: 15px 17px; list-style: none; }
+      summary::-webkit-details-marker { display: none; }
+      summary::after { float: right; color: var(--accent); content: "+"; font-size: 20px; line-height: 16px; }
+      details[open] summary::after { content: "−"; }
+      .inside { padding: 0 17px 17px; color: var(--muted); }
+      .inside strong { color: var(--ink); }
+      ul { margin: 12px 0 0; padding-left: 20px; }
+      li + li { margin-top: 7px; }
+      a { color: #f0a078; text-decoration-color: color-mix(in srgb, #f0a078 45%, transparent); text-underline-offset: 3px; }
+      code { padding: 1px 5px; border-radius: 4px; background: #151311; color: #ddd5cd; font-size: .9em; }
+      .read { margin-top: 28px; padding: 18px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--surface) 72%, var(--accent)); }
+      .read p { color: var(--muted); }
+      .small { color: var(--muted); font-size: 13px; }
+      @media (prefers-color-scheme: light) { :root { --ink: #241f1b; --muted: #665e57; --line: #d9d0c7; --surface: #fffdfb; --canvas: #f5f1ed; --blue: #2b6eae; } code { background: #f0ebe6; color: #3b342f; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Where Volli is with AI</h1>
+      <p class="lede">Volli is no longer a client for many coding harnesses. It has one structured AI experience: a durable <strong>Session</strong> that Volli owns, run by its own <strong>Agent Runtime</strong>, with Pi inside that runtime.</p>
+      <span class="now">Now: Pi migration complete · authority work in progress</span>
+
+      <section class="map" aria-label="The main AI request path">
+        <div class="node"><strong>1. Ticket or project</strong><span>A Ticket gives work scope and a worktree. A project Session uses the Main checkout.</span></div>
+        <div class="arrow">↓</div>
+        <div class="node"><strong>2. Session</strong><span>Volli creates durable identity, history, Commands, and Receipts before AI work begins.</span></div>
+        <div class="arrow">↓</div>
+        <div class="node"><strong>3. Agent Runtime</strong><span>The runtime assembles the Runtime Brief, applies authority and tools, then uses Pi to perform the turn.</span></div>
+        <div class="arrow">↓</div>
+        <div class="node"><strong>4. Volli record and UI</strong><span>Volli stores settled facts locally. The renderer shows a projection of those facts. Stream text is temporary until it settles.</span></div>
+      </section>
+
+      <p class="small">The important ownership rule: Pi runs the model loop. It does <em>not</em> own the Session, Ticket state, product history, or the user interface.</p>
+
+      <div class="rule"></div>
+      <h2>Open only the part that answers your question</h2>
+      <div class="cards">
+        <details>
+          <summary><strong>What is a Session, in plain terms?</strong></summary>
+          <div class="inside">
+            <p>A Session is the durable conversation and its local history. It exists before a live runtime attaches. It can survive a closed tab, an interrupted turn, or an app restart. A terminal pane is only a companion view; it is not the Session.</p>
+            <p><strong>Read next:</strong> <a href="../CONTEXT.md">CONTEXT.md — Session, Command, Receipt, Attention</a>; then <a href="../packages/session-engine/src/session-runtime.ts">packages/session-engine/src/session-runtime.ts</a>.</p>
+          </div>
+        </details>
+
+        <details>
+          <summary><strong>Where does the AI actually run?</strong></summary>
+          <div class="inside">
+            <p><code>@volli/agent-runtime</code> is the product boundary around Pi. It receives Volli-owned inputs: Session identity, workspace, model selection, Authority Snapshot, Runtime Brief, tool bundle, and a recovery reference. It emits Volli observations. Pi-specific detail stays inside this package.</p>
+            <p><strong>Read next:</strong> <a href="../packages/agent-runtime/src/contracts.ts">runtime contracts</a>; then <a href="../packages/agent-runtime/src/pi/runtime.ts">Pi runtime implementation</a>.</p>
+          </div>
+        </details>
+
+        <details>
+          <summary><strong>How does a message become durable history?</strong></summary>
+          <div class="inside">
+            <p>The user Command is recorded before delivery. Pi text deltas can appear immediately, but are only a transient overlay. A completed assistant message settles once into the Session ledger and a transcript artifact. This prevents a restart from duplicating a completed answer.</p>
+            <p><strong>Read next:</strong> <a href="../packages/session-engine/src/session-runtime.ts">Session runtime — delivery, stream, and reconciliation</a>; then <a href="../apps/desktop/src/main/session-control/sqlite-ledger.ts">SQLite ledger</a>.</p>
+          </div>
+        </details>
+
+        <details>
+          <summary><strong>What does recovery mean here?</strong></summary>
+          <div class="inside">
+            <p>Volli's ledger is the source of truth. Pi keeps a recovery sidecar to restore model context and find entries after a restart. If the sidecar and ledger disagree, Volli raises <strong>Attention</strong>; it does not quietly trust Pi. An unfinished streaming tail is not treated as completed history.</p>
+            <p><strong>Read next:</strong> <a href="../packages/agent-runtime/src/pi/runtime.ts">Pi recovery and reconciliation</a>; then <a href="../apps/desktop/src/main/session-runtime/boot-recovery.ts">desktop boot recovery</a>.</p>
+          </div>
+        </details>
+
+        <details>
+          <summary><strong>Who owns model access and secrets?</strong></summary>
+          <div class="inside">
+            <p>Pi owns credentials and refresh. The renderer receives only a sanitized <strong>Model Access</strong> view: available models, account state, billing-source hint, and a recovery action. There is no silent model or account fallback.</p>
+            <p><strong>Read next:</strong> <a href="../packages/agent-runtime/src/pi/model-access.ts">Pi-to-Volli Model Access mapping</a>; then <a href="../packages/session-rpc/src/index.ts">sanitized RPC schema</a>.</p>
+          </div>
+        </details>
+
+        <details>
+          <summary><strong>What stops an agent from doing unsafe work?</strong></summary>
+          <div class="inside">
+            <p>Each Session has an <strong>Authority Snapshot</strong>. Today, the Pi boundary enforces the Auto policy: execution is sandboxed, network and home-directory access are denied, and file tools stay in the Session workspace. Recent work also records a refused tool call as a durable fact. The richer escalation path—asking the user after repeated denials—is planned, not built.</p>
+            <p><strong>Read next:</strong> <a href="../docs/plans/authority-and-runtime-shape.md">authority plan — status and decisions</a>; then <a href="../packages/agent-runtime/src/authority/gate.ts">authority gate</a> and <a href="../packages/agent-runtime/src/pi/scoped-execution-env.ts">execution sandbox</a>.</p>
+          </div>
+        </details>
+
+        <details>
+          <summary><strong>How does this reach the desktop UI?</strong></summary>
+          <div class="inside">
+            <p>Electron main hosts SQLite and the runtime. Session RPC is the narrow bridge over IPC. React has a resident chat client and store that project Session events into UI state. React does not parse Pi events, own recovery, or access secrets.</p>
+            <p><strong>Read next:</strong> <a href="../apps/desktop/src/main/index.ts">main composition</a>; <a href="../apps/desktop/src/main/session-rpc-ipc.ts">IPC bridge</a>; <a href="../apps/desktop/src/renderer/src/chat/client.ts">renderer client</a>.</p>
+          </div>
+        </details>
+
+        <details>
+          <summary><strong>What changed from the old architecture?</strong></summary>
+          <div class="inside">
+            <p>OpenCode is gone as a structured executor. Users select Model Access, not a harness or runtime profile. Old OpenCode history can remain readable, but Pi never resumes an OpenCode native conversation. Terminal tools remain useful manual companions; they are not a structured fallback.</p>
+            <p><strong>Read next:</strong> <a href="../docs/plans/pi-native-ticket-session.md">Pi-native migration record — Session 7 and completion criteria</a>.</p>
+          </div>
+        </details>
+
+        <details>
+          <summary><strong>Why do some files still say “adapter” or “harness”?</strong></summary>
+          <div class="inside">
+            <p>That is migration scaffolding inside the Session Engine, not a user-facing product choice. The desktop product attaches only Pi. The generic internal port also supports deterministic tests and the UI Lab for now. The next planned architecture cleanup is to collapse that port into the singular runtime shape.</p>
+            <p><strong>Read next:</strong> <a href="../docs/plans/authority-and-runtime-shape.md">Part II — runtime shape</a>; then <a href="../apps/desktop/src/main/session-runtime/pi-adapter.ts">Pi desktop facade</a> and <a href="../packages/session-engine/src/native-adapter.ts">temporary adapter seam</a>.</p>
+          </div>
+        </details>
+      </div>
+
+      <aside class="read">
+        <h2>If you read only three files</h2>
+        <p><a href="../CONTEXT.md">1. CONTEXT.md</a> for the vocabulary. <a href="../packages/agent-runtime/src/contracts.ts">2. Agent Runtime contracts</a> for the AI boundary. <a href="../packages/session-engine/src/session-runtime.ts">3. Session Runtime</a> for the durable behavior.</p>
+      </aside>
+    </main>
+  </body>
+</html>

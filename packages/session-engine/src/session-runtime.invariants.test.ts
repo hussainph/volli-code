@@ -4,7 +4,6 @@ import type { UIMessage } from "ai";
 import {
   createInMemorySessionLedger,
   createInMemoryTranscriptArtifactStore,
-  createNativeAdapterRegistry,
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamOverlay,
@@ -43,19 +42,9 @@ function message(id = "message", text = "hello"): UIMessage {
 }
 
 class Adapter implements NativeHarnessAdapter {
-  readonly manifest = {
-    id: "invariant-adapter",
-    displayName: "Invariant Adapter",
-    adapterVersion: "1.0.0",
-    profiles: [
-      {
-        id: "native",
-        label: "Native",
-        transport: "native" as const,
-        runtime: { path: "/trusted/adapter", version: "1", fingerprint: "sha256:adapter" },
-      },
-    ],
-  };
+  readonly id = "invariant-adapter";
+  readonly adapterVersion = "1.0.0";
+  readonly runtime = { path: "/trusted/adapter", version: "1", fingerprint: "sha256:adapter" };
   attaches = 0;
   dispatches = 0;
   reconciles = 0;
@@ -126,7 +115,7 @@ function composition(
     engine,
     runtime: createSessionRuntime({
       engine,
-      adapters: createNativeAdapterRegistry([adapter]),
+      executor: adapter,
       artifacts: createInMemoryTranscriptArtifactStore(),
       locations: fixedLocation(() => input.directory?.() ?? "/ticket/original", input.reaffirm),
       clock: { now: () => now++ },
@@ -147,36 +136,11 @@ async function attach(runtime: SessionRuntime, sessionId: string, commandId = "a
   return runtime.command({
     commandId,
     sessionId,
-    command: {
-      kind: "adapter.attach",
-      adapterId: "invariant-adapter",
-      profileId: "native",
-      continuity: "fresh",
-    },
+    command: { kind: "adapter.attach", continuity: "fresh" },
   });
 }
 
 describe("SessionRuntime durable boundary invariants", () => {
-  it("records a missing adapter as a rejected attachment outcome", async () => {
-    const base = composition();
-    const missing = createSessionRuntime({
-      engine: base.engine,
-      adapters: createNativeAdapterRegistry([]),
-      artifacts: createInMemoryTranscriptArtifactStore(),
-      locations: fixedLocation(() => "/ticket/original"),
-      clock: { now: () => 100 },
-      ids: runtimeIds(),
-    });
-    const created = await create(missing);
-    await expect(attach(missing, created.sessionId)).resolves.toMatchObject({
-      receipt: { status: "rejected", code: "adapter_missing" },
-    });
-    expect((await missing.snapshot({ sessionId: created.sessionId })).projection).toMatchObject({
-      pendingExecutorStart: null,
-      attachments: [{ status: "failed", failure: { code: "adapter_missing" } }],
-    });
-  });
-
   it("publishes an engine-level rejection receipt without an adapter binding", async () => {
     const { runtime } = composition();
     const created = await create(runtime);

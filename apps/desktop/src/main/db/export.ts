@@ -71,18 +71,6 @@ export interface ExportProject {
    */
   themeCanvas: string | null;
   themeAppearance: string | null;
-  /**
-   * The per-project runtime-preferences override (migration 019) as its STORED
-   * JSON string, unparsed — `{[adapterId]: storedRuntimeRecord}`, or `null` when
-   * every adapter inherits the global record.
-   *
-   * Unparsed for `themeCanvas`'s reason above, and the pairing is the same one:
-   * the GLOBAL half rides `app_state` (`volli:runtime-preferences:<adapterId>`,
-   * carried raw by {@link ExportAppState}), so parsing only this half would make
-   * the two halves of one setting read differently in the document — and a
-   * hand-edited row would throw at the one moment a user is rescuing their data.
-   */
-  runtimePreferences: string | null;
   colorIndex: number;
   sortOrder: number;
   rowVersion: number;
@@ -257,7 +245,6 @@ interface ProjectRow {
   theme_seed: string | null;
   theme_canvas: string | null;
   theme_appearance: string | null;
-  runtime_preferences: string | null;
   color_index: number;
   sort_order: number;
   row_version: number;
@@ -266,10 +253,17 @@ interface ProjectRow {
 }
 
 /**
- * Every `projects` column — the flat row, not the app's `Project` model, so a
- * column added by a migration is carried whether or not the model happens to
- * surface it. The tests hold this against `PRAGMA table_info`, because a
- * column dropped here is invisible at every layer above.
+ * Every live `projects` column — the flat row, not the app's `Project` model, so
+ * a column added by a migration is carried whether or not the model happens to
+ * surface it. The tests hold this against `PRAGMA table_info`, because a column
+ * dropped here is invisible at every layer above.
+ *
+ * `runtime_preferences` is the one exception, and it is not a column this
+ * document forgot. Migration 019 added it for the Runtime Catalog, which went
+ * with the singular Pi runtime; nothing has written it since and nothing can
+ * read a record back out of it. The column stays because migrations are
+ * append-only, but exporting it would put a value in a user's rescue document
+ * that no build will ever restore.
  */
 function exportProjects(db: Database.Database): ExportProject[] {
   const rows = prepared<[], ProjectRow>(db, "SELECT * FROM projects ORDER BY id").all();
@@ -287,7 +281,6 @@ function exportProjects(db: Database.Database): ExportProject[] {
     themeSeed: row.theme_seed,
     themeCanvas: row.theme_canvas,
     themeAppearance: row.theme_appearance,
-    runtimePreferences: row.runtime_preferences,
     colorIndex: row.color_index,
     sortOrder: row.sort_order,
     rowVersion: row.row_version,

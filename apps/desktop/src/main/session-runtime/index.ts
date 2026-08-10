@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import {
-  createNativeAdapterRegistry,
   createSessionRuntime,
   type HostedSessionRuntime,
   type NativeHarnessAdapter,
@@ -14,13 +13,13 @@ import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
 export interface DesktopSessionRuntimeOptions {
   db: Database.Database;
   transcriptDirectory: string;
-  adapters: readonly NativeHarnessAdapter[];
+  executor: NativeHarnessAdapter;
   sessionEngine?: SessionEngine;
   now?: () => number;
   nextId?: () => string;
 }
 
-/** Composes the transport-neutral Session runtime with the desktop's durable adapters. */
+/** Composes the transport-neutral Session runtime with the desktop's durable executor. */
 export function createDesktopSessionRuntime(
   options: DesktopSessionRuntimeOptions,
 ): HostedSessionRuntime {
@@ -28,7 +27,7 @@ export function createDesktopSessionRuntime(
   const nextId = options.nextId ?? randomUUID;
   return createSessionRuntime({
     engine: options.sessionEngine ?? createDesktopSessionEngine(options.db, { now, nextId }),
-    adapters: createNativeAdapterRegistry(options.adapters),
+    executor: options.executor,
     artifacts: createFileTranscriptArtifactStore(options.transcriptDirectory),
     locations: createDesktopSessionLocationResolver(options.db),
     clock: { now },

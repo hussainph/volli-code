@@ -122,15 +122,6 @@ describe("buildExportDocument — populated db", () => {
     // an export that a user is running to rescue their data.
     updateProjectCanvas(ctx.db, project.id, exportedCanvas, 61);
     updateProjectAppearance(ctx.db, project.id, "auto", 62);
-    // Migration 019's one. Same stance as the canvas: the STORED string, and
-    // the global half of the same setting rides `app_state` beside it. Written
-    // here in SQL because nothing in the app writes this column any more — a
-    // row like this can only have been left behind by a build that still had
-    // the Runtime Catalog, which is exactly what an export must not drop.
-    ctx.db
-      .prepare("UPDATE projects SET runtime_preferences = ? WHERE id = ?")
-      .run('{"opencode":{"recordVersion":1}}', project.id);
-
     const liveTicket = testTicket(project.id, {
       id: "ticket-live",
       ticketNumber: 12,
@@ -225,11 +216,9 @@ describe("buildExportDocument — populated db", () => {
         themeSeed: null,
         themeCanvas: JSON.stringify(exportedCanvas),
         themeAppearance: "auto",
-        runtimePreferences: '{"opencode":{"recordVersion":1}}',
         colorIndex: project.colorIndex,
         sortOrder: project.sortOrder,
-        // Bumped by the three theme writes above; the leftover
-        // `runtime_preferences` row is seeded in raw SQL and moves neither.
+        // Bumped by the three theme writes above.
         rowVersion: 4,
         createdAt: project.createdAt,
         updatedAt: 62,
@@ -406,8 +395,15 @@ describe("buildExportDocument — populated db", () => {
    * `exportProjects`, so an export silently dropped them. Derived from
    * `PRAGMA table_info` rather than a hand-written list, so the NEXT migration
    * that forgets the export fails here instead of shipping.
+   *
+   * `runtime_preferences` is named rather than derived, and it is the only
+   * name allowed here: migration 019 added it for the Runtime Catalog, which
+   * went with the singular Pi runtime, so no build can restore what it holds.
+   * A column is exempt because it is dead, never because someone forgot it.
    */
-  it("carries every projects column, so a migration cannot silently drop one from the export", async () => {
+  const UNEXPORTED_DEAD_COLUMNS: ReadonlySet<string> = new Set(["runtime_preferences"]);
+
+  it("carries every live projects column, so a migration cannot silently drop one", async () => {
     ctx = openTestDb();
     insertProject(ctx.db, testProject({ id: "proj-1" }));
 
@@ -420,7 +416,9 @@ describe("buildExportDocument — populated db", () => {
     expect(exported).toBeDefined();
     expect(columns.length).toBeGreaterThan(0);
     for (const { name } of columns) {
-      expect(Object.hasOwn(exported as object, camelCase(name))).toBe(true);
+      expect(Object.hasOwn(exported as object, camelCase(name))).toBe(
+        !UNEXPORTED_DEAD_COLUMNS.has(name),
+      );
     }
   });
 

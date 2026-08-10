@@ -51,7 +51,6 @@ function attachmentSpec(overrides: Partial<NativeAttachmentSpec> = {}): NativeAt
   return {
     sessionId: SESSION_ID,
     attachmentId: ATTACHMENT_ID,
-    profileId: "native",
     directory: "/work/volli/.worktrees/VC-12",
     continuity: "fresh",
     native: null,
@@ -208,22 +207,18 @@ async function attached(
   return { binding, runtime, sink };
 }
 
-describe("Pi native adapter manifest", () => {
-  it("declares one id, one native profile, and the pinned runtime identity", () => {
+describe("Pi native adapter identity", () => {
+  it("declares the one adapter id and the pinned runtime identity", () => {
     const { adapter } = composition();
-    expect(adapter.manifest.id).toBe(PI_ADAPTER_ID);
-    expect(adapter.manifest.profiles).toEqual([
-      {
-        id: "native",
-        label: "Native",
-        transport: "native",
-        runtime: {
-          path: "@earendil-works/pi-agent-core",
-          version: "0.84.1",
-          fingerprint: "npm:@earendil-works/pi-agent-core@0.84.1",
-        },
-      },
-    ]);
+    expect(adapter.id).toBe(PI_ADAPTER_ID);
+    expect(adapter.adapterVersion).toBe("0.0.1");
+    // Recorded in every durable binding envelope, so these three strings are
+    // frozen: a change re-stamps history that past builds already wrote.
+    expect(adapter.runtime).toEqual({
+      path: "@earendil-works/pi-agent-core",
+      version: "0.84.1",
+      fingerprint: "npm:@earendil-works/pi-agent-core@0.84.1",
+    });
   });
 });
 
@@ -250,24 +245,6 @@ describe("Pi runtime host", () => {
 });
 
 describe("Pi native adapter attach", () => {
-  it("refuses a profile it does not have", async () => {
-    const { adapter } = composition();
-
-    await expect(
-      adapter.attach(
-        {
-          sessionId: "session-1",
-          attachmentId: "attachment-1",
-          profileId: "terminal",
-          directory: "/work",
-          continuity: "fresh",
-          native: null,
-        },
-        { emit: async () => undefined },
-      ),
-    ).rejects.toThrow("Unknown Pi profile terminal");
-  });
-
   it("starts a ticket session in the prepared directory with the pinned model and brief", async () => {
     const { runtime, binding } = await attached();
 
@@ -321,7 +298,7 @@ describe("Pi native adapter attach", () => {
       },
     });
 
-    expect(adapter.manifest.id).toBe(PI_ADAPTER_ID);
+    expect(adapter.id).toBe(PI_ADAPTER_ID);
     expect(seen).toEqual([{ sessionDataDir: "/data/pi-sessions", models }]);
   });
 
@@ -432,14 +409,6 @@ describe("Pi native adapter attach", () => {
       attentionKind: "adapter_unrecoverable",
     });
     expect(runtime.specs).toHaveLength(0);
-  });
-
-  it("refuses a profile it does not have", async () => {
-    const { adapter } = composition();
-
-    await expect(
-      adapter.attach(attachmentSpec({ profileId: "terminal" }), new RecordingSink()),
-    ).rejects.toThrow("Unknown Pi profile terminal");
   });
 
   it("says nothing to the Session about the attachment the engine records itself", async () => {

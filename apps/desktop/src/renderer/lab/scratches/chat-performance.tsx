@@ -10,7 +10,8 @@
  * context, only the live turn is told, and the same flip is now ~7 ms.
  *
  * Nothing here re-implements the transcript. `ChatTurn` and `TurnContext` are
- * imported from `chat-session.tsx`, so is the `holdList` stability helper, and
+ * imported from the app's `chat-plane.tsx`, so is the `holdList` stability
+ * helper, and
  * the container is the real `Conversation`/`StickToBottom`. That import is the
  * point: a benchmark holding its own copy of the component drifts from the
  * thing it claims to measure, and then reports the copy's numbers as the app's.
@@ -1212,7 +1213,7 @@ const EMPTY_INDEX: ReadonlyMap<string, SessionInteraction> = new Map();
 const EMPTY_RESOLVING: ReadonlySet<string> = new Set();
 const MESSAGE_GAP = "flex flex-col gap-3";
 
-/** `chat-session.tsx`'s `useStableList`, over its exported `holdList`. */
+/** `chat-plane.tsx`'s `useStableList`, over its exported `holdList`. */
 function useStableList<T>(
   items: readonly T[],
   same: (previous: T, next: T) => boolean,
