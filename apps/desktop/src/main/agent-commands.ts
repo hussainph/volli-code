@@ -125,7 +125,7 @@ export function composeTicketBrief(input: {
   // main checkout (cwd is the session root either way).
   const attachmentsSection = composeAttachmentsSection(attachmentsSectionInput(input.attachments));
   const attachmentsSuffix = attachmentsSection.length > 0 ? `\n\n${attachmentsSection}` : "";
-  return `${orientation}Coordinate the board through the bundled \`volli\` CLI: run \`volli help\` for the full reference (and the volli skill, when installed, for norms).\n\n${ticketPrompt}${attachmentsSuffix}`;
+  return `${orientation}Board coordination goes through the bundled \`volli\` CLI. Run \`volli help\` when you need its reference (and the volli skill, when installed, for norms).\n\n${ticketPrompt}${attachmentsSuffix}`;
 }
 
 /**
@@ -138,7 +138,7 @@ export function composeTicketBrief(input: {
  * wordings of one instruction would read as two different rules.
  */
 export function composeProjectBrief(input: { project: Pick<Project, "path"> }): string {
-  return `This is a project-scoped chat Session with no Ticket. Your working directory is the project root at ${input.project.path}.\n\nCoordinate the board through the bundled \`volli\` CLI: run \`volli help\` for the full reference (and the volli skill, when installed, for norms).`;
+  return `This is a project-scoped chat Session with no Ticket. Your working directory is the project root at ${input.project.path}.\n\nBoard coordination goes through the bundled \`volli\` CLI. Run \`volli help\` when you need its reference (and the volli skill, when installed, for norms).`;
 }
 
 export interface AgentCommandServiceOptions {

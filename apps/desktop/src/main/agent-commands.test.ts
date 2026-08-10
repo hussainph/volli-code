@@ -772,7 +772,7 @@ describe("agent command service", () => {
       ok: true,
       data: {
         prompt:
-          "Coordinate the board through the bundled `volli` CLI: run `volli help` for the full reference (and the volli skill, when installed, for norms).\n\nVC-1: Ship CLI\n\nFollow the implementation contract.",
+          "Board coordination goes through the bundled `volli` CLI. Run `volli help` when you need its reference (and the volli skill, when installed, for norms).\n\nVC-1: Ship CLI\n\nFollow the implementation contract.",
       },
     });
   });
@@ -821,7 +821,7 @@ describe("agent command service", () => {
           "You are working in an isolated git worktree at `/Users/x/.volli/worktrees/project-one/VC-1` " +
           "on branch `volli/VC-1-ship-cli` (branched from `main`). All work happens in the current " +
           "directory. The main checkout at `/repo/volli` is reference-only — never modify it.\n\n" +
-          "Coordinate the board through the bundled `volli` CLI: run `volli help` for the full reference (and the volli skill, when installed, for norms).\n\nVC-1: Ship CLI\n\nFollow the implementation contract.",
+          "Board coordination goes through the bundled `volli` CLI. Run `volli help` when you need its reference (and the volli skill, when installed, for norms).\n\nVC-1: Ship CLI\n\nFollow the implementation contract.",
       },
     });
   });
@@ -872,7 +872,7 @@ describe("agent command service", () => {
       ok: true,
       data: {
         prompt:
-          "Coordinate the board through the bundled `volli` CLI: run `volli help` for the full reference (and the volli skill, when installed, for norms).\n\n" +
+          "Board coordination goes through the bundled `volli` CLI. Run `volli help` when you need its reference (and the volli skill, when installed, for norms).\n\n" +
           "VC-1: Ship CLI\n\nFollow the implementation contract.\n\n" +
           "## Attachments\n\n" +
           "Read each attached file before starting — they are part of the ticket's spec:\n" +
@@ -914,7 +914,7 @@ describe("agent command service", () => {
       ok: true,
       data: {
         prompt:
-          "Coordinate the board through the bundled `volli` CLI: run `volli help` for the full reference (and the volli skill, when installed, for norms).\n\nVC-1: Ship CLI",
+          "Board coordination goes through the bundled `volli` CLI. Run `volli help` when you need its reference (and the volli skill, when installed, for norms).\n\nVC-1: Ship CLI",
       },
     });
   });
@@ -3179,7 +3179,7 @@ describe("composeProjectBrief", () => {
     expect(composeProjectBrief({ project: { path: "/code/volli" } })).toMatchInlineSnapshot(`
         "This is a project-scoped chat Session with no Ticket. Your working directory is the project root at /code/volli.
 
-        Coordinate the board through the bundled \`volli\` CLI: run \`volli help\` for the full reference (and the volli skill, when installed, for norms)."
+        Board coordination goes through the bundled \`volli\` CLI. Run \`volli help\` when you need its reference (and the volli skill, when installed, for norms)."
       `);
   });
 
