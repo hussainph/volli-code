@@ -100,7 +100,7 @@ function SettingsMenuButton({ active, onSelect }: { active: boolean; onSelect():
     <SidebarMenu>
       <SidebarMenuItem>
         <SidebarMenuButton isActive={active} onClick={onSelect}>
-          <GearSixIcon weight="fill" />
+          <GearSixIcon />
           <span>Settings</span>
         </SidebarMenuButton>
       </SidebarMenuItem>

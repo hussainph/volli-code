@@ -88,7 +88,7 @@ function EventLine({ event, muted = false }: { event: TicketEvent; muted?: boole
         muted ? "text-muted-foreground/70" : "text-muted-foreground",
       )}
     >
-      <Icon weight="fill" className={cn("shrink-0", muted ? "size-3" : "size-3.5")} />
+      <Icon className={cn("shrink-0", muted ? "size-3" : "size-3.5")} />
       <span className="min-w-0 truncate">{sentence}</span>
       <span className="shrink-0 text-muted-foreground/70">· {relativeTime(event.createdAt)}</span>
     </div>
@@ -131,7 +131,7 @@ function BunchRow({
   return (
     <li className="flex flex-col">
       <div className="flex items-center gap-2 px-1 text-xs text-muted-foreground">
-        <Icon weight="fill" className="size-3.5 shrink-0" />
+        <Icon className="size-3.5 shrink-0" />
         <span className="min-w-0 truncate">{sentence}</span>
         {hidden > 0 ? (
           <button
@@ -330,7 +330,7 @@ function Composer({ onSubmit }: { onSubmit: (body: string) => Promise<boolean> }
           disabled={draft.trim() === "" || submitting}
           onClick={() => void submit()}
         >
-          <PaperPlaneTiltIcon weight="fill" />
+          <PaperPlaneTiltIcon />
           Comment
           {/* Same shortcut-chip treatment as the workspace picker's tooltip
               (project-tile.tsx), tinted for the ember primary surface. */}

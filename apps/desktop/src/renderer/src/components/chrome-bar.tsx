@@ -168,7 +168,7 @@ function WorkspaceRailToggle() {
       aria-label={workspaceRailHidden ? "Show workspace switcher" : "Hide workspace switcher"}
       title={`${workspaceRailHidden ? "Show" : "Hide"} workspace switcher`}
     >
-      <SidebarIcon weight="fill" />
+      <SidebarIcon />
       <span className="sr-only">Toggle workspace switcher</span>
     </Button>
   );
@@ -243,7 +243,7 @@ function RightRailToggle() {
       aria-label={railCollapsed ? "Show details rail" : "Hide details rail"}
       title={`${railCollapsed ? "Show" : "Hide"} details (⌥⌘B)`}
     >
-      <SidebarSimpleIcon weight="fill" className="scale-x-[-1]" />
+      <SidebarSimpleIcon className="scale-x-[-1]" />
       <span className="sr-only">Toggle details rail</span>
     </Button>
   );

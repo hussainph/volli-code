@@ -127,7 +127,7 @@ export function SessionBandFilterMenu({
           onSelect={(event) => event.preventDefault()}
           onCheckedChange={() => toggleKind("chat")}
         >
-          <ChatCircleIcon weight="fill" />
+          <ChatCircleIcon />
           Chats
         </DropdownMenuCheckboxItem>
         <DropdownMenuCheckboxItem
@@ -135,7 +135,7 @@ export function SessionBandFilterMenu({
           onSelect={(event) => event.preventDefault()}
           onCheckedChange={() => toggleKind("terminal")}
         >
-          <TerminalWindowIcon weight="fill" />
+          <TerminalWindowIcon />
           Terminals
         </DropdownMenuCheckboxItem>
         <DropdownMenuSeparator />
@@ -144,7 +144,7 @@ export function SessionBandFilterMenu({
           onSelect={(event) => event.preventDefault()}
           onCheckedChange={() => onChange({ ...filter, showCleaned: !filter.showCleaned })}
         >
-          <BroomIcon weight="fill" />
+          <BroomIcon />
           Cleaned up
         </DropdownMenuCheckboxItem>
       </DropdownMenuContent>

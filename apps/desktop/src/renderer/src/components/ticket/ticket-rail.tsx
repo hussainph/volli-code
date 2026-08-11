@@ -81,7 +81,7 @@ export function TicketRailModeStrip({
                 "bg-primary/15 text-primary ring-1 ring-inset ring-primary/40 hover:bg-primary/20 hover:text-primary",
             )}
           >
-            <Icon weight="fill" className="size-3.5" />
+            <Icon className="size-3.5" />
           </Button>
         );
       })}

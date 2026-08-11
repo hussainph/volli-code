@@ -36,7 +36,7 @@ const ENVIRONMENT_ICONS: Record<TicketEnvironmentRow["id"], PhosphorIcon> = {
 
 function EnvironmentIcon({ id }: { id: TicketEnvironmentRow["id"] }) {
   const Icon = ENVIRONMENT_ICONS[id];
-  return <Icon weight="fill" className="size-4 shrink-0 text-muted-foreground" />;
+  return <Icon className="size-4 shrink-0 text-muted-foreground" />;
 }
 
 /**
@@ -201,7 +201,7 @@ export function TicketEnvironmentInspectorContent({
                   : `Couldn’t load changes: ${changeSetError}`}
               </span>
               <Button type="button" size="xs" variant="ghost" onClick={onRetry}>
-                <ArrowClockwiseIcon weight="fill" />
+                <ArrowClockwiseIcon />
                 Retry
               </Button>
             </div>
@@ -224,7 +224,7 @@ export function TicketEnvironmentInspectorContent({
               onClick={() => onOpenSource(source.relPath)}
               className="-mx-1 flex min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left transition-colors hover:bg-accent motion-reduce:transition-none"
             >
-              <FoldersIcon weight="fill" className="size-4 shrink-0 text-muted-foreground" />
+              <FoldersIcon className="size-4 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate text-ui text-foreground">
                 {source.label}
               </span>
@@ -237,7 +237,7 @@ export function TicketEnvironmentInspectorContent({
               onClick={() => onNavigate("files")}
               className="-mx-1 flex items-center gap-2 rounded-md px-1 py-1 text-left text-ui text-muted-foreground transition-colors hover:bg-accent hover:text-foreground motion-reduce:transition-none"
             >
-              <FoldersIcon weight="fill" className="size-4" />
+              <FoldersIcon className="size-4" />
               View all
             </button>
           ) : null}

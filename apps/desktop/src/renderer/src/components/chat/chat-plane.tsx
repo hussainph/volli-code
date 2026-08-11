@@ -510,7 +510,7 @@ function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
         <WarningIcon aria-hidden className="size-3.5 shrink-0 text-destructive" weight="fill" />
       ) : null}
       {blocker.tone === "waiting" ? (
-        <ClockIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" weight="fill" />
+        <ClockIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
       ) : null}
       <div className="min-w-0 flex-1">
         {/* Both lines are clipped by CSS, so both keep the hover that is the

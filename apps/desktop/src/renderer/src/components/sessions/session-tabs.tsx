@@ -377,7 +377,7 @@ function TerminalTab({ tab, onSelect, ...shell }: KindTabProps & { tab: SessionT
           labelClassName={exited ? "line-through" : undefined}
           leading={
             parked && !exited ? (
-              <MoonIcon weight="fill" className="size-2.5 shrink-0 text-muted-foreground" />
+              <MoonIcon weight="bold" className="size-2.5 shrink-0 text-muted-foreground" />
             ) : (
               <span
                 className={cn(
@@ -470,7 +470,11 @@ function ChatTab({
                 aria-hidden
                 className={cn("size-1.5 shrink-0 rounded-full", TAB_STATUS_CLASS[status])}
               />
-              <ChatCircleIcon weight="fill" className="size-3 shrink-0 text-muted-foreground" />
+              {/* Bold, not filled: the dot beside it is already a solid object,
+                  and two in a 12px row is one too many. Same treatment as the
+                  sidebar's kind glyph — at this size regular draws lighter than
+                  its own label and bold puts the pen back on the text stem. */}
+              <ChatCircleIcon weight="bold" className="size-3 shrink-0 text-muted-foreground" />
             </>
           }
         />

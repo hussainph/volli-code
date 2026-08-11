@@ -103,12 +103,12 @@ export function NewSessionControl({
   const items = (
     <>
       <DropdownMenuItem onSelect={onNewChat}>
-        <ChatCircleIcon weight="fill" />
+        <ChatCircleIcon />
         Chat
         {shortcuts ? <DropdownMenuShortcut>{CHORD.chat}</DropdownMenuShortcut> : null}
       </DropdownMenuItem>
       <DropdownMenuItem onSelect={onNewTerminal}>
-        <TerminalWindowIcon weight="fill" />
+        <TerminalWindowIcon />
         Terminal
         {shortcuts ? <DropdownMenuShortcut>{CHORD.terminal}</DropdownMenuShortcut> : null}
       </DropdownMenuItem>

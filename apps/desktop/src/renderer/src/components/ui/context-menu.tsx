@@ -37,6 +37,14 @@ function ContextMenuRadioGroup({
   return <ContextMenuPrimitive.RadioGroup data-slot="context-menu-radio-group" {...props} />;
 }
 
+/**
+ * The `icon` prop is required, and it is drawn at Phosphor's default weight.
+ *
+ * Every action in a menu is a peer of every other, so a filled glyph here marks
+ * nothing — and at 16px beside 14px text the mark is already the larger object.
+ * Fill is reserved for the one item that is the exception among its neighbours;
+ * a menu has none, which is why the primitive does not offer the choice.
+ */
 function ContextMenuSubTrigger({
   className,
   inset,
@@ -57,7 +65,7 @@ function ContextMenuSubTrigger({
       )}
       {...props}
     >
-      <ItemIcon aria-hidden weight="fill" />
+      <ItemIcon aria-hidden />
       {children}
       <CaretRightIcon weight="bold" className="ml-auto" />
     </ContextMenuPrimitive.SubTrigger>
@@ -121,7 +129,7 @@ function ContextMenuItem({
       )}
       {...props}
     >
-      <ItemIcon aria-hidden weight="fill" />
+      <ItemIcon aria-hidden />
       {children}
     </ContextMenuPrimitive.Item>
   );
@@ -169,6 +177,8 @@ function ContextMenuRadioItem({
     >
       <span className="pointer-events-none absolute left-2 flex size-3.5 items-center justify-center">
         <ContextMenuPrimitive.ItemIndicator>
+          {/* Solid IS the meaning here, and the off state is absence rather
+              than an outline. At 8px nothing else resolves anyway. */}
           <CircleIcon weight="fill" className="size-2" />
         </ContextMenuPrimitive.ItemIndicator>
       </span>

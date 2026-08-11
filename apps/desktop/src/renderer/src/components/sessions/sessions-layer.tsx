@@ -1,4 +1,4 @@
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -463,7 +463,10 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
 
           {selected && emptySurface && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center">
-              <TerminalWindowIcon weight="fill" className="size-8 text-muted-foreground" />
+              {/* Chat, not a terminal: the control below starts a chat, and the
+                  glyph crowning an empty state has to name the thing the button
+                  does. */}
+              <ChatCircleIcon className="size-8 text-muted-foreground" />
               <p className="text-sm text-muted-foreground">No open sessions.</p>
               {/* The same control the strip carries, drawn solid: it is the only
                   affordance on screen, so it takes the emphasis and says what it

@@ -160,7 +160,7 @@ function SplitNode(props: SplitNodeProps) {
                     props.onResume?.(layout.sessionId);
                   }}
                 >
-                  <ArrowClockwiseIcon weight="fill" />
+                  <ArrowClockwiseIcon />
                   Resume session
                 </Button>
               </div>

@@ -30,6 +30,8 @@ function ArchiveReadyBadge({ ticket }: { ticket: Ticket }) {
       title="Ready to archive"
       aria-label="Ready to archive"
     >
+      {/* Filled, and one of the few that is: it marks the single card on a
+          board of peers whose worktree is finished with. */}
       <ArchiveIcon weight="fill" className="size-3" />
     </span>
   );

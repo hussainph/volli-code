@@ -66,7 +66,7 @@ export function SettingsShell({
                   : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground",
               )}
             >
-              <Icon weight="fill" className="size-4 shrink-0" />
+              <Icon className="size-4 shrink-0" />
               <span className="truncate">{label}</span>
             </button>
           );
@@ -127,7 +127,7 @@ export function SettingsSection({
           <div className="min-w-0">
             {title ? (
               <div className="flex items-center gap-2">
-                {Icon ? <Icon weight="fill" className="size-4 text-muted-foreground" /> : null}
+                {Icon ? <Icon className="size-4 text-muted-foreground" /> : null}
                 <h2 className="text-sm font-semibold">{title}</h2>
               </div>
             ) : null}

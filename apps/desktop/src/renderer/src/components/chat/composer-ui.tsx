@@ -193,6 +193,10 @@ export function SessionComposer({
         <div className="ml-auto flex shrink-0 items-center gap-1">
           {working ? (
             <Button type="button" variant="ghost" size="icon-sm" aria-label="Stop" onClick={onStop}>
+              {/* One of the few glyphs that keeps its fill: a stop square MEANS
+                  solid the way a play triangle does, and hollow it reads as a
+                  checkbox. It is also the exception rather than the category —
+                  it only exists while a turn is running. */}
               <SquareIcon className="size-3.5" weight="fill" />
             </Button>
           ) : null}

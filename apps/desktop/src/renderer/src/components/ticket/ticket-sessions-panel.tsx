@@ -1,8 +1,8 @@
 import * as React from "react";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
+import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { errorMessage, type SessionListingRow, type SessionRecord } from "@volli/shared";
 
 import { renameChatSession } from "@renderer/chat/rename";
@@ -516,7 +516,8 @@ export function TicketSessionsPanel({
           </div>
           {current.length === 0 ? (
             <div className="flex flex-col items-center gap-1.5 rounded-md border border-dashed border-border py-6 text-center">
-              <TerminalWindowIcon weight="fill" className="size-4 text-muted-foreground" />
+              {/* Chat, not a terminal — the control above this panel starts one. */}
+              <ChatCircleIcon className="size-4 text-muted-foreground" />
               <p className="text-xs text-muted-foreground">No active sessions</p>
             </div>
           ) : (

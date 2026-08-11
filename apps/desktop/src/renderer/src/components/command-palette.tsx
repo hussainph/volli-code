@@ -111,7 +111,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                   className="flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-2 outline-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
                 >
                   <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-card text-muted-foreground">
-                    <TerminalWindowIcon weight="fill" className="size-3.5" />
+                    <TerminalWindowIcon className="size-3.5" />
                   </span>
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate text-sm font-medium">{item.title}</span>
@@ -143,7 +143,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               className="flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-2 outline-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
             >
               <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-card text-muted-foreground">
-                <TicketIcon weight="fill" className="size-3.5" />
+                <TicketIcon className="size-3.5" />
               </span>
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate text-sm font-medium">{item.title}</span>

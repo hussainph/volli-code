@@ -850,28 +850,28 @@ function WorktreeDoneFlowSection({ ticket }: { ticket: Ticket }) {
             ) : null}
             <DoneFlowMenuItem
               action={view.menu.commit}
-              icon={<GitCommitIcon weight="fill" />}
+              icon={<GitCommitIcon />}
               onRun={() => void runCommitOnly()}
             />
             <DoneFlowMenuItem
               action={view.menu.push}
-              icon={<GitPullRequestIcon weight="fill" />}
+              icon={<GitPullRequestIcon />}
               onRun={() => void runPushOnly(view.menu.push.kind === "push-updates")}
             />
             <DoneFlowMenuItem
               action={view.menu.openPr}
-              icon={<ArrowSquareOutIcon weight="fill" />}
+              icon={<ArrowSquareOutIcon />}
               onRun={openPr}
             />
             {retentionView.archiveReady ? (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem disabled={retentionBusy} onSelect={() => void runSetKeep(true)}>
-                  <PushPinIcon weight="fill" />
+                  <PushPinIcon />
                   {KEEP_WORKTREE_LABEL}
                 </DropdownMenuItem>
                 <DropdownMenuItem disabled={retentionBusy} onSelect={() => void runDismiss()}>
-                  <BellSlashIcon weight="fill" />
+                  <BellSlashIcon />
                   {DISMISS_LABEL}
                 </DropdownMenuItem>
               </>

@@ -41,7 +41,7 @@ export function NavList() {
                 setActiveNav(key);
               }}
             >
-              <Icon weight="fill" />
+              <Icon />
               <span>{label}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>

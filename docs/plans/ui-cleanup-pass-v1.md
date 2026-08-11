@@ -12,7 +12,7 @@ such override is written down below.
 
 | # | Task | State |
 |---|------|-------|
-| 1 | Icon-weight audit learnings | in progress — runs LAST, it sweeps every file |
+| 1 | Icon-weight audit learnings | **done** — 58 sites to outline, 15 keep fill |
 | 2 | Sidebar: hover reveal + row anatomy + ghosting + scrollbar | **done** — `3a1e6bff` |
 | 3 | Session-start controls + shortcuts | **done** — `58797fcb` |
 | 4 | Fullscreen placement, planned against `ui/right-sidebar-fixes` | **planned** — `docs/plans/fullscreen-placement.md`; blocked on that branch landing |
@@ -89,6 +89,20 @@ this work. What remains is what the implementation itself turned up.
 
 **Live judgement calls, easy to reverse**
 
+- **Two ≤12px glyphs in the tab strip went to `bold`, not `regular`.** The audit's
+  per-site verdict for `session-tabs.tsx` says regular, but its clause 5 ("bold is
+  the small-size tier") and its own tier study both bite at this size, and the
+  sidebar's kind glyph — the same ChatCircle at the same 12px beside the same
+  `text-xs` label — already ships bold. Leaving the strip at regular would draw
+  one glyph two weights on two adjacent surfaces. Revert = `weight="bold"` →
+  no prop at `session-tabs.tsx:380` (Moon, 10px) and `:473` (ChatCircle, 12px).
+- **Three transcript receipts the audit never listed went to outline**:
+  `activity-ui.tsx` `AttentionReceipt` (both branches) and
+  `interaction-ui.tsx` `InteractionReceiptLine`. A receipt records a decision
+  already made; the row or card above it wore the filled mark, and ink still
+  separates allowed from denied.
+- **`canvas-editor.tsx:910` keeps its fill** — a `role="status"` contrast alert on
+  `text-primary-text`, the same shape as the permission card's Warning.
 - Composer at 576px wraps the branch pair to a second right-aligned line; Paper's
   mock fits one line only because its chip reads "Explore" and ours reads a real
   harness name. Widening the collapsed dialog is the alternative.

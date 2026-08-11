@@ -317,7 +317,7 @@ const KIND_ICONS: Record<ActivityKind, Icon> = {
  * below it carries the mark for its own kind.
  */
 function BundleGlyph() {
-  return <WrenchIcon aria-hidden className={GLYPH_CLASS} weight="fill" />;
+  return <WrenchIcon aria-hidden className={GLYPH_CLASS} />;
 }
 
 const GLYPH_CLASS = "size-3.5 shrink-0 text-muted-foreground";
@@ -335,14 +335,16 @@ const GLYPH_CLASS = "size-3.5 shrink-0 text-muted-foreground";
 function RowGlyph({ kind, status }: { kind: ActivityKind; status: ActivityStatus }) {
   if (status !== "done") return <StatusGlyph status={status} />;
   const Icon = KIND_ICONS[kind];
-  return <Icon aria-hidden className={GLYPH_CLASS} weight="fill" />;
+  return <Icon aria-hidden className={GLYPH_CLASS} />;
 }
 
 /**
- * Filled weights throughout — the outline set reads thin and unresolved beside
- * the app's type. The two exceptions are the states whose meaning *is* the
- * outline: a filled spinner-gap is a disc with no gap to rotate, and a filled
- * dashed circle is a disc with no dashes.
+ * Outline is the baseline; fill is spent only on the rows that are the
+ * exception. A transcript is a scannable list, and the scan works because the
+ * routine rows are uniform — so the three states that stop a person (blocked,
+ * failed, denied) are filled and everything else, the settled tick included, is
+ * not. A muted filled CheckCircle covers half its box to say "this went fine",
+ * which is the one thing a settled row should not say loudly.
  */
 function StatusGlyph({ status }: { status: ActivityStatus }) {
   const className = "size-3.5 shrink-0";
@@ -364,13 +366,7 @@ function StatusGlyph({ status }: { status: ActivityStatus }) {
         <ProhibitIcon aria-hidden className={cn(className, "text-destructive")} weight="fill" />
       );
     default:
-      return (
-        <CheckCircleIcon
-          aria-hidden
-          className={cn(className, "text-muted-foreground")}
-          weight="fill"
-        />
-      );
+      return <CheckCircleIcon aria-hidden className={cn(className, "text-muted-foreground")} />;
   }
 }
 
@@ -829,7 +825,7 @@ const ReasoningRow = React.memo(function ReasoningRow({
         {streaming ? (
           <SpinnerGapIcon aria-hidden className="size-3.5 shrink-0 animate-spin text-primary" />
         ) : (
-          <BrainIcon aria-hidden className={GLYPH_CLASS} weight="fill" />
+          <BrainIcon aria-hidden className={GLYPH_CLASS} />
         )}
         <span id={verbId} className="min-w-0 truncate">
           {status.verb}
@@ -868,10 +864,14 @@ export function AttentionReceipt({ part }: { part: DynamicToolUIPart }) {
   const approved = row.status !== "denied";
   return (
     <div className="not-prose flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+      {/* Outline, even for the denial. The row this receipt hangs under already
+          carries the filled destructive Prohibit that says the call was refused;
+          the receipt is the settled record of what you did about it, and a
+          second filled mark on the same fact is the same bit twice. */}
       {approved ? (
-        <CheckCircleIcon aria-hidden className="size-3.5 shrink-0 text-primary" weight="fill" />
+        <CheckCircleIcon aria-hidden className="size-3.5 shrink-0 text-primary" />
       ) : (
-        <ProhibitIcon aria-hidden className={GLYPH_CLASS} weight="fill" />
+        <ProhibitIcon aria-hidden className={GLYPH_CLASS} />
       )}
       <span className="shrink-0">You {approved ? "allowed" : "denied"}</span>
       {row.object ? (
