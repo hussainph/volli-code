@@ -82,10 +82,18 @@ this work. What remains is what the implementation itself turned up.
   button, and the row-anatomy scratch sets that attribute too — so what was
   reviewed as "ghost + indent" was always ghost alone. Shipping the indent means
   relaxing those rules, which changes every sidebar row's height.
-- Terminal focus (`data-volli-shell="focused"`) is **code-verified only** — the
-  lab mounts no PTY. Wants a local desktop smoke.
-- `docs-shots.mjs` and `ticket-detail-smoke.mjs` were edited but not run. CI does
-  not run desktop smokes, so nothing else will catch it.
+## Desktop smokes — run locally, all green
+
+CI does not run these. Run before shipping: `pnpm run build`, then each of
+`ticket-detail-smoke`, `composer-basics-smoke`, `composer-kickoff-smoke`,
+`session-start-control-shots`, `ticket-rail-shots`, `docs-shots`,
+`terminal-smoke`, `memory-smoke`, `park-smoke`. All nine pass on `c08ad8aa`.
+
+`ticket-detail-smoke` step 6b covers terminal focus in both directions, so the
+`data-volli-shell="focused"` path is no longer code-verified only.
+
+`docs-shots` rewrites `apps/docs/src/assets/screenshots/` from the running app —
+expect a diff there after any chrome change, and commit it.
 
 **Live judgement calls, easy to reverse**
 
