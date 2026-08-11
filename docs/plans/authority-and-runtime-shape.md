@@ -647,9 +647,15 @@ the codec rather than of this kind.
 `apps/desktop/src/renderer/src/components/chat/interaction-ui.tsx`.
 
 Roughly 1400 renderer lines sit at 100% coverage verifying behaviour nothing in
-production emits: the only producer of `interaction.opened` is the lab, and the
-Pi adapter refuses `interaction.resolve` outright. The coverage gate certifies
-unreachable code.
+production emits, and the Pi adapter refuses `interaction.resolve` outright
+(`PI_INTERACTION_UNSUPPORTED`). The coverage gate certifies unreachable code.
+
+**Sharpened 2026-08-11.** This said the lab was the one producer of
+`interaction.opened`. The lab's backend half was deleted with the registry, so
+there is now *no* producer at all — the arm `RuntimeObservation` gained in the
+same stack is translated but never emitted. That strengthens the dependency
+rather than changing it: the surface is still waiting on Part I slice 4 for its
+first real producer, and there is now nothing else keeping it honest.
 
 Read on its own, this looks like a deletion candidate. It is not. Part I step 4
 flips the adapter's declaration and gives the surface its producer, at which
