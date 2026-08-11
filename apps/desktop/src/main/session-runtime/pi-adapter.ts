@@ -372,6 +372,17 @@ class PiBinding implements BindingHandle {
   readonly #asked = new Map<string, ParkedAsk>();
   #handle: RuntimeAttachmentHandle | null = null;
   #native: SessionNativeReference = { id: null, detail: null };
+  /**
+   * Set the moment {@link PiBinding.release} begins, and read by every command
+   * path instead of {@link PiBinding.#released}.
+   *
+   * Release cannot set `#released` until it has announced its withdrawals, so
+   * the two flags exist to say different things: this one closes the door on new
+   * work, `#released` closes it on new facts. One flag could only do both by
+   * accepting a command onto a handle that is already closing — a durable
+   * `accepted` receipt for a message Pi will never process.
+   */
+  #releasing = false;
   #released = false;
 
   constructor(options: PiBindingOptions) {
@@ -449,7 +460,7 @@ class PiBinding implements BindingHandle {
 
   async dispatch(command: HarnessCommand): Promise<DeliveryReceipt> {
     const handle = this.#handle;
-    if (handle === null || this.#released) {
+    if (handle === null || this.#releasing) {
       return this.#rejected(
         command.commandId,
         "PI_ATTACHMENT_CLOSED",
@@ -514,7 +525,7 @@ class PiBinding implements BindingHandle {
 
   async reconcile(cursor: Parameters<BindingHandle["reconcile"]>[0]): Promise<Reconciliation> {
     const handle = this.#handle;
-    if (handle === null || this.#released) {
+    if (handle === null || this.#releasing) {
       return { cursor, observations: [], receipts: [] };
     }
     const entryId = recoveryEntryId(cursor);
@@ -565,7 +576,8 @@ class PiBinding implements BindingHandle {
    * only one path end any of them.
    */
   async release(_reason: ReleaseReason): Promise<void> {
-    if (this.#released) return;
+    if (this.#releasing) return;
+    this.#releasing = true;
     // Iterated live rather than over a snapshot: an escalation that slipped in
     // between two awaits here is one this loop still has to withdraw, and a
     // question the map no longer holds is one something else already ended.

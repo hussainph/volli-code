@@ -1028,6 +1028,34 @@ describe("Pi native adapter escalation", () => {
     expect(runtime.closes).toBe(1);
   });
 
+  it("refuses a command that arrives while release is still withdrawing", async () => {
+    const { binding, runtime } = await attached();
+
+    const answer = ask(runtime);
+    await flush();
+    // Deliberately not awaited: this is the window between the first withdrawal
+    // and the released flag, which is the only moment the two flags disagree.
+    const releasing = binding.release("requested");
+    const receipt = await binding.dispatch({
+      kind: "message.submit",
+      commandId: "command-9",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      message: userMessage("Ship it anyway"),
+      delivery: "queue",
+      model: null,
+      agent: null,
+      variant: null,
+    });
+    await releasing;
+
+    // Accepting here would hand back a durable receipt for a message Pi closes
+    // before it ever reads — the one outcome a receipt must never claim.
+    expect(receipt).toMatchObject({ status: "rejected", code: "PI_ATTACHMENT_CLOSED" });
+    expect(runtime.submissions).toHaveLength(0);
+    expect(await answer).toEqual(WITHDRAWN);
+  });
+
   it("settles every parked question even when the withdrawal cannot be recorded", async () => {
     const { binding, runtime, sink } = await attached();
 
