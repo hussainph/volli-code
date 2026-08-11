@@ -11,6 +11,9 @@
  */
 import { detectProjectBaseBranch, type RunGit } from "../project-base-branch";
 
+/** The one remote every downstream reader of a stamped base assumes — see below. */
+const ORIGIN_PREFIX = "origin/";
+
 export interface BaseResolution {
   /** The base branch NAME, stamped into `ticket.baseBranch`, e.g. `"main"`. */
   name: string;
@@ -56,17 +59,37 @@ export function resolveBaseBranch(
     return { name, startPoint: name };
   }
 
-  // A base picked from the remote-tracking list ("origin/main") names the same
-  // BRANCH as its local counterpart; the prefix only says to start from
-  // origin's snapshot of it rather than from the local head. Stamping the
-  // prefixed form onto the ticket would hand every later reader a ref the
-  // remote does not have — `fetchBase` would run `git fetch origin
-  // origin/main` — so the prefix is resolved into a start point here and never
-  // persisted. Checked AFTER refs/heads so a local branch literally named
-  // `origin/main` still wins as itself.
+  // A base picked from the remote-tracking list names a ref that only moves on a
+  // fetch, so its prefix says "start from that snapshot" rather than "start from
+  // the local head". WHICH remote it names decides what gets stamped, and the
+  // asymmetry is not tidiness: every later reader of `ticket.baseBranch` speaks
+  // to `origin` and only `origin` — `fetchBase` runs `git fetch origin <base>`,
+  // `resolveComparisonRef` probes `refs/remotes/origin/<base>`, and the PR is
+  // opened with `gh pr create --base <base>` against origin's repo.
+  //
+  // Only `origin/` is stripped. For `origin/main` the prefix is redundant and
+  // actively harmful — `main` is the same BRANCH those readers want, and the
+  // prefixed form would have them name `origin/origin/main`.
+  //
+  // A SECOND remote is a different branch, not a different spelling of the same
+  // one. `upstream/main` is offered by the composer's picker on any fork checkout
+  // (`state.ts` lists all of `refs/remotes`), and origin's `main` is nobody's
+  // guarantee of upstream's: stripping there would fork the worktree from one
+  // branch and then silently fetch, diff and PR against the other. So the full
+  // name is kept. It stays a name git resolves, which is what the readers that
+  // matter for correctness use — the comparison ref and the Change Set's merge
+  // base measure against exactly what the branch forked from — while the two that
+  // can only speak to origin fail LOUDLY on it: the fetch is best-effort and
+  // degrades to stale-local info (publish.ts step (b)), and `gh` surfaces its own
+  // stderr. "You based this on a remote we cannot publish to" is the honest
+  // answer there, and far better than measuring the wrong branch without a word.
+  //
+  // Checked AFTER refs/heads so a local branch literally named `origin/main`
+  // still wins as itself.
   const remoteTracking = `refs/remotes/${name}`;
   if (name.includes("/") && refExists(git, input.projectPath, remoteTracking)) {
-    return { name: name.slice(name.indexOf("/") + 1), startPoint: remoteTracking };
+    const stamped = name.startsWith(ORIGIN_PREFIX) ? name.slice(ORIGIN_PREFIX.length) : name;
+    return { name: stamped, startPoint: remoteTracking };
   }
 
   const remoteRef = `refs/remotes/origin/${name}`;

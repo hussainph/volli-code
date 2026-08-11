@@ -62,7 +62,7 @@ describe("resolveBaseBranch", () => {
     ).toEqual({ name: "main", startPoint: "refs/remotes/origin/main" });
   });
 
-  it("strips the remote prefix off a base picked from the remote-tracking list", () => {
+  it("strips an origin/ prefix off a base picked from the remote-tracking list", () => {
     // The composer's base chip offers `origin/main`; what gets STAMPED is
     // `main`, so later readers (`git fetch origin <base>`) name a ref the
     // remote actually has, while the worktree still starts from origin's tip.
@@ -74,6 +74,23 @@ describe("resolveBaseBranch", () => {
         projectBaseBranch: null,
       }),
     ).toEqual({ name: "main", startPoint: "refs/remotes/origin/main" });
+  });
+
+  it("keeps a second remote's prefix, so nothing later measures against origin's branch of that name", () => {
+    // A fork checkout's picker offers `upstream/main` (state.ts lists all of
+    // refs/remotes). Stripping it would fork the worktree from upstream and then
+    // fetch, diff and PR against origin's OWN `main` — a different branch, with
+    // an `origin/main` present here to make the substitution possible.
+    const { git } = gitWithRefs(
+      new Set(["refs/remotes/upstream/main", "refs/remotes/origin/main"]),
+    );
+    expect(
+      resolveBaseBranch(git, {
+        projectPath: "/repo",
+        ticketBaseBranch: "upstream/main",
+        projectBaseBranch: null,
+      }),
+    ).toEqual({ name: "upstream/main", startPoint: "refs/remotes/upstream/main" });
   });
 
   it("keeps a slashed base that is a real local branch as itself", () => {

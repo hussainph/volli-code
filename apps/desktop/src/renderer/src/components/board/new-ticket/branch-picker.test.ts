@@ -36,43 +36,75 @@ describe("fetchedLabel", () => {
 });
 
 describe("defaultBaseBranch", () => {
-  it("is the checkout's own branch", () => {
-    expect(defaultBaseBranch(listing())).toBe("main");
+  it("is the checkout's own branch when the project pins none", () => {
+    expect(defaultBaseBranch(listing(), null)).toBe("main");
+  });
+
+  it("prefers the project's configured base over the checked-out branch", () => {
+    // The composer's default is written to `ticket.baseBranch`, which OUTRANKS
+    // `project.base_branch` at worktree time — so a repo parked on a feature
+    // branch would durably start new tickets off that feature branch.
+    expect(
+      defaultBaseBranch(listing({ current: "feature/x", branches: ["feature/x", "main"] }), "main"),
+    ).toBe("main");
+  });
+
+  it("honours a configured base that only exists as a remote-tracking ref", () => {
+    expect(defaultBaseBranch(listing({ current: "develop" }), "origin/main")).toBe("origin/main");
+  });
+
+  it("falls through to the checkout's branch when the configured base is gone", () => {
+    // An unselectable chip is worse than the fallback: the ref is in no group of
+    // the picker, so it would look chosen and fail only at worktree creation.
+    expect(defaultBaseBranch(listing({ current: "develop" }), "release/deleted")).toBe("develop");
   });
 
   it("falls back to the most recently committed branch on a detached HEAD", () => {
-    expect(defaultBaseBranch(listing({ current: null }))).toBe("main");
+    expect(defaultBaseBranch(listing({ current: null }), null)).toBe("main");
   });
 
   it("is null for a project with no branches", () => {
-    expect(defaultBaseBranch(listing({ current: null, branches: [] }))).toBeNull();
+    expect(defaultBaseBranch(listing({ current: null, branches: [] }), null)).toBeNull();
   });
 
-  it("is null before the refs have arrived", () => {
-    expect(defaultBaseBranch(null)).toBeNull();
+  it("is null before the refs have arrived, configured base or not", () => {
+    expect(defaultBaseBranch(null, "main")).toBeNull();
   });
 });
 
 describe("resolveBaseBranch", () => {
-  it("keeps a choice the project still has", () => {
-    expect(resolveBaseBranch("develop", listing())).toBe("develop");
+  it("keeps a choice the project still has, over the configured base", () => {
+    expect(resolveBaseBranch("develop", listing(), "main")).toBe("develop");
   });
 
   it("keeps a remote-tracking choice", () => {
-    expect(resolveBaseBranch("origin/main", listing())).toBe("origin/main");
+    expect(resolveBaseBranch("origin/main", listing(), null)).toBe("origin/main");
   });
 
   it("replaces a branch the project no longer has with the default", () => {
-    expect(resolveBaseBranch("deleted/branch", listing())).toBe("main");
+    expect(resolveBaseBranch("deleted/branch", listing(), null)).toBe("main");
   });
 
   it("fills an unset choice with the default", () => {
-    expect(resolveBaseBranch(null, listing())).toBe("main");
+    expect(resolveBaseBranch(null, listing(), null)).toBe("main");
+  });
+
+  it("fills an unset choice with the configured base once the refs land", () => {
+    expect(resolveBaseBranch(null, listing({ current: "develop" }), "main")).toBe("main");
   });
 
   it("holds the choice while the refs are still in flight", () => {
-    expect(resolveBaseBranch("develop", null)).toBe("develop");
-    expect(resolveBaseBranch(null, null)).toBeNull();
+    expect(resolveBaseBranch("develop", null, "main")).toBe("develop");
+  });
+
+  it("shows the configured base before the refs land, so a fast submit records what the chip said", () => {
+    expect(resolveBaseBranch(null, null, "main")).toBe("main");
+  });
+
+  it("has nothing to show or record before the refs land when the project pins no base", () => {
+    // `null` is main's cue to resolve a base itself, which is the honest answer —
+    // better than the chip guessing one it cannot yet check.
+    expect(resolveBaseBranch(null, null, null)).toBeNull();
   });
 });
 

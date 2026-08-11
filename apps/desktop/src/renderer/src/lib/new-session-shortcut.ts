@@ -60,6 +60,8 @@ export interface NewSessionChrome {
   nav: NavKey;
   /** App-wide Settings is chrome layered OVER the workspace, not a nav page. */
   settingsOpen: boolean;
+  /** The global New-ticket dialog — modal, and layered over the workspace too. */
+  newTicketOpen: boolean;
   /** The selected project's open ticket, or null on the plain board. */
   openTicketId: string | null;
 }
@@ -95,12 +97,23 @@ export interface NewSessionLanding {
  * Session, the Sessions page's control mints a project one, and neither asks.
  *
  * "In front of you" is resolved exactly as `terminalFocusTargetForChrome`
- * resolves it, and that agreement is the point: `board` + an `openTicketId`,
- * with Settings not layered over the top. `setNav` deliberately does NOT clear
+ * resolves it, and that agreement is the point: `board` + an `openTicketId`, with
+ * no modal layered over the top. `setNav` deliberately does NOT clear
  * `openTicketId` (stores/workspace.ts), so a ticket you opened stays open behind
  * the Files, Sessions and Configure pages — without the nav gate, pressing ⌘T on
  * the Sessions page would silently mint a Session onto a ticket that is nowhere
  * on screen, which is the failure the old decision was actually afraid of.
+ *
+ * The modal gate is the WHOLE chord, not the ticket branch of it, and that is
+ * where it differs in shape from the nav gate. Settings and the New-ticket dialog
+ * are layered over the workspace, so while one is up nothing behind it is a
+ * surface at all — there is no correct answer to fall through to. Gating only the
+ * ticket branch still minted a Session (a ticketless one) and navigated to
+ * Sessions UNDERNEATH the sheet, where the tab it opened cannot be seen and
+ * nothing here dismisses the sheet to reveal it; the user gets a durable Session
+ * they never see created. A chord that cannot land anywhere visible should not
+ * fire, which is the call `use-new-ticket-shortcut` already makes for "c" and
+ * `terminalFocusTargetForChrome` makes for ⌘⏎.
  *
  * What follows for the menus: a chord hint belongs in any menu whose items
  * resolve the way this does, and now BOTH do — the ticket strip's control and
@@ -122,7 +135,9 @@ export function newSessionLandingForChrome(chrome: NewSessionChrome): NewSession
   // one is worse than the chord doing nothing.
   const projectId = chrome.selectedProjectId;
   if (projectId === null) return null;
-  if (chrome.nav === "board" && !chrome.settingsOpen && chrome.openTicketId !== null) {
+  // Modal chrome owns the keyboard while it is up.
+  if (chrome.settingsOpen || chrome.newTicketOpen) return null;
+  if (chrome.nav === "board" && chrome.openTicketId !== null) {
     // The ticket is already the surface in front, so the tab appears where the
     // user is looking without moving the page under them.
     return { projectId, ticketId: chrome.openTicketId, navigateTo: null };

@@ -77,6 +77,7 @@ function chrome(overrides: Partial<NewSessionChrome> = {}): NewSessionChrome {
     selectedProjectId: "p1",
     nav: "board",
     settingsOpen: false,
+    newTicketOpen: false,
     openTicketId: null,
     ...overrides,
   };
@@ -123,14 +124,25 @@ describe("newSessionLandingForChrome", () => {
     }
   });
 
-  it("ignores a ticket under an open Settings sheet", () => {
-    // Settings is chrome layered OVER the workspace, so the ticket is not what
-    // is in front — the same reading `terminalFocusTargetForChrome` makes.
-    expect(newSessionLandingForChrome(chrome({ openTicketId: "t1", settingsOpen: true }))).toEqual({
-      projectId: "p1",
-      ticketId: null,
-      navigateTo: "sessions",
-    });
+  it("starts nothing under an open Settings sheet, ticket behind it or not", () => {
+    // Settings is chrome layered OVER the workspace, so nothing behind it is the
+    // surface in front — the same reading `terminalFocusTargetForChrome` makes.
+    // Falling through to a project landing minted a Session and navigated to
+    // Sessions UNDERNEATH the sheet, where its tab cannot be seen and nothing
+    // here dismisses the sheet.
+    expect(
+      newSessionLandingForChrome(chrome({ openTicketId: "t1", settingsOpen: true })),
+    ).toBeNull();
+    expect(newSessionLandingForChrome(chrome({ settingsOpen: true }))).toBeNull();
+  });
+
+  it("starts nothing while the New-ticket dialog is up", () => {
+    // The modal owns the keyboard, exactly as `use-new-ticket-shortcut` reads it
+    // for "c" — and a Session minted behind it lands where nobody is looking.
+    expect(newSessionLandingForChrome(chrome({ newTicketOpen: true }))).toBeNull();
+    expect(
+      newSessionLandingForChrome(chrome({ openTicketId: "t1", newTicketOpen: true })),
+    ).toBeNull();
   });
 
   it("starts nothing with no project selected", () => {

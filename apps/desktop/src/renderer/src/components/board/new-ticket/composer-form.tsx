@@ -86,8 +86,13 @@ export function ComposerForm({
   // then drops one the project turns out not to have — the same revalidation
   // the restored `target` gets above, for the same reason (a draft can outlive
   // the branch it named).
+  //
+  // The target's own configured base goes in as the default, and it follows a
+  // retarget: the base a ticket starts from is the target project's business, so
+  // reading it off `target` rather than off the listing keeps the two chips from
+  // ever describing different projects.
   const { listing: branchListing, error: branchError } = useBranchListing(target.id);
-  const baseBranch = resolveBaseBranch(chosenBase, branchListing);
+  const baseBranch = resolveBaseBranch(chosenBase, branchListing, target.baseBranch ?? null);
 
   // Implicit save: every field change re-caches the draft (the storage layer
   // debounces the SQLite write), so closing the dialog ANY way keeps the work.

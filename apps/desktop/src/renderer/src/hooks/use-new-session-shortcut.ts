@@ -48,10 +48,12 @@ export function useNewSessionShortcut(): void {
       const selectedProjectId = useProjectsStore.getState().selectedProjectId;
       const workspace = useWorkspaceStore.getState();
       const ui = selectedProjectId === null ? undefined : workspace.byProject[selectedProjectId];
+      const { settingsOpen, newTicketOpen } = useUiStore.getState();
       const landing = newSessionLandingForChrome({
         selectedProjectId,
         nav: ui?.nav ?? DEFAULT_WORKSPACE_UI.nav,
-        settingsOpen: useUiStore.getState().settingsOpen,
+        settingsOpen,
+        newTicketOpen,
         openTicketId: ui?.openTicketId ?? null,
       });
       if (landing === null) return;

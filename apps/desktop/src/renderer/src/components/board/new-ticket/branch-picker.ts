@@ -2,8 +2,13 @@
  * The composer base-branch chip's reading of a project's refs, hoisted out of
  * the React layer so the branching lives in tested, plain TypeScript.
  *
- * Two jobs, and both are about not lying to the user about what a base is:
+ * Three jobs, and all of them are about not lying to the user about what a base
+ * is:
  *
+ * - {@link defaultBaseBranch} opens on the base the project is CONFIGURED with,
+ *   and only falls back to the branch the checkout is parked on. What this chip
+ *   shows is written to `ticket.baseBranch`, which outranks the project setting
+ *   for the rest of that ticket's life.
  * - {@link groupBranchOptions} keeps local heads and remote-tracking refs in
  *   SEPARATE groups, and the remote group's heading carries the age of the
  *   snapshot it holds. A remote-tracking ref only moves on a fetch, and nothing
@@ -42,13 +47,39 @@ export function fetchedLabel(fetchedAt: number | null, now: number = Date.now())
   return fetchedAt === null ? "never fetched" : `fetched ${relativeTime(fetchedAt, now)}`;
 }
 
+/** Whether the project still has `name`, as a local head or a remote-tracking ref. */
+function listingHas(listing: WorktreeBranchListing, name: string): boolean {
+  return listing.branches.includes(name) || listing.remotes.includes(name);
+}
+
 /**
- * The base a fresh composer opens on: the project checkout's own branch, or —
- * for a detached HEAD, where there is no "current" — its most recently
- * committed branch. `null` only for a project with no branches at all.
+ * The base a fresh composer opens on: the base configured for the project, and
+ * failing that the project checkout's own branch — or, for a detached HEAD where
+ * there is no "current", its most recently committed branch. `null` only for a
+ * project with no branches at all.
+ *
+ * That order is the whole point, and it used to be the other way round.
+ * `current` is whatever the checkout happens to be parked on, which for anyone
+ * who leaves a feature branch checked out is not a base at all; the configured
+ * value is a deliberate statement about where new work starts, and main resolves
+ * bases in exactly that order too (`main/worktree/base.ts`: `ticket.baseBranch`
+ * → `project.base_branch` → detection). Opening on `current` did not merely
+ * disagree with the configured base, it PRE-EMPTED it durably — the composer's
+ * guess is written to `ticket.baseBranch`, which outranks the project's setting
+ * from then on.
+ *
+ * A configured base the project no longer has is skipped rather than shown: it
+ * appears in no group of the picker, so it would sit in the chip looking chosen
+ * while being unselectable, and fail only later at worktree creation.
  */
-export function defaultBaseBranch(listing: WorktreeBranchListing | null): string | null {
+export function defaultBaseBranch(
+  listing: WorktreeBranchListing | null,
+  projectBaseBranch: string | null,
+): string | null {
   if (listing === null) return null;
+  if (projectBaseBranch !== null && listingHas(listing, projectBaseBranch)) {
+    return projectBaseBranch;
+  }
   return listing.current ?? listing.branches[0] ?? null;
 }
 
@@ -59,16 +90,25 @@ export function defaultBaseBranch(listing: WorktreeBranchListing | null): string
  * A null `listing` is "the refs have not arrived yet", NOT "the project has no
  * branches": the choice is held as-is rather than reset, so an in-flight read
  * can't blank a chip the user already set.
+ *
+ * With no choice to hold, the configured base stands in — and this is one value,
+ * not two, because the composer both DISPLAYS it and SUBMITS it. A create that
+ * beats the refs home would otherwise record a different base than the one the
+ * user was looking at, which makes the same click write different durable data
+ * depending on how fast a `for-each-ref` returned. The configured base is the
+ * safe stand-in precisely because it is what main resolves anyway for a ticket
+ * that records nothing; a project with no configured base has no honest answer
+ * yet and keeps `null`, which is main's cue to resolve one itself rather than
+ * this chip's cue to guess.
  */
 export function resolveBaseBranch(
   chosen: string | null,
   listing: WorktreeBranchListing | null,
+  projectBaseBranch: string | null,
 ): string | null {
-  if (listing === null) return chosen;
-  if (chosen !== null && (listing.branches.includes(chosen) || listing.remotes.includes(chosen))) {
-    return chosen;
-  }
-  return defaultBaseBranch(listing);
+  if (listing === null) return chosen ?? projectBaseBranch;
+  if (chosen !== null && listingHas(listing, chosen)) return chosen;
+  return defaultBaseBranch(listing, projectBaseBranch);
 }
 
 /** Case-insensitive substring match — the picker filters, it does not rank. */
