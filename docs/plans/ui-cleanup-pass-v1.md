@@ -21,6 +21,125 @@ such override is written down below.
 Split tabs (`split-tabs.tsx`) stays a lab scratch. Drag-and-select in split view
 has bugs the user wants to work through separately; do not implement it here.
 
+## Round two — the live-app nitpicks
+
+Nine defects found by running the built app, plus one parity mandate added
+mid-round. Fanned out across six agents partitioned by file ownership.
+
+| # | Defect | Owner |
+|---|--------|-------|
+| 1 | Toggle-open animation clips the workspace rail; animation cost | sidebar |
+| 2 | An empty chat counts as a live Session and blocks archive | liveness |
+| 3 | `+Chat` wears a tab's silhouette in dark mode | tabs |
+| 4 | The Calm Stack rail was merged with the old rail, not reproduced | rail |
+| 5 | Composer offers unauthenticated models; first send hits the wrong one | chat |
+| 6 | The composer keeps its text after a successful send | chat |
+| 7 | ⌘T / ⌥⌘T should resolve against context, not always globally | tabs |
+| 8 | Terminal focus sits on the chrome band; wrong surface | tabs |
+| 9 | Sidebar ticket ids render in Mona and blend into the row | sidebar |
+| — | Terminal focus is ticket-only; chat and terminal diverge across surfaces | tabs |
+| — | "The app is starting to feel really sluggish and slow" | perf |
+
+### Decisions the owner settled before the round started
+
+- **`+Chat` moves to a trailing action cluster**, past a divider at the strip's
+  right edge. Tabs own the left, actions own the right. Distance is half the
+  fix; losing the tab silhouette is the other half.
+- **Terminal focus moves onto the terminal pane** — a hover-revealed control in
+  the pane's own corner. It acts on that pane, so it lives on it, and it cannot
+  then appear where no terminal is. Exit stays in the band — not, as first
+  argued, because zen leaves no chrome to host it (the pane is still there and
+  could), but because in zen the user is driving a PTY from the keyboard, and a
+  hover-revealed control is not a way out of a mode.
+
+### Decisions this round reverses
+
+- **⌘T is now context-sensitive.** `new-session-shortcut.ts` documents the
+  opposite — "the alternative … was drawn and rejected" — on the grounds that a
+  chord meaning two things is a chord you have to look up. The owner has
+  overruled it: inside a ticket the chord starts a Session on that ticket. The
+  doc comment gets rewritten rather than left arguing against its own code.
+- **Two reveal gestures, two animations.** The toggle returns to the old
+  layout-participating push; hover keeps the overlay slide the owner likes. One
+  animation for both is what put the panel over the workspace rail.
+- **Liveness is not `exitCode === null`.** That predicate is a fair proxy for a
+  shell and meaningless for a chat, which has no process and so is live
+  forever. Archive gates on an agent loop actually running.
+
+### Where the diagnoses were wrong
+
+Worth keeping, because in four of these the reported symptom was real and the
+cause named in the report was not. Reading the code first would have produced
+four wrong fixes.
+
+- **The archive refusal was not in the renderer.** `exitCode === null` in
+  `ticket-context-menu.tsx` was already terminal-only and already correct — chats
+  never enter that store. The refusal came from main, where a *binding* counted
+  as busy, and `adapter.release` has no production caller, so one chat pinned a
+  worktree for the life of the process. Its comments claimed the renderer
+  conflation, which is how the wrong file got blamed.
+- **The sidebar's old animation was never replaced.** The content push still
+  runs; the card animates 326→68 exactly as before. The defect was the travel —
+  both reveals parked a full window's width away and slid in unclipped over a
+  transparent, unlayered rail.
+- **The ticket id was already `font-mono`.** `text-label` bakes in +0.05em
+  tracking, which gives up the one property anyone wants from a monospace face,
+  and there was no column to line up in.
+- **Theme switching is not derivation.** Tokens land in under 7ms at any scale.
+  The ~400ms is a deliberate 300ms crossfade, inside which 331ms is style
+  recalculation, because the transition is declared on
+  `:root, :root *, :root *::before, :root *::after`.
+
+### Two fixes that looked right and were not
+
+Both passed review and typecheck while rendering wrong; only a browser caught
+them. This is the third round in a row that has happened.
+
+- `clip-path` on the panel **rides the panel's own transform**, so it clips
+  nothing — 20 of 20 sweep positions still put ink on the rail.
+- `clip-path` on the wrapper **forms a backdrop root**, silently killing the
+  peek's `backdrop-blur-2xl`. An oversized `overflow-hidden` box does both jobs
+  and neither harm.
+
+### Measured outcomes
+
+| | before | after |
+|---|---|---|
+| Sidebar pin/unpin toggle, script | 98.8ms | 6.3ms |
+| 600 pointer moves, forced layouts | 599 | 0 |
+| `AlertDialog` fibers at 150 tickets | 360 | 14 |
+| Whole-window fibers at 150 tickets | 10,039 | 7,619 |
+
+The dialog hoist removed 24% of the tree for ~10ms of render time — a closed
+dialog is a cheap subtree, and the per-card mass is the card body and
+`useSortable`. What it bought outright: opening a confirm at 150 tickets costs
+0ms of long task with the board at zero renders behind it.
+
+The 1620ms sidebar-drag figure that started the performance thread is gone, and
+not from the dialog work — the `pointermove` fix removed the state writes, so
+that drag now produces one commit and zero attributed renders.
+
+### Still open
+
+- **`HISTORY` in the rail** awaits a ruling. The scratch has none, but it is a
+  fixture with no Session ledger behind it, so its absence is probably an
+  artifact rather than a decision to retire durable history.
+- **The stored default model is still `azure-openai-responses`.** Code cannot
+  repair it silently and no agent may write to the live DB. One visit to
+  Settings fixes it; until then new Sessions record Azure, but now say so
+  before a message is spent rather than after.
+- **The rail card is flat in light mode**, which is what was reviewed. The
+  scratch's intent was a soft ambient lift; that needs a real token, not the
+  broken `hsl(var(--foreground)/0.06)` string.
+- **The context menu is now the remaining per-card Radix mass** — 310
+  `ContextMenu` + 165 `Popper` fibers at 150 tickets. Hoisting it means
+  replacing Radix's `Trigger` with a board-level menu positioned from the
+  pointer event. Real redesign, real behaviour risk.
+- **Nothing guards the dialog host's memo.** The win rests on `children` being a
+  prop and the context value memoizing on the destructured guard. Inlining the
+  JSX or widening that dependency evaporates it silently, and the renderer's
+  node-env harness cannot catch it.
+
 ## Overrides the user gave after the scratches were reviewed
 
 - **Hover dwell 20ms, exit grace 375ms.** The scratch opens on 100/220. The rail
