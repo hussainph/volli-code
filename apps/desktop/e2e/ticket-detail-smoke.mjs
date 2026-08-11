@@ -111,6 +111,7 @@ import {
   makeGitRepo,
   readDocumentLine,
   readMonacoState,
+  startTerminalSession,
   typeIntoMonaco,
 } from "./lib/smoke-kit.mjs";
 
@@ -831,7 +832,7 @@ async function main() {
         await fs.rm(PROBE_ALIVE, { force: true });
 
         const aside = page.locator("aside");
-        await aside.getByRole("button", { name: "New terminal", exact: true }).click();
+        await startTerminalSession(aside);
 
         const sessionTab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
         await waitUntil("session tab to appear", async () => (await sessionTab.count()) === 1);

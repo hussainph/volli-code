@@ -123,12 +123,16 @@ async function ensurePiAuthInto(homeDir) {
   await fs.copyFile(REAL_PI_AUTH, dest);
 }
 
-/** The nearest visible tablist's own "+" — scopes past the ticket rail's identical mount. */
-function tabStripNewSessionButton(page) {
+/**
+ * The nearest visible tablist's own session-start control — scopes past the
+ * ticket rail's identical mount. Chat is the split button's PRESS, so this is
+ * the whole gesture rather than a trigger to be followed by a menu pick.
+ */
+function tabStripNewChatButton(page) {
   return page
     .locator('[role="tablist"]')
     .locator("xpath=..")
-    .getByRole("button", { name: "New session", exact: true });
+    .getByRole("button", { name: "New chat", exact: true });
 }
 
 /** Navigate to Sessions and wait for its (auto-opened scratch terminal) tab strip to mount. */
@@ -143,8 +147,7 @@ async function goToSessions(page) {
 
 async function openNewChatTab(page) {
   const tabsBefore = await page.locator('[role="tab"]').count();
-  await tabStripNewSessionButton(page).click();
-  await page.getByRole("menuitem", { name: "Chat", exact: true }).click();
+  await tabStripNewChatButton(page).click();
   await waitUntil(
     "a new chat tab to appear",
     async () => (await page.locator('[role="tab"]').count()) > tabsBefore,

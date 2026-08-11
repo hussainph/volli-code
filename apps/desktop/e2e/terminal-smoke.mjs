@@ -418,11 +418,12 @@ async function main() {
       JSON.stringify(dprReport),
     );
 
-    // === 6. Second tab in A: "+" → two tabs, each its own live shell ========
-    // The scratch strip's "+" is a menu since chat tabs landed beside terminals
-    // (Terminal / Chat); this flow boots the terminal kind.
-    await page.getByLabel("New session").click();
-    await page.getByRole("menuitem", { name: "Terminal", exact: true }).click();
+    // === 6. Second tab in A: caret → two tabs, each its own live shell ======
+    // The scratch strip's control is a split button (press = chat, caret = the
+    // kinds); this flow boots the terminal kind, so it takes the caret. The
+    // item's name carries its chord, hence the regex.
+    await page.getByLabel("Other session kinds").click();
+    await page.getByRole("menuitem", { name: /^Terminal/ }).click();
     await page.waitForFunction(
       () => document.querySelectorAll('[aria-label^="Close Terminal"]').length === 2,
       { timeout: 10000 },

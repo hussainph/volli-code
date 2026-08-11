@@ -163,11 +163,17 @@ function DropdownMenuSeparator({
   );
 }
 
+// No `tracking-widest` (stock shadcn's): letter spacing is applied AFTER the
+// last glyph as well as between them, so every chord sits a pixel short of the
+// right edge and the column reads inset from the menu's own padding — visible
+// precisely because `ml-auto` promised it would be flush, and worse with rows
+// of different width stacked. Latin chords absorb it; the ⌥⌘ glyph runs this
+// app actually ships (⌘D, ⇧⌘D, ⌘T, ⌥⌘T) do not.
 function DropdownMenuShortcut({ className, ...props }: React.ComponentProps<"span">) {
   return (
     <span
       data-slot="dropdown-menu-shortcut"
-      className={cn("ml-auto text-xs tracking-widest text-muted-foreground", className)}
+      className={cn("ml-auto text-xs text-muted-foreground", className)}
       {...props}
     />
   );

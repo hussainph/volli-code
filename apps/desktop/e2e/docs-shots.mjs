@@ -59,6 +59,7 @@ import {
   REPO,
   seedProjects,
   sleep,
+  startTerminalSession,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 import { buildFakeHarness, harnessEnv } from "./lib/fake-harness.mjs";
@@ -273,7 +274,7 @@ try {
 
     const aside = page.locator("aside");
     await waitUntil("ticket rail", async () => (await aside.count()) === 1);
-    await aside.getByRole("button", { name: "New terminal", exact: true }).click();
+    await startTerminalSession(aside);
     // The session boots a worktree + PTY; the canvas is what says it is live.
     await waitUntil("terminal canvas", async () => {
       const rect = await visibleCanvas(page);

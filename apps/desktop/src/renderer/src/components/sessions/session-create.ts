@@ -11,17 +11,20 @@
  */
 import { errorMessage, type HarnessId, type Project } from "@volli/shared";
 
+import { chatTabId, nextChatOrdinal } from "@renderer/components/ticket/ticket-chat-tab";
 import { toastError } from "@renderer/lib/toast";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import {
   findSessionPane,
   ownerKey,
+  scratchScope,
   useSessionsStore,
   type SessionLaunch,
   type SessionScope,
   type TerminalSplitDirection,
 } from "@renderer/stores/sessions";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { disposeEngine, getOrCreateEngine } from "@renderer/terminal/registry";
 
 /** Initial PTY grid; restty re-measures and resizes the shell within a frame. */
@@ -336,6 +339,51 @@ function abandonChat(sessionId: string): void {
  * `session.create` — which has already toasted, and left nothing durable behind
  * — resolves null, and only that skips the tab.
  */
+/* -------------------------------------------------------------------------- */
+/* The project's ticketless Sessions — one path per kind                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Start one of a project's ticketless Sessions and put its tab in front.
+ *
+ * Two callers, and they must not drift: the Sessions surface's split control
+ * and the ⌘T / ⌥⌘T chords (`lib/new-session-shortcut.ts`). A chord that started
+ * a Session the button would not have — or landed it somewhere the button
+ * doesn't — is the class of bug you only find by pressing the key, so there is
+ * one function per kind and both surfaces call it.
+ *
+ * The tab is recorded on `sessionsActiveTab` explicitly rather than left to the
+ * container's own `activeSessionId`: {@link resolveActiveTabId} in
+ * `sessions-layer.tsx` prefers the recorded id while it still names an open tab,
+ * so a fresh terminal opened while another tab was recorded would otherwise land
+ * behind it — the chord would look like it had done nothing at all.
+ */
+export async function startScratchTerminal(projectId: string): Promise<void> {
+  const sessionId = await createTerminalSession(scratchScope(projectId));
+  if (sessionId === null) return;
+  useWorkspaceStore.getState().setSessionsActiveTab(projectId, sessionId);
+}
+
+/**
+ * The chat half of {@link startScratchTerminal}.
+ *
+ * The ordinal counts only what is OPEN, because that is all this surface has: a
+ * project's ticketless chats have no durable listing the way a ticket's do. Read
+ * at call time rather than passed in, so a chord fired from another page counts
+ * the same tabs the strip would have.
+ */
+export async function startScratchChat(projectId: string): Promise<void> {
+  const openChats = useChatSessionsStore.getState().openTabs[projectId]?.length ?? 0;
+  await bootChatSession(scratchScope(projectId), {
+    title: `Chat ${nextChatOrdinal(0, openChats)}`,
+    land: (sessionId) => {
+      useChatSessionsStore.getState().openChatTab(projectId, sessionId);
+      useWorkspaceStore.getState().setSessionsActiveTab(projectId, chatTabId(sessionId));
+      return true;
+    },
+  });
+}
+
 export async function bootChatSession(
   scope: SessionScope,
   { title, land }: ChatBoot,

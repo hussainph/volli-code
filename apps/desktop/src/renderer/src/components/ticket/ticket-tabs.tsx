@@ -1,7 +1,7 @@
 /**
  * The ticket detail's tab strip (ticket-detail-mvp decision #6, restyled to the
  * Chrome-browser metaphor): a full-width row at the very top of the detail view
- * — `<TicketId> | <file tabs…> | <session tabs…> | Chat / Terminal` — spanning above both the
+ * — `<TicketId> | <file tabs…> | <session tabs…> | [ + Chat ▾ ]` — spanning above both the
  * main column and the right rail. The active tab is a raised surface on the
  * content background with rounded top corners so it reads as physically
  * connected to the content below; inactive tabs are flat on the recessed rail
@@ -20,7 +20,7 @@ import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
-import { TicketSessionActions } from "@renderer/components/ticket/ticket-session-actions";
+import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
 import { Button } from "@renderer/components/ui/button";
 import {
   ContextMenu,
@@ -115,7 +115,7 @@ export interface TicketTabDescriptor {
 interface TicketTabStripProps {
   tabs: readonly TicketTabDescriptor[];
   activeTabId: string;
-  /** Disables the direct Chat and Terminal controls while a session is booting. */
+  /** Disables the session-start control while a session of either kind is booting. */
   creating: boolean;
   onSelectTab(tabId: string): void;
   /** Closes a session, chat, file, or diff tab. Doc has no close affordance. */
@@ -334,9 +334,9 @@ export function TicketTabStrip({
 
   return (
     <div className="flex shrink-0 items-end border-b border-border bg-rail pt-1.5">
-      {/* Tabs and their direct Chat / Terminal controls scroll as one cluster,
-          keeping creation beside the last tab instead of pinning it away from
-          its destination. The focus control owns a stable slot at the far right. */}
+      {/* Tabs and the session-start control scroll as one cluster, keeping
+          creation beside the last tab instead of pinning it away from its
+          destination. The focus control owns a stable slot at the far right. */}
       <div className="flex min-w-0 flex-1 items-end overflow-x-auto px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <div role="tablist" aria-orientation="horizontal" className="flex items-end gap-0.5">
           {tabs.map((tab) => (
@@ -361,9 +361,14 @@ export function TicketTabStrip({
             />
           ))}
         </div>
-        <TicketSessionActions
+        {/* No chord hint here: ⌘T is global, and this control is the ticket's.
+            The menu hangs from the control's start edge — it sits mid-strip,
+            after the last tab, not against a window edge. */}
+        <NewSessionControl
           disabled={creating}
-          className="mb-1 ml-0.5 shrink-0"
+          placement="strip"
+          align="start"
+          className="mb-1 ml-0.5"
           onNewChat={onNewChat}
           onNewTerminal={onNewSession}
         />
@@ -382,7 +387,11 @@ export function TicketTabStrip({
           disabled={!canFocusTerminal}
           onClick={onEnterTerminalFocus}
           aria-label="Enter terminal focus"
-          aria-pressed={false}
+          // No `aria-pressed`: entering focus hides this whole strip
+          // (ticket-detail.tsx renders it only while NOT focused), so the
+          // control can never be drawn in the pressed state. It is a one-way
+          // action, and a toggle that always reports "off" is worse than no
+          // toggle semantics at all — Escape is what comes back.
           title={
             canFocusTerminal
               ? "Enter terminal focus"

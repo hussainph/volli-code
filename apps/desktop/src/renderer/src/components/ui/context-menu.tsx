@@ -207,11 +207,15 @@ function ContextMenuSeparator({
   );
 }
 
+// Same as {@link DropdownMenuShortcut}, and for the same reason: no
+// `tracking-widest`. Trailing letter spacing pushes a chord off the flush right
+// edge `ml-auto` promised, which the split terminal menu's ⌘D / ⇧⌘D pair shows
+// as clearly as the ⌥⌘T the session menus now carry.
 function ContextMenuShortcut({ className, ...props }: React.ComponentProps<"span">) {
   return (
     <span
       data-slot="context-menu-shortcut"
-      className={cn("ml-auto text-xs tracking-widest text-muted-foreground", className)}
+      className={cn("ml-auto text-xs text-muted-foreground", className)}
       {...props}
     />
   );

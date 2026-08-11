@@ -250,10 +250,11 @@ async function main() {
 
     for (let i = 1; i <= N_SESSIONS; i++) {
       if (i > 1) {
-        // The scratch strip's "+" is a menu since chat tabs landed beside
-        // terminals (Terminal / Chat); this benchmark measures PTYs.
-        await page.getByLabel("New session").click();
-        await page.getByRole("menuitem", { name: "Terminal", exact: true }).click();
+        // The scratch strip's control is a split button (press = chat, caret =
+        // the kinds); this benchmark measures PTYs, so it takes the caret. The
+        // item's name carries its chord, hence the regex.
+        await page.getByLabel("Other session kinds").click();
+        await page.getByRole("menuitem", { name: /^Terminal/ }).click();
         await page.waitForFunction(
           (n) => document.querySelectorAll('[aria-label^="Close Terminal"]').length === n,
           i,
@@ -277,8 +278,8 @@ async function main() {
     await snap(`${N_SESSIONS} tabs after 15s idle`);
 
     // === Phase 3: scrollback fill in a plain shell tab ========================
-    await page.getByLabel("New session").click();
-    await page.getByRole("menuitem", { name: "Terminal", exact: true }).click();
+    await page.getByLabel("Other session kinds").click();
+    await page.getByRole("menuitem", { name: /^Terminal/ }).click();
     await page.waitForFunction(
       (n) => document.querySelectorAll('[aria-label^="Close Terminal"]').length === n,
       N_SESSIONS + 1,

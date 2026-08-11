@@ -9,7 +9,7 @@ import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { errorMessage, type TerminalIoResult } from "@volli/shared";
 
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
-import { NewSessionMenu } from "@renderer/components/sessions/new-session-menu";
+import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
 import { TAB_STATUS_CLASS, type TicketTabStatus } from "@renderer/components/ticket/ticket-tabs";
 import {
   ContextMenu,
@@ -116,8 +116,9 @@ interface SessionTabsProps {
  * The scratch tab strip: small, dark, ember-orange active accent — matching the
  * chrome band the sessions surface sits under. It holds both kinds of Session a
  * project can run without a ticket, terminals first and chats after, each in
- * the order it was opened. A trailing "+" starts either; each tab carries a
- * hover-revealed close, a right-click menu, and double-click inline rename.
+ * the order it was opened. A trailing split control starts either; each tab
+ * carries a hover-revealed close, a right-click menu, and double-click inline
+ * rename.
  *
  * Only the terminal kind talks about parking: the moon badge, the wake-on-click
  * and the Park/Wake/Keep Awake items are all about a PTY holding memory (issue
@@ -179,14 +180,17 @@ export function SessionTabs({
           );
         })}
       </div>
-      <NewSessionMenu
+      {/* This surface's Sessions are the project's ticketless ones — exactly
+          what ⌘T / ⌥⌘T mint — so this is the one mount that may announce the
+          chords. The trigger sits at the strip's right edge, so the menu hangs
+          back into the window rather than off it. */}
+      <NewSessionControl
         disabled={creating}
-        // The trigger sits at the strip's right edge, so the menu hangs back
-        // into the window rather than off it.
+        placement="strip"
         align="end"
-        className="shrink-0"
-        onNewSession={onNewSession}
+        shortcuts
         onNewChat={onNewChat}
+        onNewTerminal={onNewSession}
       />
     </div>
   );

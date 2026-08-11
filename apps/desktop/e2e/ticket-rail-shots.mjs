@@ -20,6 +20,7 @@ import {
   makeGitRepo,
   makeScratch,
   seedProjects,
+  startTerminalSession,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 
@@ -99,7 +100,7 @@ try {
   await page.waitForLoadState("domcontentloaded");
   const aside = await openTicketRail(page, ticket.displayId);
 
-  await aside.getByRole("button", { name: "New terminal", exact: true }).click();
+  await startTerminalSession(aside);
   await waitUntil(
     "session tab",
     async () => (await page.getByRole("tab", { name: "Session 1", exact: true }).count()) === 1,

@@ -46,6 +46,9 @@
  *                      STYLE. textContent still returns `display:none` text, so
  *                      it cannot answer "is this delimiter visible?".
  *   • cardById()/columnCount() — the board DOM readers both composer probes need.
+ *   • startTerminalSession() — the ONE encoding of "start a terminal from this
+ *                      surface's session-start control", which is a split
+ *                      button: chat on the press, terminal behind the caret.
  *
  * These smokes are NOT wired into `vp test`; they need a display + the built app.
  */
@@ -713,4 +716,22 @@ export async function goToBoard(page) {
   }
 
   throw new Error("board view did not become stable");
+}
+
+/**
+ * Start a terminal Session from a surface's session-start control.
+ *
+ * The ONE encoding of that gesture. The control is a split button: its press
+ * starts a CHAT (so a probe that wants a chat just clicks `New chat`), and a
+ * terminal lives behind the caret half. The menu item's accessible name is
+ * computed from its whole subtree, so on the Sessions strip — the one mount
+ * that announces the chords — it reads "Terminal ⌥⌘T"; matching a prefix is
+ * what works on every mount.
+ *
+ * `scope` is a Locator (a rail, a strip's container) or the Page itself.
+ */
+export async function startTerminalSession(scope) {
+  await scope.getByRole("button", { name: "Other session kinds", exact: true }).first().click();
+  const page = scope.page?.() ?? scope;
+  await page.getByRole("menuitem", { name: /^Terminal/ }).click();
 }

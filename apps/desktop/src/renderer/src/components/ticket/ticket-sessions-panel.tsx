@@ -7,6 +7,7 @@ import { errorMessage, type SessionListingRow, type SessionRecord } from "@volli
 
 import { renameChatSession } from "@renderer/chat/rename";
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
+import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
 import { resumeTicketSession } from "@renderer/components/sessions/session-create";
 import {
   ContextMenu,
@@ -16,7 +17,6 @@ import {
 } from "@renderer/components/ui/context-menu";
 import { Input } from "@renderer/components/ui/input";
 import { RailDrawer } from "@renderer/components/ticket/rail-drawer";
-import { TicketSessionActions } from "@renderer/components/ticket/ticket-session-actions";
 import {
   buildTicketChatSessionRows,
   buildTicketSessionRows,
@@ -334,8 +334,8 @@ function SessionList({
 }
 
 /**
- * The right rail's session content: a scrollable "Sessions" working set (a
- * direct Chat and Terminal controls, plus one row per live session from the
+ * The right rail's session content: a scrollable "Sessions" working set (the
+ * split session-start control, plus one row per live session from the
  * unified store) and a bottom-pinned History drawer (a
  * `RailDrawer` sibling of Details) holding ended/closed durable records —
  * searchable past 4 entries — so the working set stays unlabeled and flat.
@@ -368,9 +368,9 @@ export function TicketSessionsPanel({
   const setActivePane = useSessionsStore((state) => state.setActivePane);
   const worktreePhase = useWorktreeStore((state) => phaseFor(state.phases, ticketId));
   // `creating`/`copying` haven't booted a PTY yet, so there's no session row to
-  // chip — they reuse the existing pre-boot "starting" affordance (disables
-  // the direct controls the same way an in-flight `starting[ticketId]` create does)
-  // rather than inventing a second loading state.
+  // chip — they reuse the existing pre-boot "starting" affordance (disables the
+  // session-start control the same way an in-flight `starting[ticketId]` create
+  // does) rather than inventing a second loading state.
   const effectiveCreating = creating || worktreePhase === "creating" || worktreePhase === "copying";
   // The durable list is a shared cache (stores/ticket-session-records.ts), not
   // local state: the exited-pane resume overlay reads the exact same cache
@@ -503,8 +503,13 @@ export function TicketSessionsPanel({
         <div className="flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <h2 className="text-label font-medium text-muted-foreground uppercase">Sessions</h2>
-            <TicketSessionActions
+            {/* Right-aligned against the rail's own edge, so the menu hangs
+                back into the rail instead of off the window. No chord hint: ⌘T
+                is global and this control is the ticket's. */}
+            <NewSessionControl
               disabled={effectiveCreating}
+              placement="rail"
+              align="end"
               onNewChat={onNewChat}
               onNewTerminal={onNewSession}
             />
