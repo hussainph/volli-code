@@ -187,7 +187,12 @@ async function main() {
         const sessionFocused = await waitUntil(
           "session tab is the active tab",
           async () => {
-            const active = page.locator('[role="tab"][aria-selected="true"]');
+            // Scoped to the ticket strip by name. The details rail draws a
+            // tablist of its own on this screen and always has a page selected,
+            // so an unscoped "exactly one selected tab" now counts two and can
+            // never be satisfied — which says nothing about which tab is front.
+            const strip = page.getByRole("tablist", { name: "Ticket tabs" });
+            const active = strip.locator('[role="tab"][aria-selected="true"]');
             if ((await active.count()) !== 1) return null;
             const text = (await active.textContent()) ?? "";
             return text.includes("Session") ? true : null;
