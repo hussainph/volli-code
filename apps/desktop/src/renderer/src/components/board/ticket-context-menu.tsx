@@ -22,7 +22,7 @@ import {
   type Ticket,
 } from "@volli/shared";
 
-import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
+import { useTicketDialogs } from "@renderer/components/board/ticket-dialog-host";
 import { resumeTicketSession } from "@renderer/components/sessions/session-create";
 import {
   ContextMenu,
@@ -34,7 +34,6 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
-import { RemoveWorktreeDialog } from "@renderer/components/ticket/remove-worktree-dialog";
 import { latestResumableSession } from "@renderer/components/ticket/session-history";
 import { useBoardStore } from "@renderer/stores/board";
 import {
@@ -45,7 +44,6 @@ import {
 } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
-import { useCloseGuard } from "@renderer/terminal/close-guard";
 
 /** Stable empty array so the per-card session-records selector never forces a
  *  re-render of every OTHER card's menu when one ticket's cache is touched. */
@@ -89,16 +87,10 @@ export function TicketContextMenu({
   projectId: string;
   children: React.ReactNode;
 }) {
-  // Archiving kills the ticket's live TERMINALS (stores/board.ts), so gate it
-  // behind a confirm when any is busy — the confirm says archiving will end
-  // them, and for a terminal that is exactly what happens. It says nothing about
-  // the ticket's chats because archiving does not touch them: the worktree
-  // survives (only Archive & clean removes it) and the Session outlives the
-  // board. The dialog is a SIBLING of the menu — the menu unmounts on item
-  // select, but this component (and its guard state) survives, so the confirm
-  // can open after the menu is gone.
-  const closeGuard = useCloseGuard();
-  const [removeWorktreeOpen, setRemoveWorktreeOpen] = React.useState(false);
+  // Both confirms live once at board level, not once per card — see
+  // ticket-dialog-host.tsx for why, and for how they still open after this menu
+  // has unmounted (which every item select does immediately).
+  const dialogs = useTicketDialogs();
 
   // Reactive so the item disables the instant a terminal boots/exits, not just
   // at click time. Terminals ONLY: this store holds PTY panes, and a chat
@@ -113,19 +105,6 @@ export function TicketContextMenu({
       sessionPanes(tab.layout).some((pane) => pane.exitCode === null),
     ),
   );
-
-  const requestArchive = () => {
-    const container = useSessionsStore.getState().byOwner[ticket.id];
-    const liveIds = (container?.tabs ?? []).flatMap((tab) =>
-      sessionPanes(tab.layout)
-        .filter((pane) => pane.exitCode === null)
-        .map((pane) => pane.sessionId),
-    );
-    closeGuard.guard(
-      liveIds,
-      () => void useBoardStore.getState().archiveTicket(projectId, ticket.id),
-    );
-  };
 
   // Resumability (interrupt/resume, issue #78) needs the ticket's durable
   // session records — the same shared cache the rail and the exited-pane
@@ -149,86 +128,69 @@ export function TicketContextMenu({
   };
 
   return (
-    <>
-      <ContextMenu
-        onOpenChange={(open) => {
-          if (open) void useTicketSessionRecordsStore.getState().refresh(ticket.id);
-        }}
-      >
-        <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-        <ContextMenuContent>
-          <ContextMenuSub>
-            <ContextMenuSubTrigger icon={ArrowsLeftRightIcon}>Move to</ContextMenuSubTrigger>
-            <ContextMenuSubContent>
-              {TICKET_STATUSES.filter((status) => status !== ticket.status).map((status) => (
-                <ContextMenuItem
-                  key={status}
-                  icon={STATUS_ICON[status]}
-                  onSelect={() =>
-                    useBoardStore
-                      .getState()
-                      .moveTicket(projectId, ticket.id, status, Number.MAX_SAFE_INTEGER)
-                  }
-                >
-                  {TICKET_STATUS_LABELS[status]}
-                </ContextMenuItem>
-              ))}
-            </ContextMenuSubContent>
-          </ContextMenuSub>
-          <ContextMenuSub>
-            <ContextMenuSubTrigger icon={FlagIcon}>Priority</ContextMenuSubTrigger>
-            <ContextMenuSubContent>
-              {TICKET_PRIORITIES.map((priority) => (
-                <ContextMenuItem
-                  key={priority}
-                  icon={PRIORITY_ICON[priority]}
-                  onSelect={() =>
-                    useBoardStore.getState().setTicketPriority(projectId, ticket.id, priority)
-                  }
-                >
-                  {TICKET_PRIORITY_LABELS[priority]}
-                  {priority === ticket.priority ? (
-                    <CheckIcon weight="bold" className="ml-auto size-3.5" />
-                  ) : null}
-                </ContextMenuItem>
-              ))}
-            </ContextMenuSubContent>
-          </ContextMenuSub>
-          <ContextMenuSeparator />
-          {resumableSession !== null ? (
-            <ContextMenuItem icon={ArrowClockwiseIcon} onSelect={resumeLastSession}>
-              Resume last session
-            </ContextMenuItem>
-          ) : null}
-          {ticket.worktreePath !== null ? (
-            <ContextMenuItem
-              icon={TrashIcon}
-              disabled={hasLiveTerminals}
-              onSelect={() => setRemoveWorktreeOpen(true)}
-            >
-              Remove worktree…
-            </ContextMenuItem>
-          ) : null}
-          <ContextMenuItem icon={ArchiveIcon} onSelect={requestArchive}>
-            Archive
+    <ContextMenu
+      onOpenChange={(open) => {
+        if (open) void useTicketSessionRecordsStore.getState().refresh(ticket.id);
+      }}
+    >
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuSub>
+          <ContextMenuSubTrigger icon={ArrowsLeftRightIcon}>Move to</ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            {TICKET_STATUSES.filter((status) => status !== ticket.status).map((status) => (
+              <ContextMenuItem
+                key={status}
+                icon={STATUS_ICON[status]}
+                onSelect={() =>
+                  useBoardStore
+                    .getState()
+                    .moveTicket(projectId, ticket.id, status, Number.MAX_SAFE_INTEGER)
+                }
+              >
+                {TICKET_STATUS_LABELS[status]}
+              </ContextMenuItem>
+            ))}
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+        <ContextMenuSub>
+          <ContextMenuSubTrigger icon={FlagIcon}>Priority</ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            {TICKET_PRIORITIES.map((priority) => (
+              <ContextMenuItem
+                key={priority}
+                icon={PRIORITY_ICON[priority]}
+                onSelect={() =>
+                  useBoardStore.getState().setTicketPriority(projectId, ticket.id, priority)
+                }
+              >
+                {TICKET_PRIORITY_LABELS[priority]}
+                {priority === ticket.priority ? (
+                  <CheckIcon weight="bold" className="ml-auto size-3.5" />
+                ) : null}
+              </ContextMenuItem>
+            ))}
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+        <ContextMenuSeparator />
+        {resumableSession !== null ? (
+          <ContextMenuItem icon={ArrowClockwiseIcon} onSelect={resumeLastSession}>
+            Resume last session
           </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
-      <ConfirmCloseDialog
-        pending={closeGuard.pending}
-        onConfirm={closeGuard.confirm}
-        onCancel={closeGuard.cancel}
-        title="Archive ticket?"
-        confirmLabel="Archive Anyway"
-        verb="Archiving"
-      />
-      {ticket.worktreePath !== null ? (
-        <RemoveWorktreeDialog
-          ticketId={ticket.id}
-          open={removeWorktreeOpen}
-          onOpenChange={setRemoveWorktreeOpen}
-        />
-      ) : null}
-    </>
+        ) : null}
+        {ticket.worktreePath !== null ? (
+          <ContextMenuItem
+            icon={TrashIcon}
+            disabled={hasLiveTerminals}
+            onSelect={() => dialogs.requestRemoveWorktree(ticket.id)}
+          >
+            Remove worktree…
+          </ContextMenuItem>
+        ) : null}
+        <ContextMenuItem icon={ArchiveIcon} onSelect={() => dialogs.requestArchive(ticket.id)}>
+          Archive
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

@@ -31,6 +31,7 @@ import { BoardHeader } from "@renderer/components/board/board-header";
 import { BoardListView, TicketRowContent } from "@renderer/components/board/board-list-view";
 import { CollapsedColumnRail } from "@renderer/components/board/collapsed-column-rail";
 import { TicketCardContent } from "@renderer/components/board/ticket-card";
+import { TicketDialogHost } from "@renderer/components/board/ticket-dialog-host";
 import { useBoardCanvasPan } from "@renderer/hooks/use-board-canvas-pan";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
@@ -75,10 +76,10 @@ const EMPTY_TICKETS: Ticket[] = [];
  *
  * Honest about what this does NOT buy: profiling a 150-ticket board during a
  * sidebar drag showed the per-card `React.memo`s were ALREADY holding — the
- * cards themselves did not re-render either way. The cost that scales with
- * ticket count is the Radix context menu and dialogs each card mounts, which
- * re-render from provider context above this boundary and so are untouched by
- * it. This is a cheap correct boundary, not the fix for that.
+ * cards themselves did not re-render either way. What scaled with ticket count
+ * was the Radix machinery under each card, and the dialog half of that is gone
+ * (see `TicketDialogHost`); the context menu each card must keep is the rest.
+ * This is a cheap correct boundary, not the fix for either.
  */
 export const Board = React.memo(function Board({
   projectId,
@@ -239,108 +240,114 @@ export const Board = React.memo(function Board({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <BoardHeader
-        projectId={projectId}
-        ticketCount={visible.length}
-        tickets={storeTickets}
-        filter={filter}
-      />
-      {/* One DndContext drives BOTH views — same handlers, same preview/commit
-          machinery, same ticket id space. The view branch lives inside it so the
-          list view has full drag parity with the board; only the layout and the
-          drag overlay's shape differ. Escape-clears-selection (above) is shared. */}
-      <DndContext
-        sensors={sensors}
-        collisionDetection={boardCollision}
-        onDragStart={handleDragStart}
-        onDragOver={handleDragOver}
-        onDragEnd={handleDragEnd}
-        onDragCancel={handleDragCancel}
-      >
-        {boardView === "list" ? (
-          // Same grouped/filtered set, sort, and selection as the board. `shown`
-          // and `hidden` are the board's own frozen-during-drag topology reused:
-          // shown → full sections; hidden (empty-at-start) → slim drop rows,
-          // rendered only while dragging so a row can land in any status.
-          <BoardListView
-            projectId={projectId}
-            ticketPrefix={ticketPrefix}
-            groups={sortedGroups}
-            shownStatuses={shown}
-            emptyDropStatuses={drag ? hidden : []}
-            dragActive={drag !== null}
-            selectedId={selectedId}
-            onSelect={handleSelect}
-            onOpen={handleOpen}
-          />
-        ) : (
-          <div
-            ref={canvasRef}
-            {...canvasProps}
-            className={cn(
-              // Columns cap below full height so a strip of canvas stays
-              // grab-able under them (Trello-style mouse pan). Scrollbar is
-              // hidden — drag / shift-wheel / trackpad replace it.
-              "flex min-h-0 flex-1 items-start gap-3 overflow-x-auto px-gutter pb-4",
-              "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-              panning ? "cursor-grabbing select-none" : "cursor-grab",
-            )}
-          >
-            {shown.map((status) => (
-              <BoardColumn
-                key={status}
-                status={status}
-                // Display order is sort-driven: `sortedGroups` reorders each
-                // column for rendering. Drag mechanics stay unchanged — a drop
-                // still writes the manual `order` (see handleDragEnd), but under
-                // a non-manual sort the displayed position is sort-driven, so the
-                // card snaps to its sorted slot after the drop (Linear behaves the
-                // same). "manual" remains the true drag-reorder mode.
-                tickets={sortedGroups[status]}
-                projectId={projectId}
-                ticketPrefix={ticketPrefix}
-                selectedId={selectedId}
-                onSelect={handleSelect}
-                onOpen={handleOpen}
-                composerInitiallyOpen={expandedEmptyStatus === status}
-                onComposerClose={handleComposerClose}
+    // Every card's context menu asks this host — not itself — to open the
+    // archive and remove-worktree confirms, so the board carries one of each
+    // instead of one per card. The whole board is its `children` prop, which is
+    // what lets an open dialog re-render the host alone.
+    <TicketDialogHost projectId={projectId}>
+      <div className="flex min-h-0 flex-1 flex-col">
+        <BoardHeader
+          projectId={projectId}
+          ticketCount={visible.length}
+          tickets={storeTickets}
+          filter={filter}
+        />
+        {/* One DndContext drives BOTH views — same handlers, same preview/commit
+            machinery, same ticket id space. The view branch lives inside it so the
+            list view has full drag parity with the board; only the layout and the
+            drag overlay's shape differ. Escape-clears-selection (above) is shared. */}
+        <DndContext
+          sensors={sensors}
+          collisionDetection={boardCollision}
+          onDragStart={handleDragStart}
+          onDragOver={handleDragOver}
+          onDragEnd={handleDragEnd}
+          onDragCancel={handleDragCancel}
+        >
+          {boardView === "list" ? (
+            // Same grouped/filtered set, sort, and selection as the board. `shown`
+            // and `hidden` are the board's own frozen-during-drag topology reused:
+            // shown → full sections; hidden (empty-at-start) → slim drop rows,
+            // rendered only while dragging so a row can land in any status.
+            <BoardListView
+              projectId={projectId}
+              ticketPrefix={ticketPrefix}
+              groups={sortedGroups}
+              shownStatuses={shown}
+              emptyDropStatuses={drag ? hidden : []}
+              dragActive={drag !== null}
+              selectedId={selectedId}
+              onSelect={handleSelect}
+              onOpen={handleOpen}
+            />
+          ) : (
+            <div
+              ref={canvasRef}
+              {...canvasProps}
+              className={cn(
+                // Columns cap below full height so a strip of canvas stays
+                // grab-able under them (Trello-style mouse pan). Scrollbar is
+                // hidden — drag / shift-wheel / trackpad replace it.
+                "flex min-h-0 flex-1 items-start gap-3 overflow-x-auto px-gutter pb-4",
+                "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+                panning ? "cursor-grabbing select-none" : "cursor-grab",
+              )}
+            >
+              {shown.map((status) => (
+                <BoardColumn
+                  key={status}
+                  status={status}
+                  // Display order is sort-driven: `sortedGroups` reorders each
+                  // column for rendering. Drag mechanics stay unchanged — a drop
+                  // still writes the manual `order` (see handleDragEnd), but under
+                  // a non-manual sort the displayed position is sort-driven, so the
+                  // card snaps to its sorted slot after the drop (Linear behaves the
+                  // same). "manual" remains the true drag-reorder mode.
+                  tickets={sortedGroups[status]}
+                  projectId={projectId}
+                  ticketPrefix={ticketPrefix}
+                  selectedId={selectedId}
+                  onSelect={handleSelect}
+                  onOpen={handleOpen}
+                  composerInitiallyOpen={expandedEmptyStatus === status}
+                  onComposerClose={handleComposerClose}
+                  animateEnter={boardMounted.current}
+                />
+              ))}
+              <CollapsedColumnRail
+                statuses={hidden}
+                dragActive={drag !== null}
+                onExpand={setExpandedEmptyStatus}
                 animateEnter={boardMounted.current}
               />
-            ))}
-            <CollapsedColumnRail
-              statuses={hidden}
-              dragActive={drag !== null}
-              onExpand={setExpandedEmptyStatus}
-              animateEnter={boardMounted.current}
-            />
-          </div>
-        )}
-        <DragOverlay
-          dropAnimation={
-            reducedMotion ? null : { duration: 200, easing: "cubic-bezier(0.32, 0.72, 0, 1)" }
-          }
-        >
-          {drag ? (
-            boardView === "list" ? (
-              // Row-shaped overlay sized to the active row by dnd-kit; a lifted
-              // surface (bg + shadow) instead of the card's scale-up.
-              //
-              // `--shadow-card` rather than a black alpha: the elevation set is
-              // solved per mode (a near-black in dark, a warm brown against the
-              // light canvas), and a card being dragged is a card — the same
-              // tier the board's cards already sit at, one step further off.
-              <div className="cursor-grabbing overflow-hidden rounded-md bg-card shadow-[var(--shadow-card)]">
-                <TicketRowContent ticket={drag.ticket} ticketPrefix={ticketPrefix} />
-              </div>
-            ) : (
-              <div className="scale-[1.03] cursor-grabbing rounded-lg shadow-[var(--shadow-card)]">
-                <TicketCardContent ticket={drag.ticket} ticketPrefix={ticketPrefix} />
-              </div>
-            )
-          ) : null}
-        </DragOverlay>
-      </DndContext>
-    </div>
+            </div>
+          )}
+          <DragOverlay
+            dropAnimation={
+              reducedMotion ? null : { duration: 200, easing: "cubic-bezier(0.32, 0.72, 0, 1)" }
+            }
+          >
+            {drag ? (
+              boardView === "list" ? (
+                // Row-shaped overlay sized to the active row by dnd-kit; a lifted
+                // surface (bg + shadow) instead of the card's scale-up.
+                //
+                // `--shadow-card` rather than a black alpha: the elevation set is
+                // solved per mode (a near-black in dark, a warm brown against the
+                // light canvas), and a card being dragged is a card — the same
+                // tier the board's cards already sit at, one step further off.
+                <div className="cursor-grabbing overflow-hidden rounded-md bg-card shadow-[var(--shadow-card)]">
+                  <TicketRowContent ticket={drag.ticket} ticketPrefix={ticketPrefix} />
+                </div>
+              ) : (
+                <div className="scale-[1.03] cursor-grabbing rounded-lg shadow-[var(--shadow-card)]">
+                  <TicketCardContent ticket={drag.ticket} ticketPrefix={ticketPrefix} />
+                </div>
+              )
+            ) : null}
+          </DragOverlay>
+        </DndContext>
+      </div>
+    </TicketDialogHost>
   );
 });
