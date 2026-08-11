@@ -83,6 +83,19 @@ const SHOT_DIR = process.argv[2] ?? join(os.homedir(), "Desktop", "volli-ui-clea
 const PROJECT = { id: "ui-cleanup-voltaic", name: "voltaic", prefix: "VLT", colorIndex: 2 };
 
 /**
+ * The ticket rail's width floor and default, mirrored from `stores/ui.ts`.
+ *
+ * Up here with the other module constants rather than beside the helpers that
+ * read them: the shot walk is top-level code that runs BEFORE the bottom half
+ * of this file is evaluated, so a `const` declared next to `dragRailTo` sits in
+ * the temporal dead zone when the attempt calling it runs — which fails as
+ * "Cannot access before initialization" inside one check rather than as a
+ * syntax error anywhere.
+ */
+const RAIL_MIN_WIDTH = 240;
+const RAIL_DEFAULT_WIDTH = 300;
+
+/**
  * Board content. Real planner tickets rather than lorem: the shots are read as
  * screenshots of an app, and placeholder text is the one thing that makes them
  * look like a mock of one.
@@ -175,11 +188,34 @@ const GROUPS = [
     key: "fullscreen",
     title: "5 · Fullscreen / terminal focus",
     blurb:
-      "Nothing shipped. The implementation found there is no fullscreen button to move — " +
-      "`useFullScreen` is read-only, and issue 5's control is really terminal focus, an in-app zen " +
-      "mode. It is planned in docs/plans/fullscreen-placement.md and blocked on ui/right-sidebar-" +
-      "fixes landing, so there is no surface to photograph.",
+      "Shipped after all, and it is group 7 below. There is no fullscreen button to move — " +
+      "`useFullScreen` is read-only and exists so the traffic-light spacer can collapse — so this " +
+      "task turned out to be about TERMINAL FOCUS, an in-app zen mode, and it landed as one half " +
+      "of the swapped lanes. Nothing is missing here; the frames are just filed under the change " +
+      "that actually made them.",
     empty: true,
+  },
+  {
+    key: "rail",
+    title: "6 · The Calm Stack right rail",
+    blurb:
+      "The ticket rail is header plus one scrolling page now, not four icon modes. A centred pill " +
+      "of three pages — Now, Diffs, Files — floats in the panel's own header, the vertical mode " +
+      "strip on the outer edge is gone, and Properties folded inline into Now rather than staying " +
+      "a destination. A new repository card owns the rail's single live read of worktree status " +
+      "and the Change Set, so the changes count and the publish state are two projections of one " +
+      "snapshot instead of two races.",
+  },
+  {
+    key: "lanes",
+    title: "7 · The swapped lanes",
+    blurb:
+      "Two controls traded places. The rail toggle went down into the tab strip's corner, which " +
+      "sits directly on top of the pane it collapses — a mapping the chrome band could never " +
+      "offer. The band's trailing slot took terminal focus instead: ONE button that enters and " +
+      "exits, its glyph flipping CornersOut ⇄ CornersIn, where entering and leaving used to be two " +
+      "points on screen 40px apart. Neither takes `aria-pressed`; both flip their label instead, " +
+      "because a button announcing “Exit terminal focus, pressed” states its own opposite.",
   },
 ];
 
@@ -290,6 +326,51 @@ try {
       ok: result.previous >= 10 && result.cleaned >= 2,
       detail: `previous=${result.previous} cleaned=${result.cleaned} errors=${result.errors.join(" / ") || "none"}`,
     };
+  });
+
+  // The hero ticket needs a WORKTREE with uncommitted work in it, because that
+  // is the only state in which the repository card's publish action reads
+  // "Commit & create draft PR" — the longest verb it has, and the one the
+  // narrow-rail truncation shot exists to prove. `uncommitted && prUrl === null`
+  // is the whole condition (worktree-done-flow-model.ts).
+  await attempt("seed", "a dirty worktree behind the hero ticket", async () => {
+    const worktree = await page.evaluate(
+      async ({ project, ticketId }) => {
+        const created = await window.api.terminal.create({
+          workspaceId: project.projectId,
+          cwd: project.projectPath,
+          cols: 80,
+          rows: 24,
+          // Main resolves the ticket and its project from the db and never trusts
+          // the cwd above for a ticket-scoped session — it runs the PTY in the
+          // ticket's own worktree, creating it if this is the first one.
+          ticket: { ticketId },
+        });
+        if (!created.ok) return { error: created.error ?? "create failed" };
+        await window.api.sessions.rename({
+          sessionId: created.sessionId,
+          title: "Wire the draft cache key",
+        });
+        await window.api.terminal.kill(created.sessionId);
+        const boot = await window.api.data.bootstrap();
+        if (!boot.ok) return { error: boot.error };
+        const ticket = (boot.data.ticketsByProject[project.projectId] ?? []).find(
+          (row) => row.id === ticketId,
+        );
+        return { path: ticket?.worktreePath ?? null, branch: ticket?.branch ?? null };
+      },
+      { project: seeded, ticketId: seeded.tickets[0].id },
+    );
+    if (worktree.error !== undefined) return { ok: false, detail: worktree.error };
+    if (worktree.path === null) return { ok: false, detail: "ticket has no worktree path" };
+    // Two edits rather than one: the changes row counts files, and "1 changed"
+    // would not show the row doing any counting.
+    await fs.writeFile(
+      join(worktree.path, "NOTES.md"),
+      "# Draft cache\n\nKey on {projectId, ticketId}.\n",
+    );
+    await fs.appendFile(join(worktree.path, "README.md"), "\nDraft cache notes in NOTES.md.\n");
+    return { ok: true, detail: `${worktree.branch} dirty at ${worktree.path}` };
   });
 } catch (error) {
   check("!", "seeding launch crashed", false, String(error?.stack ?? error));
@@ -688,8 +769,9 @@ try {
         name: "24-session-start-ticket-rail",
         group: "session-start",
         caption:
-          "The same component in the 300px ticket rail, one size step down so it sits level with a " +
-          "`text-label` heading. The ticket surfaces used to carry a two-button Chat/Terminal cluster, " +
+          "The same component in the 300px ticket rail — one size step down so it sits level with " +
+          "a `text-label` heading, and now inside the Calm Stack's Now page rather than a Sessions " +
+          "mode of its own. The ticket surfaces used to carry a two-button Chat/Terminal cluster, " +
           "which gave the terminal a peer status the code does not have.",
         rect:
           railBox === null
@@ -887,6 +969,301 @@ try {
       rect: await dialogCrop(page),
     });
     return { ok: true, detail: wrap.wrapped ? "still wrapping" : "one line when expanded" };
+  });
+
+  /* ------------------------------------------------------------------ */
+  /* GROUP 5 — the Calm Stack right rail                                */
+  /* ------------------------------------------------------------------ */
+
+  await attempt("rail", "the Now page, and the header pill above it", async () => {
+    await page.keyboard.press("Escape");
+    await gotoNav(page, "Board");
+    await sleep(700);
+    await openHeroTicket(page, heroId);
+    // The repository card reads worktree status live; give the first read time
+    // to land or the publish action photographs as its disabled placeholder.
+    await waitUntil(
+      "the repository card",
+      async () => (await page.getByTestId("ticket-repository-summary").count()) === 1,
+      { timeout: 20000 },
+    );
+    await waitUntil(
+      "worktree status to arrive",
+      async () =>
+        (await page.getByRole("button", { name: /Commit & create draft PR/ }).count()) === 1,
+      { timeout: 25000 },
+    ).catch(() => null);
+    await parkPointer(page);
+    await sleep(600);
+    const tabs = await railTabs(page);
+    await capture({
+      name: "60-rail-now-page",
+      group: "rail",
+      caption:
+        "The Now page — the resting page, answering three questions in the order they are asked: " +
+        "what the repository is doing, then what has been run, then when any of it happened. " +
+        "Status and priority fold inline as pills; there is no Properties destination to navigate " +
+        "to any more.",
+      rect: await railCrop(page),
+    });
+    await capture({
+      name: "61-rail-header-tablist",
+      group: "rail",
+      caption:
+        "The header's centred pill: Now · Diffs · Files. It belongs to the PANEL rather than to " +
+        "the page under it, and it replaced a vertical icon strip that stood on the rail's outer " +
+        "edge — four modes, none of them named.",
+      rect: await tablistCrop(page),
+    });
+    return { ok: tabs.length === 3, detail: tabs.map((tab) => tab.label).join(" · ") };
+  });
+
+  await attempt("rail", "the repository card", async () => {
+    const card = page.getByTestId("ticket-repository-summary");
+    const facts = await page.evaluate(() => ({
+      changes:
+        document.querySelector('[data-testid="ticket-repository-changes"]')?.textContent ?? null,
+      branch:
+        document.querySelector('[data-testid="ticket-repository-branch"]')?.textContent ?? null,
+      publish:
+        document.querySelector('[aria-label="Publish repository changes"]')?.textContent?.trim() ??
+        null,
+    }));
+    await capture({
+      name: "62-rail-repository-card",
+      group: "rail",
+      caption:
+        "The repository card. One live read of worktree status and the Change Set feeds the " +
+        "changes row, the branch row and the publish action together — so the count and the " +
+        "publish state are two projections of one snapshot rather than two races.",
+      rect: padded(await card.boundingBox(), 14),
+    });
+    return {
+      ok: facts.changes !== null && facts.branch !== null,
+      detail: `changes=[${facts.changes}] branch=[${facts.branch}] publish=[${facts.publish}]`,
+    };
+  });
+
+  for (const [key, label, name, caption] of [
+    [
+      "changes",
+      "Diffs",
+      "63-rail-diffs-page",
+      "The Diffs page. A page rather than a mode: the header pill stays put above it, so switching " +
+        "is a move within one panel instead of a change of what the panel is.",
+    ],
+    [
+      "files",
+      "Files",
+      "64-rail-files-page",
+      "The Files page, which absorbed the old Environment inspector's Sources half — that half was " +
+        "already a strict subset of this Referenced section, both reading the same body file refs.",
+    ],
+  ]) {
+    await attempt("rail", `the ${label} page`, async () => {
+      await page.getByTestId(`ticket-rail-tab-${key}`).click();
+      await waitUntil(
+        `${label} selected`,
+        async () =>
+          (await page.getByTestId(`ticket-rail-tab-${key}`).getAttribute("aria-selected")) ===
+          "true",
+      );
+      await parkPointer(page);
+      await sleep(700);
+      await capture({ name, group: "rail", caption, rect: await railCrop(page) });
+      return { ok: true, detail: `${label} captured` };
+    });
+  }
+
+  await attempt("rail", "the repository card at the rail's 240px floor", async () => {
+    await page.getByTestId("ticket-rail-tab-now").click();
+    await sleep(500);
+    const width = await dragRailTo(page, RAIL_MIN_WIDTH);
+    await parkPointer(page);
+    await sleep(800);
+    const clipping = await page.evaluate(() => {
+      const group = document.querySelector('[aria-label="Publish repository changes"]');
+      const more = document.querySelector('[aria-label="More repository actions"]');
+      if (group === null || more === null) return null;
+      const groupBox = group.getBoundingClientRect();
+      const moreBox = more.getBoundingClientRect();
+      const card = document.querySelector('[data-testid="ticket-repository-summary"]');
+      const cardBox = card?.getBoundingClientRect() ?? null;
+      return {
+        moreWidth: Math.round(moreBox.width),
+        // The failure this shot exists for: the ⋯ pushed past the card's own
+        // clipped edge by a verb that refused to truncate.
+        moreInsideCard: cardBox === null ? false : moreBox.right <= cardBox.right + 1,
+        groupWithinCard: cardBox === null ? false : groupBox.right <= cardBox.right + 1,
+      };
+    });
+    await capture({
+      name: "65-rail-repository-card-narrow",
+      group: "rail",
+      caption:
+        "The same card with the rail dragged to its 240px floor, carrying the longest verb it has: " +
+        "“Commit & create draft PR”. The label truncates and the ⋯ holds its place — it used to be " +
+        "pushed off the card's clipped edge by a verb that refused to give any width back.",
+      rect: padded(await page.getByTestId("ticket-repository-summary").boundingBox(), 14),
+    });
+    if (clipping === null) return { ok: false, detail: "no publish group on screen" };
+    return {
+      ok: clipping.moreInsideCard && clipping.groupWithinCard && clipping.moreWidth > 8,
+      detail: `rail=${width}px ⋯=${clipping.moreWidth}px insideCard=${clipping.moreInsideCard}`,
+    };
+  });
+
+  /* ------------------------------------------------------------------ */
+  /* GROUP 6 — the swapped lanes                                        */
+  /* ------------------------------------------------------------------ */
+
+  await attempt("lanes", "the rail toggle in the tab strip's corner", async () => {
+    await dragRailTo(page, RAIL_DEFAULT_WIDTH);
+    await parkPointer(page);
+    await sleep(600);
+    const geometry = await lanesGeometry(page);
+    await capture({
+      name: "70-lanes-tab-strip-corner",
+      group: "lanes",
+      caption:
+        "The whole argument in one frame: the rail toggle now sits in the TAB STRIP'S CORNER, " +
+        "directly on top of the rail column it collapses. The chrome band could never offer that " +
+        "mapping — it is a window-wide strip, and the pane is a column under one part of it.",
+      rect: geometry.crop,
+    });
+    if (geometry.corner === null || geometry.rail === null) {
+      return { ok: false, detail: "corner or rail not on screen" };
+    }
+    // The adjacency IS the claim, so measure it: the toggle's centre has to sit
+    // over the rail column, not merely near it.
+    const centre = geometry.corner.x + geometry.corner.width / 2;
+    return {
+      ok: centre >= geometry.rail.x && centre <= geometry.rail.x + geometry.rail.width,
+      detail: `toggle centre x=${centre.toFixed(0)}, rail column x=${geometry.rail.x.toFixed(0)}…${(geometry.rail.x + geometry.rail.width).toFixed(0)}`,
+    };
+  });
+
+  await attempt("lanes", "the band's focus button, on a session tab", async () => {
+    await openTicketTerminal(page);
+    await parkPointer(page);
+    await sleep(700);
+    const enter = page.getByRole("button", { name: "Enter terminal focus", exact: true });
+    const present = await enter.count();
+    await capture({
+      name: "71-lanes-band-enter-focus",
+      group: "lanes",
+      caption:
+        "The chrome band's trailing slot with a session tab in front: ONE button, wearing " +
+        "CornersOut. It took this slot from the right-rail toggle, and it is the slot the old Exit " +
+        "button already lived in — so entering and leaving now happen at one point on screen " +
+        "instead of two 40px apart.",
+      rect: await bandTailCrop(page),
+    });
+    return { ok: present === 1, detail: `Enter terminal focus present=${present === 1}` };
+  });
+
+  await attempt("lanes", "the same button, while focused", async () => {
+    await page.getByRole("button", { name: "Enter terminal focus", exact: true }).first().click();
+    await waitUntil("terminal focus", async () => (await shellState(page)) === "focused", {
+      timeout: 15000,
+    });
+    await parkPointer(page);
+    await sleep(900);
+    const exit = page.getByRole("button", { name: "Exit terminal focus", exact: true });
+    const pressed = await exit
+      .first()
+      .getAttribute("aria-pressed")
+      .catch(() => null);
+    await capture({
+      name: "72-lanes-band-exit-focus",
+      group: "lanes",
+      caption:
+        "The same button while focused, flipped to CornersIn. No `aria-pressed` on either side, " +
+        "against the plan: both states flip the LABEL instead, because a button announcing “Exit " +
+        "terminal focus, pressed” states its own opposite.",
+      rect: await bandTailCrop(page),
+    });
+    await capture({
+      name: "73-lanes-terminal-focus-engaged",
+      group: "lanes",
+      caption:
+        "Terminal focus engaged. Everything but one thin chrome row is gone — the card loses its " +
+        "frame, its margin and its radius, the sidebar leaves without a journey to watch, and the " +
+        "breadcrumb sits centred with the exit control at the end of the same row.",
+    });
+    return {
+      ok: (await exit.count()) === 1 && pressed === null,
+      detail: `label flipped to Exit, aria-pressed=${pressed ?? "absent"}`,
+    };
+  });
+
+  await attempt("lanes", "the band control is ABSENT on a Doc tab", async () => {
+    await page.getByRole("button", { name: "Exit terminal focus", exact: true }).first().click();
+    await waitUntil("chrome back", async () => (await shellState(page)) !== "focused");
+    await sleep(700);
+    // The ticket's own body tab is a Doc, not a session — and the control gates
+    // on tab KIND, so its absence here is the assertion.
+    const docTab = page.getByRole("tab").first();
+    await docTab.click();
+    await sleep(900);
+    await parkPointer(page);
+    await sleep(500);
+    const counts = await page.evaluate(() => ({
+      enter: document.querySelectorAll('button[aria-label="Enter terminal focus"]').length,
+      exit: document.querySelectorAll('button[aria-label="Exit terminal focus"]').length,
+      activeTab: document.querySelector('[role="tab"][aria-selected="true"]')?.textContent ?? null,
+    }));
+    await capture({
+      name: "74-lanes-band-absent-on-doc",
+      group: "lanes",
+      caption:
+        "The same corner of the band with the ticket's Doc tab in front, and the point is what is " +
+        "NOT there: the control gates on tab kind and simply does not mount. It derives its own " +
+        "target from the stores rather than taking one from the ticket view, so its existence " +
+        "tracks the state and not whichever view happens to be mounted.",
+      rect: await bandTailCrop(page),
+    });
+    return {
+      ok: counts.enter === 0 && counts.exit === 0,
+      detail: `on “${counts.activeTab}” — enter=${counts.enter} exit=${counts.exit}`,
+    };
+  });
+
+  await attempt("rail", "the Calm Stack rail on a light canvas", async () => {
+    const written = await page.evaluate(() => window.api.theme.setGlobalAppearance("light"));
+    if (!written.ok) return { ok: false, detail: written.error };
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
+    await waitUntil("light stamped", () =>
+      page.evaluate(() => document.documentElement.classList.contains("light")),
+    );
+    await sleep(2200);
+    await openHeroTicket(page, heroId);
+    await waitUntil(
+      "the repository card",
+      async () => (await page.getByTestId("ticket-repository-summary").count()) === 1,
+      { timeout: 20000 },
+    );
+    await sleep(2500);
+    await parkPointer(page);
+    await sleep(600);
+    await capture({
+      name: "66-rail-now-page-light",
+      group: "rail",
+      caption:
+        "The Now page on a light canvas. The card's hairlines and the pill's selected fill are the " +
+        "two things that carry the least ink here, so this is where a generated token set at the " +
+        "other end of the ladder shows whether it still separates the tiers.",
+      rect: await railCrop(page),
+    });
+    // Back to dark before the transcript group, which is shot in both.
+    const restored = await page.evaluate(() => window.api.theme.setGlobalAppearance("dark"));
+    if (restored.ok) {
+      await page.reload();
+      await page.waitForLoadState("domcontentloaded");
+      await sleep(2000);
+    }
+    return { ok: true, detail: "light rail captured" };
   });
 
   /* ------------------------------------------------------------------ */
@@ -1319,6 +1696,127 @@ function chipRowWrap(page) {
   });
 }
 
+/* -------------------------------------------------------------------------- */
+/* The Calm Stack rail, and the swapped lanes                                 */
+/* -------------------------------------------------------------------------- */
+
+/** The hero ticket's detail view, from the board or from a restored session. */
+async function openHeroTicket(page, displayId) {
+  if ((await page.getByTestId("ticket-rail").count()) === 1) return;
+  const card = cardById(page, displayId).first();
+  await waitUntil("board card", async () => (await card.count()) >= 1);
+  await card.dblclick();
+  await waitUntil(
+    "ticket rail",
+    async () => (await page.getByTestId("ticket-rail").count()) === 1,
+    {
+      timeout: 20000,
+    },
+  );
+  await sleep(1200);
+}
+
+/** The three header pages, in order, with which one is selected. */
+function railTabs(page) {
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll('[data-testid^="ticket-rail-tab-"]')).map((tab) => ({
+      label: (tab.textContent ?? "").trim(),
+      selected: tab.getAttribute("aria-selected") === "true",
+    })),
+  );
+}
+
+async function railCrop(page) {
+  return padded(await page.getByTestId("ticket-rail").boundingBox(), 12);
+}
+
+async function tablistCrop(page) {
+  return padded(await page.getByRole("tablist", { name: "Ticket rail pages" }).boundingBox(), 22);
+}
+
+/**
+ * Drag the rail's grip to `width`. Driven as a real pointer-capture drag rather
+ * than by writing the store, because the grip is the only thing that sets this
+ * width and a store write would photograph a geometry the handle cannot reach.
+ */
+async function dragRailTo(page, width) {
+  const grip = page.locator('[data-slot="rail-resize-handle"]').first();
+  const box = await grip.boundingBox();
+  if (box === null) return -1;
+  const railBox = await page.getByTestId("ticket-rail").boundingBox();
+  const current = railBox?.width ?? RAIL_DEFAULT_WIDTH;
+  const y = box.y + box.height / 2;
+  const from = box.x + box.width / 2;
+  // The grip is on the rail's LEFT edge, so widening moves it left.
+  await page.mouse.move(from, y, { steps: 4 });
+  await page.mouse.down();
+  await page.mouse.move(from + (current - width), y, { steps: 14 });
+  await page.mouse.up();
+  await sleep(500);
+  const settled = await page.getByTestId("ticket-rail").boundingBox();
+  return Math.round(settled?.width ?? -1);
+}
+
+/**
+ * The tab strip's corner toggle and the rail column beneath it, plus a crop
+ * that frames BOTH — the adjacency is the argument, and a shot of the button
+ * alone would be a shot of a button.
+ */
+async function lanesGeometry(page) {
+  const toggle = page.getByRole("button", { name: /details rail$/ }).first();
+  const [corner, rail, strip] = await Promise.all([
+    toggle.boundingBox(),
+    page.getByTestId("ticket-rail").boundingBox(),
+    page.getByRole("tablist", { name: "Ticket tabs" }).boundingBox(),
+  ]);
+  if (corner === null || rail === null) return { corner, rail, crop: null };
+  const top = Math.min(corner.y, strip?.y ?? corner.y) - 18;
+  return {
+    corner,
+    rail,
+    crop: {
+      x: rail.x - 190,
+      y: top,
+      width: rail.width + 210,
+      // Far enough down the rail that the column the toggle sits over is
+      // legible as a column.
+      height: 300,
+    },
+  };
+}
+
+/**
+ * The band's trailing slot, where terminal focus now lives.
+ *
+ * A FIXED rect anchored to the band's right edge, never the button's own box —
+ * the three frames it takes are `CornersOut`, `CornersIn` and nothing, and the
+ * third is the assertion. Three crops of three different rects would let a
+ * reader read the absence as a different framing.
+ */
+async function bandTailCrop(page) {
+  const band = await page.locator("[data-volli-shell] > div").first().boundingBox();
+  if (band === null) return null;
+  const width = 190;
+  return {
+    x: Math.max(0, band.x + band.width - width),
+    y: band.y,
+    width,
+    height: Math.max(band.height, 40) + 4,
+  };
+}
+
+/** Start a terminal on the open ticket, so the band has a session tab to gate on. */
+async function openTicketTerminal(page) {
+  const existing = page.getByRole("tab", { name: /^Session|^Terminal/ });
+  if ((await existing.count()) === 0) {
+    await startTerminalSession(page.getByTestId("ticket-rail"));
+    await waitUntil("a session tab", async () => (await existing.count()) >= 1, { timeout: 30000 });
+    await sleep(2500);
+  }
+  await existing.first().click();
+  await sleep(900);
+}
+
 /** Land on a primary nav page, from wherever we are. */
 async function gotoNav(page, label) {
   const button = page.getByRole("button", { name: label, exact: true });
@@ -1549,7 +2047,7 @@ async function writeIndex() {
     );
     const body =
       group.empty === true
-        ? `<p class="none">Nothing to show — deliberately, not a gap in this sheet.</p>`
+        ? `<p class="none">No frames of its own — see the group it landed in.</p>`
         : shots.length === 0
           ? `<p class="none">No shots landed for this group in the last run.</p>`
           : shots
