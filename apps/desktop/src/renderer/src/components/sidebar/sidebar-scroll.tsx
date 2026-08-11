@@ -47,11 +47,35 @@ const THUMB_MIN_HEIGHT = 20;
 const THUMB_CHANNEL = 8;
 /** How long the thumb stays up after the last scroll event. */
 const FADE_MS = 700;
+/** How far a row dissolves where it passes under the nav above or the footer below. */
+const EDGE_FADE = 12;
 
 /** Where the thumb sits, in the scrollport's own pixels. */
 interface ThumbGeometry {
   top: number;
   height: number;
+}
+
+/** Which ends of the list are flush against their own edge, and so uncut. */
+interface ScrollEdges {
+  atTop: boolean;
+  atBottom: boolean;
+}
+
+/**
+ * The scrollport clips, and a clip is a straight cut: a row sliding past the nav
+ * lost its top half to a hard horizontal line, mid-glyph, with nothing to say it
+ * was scrolling rather than broken.
+ *
+ * Only the cut ends fade. Softening an edge the list is already flush against
+ * would dim the first row for no reason — the fade means "this continues", so an
+ * edge where nothing continues must not have one.
+ */
+function edgeMask({ atTop, atBottom }: ScrollEdges): string | undefined {
+  if (atTop && atBottom) return undefined;
+  const head = atTop ? "#000 0" : `transparent 0, #000 ${EDGE_FADE}px`;
+  const tail = atBottom ? "#000 100%" : `#000 calc(100% - ${EDGE_FADE}px), transparent 100%`;
+  return `linear-gradient(to bottom, ${head}, ${tail})`;
 }
 
 /** The proportional thumb, floored so a very long list still leaves something to grab. */
@@ -74,6 +98,7 @@ export function SidebarScrollArea({
     startScrollTop: number;
   } | null>(null);
   const [thumb, setThumb] = React.useState<ThumbGeometry | null>(null);
+  const [edges, setEdges] = React.useState<ScrollEdges>({ atTop: true, atBottom: true });
   const [scrolling, setScrolling] = React.useState(false);
   const [dragging, setDragging] = React.useState(false);
 
@@ -88,6 +113,13 @@ export function SidebarScrollArea({
     const element = scrollRef.current;
     if (element === null) return;
     const { clientHeight, scrollHeight, scrollTop } = element;
+    // Sub-pixel scrollHeights mean the bottom never reaches equality exactly, so
+    // the last pixel would keep a fade the reader has already scrolled past.
+    const atTop = scrollTop <= 0;
+    const atBottom = scrollTop + clientHeight >= scrollHeight - 1;
+    setEdges((current) =>
+      current.atTop === atTop && current.atBottom === atBottom ? current : { atTop, atBottom },
+    );
     if (scrollHeight <= clientHeight) {
       setThumb((current) => (current === null ? current : null));
       return;
@@ -164,6 +196,7 @@ export function SidebarScrollArea({
       <SidebarContent
         ref={scrollRef}
         onScroll={handleScroll}
+        style={{ maskImage: edgeMask(edges) }}
         className={cn("overflow-x-hidden [&::-webkit-scrollbar]:hidden", className)}
       >
         {children}
