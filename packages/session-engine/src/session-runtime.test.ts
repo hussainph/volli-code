@@ -88,6 +88,11 @@ class FakeAdapter implements NativeHarnessAdapter {
   dispatchReceipt: Awaited<ReturnType<BindingHandle["dispatch"]>> | null = null;
   dispatchGate: Promise<void> | null = null;
   dispatchStarted: () => void = () => undefined;
+  withdrawals: string[] = [];
+  /** Off means the optional method is absent, not present and inert. */
+  withdrawsInteractions = true;
+  withdrawFailure: unknown = null;
+  withdrawThrow: unknown = null;
   commands: HarnessCommand[] = [];
   /** What each attach was actually pointed at — the live half of the directory contract. */
   specs: Parameters<NativeHarnessAdapter["attach"]>[0][] = [];
@@ -136,6 +141,19 @@ class FakeAdapter implements NativeHarnessAdapter {
       acknowledgeReconciliation: async (cursor) => {
         this.reconcileAcknowledgements.push(cursor);
       },
+      ...(this.withdrawsInteractions
+        ? {
+            // Deliberately not `async`: a harness that fails before it has a
+            // promise to reject is the case a bare `.catch()` would miss.
+            withdrawInteraction: (interactionId: string) => {
+              this.withdrawals.push(interactionId);
+              if (this.withdrawThrow) throw this.withdrawThrow;
+              return this.withdrawFailure
+                ? Promise.reject(this.withdrawFailure)
+                : Promise.resolve();
+            },
+          }
+        : {}),
       release: async (reason) => {
         this.releases += 1;
         this.releaseReasons.push(reason);
@@ -1725,7 +1743,7 @@ describe("SessionRuntime native adapter contract", () => {
     expect((await first.engine.getSession({ sessionId }))?.attention.primary).toBeNull();
   });
 
-  it("cancels a pending interaction as a fact, without answering it or telling the harness", async () => {
+  it("cancels a pending interaction as a fact, withdrawing the ask without answering it", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);
     const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
@@ -1753,9 +1771,11 @@ describe("SessionRuntime native adapter contract", () => {
 
     const { projection, frames } = await runtime.snapshot({ sessionId });
     expect(projection.interactions).toMatchObject({ active: [], resolved: [] });
-    // No delivery, so no receipt: the harness was never told an answer and
-    // Volli does not pretend otherwise.
+    // The executor is told to stop waiting, and that is all it is told. A
+    // withdrawal is not a dispatch, so no command carried a disposition and no
+    // receipt claims one was delivered.
     expect(adapter.dispatches).toBe(dispatchesBefore);
+    expect(adapter.withdrawals).toEqual(["question-1"]);
     expect(frames.map(({ event }) => event.payload).at(-1)).toEqual({
       kind: "interaction.cancelled",
       attachmentId,
@@ -1786,6 +1806,9 @@ describe("SessionRuntime native adapter contract", () => {
     const repeated = await runtime.snapshot({ sessionId });
     expect(repeated.throughSequence).toBe(throughSequence);
     expect(repeated.projection.interactions).toEqual({ active: [], resolved: [] });
+    // Nothing is left waiting, so nothing is told again: the second cancel
+    // returns on the absent interaction, before the executor is reached.
+    expect(adapter.withdrawals).toEqual(["question-1"]);
     // An unknown Session is still a fault: nothing was ever asked there.
     await expect(
       runtime.cancelInteraction({
@@ -1834,12 +1857,117 @@ describe("SessionRuntime native adapter contract", () => {
     const { projection, frames } = await runtime.snapshot({ sessionId });
     expect(projection.interactions).toMatchObject({ active: [], resolved: [] });
     expect(adapter.dispatches).toBe(dispatchesBefore);
+    // There is no binding left to withdraw from, which is where a cancel that
+    // outlives its attachment ordinarily lands — and no reason to open one.
+    expect(adapter.withdrawals).toEqual([]);
+    expect(adapter.attaches).toBe(1);
     expect(frames.map(({ event }) => event.payload).at(-1)).toEqual({
       kind: "interaction.cancelled",
       attachmentId,
       interactionId: "question-2",
       reason: "withdrawn",
     });
+  });
+
+  it("cancels cleanly however the executor declines to be told", async () => {
+    // Three ways a harness refuses to hear the withdrawal — the optional method
+    // is absent, it rejects, or it throws before there is a promise to reject —
+    // and one outcome, because the fact is durable before any of them happen.
+    const refusals = {
+      unimplemented: (adapter: FakeAdapter) => {
+        adapter.withdrawsInteractions = false;
+      },
+      rejected: (adapter: FakeAdapter) => {
+        adapter.withdrawFailure = new Error("gate already collected");
+      },
+      thrown: (adapter: FakeAdapter) => {
+        adapter.withdrawThrow = new Error("no gate to open");
+      },
+    };
+    for (const [refusal, arrange] of Object.entries(refusals)) {
+      const { runtime, adapter } = composition();
+      arrange(adapter);
+      const sessionId = await createAndAttach(runtime);
+      const interactionId = `question-${refusal}`;
+      await adapter.emit({
+        kind: "interaction",
+        state: "opened",
+        occurredAt: 300,
+        interaction: {
+          id: interactionId,
+          kind: "question",
+          title: "Which files should I read?",
+          detail: null,
+          options: [{ id: "prompt:0/option:0", label: "All of them", description: null }],
+          multiple: true,
+          native: { id: `native-${interactionId}`, detail: null },
+        },
+      });
+
+      await expect(
+        runtime.cancelInteraction({ sessionId, interactionId, reason: "abandoned" }),
+      ).resolves.toBeUndefined();
+
+      const { projection, frames } = await runtime.snapshot({ sessionId });
+      expect(projection.interactions).toEqual({ active: [], resolved: [] });
+      expect(frames.map(({ event }) => event.payload).at(-1)).toMatchObject({
+        kind: "interaction.cancelled",
+        interactionId,
+        reason: "abandoned",
+      });
+      // The two failing arms only mean something if the call was made at all,
+      // so the refusal that survives is pinned to the one that was arranged.
+      expect(adapter.withdrawals).toEqual(adapter.withdrawsInteractions ? [interactionId] : []);
+    }
+  });
+
+  it("files the executor's own withdrawal under the executor's provenance, not the person's", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    await adapter.emit({
+      kind: "interaction",
+      state: "opened",
+      occurredAt: 300,
+      interaction: {
+        id: "question-4",
+        kind: "question",
+        title: "Which files should I read?",
+        detail: null,
+        options: [{ id: "prompt:0/option:0", label: "All of them", description: null }],
+        multiple: true,
+        native: { id: "native-question-4", detail: null },
+      },
+    });
+
+    await adapter.emit({
+      kind: "interaction",
+      state: "cancelled",
+      interactionId: "question-4",
+      reason: "superseded",
+      occurredAt: 301,
+    });
+
+    const { projection, frames } = await runtime.snapshot({ sessionId });
+    // Neither list, on this side too: an ask that stopped being asked was never
+    // decided, and the reason it ended must not read back as one.
+    expect(projection.interactions).toEqual({ active: [], resolved: [] });
+    const { event } = frames.at(-1)!;
+    expect(event.payload).toEqual({
+      kind: "interaction.cancelled",
+      attachmentId,
+      interactionId: "question-4",
+      reason: "superseded",
+    });
+    // Same kind as the cancel a person clicks, and the reason the two are
+    // written in different places: nobody clicked this one, so it is filed
+    // against the executor that stopped asking, at the moment it says it did.
+    expect(event.provenance.source).toEqual({
+      kind: "adapter",
+      id: "fake",
+      detail: { adapterVersion: "1.0.0" },
+    });
+    expect(event.occurredAt).toBe(301);
   });
 
   it("records attention under one durable id per reason and clears the one it names", async () => {

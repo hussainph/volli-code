@@ -117,6 +117,21 @@ export interface BindingHandle {
   reconcile(cursor: SessionNativeDetail | null): Promise<Reconciliation>;
   /** Called only after every fact in the returned reconciliation batch commits durably. */
   acknowledgeReconciliation?(cursor: SessionNativeDetail | null): Promise<void>;
+  /**
+   * Tells an executor still parked on an ask to stop waiting for an answer.
+   *
+   * Optional, because only an executor that raises interactions has anything to
+   * withdraw. Best-effort, because the Session's `interaction.cancelled` fact is
+   * already durable when this is called: a refusal here leaves a harness waiting
+   * on a question that is over — which its own release settles either way — and
+   * must never turn a cancel that already happened into a failure.
+   *
+   * The withdrawal carries no resolution and takes none. Every way to answer
+   * carries a disposition, so a withdrawal that resolved would let something
+   * downstream read back a decision the person never made. The ask stops; what
+   * it was asking stays unanswered, and nothing may conclude otherwise.
+   */
+  withdrawInteraction?(interactionId: string): Promise<void>;
   release(reason: ReleaseReason): Promise<void>;
 }
 

@@ -22,6 +22,7 @@ import {
   SESSION_PERMISSION_OPTIONS,
   SESSION_REFUSAL_OPTION_IDS,
   type SessionInteraction,
+  type SessionInteractionCancelReason,
   type SessionInteractionOption,
   type SessionInteractionResolution,
 } from "./session-ledger";
@@ -478,13 +479,18 @@ export interface AttentionObservation {
 }
 
 /**
- * The executor is waiting on a person and will wait until it is answered.
+ * The executor is waiting on a person, until it is answered or stops being asked.
  *
  * The runtime owns everything about the ask except which attachment is doing the
  * asking: the Session Engine injects `attachmentId` when it records the fact, so
- * the runtime cannot name an attachment other than its own. Nothing produces
- * this arm yet — the Pi runtime raises no interactions — and the producer
- * arrives with the port that can answer one.
+ * the runtime cannot name an attachment other than its own. The Pi adapter
+ * raises all three arms around its {@link SessionRuntimeSpec.ask} host: an
+ * escalation opens one, an answer resolves it, and an abort cancels it.
+ *
+ * `cancelled` carries a reason where `resolved` carries a resolution, and
+ * deliberately cannot carry both — see {@link SessionInteractionCancelReason}
+ * for why an ask that ended undecided must leave nothing a reader could take for
+ * a decision.
  */
 export type InteractionObservation =
   | {
@@ -498,6 +504,13 @@ export type InteractionObservation =
       state: "resolved";
       interactionId: string;
       resolution: SessionInteractionResolution;
+      occurredAt?: number;
+    }
+  | {
+      kind: "interaction";
+      state: "cancelled";
+      interactionId: string;
+      reason: SessionInteractionCancelReason;
       occurredAt?: number;
     };
 

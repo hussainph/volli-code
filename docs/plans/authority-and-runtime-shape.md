@@ -1,8 +1,9 @@
 # Agent authority and runtime shape
 
-**Status:** Part I slices 1–3 shipped; slice 4 remains. Part II candidates 3 and
-1 shipped (1 as #205 → #206 → #207); 2, 5 and 6 remain, in the order below. Part
-III decision complete, not started — all four slices.
+**Status:** Part I slices 1–4 shipped, except slice 4's second half — the drawer
+above the composer — and the five other items its checklist names. Part II
+candidates 3 and 1 shipped (1 as #205 → #206 → #207); 2, 5 and 6 remain, in the
+order below. Part III decision complete, not started — all four slices.
 
 **Date:** 2026-08-11
 
@@ -13,24 +14,13 @@ Runtime sits behind, and how a user signs in to Model Access.
 
 Three efforts follow the Pi migration. They are recorded here rather than in
 `pi-native-ticket-session.md` because that document describes a migration that is
-finished: its Sessions 1–7 shipped, OpenCode is gone, and the singular Pi-backed
-`@volli/agent-runtime` is the only structured executor. What follows is new
-product work, not migration residue.
-
-The parts interlock, which is why they share a document:
-
-- Part I makes auto mode honest. Its last step gives the `SessionInteraction`
-  surface a producer, which is a question Part II would otherwise have to answer
-  by deletion.
-- Part II collapses the adapter registry into a single runtime port. That port is
-  where Part I's evaluation seam belongs, so the order in which they land changes
-  where the code goes.
-- Part III moves sign-in into the app. It is independent of Part I in code, but
-  it removes one of the two ways packaging currently breaks things that work
-  today — the other being Part I's sandbox note — so it belongs in the same
-  conversation.
-
-Do Part I and Part III first; they are decisions already made. Part II is a menu.
+finished. They interlock, which is why they share a document: Part I makes auto
+mode honest, and its last step gave the `SessionInteraction` surface a producer,
+which is a question Part II would otherwise have answered by deletion; Part II
+collapsed the adapter registry into a single runtime port, which is where Part I's
+evaluation seam belongs; and Part III moves sign-in into the app, removing one of
+the two ways packaging currently breaks things that work today — the other being
+Part I's sandbox note.
 
 **One thing Part III must not do:** reuse Part I's `SessionInteraction` channel
 for auth prompts. The two look alike and are not. See "The interaction channel"
@@ -44,275 +34,148 @@ Auto is the default authority mode for every Session. The user is not asked to
 approve individual tool calls.
 
 The reasoning is Anthropic's, from making auto mode the Claude Code default on
-2026-08-14: users approve about 97% of permission prompts, which is reflexive
+2026-08-07: users approve about 97% of permission prompts, which is reflexive
 clicking rather than review, while they reject about 39% of proposed plans. A
 prompt on every action buys the appearance of control and little of the
-substance. Scrutiny belongs at the level of intent, not the individual call.
+substance. Scrutiny belongs at the level of intent, not the individual call. (The
+97% and 39% are the product announcement's; the engineering post states 93% for
+the same rate — quote 93% when citing that post.
+`docs/research/claude-code-auto-mode-semantics.md` holds the full semantics.)
 
-This decision does not mean unbounded execution. Anthropic's auto mode routes
-every tool call through a classifier that blocks actions which are irreversible,
-destructive, or aimed outside the environment; keeps a category it will never
-approve; checks whether a git push destination is public, private, or trusted;
-reads repository state before a destructive git command; and escalates to the
-human after three consecutive denials or twenty in a session.
+It does not mean unbounded execution. Their auto mode routes every tool call
+through a classifier that blocks irreversible, destructive or outward-aimed
+actions; keeps a category it will never approve; checks whether a git push
+destination is public, private or trusted; reads repository state before a
+destructive git command; and escalates after three consecutive denials or twenty
+in a session.
 
 Prompt injection is screened by a *different* mechanism, and the distinction
-matters because it is a layer Volli does not have. A server-side probe scans tool
-outputs before they enter the agent's context. The transcript classifier is
+matters because it is a layer Volli does not have: a server-side probe scans tool
+outputs before they enter the agent's context, and the transcript classifier is
 defined by never seeing tool output at all — that stripping is itself the
 defence, since an injection would have to beat the probe and then steer the agent
-into a tool call the classifier independently judges safe. An earlier draft of
-this plan collapsed the two into one clause, which made "why no classifier yet"
-read as though it covered injection. It does not, and nothing in Volli does.
+into a call the classifier independently judges safe. Nothing in Volli screens
+injection.
 
-The 97% and 39% figures above are from the product announcement; the engineering
-post states 93% for the same approval rate. Quote 93% when citing that post.
-`docs/research/claude-code-auto-mode-semantics.md` holds the full semantics and
-the mapping onto what Volli built.
+### What the boundary already enforces
 
-Volli's job is to earn the same default. What follows is what that requires here,
-which is less than it sounds, because much of the boundary already exists.
-
-### What was true when this section was written
-
-Four claims below were superseded once slices 1–3 shipped. Rather than update
-them in place and erase the record of the starting point, this section stays
-as written; "Part I implementation record" below states what actually shipped
-and where the plan itself was wrong.
-
-- `AuthoritySnapshot` in `packages/shared/src/agent-runtime.ts` was a
-  single-field interface whose field was a literal: `{ mode: "auto" }`.
-- `apps/desktop/src/main/session-runtime/pi-adapter.ts` hardcoded
-  `authority: { mode: "auto" }` when it built a runtime spec.
-- The same adapter declared the `interaction.permission` capability
-  `state: "unavailable"`, so nothing in the product could raise a permission
-  decision.
-- `packages/agent-runtime/src/pi/runtime.ts` constructed its `Agent` with
-  `initialState`, `streamFn`, `sessionId` and `toolExecution`, and nothing
-  else.
-
-`CONTEXT.md` defines the Authority Snapshot as "the durable policy granted to one
-Session when it starts: which actions are automatic, which require a decision,
-which are forbidden, and the classifier model allowed to help within
-deterministic boundaries." None of that was recorded then. The glossary
-described the destination; the code had not arrived yet.
-
-### What is already enforced
-
-This matters more than the gap, because it determines how much is left to build.
-
-`packages/agent-runtime/src/pi/scoped-execution-env.ts` already runs every bash
-call inside a Seatbelt sandbox through `@anthropic-ai/sandbox-runtime`:
-
-- All network is denied. `PROCESS_SANDBOX_CONFIG` sets
-  `deniedDomains: ["*"]` with `strictAllowlist: true`, no Unix sockets, no local
-  binding.
-- The environment handed to a child is sanitized, so no credential reaches it.
-- Reads of the home directory are denied; reads and writes are scoped to the
-  Session workspace.
-- File tools reject any path outside the root **and reject symlinks**, so the
-  scope cannot be walked out of.
-- The process-global config carries no workspace paths at all. Each Session's
-  root travels per command, and a gated integration test proves two Sessions at
-  sibling roots cannot read each other's files in either attach order.
+This matters more than any gap, because it is why the rule layer above it can
+stay small. `packages/agent-runtime/src/pi/scoped-execution-env.ts` runs every
+bash call inside a Seatbelt sandbox through `@anthropic-ai/sandbox-runtime`: all
+network denied (`deniedDomains: ["*"]`, `strictAllowlist: true`, no Unix sockets,
+no local binding); the child environment sanitized, so no credential reaches it;
+home-directory reads denied and reads and writes scoped to the Session workspace;
+file tools rejecting any path outside the root **and rejecting symlinks**. The
+process-global config carries no workspace paths at all — each Session's root
+travels per command, and a gated integration test proves two Sessions at sibling
+roots cannot read each other's files in either attach order.
 
 The categories Anthropic's classifier exists for — exfiltration, actions aimed
 outside your environment — are therefore largely unreachable for a Session in a
-Ticket worktree today. That is a real boundary enforced by the kernel, not a
-policy layer that can be reasoned around.
+Ticket worktree. That is a real boundary enforced by the kernel, not a policy
+layer that can be reasoned around.
 
-### What was missing
+### The shape that shipped
 
-Three things, in order of importance. The first two closed in slices 2 and 3 —
-`beforeToolCall` is wired and `authority.denied` is a durable Session Event, and
-`AUTHORITY_RULE_IDS` is the forbidden set. They stay as written for the same
-reason as the section above: the record of what the gap was is worth more than a
-paragraph edited to agree with the code. Only the third is still open.
-
-**A block is not a durable fact.** Pi's `beforeToolCall` seam, when it blocks,
-causes the loop to emit an error tool result whose text is the supplied reason.
-Today Volli does not use that seam at all, and the boundary it does enforce
-speaks the same way: a path escape returns a `permission_denied` file error, and
-a sandboxed command gets a kernel `EPERM`. Both surface only as a failed activity
-in the transcript — an error string the model reads and may route around. No
-Session Event records that a denial happened. Nothing is countable, nothing is
-observable, and Attention never learns of it.
-
-**There is no forbidden set.** Auto is currently all-or-nothing within the
-sandbox. Inside a worktree an agent may rewrite `.git/hooks`, edit `.git/config`,
-or run any git subcommand.
-
-**There is no fallback.** Anthropic's design tolerates an aggressive classifier
-because a user can be asked when it gets in the way. Volli has no ask channel
-wired to a block — not because anything declares one unavailable (Part II
-candidate 3 deleted that declaration along with the rest of the capability
-probe, and nothing replaced it), but because nothing yet supplies
-`SessionRuntimeSpec.ask`. A block is still terminal for a plainer reason than
-before: without an ask channel there is no escalation state, only failure.
-
-The ask channel itself is not missing — it is built end to end and unused. The
-`SessionInteraction` ledger types, the `interaction.opened` and
-`interaction.resolved` observations, the `interaction.resolve` command, the
-SQLite ledger, the pure answering rules in the renderer and the interaction card
-UI all exist and are covered. Only the Pi adapter opts out.
-
-### Target architecture
-
-#### The durable Authority Snapshot
-
-Replace the literal with a record written when the Session starts and projected
-to the UI:
-
-- `mode`
-- the work-location kind — `worktree` or `main-checkout`
-- the tool bundle
-- a rule-pack **id and hash**, not the rules inline
-- `classifierModel`, initially `null`
-- fallback thresholds
-
-Pinning the rule pack by identity rather than by value satisfies `CONTEXT.md`'s
+**The Authority Snapshot is a record, not a literal:** `mode`, the work-location
+kind (`worktree` or `main-checkout`), the tool bundle, a rule-pack **id and
+hash** rather than the rules inline, `classifierModel` (still `null`), and the
+fallback thresholds. Pinning the pack by identity satisfies `CONTEXT.md`'s
 requirement that "a Settings change does not silently change a running Session's
-authority" without freezing machine facts that must stay live.
+authority" without freezing machine facts that must stay live. Resolved paths,
+the current branch, remote visibility, repository status before a destructive
+command and the denial counters are all computed at call time — they are not
+policy, they are the state policy reads.
 
-Resolved paths, the current branch, remote visibility, repository status before a
-destructive command, and the block counters are all computed at call time. They
-are not policy; they are the state policy reads.
+**It is not persisted, and never was**, which corrects what slice 1 claimed for
+itself. `PiBinding.runtimeSpec()` constructs the record on every attach; no
+Session Event carries it, no SQLite column holds it, and `SessionProjection` has
+no field for it, so it is not projected to the UI either. What shipped is the
+record's *shape*. The only durable trace of authority is the consequence of a
+denial — the `authority.denied` event and the
+`SessionProjection.authorityDenials` fold.
 
-#### The evaluation seam
-
-`AgentOptions.beforeToolCall` is Pi's in-process equivalent of `canUseTool`. It
-takes the assistant message, the raw tool call, the validated arguments and the
-current agent context, and may return `{ block, reason, terminate }`. It requires
-no Pi CLI and no extension host.
-
-Wire it inside `@volli/agent-runtime` to a pure evaluation function in
-`@volli/shared` — `evaluate(call, snapshot, context)` — so the policy is
-testable without a runtime, a process, or a model.
-
-Only the decision is pure. Resolving a path, following a symlink and lexing a
-command line all need `node:fs`, which `@volli/shared` may not import, so they
-belong in `@volli/agent-runtime`, which normalizes a runtime tool call into the
-value the pure function judges.
-
-#### Denials as durable facts
-
-A block must commit a Session Event before it reaches the model. This is what
-turns the boundary from an error string into product behaviour: it makes denials
-countable for the fallback threshold, visible in the transcript as a Volli
-semantic fact rather than a failed tool, and available to Attention.
-
-#### Escalation and the ask channel
-
-Open a real `SessionInteraction` when the counters trip — three consecutive
-blocks, or twenty in a Session. The renderer half already knows how to render
-and answer it.
+**The evaluation seam is `AgentOptions.beforeToolCall`**, Pi's in-process
+equivalent of `canUseTool`, wired to a pure `evaluate(call, snapshot, context)` in
+`@volli/shared` so the policy table is a unit test with no runtime, no process and
+no model. Only the decision is pure: resolving a path, following a symlink and
+lexing a command line all need `node:fs`, so normalizing a call into the value the
+pure function judges stays in `@volli/agent-runtime`. A block commits its Session
+Event **before** it reaches the model, which is what turns the boundary from an
+error string the model can route around into product behaviour — countable for the
+thresholds, visible in the transcript as a Volli semantic fact rather than a
+failed tool, and available to Attention.
 
 ### Role policy
 
 The two Session Roles do not deserve the same policy, and this is the sharpest
-product question in Part I.
+product question in Part I. **Only the ticket half shipped.**
 
 A **ticket** Session runs in a Ticket worktree: branch-isolated, disposable, and
 already sandboxed away from the network and the home directory. Auto is nearly
-free there. The residual risk is inside the tree — add a forbidden set covering
-`.git/hooks`, `.git/config`, `.volli/`, and git subcommands that leave the
-worktree.
+free there, and the residual risk inside the tree is what the forbidden set
+covers — `.git/hooks`, `.git/config`, `.volli/`, and git subcommands that leave
+the worktree.
 
 A **project** Session runs in the Main checkout, on the user's real working tree,
 with their uncommitted work, on whatever branch is checked out. It inherits the
-same sandbox widened to that root. It should not inherit the worktree's policy:
-
-- forbid `reset --hard`, `checkout -- .`, `clean -fd`, `stash drop`, `rebase` and
-  `commit --amend`
-- forbid branch switching
-- take an automatic pre-image commit of dirty work before the first edit, so the
-  user's uncommitted work is recoverable
-
-That last idea is Aider's, and it is the single best pattern found in the survey
-for agents working a checkout a human also uses.
+same sandbox widened to that root. It must not inherit the worktree's policy, and
+does not yet have one of its own: forbid `reset --hard`, `checkout -- .`,
+`clean -fd`, `stash drop`, `rebase` and `commit --amend`; forbid branch
+switching; and take an automatic pre-image commit of dirty work before the first
+edit, so the user's uncommitted work is recoverable. That last idea is Aider's,
+and it is the single best pattern in the survey for agents working a checkout a
+human also uses.
 
 ### Why no classifier yet
 
-Keep `classifierModel: null`.
+Keep `classifierModel: null`. A classifier earns its cost when the dangerous
+categories are reachable: three of Anthropic's four block-rule groups need the
+network or the home directory and Seatbelt denies both outright, and their own
+tier 2 skips the classifier for in-project file writes on the same blast-radius
+reasoning.
 
-A classifier earns its cost when the dangerous categories are reachable. Three of
-Anthropic's four block-rule groups need the network or the home directory, and
-Seatbelt denies both outright. Their own tier 2 skips the classifier entirely for
-in-project file writes on the same blast-radius reasoning. Deterministic rules
-plus the existing sandbox cover most of the realistic risk here.
-
-**But not all of it, and an earlier draft of this section overclaimed.** It said a
-per-call model invocation "would mostly re-derive what the kernel already
-guarantees." That is wrong about what their classifier is for. It is an *intent*
-checker, not a boundary enforcer: its rules are anchored on the user's own
-messages, and "everything the agent chooses on its own is unauthorized until the
-user says otherwise." A kernel guarantees nothing about intent. A branch sweep, a
-`push --force`, or an over-broad `rm` entirely inside the workspace is legal under
-every rule we wrote and legal under Seatbelt, and only an intent check catches it.
-The honest statement is that we accept that gap for now, not that it does not
-exist.
-
-The second thing only a classifier reaches: "evaluate the real-world impact of an
-action, rather than just the surface text of the invocation." That is the rule a
-lexer cannot implement, and it is the same gap our `eval`, base64 and
-command-substitution residuals name.
-
-It becomes warranted when either of two things changes: network egress is
-allowlisted (which reopens exfiltration), or the Main-checkout Role ships to
-users at scale. Keep the field in the snapshot so the seam exists before it is
-needed.
+**That covers most of the realistic risk, not all of it, and the gap is accepted
+rather than absent.** Their classifier is an *intent* checker, not a boundary
+enforcer: its rules are anchored on the user's own messages, and "everything the
+agent chooses on its own is unauthorized until the user says otherwise." A kernel
+guarantees nothing about intent. A branch sweep, a `push --force`, or an
+over-broad `rm` entirely inside the workspace is legal under every rule we wrote
+and legal under Seatbelt. The second thing only a classifier reaches: "evaluate
+the real-world impact of an action, rather than just the surface text of the
+invocation" — the rule a lexer cannot implement, and the same gap our `eval`,
+base64 and command-substitution residuals name. It becomes warranted when network
+egress is allowlisted, which reopens exfiltration, or when the Main-checkout Role
+ships at scale. Keep the field so the seam exists before it is needed.
 
 ### External evaluation
 
-**`czottmann/pi-automode`** (`bd82e29e`, v1.11.0, MIT) was evaluated as the
-primary candidate and **should not be taken as a dependency.** It is a Pi
-*extension* registered for `pi-coding-agent` — the CLI and TUI layer — while
-Volli embeds `@earendil-works/pi-agent-core`. Adopting it would pull the whole
-terminal stack into Electron main. It also has no notion of two work locations,
-no fallback-to-manual, and its own README states it is not a sandbox.
+**`czottmann/pi-automode`** (`bd82e29e`, v1.11.0, MIT) was **rejected as a
+dependency**: it is a Pi *extension* registered for `pi-coding-agent`, the CLI
+and TUI layer, while Volli embeds `@earendil-works/pi-agent-core`, so adopting it
+would pull the whole terminal stack into Electron main. It also has no notion of
+two work locations, no fallback-to-manual, and its own README states it is not a
+sandbox. Its deterministic layer was worth having and was vendored with
+attribution — a shell lexer that understands quoting, redirects and operators,
+plus path helpers — with its classifier taken as design only. Vendoring rather
+than depending also reflects that 51 of its 56 commits are from one author.
 
-Its deterministic layer is worth having. `hard-deny.ts`, `paths.ts` and
-`permissions.ts` import nothing from `@earendil-works` — they are pure Node under
-MIT. Vendor them with attribution: a shell lexer that understands quoting,
-redirects and operators, plus rules for TLS weakening, persistence mechanisms,
-macOS platform weakening, destructive removals against system roots, and writes
-to shell profiles. Take its classifier as design only. Vendoring rather than
-depending also reflects that 51 of its 56 commits are from one author.
-
-Note the honest caveat: porting a shell lexer copies its bypass surface. It does
-not handle `eval`, base64, command substitution or `xargs`. It is sound as
-defence in depth beneath Seatbelt, and unsound as a standalone boundary.
+The honest caveat: porting a shell lexer copies its bypass surface. It does not
+handle `eval`, base64, command substitution or `xargs`. Sound as defence in depth
+beneath Seatbelt, unsound as a standalone boundary.
 
 **From the wider survey**, the useful borrowings are Codex's policy shape — a
-capability tier (`writable_roots`) kept orthogonal to an approval axis, which is
-the only surveyed model where work location *is* the policy variable — and
-Codex's habit of carving protected metadata paths out of every writable root.
-Claude Code contributes the precedence order and the fallback thresholds. Goose
-demonstrates the failure mode to avoid: approval at tool-name granularity, where
-one approved shell tool chains anything.
+capability tier (`writable_roots`) kept orthogonal to an approval axis, the only
+surveyed model where work location *is* the policy variable — and its habit of
+carving protected metadata paths out of every writable root. Claude Code
+contributes the precedence order and the thresholds. Goose demonstrates the
+failure mode to avoid: approval at tool-name granularity, where one approved
+shell tool chains anything.
 
-### Implementation slices
+### Deliberately not in the first pass
 
-1. Make `AuthoritySnapshot` a real record, constructed per attach.
-2. Wire `beforeToolCall` to a pure `evaluate(call, snapshot, location)` in
-   `@volli/shared`; vendor the deterministic hard-deny layer under MIT
-   attribution.
-3. Emit a denial as a durable Session fact.
-4. Open a real `SessionInteraction` and escalate on the counters.
-
-Follow-up, deliberately not in the first pass: the classifier, network
-allowlisting, the Main-checkout policy and its pre-image commit, per-project rule
-packs, and data-aware git rules.
-
-### Testing and evidence
-
-- `evaluate` is pure, so the policy table is a unit test with no runtime.
-- The vendored hard-deny lexer keeps its upstream test corpus.
-- A denial's durable fact needs a ledger round-trip test and a projection test.
-- The escalation counters need a test that trips consecutive and per-Session
-  thresholds independently.
-- The existing `VOLLI_SRT_INTEGRATION`-gated sandbox test should gain a case
-  asserting a *blocked* call is recorded, not merely refused.
+The classifier, network allowlisting, the Main-checkout policy and its pre-image
+commit, per-project rule packs, and data-aware git rules.
 
 ### Risks and unverified assumptions
 
@@ -326,72 +189,52 @@ packs, and data-aware git rules.
 - `sandbox-exec` is formally deprecated and cannot nest, so a Mac App Store build
   under the App Sandbox would lose this boundary entirely. That is a packaging
   constraint worth knowing before it is discovered late.
-- The 3-consecutive / 20-per-session thresholds are copied from Anthropic's post
-  with no knowledge of how they were tuned. Treat them as a starting point.
-- Denials becoming durable facts is a new event kind; its downstream projection
-  assumptions have not been checked.
+- The 3-consecutive / 20-per-Session thresholds are inherited, not earned — see
+  slice 4's record below, which is where they now have a consequence.
 
-### Part I implementation record (2026-08-10)
+### Slices 1–3 record (2026-08-10)
 
-Slices 1, 2 and 3 shipped. Slice 4 — escalation through the interaction channel
-— is scoped below and not built.
+`authority.denied` carries which tool, which rule, and the refusing rule's own
+words, from `beforeToolCall` through the adapter to SQLite. Three decisions in
+that durable fact are load-bearing. `cause` is stored as a
+bare string, not the rule-id union, because history outlives the pack that wrote
+it and `sqlite-ledger.ts` decodes with `default: throw` — a decoder rejecting a
+retired rule id would not degrade one event, it would fail every later read of
+that Session. The count is projected but the streak cannot be:
+`SessionProjection.authorityDenials` exists because a counter that reset on every
+attach would never reach twenty, while an *allowed* call is not an event, so only
+a live runtime can know a run of refusals was broken. And a refusal goes through
+the same `OrderedObservationDelivery` queue as everything else — one that overtook
+its turn would be filed against the wrong turn — which works without a
+`try`/`catch` because `commitObservation` never rejects, and a ledger that cannot
+be written is not a reason to let the call through.
 
-**Sequenced before Part II candidate 1, and the reason is now evidence rather
-than preference.** `AuthoritySnapshot` already travelled from `@volli/shared`
-through `SessionRuntimeSpec.authority` into `@volli/agent-runtime`, so the
-registry never sees it and enforcement landed without touching the facade at
-all. The `AgentRuntime` port the collapse is meant to produce already exists at
-`packages/agent-runtime/src/contracts.ts`; candidate 1 deletes
-`NativeHarnessAdapter` *above* that port rather than creating it. Only slices 3
-and 4 pay a facade tax, because only they mint new observation kinds.
+**Where the plan was wrong, corrected in the build:** the vendored hard-deny
+layer could not sit in `@volli/shared` beside `evaluate`, because its path helpers
+need `node:fs`. Only pi-automode's lexer and path helpers were vendored, not its
+rule body — two rule tables able to disagree, with no way to say which refused, is
+worse than one — and not `permissions.ts`, which matches configured patterns like
+`bash(git push *)` against a call, a question Volli does not ask. Work location is
+not derivable from the Session Role, because a Ticket that never took a worktree
+runs in the Main checkout, so `PiRuntimeContext` carries a **required** `location`
+set from `ticket.usesWorktree`; a default would have marked every Session a Main
+checkout and rotted quietly.
 
-**Where the plan above was wrong, corrected in the build:**
-
-- Slice 1 said `AuthoritySnapshot` would be "persisted at Session start." It
-  never was and still is not: `PiBinding.runtimeSpec()` constructs the record
-  on every attach (`apps/desktop/src/main/session-runtime/pi-adapter.ts:347`),
-  no Session Event carries it, no SQLite column holds it, and
-  `SessionProjection` has no field for it — so it is not projected to the UI
-  either, which the same line claimed. What shipped is the record's shape. The
-  only durable trace of authority is the consequence of a denial — the
-  `authority.denied` event and the `SessionProjection.authorityDenials` fold
-  slice 3 added.
-- The vendored hard-deny layer could not sit in `@volli/shared` beside
-  `evaluate`, because `paths.ts` needs `node:fs`. Pure policy lives in shared;
-  path and shell resolution live in `agent-runtime`.
-- Only pi-automode's lexer and path helpers were vendored, not its rule body and
-  not `permissions.ts`. Porting `segmentHardDeny` would have left the product
-  with two rule tables able to disagree and no way to say which refused, and
-  `permissions.ts` matches configured patterns like `bash(git push *)` against a
-  call — a question Volli does not ask, so every function in it would have been
-  dead code beneath a 100% coverage gate. The `ToolPattern` transitive import of
-  `@earendil-works` is moot as a result.
-- Work location is not derivable from the Session Role: a Ticket that never took
-  a worktree runs in the Main checkout. `PiRuntimeContext` carries a required
-  `location` field set from `ticket.usesWorktree`. Making it optional with a
-  default would have marked every Session a Main checkout and rotted quietly.
-- `packages/agent-runtime/src/prompt.ts` told the model "Process execution is not
-  available in this migration slice" while `pi-adapter.ts` shipped `execute` in
-  the bundle. The Authority layer now states the real boundary.
-
-**Two boundary decisions worth not relitigating:**
-
-- `path.outside-workspace` judges writes, not every command operand. The
-  per-command Seatbelt policy denies the home directory and deliberately leaves
-  `/usr`, `/etc` and `/opt/homebrew` readable so ordinary build and test commands
-  work. A first pass checked every operand and thereby denied `ls /usr/bin`,
-  `cat /etc/hosts`, `2>/dev/null` and any explicitly-pathed toolchain binary — a
-  rule layer stricter than the boundary it backs up is a second, worse boundary,
-  and `2>/dev/null` alone would have tripped the three-consecutive fallback on
-  ordinary work. Rules 9 and 10 still read operands, because destructive removal
-  and a git flag aimed at another tree are intent-level cases the kernel permits.
-- `cp evil.sh <workspace>/.git/hooks/pre-commit` cannot be caught in the rule
-  table without per-program positional parsing, which is how bugs get into
-  security rules. It is closed one layer down instead: the per-command sandbox
-  denies writes to `<workspace>/.git/hooks` and `<workspace>/.git/config`, the
-  two paths normal git operation never writes and the two that change what later
-  commands do. Rule 3 stops file tools and `git config`; the sandbox stops every
-  other writer. Neither is complete alone.
+**Two boundary decisions worth not relitigating.** `path.outside-workspace` judges
+writes, not every command operand: the per-command Seatbelt policy deliberately
+leaves `/usr`, `/etc` and `/opt/homebrew` readable so ordinary build and test
+commands work, and a first pass that checked every operand denied `ls /usr/bin`,
+`cat /etc/hosts`, `2>/dev/null` and any explicitly-pathed toolchain binary. A rule
+layer stricter than the boundary it backs up is a second, worse boundary —
+`2>/dev/null` alone would have tripped the three-consecutive threshold on ordinary
+work. Rules 9 and 10 still read operands, because destructive removal and a git
+flag aimed at another tree are intent-level cases the kernel permits. And
+`cp evil.sh <workspace>/.git/hooks/pre-commit` is closed one layer down rather
+than in the rule table, which would need per-program positional parsing: the
+sandbox denies writes to `<workspace>/.git/hooks` and `<workspace>/.git/config`,
+the two paths normal git operation never writes and the two that change what later
+commands do. Rule 3 stops file tools and `git config`; the sandbox stops every
+other writer. Neither is complete alone.
 
 **Accepted residual:** `cp <workspace>/secret /tmp/leak` is not refused. With the
 network denied outright, that is a file elsewhere on a machine the user already
@@ -403,282 +246,270 @@ agent-controllable scratch paths.
 is refused — an ordinary cleanup loop, and a self-amplifying one, because the
 natural retry is another `rm` in the same loop and three of them trip the
 consecutive-denial threshold. `git` was narrowed away from this cost, to the
-values of its path-bearing flags; `rm` was not, because every one of its
-operands is a deletion target. The refusal names the remedy — write the paths
-literally — so the model has a next move rather than a dead end. Resolving
-`$PWD`, which is derivable, would shrink this further if it proves noisy.
+values of its path-bearing flags; `rm` was not, because every one of its operands
+is a deletion target. The refusal names the remedy — write the paths literally —
+so the model has a next move rather than a dead end. Resolving `$PWD`, which is
+derivable, would shrink this further if it proves noisy.
 
-**A Session can no longer set its own git identity.** `~/.gitconfig` was already
-unreadable under `denyRead: [homeDir]`, and denying `.git/config` writes removes
-the workaround of the agent setting a local identity itself. This costs nothing,
-because the agent is not the commit path: `apps/desktop/src/main/worktree/publish.ts`
+**A Session can no longer set its own git identity**, and that costs nothing: the
+agent is not the commit path, since `apps/desktop/src/main/worktree/publish.ts`
 resolves identity in main and runs `add`/`commit` outside the sandbox. It would
 matter only if a Session were ever expected to commit through its own bash.
 
-### Slice 3 record (2026-08-10)
+### Slice 4 — the escalation producer
 
-`authority.denied` carries which tool, which rule, and the refusing rule's own
-words, from `beforeToolCall` through the adapter to SQLite. Three decisions in it
-are load-bearing.
+**Shipped across two PRs**: the port, the counters and the shared ask vocabulary
+first (#210), then the Pi adapter implementing that port against the interaction
+card the renderer already had (#211). The answer pipe is complete end to end —
+renderer, IPC, tRPC, Engine, durable event, adapter dispatch, and the last hop
+into Pi — so the roughly 1400 renderer lines that sat at 100% coverage verifying
+behaviour nothing produced now have a producer, which is what retires Part II
+candidate 4. What has *not* shipped is the second half of the original two-PR
+plan — the drawer above the composer, which is where the existing card moves —
+and five other items. Both are in the checklist below.
 
-**`cause` is stored as a bare string, not the rule-id union.** History outlives
-the pack that wrote it. `sqlite-ledger.ts` decodes with `default: throw`, so a
-decoder that rejected a retired rule id would not degrade one event — it would
-make every later read of that Session fail.
+**The ask is a typed port, not an observation.**
+`SessionRuntimeSpec.ask?: (request: RuntimeAskRequest, signal: AbortSignal) =>
+Promise<RuntimeAskChoice>`, `RuntimeAskChoice = "allow" | "refuse" | "stop"`. The
+adapter implements it by emitting `interaction.opened` and parking a resolver,
+then claiming it back from the `interaction.resolve` dispatch, which keeps
+`@volli/agent-runtime` free of ledger types entirely. It blocks with no invented
+timeout — the runtime awaits it with none of its own, and a question left up
+overnight costs a parked promise. The `AbortSignal` is the other half of that
+bargain: the host's only notice that the turn its question belongs to has stopped
+waiting, and a host that ignores it strands the card it opened.
 
-**The count is projected; the streak cannot be.** `SessionProjection.authorityDenials`
-exists because the per-Session half of the threshold is a fact about the Session,
-and a counter that reset on every attach would never reach twenty. The
-consecutive half has no projection and can never have one: an *allowed* call is
-not an event, so only the runtime that sees both answers can know a run was
-broken.
+**One question ends three ways, not two,** and the distinction decides what
+history says. `AskResult` in `packages/agent-runtime/src/pi/escalation.ts` is
+`answered` — a decision; `abandoned` — a signal fired first, so nobody was asked
+and nothing is recorded; or `unavailable` — the host could not obtain an answer at
+all, so the refusal stands and *is* recorded, because nothing was cancelled and
+the call really was refused.
 
-**A refusal goes through the same ordered queue as everything else.** The first
-cut called `spec.observer` directly from `beforeToolCall`, bypassing
-`OrderedObservationDelivery`. A refusal that overtook the turn it belongs to
-would be filed against the wrong turn. `commitObservation` also never rejects, so
-the "record, then refuse" ordering holds without a `try`/`catch` deciding what a
-ledger failure means — a ledger that cannot be written is not a reason to let the
-call through.
+**The interaction id is `ask:<toolCallId>`, and it is frozen.** It lands inside
+`pi:interaction:<attachmentId>:ask:<toolCallId>:opened` on disk, and every relaunch
+re-derives that event id and dedupes by exact match — so changing how it is built
+would not fail, it would write a second copy of every question a Session ever
+asked. The tool call id is the identity because the runtime blocks exactly one
+question per refused call.
 
-**One fail-open closed on the way past.** The renderer scrubbing switch in
-`packages/session-rpc` ended in `default: return safeFrame`, so any newly added
-payload kind reached the renderer unscrubbed with no compile error. It now lists
-its pass-throughs explicitly with a `never` guard, the way the projection reducer
-in `session-ledger.ts` already did.
+**Counters.** `#consecutiveDenials` is runtime-only and necessarily so: an
+allowed call leaves no durable trace, so nothing outside a live attachment can
+tell three refusals in a row from three spread over a day. `#sessionDenials`
+seeds from `SessionRuntimeSpec.priorAuthorityDenials` and advances only in the
+branches that ask for a record, so it can drift below the projection but never
+above — toward one question missed, never toward one invented on evidence that
+does not exist. `#sessionTrip` is a moving target rather than a comparison,
+because the fallback names an *interval*: once a person has answered at twenty
+the next question belongs at forty, where a fixed comparison would ask again on
+the twenty-first refusal and every one after. A threshold that is not a finite
+number ≥ 1 coerces to infinity — never ask — rather than to zero, because a
+broken config must not turn escalation into a prompt on every refusal.
 
-### Slice 4 — scope, settled
+**Both causes ask; they differ in what they offer.** `askOffer` mints both pairs
+from the ledger's own option lists rather than restating them, because the
+surface that offers a choice and the runtime that reads the answer are one
+decision made twice with the option ids as the wire between them. An overridable
+rule offers `[once, reject]` as a `permission` — **no `always`**, because there
+is no durable policy store to write a standing grant into and an option that
+silently meant `once` would be a lie told in the one place a person is being
+asked to trust us. A rule that only reports offers `[continue, stop]` as a
+`question`: "Keep working" accepts the refusal and lets the turn run on, "Stop
+the turn" ends it. Neither grants anything — the call is refused either way,
+which is why the title says the call was blocked rather than asking permission
+for it. It is still a real question: not "may it run", which is settled, but "is
+this policy in your way badly enough to stop". That is why it is an interaction
+rather than an Attention — it has a consequence either way, and it avoids
+widening the Attention reason union for a state none of its members describes.
 
-Two stacked PRs. The escalation producer first, landing in today's interaction
-card so it works end to end; then the drawer above the composer, which is also
-where the existing card moves. The whole answer pipe — renderer, IPC, tRPC,
-engine, durable event, adapter dispatch — already exists and is tested; only the
-last hop into Pi is stubbed, which is why roughly 1400 renderer lines sit at 100%
-coverage verifying something nothing produces.
-
-**Counters.** `sessionDenials` seeds from `SessionProjection.authorityDenials`
-through `PiRuntimeContextFields`, the way `location` did in slice 2;
-`NativeAttachmentSpec` does not carry a projection and must not grow one.
-`consecutiveDenials` is runtime-only. After any escalation both trips move
-forward — consecutive to zero, the session trip to `total + sessionDenials` — so
-it fires every twenty rather than once and then on every call after.
-
-**The ask is a typed port, not an observation.** `SessionRuntimeSpec` gains
-`ask?: (request) => Promise<answer>`. The adapter implements it by emitting
-`interaction.opened` and parking the resolver against the interaction id, then
-resolving it from the `interaction.resolve` dispatch. That keeps
-`@volli/agent-runtime` free of ledger types. It blocks with no invented timeout:
-cancellation comes from the vocabulary that already exists — `abandoned`,
-`superseded`, `withdrawn` — and every parked resolver is cancelled on release and
-on abort.
-
-**Both causes ask; they differ in what they offer.** An overridable rule offers
-`[once, reject]` — no `always`, because there is no durable policy store to write
-it to and an option that silently means `once` is a lie. A rule that only reports
-offers `[stop, continue]`: stop interrupts the turn, continue resets the counters
-and keeps refusing. That is a real question with a real consequence, which is why
-it is an interaction rather than an Attention — and it avoids widening the
-Attention reason union for a state none of its members describes.
+**The renderer widens the polarity, and only the renderer.** `optionPolarity`
+groups `stop` with the refusing ids and `continue` with the allowing ones, so an
+escalation draws like every other two-sided ask. That widening must stay
+renderer-local: `askChoice` tests `SESSION_REFUSAL_OPTION_IDS` *before* it tests
+`stop`, so an id moved into that shared list would resolve "Stop the turn" to a
+plain refusal and the turn would never stop. The transcript gained `continued`
+and `stopped` receipt verdicts for the same reason — an escalation's outcome is
+neither "allowed" nor "rejected", and printing it as either would misreport what
+the person decided.
 
 **We park where Anthropic terminates, and that is deliberate.** Their rule is
 that in headless mode "there is no UI to ask the human, so we instead terminate
 the process." Volli has no headless mode and no manual-approval mode to fall back
 *to*, so terminating would destroy a Session to avoid asking a question the
-product can hold open indefinitely. `sessionAwaitsUser()` already surfaces an
-unanswered interaction in the sidebar and the chat listing, so a parked Session is
-visible rather than silently stuck. Their word "fallback" should stop being
-borrowed for this: ours is a check-in that re-arms auto, not a demotion to manual.
+product can hold open indefinitely. `sessionAwaitsUser()` surfaces an unanswered
+interaction in the sidebar and the chat listing, so a parked Session is visible
+rather than silently stuck. Their word "fallback" should stop being borrowed for
+this: ours is a check-in that re-arms auto, not a demotion to manual.
 
 **The thresholds are inherited, not earned.** 3-consecutive and 20-per-Session
 were tuned against a decider measured at 0.4% false positives over 10,000 real
 sessions. A deterministic rule table is not that decider and its false-positive
-rate here is unmeasured — the Part I record above documents one narrowly avoided
-case where `2>/dev/null` alone would have tripped three-in-a-row. Slice 3 makes
-the rate measurable for the first time. Ship 3/20 as provisional and read the
-ledger before defending them.
+rate here is unmeasured — the record above documents one narrowly avoided case
+where `2>/dev/null` alone would have tripped three-in-a-row. Slice 3 made the
+rate measurable and slice 4 made it consequential. They ship as provisional: read
+the ledger before defending them.
 
 **An unreadable call counts toward the streak.** A command the lexer cannot parse
 is refused like any other and pushes the Session toward being asked. That is
 right — the agent genuinely cannot proceed and the user genuinely should know —
 but it means a parser limitation, not a policy judgement, is what interrupts
-someone. Recorded here so it is a decision rather than a side effect.
+someone. Recorded so it is a decision rather than a side effect.
 
-**No new event kind for an override.** The `authority.denied` emit moves to
-*after* the ask resolves and fires only when the call is actually refused;
-otherwise history would record a denial for a call that ran. What the user
-permitted is already durable as `interaction.opened` plus `interaction.resolved`
-— the user's decision is an interaction fact, not a policy fact.
+**No new event kind for an override.** The `authority.denied` emit happens *after*
+the ask resolves and fires only when the call is actually refused; otherwise
+history would record a denial for a call that ran. What the user permitted is
+already durable as `interaction.opened` plus `interaction.resolved` — the user's
+decision is an interaction fact, not a policy fact.
 
-**Cancelling an ask does not reach the runtime, and that is a deadlock.**
-`SessionRuntime.#cancelInteraction` (`session-runtime.ts:1358`) writes
-`interaction.cancelled` and dispatches nothing to the adapter — deliberately,
-with a docstring defending the choice at length. Once a resolver is parked, a
-withdrawal writes the durable fact, the projection drops the interaction, and
-`sessionAwaitsUser()` goes false while the Pi turn stays blocked inside
-`beforeToolCall` forever, with nothing on screen saying so. The docstring
-names its own escape hatch: whether a harness can be told to withdraw is the
-adapter's question to answer, and for an ask Volli itself raised the answer is
-plainly yes. Closing it needs an optional withdraw verb on `BindingHandle` and
-a best-effort hop from the Engine. "Every parked resolver is cancelled on
-release and on abort," above, missed cancellation — the path a person actually
-reaches from the UI.
+**`NativeAttachmentSpec` does not carry a projection and must not grow one.**
+Whatever seeds the session counter travels through `PiRuntimeContext`, the way
+`location` did in slice 2. The spec describes an attachment; threading a
+projection through it would make every attachment a reader of Session state it has
+no business holding.
 
-**The ask port had no way to tell its caller a question had been abandoned,
-and every abandonment path leaked one.** A review traced every way an open
-ask stops mattering — the turn is interrupted, the attachment is released,
-the app quits, `stop` is answered, or the app crashes and relaunches — and
-found that in each of them the runtime stops waiting while the host is never
-told. Nothing the host opened on the way to asking is ever closed:
-`attachment.closed` does not clear `interactions` in the projection fold, the
-boot sweep in `boot-recovery.ts` excludes Pi attachments from
-`isStaleOnBoot` by design, and `sessionAwaitsUser()` reads
-`interactions.active.length`, so it never goes false again once one is
-stranded. "Every parked resolver is cancelled on release and on abort,"
-above, described the escalation's own bookkeeping — its consecutive and
-session counters reset once a person answers — not whether the ask a host
-opened to raise the question ever closes; an escalation can move on while the
-question it asked stays open forever in whatever surface is showing it. The
-fix: `ask` now takes an `AbortSignal` second parameter, the host's only
-notice that the question it is showing has been abandoned and must be
-withdrawn.
+**Cancelling an ask reaches the runtime now.** `#cancelInteraction` used to write
+`interaction.cancelled` and dispatch nothing, which left the Pi turn blocked
+inside `beforeToolCall` forever while `sessionAwaitsUser()` went false and nothing
+on screen said so. `BindingHandle` carries an optional
+`withdrawInteraction(interactionId)`, and the Engine makes a best-effort hop to it
+after the durable fact, swallowing whatever it does — including a throw — because
+the cancel already holds and an unheard withdrawal changes no Session fact. It
+deliberately does not attach a binding to say it: cancelling a question is the last
+intent that should ever start a harness.
 
-A rejected ask and an aborted ask are different facts, and the port keeps
-them apart. Rejection means the host could not obtain an answer at all, so
-the refusal stands and is recorded. Abort means nobody was asked, so nothing
-is.
+**A withdrawn ask rejects; it never resolves with a refusal.** A refusal is a
+decision and a withdrawal is the absence of one, so resolving would print a choice
+nobody made — the exact failure `interaction.cancelled` exists to avoid. The
+runtime reads the rejection as "the host could not obtain an answer" and lets its
+own refusal stand. The one case where a refusal is *not* recorded mirrors this: a
+question was put and a cancellation arrived before any answer, so a denial written
+on nobody's behalf would be a claim about a person that is not true. Everything
+that can end an ask — answer, withdrawal, abort, release — goes through one claim
+on the parked map, so the second arrival finds nothing; and release withdraws what
+is still parked *before* setting its released flag, since the sink admits nothing
+after that and a later cancellation would be dropped on the floor.
 
-**`stop` reaches `agent.abort()`, and that has a defect a review just found,
-being fixed now.** `beforeToolCall` cannot end a turn on its own: Pi's
-`terminate` flag only takes effect when every finalized tool result in the
-batch sets it — the comment in `packages/agent-runtime/src/pi/runtime.ts`
-already says so, which is why it is left unset, and one refused call is not
-the whole batch agreeing to stop. `stop` instead reaches `agent.abort()` from
-inside the callback, through an `endTurn` closure assigned the statement
-after `Agent` is constructed, because the callback needs to call something
-the constructor argument cannot yet close over.
+**`stop` reaches `agent.abort()`,** because `beforeToolCall` cannot end a turn on
+its own: Pi's `terminate` flag takes effect only when every finalized tool result
+in the batch sets it, and one refused call is not the whole batch agreeing to
+stop. The call goes through a closure assigned the statement after `Agent` is
+constructed, since the callback needs something the constructor argument cannot
+yet close over. That abort does not end the turn cleanly — Pi runs one more loop
+pass and synthesizes an assistant message with `stopReason: "error"` rather than
+`"aborted"`, which the existing `failure.reason === "aborted"` guard never saw, so
+a deliberate stop surfaced as the unrecoverable "Session stopped" banner. An
+`interrupting` flag in `packages/agent-runtime/src/pi/runtime.ts` closes it: set
+when the runtime calls the abort, cleared at `agent_start`, and read alongside
+`failure.reason` so this abort is told apart from a genuine model failure
+**before** classification rather than after.
 
-Aborting from inside `beforeToolCall` does not end the turn cleanly. Pi runs
-one more loop pass after the blocked call, and that pass synthesizes an
-assistant message with `stopReason: "error"` rather than `"aborted"`.
-`classifyAssistantMessage` (`packages/agent-runtime/src/pi/transcript.ts`)
-already treats a genuine `"aborted"` stop as one to swallow — `runtime.ts`
-skips raising an Attention when `failure.reason === "aborted"` — but this
-message never reaches that guard, because Pi reports its `stopReason` as
-`"error"`, not `"aborted"`. It is classified as a runtime failure like any
-model error and surfaces as the unrecoverable "Session stopped" error banner
-(`chat-plane-model.ts`), so a deliberate stop reads as a crash. The fix has
-to distinguish this abort from a genuine model failure before it is
-classified, not after.
-
-The stop path has a second cost, independent of the first: the model
-receives Pi's own "Operation aborted" rather than the refusing rule's words.
+**Accepted residual: the model is told "Operation aborted", not why.**
 `beforeToolCall` returns `{ block: true, reason }` after `agent.abort()` has
-already run, and Pi checks `signal.aborted` before it looks at the block
-result, so it discards the reason and reports "Operation aborted" instead.
-The ledger still holds the truth — `authority.denied` records the refusing
-rule's reason before the abort runs — but only the ledger. The model itself
-never sees the reason it was refused for.
+already run, and Pi re-reads its own cancellation before it looks at the block
+result, so it discards the reason. Pi offers no hook that reorders those two
+reads. The ledger still holds the truth — `authority.denied` records the refusing
+rule's words before the abort runs — but only the ledger. The turn is ending
+regardless, so the model is told the run stopped rather than why, which is the
+honest reading of what happened to it. This is documented on the `reason` field
+in `escalation.ts` so nobody rediscovers it as a bug.
 
-**Recording a denial now races the Engine recording the answer.** The Engine
-writes `interaction.resolved` itself, in `#recordDelivery` after the adapter's
-dispatch returns (`session-runtime.ts:1322`), while the runtime emits
-`authority.denied` on its own ordered queue once the parked resolver settles.
-Two independent chains, so the order they land in is unspecified. Slice 3 took
-care to make a refusal land on the turn it belongs to; parking reintroduces the
-same question one level up. Both facts are true and separately timestamped, so
-this is recorded as a known interleave to pin with a test, not a thing to build
-ordering machinery for.
+#### What remains
+
+1. **Seed the session counter.** `SessionRuntimeSpec.priorAuthorityDenials` is
+   declared and read — `runtime.ts` passes it to `AuthorityEscalation` as
+   `priorDenials` — but nothing supplies it. `PiBinding.runtimeSpec()` never sets
+   it and `PiRuntimeContext` has no field for it, so the per-Session half of the
+   threshold restarts at zero on every attach and a Session that accrued denials
+   across attaches is never asked on that count. It seeds from
+   `SessionProjection.authorityDenials` through `PiRuntimeContext`.
+2. **Put `pi-adapter.ts` under the coverage gate.**
+   `apps/desktop/src/main/session-runtime/pi-adapter.ts` is absent from the
+   `include` list in `apps/desktop/vite.config.ts`, so the file this slice is
+   mostly about is not measured by the 100% gate at all. Measured on 2026-08-11
+   it sits at **78/88 branches** and 141/146 statements — ten uncovered branches
+   and five uncovered statements (lines 233, 301, 484, 493, 518), most of them
+   pre-existing. Adding the entry means closing all of them.
+3. **A live smoke.** `apps/desktop/e2e/authority-escalation-smoke.mjs` does not
+   exist. Three refusals in a row, a card, an answer, and the turn continuing or
+   stopping is the one path no unit test covers end to end.
+4. **The drawer above the composer** — the second half of this slice's own
+   two-PR plan, unbuilt. The card is drawn today at the foot of the transcript by
+   `footInteraction` in `chat-plane.tsx`; the drawer is where it moves.
+5. **Pin the denial/answer interleave with a test.** The Engine writes
+   `interaction.resolved` itself, from the receipt the adapter's dispatch
+   returns, while the runtime emits `authority.denied` on its own ordered queue
+   once the parked resolver settles. Two independent chains, so the order they
+   land in is unspecified. Slice 3 took care to make a refusal land on the turn it
+   belongs to; parking reintroduces the same question one level up. Both facts are
+   true and separately timestamped, so this is a known interleave to pin, not a
+   reason to build ordering machinery — and neither `session-runtime.test.ts` nor
+   `pi-adapter.test.ts` pins it today.
+6. **Prove a blocked call is *recorded*.** The three cases in
+   `packages/agent-runtime/src/pi/scoped-execution-env.srt.integration.test.ts`
+   assert filesystem refusal only. The `VOLLI_SRT_INTEGRATION`-gated suite should
+   gain a case asserting that a blocked call is recorded, not merely refused —
+   the property the whole slice rests on.
 
 ## Part II — Runtime shape
 
 Six deepening candidates, strongest first. Each was checked with the deletion
 test: does removing the suspect module *concentrate* complexity, or merely move
-it? Only "concentrates" is a reason to act.
+it? Only "concentrates" is a reason to act. Candidates 1 and 3 shipped;
+candidate 4 was answered by Part I rather than actioned.
 
-### How Part II interacts with Part I
+### 1. Collapse the adapter registry into the Agent Runtime port — shipped
 
-Candidate 1 decides where Part I's evaluation seam lives. If the registry
-collapses first, `beforeToolCall` is wired at a single runtime port; if not, it
-is wired behind a translation facade that a later refactor must move.
+**Shipped 2026-08-11 (PRs #205, #206, #207).** The registry, the manifest, the
+profiles and `profileId` were scaffolding and are gone; `SessionRuntime` holds one
+injected executor port, which lives in `@volli/shared` so `@volli/session-engine`
+— which the renderer imports, and which may therefore never take a Node dependency
+— can name the type it holds. `adapterId` survives only as the discriminator
+between a terminal companion attachment and the structured one.
 
-Candidate 4 asks whether the renderer's interaction modules should exist at all,
-given nothing produces what they consume. Part I answers that by giving them a
-producer. **Do not delete that surface on candidate 4's evidence alone.**
+`RuntimeObservation` is now the only observation vocabulary any layer names across
+a boundary. The Session-shaped arms survive as `TranslatedObservation`,
+unexported, the Engine's own intermediate shape in
+`packages/session-engine/src/observation-translation.ts` — an earlier review was
+right that the facade was an altitude crossing rather than a rename table, and
+wrong only that the crossing had to be a *published* vocabulary. The 450 lines of
+translation that left Electron main are the win.
 
-### 1. Collapse the adapter registry into the Agent Runtime port
+**Three constraints from that review still bind, and outlive it:**
 
-**Strength: strong.** `packages/session-engine/src/native-adapter.ts`,
-`apps/desktop/src/main/session-runtime/pi-adapter.ts`,
-`apps/desktop/src/main/lab/scenario-adapter.ts`,
-`packages/agent-runtime/src/contracts.ts`.
+- **Widening `attention.reason` is a two-store migration, not a type widening.**
+  It is an input to the frozen `session_events.id`
+  (`pi:attention:${attachmentId}:${reason}`), *and* `isRecoverableObservation`
+  whitelists exactly five values and **throws** on anything else, so markers
+  already on disk would be rejected and the attach dies as `PI_RECOVERY_FAILED`
+  rather than degrading. Adding an *arm* is safe in a way widening `reason` is not
+  — the recovery sidecar validates by `kind` and never sees one it does not know —
+  which is why the `interaction` arm could simply be added. Four Attention kinds
+  (`rate_limited`, `quota_exhausted`, `transport_retrying`,
+  `adapter_disconnected`) consequently have no writer: the union derives from
+  `AttentionObservation["reason"]` through `ATTENTION_KINDS` and nothing maps to
+  them. Nothing could reach them before either; `retryAt` and `resetAt` went with
+  them.
+- **Replay stays a separate, state-free translation path.** Routing it through
+  the live translator would let a reconcile during an active turn reset
+  `messageSequence` to 0, re-mint the same message id and emit `reset` over
+  accumulated text — and `SessionRuntime.reconcile` is public and not gated on
+  the binding being idle. The two share only the id counter.
+- **The frozen id derivations moved verbatim**, with the `pi:` namespace supplied
+  by the adapter through `NativeHarnessAdapter.durableIdNamespace`, so the Engine
+  mints ids it does not name.
 
-Two near-isomorphic observation vocabularies exist — `RuntimeObservation` and
-`HarnessObservation` — with a ~1000-line facade translating between them. The
-seam has one product adapter; the lab's scenario adapter is a fake, which proves
-the seam is *testable*, not that anything *varies*. Meanwhile `adapterId` and
-`profileId` thread through 24 non-test source modules, the SQLite ledger, a
-migration and the RPC command schema, then are stripped before the renderer sees
-them.
+`attachment.closed.outcome` narrowed to `completed` in the *translation*, which
+cannot say how the work inside an attachment went, only that it closed. The
+durable event kind still carries all three, and the other two keep their
+producers: a native failure arrives as `attachment.failed` and is written down as
+`attachment.closed` with `outcome: "failed"`, and `interrupted` is written by the
+boot sweep retiring local attachments a relaunch cannot reconnect to.
 
-Let `SessionRuntime` hold a single `AgentRuntime` port; the lab supplies a fake
-at that same port. Keep `adapterId` only where it earns its place — as the
-discriminator between a terminal companion attachment and the structured one —
-and drop `profileId` and the registry.
-
-**Deletion test: concentrates.** Translation moves into the module that already
-owns Session facts, and a routing key leaves five layers that only pass it along.
-
-#### Correction (2026-08-10): the two vocabularies stay; the registry goes
-
-"Near-isomorphic" was wrong, and a design review before implementation is what
-caught it. The two vocabularies sit at different altitudes.
-`RuntimeObservation` has 7 runtime-shaped arms; `HarnessObservation` has 12
-Session-shaped ones carrying `threadId`, `branchId`, `attemptId` and a whole
-`UIMessage`. The facade is an altitude crossing, not a rename table.
-
-**The lab is what settles it.** `LabScenarioBeat = Unstamped<HarnessObservation>`
-— the Session-shaped vocabulary *is* the lab's scenario language, and its own
-docstring states the intent: "a state that cannot be written here is a state a
-harness cannot report either." It authors one message carrying both a text part
-and a gated tool call, tool states `approval-requested` and `output-denied`, and
-its own attention ids. No runtime arm can express any of those. So the
-Session-shaped vocabulary has a reason to exist that does not depend on how many
-runtimes there are, and deleting it would relocate complexity while costing the
-permission and interaction scenarios.
-
-Three further findings, each verified against the code:
-
-- **Widening the runtime's attention arm is a two-store migration.** Its
-  `reason` is an input to the frozen `session_events.id`
-  (`pi:attention:${attachmentId}:${reason}`), *and*
-  `isRecoverableObservation` in `pi/runtime.ts` whitelists exactly the five
-  values and **throws** on anything else. Markers already on disk would be
-  rejected, `recoveredObservation` throws rather than skipping, and the failure
-  surfaces as `PI_RECOVERY_FAILED` — the attach dies rather than degrading.
-  That is why 4 of the 9 durable attention kinds remain unreachable: reaching
-  them is a sidecar schema change, not a type widening.
-- **`#durableObservations` is a second, deliberately state-free translation
-  path**, not a filter over the live one. Merging the two switches would route
-  replay through the live translator, where a reconcile during an active turn
-  resets `messageSequence` to 0, re-mints the same message id and emits `reset`
-  over accumulated text. `SessionRuntime.reconcile` is public and is not gated
-  on the binding being idle.
-- **`pi-adapter.ts` is not in the desktop coverage include list.** Moving 250
-  lines of it into `packages/session-engine` is a coverage tightening, not a
-  neutral relocation.
-
-The economics decide the rest. Adding one observation kind touches nine places;
-collapsing the vocabularies would have made it seven, against a
-history-duplication risk and a sidecar migration. Candidate 2 collapses four of
-the nine and does not touch the runtime boundary at all. So candidate 1 keeps
-only its second half — the registry, the manifest, the profiles and
-`profileId` — and candidate 2 becomes the larger win.
-
-Defects this review surfaced that outlive the decision, none of them blocking:
-`attachment.closed.outcome` is hardcoded `"completed"`, so `failed` and
-`interrupted` are unreachable on that kind; `RuntimeFailure.reason` is dropped
-in translation; `transcript.delta` ids are computed and never read;
-`observationCursor()` is exported with no production caller.
+**Two defects that review surfaced are still open**, neither blocking:
+`RuntimeFailure.reason` is dropped in translation (only `failure.message` survives
+onto `attachment.failed`), and `transcript.delta` ids are computed and never
+read. A third — `observationCursor()` exported with no production caller — was
+resolved by deletion; the symbol is gone from the tree.
 
 ### 2. One codec for the Session Event
 
@@ -700,68 +531,30 @@ form and its parse, exhaustive by construction.
 **Deletion test: concentrates.** Deleting any single switch today just
 re-scatters the same arms.
 
-### 3. Retire the capability probe
+### 3. Retire the capability probe — shipped
 
-**Strength: strong.** `apps/desktop/src/main/session-runtime/pi-adapter.ts`,
-`packages/session-engine/src/session-runtime.ts`,
-`packages/shared/src/session-ledger.ts`.
-
-`probe()` is a static literal by design, yet a whole pipeline carries it —
-capability report, `capabilities.updated` ledger event, SQLite codec, RPC scrub,
-renderer. The fabricated model entry was removed in the Session 7 review round,
-which resolved the false-fact half of this. What remains is a pipeline whose only
-payload is a declaration.
-
-Either derive the catalog from the Session's recorded model selection and Model
-Access, or delete the probe path and let refusals speak on the turn that hits
-them — which is already what the adapter does for credentials.
-
-**Deletion test: concentrates.** The only fact the pipeline carries is durable
-elsewhere.
-
-Note the dependency: **Part I gives refusals a durable representation.** This
-candidate reads better after Part I than before it.
-
-**Shipped 2026-08-10.** The probe turned out to be doing three jobs, not one. It
-re-checked profile availability, which the profile lookup above it in the attach
-path already does; it supplied the runtime identity; and it declared
-capabilities. Only the third had no reader, so only the third and the redundant
-check were deleted. The runtime identity is a product fact rather than a claim
-about a model, so it survives as static data on the profile — the async call,
-its 15-second timeout and its AbortController set are gone, and
-`volli.native-binding.v1` is unchanged on the wire.
-
-Two consequences were not separable from it. `projectSession` lost its `now`
-parameter, capability expiry having been its only reader, so the fold is now the
-pure total function over the log its own comment already claimed; and
-`ProjectedHistory.staleAt` went with it, leaving `#history` to invalidate on the
-ledger cursor alone.
-
+**Shipped 2026-08-10 (PR #204).** `probe()` was doing three jobs, and only the
+capability declaration had no reader; the runtime identity is a product fact
+rather than a claim about a model, so it survives as static data on the profile,
+and `volli.native-binding.v1` is unchanged on the wire. Two consequences were not
+separable from it: `projectSession` lost its `now` parameter, capability expiry
+having been its only reader, so the fold is now the pure total function over the
+log its own comment already claimed, and `ProjectedHistory.staleAt` went with it.
 Retiring a durable event kind also needed the read path to tolerate one it does
-not know — recorded as a convention in `CLAUDE.md`, since it is a property of
-the codec rather than of this kind.
+not know — now a convention in `CLAUDE.md`, since it is a property of the codec
+rather than of this kind.
 
-### 4. The interaction modules have no producer
+### 4. The interaction modules have no producer — resolved
 
-**Strength: resolved by Part I — do not action independently.**
-`apps/desktop/src/renderer/src/chat/interaction.ts`,
-`apps/desktop/src/renderer/src/components/chat/interaction-ui.tsx`.
-
-Roughly 1400 renderer lines sit at 100% coverage verifying behaviour nothing in
-production emits, and the Pi adapter refuses `interaction.resolve` outright
-(`PI_INTERACTION_UNSUPPORTED`). The coverage gate certifies unreachable code.
-
-**Sharpened 2026-08-11.** This said the lab was the one producer of
-`interaction.opened`. The lab's backend half was deleted with the registry, so
-there is now *no* producer at all — the arm `RuntimeObservation` gained in the
-same stack is translated but never emitted. That strengthens the dependency
-rather than changing it: the surface is still waiting on Part I slice 4 for its
-first real producer, and there is now nothing else keeping it honest.
-
-Read on its own, this looks like a deletion candidate. It is not. Part I step 4
-opens a real `SessionInteraction` and gives the surface its producer, at which
-point the modules are exactly what is needed. Reassess only if Part I is
-abandoned.
+**Resolved by Part I slice 4; nothing to action.** The premise was that roughly
+1400 renderer lines sat at 100% coverage verifying behaviour nothing in
+production emitted, while the Pi adapter refused `interaction.resolve` outright
+(`PI_INTERACTION_UNSUPPORTED`) — a coverage gate certifying unreachable code.
+Both halves of that are now false: the adapter emits `interaction.opened` for
+every escalation and answers `interaction.resolve` from its parked map.
+`apps/desktop/src/renderer/src/chat/interaction.ts` and
+`apps/desktop/src/renderer/src/components/chat/interaction-ui.tsx` are exactly
+what is needed. Do not revisit this as a deletion candidate.
 
 ### 5. One Session-start module
 
@@ -795,113 +588,21 @@ not for leverage. Lowest priority here.
 
 ### Recommended order
 
-**Revised 2026-08-10, and candidate 3 is done.** The order is now
-**3 → 1 → 2 → 6**, with 5 available at any point as an independent slice.
+**2 → 6**, with 5 available at any point as an independent slice.
 
-Two things changed the sequence this section originally proposed.
+Candidate 2 is next, and candidate 1 sharpened it: removing `profileId` from the
+ledger, the RPC schema and the scrub shrank the codec's fan-out before the codec
+is written. The rule that made candidate 3 go first — delete before you rewrite,
+since porting a thing you intend to remove is strictly more work — applies again
+if anything else turns out to be scaffolding.
 
-**Delete before you rewrite.** The probe was part of the adapter contract, so
-collapsing the registry first meant porting the probe and then deleting it.
-Candidate 3 first was strictly less work, and the reason this section gave for
-deferring it — that refusals need a durable representation, which Part I
-supplies — was already satisfied by slices 1–3.
-
-Candidate 3 also moved ahead of Part I slice 4. The probe declared
-`interaction.question` unavailable, which slice 4 makes false; retiring the
-probe first means slice 4 never has to hand-correct a declaration on its way to
-deleting it. Nothing read the declarations — the presentation projection
-omitted capabilities, the renderer's own typed client omitted
-`refreshCapabilities`, and only the lab scratch ever branched on a feature's
-state.
-
-**Candidate 6 is promoted, on a product direction rather than on leverage.**
-This section rated it speculative and lowest priority, which was right when the
-only argument for it was layer honesty. The stated intent to keep the surface
-open for a cloud-native or mobile client changes that: `@volli/session-rpc` is
-already transport-agnostic and can travel, while 129 raw Electron channels and
-their 2047-line contract sit inside `@volli/shared` — the one package such a
-client would import for domain types. The boundary is drawn in the wrong place,
-and candidate 6 is what moves it. Still last, because nothing depends on it,
-but no longer optional.
-
-Candidate 1 keeps its place as the next one to do, and its own reasoning is
-unchanged: it removes `profileId` from the ledger, the RPC schema and the
-scrub, shrinking candidate 2's fan-out before the codec is written. It remains
-the only candidate whose answer is genuinely in doubt — the Pi migration called
-this scaffolding temporary, and the code has carried it as though permanent
-through seven sessions.
-
-**Doubt resolved, half each way (2026-08-10).** The registry, manifest,
-profiles and `profileId` are scaffolding and go. The second observation
-vocabulary is not, and stays — see the correction under candidate 1. The port
-now lives in `@volli/shared` (PR #205) so `@volli/session-engine`, which the
-renderer imports and which therefore may never take a Node dependency, can name
-the type it holds.
-
-**The lab's half of that argument is gone (2026-08-10, same session).** The UI
-lab became a frontend-only prototyping surface and is no longer wired to the
-Session ledger: the scripted harness, the lab's Session RPC server, the scenario
-vocabulary and the three scratches that drove them were deleted with the
-registry. `HarnessObservation` therefore has one producer and one consumer, and
-the "a state that cannot be written here is a state a harness cannot report"
-evidence no longer exists. The two vocabularies still stand on the rest of the
-correction — the altitude crossing, the frozen `session_events.id`, the
-two-store attention migration and the state-free replay path, none of which the
-lab was load-bearing for — but anyone re-opening candidate 1's first half should
-know that its sharpest argument was retired rather than answered.
-
-**Re-opened and settled (2026-08-11).** `RuntimeObservation` is the only
-observation vocabulary *any layer names across a boundary*, and the altitude
-crossing moved into `packages/session-engine/src/observation-translation.ts` —
-the layer that owns Session facts — where the durable ids it mints are now
-covered at 100%.
-
-Worth stating precisely, because "deleted" would overclaim: the 12 Session-shaped
-arms survive as `TranslatedObservation`, in the same package `HarnessObservation`
-already lived in (`native-adapter.ts`). What changed is that they are no longer
-exported from the package index and no longer cross a boundary — the Engine's
-own intermediate shape between a runtime observation and a durable fact, rather
-than a contract Electron main and the Engine both had to agree on. The altitude
-crossing the 2026-08-10 correction identified is real and still here; what the
-correction got wrong was that it had to be a *published* vocabulary. The 450
-lines of translation that left Electron main are the actual win. The four blockers held up, and each has an answer rather than a
-workaround: the frozen `session_events.id` derivations moved verbatim, with the
-`pi:` namespace supplied by the adapter through `NativeHarnessAdapter.durableIdNamespace`
-so the Engine mints ids it does not name; the replay path stayed separate from
-the live one, sharing only the id counter, because `reconcile` is not gated on
-the binding being idle; per-attachment translator state lives on the observation
-sink, whose lifetime is the attach rather than the binding record's, which is
-dropped early on close; and the two-store attention question never arose,
-because `attention.reason` was not widened.
-
-Three shapes changed rather than moved. An `interaction` arm was **added** to
-`RuntimeObservation` instead of deleting the Engine's two interaction arms —
-safe in a way widening `reason` is not, since the recovery sidecar validates by
-`kind` and never sees a kind it does not know, whereas a new `reason` is
-re-validated against every marker already on disk. And the `rate_limited`,
-`quota_exhausted`, `transport_retrying` and `adapter_disconnected` Attention
-kinds lost their writer, all four the same way: the surviving union is derived
-from `AttentionObservation["reason"]` through the `ATTENTION_KINDS` map, and
-`reason` has five members, so a kind no reason maps to has nothing that can
-write it. Nothing could reach any of the four before either — the nine-kind
-union already sat over the same five-member map — and reaching them needs the
-widening above. `retryAt` and `resetAt` went with them: both existed only to
-time a `rate_limited` or a `quota_exhausted`, so they outlive nothing once
-neither kind has a writer.
-
-The third is `attachment.closed.outcome`, now `completed` alone where the
-harness vocabulary admitted `completed`, `failed` and `interrupted`. A
-translation cannot say how the work inside an attachment went; it observes
-only that the attachment closed. What narrowed is the translation pipeline
-and not the durable event kind, which still carries all three, and the other
-two keep their producers: a native failure arrives as `attachment.failed`,
-which `#recordFact` writes down as `attachment.closed` with
-`outcome: "failed"`, and `interrupted` is written directly by the boot sweep
-that retires the local attachments a relaunch cannot reconnect to, where a
-terminal companion's PTY died with the process that owned it and the work
-inside it was cut off rather than finished. It is also the defect listed
-under candidate 1 — `outcome` hardcoded `"completed"` — resolved by making
-the type say what the only emitter already said.
+Candidate 6 stays last because nothing depends on it, but it is **no longer
+optional**, and on a product direction rather than on leverage. Layer honesty
+alone made it speculative. The stated intent to keep the surface open for a
+cloud-native or mobile client does not: `@volli/session-rpc` is already
+transport-agnostic and can travel, while 129 raw Electron channels and their
+2047-line contract sit inside `@volli/shared` — the one package such a client
+would import for domain types.
 
 ## Part III — In-app Model Access sign-in
 
@@ -914,38 +615,33 @@ in the same effort.
 ### What is true today
 
 "Auth" covers three separate things here, and only one of them is missing.
+**Credentials are not bundled and never were** — `PiFileCredentialStore` reads and
+writes `~/.pi/agent/auth.json`, the same file the `pi` CLI uses. **Token refresh
+already happens in-process**, since `piOwnedModels()` calls
+`registerBunOAuthFlows()` and `Models.getAuth()` runs the refresh itself under the
+store's lock, so staying signed in is solved. **Only initial sign-in is a terminal
+handoff:** there is no login IPC anywhere in the tree, and Model Access Settings'
+"Sign in" calls `openExternalSignIn` → `createModelAccessTerminal` → a `shell`
+terminal running the bundled binary under `RESTRICTED_LOGIN_FLAGS`.
 
-- **Credentials are not bundled and never were.** `PiFileCredentialStore` reads
-  and writes `~/.pi/agent/auth.json` — the same file, in the same place, in the
-  same shape the `pi` CLI uses.
-- **Token refresh already happens in-process.** `piOwnedModels()` calls
-  `registerBunOAuthFlows()`, and `Models.getAuth()` runs the refresh itself
-  under the credential store's lock. Staying signed in is solved.
-- **Initial sign-in is a terminal handoff.** There is no login IPC anywhere in
-  the tree. Model Access Settings' "Sign in" calls `openExternalSignIn` →
-  `createModelAccessTerminal` → a `shell` terminal running the bundled binary
-  under `RESTRICTED_LOGIN_FLAGS` with `PI_OFFLINE=1`, `PI_TELEMETRY=0` and
-  `PI_CODING_AGENT_DIR` pointed at Volli's auth directory.
-
-The binary itself is bundled by mechanism only. `verifiedPiCliResource` resolves
+That binary is bundled by mechanism only. `verifiedPiCliResource` resolves
 `resources/pi-cli/<target>/pi` and gates it on a `sha256` **and** a `treeSha256`
-recorded in a tracked `manifest.json` (Pi 0.84.1). The binaries are gitignored;
-only the manifest is in the repo. They arrive via `pnpm prepare:pi-cli`, which is
-**not** part of `postinstall`. Targets are `darwin-arm64` and `darwin-x64` only.
+recorded in a tracked `manifest.json` (Pi 0.84.1). The binaries are gitignored,
+arrive via `pnpm prepare:pi-cli` which is **not** part of `postinstall`, and exist
+for `darwin-arm64` and `darwin-x64` only.
 
 ### Why it must change
 
 1. **Sign-in is broken out of the box.** A fresh clone has no binary, so
    `modelAccessTerminal` stays `null` and the button fails with "Bundled Pi CLI
    is unavailable".
-2. **It is macOS-only.** There is no Windows or Linux target, so there is no
-   sign-in path on those platforms at all.
+2. **It is macOS-only**, so on Windows and Linux there is no sign-in path at all.
 3. **It is large** — roughly 66MB of archives across two targets, more unpacked,
-   to provide one interactive flow.
+   for one interactive flow.
 4. **The first signed build will break it, silently.** `codesign` rewrites
    Mach-O bytes, so a `treeSha256` computed before signing cannot match after.
-   The gate fails closed, `modelAccessTerminal` becomes `null`, and the user is
-   told the CLI is unavailable — a true statement with a misleading cause.
+   The gate fails closed and the user is told the CLI is unavailable — a true
+   statement with a misleading cause.
 5. **It leaves the product surface.** Model Access is a Settings page; sign-in
    drops the user into a terminal to finish a Settings task.
 
@@ -954,19 +650,17 @@ only the manifest is in the repo. They arrive via `pnpm prepare:pi-cli`, which i
 Verified against `@earendil-works/pi-ai` 0.84.1:
 
 - `Models.login(providerId, type: AuthType, interaction: AuthInteraction): Promise<Credential>`
-- `Models.logout(providerId, options?): Promise<void>`
-- `AuthType = "api_key" | "oauth"`
-- `AuthInteraction { signal?; prompt(AuthPrompt): Promise<string>; notify(AuthEvent): void }`
+  and `Models.logout(providerId, options?)`, with `AuthType = "api_key" | "oauth"`.
+- `AuthInteraction { signal?; prompt(AuthPrompt): Promise<string>; notify(AuthEvent): void }`.
 - `AuthPrompt` is `text`, `secret`, `select` (options of `{ id, label, description? }`)
-  or `manual_code`, each with an optional per-prompt `signal`
+  or `manual_code`, each with an optional per-prompt `signal`. `prompt()` resolves
+  with the entered or selected string — `select` returns the option id — and
+  rejects on cancel or abort.
 - `AuthEvent` is `info` (message plus links), `auth_url` (url plus instructions),
-  `device_code` (user code, verification URI, interval, expiry) or `progress`
-- `prompt()` resolves with the entered or selected string — `select` returns the
-  option id — and rejects on cancel or abort
+  `device_code` (user code, verification URI, interval, expiry) or `progress`.
 - OAuth flows shipped in 0.84.1: anthropic, github-copilot, kimi-coding,
-  openai-codex, openrouter, radius, xai
-- `OAuthAuth` carries `loginLabel` and `isSubscription`, which is what a provider
-  picker should render
+  openai-codex, openrouter, radius, xai. `OAuthAuth` carries `loginLabel` and
+  `isSubscription`, which is what a provider picker should render.
 
 pi-ai's own documentation states the division plainly: "Login/logout
 orchestration is app-owned." Nothing here requires a CLI.
@@ -977,17 +671,12 @@ orchestration is app-owned." Nothing here requires a CLI.
 except in the one direction a human types it.
 
 **The interaction channel.** `AuthInteraction` is a request/response protocol:
-main starts a login, and the flow blocks on an answer only the renderer can
-supply. That is structurally identical to a `SessionInteraction`, and it must not
-be one:
-
-- it is not Session history — it belongs to Model Access, not to any Session
-- a `secret` prompt carries an API key, and the Session ledger is durable
-
-Build a **separate ephemeral channel**, correlated by a login-attempt id,
-cancellable from either end, never persisted and never logged. `CONTEXT.md`
-already requires that the credential owner never exposes secrets to the renderer,
-prompt, transcript, or Session ledger.
+main starts a login and the flow blocks on an answer only the renderer can
+supply. That is structurally identical to a `SessionInteraction`, and it **must
+not be one** — it is not Session history, it belongs to Model Access rather than
+to any Session, and a `secret` prompt carries an API key while the Session ledger
+is durable. Build a **separate ephemeral channel**, correlated by a login-attempt
+id, cancellable from either end, never persisted and never logged.
 
 **Secret direction.** An `api_key` login means the user types a key into the
 renderer and it crosses IPC to main. That is inbound and one-way: main writes it
@@ -995,42 +684,34 @@ through `credentials.modify` and never reads it back out. `CredentialInfo`
 (`providerId` plus `type`) stays the only credential shape the renderer sees.
 
 **Use `piOwnedModels()`, never `builtinModels()` directly.** `piOwnedModels`
-calls `registerBunOAuthFlows()` first, which imports the OAuth flows statically.
-Reaching for `builtinModels()` re-takes pi-ai's variable-specifier dynamic import
-path, which does not survive the Electron bundle. This landmine is already
-defused in exactly one place; keep it that way.
+calls `registerBunOAuthFlows()` first, which imports the OAuth flows statically;
+`builtinModels()` re-takes pi-ai's variable-specifier dynamic import path, which
+does not survive the Electron bundle. This landmine is defused in exactly one
+place; keep it that way. Cross-process safety needs nothing new —
+`PiFileCredentialStore` serializes the whole file under an advisory lock and
+re-reads on each pass, so a credential the `pi` CLI refreshed concurrently is
+carried forward rather than clobbered.
 
-**Cross-process safety needs nothing new.** `PiFileCredentialStore` serializes
-the whole file under an advisory lock and re-reads on each pass, so a credential
-the `pi` CLI refreshed concurrently is carried forward rather than clobbered.
-Login persists through the same `modify` path.
-
-**UI.** Model Access Settings gains per-provider sign-in and sign-out. The four
+**UI.** Model Access Settings gains per-provider sign-in and sign-out; the four
 prompt kinds and four event kinds are the entire surface. The repo's UI copy rule
-applies — labels are nouns and the control is the explanation. `auth_url` and
-`device_code` are the one justified exception: they need an openable link and a
-copyable code, which cannot be expressed by a label alone.
-
-**There is no API-key validation call.** A wrong key surfaces on first use as a
-`ModelsError` with code `auth`. The UI must not imply it verified anything.
+applies. `auth_url` and `device_code` are the one justified exception — they need
+an openable link and a copyable code, which no label alone expresses. There is no
+API-key validation call: a wrong key surfaces on first use as a `ModelsError`
+with code `auth`, and the UI must not imply it verified anything.
 
 ### What gets deleted
 
-Once in-app sign-in works, in the same effort:
-
-- `apps/desktop/resources/pi-cli/**` and its `manifest.json`
-- `apps/desktop/scripts/prepare-pi-cli.mjs` and the `prepare:pi-cli` script
-- `apps/desktop/src/main/pi-cli-resource.ts` — `verifiedPiCliResource`,
-  `piLoginLaunch`, and the release-identity helpers
-- the bundle-marker integrity module and its `.volli-pi-bundle.json`
-- both `model-access` branches in `apps/desktop/src/main/pty/scope.ts`, the
-  guards in `pty/ipc.ts`, and the `purpose` field in `packages/shared/src/terminal.ts`
-- `createModelAccessTerminal` and `openProjectModelAccess`
-- the `.gitignore` entry for the gitignored binaries
-
-Keep the **recovery concept** — a provider still needs to distinguish "sign in"
-from "retry". Rename the `external-sign-in` kind, since after this it is not
-external.
+Once in-app sign-in works, in the same effort: `apps/desktop/resources/pi-cli/**`
+and its `manifest.json`; `apps/desktop/scripts/prepare-pi-cli.mjs` and the
+`prepare:pi-cli` script; `apps/desktop/src/main/pi-cli-resource.ts` —
+`verifiedPiCliResource`, `piLoginLaunch` and the release-identity helpers; the
+bundle-marker integrity module and its `.volli-pi-bundle.json`; both
+`model-access` branches in `apps/desktop/src/main/pty/scope.ts`, the guards in
+`pty/ipc.ts` and the `purpose` field in `packages/shared/src/terminal.ts`;
+`createModelAccessTerminal` and `openProjectModelAccess`; and the `.gitignore`
+entry for the binaries. Keep the **recovery concept** — a provider still needs to
+distinguish "sign in" from "retry" — and rename the `external-sign-in` kind,
+since after this it is not external.
 
 ### Implementation slices
 
@@ -1071,8 +752,9 @@ external.
 
 - Whether the Main-checkout Role ships with the pre-image commit or waits.
 - Whether the fallback thresholds stay at 3 / 20 or are tuned against real usage.
-  Slice 3 made denials countable, so there is a record to tune against; nothing
-  acts on the counts until slice 4, so tuning them costs nothing yet either.
+  Slice 3 made denials countable and slice 4 acts on the counts, so there is both
+  a record to tune against and a consequence to tuning: changing them now changes
+  how often a person is interrupted, which it did not before.
 - Packaging: an App-Sandboxed build cannot nest `sandbox-exec`, so distribution
   strategy and Part I's boundary are the same decision. Part III removes the
   *other* packaging hazard (the `codesign`/`treeSha256` gate), so doing it first
