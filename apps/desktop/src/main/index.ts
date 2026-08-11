@@ -614,9 +614,18 @@ app.whenReady().then(async () => {
    * inside it and resumes writing into that directory the moment it is answered.
    *
    * A Session whose history cannot be read leaves its binding OUT — the
-   * fail-open stance the renderer's busy probe already takes, for the same
-   * reason: every one of these acts is independently refused on a dirty
-   * worktree, and a ticket nothing can ever archive is the worse failure.
+   * fail-open stance the renderer's busy probe already takes, and for the same
+   * reason: a ticket nothing can ever archive is the worse failure.
+   *
+   * Be precise about what that costs, because the obvious defence is wrong. The
+   * non-forced path re-checks cleanliness right before deleting, so an
+   * unreadable Session cannot lose uncommitted work there. `force: true` skips
+   * that check by design (worktree/remove.ts) — it means the user read a dialog
+   * naming the dirtiness and said yes. So the residual exposure is exactly:
+   * history unreadable AND a turn open AND the user forcing. That needs a
+   * corrupt ledger to reach at all, and the alternative — treating an
+   * unreadable Session as busy — hands the user a worktree they cannot remove
+   * by any route, which is the failure this whole change exists to end.
    */
   const busyWorktreeSites = async (): Promise<readonly BusyWorktreeSite[]> => {
     const sites: BusyWorktreeSite[] = (ptyManagerRef?.liveSessionCwds() ?? []).map((directory) => ({
