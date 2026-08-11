@@ -7,6 +7,7 @@ import {
   canSaveDefaultModel,
   modelOptionLabel,
   ModelAccessAccounts,
+  offerableModels,
   preferredReasoning,
   providerAccessLabel,
   providerRecoveryActionLabel,
@@ -41,10 +42,11 @@ describe("default model availability", () => {
     reasoningLevel: "high" as const,
   };
 
-  it("allows an explicit default before sign-in so the recovery Session is reachable", () => {
+  it("refuses a default nobody is signed in to, whatever the catalog knows", () => {
     expect(canSaveDefaultModel({ ...MODEL, state: "authentication-required" }, selection)).toBe(
-      true,
+      false,
     );
+    expect(canSaveDefaultModel(null, selection)).toBe(false);
   });
 
   it("uses off as the product policy for a model without reasoning controls", () => {
@@ -63,12 +65,32 @@ describe("default model availability", () => {
 });
 
 describe("sanitized access presentation", () => {
-  it("makes authentication state visible in a selectable model label", () => {
-    expect(modelOptionLabel({ ...MODEL, state: "authentication-required" })).toBe(
-      "GPT-5.6 Sol — Sign in required",
-    );
-    expect(modelOptionLabel({ ...MODEL, state: "unavailable" })).toBe("GPT-5.6 Sol — Unavailable");
-    expect(modelOptionLabel(MODEL)).toBe("GPT-5.6 Sol");
+  it("offers only models this profile is signed in to", () => {
+    const signedOut = { ...MODEL, providerId: "azure-openai-responses" as const };
+    expect(
+      offerableModels([
+        MODEL,
+        { ...signedOut, state: "authentication-required" },
+        { ...signedOut, state: "unavailable" },
+      ]),
+    ).toEqual([MODEL]);
+  });
+
+  it("names the provider beside a model whose name several providers share", () => {
+    const providers: readonly ModelAccessProvider[] = [
+      {
+        id: "openai-codex",
+        label: "OpenAI Codex",
+        state: "available",
+        accountLabel: null,
+        billingSource: "subscription",
+        recovery: null,
+      },
+    ];
+
+    expect(modelOptionLabel(MODEL, providers)).toBe("GPT-5.6 Sol · OpenAI Codex");
+    // An unlabelled provider still has to be told apart from its namesakes.
+    expect(modelOptionLabel(MODEL, [])).toBe("GPT-5.6 Sol · openai-codex");
   });
 
   it("summarizes only sanitized account and billing metadata", () => {

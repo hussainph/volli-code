@@ -66,6 +66,7 @@ import {
   sameInteractionId,
   sameMessages,
   sessionBlocker,
+  sessionModelStanding,
   withdrawInteraction,
   type CatalogState,
   type SessionBlockerActs,
@@ -129,7 +130,8 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   // lives in the chat-drafts store rather than local state (see stores/chat-drafts.ts).
   const input = useChatDraftsStore((state) => state.drafts[sessionId]?.text ?? "");
   const setDraft = useChatDraftsStore((state) => state.setDraft);
-  const clearSentDraft = useChatDraftsStore((state) => state.clearSentDraft);
+  const clearDraft = useChatDraftsStore((state) => state.clearDraft);
+  const restoreDraft = useChatDraftsStore((state) => state.restoreDraft);
   const onInputChange = React.useCallback(
     (text: string) => setDraft(sessionId, text),
     [sessionId, setDraft],
@@ -153,9 +155,20 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   const { models, providers, catalogState, catalogError } = useModelAccess(
     slice?.projection != null,
   );
+  // Signed-in models only. Pi's catalog is every provider it knows — around a
+  // thousand models against the handful this profile has credentials for — and
+  // a picker that lists the rest is a picker whose first "GPT-5.6 Luna" is
+  // whichever provider sorted first. What you cannot send to is not an option.
   const composerModels = React.useMemo(
-    () => models.map((model) => composerModel(model, providers)),
+    () =>
+      models
+        .filter((model) => model.state === "available")
+        .map((model) => composerModel(model, providers)),
     [models, providers],
+  );
+  const sessionModel = React.useMemo(
+    () => sessionModelStanding(modelSelection, models, providers),
+    [modelSelection, models, providers],
   );
   const changeModel = React.useCallback(
     (next: ComposerModelSelection) => {
@@ -192,18 +205,23 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
     [deliverable, enqueue, submit],
   );
 
+  /**
+   * The box empties on dispatch, not on delivery.
+   *
+   * Pi answers a `message.submit` when the whole TURN has ended — the runtime
+   * awaits `agent.prompt` — so "clear once it lands" means the words you sent
+   * sit in the composer for the length of the reply, then vanish. Sending is
+   * the moment the message stopped being a draft; {@link deliver} already holds
+   * the only copy that matters and puts it back if nothing took it.
+   */
   const send = React.useCallback(
     (text: string, intent: ComposerIntent) => {
-      // Capture the draft revision at submit. Text alone is not enough: if the
-      // user clears and retypes the same words while delivery is in flight,
-      // that is a new draft with a new monotonic token and must survive — even
-      // if both edits land inside the same `Date.now()` millisecond.
-      const revision = useChatDraftsStore.getState().draftRevisions[sessionId];
+      clearDraft(sessionId);
       void deliver(text, intent).then((kept) => {
-        if (kept && revision !== undefined) clearSentDraft(sessionId, text, revision);
+        if (!kept) restoreDraft(sessionId, text);
       });
     },
-    [clearSentDraft, deliver, sessionId],
+    [clearDraft, deliver, restoreDraft, sessionId],
   );
 
   // The composer only ever takes messages OUT of the queue — editing one puts
@@ -312,6 +330,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
       attention: slice?.projection?.attention ?? EMPTY_ATTENTION,
       catalogState,
       catalogError,
+      sessionModel,
       terminalAvailable: ticketId !== null,
     },
     blockerActs,
@@ -489,7 +508,6 @@ function composerModel(
       providers.find((provider) => provider.id === model.providerId)?.label ?? model.providerId,
     modelId: model.modelId,
     label: model.label,
-    state: model.state,
     reasoningLevels: model.reasoningLevels,
   };
 }

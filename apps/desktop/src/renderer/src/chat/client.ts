@@ -139,8 +139,18 @@ export interface ChatSessionWrites {
   setProjection(sessionId: string, projection: SessionPresentationProjection): void;
   /** An attachment attempt is in flight; nothing derives lifecycle until it lands. */
   attaching(sessionId: string): void;
-  /** The harness took a message; the turn is live until the stream says otherwise. */
-  delivered(sessionId: string): void;
+  /**
+   * The harness took a message — optimistically, and only while the stream has
+   * said nothing since it left.
+   *
+   * `turnEpoch` is the transcript's count at submit. Pi answers a
+   * `message.submit` when the turn it started has ALREADY ENDED (the runtime
+   * awaits `agent.prompt`), so an unconditional latch here re-opens a turn the
+   * stream has closed — and the queue's release rule reads this same field,
+   * which strands every message behind it. An unchanged epoch is the one case
+   * where nothing has been heard and optimism is all there is.
+   */
+  delivered(sessionId: string, turnEpoch: number): void;
   /** A failure, or `null` to clear one and hand the Session back to its stream. */
   settle(sessionId: string, error: string | null): void;
   dequeue(sessionId: string, id: string): void;
@@ -505,7 +515,7 @@ export class ChatSessionClient {
         this.#writes().settle(this.sessionId, `Message not delivered: ${refusal}`);
         return false;
       }
-      this.#writes().delivered(this.sessionId);
+      this.#writes().delivered(this.sessionId, slice.transcript.turnEpoch);
       // The first accepted message — direct or released off the queue, this is
       // the one choke point both go through — is the moment a Session gains a
       // subject. Fire-and-forget: a failed rename costs a toast (renameChatSession

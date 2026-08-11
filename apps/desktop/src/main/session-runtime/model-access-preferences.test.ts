@@ -82,7 +82,7 @@ describe("Model Access default selection", () => {
     });
   });
 
-  it("accepts a known model before sign-in but still rejects unavailable or unsupported choices", () => {
+  it("stores only a model this profile can run today", () => {
     const access = {
       observedAt: 1,
       providers: [],
@@ -120,7 +120,17 @@ describe("Model Access default selection", () => {
           reasoningLevel: "high",
         },
       ),
-    ).not.toThrow();
+    ).toThrow("Sign in");
+    expect(() =>
+      assertDefaultModelAvailable(
+        { ...access, models: [] },
+        {
+          providerId: "openai-codex",
+          modelId: "gpt-5.6-sol",
+          reasoningLevel: "high",
+        },
+      ),
+    ).toThrow("not currently available");
     expect(() =>
       assertDefaultModelAvailable(
         { ...access, models: [{ ...access.models[0]!, state: "unavailable" }] },

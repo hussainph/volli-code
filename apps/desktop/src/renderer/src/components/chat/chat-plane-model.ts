@@ -7,6 +7,9 @@
  * streamed token is allowed to repaint.
  */
 import type {
+  ModelAccessModel,
+  ModelAccessProvider,
+  ModelAccessState,
   ModelSelection,
   SessionAttention,
   SessionAttentionProjection,
@@ -28,6 +31,41 @@ export function composerModelSelection(input: {
   return reasoningLevel === undefined
     ? null
     : { providerId: input.providerId, modelId: input.modelId, reasoningLevel };
+}
+
+/** This Session's durable model, weighed against what the profile can run. */
+export interface SessionModelStanding {
+  /** Named rather than the model, because signing in is per provider. */
+  providerLabel: string;
+  state: ModelAccessState;
+}
+
+/**
+ * What the catalog says about the model this Session is pinned to.
+ *
+ * A Session records its model policy at birth, from the app default, and
+ * nothing re-reads that decision afterwards — so a Session can be pointed at a
+ * provider nobody is signed in to and look completely ordinary until its first
+ * message dies at the provider's API. This is that fact, available before the
+ * message rather than after it.
+ *
+ * A selection the catalog has never heard of counts as unavailable: the model
+ * is gone, and the Session is pinned to it either way.
+ */
+export function sessionModelStanding(
+  selection: { providerId: string; modelId: string } | null,
+  models: readonly ModelAccessModel[],
+  providers: readonly ModelAccessProvider[],
+): SessionModelStanding | null {
+  if (selection === null) return null;
+  const providerLabel =
+    providers.find((provider) => provider.id === selection.providerId)?.label ??
+    selection.providerId;
+  const model = models.find(
+    (candidate) =>
+      candidate.providerId === selection.providerId && candidate.modelId === selection.modelId,
+  );
+  return { providerLabel, state: model?.state ?? "unavailable" };
 }
 
 /* -------------------------------------------------------------- answering */
@@ -156,6 +194,8 @@ export interface SessionBlockerInput {
   attention: SessionAttentionProjection;
   catalogState: CatalogState;
   catalogError: string | null;
+  /** This Session's model against the catalog — see {@link sessionModelStanding}. */
+  sessionModel: SessionModelStanding | null;
   /**
    * Whether this Session has a manual terminal companion beside it — which only
    * a Ticket Session does.
@@ -194,12 +234,17 @@ export function terminalCompanionTabId(
  * whether you can write, not about what happened in the conversation, and a
  * failure that scrolls away with the history is one nobody can act on.
  *
- * Three sources, in the order they answer:
+ * Four sources, in the order they answer:
  *
  * 1. `sessionError` — this Session's own transport. If the stream is gone the
  *    attention we hold is a memory, so it does not get to speak over it.
- * 2. `attention.primary` — the harness stating a state to recover from.
- * 3. `catalogState` / `catalogError` — nothing configured yet, which auth would
+ * 2. `sessionModel` — the Session is pinned to a model this profile cannot run.
+ *    It outranks the attention because every failure such a Session will ever
+ *    raise is downstream of this one fact, the harness's own report of it names
+ *    a provider id and offers a sign-in the reader did not ask for, and this is
+ *    the only one of the two that can be read *before* a message is spent on it.
+ * 3. `attention.primary` — the harness stating a state to recover from.
+ * 4. `catalogState` / `catalogError` — nothing configured yet, which auth would
  *    otherwise be mistaken for since an unauthenticated provider lists no models
  *    either, and the refresh that could not answer at all.
  *
@@ -222,6 +267,20 @@ export function sessionBlocker(
   const settings: SessionBlockerAction = { label: "Settings", act: acts.openSettings };
   if (input.sessionError !== null) {
     return { message: input.sessionError, detail: null, tone: "error", action: retry };
+  }
+  // Only a catalog that has answered may accuse the Session's model: while it
+  // loads, every model reads as unavailable.
+  const sessionModel = input.catalogState === "ready" ? input.sessionModel : null;
+  if (sessionModel !== null && sessionModel.state !== "available") {
+    return {
+      message:
+        sessionModel.state === "authentication-required"
+          ? `Sign-in required for ${sessionModel.providerLabel}`
+          : "Model unavailable",
+      detail: null,
+      tone: "error",
+      action: settings,
+    };
   }
   const attention = input.attention.primary;
   if (attention) {

@@ -62,65 +62,70 @@ describe("setDraft", () => {
   });
 });
 
-describe("clearSentDraft", () => {
-  it("removes a session's draft once the message it holds is away", () => {
+describe("clearDraft", () => {
+  it("empties the box the moment its message is dispatched", () => {
     const store = createChatDraftsStore(createMemoryStorage());
     store.getState().setDraft("s1", "hello");
-    const revision = store.getState().draftRevisions.s1!;
 
-    store.getState().clearSentDraft("s1", "hello", revision);
+    store.getState().clearDraft("s1");
 
     expect(store.getState().drafts).not.toHaveProperty("s1");
   });
 
-  it("clears a draft whose only difference from the sent text is whitespace", () => {
+  it("leaves other sessions' drafts alone", () => {
     const store = createChatDraftsStore(createMemoryStorage());
-    store.getState().setDraft("s1", "hello\n");
-    const revision = store.getState().draftRevisions.s1!;
+    store.getState().setDraft("s1", "one");
+    store.getState().setDraft("s2", "two");
 
-    store.getState().clearSentDraft("s1", "hello", revision);
+    store.getState().clearDraft("s1");
 
-    expect(store.getState().drafts).not.toHaveProperty("s1");
-  });
-
-  // Delivery is a round trip and the composer stays editable across it: what
-  // was typed while it was in flight is a new message, not the one that left.
-  it("keeps a draft typed while the send was in flight", () => {
-    const store = createChatDraftsStore(createMemoryStorage());
-    store.getState().setDraft("s1", "hello");
-    const revision = store.getState().draftRevisions.s1!;
-    store.getState().setDraft("s1", "and one more thing");
-
-    store.getState().clearSentDraft("s1", "hello", revision);
-
-    expect(store.getState().drafts.s1?.text).toBe("and one more thing");
-  });
-
-  // Same words, new keystrokes: text alone would wipe the retyped draft.
-  it("keeps a draft retyped as the same text before the original delivery resolves", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1000);
-    const store = createChatDraftsStore(createMemoryStorage());
-    store.getState().setDraft("s1", "hello");
-    const revision = store.getState().draftRevisions.s1!;
-
-    // Same clock tick on purpose: a timestamp is not a compare-and-swap token.
-    store.getState().setDraft("s1", "");
-    store.getState().setDraft("s1", "hello");
-
-    store.getState().clearSentDraft("s1", "hello", revision);
-
-    expect(store.getState().drafts.s1).toEqual({ text: "hello", touchedAt: 1000 });
-    expect(store.getState().draftRevisions.s1).toBeGreaterThan(revision);
+    expect(store.getState().drafts.s2?.text).toBe("two");
   });
 
   it("is a no-op for a session with no draft", () => {
     const store = createChatDraftsStore(createMemoryStorage());
     const before = store.getState().drafts;
 
-    store.getState().clearSentDraft("missing", "hello", 1);
+    store.getState().clearDraft("missing");
 
     expect(store.getState().drafts).toBe(before);
+  });
+});
+
+describe("restoreDraft", () => {
+  it("puts words back when nothing took them", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(2000);
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().setDraft("s1", "hello");
+    store.getState().clearDraft("s1");
+
+    store.getState().restoreDraft("s1", "hello");
+
+    expect(store.getState().drafts.s1).toEqual({ text: "hello", touchedAt: 2000 });
+  });
+
+  // Delivery is a round trip and the composer stays editable across it: a
+  // failure must lose neither the message that never left nor the one typed
+  // behind it.
+  it("prepends rather than overwriting whatever was typed since", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().setDraft("s1", "hello");
+    store.getState().clearDraft("s1");
+    store.getState().setDraft("s1", "and one more thing");
+
+    store.getState().restoreDraft("s1", "hello");
+
+    expect(store.getState().drafts.s1?.text).toBe("hello\nand one more thing");
+  });
+
+  it("treats a whitespace-only box as an empty one", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().setDraft("s1", "  ");
+
+    store.getState().restoreDraft("s1", "hello");
+
+    expect(store.getState().drafts.s1?.text).toBe("hello");
   });
 });
 

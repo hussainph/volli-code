@@ -6,7 +6,12 @@
  * disables, where words go when there is nowhere to send them, and what a
  * streamed token is allowed to re-render.
  */
-import type { SessionAttention, SessionInteractionResolution } from "@volli/shared";
+import type {
+  ModelAccessModel,
+  ModelAccessProvider,
+  SessionAttention,
+  SessionInteractionResolution,
+} from "@volli/shared";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -19,6 +24,7 @@ import {
   sameInteractionId,
   sameMessages,
   sessionBlocker,
+  sessionModelStanding,
   terminalCompanionTabId,
   withdrawInteraction,
   type SessionBlockerActs,
@@ -55,6 +61,63 @@ describe("composer model selection", () => {
   });
 });
 
+describe("the Session's own model, against the catalog", () => {
+  const catalog: readonly ModelAccessModel[] = [
+    {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-luna",
+      label: "GPT-5.6 Luna",
+      state: "available",
+      reasoningLevels: ["medium"],
+    },
+    {
+      // The same model name, from a provider this profile never signed into.
+      providerId: "azure-openai-responses",
+      modelId: "gpt-5.6-luna",
+      label: "GPT-5.6 Luna",
+      state: "authentication-required",
+      reasoningLevels: ["medium"],
+    },
+  ];
+  const providers: readonly ModelAccessProvider[] = [
+    {
+      id: "azure-openai-responses",
+      label: "Azure OpenAI Responses",
+      state: "authentication-required",
+      accountLabel: null,
+      billingSource: "unknown",
+      recovery: { kind: "external-sign-in" },
+    },
+  ];
+
+  it("separates two identically named models by the provider each belongs to", () => {
+    expect(
+      sessionModelStanding(
+        { providerId: "azure-openai-responses", modelId: "gpt-5.6-luna" },
+        catalog,
+        providers,
+      ),
+    ).toEqual({ providerLabel: "Azure OpenAI Responses", state: "authentication-required" });
+    expect(
+      sessionModelStanding(
+        { providerId: "openai-codex", modelId: "gpt-5.6-luna" },
+        catalog,
+        providers,
+      ),
+    ).toEqual({ providerLabel: "openai-codex", state: "available" });
+  });
+
+  it("counts a model the catalog no longer lists as one that cannot be run", () => {
+    expect(
+      sessionModelStanding({ providerId: "openai", modelId: "gone" }, catalog, providers),
+    ).toEqual({ providerLabel: "openai", state: "unavailable" });
+  });
+
+  it("has nothing to say about a Session with no recorded model", () => {
+    expect(sessionModelStanding(null, catalog, providers)).toBeNull();
+  });
+});
+
 const NO_OP = () => undefined;
 const ACTS: SessionBlockerActs = {
   recover: NO_OP,
@@ -69,6 +132,7 @@ function blockerInput(overrides: Partial<SessionBlockerInput> = {}): SessionBloc
     attention: { active: [], primary: null },
     catalogState: "ready",
     catalogError: null,
+    sessionModel: { providerLabel: "OpenAI Codex", state: "available" },
     terminalAvailable: false,
     ...overrides,
   };
@@ -179,6 +243,59 @@ describe("sessionBlocker", () => {
       tone: "error",
       action: { label: "Settings", act: NO_OP },
     });
+  });
+
+  it("says the Session's own model needs sign-in before a message is spent on it", () => {
+    // The exact shape of the bug: a Session born with the app default still
+    // pointing at a provider nobody signed into. Today it looks ordinary until
+    // the first message dies at the provider's API.
+    const pinned = blockerInput({
+      sessionModel: { providerLabel: "Azure OpenAI Responses", state: "authentication-required" },
+    });
+
+    expect(sessionBlocker(pinned, ACTS, false)).toEqual({
+      message: "Sign-in required for Azure OpenAI Responses",
+      detail: null,
+      tone: "error",
+      action: { label: "Settings", act: NO_OP },
+    });
+    expect(
+      sessionBlocker(
+        blockerInput({ sessionModel: { providerLabel: "OpenAI", state: "unavailable" } }),
+        ACTS,
+        false,
+      )?.message,
+    ).toBe("Model unavailable");
+  });
+
+  it("outranks the harness's own report of the same fact, but never the transport's", () => {
+    const pinned = {
+      ...raised(attention("auth_required", "Provider is not configured: azure-openai-responses")),
+      sessionModel: {
+        providerLabel: "Azure OpenAI Responses",
+        state: "authentication-required" as const,
+      },
+    };
+
+    expect(sessionBlocker(pinned, ACTS, false)?.message).toBe(
+      "Sign-in required for Azure OpenAI Responses",
+    );
+    expect(
+      sessionBlocker({ ...pinned, sessionError: "Lost the Session stream" }, ACTS, false)?.message,
+    ).toBe("Lost the Session stream");
+  });
+
+  it("accuses no model until the catalog has answered", () => {
+    const unanswered = { sessionModel: { providerLabel: "OpenAI", state: "unavailable" as const } };
+
+    expect(
+      sessionBlocker(blockerInput({ ...unanswered, catalogState: "loading" }), ACTS, false),
+    ).toBeNull();
+    // A Session whose executor pins its own model has no catalog to weigh.
+    expect(
+      sessionBlocker(blockerInput({ ...unanswered, catalogState: "pinned" }), ACTS, false),
+    ).toBeNull();
+    expect(sessionBlocker(blockerInput({ sessionModel: null }), ACTS, false)).toBeNull();
   });
 
   it("stands down for the attention the card is itself the answer to", () => {

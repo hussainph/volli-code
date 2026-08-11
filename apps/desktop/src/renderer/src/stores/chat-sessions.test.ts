@@ -327,7 +327,6 @@ describe("writes addressed to a Session that is gone", () => {
     store.getState().applyStream("ghost", [], []);
     store.getState().setProjection("ghost", projection);
     store.getState().attaching("ghost");
-    store.getState().delivered("ghost");
     store.getState().settle("ghost", "gone");
     store.getState().enqueue("ghost", { id: "q1", text: "hello" });
     store.getState().dequeue("ghost", "q1");
@@ -462,12 +461,47 @@ describe("the slice", () => {
     expect(slice().lifecycle).toBe("working");
   });
 
-  it("marks a delivered message working without waiting for the turn", () => {
+  it("marks a delivered message working while the stream has said nothing since", () => {
     const { store, slice } = seeded();
 
-    store.getState().delivered("durable-9");
+    store.getState().delivered("durable-9", slice().transcript.turnEpoch);
 
     expect(slice()).toMatchObject({ lifecycle: "working", sessionError: null });
+  });
+
+  it("does not re-open a turn the stream closed while the reply was in flight", () => {
+    // Pi answers a submit when the turn it started has already ended, so the
+    // reply routinely lands behind its own turn.completed. Latching on it left
+    // the composer showing Stop and stranded every queued message behind a
+    // turn that was over.
+    const { store, slice } = seeded();
+    const epoch = slice().transcript.turnEpoch;
+    store.getState().setProjection("durable-9", {
+      ...projection,
+      liveExecutor: { id: "attach-1" },
+    });
+    store.getState().applyStream(
+      "durable-9",
+      [
+        {
+          sessionId: SESSION.id,
+          sequence: 1,
+          event: { payload: { kind: "turn.started" } } as never,
+          transcript: null,
+        },
+        {
+          sessionId: SESSION.id,
+          sequence: 2,
+          event: { payload: { kind: "turn.completed" } } as never,
+          transcript: null,
+        },
+      ],
+      [],
+    );
+
+    store.getState().delivered("durable-9", epoch);
+
+    expect(slice()).toMatchObject({ lifecycle: "ready", sessionError: null });
   });
 });
 

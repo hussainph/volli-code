@@ -249,8 +249,18 @@ export function createChatSessionsStore(
         update(sessionId, (slice) => ({ ...slice, lifecycle: "starting", sessionError: null }));
       },
 
-      delivered(sessionId) {
-        update(sessionId, (slice) => ({ ...slice, lifecycle: "working", sessionError: null }));
+      delivered(sessionId, turnEpoch) {
+        update(sessionId, (slice) => ({
+          ...slice,
+          // An unchanged epoch means the stream has said nothing about turns
+          // since the message left, so the optimistic "a turn is running" is
+          // the only reading there is. A moved one means it has spoken — and it
+          // outranks a reply that, with Pi, arrives after the turn it started
+          // has already ended.
+          lifecycle:
+            slice.transcript.turnEpoch === turnEpoch || isWorking(slice) ? "working" : "ready",
+          sessionError: null,
+        }));
       },
 
       settle(sessionId, error) {

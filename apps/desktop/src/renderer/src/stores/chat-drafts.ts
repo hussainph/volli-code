@@ -34,28 +34,26 @@ export interface ChatDraft {
 
 interface ChatDraftsState {
   drafts: Readonly<Record<string, ChatDraft>>;
-  /** Volatile compare-and-swap tokens; unlike `touchedAt`, these are strictly monotonic. */
-  draftRevisions: Readonly<Record<string, number>>;
-  /** The last revision handed out in this renderer lifetime. Never persisted. */
-  nextDraftRevision: number;
   /** Sets (or overwrites) a session's draft text, stamping `touchedAt` to now. */
   setDraft(sessionId: string, text: string): void;
   /**
-   * Drops a session's draft once its message is safely away — but only if the
-   * box still holds that same draft revision.
+   * Empties the box, because the words are on their way out of it.
    *
-   * Delivery is a round trip to main and the composer stays editable across it,
-   * so whatever is in the box when the reply lands is not necessarily what was
-   * sent: anything typed in between is a NEW draft, and clearing on the reply
-   * regardless would delete keystrokes the user watched themselves type.
-   * `revision` is the draft's volatile token captured at submit; text alone is
-   * not enough, because retyping the same words must stamp a new revision even
-   * when both edits land inside one millisecond. `sent` is the composer's
-   * already-trimmed value (see
-   * `composer-ui.tsx`), so the comparison trims too — trailing whitespace is
-   * not a keystroke worth keeping a draft alive for.
+   * Called the moment a message is dispatched rather than when delivery lands.
+   * Pi's reply to a `message.submit` arrives when the whole TURN has finished —
+   * the runtime awaits `agent.prompt`, so a 30-second answer is a 30-second
+   * round trip — and a box that keeps what you sent until then is a box that
+   * still holds your message while its reply streams in above it.
    */
-  clearSentDraft(sessionId: string, sent: string, revision: number): void;
+  clearDraft(sessionId: string): void;
+  /**
+   * Puts words back after a delivery that never happened.
+   *
+   * Prepended rather than assigned, on the same rule the composer's unqueue
+   * follows: whatever was typed while the send was in flight is also somebody's
+   * sentence, and a failure must not be a way to lose either one.
+   */
+  restoreDraft(sessionId: string, text: string): void;
 }
 
 type PersistedChatDraftsState = Pick<ChatDraftsState, "drafts">;
@@ -120,32 +118,29 @@ export function createChatDraftsStore(storage?: StateStorage) {
     persist(
       (set) => ({
         drafts: {},
-        draftRevisions: {},
-        nextDraftRevision: 0,
         setDraft: (sessionId, text) =>
+          set((state) => ({
+            drafts: { ...state.drafts, [sessionId]: { text, touchedAt: Date.now() } },
+          })),
+        clearDraft: (sessionId) =>
           set((state) => {
-            const revision = state.nextDraftRevision + 1;
-            return {
-              drafts: { ...state.drafts, [sessionId]: { text, touchedAt: Date.now() } },
-              draftRevisions: { ...state.draftRevisions, [sessionId]: revision },
-              nextDraftRevision: revision,
-            };
+            if (state.drafts[sessionId] === undefined) return {};
+            const drafts = { ...state.drafts };
+            delete drafts[sessionId];
+            return { drafts };
           }),
-        clearSentDraft: (sessionId, sent, revision) =>
+        restoreDraft: (sessionId, text) =>
           set((state) => {
-            const draft = state.drafts[sessionId];
-            if (
-              draft === undefined ||
-              state.draftRevisions[sessionId] !== revision ||
-              draft.text.trim() !== sent
-            ) {
-              return {};
-            }
-            const next = { ...state.drafts };
-            const draftRevisions = { ...state.draftRevisions };
-            delete next[sessionId];
-            delete draftRevisions[sessionId];
-            return { drafts: next, draftRevisions };
+            const typedSince = state.drafts[sessionId]?.text ?? "";
+            return {
+              drafts: {
+                ...state.drafts,
+                [sessionId]: {
+                  text: typedSince.trim().length === 0 ? text : `${text}\n${typedSince}`,
+                  touchedAt: Date.now(),
+                },
+              },
+            };
           }),
       }),
       {
@@ -158,20 +153,7 @@ export function createChatDraftsStore(storage?: StateStorage) {
         }),
         merge: (persisted, current) => {
           const stored = isPlainRecord(persisted) ? persisted : {};
-          const drafts = readPersistedDrafts(stored.drafts);
-          let nextDraftRevision = current.nextDraftRevision;
-          const draftRevisions: Record<string, number> = {};
-          // No delivery survives a renderer relaunch, so hydrated drafts need
-          // fresh tokens only for comparisons made in this renderer lifetime.
-          for (const sessionId of Object.keys(drafts)) {
-            draftRevisions[sessionId] = ++nextDraftRevision;
-          }
-          return {
-            ...current,
-            drafts,
-            draftRevisions,
-            nextDraftRevision,
-          };
+          return { ...current, drafts: readPersistedDrafts(stored.drafts) };
         },
       },
     ),

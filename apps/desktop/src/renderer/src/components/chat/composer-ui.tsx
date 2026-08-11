@@ -219,14 +219,22 @@ export function SessionComposer({
 
 /* ------------------------------------------------------------------- model */
 
-/** `sonnet-4.5 · high` — two values, one caret. */
+/**
+ * `sonnet-4.5 · high` — two values, one caret.
+ *
+ * Every model here is one the Session could run right now. There is no state on
+ * it because a model you cannot send to is not an option in a different colour,
+ * it is not an option: the list is filtered before it arrives (see
+ * `chat-plane.tsx`), on the same rule the mode segment and the pill itself
+ * follow — a control naming something the harness will refuse is worse than no
+ * control.
+ */
 export interface ComposerModel {
   id: string;
   providerId: string;
   providerLabel: string;
   modelId: string;
   label: string;
-  state: "available" | "authentication-required" | "unavailable";
   reasoningLevels: readonly string[];
 }
 
@@ -301,7 +309,6 @@ function ModelPill({
                       <PromptInputCommandItem
                         key={model.id}
                         value={`${model.providerId} ${model.modelId} ${model.label}`}
-                        disabled={model.state !== "available"}
                         onSelect={() => {
                           onChange({
                             ...selection,
@@ -318,11 +325,7 @@ function ModelPill({
                           className={cn("size-3.5 shrink-0", !selected && "invisible")}
                           weight="bold"
                         />
-                        <span className="min-w-0 flex-1 truncate">
-                          {model.label}
-                          {model.state === "authentication-required" ? " — Sign in required" : null}
-                          {model.state === "unavailable" ? " — Unavailable" : null}
-                        </span>
+                        <span className="min-w-0 flex-1 truncate">{model.label}</span>
                         {selected && model.reasoningLevels.length > 1 ? (
                           <EffortSegment
                             variants={model.reasoningLevels}
