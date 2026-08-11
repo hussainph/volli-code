@@ -12,11 +12,11 @@ such override is written down below.
 
 | # | Task | State |
 |---|------|-------|
-| 1 | Icon-weight audit learnings | not started — runs LAST, it sweeps every file |
-| 2 | Sidebar: hover reveal + row anatomy + ghosting + scrollbar | not started |
-| 3 | Session-start controls + shortcuts | not started |
+| 1 | Icon-weight audit learnings | in progress — runs LAST, it sweeps every file |
+| 2 | Sidebar: hover reveal + row anatomy + ghosting + scrollbar | **done** — `3a1e6bff` |
+| 3 | Session-start controls + shortcuts | **done** — `58797fcb` |
 | 4 | Fullscreen placement, planned against `ui/right-sidebar-fixes` | **planned** — `docs/plans/fullscreen-placement.md`; blocked on that branch landing |
-| 5 | Ticket composer, ported from Paper | not started |
+| 5 | Ticket composer, ported from Paper | **done** — `6daf4e09` |
 
 Split tabs (`split-tabs.tsx`) stays a lab scratch. Drag-and-select in split view
 has bugs the user wants to work through separately; do not implement it here.
@@ -58,13 +58,50 @@ has bugs the user wants to work through separately; do not implement it here.
 
 ## Carried items — outside any scratch, easy to lose
 
-- `new-session-menu.tsx` lines 66–73 list Terminal above Chat → flip to Chat, Terminal.
-- `CLAUDE.md` context-menu line: drop `(weight="fill")`, keep the icon requirement.
-- `tracking-widest` belongs out of `DropdownMenuShortcut` / `ContextMenuShortcut`.
-- `aria-pressed` used decoratively in four places, incl. `ticket-tabs.tsx:385`.
-- ⌥⌘B at `use-nav-history.ts:176` fires globally with no ticket gate.
-- `SplitDivider` ignores `uiScale`.
-- `compactAge` → `"now"`; the cross-year `"Dec 6, 2025"` form overflows the age column.
-- `SidebarResizeHandle`'s `null`-on-collapsed early return, plus the dead
-  collapsed-nav code (`primary-sidebar.tsx` ~101–123, `NavList collapsed`,
-  `COLLAPSED_NAV_WIDTH`, `--sidebar-width-icon`).
+All of the original list is done except `SplitDivider`, which never depended on
+this work. What remains is what the implementation itself turned up.
+
+**Still open**
+
+- `SplitDivider` ignores `uiScale` (in the shipped split layout, not the shelved
+  split-tabs scratch).
+- **Dead, and deletable as one change**: `components/ticket/ticket-session-actions.tsx`
+  and `components/sessions/new-session-menu.tsx` now have zero app callers. They
+  survive only because `lab/scratches/session-start-controls.tsx` imports them as
+  its "shipped today" baseline. Delete them together with those baseline
+  sections — it costs the scratch its before/after comparison, which is why it
+  did not happen automatically.
+- **Dead by selector**: nothing now uses `collapsible="icon"`/`"offcanvas"`, so in
+  `components/ui/sidebar.tsx` the `SIDEBAR_WIDTH_ICON` constant, every
+  `group-data-[collapsible=icon]:*` variant, `data-slot="sidebar-gap"`,
+  `data-slot="sidebar-container"`, the `tooltip` prop on `SidebarMenuButton` and
+  the `toggleSidebar({instant:true})` machinery are all unreachable. It is a
+  vendored file; the deletion is clean but standalone.
+- The ghost **indent** never rendered. `globals.css` forces
+  `padding: 0.5rem !important` / `height: 2rem !important` on every expanded menu
+  button, and the row-anatomy scratch sets that attribute too — so what was
+  reviewed as "ghost + indent" was always ghost alone. Shipping the indent means
+  relaxing those rules, which changes every sidebar row's height.
+- Terminal focus (`data-volli-shell="focused"`) is **code-verified only** — the
+  lab mounts no PTY. Wants a local desktop smoke.
+- `docs-shots.mjs` and `ticket-detail-smoke.mjs` were edited but not run. CI does
+  not run desktop smokes, so nothing else will catch it.
+
+**Live judgement calls, easy to reverse**
+
+- Composer at 576px wraps the branch pair to a second right-aligned line; Paper's
+  mock fits one line only because its chip reads "Explore" and ours reads a real
+  harness name. Widening the collapsed dialog is the alternative.
+- Sidebar pinning now persists (`sidebarPinned`). Revert = delete the field and
+  hold it in `AppShell` state.
+- No attention mark on the sliver — it would vanish whenever the workspace rail
+  is hidden, which is worse than not having it.
+- "Starting…" dropped from the Sessions empty state; dimming is now the single
+  vocabulary for a booting Session.
+
+**Unrelated, noticed in passing**
+
+- The Monaco description area renders as a bluish-slate slab against the warm
+  composer dialog once the editor mounts. Editor theme, not layout. May be
+  lab-only, since the theme derives from the canvas at runtime — worth one look
+  in the real app.
