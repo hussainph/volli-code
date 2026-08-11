@@ -58,12 +58,24 @@ describe("TicketRail header", () => {
     expect(html).toContain('data-testid="ticket-rail-tab-now"');
     expect(html).toContain('data-testid="ticket-rail-tab-changes"');
     expect(html).toContain('data-testid="ticket-rail-tab-files"');
-    expect(html).toContain(">Now<");
-    expect(html).toContain(">Diffs<");
-    expect(html).toContain(">Files<");
     // One tab is selected, and it is the one holding the roving tab stop.
     expect(html.match(/aria-selected="true"/g)?.length).toBe(1);
     expect(html.match(/tabindex="0"/g)?.length).toBe(1);
+  });
+
+  // The design of record shows exactly one word in the pill; the other two
+  // pages are bare glyphs until selected. That is what makes three pages fit
+  // 160px, so the unselected labels are genuinely absent from the DOM — every
+  // tab still carries its name for assistive tech through `aria-label`.
+  it("labels only the selected page, and names the other two for screen readers", () => {
+    const html = render();
+
+    expect(html).toContain(">Now<");
+    expect(html).not.toContain(">Diffs<");
+    expect(html).not.toContain(">Files<");
+    expect(html).toContain('aria-label="Now"');
+    expect(html).toContain('aria-label="Diffs"');
+    expect(html).toContain('aria-label="Files"');
   });
 
   it("retires the vertical icon-mode strip and its Properties page", () => {

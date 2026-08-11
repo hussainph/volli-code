@@ -32,17 +32,11 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
-import { formatStamp } from "@renderer/lib/relative-time";
 import { useBoardStore } from "@renderer/stores/board";
 
 /** The fold's one control shape: a 24px chip carrying its glyph and its value. */
 const PILL =
-  "flex h-6 shrink-0 items-center gap-1.5 rounded-full border border-sidebar-border bg-background/40 px-2 text-xs text-foreground transition-colors duration-150 ease-out hover:bg-sidebar-accent/60 focus-visible:ring-2 focus-visible:ring-sidebar-ring/50 focus-visible:outline-none motion-reduce:transition-none";
-
-/** "Jul 14, 2026, 3:04 PM" — a compact created/updated stamp. */
-function formatTimestamp(epochMs: number): string {
-  return formatStamp(epochMs, { time: true });
-}
+  "flex h-6 shrink-0 items-center gap-2 rounded-full border border-sidebar-border bg-background/40 px-2 text-xs text-foreground transition-colors duration-150 ease-out hover:bg-sidebar-accent/60 focus-visible:ring-2 focus-visible:ring-sidebar-ring/50 focus-visible:outline-none motion-reduce:transition-none";
 
 /**
  * Status picker: the fold's pill wired to the board store's `moveTicket`.
@@ -56,7 +50,7 @@ function StatusPill({ projectId, ticket }: { projectId: string; ticket: Ticket }
         className={PILL}
         aria-label={`Status: ${TICKET_STATUS_LABELS[ticket.status]}`}
       >
-        <CircleIcon className="size-3.5 text-muted-foreground" />
+        <CircleIcon className="size-4 text-muted-foreground" />
         {TICKET_STATUS_LABELS[ticket.status]}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
@@ -121,7 +115,7 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
     <section
       aria-label="Properties"
       data-testid="ticket-rail-properties"
-      className="flex flex-col gap-1.5 px-4 pt-5"
+      className="flex flex-col gap-1.5 px-4 pt-5 group-data-[narrow=true]/rail:px-3"
     >
       <div aria-label="Status and priority" className="flex min-h-6 flex-wrap items-center gap-1.5">
         <StatusPill projectId={projectId} ticket={ticket} />
@@ -131,20 +125,5 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
         <TicketLabelEditor projectId={projectId} ticket={ticket} />
       </div>
     </section>
-  );
-}
-
-/**
- * When the ticket was made and last touched — kept from the Details page this
- * fold replaces, because nothing else in the app records it, but moved to the
- * foot of the Now page. Between the pills and Sessions they read as a caption
- * on the pills; last, they read as what they are.
- */
-export function TicketStamps({ ticket }: { ticket: Ticket }) {
-  return (
-    <div className="flex flex-col gap-0.5 px-4 pt-5 text-label text-muted-foreground">
-      <span>Created {formatTimestamp(ticket.createdAt)}</span>
-      <span>Updated {formatTimestamp(ticket.updatedAt)}</span>
-    </div>
   );
 }

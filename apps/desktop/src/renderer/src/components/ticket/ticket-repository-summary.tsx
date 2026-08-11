@@ -770,21 +770,28 @@ export function TicketRepositorySummary({
   );
 
   // The row's outward-facing half, balancing the split button: the PR on
-  // GitHub. Suppressed when the primary is already "View PR" — one control per
-  // destination — and absent entirely until a PR exists, so the row is calm
-  // rather than carrying a permanently dead slot.
+  // GitHub. The scratch balances with "Compare", which needs the repository's
+  // remote URL — the renderer only ever learns `prUrl`, so that stays out (see
+  // the module note). Suppressed when the primary is already "View PR" — one
+  // control per destination — and absent entirely until a PR exists, so the row
+  // is calm rather than carrying a permanently dead slot.
   const prLink =
     ticket.prUrl !== null && view.primary.kind !== "view-pr" ? (
-      <Button
-        variant="outline"
-        size="sm"
-        className="shrink-0 border-sidebar-border bg-background/35 px-2.5 text-xs shadow-xs"
-        title="Open the pull request on GitHub"
-        onClick={openPr}
-      >
-        <GithubLogoIcon weight="fill" />
-        PR
-      </Button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="outline"
+            size="sm"
+            className="shrink-0 border-sidebar-border bg-background/35 px-2.5 text-xs shadow-xs"
+            aria-label="Open the pull request on GitHub"
+            onClick={openPr}
+          >
+            <GithubLogoIcon weight="fill" />
+            PR
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="top">Open the pull request on GitHub</TooltipContent>
+      </Tooltip>
     ) : null;
 
   const changesLabel =
@@ -795,9 +802,17 @@ export function TicketRepositorySummary({
         : `${fileCount} ${fileCount === 1 ? "change" : "changes"}`;
 
   return (
+    // No elevation: the scratch asks for one in light mode, but writes it as
+    // `hsl(var(--foreground)/…)` against a `--foreground` that is a hex — an
+    // invalid value the browser drops, so the card that was reviewed and
+    // approved is flat in BOTH appearances (verified in the lab, computed
+    // `box-shadow: none` under `.light`). Border plus surface is the whole
+    // frame. To add the lift the scratch intended, this wants
+    // `shadow-[0_1px_2px_var(--shadow-ink)/6%,…]` and a real token, not a
+    // revival of the broken string.
     <section
       data-testid="ticket-repository-summary"
-      className="mx-4 overflow-hidden rounded-xl border border-sidebar-border/70 bg-background/55 shadow-[var(--shadow-raised)] dark:bg-sidebar-accent/45 dark:shadow-none"
+      className="mx-4 overflow-hidden rounded-xl border border-sidebar-border/70 bg-background/55 group-data-[narrow=true]/rail:mx-3 dark:bg-sidebar-accent/45"
     >
       <button
         type="button"
@@ -899,17 +914,21 @@ export function TicketRepositorySummary({
                 doneFlowPrimaryButton
               )}
               <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="icon-sm"
-                    aria-label="More repository actions"
-                    title="More repository actions"
-                    className="border-sidebar-border bg-background/35 shadow-xs"
-                  >
-                    <DotsThreeIcon weight="bold" />
-                  </Button>
-                </DropdownMenuTrigger>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="icon-sm"
+                        aria-label="More repository actions"
+                        className="border-sidebar-border bg-background/35 shadow-xs"
+                      >
+                        <DotsThreeIcon weight="bold" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">More repository actions</TooltipContent>
+                </Tooltip>
                 <DropdownMenuContent align="start">
                   {/* Archive-ready: the demoted done-flow primary leads, then the
                       unbundled verbs, then the Keep/Dismiss retention escape hatches. */}

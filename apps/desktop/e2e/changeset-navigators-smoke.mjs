@@ -357,7 +357,10 @@ async function main() {
       );
       const text = await aside.getByTestId("ticket-files-list").innerText();
       const hasRef = /keep\.ts/i.test(text) || /referenced/i.test(text);
-      const hasWorktree = /worktree/i.test(text) && (/src/i.test(text) || /readme/i.test(text));
+      // The Calm Stack's Files page is ONE list, so there is no "Worktree"
+      // caption to match on any more — a worktree entry showing up IS the
+      // evidence that half of the list rendered.
+      const hasWorktree = /src/i.test(text) || /readme/i.test(text);
       return { ok: hasRef && hasWorktree, detail: text.slice(0, 200) };
     });
 
