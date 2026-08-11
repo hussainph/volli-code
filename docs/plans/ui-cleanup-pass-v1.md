@@ -15,7 +15,7 @@ such override is written down below.
 | 1 | Icon-weight audit learnings | not started — runs LAST, it sweeps every file |
 | 2 | Sidebar: hover reveal + row anatomy + ghosting + scrollbar | not started |
 | 3 | Session-start controls + shortcuts | not started |
-| 4 | Fullscreen placement, planned against `ui/right-sidebar-fixes` | not started — plan only |
+| 4 | Fullscreen placement, planned against `ui/right-sidebar-fixes` | **planned** — `docs/plans/fullscreen-placement.md`; blocked on that branch landing |
 | 5 | Ticket composer, ported from Paper | not started |
 
 Split tabs (`split-tabs.tsx`) stays a lab scratch. Drag-and-select in split view
@@ -37,6 +37,14 @@ has bugs the user wants to work through separately; do not implement it here.
 - **Composer scope: craft + branch row.** Paper's layout, the harness picker
   moved out of the footer into the chip row, and a real `base → new worktree`
   row wired to actual git refs. Automation presets are NOT in scope.
+
+## Corrections the work turned up
+
+- **There is no fullscreen button.** `useFullScreen` is read-only; it exists so
+  the traffic-light spacer can collapse. Issue 5's control is *terminal focus*,
+  an in-app zen mode. See `fullscreen-placement.md`.
+- **The branch-listing verb the composer needs already exists** — it does not
+  have to be built. Confirm what it returns before adding anything.
 
 ## Rules for this branch
 
