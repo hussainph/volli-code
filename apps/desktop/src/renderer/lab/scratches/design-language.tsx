@@ -9,7 +9,7 @@
  *      so the system can be judged before production code adopts it.
  *
  * The proposal borrows the mechanics of Fluid Functionalism (relative surface
- * depth and region-owned size context), not its product styling wholesale.
+ * depth and coherent size contracts), not its product styling wholesale.
  * Volli keeps its generated canvas, ember accent, Mona/Geist typography, and
  * excellent shell seam. This scratch exists to make those strengths systemic.
  */
@@ -18,6 +18,15 @@ import type { ReactNode } from "react";
 
 import { TicketCardContent } from "@renderer/components/board/ticket-card";
 import { Button } from "@renderer/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@renderer/components/ui/dropdown-menu";
 import { Input } from "@renderer/components/ui/input";
 import {
   Select,
@@ -33,7 +42,7 @@ import { project, ticketById } from "../fixtures";
 import { appApi, seedBoard } from "../seed";
 
 export const title = "Design system · audit";
-export const note = "Surfaces, density, radius, components, motion, and a migration path";
+export const note = "Surfaces, density, radius, components, motion, and the next proof";
 export const seed = seedBoard;
 export const api = appApi;
 
@@ -44,26 +53,38 @@ const PAGES = [
   { id: "radius", label: "Radius" },
   { id: "components", label: "Components" },
   { id: "motion", label: "Motion & states" },
-  { id: "roadmap", label: "Roadmap" },
+  { id: "proof", label: "Next proof" },
 ] as const;
 
 type PageId = (typeof PAGES)[number]["id"];
 type Density = "normal" | "compact";
+type SizeContract = "roomy" | "compact-first";
 type OperationState = "rest" | "pending" | "success" | "failure";
 
-const SURFACE_LEVELS = [
-  { level: 1, role: "Canvas", use: "Window frame and project rail", token: "--canvas" },
-  { level: 2, role: "Shell", use: "Primary sidebar and principal workspace", token: "--lift-2" },
-  { level: 3, role: "Plane", use: "Reading and workbench substrate", token: "--background" },
-  { level: 4, role: "Section", use: "Grouped settings and quiet regions", token: "--card" },
-  { level: 5, role: "Raised", use: "Cards, composer, active objects", token: "--secondary" },
-  { level: 6, role: "Popover", use: "Menus, selects, contextual inspectors", token: "--popover" },
-  { level: 7, role: "Dialog", use: "Blocking task surface", token: "relative + shadow" },
+const SURFACE_ROLES = [
   {
-    level: 8,
-    role: "Nested",
-    use: "Picker or menu opened inside level 7",
-    token: "relative + shadow",
+    role: "Base",
+    use: "Canvas, shell, workbench, and reading substrates",
+    fill: "owned fill",
+    shadow: "none",
+  },
+  {
+    role: "Raised",
+    use: "Cards, composers, active objects, and local inspectors",
+    fill: "one relative lift",
+    shadow: "raised",
+  },
+  {
+    role: "Overlay",
+    use: "Popover, dropdown, select, context menu, and hover card",
+    fill: "one relative lift, clamped",
+    shadow: "overlay · stable",
+  },
+  {
+    role: "Blocking",
+    use: "Dialog, alert dialog, command palette, and sheet",
+    fill: "stable paper + scrim",
+    shadow: "blocking · stable",
   },
 ] as const;
 
@@ -71,52 +92,59 @@ const AUDIT_ROWS = [
   {
     severity: "High",
     before: "Button defaults to 28px; Input and Select default to 36px",
-    after: "One inherited control token: 36px normal, 28px compact",
-    why: "Adjacent controls stop looking like unrelated kits.",
-    source: "ui/button.tsx:32 · ui/input.tsx:11 · ui/select.tsx:34",
+    after: "Compare 36/28 and 28/24 on the real primitives before choosing a contract",
+    why: "The Lab tests the fork instead of presenting one taste judgment as settled.",
+    source:
+      "apps/desktop/src/renderer/src/components/ui/button.tsx:32 · apps/desktop/src/renderer/src/components/ui/input.tsx:11 · apps/desktop/src/renderer/src/components/ui/select.tsx:34",
   },
   {
     severity: "High",
     before: "Popover, select, dropdown, and nested menus always use bg-popover",
     after: "Each overlay lifts one step from the substrate that opened it",
     why: "Nested overlays remain visible without caller-specific color props.",
-    source: "ui/popover.tsx:33 · ui/select.tsx:59 · ui/dropdown-menu.tsx:37",
+    source:
+      "apps/desktop/src/renderer/src/components/ui/popover.tsx:33 · apps/desktop/src/renderer/src/components/ui/select.tsx:59 · apps/desktop/src/renderer/src/components/ui/dropdown-menu.tsx:37",
   },
   {
     severity: "High",
     before: "CSS zoom is the only app-wide answer to a small screen",
     after: "Density changes rhythm; zoom remains a separate accessibility tool",
     why: "Compact mode preserves crisp type and known hit areas.",
-    source: "stores/ui.ts:89-130 · components/app-shell.tsx:133",
+    source:
+      "apps/desktop/src/renderer/src/stores/ui.ts:89 · apps/desktop/src/renderer/src/components/app-shell.tsx:133",
   },
   {
     severity: "Medium",
     before:
       "Overlay classes advertise shadow-md/lg, while global CSS overrides most—but not Select or Hover Card",
-    after: "One contextual, size-aware shadow contract covers the whole overlay family",
-    why: "Source intent and runtime depth agree; a tooltip no longer casts a dialog-sized shadow.",
-    source: "globals.css:774-785 · ui/select.tsx:59 · ui/hover-card.tsx:27",
+    after: "Relative fill changes with substrate; role-sized shadow stays stable through nesting",
+    why: "Depth cues do not compound, and a popover remains recognizably a popover at every depth.",
+    source:
+      "apps/desktop/src/renderer/src/globals.css:774 · apps/desktop/src/renderer/src/components/ui/select.tsx:59 · apps/desktop/src/renderer/src/components/ui/hover-card.tsx:27",
   },
   {
     severity: "Medium",
     before: "Pill Button is repeatedly overridden to rounded-md in chrome",
     after: "Shape follows role: pill action, squircle navigation, shell container",
     why: "Exceptions become named semantics instead of local class patches.",
-    source: "ui/button.tsx:8 · ticket/ticket-rail.tsx:78",
+    source:
+      "apps/desktop/src/renderer/src/components/ui/button.tsx:8 · apps/desktop/src/renderer/src/components/ticket/ticket-rail.tsx:78",
   },
   {
     severity: "Medium",
     before: "SettingsSection and TicketCard are both rounded-lg bordered cards",
     after: "Sections recede; actionable entities lift and react",
     why: "Hierarchy comes from surface behavior, not more framing.",
-    source: "pages/settings-shell.tsx:124 · board/ticket-card.tsx:59",
+    source:
+      "apps/desktop/src/renderer/src/components/pages/settings-shell.tsx:124 · apps/desktop/src/renderer/src/components/board/ticket-card.tsx:59",
   },
   {
     severity: "Medium",
-    before: "Primitive icons mix Lucide Select glyphs with Phosphor product chrome",
+    before: "Lucide leaks through three shared primitives: Command, Select, and Spinner",
     after: "Phosphor owns product controls; vendor icons stay inside vendor surfaces",
     why: "Stroke, silhouette, and optical weight stop shifting between neighbors.",
-    source: "ui/select.tsx:3 · ui/dialog.tsx:4",
+    source:
+      "apps/desktop/src/renderer/src/components/ui/command.tsx:3 · apps/desktop/src/renderer/src/components/ui/select.tsx:4 · apps/desktop/src/renderer/src/components/ui/spinner.tsx:1",
   },
   {
     severity: "High",
@@ -124,14 +152,17 @@ const AUDIT_ROWS = [
       "Streaming reasoning stacks pulse and a repainting 1.6s shimmer with no reduced-motion branch",
     after: "One quiet working-state cue with a non-moving reduced-motion equivalent",
     why: "The primary chat surface stops spending motion and paint on duplicate status signals.",
-    source: "ai-elements/reasoning.tsx:76-84 · ai-elements/shimmer.tsx:42-83",
+    source:
+      "apps/desktop/src/components/ai-elements/reasoning.tsx:76 · apps/desktop/src/components/ai-elements/shimmer.tsx:42",
   },
   {
     severity: "High",
     before: "Chat disclosure animates grid rows for 400ms inside a busy transcript",
-    after: "A faster disclosure preset with measured large-body behavior",
-    why: "Frequent inspection stays responsive and spends less time in layout.",
-    source: "chat/activity-ui.tsx:61-71 · chat/activity-ui.tsx:165-185",
+    after:
+      "Instant body disclosure; consider opacity only if a real feel-check proves it necessary",
+    why: "Repeated inspection does not earn paced layout motion, and grid-template-rows is not compositor-safe.",
+    source:
+      "apps/desktop/src/renderer/src/components/chat/activity-ui.tsx:61 · apps/desktop/src/renderer/src/components/chat/activity-ui.tsx:165",
   },
   {
     severity: "High",
@@ -139,7 +170,8 @@ const AUDIT_ROWS = [
       "Equivalent overlays disagree on reduced motion: Dialog opts out; AlertDialog and Select do not",
     after: "One overlay accessibility contract preserves a short fade and removes movement",
     why: "Reduced motion is predictable across every path into an overlay.",
-    source: "ui/dialog.tsx:25-60 · ui/alert-dialog.tsx:24-55 · ui/select.tsx:48-67",
+    source:
+      "apps/desktop/src/renderer/src/components/ui/dialog.tsx:25 · apps/desktop/src/renderer/src/components/ui/alert-dialog.tsx:24 · apps/desktop/src/renderer/src/components/ui/select.tsx:48",
   },
   {
     severity: "Medium",
@@ -147,14 +179,16 @@ const AUDIT_ROWS = [
       "Files retains stale content under failure; Change Set replaces it with error-only content",
     after: "One async frame contract: rest, pending, stale refresh, success, recoverable failure",
     why: "Failures preserve context and recovery behaves consistently.",
-    source: "ticket-files-panel.tsx:164 · ticket-changes-panel.tsx:38",
+    source:
+      "apps/desktop/src/renderer/src/components/ticket/ticket-files-panel.tsx:164 · apps/desktop/src/renderer/src/components/ticket/ticket-changes-panel.tsx:38",
   },
   {
     severity: "Low",
     before: "Motion values mix ease-out, ease-swift, 100/120/150/180/200/240/300/400ms",
     after: "Frequency-based presets: instant, press, overlay, structural, gesture",
     why: "Motion gets a product voice without animating high-frequency work.",
-    source: "globals.css:254-256 · chat/activity-ui.tsx:63-71",
+    source:
+      "apps/desktop/src/renderer/src/globals.css:254 · apps/desktop/src/renderer/src/components/chat/activity-ui.tsx:63",
   },
 ] as const;
 
@@ -247,14 +281,14 @@ function ThesisPage() {
       >
         <div className="grid gap-3 md:grid-cols-3">
           <Metric
-            value="8"
+            value="4"
             label="Surface roles proposed"
-            detail="Relative depth replaces absolute bg-* choices."
+            detail="Base, raised, overlay, and blocking—with a fill clamp."
           />
           <Metric
-            value="2"
-            label="Density steps"
-            detail="Normal 36px and compact 28px, inherited by region."
+            value="2×2"
+            label="Size fork to test"
+            detail="36/28 and 28/24, shown on the same real primitives."
           />
           <Metric
             value="3"
@@ -285,9 +319,9 @@ function ThesisPage() {
             title="Integrate"
             items={[
               "Substrate-aware elevation context",
-              "Normal / compact region context",
+              "CSS-first global density contract",
               "Role-based radius taxonomy",
-              "Control metrics that scale as one unit",
+              "Control metrics that scale without owning content type",
               "Explicit async state galleries and motion presets",
             ]}
           />
@@ -313,8 +347,8 @@ function ThesisPage() {
               "A surface must name what it contains and what it sits on.",
             ],
             [
-              "Density belongs to a region",
-              "Neighboring controls inherit one rhythm; overrides are exceptional.",
+              "Density is global first",
+              "CSS variables carry the preference; regional overrides wait for evidence.",
             ],
             ["Shape predicts behavior", "Pills act, squircles navigate or edit, shells contain."],
             [
@@ -413,7 +447,10 @@ function SurfacesPage() {
               uses substrate-specific ink, and the shadows already combine contact and ambient
               layers. The fix is a consumption model—not another palette.
             </p>
-            <Evidence>globals.css:34-212 · globals.css:540-663</Evidence>
+            <Evidence>
+              apps/desktop/src/renderer/src/globals.css:34 ·
+              apps/desktop/src/renderer/src/globals.css:540
+            </Evidence>
           </div>
         </div>
       </Section>
@@ -435,40 +472,57 @@ function SurfacesPage() {
             </div>
           </div>
         </div>
-        <Evidence>board/board-column.tsx:58,90-102 · board/ticket-card.tsx:57-63</Evidence>
+        <Evidence>
+          apps/desktop/src/renderer/src/components/board/board-column.tsx:58 ·
+          apps/desktop/src/renderer/src/components/board/ticket-card.tsx:57
+        </Evidence>
       </Section>
 
       <Section
         eyebrow="Proposed model"
-        title="Eight levels, exposed as roles and consumed relatively"
-        description="Most feature code should ask for a role such as raised, popover, or dialog. The primitive resolves the actual level from its substrate. Numeric levels remain an implementation and debugging vocabulary."
+        title="Four roles, relative fills, stable shadows, and a clamp"
+        description="Feature code asks for a semantic role. The surface resolves its fill relative to the nearest substrate, stops lifting when the appearance reaches its useful ceiling, and keeps the role's shadow stable through nesting. Numeric levels are diagnostic output, never component API."
       >
         <div className="overflow-hidden rounded-xl border border-border bg-background">
-          <div className="grid grid-cols-[3rem_7rem_1fr_9rem] gap-3 border-b border-border px-3 py-2 font-mono text-label uppercase text-muted-foreground max-md:grid-cols-[3rem_6rem_1fr]">
-            <span>Level</span>
+          <div className="grid grid-cols-[7rem_1fr_10rem_9rem] gap-3 border-b border-border px-3 py-2 font-mono text-label uppercase text-muted-foreground max-md:grid-cols-[6rem_1fr_8rem]">
             <span>Role</span>
             <span>Use</span>
-            <span className="max-md:hidden">Source</span>
+            <span>Fill</span>
+            <span className="max-md:hidden">Shadow</span>
           </div>
-          {SURFACE_LEVELS.map((surface) => (
+          {SURFACE_ROLES.map((surface) => (
             <div
-              key={surface.level}
-              className="grid grid-cols-[3rem_7rem_1fr_9rem] items-center gap-3 border-b border-border/60 px-3 py-2.5 text-xs last:border-b-0 max-md:grid-cols-[3rem_6rem_1fr]"
+              key={surface.role}
+              className="grid grid-cols-[7rem_1fr_10rem_9rem] items-center gap-3 border-b border-border/60 px-3 py-2.5 text-xs last:border-b-0 max-md:grid-cols-[6rem_1fr_8rem]"
             >
-              <span className="flex size-6 items-center justify-center rounded-full border border-border bg-card font-mono text-label text-foreground">
-                {surface.level}
-              </span>
               <span className="font-medium text-foreground">{surface.role}</span>
               <span className="text-muted-foreground">{surface.use}</span>
+              <span className="font-mono text-label text-muted-foreground">{surface.fill}</span>
               <span className="font-mono text-label text-muted-foreground max-md:hidden">
-                {surface.token}
+                {surface.shadow}
               </span>
             </div>
           ))}
         </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <PolicyCard
+            title="Light appearance"
+            value="Lift once, then clamp"
+            copy="A warm base and one stable paper fill prevent washout; contact edge, ambient shadow, and scrim carry the remaining elevation."
+          />
+          <PolicyCard
+            title="Dark appearance"
+            value="Fill can keep lifting"
+            copy="Low-opacity light layers help where shadows disappear, but the ladder still clamps before nested overlays begin to glow."
+          />
+        </div>
       </Section>
 
-      <Section eyebrow="Context demo" title="The same overlay must lift from where it opens">
+      <Section
+        eyebrow="Mechanic diagram"
+        title="The same overlay must lift from where it opens"
+        description="This diagram explains the relationship; it is not implementation proof. The real dropdown sub-menu experiment on Next proof is the acceptance test."
+      >
         <div className="grid gap-5 lg:grid-cols-2">
           <SurfaceDemo current />
           <SurfaceDemo />
@@ -497,7 +551,7 @@ function SurfaceDemo({ current = false }: { current?: boolean }) {
       <div className="rounded-xl border border-border bg-background p-4">
         <p className="text-xs text-muted-foreground">Page substrate</p>
         <div className="mt-4 rounded-xl border border-border bg-card p-4 shadow-[var(--shadow-card)]">
-          <p className="text-ui font-medium text-foreground">Dialog task</p>
+          <p className="text-ui font-medium text-foreground">Raised task panel</p>
           <p className="mt-1 text-xs text-muted-foreground">Choose a model for the next run.</p>
           <div
             className={cn(
@@ -517,7 +571,7 @@ function SurfaceDemo({ current = false }: { current?: boolean }) {
       <Evidence>
         {current
           ? "Absolute bg-card / bg-popover choices are blind to nesting."
-          : "Surface context advances the picker from its dialog substrate."}
+          : "The picker advances its fill; its overlay shadow does not grow with nesting."}
       </Evidence>
     </div>
   );
@@ -530,23 +584,18 @@ function SizesPage({
   density: Density;
   onDensityChange(value: Density): void;
 }) {
-  const metrics =
-    density === "normal"
-      ? { control: 36, text: 13, icon: 16, px: 12, itemPx: 8, gap: 8 }
-      : { control: 28, text: 12, icon: 14, px: 10, itemPx: 6, gap: 4 };
-
   return (
     <div className="space-y-10">
       <Section
-        eyebrow="Live control"
-        title="Normal and compact are coherent steps, not zoom factors"
-        description="Every metric below changes as one unit. The content hierarchy and meaning remain identical. Compact is for a dense 13-inch workspace; normal restores air on larger displays."
+        eyebrow="Decision control"
+        title="Compare both size contracts at the same density"
+        description="Normal and compact remain user-facing modes, but their actual measurements are unresolved. The switch below changes both candidate families together so content and state stay identical while the geometry changes."
       >
         <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border bg-card p-4 shadow-[var(--shadow-raised)]">
           <div>
             <p className="text-sm font-semibold text-foreground">Interface density</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              This prototype changes only the examples below.
+              Compare the two candidates here, then judge them in the real App Shell.
             </p>
           </div>
           <Segmented
@@ -559,16 +608,9 @@ function SizesPage({
             onChange={onDensityChange}
           />
         </div>
-        <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-          {Object.entries(metrics).map(([label, value]) => (
-            <div
-              key={label}
-              className="rounded-lg border border-border bg-background p-3 text-center"
-            >
-              <p className="text-heading font-semibold tabular-nums text-foreground">{value}</p>
-              <p className="mt-1 font-mono text-label text-muted-foreground">{label}</p>
-            </div>
-          ))}
+        <div className="grid gap-4 xl:grid-cols-2">
+          <SizeContractCard contract="roomy" density={density} />
+          <SizeContractCard contract="compact-first" density={density} />
         </div>
       </Section>
 
@@ -578,35 +620,31 @@ function SizesPage({
         description="These are the real primitives. The Button is 28px; Input and Select are 36px; the Switch is 16px tall. Each is internally polished, but the row has no shared rhythm."
       >
         <div className="rounded-xl border border-border bg-card p-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <Input aria-label="Search current controls" className="w-48" placeholder="Search…" />
-            <Select defaultValue="updated">
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="updated">Last updated</SelectItem>
-                <SelectItem value="created">Created</SelectItem>
-              </SelectContent>
-            </Select>
-            <Button variant="outline">Filter</Button>
-            <Button>New</Button>
-            <label className="ml-1 flex items-center gap-2 text-ui text-muted-foreground">
-              <Switch defaultChecked /> Live
-            </label>
-          </div>
+          <RealControlRow label="Current" />
           <Evidence>Button h-7 · Input h-9 · Select h-9 · Switch h-4</Evidence>
         </div>
       </Section>
 
       <Section
-        eyebrow="Proposed evidence"
-        title={`One ${density} region; every control lands at ${metrics.control}px`}
+        eyebrow="Typography boundary"
+        title="Density may tune UI type; it does not own typography"
       >
-        <PrototypeControlRow density={density} />
-        <div className="grid gap-4 lg:grid-cols-2">
-          <TypeLadder density="normal" active={density === "normal"} />
-          <TypeLadder density="compact" active={density === "compact"} />
+        <div className="grid gap-3 md:grid-cols-3">
+          <PolicyCard
+            title="Content type"
+            value="Fixed"
+            copy="Transcript prose, editor text, ticket bodies, and the six-step hierarchy do not shrink with density."
+          />
+          <PolicyCard
+            title="UI chrome"
+            value="13px, optionally 12px"
+            copy="Compact labels may step down only when the real-component comparison stays legible."
+          />
+          <PolicyCard
+            title="Constraint"
+            value="No global font scale"
+            copy="Typography remains independently tunable instead of becoming a side effect of compact mode."
+          />
         </div>
       </Section>
 
@@ -618,7 +656,7 @@ function SizesPage({
           <PolicyCard
             title="Density"
             value="Normal / Compact"
-            copy="Changes control, row, icon, gap, and UI type tokens. Persisted user preference."
+            copy="Changes control, row, icon, padding, and gap tokens. UI type remains an optional optical adjustment."
           />
           <PolicyCard
             title="Zoom"
@@ -632,18 +670,19 @@ function SizesPage({
           />
         </div>
         <div className="rounded-xl border border-primary/30 bg-primary/8 p-4 text-xs leading-5 text-muted-foreground">
-          <strong className="text-foreground">Provider seam:</strong> persist{" "}
-          <code className="font-mono text-primary-text">uiDensity</code> in the UI store, mount one
-          DensityProvider inside the native chrome band, and let region providers override it for
-          board/list/rail/editor areas. Every portaled primitive consumes the context when it
-          renders its content.
+          <strong className="text-foreground">CSS-first seam:</strong> persist{" "}
+          <code className="font-mono text-primary-text">uiDensity</code>, stamp{" "}
+          <code className="font-mono text-primary-text">data-density</code> on{" "}
+          <code className="font-mono text-primary-text">html</code>, and let ordinary components
+          consume inherited variables. A small JavaScript bridge owns persistence and the first
+          frame. React context waits until a real per-region or portal-boundary requirement exists.
         </div>
       </Section>
 
       <Section
-        eyebrow="13-inch target"
-        title="Recover workspace width before shrinking readable content"
-        description="A prior 940px minimum-window probe with the same current rail constants left about 313px for Chat and 263px for its textarea. Compact layout tokens can recover roughly 100px while keeping transcript prose readable."
+        eyebrow="Separate claim"
+        title="Chrome geometry recovers width; control density changes rhythm"
+        description="The earlier ~100px recovery came from rails and insets. It does not validate either control-height contract. Judge geometry independently in the App Shell, especially at the 940px minimum."
       >
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
           {[
@@ -660,108 +699,103 @@ function SizesPage({
           ))}
         </div>
         <p className="text-xs leading-5 text-muted-foreground">
-          These are candidate compact tokens for prototype validation, not approved production
-          constants. Store independent normal and compact resize preferences so toggling density
-          never corrupts a user’s chosen rail widths.
+          These remain candidate layout defaults, not density-system proof. Store independent resize
+          preferences if they are eventually coupled to a user mode, and never let a toggle
+          overwrite a manually chosen rail width.
         </p>
+        <Button asChild>
+          <a href="#app-shell">Open the real App Shell comparison</a>
+        </Button>
       </Section>
     </div>
   );
 }
 
-function PrototypeControlRow({ density }: { density: Density }) {
-  const compact = density === "compact";
-  const style = {
-    height: compact ? 28 : 36,
-    fontSize: compact ? 12 : 13,
-    paddingInline: compact ? 10 : 12,
-    gap: compact ? 4 : 8,
-  } satisfies React.CSSProperties;
+function metricsFor(contract: SizeContract, density: Density) {
+  if (contract === "roomy") {
+    return density === "normal"
+      ? { control: 36, text: 13, icon: 16, px: 12, gap: 8 }
+      : { control: 28, text: 12, icon: 14, px: 10, gap: 4 };
+  }
+  return density === "normal"
+    ? { control: 28, text: 13, icon: 14, px: 10, gap: 6 }
+    : { control: 24, text: 12, icon: 12, px: 8, gap: 4 };
+}
+
+function SizeContractCard({ contract, density }: { contract: SizeContract; density: Density }) {
+  const metrics = metricsFor(contract, density);
+  const label = contract === "roomy" ? "36 normal / 28 compact" : "28 normal / 24 compact";
   return (
     <div className="rounded-xl border border-border bg-card p-4 shadow-[var(--shadow-raised)]">
-      <div className="flex flex-wrap items-center" style={{ gap: compact ? 4 : 8 }}>
-        <div
-          className="flex min-w-44 flex-1 items-center rounded-lg border border-input bg-background text-muted-foreground shadow-xs"
-          style={style}
-        >
-          Search…
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold text-foreground">{label}</p>
+          <p className="mt-1 text-xs text-muted-foreground">Showing {density}</p>
         </div>
-        <button
-          type="button"
-          className="inline-flex items-center rounded-lg border border-input bg-background text-foreground shadow-xs"
-          style={style}
-        >
-          Last updated <span aria-hidden>⌄</span>
-        </button>
-        <button
-          type="button"
-          className="inline-flex items-center rounded-full border border-border bg-background text-foreground shadow-xs transition-transform duration-150 ease-out active:scale-[0.97]"
-          style={style}
-        >
-          Filter
-        </button>
-        <button
-          type="button"
-          className="inline-flex items-center rounded-full bg-primary text-primary-foreground transition-transform duration-150 ease-out active:scale-[0.97]"
-          style={style}
-        >
-          New
-        </button>
+        <span className="rounded-full bg-secondary px-2 py-0.5 font-mono text-label text-muted-foreground">
+          {metrics.control}px
+        </span>
       </div>
+      <RealControlRow label={label} metrics={metrics} />
       <Evidence>
-        {density}: control {compact ? 28 : 36} · type {compact ? 12 : 13} · icon {compact ? 14 : 16}{" "}
-        · gap {compact ? 4 : 8}
+        Real Input · Select · Button · Switch · control {metrics.control} · UI type {metrics.text} ·
+        icon {metrics.icon} · gap {metrics.gap}
       </Evidence>
     </div>
   );
 }
 
-function TypeLadder({ density, active }: { density: Density; active: boolean }) {
-  const rows =
-    density === "normal"
-      ? [
-          ["Display", "28"],
-          ["Title", "16"],
-          ["Subtitle", "14"],
-          ["UI body", "13"],
-          ["Caption", "12"],
-        ]
-      : [
-          ["Display", "24"],
-          ["Title", "15"],
-          ["Subtitle", "13"],
-          ["UI body", "12"],
-          ["Caption", "11"],
-        ];
+type ControlMetrics = ReturnType<typeof metricsFor>;
+
+function RealControlRow({ label, metrics }: { label: string; metrics?: ControlMetrics }) {
+  const controlStyle = metrics
+    ? ({
+        height: metrics.control,
+        minHeight: metrics.control,
+        fontSize: metrics.text,
+        paddingInline: metrics.px,
+        gap: metrics.gap,
+      } satisfies React.CSSProperties)
+    : undefined;
+  const rowStyle = metrics
+    ? ({
+        gap: metrics.gap,
+        "--lab-example-icon": `${metrics.icon}px`,
+      } as React.CSSProperties)
+    : undefined;
   return (
     <div
       className={cn(
-        "rounded-xl border p-4",
-        active ? "border-primary/40 bg-primary/8" : "border-border bg-background opacity-70",
+        "flex flex-wrap items-center gap-2",
+        metrics && "[&_svg]:size-(--lab-example-icon)",
       )}
+      style={rowStyle}
     >
-      <div className="flex items-center justify-between">
-        <p className="text-ui font-semibold capitalize text-foreground">{density}</p>
-        {active ? (
-          <span className="rounded-full bg-primary/15 px-2 py-0.5 text-label text-primary-text">
-            Active
-          </span>
-        ) : null}
-      </div>
-      <div className="mt-3 space-y-2">
-        {rows.map(([role, size]) => (
-          <div
-            key={role}
-            className="flex items-baseline justify-between border-b border-border/60 pb-2 last:border-0 last:pb-0"
-          >
-            <span className="text-xs text-muted-foreground">{role}</span>
-            <span className="font-mono text-label tabular-nums text-foreground">{size}px</span>
-          </div>
-        ))}
-      </div>
-      <p className="mt-3 text-label leading-4 text-muted-foreground">
-        Ticket prose and editor text remain independently readable; this ladder governs UI chrome.
-      </p>
+      <Input
+        aria-label={`${label} search`}
+        className="min-w-40 flex-1"
+        placeholder="Search…"
+        style={controlStyle}
+      />
+      <Select defaultValue="updated">
+        <SelectTrigger aria-label={`${label} sort`} style={controlStyle}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="updated">Last updated</SelectItem>
+          <SelectItem value="created">Created</SelectItem>
+        </SelectContent>
+      </Select>
+      <Button variant="outline" style={controlStyle}>
+        Filter
+      </Button>
+      <Button style={controlStyle}>New</Button>
+      <label
+        className="ml-1 flex items-center gap-2 text-ui text-muted-foreground"
+        style={metrics ? { minHeight: metrics.control, fontSize: metrics.text } : undefined}
+      >
+        <Switch defaultChecked /> Live
+      </label>
     </div>
   );
 }
@@ -824,37 +858,37 @@ function RadiusPage() {
               "Button",
               "rounded-full",
               "Correct for actions; over-broad as a base identity.",
-              "ui/button.tsx:8",
+              "apps/desktop/src/renderer/src/components/ui/button.tsx:8",
             ],
             [
               "Input / Select",
               "rounded-md",
               "Correct field family, but its height rhythm differs.",
-              "ui/input.tsx:11 · ui/select.tsx:34",
+              "apps/desktop/src/renderer/src/components/ui/input.tsx:11 · apps/desktop/src/renderer/src/components/ui/select.tsx:34",
             ],
             [
               "Menu item",
               "rounded-sm",
               "Good parent-minus-inset relationship.",
-              "ui/select.tsx:103",
+              "apps/desktop/src/renderer/src/components/ui/select.tsx:103",
             ],
             [
               "Ticket card",
               "rounded-lg",
               "Entity card shares the same treatment as quiet settings groups.",
-              "board/ticket-card.tsx:59",
+              "apps/desktop/src/renderer/src/components/board/ticket-card.tsx:59",
             ],
             [
               "Project tile",
               "rounded-[10px]",
               "Visually strong, but literal and outside the radius scale.",
-              "rail/project-tile.tsx:68",
+              "apps/desktop/src/renderer/src/components/rail/project-tile.tsx:68",
             ],
             [
               "App inset",
               "--radius-xl",
               "Excellent shell-level role and paired-corner logic.",
-              "globals.css:622-663",
+              "apps/desktop/src/renderer/src/globals.css:622",
             ],
           ].map(([component, token, judgment, source]) => (
             <div key={component} className="rounded-xl border border-border bg-card p-4">
@@ -1008,13 +1042,13 @@ function ComponentsPage() {
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <PolicyCard
             title="Surface"
-            value="Surface / Elevated"
-            copy="Dialog, popover, dropdown, select, card, composer."
+            value="Four roles + clamp"
+            copy="Base, raised, overlay, and blocking; relative fill and stable role shadow."
           />
           <PolicyCard
             title="Size"
-            value="DensityProvider"
-            copy="Button, input, select, rows, tabs, menus, rails."
+            value="data-density + variables"
+            copy="A global CSS contract first; JavaScript only persists and stamps the preference."
           />
           <PolicyCard
             title="Shape"
@@ -1063,10 +1097,10 @@ function MotionPage({
       >
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           {[
-            ["Instant", "0ms", "Keyboard palette, tab focus, repeated navigation"],
+            ["Instant", "0ms", "Keyboard palette, tab focus, repeated disclosure/navigation"],
             ["Press", "100–160ms", "Pointer-down feedback and tiny state response"],
             ["Overlay", "150–250ms", "Popover, select, menu, dialog"],
-            ["Structural", "180–250ms", "Sidebar and rail geometry"],
+            ["Structural", "Measured", "Occasional geometry only; instant on busy terminal paths"],
             ["Gesture", "Spring", "Drag, sheet, reorder, momentum"],
           ].map(([name, value, use]) => (
             <div key={name} className="rounded-xl border border-border bg-card p-3">
@@ -1114,17 +1148,18 @@ function MotionPage({
             title="Tighten"
             items={[
               "Replace the streaming pulse + repainting shimmer with one reduced-motion-safe cue",
-              "Split the 400ms layout disclosure into a faster, measured high-frequency preset",
+              "Remove the 400ms grid-row disclosure; mount repeated tool detail instantly",
+              "Test opacity-only disclosure only if the instant version is genuinely disorienting",
               "Make AlertDialog, Select, swatch hover, and every overlay honor the same accessibility contract",
               "Name shared duration/easing presets instead of local combinations",
             ]}
           />
         </div>
         <div className="rounded-xl border border-border bg-background p-4 text-xs leading-5 text-muted-foreground">
-          <strong className="text-foreground">Missed opportunities:</strong> animate only spatially
-          meaningful, occasional transitions—the right-rail mode content swap, recoverable
-          completion feedback, and rare first-session success. Do not animate keyboard-open command
-          palette or routine tab selection.
+          <strong className="text-foreground">Addition gate:</strong> no new motion is approved by
+          this audit. First remove repeated layout motion and redundant streaming cues. Only then
+          feel-check occasional, spatially meaningful transitions such as recoverable completion or
+          rare first-session success.
         </div>
       </Section>
     </div>
@@ -1200,106 +1235,168 @@ function OperationCard({
   );
 }
 
-function RoadmapPage() {
-  const phases = [
-    {
-      phase: "0",
-      title: "Protect the current strengths",
-      scope:
-        "Characterization tests for generated colors, shell seam, public primitive classes, reduced motion, and current screenshot baselines.",
-      proof: "No visual regression before the system changes.",
-    },
-    {
-      phase: "1",
-      title: "Introduce contexts and tokens",
-      scope:
-        "Surface substrate + Elevated primitive; DensityProvider + uiDensity persistence; role-based radius and motion tokens.",
-      proof: "A nested overlay and a mixed control row pass public-seam tests.",
-    },
-    {
-      phase: "2",
-      title: "Unify primitives",
-      scope:
-        "Button, Input, Select, Dropdown, Popover, Dialog, Badge, Switch, tabs, and menu rows consume the new contexts.",
-      proof: "Normal and compact galleries stay semantically identical.",
-    },
-    {
-      phase: "3",
-      title: "Migrate high-leverage regions",
-      scope:
-        "Board/list, ticket rail/workbench, Settings, chat composer/activity, and session chrome—in that order.",
-      proof: "Wide, 13-inch-like, light, dark, and long-content screenshots.",
-    },
-    {
-      phase: "4",
-      title: "Motion and performance pass",
-      scope:
-        "Remove layout-property animation, consolidate presets, add only selected spatial transitions, and measure under transcript load.",
-      proof: "Reduced-motion and frame-budget checks on real app surfaces.",
-    },
-  ] as const;
+const LabSurfaceDepthContext = React.createContext(0);
+
+function CandidateDropdownContent({ children }: { children: ReactNode }) {
+  const substrate = React.useContext(LabSurfaceDepthContext);
+  const depth = Math.min(substrate + 1, 2);
+  return (
+    <LabSurfaceDepthContext.Provider value={depth}>
+      <DropdownMenuContent
+        data-lab-surface-role="overlay"
+        data-lab-surface-depth={depth}
+        className="border-border-strong bg-popover shadow-[var(--shadow-overlay)]"
+      >
+        {children}
+      </DropdownMenuContent>
+    </LabSurfaceDepthContext.Provider>
+  );
+}
+
+function CandidateDropdownSubContent({ children }: { children: ReactNode }) {
+  const substrate = React.useContext(LabSurfaceDepthContext);
+  const depth = Math.min(substrate + 1, 2);
+  return (
+    <LabSurfaceDepthContext.Provider value={depth}>
+      <DropdownMenuSubContent
+        data-lab-surface-role="overlay"
+        data-lab-surface-depth={depth}
+        className="border-border-strong bg-popover shadow-[var(--shadow-overlay)] dark:bg-[color-mix(in_oklab,var(--popover)_88%,white)]"
+      >
+        {children}
+      </DropdownMenuSubContent>
+    </LabSurfaceDepthContext.Provider>
+  );
+}
+
+function SurfaceProofMenu({ candidate = false }: { candidate?: boolean }) {
+  const rootItems = (
+    <>
+      <DropdownMenuItem>Open in workbench</DropdownMenuItem>
+      <DropdownMenuSub>
+        <DropdownMenuSubTrigger>Move to</DropdownMenuSubTrigger>
+        {candidate ? (
+          <CandidateDropdownSubContent>
+            <DropdownMenuItem>Todo</DropdownMenuItem>
+            <DropdownMenuItem>Doing</DropdownMenuItem>
+            <DropdownMenuItem>Needs Review</DropdownMenuItem>
+          </CandidateDropdownSubContent>
+        ) : (
+          <DropdownMenuSubContent>
+            <DropdownMenuItem>Todo</DropdownMenuItem>
+            <DropdownMenuItem>Doing</DropdownMenuItem>
+            <DropdownMenuItem>Needs Review</DropdownMenuItem>
+          </DropdownMenuSubContent>
+        )}
+      </DropdownMenuSub>
+      <DropdownMenuItem>Copy link</DropdownMenuItem>
+    </>
+  );
+
+  return (
+    <div className="rounded-xl border border-border bg-background p-4">
+      <p className="text-ui font-semibold text-foreground">
+        {candidate ? "Candidate · relative" : "Current · absolute"}
+      </p>
+      <p className="mt-1 min-h-10 text-xs leading-5 text-muted-foreground">
+        {candidate
+          ? "Root and sub-menu share the Overlay role. Dark fill advances before the clamp; light relies on edge and the same shadow."
+          : "Root and sub-menu both hard-code bg-popover, so their effective fill cannot respond to nesting."}
+      </p>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button className="mt-3" variant={candidate ? "default" : "outline"}>
+            Open {candidate ? "candidate" : "current"} menu
+          </Button>
+        </DropdownMenuTrigger>
+        {candidate ? (
+          <CandidateDropdownContent>{rootItems}</CandidateDropdownContent>
+        ) : (
+          <DropdownMenuContent>{rootItems}</DropdownMenuContent>
+        )}
+      </DropdownMenu>
+      <Evidence>Open the menu, then point at “Move to” to inspect the nested surface.</Evidence>
+    </div>
+  );
+}
+
+function NextProofPage() {
   return (
     <div className="space-y-10">
       <Section
-        eyebrow="Migration"
-        title="A preservation-first sequence, not a reskin"
-        description="Each phase is independently useful and reviewable. Production theming, runtime semantics, IA, and terminal ownership remain untouched unless a later slice explicitly needs them."
+        eyebrow="One falsifiable proof"
+        title="Apply a Surface primitive to dropdown sub-menus only"
+        description="The first production slice should answer one question: can a real nested dropdown remain legibly separated from its substrate while keeping one stable overlay shadow? Dark fill may advance before its clamp; light fill may already be clamped and rely on edge plus shadow. If neither appearance reads, stop before building a general surface system."
       >
-        <div className="space-y-3">
-          {phases.map((phase) => (
-            <article
-              key={phase.phase}
-              className="grid gap-3 rounded-xl border border-border bg-card p-4 shadow-[var(--shadow-raised)] md:grid-cols-[3rem_12rem_1fr]"
-            >
-              <span className="flex size-8 items-center justify-center rounded-full bg-primary/15 font-mono text-xs text-primary-text">
-                {phase.phase}
-              </span>
-              <h3 className="text-sm font-semibold text-foreground">{phase.title}</h3>
-              <div>
-                <p className="text-xs leading-5 text-muted-foreground">{phase.scope}</p>
-                <p className="mt-2 text-label leading-4 text-foreground">
-                  <strong>Proof:</strong> {phase.proof}
-                </p>
-              </div>
-            </article>
-          ))}
+        <div className="grid gap-4 lg:grid-cols-2">
+          <SurfaceProofMenu />
+          <SurfaceProofMenu candidate />
         </div>
+        <div className="rounded-xl border border-primary/35 bg-primary/8 p-5 shadow-[var(--shadow-raised)]">
+          <div className="grid gap-4 md:grid-cols-[10rem_1fr]">
+            <div>
+              <p className="font-mono text-label uppercase text-primary-text">Surface proof 01</p>
+              <p className="mt-2 text-sm font-semibold text-foreground">Dropdown → Sub-menu</p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {[
+                [
+                  "Scope",
+                  "Surface/Substrate seam plus root and nested Dropdown content. No palette rewrite.",
+                ],
+                [
+                  "Appearance",
+                  "Dark fill changes before clamp; warm light may separate with edge and shadow alone.",
+                ],
+                ["Shadow", "One overlay recipe remains unchanged at root and nested depth."],
+                [
+                  "Stop rule",
+                  "If the real collapse is not reproduced or fixed, retire the abstraction.",
+                ],
+              ].map(([label, copy]) => (
+                <div key={label} className="rounded-lg border border-border bg-background p-3">
+                  <p className="font-mono text-label uppercase text-muted-foreground">{label}</p>
+                  <p className="mt-1 text-xs leading-5 text-foreground">{copy}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        <Evidence>
+          apps/desktop/src/renderer/src/components/ui/dropdown-menu.tsx:26 ·
+          apps/desktop/src/renderer/src/components/ui/dropdown-menu.tsx:204
+        </Evidence>
       </Section>
 
-      <Section eyebrow="Discrete work packages" title="The first implementation should stay narrow">
-        <div className="grid gap-3 md:grid-cols-2">
+      <Section eyebrow="Open decisions" title="The Lab decides before architecture expands">
+        <div className="overflow-hidden rounded-xl border border-border bg-background">
           {[
             [
-              "DS-1 · Density contract",
-              "Add preference, provider, token maps, and a primitive gallery. No feature migration.",
+              "Control height",
+              "Open",
+              "Compare 36/28 and 28/24 on real primitives and the App Shell.",
             ],
-            [
-              "DS-2 · Contextual elevation",
-              "Add substrate context and migrate Popover + Dialog as the proof pair.",
-            ],
-            [
-              "DS-3 · Control family",
-              "Unify Button, Input, Select, menu rows, icons, and radius roles.",
-            ],
-            [
-              "DS-4 · Board + ticket rail",
-              "First product migration at normal/compact and 940/1280 widths.",
-            ],
-            [
-              "DS-5 · Settings + chat",
-              "Remove redundant framing/copy and apply async state gallery rules.",
-            ],
-            [
-              "DS-6 · Motion corrections",
-              "Execute only vetted high-leverage motion plans after feel checks.",
-            ],
-          ].map(([name, copy]) => (
-            <div key={name} className="rounded-xl border border-border bg-background p-4">
-              <p className="text-ui font-semibold text-foreground">{name}</p>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">{copy}</p>
+            ["Light elevation", "Direction", "Warm base, one fill lift, then shadow/edge/scrim."],
+            ["Dark elevation", "Direction", "Relative fill lifting with an explicit clamp."],
+            ["Density transport", "Direction", "Global html attribute and CSS variables first."],
+            ["Typography", "Guardrail", "Content scale fixed; compact UI type remains optional."],
+            ["Motion", "Correction", "Repeated tool disclosure becomes instant."],
+          ].map(([decision, status, next]) => (
+            <div
+              key={decision}
+              className="grid gap-2 border-b border-border/60 px-4 py-3 last:border-0 sm:grid-cols-[9rem_7rem_1fr] sm:items-center"
+            >
+              <p className="text-ui font-semibold text-foreground">{decision}</p>
+              <span className="w-fit rounded-full bg-secondary px-2 py-0.5 font-mono text-label text-muted-foreground">
+                {status}
+              </span>
+              <p className="text-xs leading-5 text-muted-foreground">{next}</p>
             </div>
           ))}
         </div>
+        <Button asChild variant="outline">
+          <a href="#app-shell">Judge the size fork in the App Shell</a>
+        </Button>
       </Section>
 
       <Section eyebrow="Boundaries" title="What this proposal intentionally does not change">
@@ -1312,6 +1409,8 @@ function RoadmapPage() {
               "Terminal mounting, scaling, or editor-specific zoom",
               "Automatic density changes based on window width",
               "Decorative motion on frequent keyboard interactions",
+              "Eight numeric surface levels as public component API",
+              "A multi-phase migration plan before proof 01 passes",
             ].map((item) => (
               <div key={item} className="flex gap-2 text-xs leading-5 text-muted-foreground">
                 <span
@@ -1343,8 +1442,8 @@ export default function DesignSystemAuditScratch() {
               Cohesion through context
             </h1>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              A critical codebase audit and an interactive proposal for relative surfaces,
-              region-owned density, semantic shape, and restrained physical motion.
+              A critical codebase audit and an interactive proposal for relative surfaces, CSS-first
+              density, semantic shape, and restrained physical motion.
             </p>
           </div>
           <div className="flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1.5 shadow-[var(--shadow-raised)]">
@@ -1381,7 +1480,7 @@ export default function DesignSystemAuditScratch() {
         {page === "motion" ? (
           <MotionPage state={operationState} onStateChange={setOperationState} />
         ) : null}
-        {page === "roadmap" ? <RoadmapPage /> : null}
+        {page === "proof" ? <NextProofPage /> : null}
       </main>
     </div>
   );
