@@ -13,6 +13,7 @@ function fields(overrides: Partial<ComposerFields> = {}): ComposerFields {
     body: "",
     labels: [],
     usesWorktree: true,
+    baseBranch: "main",
     ...overrides,
   };
 }
@@ -69,9 +70,23 @@ describe("runPlainCreate", () => {
       body: "## Body",
       labels: ["bug"],
       usesWorktree: true,
+      baseBranch: "main",
     });
     expect(deps.toastSuccess).toHaveBeenCalledWith("VC-12 created");
     expect(deps.startSession).not.toHaveBeenCalled();
+  });
+
+  it("records no base branch for a ticket that works in the project checkout", async () => {
+    const deps = fakeDeps();
+
+    await runPlainCreate(fields({ usesWorktree: false, baseBranch: "develop" }), deps);
+
+    expect(deps.addTicket).toHaveBeenCalledWith(
+      "p1",
+      "backlog",
+      "A ticket",
+      expect.objectContaining({ usesWorktree: false, baseBranch: null }),
+    );
   });
 
   it("reports not-created and skips the toast when the create fails", async () => {
@@ -127,6 +142,24 @@ describe("runKickoff", () => {
       "doing",
       "A ticket",
       expect.objectContaining({ preferredHarnessId: "codex" }),
+    );
+  });
+
+  it("carries the chosen base branch into the kickoff create", async () => {
+    const deps = fakeDeps({
+      addTicket: vi.fn<SubmitDeps["addTicket"]>(async () => madeTicket({ id: "tk" })),
+    });
+
+    await runKickoff(fields({ baseBranch: "origin/main" }), deps, {
+      createMore: false,
+      harnessId: "codex",
+    });
+
+    expect(deps.addTicket).toHaveBeenCalledWith(
+      "p1",
+      "doing",
+      "A ticket",
+      expect.objectContaining({ baseBranch: "origin/main" }),
     );
   });
 

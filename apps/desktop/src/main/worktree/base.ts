@@ -16,8 +16,8 @@ export interface BaseResolution {
   name: string;
   /**
    * The ref `git worktree add -b <branch> <path> <startPoint>` branches from —
-   * the local branch name when it exists, else `refs/remotes/origin/<name>`,
-   * else the bare name (letting git surface a meaningful error).
+   * the local branch name when it exists, else the remote-tracking ref, else
+   * the bare name (letting git surface a meaningful error).
    */
   startPoint: string;
 }
@@ -55,6 +55,20 @@ export function resolveBaseBranch(
   if (refExists(git, input.projectPath, `refs/heads/${name}`)) {
     return { name, startPoint: name };
   }
+
+  // A base picked from the remote-tracking list ("origin/main") names the same
+  // BRANCH as its local counterpart; the prefix only says to start from
+  // origin's snapshot of it rather than from the local head. Stamping the
+  // prefixed form onto the ticket would hand every later reader a ref the
+  // remote does not have — `fetchBase` would run `git fetch origin
+  // origin/main` — so the prefix is resolved into a start point here and never
+  // persisted. Checked AFTER refs/heads so a local branch literally named
+  // `origin/main` still wins as itself.
+  const remoteTracking = `refs/remotes/${name}`;
+  if (name.includes("/") && refExists(git, input.projectPath, remoteTracking)) {
+    return { name: name.slice(name.indexOf("/") + 1), startPoint: remoteTracking };
+  }
+
   const remoteRef = `refs/remotes/origin/${name}`;
   if (refExists(git, input.projectPath, remoteRef)) {
     return { name, startPoint: remoteRef };

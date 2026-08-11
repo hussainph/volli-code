@@ -62,6 +62,42 @@ describe("resolveBaseBranch", () => {
     ).toEqual({ name: "main", startPoint: "refs/remotes/origin/main" });
   });
 
+  it("strips the remote prefix off a base picked from the remote-tracking list", () => {
+    // The composer's base chip offers `origin/main`; what gets STAMPED is
+    // `main`, so later readers (`git fetch origin <base>`) name a ref the
+    // remote actually has, while the worktree still starts from origin's tip.
+    const { git } = gitWithRefs(new Set(["refs/heads/main", "refs/remotes/origin/main"]));
+    expect(
+      resolveBaseBranch(git, {
+        projectPath: "/repo",
+        ticketBaseBranch: "origin/main",
+        projectBaseBranch: null,
+      }),
+    ).toEqual({ name: "main", startPoint: "refs/remotes/origin/main" });
+  });
+
+  it("keeps a slashed base that is a real local branch as itself", () => {
+    const { git } = gitWithRefs(new Set(["refs/heads/feature/x"]));
+    expect(
+      resolveBaseBranch(git, {
+        projectPath: "/repo",
+        ticketBaseBranch: "feature/x",
+        projectBaseBranch: null,
+      }),
+    ).toEqual({ name: "feature/x", startPoint: "feature/x" });
+  });
+
+  it("preserves a slashed branch name under a remote prefix", () => {
+    const { git } = gitWithRefs(new Set(["refs/remotes/origin/feature/x"]));
+    expect(
+      resolveBaseBranch(git, {
+        projectPath: "/repo",
+        ticketBaseBranch: "origin/feature/x",
+        projectBaseBranch: null,
+      }),
+    ).toEqual({ name: "feature/x", startPoint: "refs/remotes/origin/feature/x" });
+  });
+
   it("returns the bare name as start point when neither local nor remote ref exists", () => {
     const { git } = gitWithRefs(new Set());
     expect(

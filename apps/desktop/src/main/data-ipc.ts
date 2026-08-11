@@ -359,6 +359,7 @@ export function registerDataIpcHandlers(
             labels: input.labels,
             usesWorktree: input.usesWorktree,
             preferredHarnessId: input.preferredHarnessId,
+            baseBranch: input.baseBranch,
           },
           { now, actor: { kind: "user" } },
         ),
@@ -587,7 +588,7 @@ export function registerDataIpcHandlers(
 
     "volli:worktree-branches": (input: ProjectIdInput): WorktreeBranchesResult => {
       const result = listBranches(worktreeDeps(db), input.projectId);
-      return result.ok ? { ok: true, branches: result.value } : { ok: false, error: result.error };
+      return result.ok ? { ok: true, ...result.value } : { ok: false, error: result.error };
     },
 
     "volli:worktree-orphans": async (

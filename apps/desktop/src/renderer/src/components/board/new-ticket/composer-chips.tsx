@@ -1,3 +1,4 @@
+import type { HarnessId, WorktreeBranchListing } from "@volli/shared";
 import {
   TICKET_PRIORITIES,
   TICKET_PRIORITY_LABELS,
@@ -7,6 +8,9 @@ import {
   type TicketStatus,
 } from "@volli/shared";
 
+import { ComposerBranchRow } from "@renderer/components/board/new-ticket/composer-branch";
+import { composerChipClass } from "@renderer/components/board/new-ticket/composer-chip";
+import { ComposerHarnessChip } from "@renderer/components/board/new-ticket/composer-harness";
 import { ComposerLabels } from "@renderer/components/board/new-ticket/composer-labels";
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import { Button } from "@renderer/components/ui/button";
@@ -17,12 +21,6 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
-import { Switch } from "@renderer/components/ui/switch";
-
-/** A rounded-full ghost chip trigger — the composer's quiet metadata affordance. */
-function chipClass() {
-  return "gap-1.5 border border-border px-2.5 text-xs text-muted-foreground";
-}
 
 function StatusChip({
   status,
@@ -34,7 +32,7 @@ function StatusChip({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" className={chipClass()}>
+        <Button variant="ghost" size="sm" className={composerChipClass()}>
           {TICKET_STATUS_LABELS[status]}
         </Button>
       </DropdownMenuTrigger>
@@ -64,7 +62,7 @@ function PriorityChip({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" className={chipClass()}>
+        <Button variant="ghost" size="sm" className={composerChipClass()}>
           {/* aria-hidden: the indicator already carries a "Priority: X" label,
               which would pollute the chip/option's accessible name (its own
               text label is the name that matters). */}
@@ -94,9 +92,14 @@ function PriorityChip({
 }
 
 /**
- * The composer's metadata chip row: Status, Priority, Labels, and the Worktree
- * toggle (binds `usesWorktree`, default on). All local-state driven — nothing
- * is persisted until the ticket is created.
+ * The composer's metadata row: what the ticket IS on the left — Status,
+ * Priority, Labels, the terminal harness — and where its work will HAPPEN on
+ * the right, as one `base → destination` statement.
+ *
+ * The split is the point. Everything on the left describes the ticket; the
+ * right names the git ground it lands on, and the two never interleave, so the
+ * row can be read as two thoughts instead of six controls. All of it is local
+ * state — nothing is persisted until the ticket is created.
  */
 export function ComposerChips({
   projectId,
@@ -106,6 +109,12 @@ export function ComposerChips({
   onPriorityChange,
   labels,
   onLabelsChange,
+  harnessId,
+  onHarnessChange,
+  branchListing,
+  branchError,
+  baseBranch,
+  onBaseBranchChange,
   usesWorktree,
   onUsesWorktreeChange,
 }: {
@@ -116,22 +125,29 @@ export function ComposerChips({
   onPriorityChange: (priority: TicketPriority) => void;
   labels: string[];
   onLabelsChange: (labels: string[]) => void;
+  harnessId: HarnessId;
+  onHarnessChange: (harnessId: HarnessId) => void;
+  branchListing: WorktreeBranchListing | null;
+  branchError: string | null;
+  baseBranch: string | null;
+  onBaseBranchChange: (branch: string) => void;
   usesWorktree: boolean;
   onUsesWorktreeChange: (usesWorktree: boolean) => void;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-wrap items-center gap-1.5">
       <StatusChip status={status} onChange={onStatusChange} />
       <PriorityChip priority={priority} onChange={onPriorityChange} />
       <ComposerLabels projectId={projectId} value={labels} onChange={onLabelsChange} />
-      <label className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
-        <Switch
-          aria-label="Worktree"
-          checked={usesWorktree}
-          onCheckedChange={onUsesWorktreeChange}
-        />
-        Worktree
-      </label>
+      <ComposerHarnessChip harnessId={harnessId} onChange={onHarnessChange} />
+      <ComposerBranchRow
+        listing={branchListing}
+        error={branchError}
+        baseBranch={baseBranch}
+        onBaseBranchChange={onBaseBranchChange}
+        usesWorktree={usesWorktree}
+        onUsesWorktreeChange={onUsesWorktreeChange}
+      />
     </div>
   );
 }

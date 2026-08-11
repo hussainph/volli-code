@@ -498,7 +498,12 @@ const api = {
     /** The "Remove worktree…" escape hatch; `force` discards uncommitted work when the caller has confirmed. */
     remove: (ticketId: string, force: boolean): Promise<WorktreeRemoveResult> =>
       invoke("volli:worktree-remove", { ticketId, force }),
-    /** A project's local branch names, for the base-branch picker. */
+    /**
+     * A project's branch refs for the base-branch pickers: local heads, the
+     * checkout's own branch, remote-tracking refs, and when those last moved
+     * (see `WorktreeBranchListing` — the remote half is a snapshot, not a live
+     * reading, and the pickers label it as one).
+     */
     branches: (projectId: string): Promise<WorktreeBranchesResult> =>
       invoke("volli:worktree-branches", { projectId }),
     /**

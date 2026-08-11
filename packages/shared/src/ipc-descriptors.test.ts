@@ -208,9 +208,18 @@ describe("DATA_IPC descriptor table", () => {
             labels: ["a", "b"],
             usesWorktree: false,
             preferredHarnessId: "codex",
+            baseBranch: "origin/main",
           },
         ]),
       ).toBe(true);
+    });
+
+    it("accepts an explicitly null baseBranch (leave it to worktree-time detection)", () => {
+      expect(guard([{ ...valid, baseBranch: null }])).toBe(true);
+    });
+
+    it("rejects a non-string baseBranch when present", () => {
+      expect(guard([{ ...valid, baseBranch: 7 }])).toBe(false);
     });
 
     it("rejects a non-object payload", () => {

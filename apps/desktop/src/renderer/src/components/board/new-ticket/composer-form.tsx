@@ -2,9 +2,12 @@ import * as React from "react";
 import { errorMessage, type Project, type TicketPriority, type TicketStatus } from "@volli/shared";
 import { toast } from "sonner";
 
+import { resolveBaseBranch } from "@renderer/components/board/new-ticket/branch-picker";
+import { useBranchListing } from "@renderer/components/board/new-ticket/composer-branch";
 import { ComposerBreadcrumb } from "@renderer/components/board/new-ticket/composer-breadcrumb";
 import { ComposerChips } from "@renderer/components/board/new-ticket/composer-chips";
 import { ComposerFooter } from "@renderer/components/board/new-ticket/composer-footer";
+import { useActiveHarnessLabel } from "@renderer/components/board/new-ticket/composer-harness";
 import { clearDraft, loadDraft, saveDraft } from "@renderer/components/board/new-ticket/draft";
 import {
   type ComposerFields,
@@ -74,13 +77,33 @@ export function ComposerForm({
   const [usesWorktree, setUsesWorktree] = React.useState(restored?.usesWorktree ?? true);
   const [createMore, setCreateMore] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
+  // The chip's own choice, or null for "whatever the project's default is".
+  // Never read directly — `baseBranch` below is the resolved answer.
+  const [chosenBase, setChosenBase] = React.useState<string | null>(restored?.baseBranch ?? null);
+
+  // The target project's refs, re-read per open and per retarget. `null` while
+  // in flight; `resolveBaseBranch` holds the chip's choice until they land and
+  // then drops one the project turns out not to have — the same revalidation
+  // the restored `target` gets above, for the same reason (a draft can outlive
+  // the branch it named).
+  const { listing: branchListing, error: branchError } = useBranchListing(target.id);
+  const baseBranch = resolveBaseBranch(chosenBase, branchListing);
 
   // Implicit save: every field change re-caches the draft (the storage layer
   // debounces the SQLite write), so closing the dialog ANY way keeps the work.
   // Content-empty state clears the slot instead (erasing = discarding).
   React.useEffect(() => {
-    saveDraft({ projectId: target.id, status, priority, title, body, labels, usesWorktree });
-  }, [target.id, status, priority, title, body, labels, usesWorktree]);
+    saveDraft({
+      projectId: target.id,
+      status,
+      priority,
+      title,
+      body,
+      labels,
+      usesWorktree,
+      baseBranch: chosenBase,
+    });
+  }, [target.id, status, priority, title, body, labels, usesWorktree, chosenBase]);
 
   const titleRef = React.useRef<HTMLInputElement>(null);
   const editorRef = React.useRef<MonacoDocumentEditorHandle>(null);
@@ -109,6 +132,9 @@ export function ComposerForm({
   );
 
   const canSubmit = title.trim() !== "" && !submitting;
+  // The harness lives in the chip row now; the kickoff button still names it,
+  // which is what keeps the two legible as a pair across the footer boundary.
+  const harnessLabel = useActiveHarnessLabel(lastHarnessId);
 
   const currentFields = React.useCallback(
     (): ComposerFields => ({
@@ -120,8 +146,9 @@ export function ComposerForm({
       body,
       labels,
       usesWorktree,
+      baseBranch,
     }),
-    [target, status, priority, title, body, labels, usesWorktree],
+    [target, status, priority, title, body, labels, usesWorktree, baseBranch],
   );
 
   const deps = React.useMemo<SubmitDeps>(
@@ -257,6 +284,12 @@ export function ComposerForm({
           onPriorityChange={setPriority}
           labels={labels}
           onLabelsChange={setLabels}
+          harnessId={lastHarnessId}
+          onHarnessChange={(harnessId) => useUiStore.getState().setLastHarnessId(harnessId)}
+          branchListing={branchListing}
+          branchError={branchError}
+          baseBranch={baseBranch}
+          onBaseBranchChange={setChosenBase}
           usesWorktree={usesWorktree}
           onUsesWorktreeChange={setUsesWorktree}
         />
@@ -268,8 +301,7 @@ export function ComposerForm({
           onInsertRef={(relPath) => editorRef.current?.insertAtCursor(`@${relPath}`)}
           createMore={createMore}
           onCreateMoreChange={setCreateMore}
-          harnessId={lastHarnessId}
-          onHarnessChange={(harnessId) => useUiStore.getState().setLastHarnessId(harnessId)}
+          harnessLabel={harnessLabel}
           onCreate={() => void handleCreate()}
           onKickoff={() => void handleKickoff()}
           disabled={!canSubmit}

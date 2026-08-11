@@ -301,6 +301,28 @@ describe("volli:ticket-create — body, labels, usesWorktree", () => {
     expect(hydrated?.usesWorktree).toBe(false);
   });
 
+  it("persists the composer's chosen baseBranch, and rejects a name git could not take", () => {
+    const projectId = createProject();
+    const result = invoke<TicketResult>("volli:ticket-create", {
+      projectId,
+      status: "todo",
+      title: "Based on a release branch",
+      baseBranch: "release/1.4",
+    });
+    if (!result.ok) throw new Error(result.error);
+    expect(result.ticket.baseBranch).toBe("release/1.4");
+
+    // The command layer's branch-name validation is the shared gate; a throw
+    // there reaches the renderer as a failed Result, never as a silent create.
+    const bad = invoke<TicketResult>("volli:ticket-create", {
+      projectId,
+      status: "todo",
+      title: "Based on nonsense",
+      baseBranch: "..",
+    });
+    expect(bad).toEqual({ ok: false, error: "Invalid base branch name" });
+  });
+
   it("defaults body/labels/usesWorktree when omitted (backward-compatible)", () => {
     const projectId = createProject();
     const result = invoke<TicketResult>("volli:ticket-create", {
@@ -1138,14 +1160,28 @@ describe("volli:worktree-remove", () => {
 });
 
 describe("volli:worktree-branches", () => {
-  it("returns the project's local branch names", () => {
-    vi.mocked(listBranches).mockReturnValue({ ok: true, value: ["main", "dev"] });
+  it("flattens the listing onto the result envelope", () => {
+    vi.mocked(listBranches).mockReturnValue({
+      ok: true,
+      value: {
+        branches: ["main", "dev"],
+        current: "dev",
+        remotes: ["origin/main"],
+        fetchedAt: 1_700_000_000_000,
+      },
+    });
 
     const result = invoke<WorktreeBranchesResult>("volli:worktree-branches", {
       projectId: "project-1",
     });
 
-    expect(result).toEqual({ ok: true, branches: ["main", "dev"] });
+    expect(result).toEqual({
+      ok: true,
+      branches: ["main", "dev"],
+      current: "dev",
+      remotes: ["origin/main"],
+      fetchedAt: 1_700_000_000_000,
+    });
   });
 
   it("rejects a non-string projectId", () => {

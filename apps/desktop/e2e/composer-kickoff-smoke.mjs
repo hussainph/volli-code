@@ -5,9 +5,11 @@
  * primary action. Its behaviour (per the ui/ticket-creation-fix spec):
  *   • accessible name starts with "Create & start" and carries the current
  *     harness label, e.g. "Create & start · Claude Code";
- *   • a neighboring "Terminal harness" picker (visible label = the active
- *     one) opens a menu of Claude Code / Codex / OpenCode that switches which
- *     TUI the booted terminal launches;
+ *   • the "Terminal harness" picker — a chip in the metadata row, no longer a
+ *     footer neighbour, since it describes the ticket rather than modifying
+ *     this button (visible label = the active one) — opens a menu of Claude
+ *     Code / Codex / OpenCode that switches which TUI the booted terminal
+ *     launches; the button's accessible name is what still pairs the two;
  *   • clicking it creates the ticket DIRECTLY in Doing (regardless of the Status
  *     chip), navigates into the ticket detail view, creates + focuses a terminal
  *     session tab, and AUTO-LAUNCHES the harness CLI inside that session's shell

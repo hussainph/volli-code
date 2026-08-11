@@ -51,6 +51,12 @@ export interface BoardGateway {
     usesWorktree?: boolean;
     /** The ticket's persisted default harness (kickoff choice). Defaults to the DB default. */
     preferredHarnessId?: HarnessId;
+    /**
+     * The ref the ticket's worktree branches from (the composer's base-branch
+     * chip). Omitted leaves it unset and `resolveBaseBranch` detects the
+     * project default at worktree time, as it always has.
+     */
+    baseBranch?: string | null;
   }): Promise<TicketResult>;
   moveTicket(input: {
     projectId: string;
@@ -193,6 +199,8 @@ interface BoardState {
       labels?: string[];
       usesWorktree?: boolean;
       preferredHarnessId?: HarnessId;
+      /** The ref the worktree branches from; omitted leaves it to worktree-time detection. */
+      baseBranch?: string | null;
     },
   ): Promise<Ticket | null>;
   setTicketPriority(projectId: string, ticketId: string, priority: TicketPriority): Promise<void>;
@@ -510,6 +518,7 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
               labels: options?.labels,
               usesWorktree: options?.usesWorktree,
               preferredHarnessId: options?.preferredHarnessId,
+              baseBranch: options?.baseBranch,
             }),
         );
         if (!result) return null;

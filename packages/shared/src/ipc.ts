@@ -75,6 +75,13 @@ export interface TicketCreateInput {
   usesWorktree?: boolean;
   /** The ticket's persisted default harness (set on kickoff); defaults to the DB default. */
   preferredHarnessId?: HarnessId;
+  /**
+   * The ref the ticket's worktree branches from, chosen in the composer.
+   * Omitted (or `null`) leaves it unset, and `resolveBaseBranch` detects the
+   * project's default at worktree time — the behavior every caller had before
+   * the composer could name one. The command layer re-validates the name.
+   */
+  baseBranch?: string | null;
 }
 
 /** `volli:ticket-move` — runs the shared board move + persists it. */
@@ -1172,8 +1179,30 @@ export type WorktreeDiskState = "present" | "missing" | "unregistered";
 /** Ack for a `volli:worktree-remove` (the "Remove worktree…" escape hatch). */
 export type WorktreeRemoveResult = Result;
 
-/** A project's local branch names — returned by `volli:worktree-branches` for the base-branch picker. */
-export type WorktreeBranchesResult = Result<{ branches: string[] }>;
+/**
+ * A project's branch refs, for the base-branch pickers (the Details rail's and
+ * the composer's).
+ *
+ * `remotes` is a SNAPSHOT, not a live reading: a remote-tracking ref only moves
+ * on a fetch, so the list is exactly as old as {@link
+ * WorktreeBranchListing.fetchedAt} and a picker has to say so. Nothing in the
+ * worktree pipeline fetches on the user's behalf before branching, so a base
+ * chosen from `remotes` inherits that same age — which is the whole reason this
+ * timestamp crosses the boundary instead of staying a main-process detail.
+ */
+export interface WorktreeBranchListing {
+  /** Local branch short names (`refs/heads`), most-recently-committed first. */
+  branches: string[];
+  /** The project checkout's own branch; `null` when detached or unreadable. */
+  current: string | null;
+  /** Remote-tracking short names in `origin/main` form, as of {@link WorktreeBranchListing.fetchedAt}. */
+  remotes: string[];
+  /** Epoch ms of the repo's last fetch (`FETCH_HEAD`'s mtime); `null` when it has never fetched. */
+  fetchedAt: number | null;
+}
+
+/** A project's branch refs — returned by `volli:worktree-branches` for the base-branch pickers. */
+export type WorktreeBranchesResult = Result<WorktreeBranchListing>;
 
 /** One orphan the sweep refused to remove, for the Settings → Worktrees list. */
 export interface DirtyWorktreeOrphan {

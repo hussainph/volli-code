@@ -32,6 +32,14 @@ export interface ComposerDraft {
   body: string;
   labels: string[];
   usesWorktree: boolean;
+  /**
+   * The chosen base ref, or `null` for "whatever the project's default is".
+   * Optional on read so a draft written before this field existed still
+   * restores — and revalidated against the live refs on restore (the caller's
+   * job, {@link import("./branch-picker").resolveBaseBranch}), because a branch
+   * can be deleted between two app launches.
+   */
+  baseBranch?: string | null;
 }
 
 const DRAFT_KEY = "volli:new-ticket-draft";
@@ -72,7 +80,10 @@ function isComposerDraft(value: unknown): value is ComposerDraft {
     typeof draft["body"] === "string" &&
     Array.isArray(draft["labels"]) &&
     draft["labels"].every((label) => typeof label === "string") &&
-    typeof draft["usesWorktree"] === "boolean"
+    typeof draft["usesWorktree"] === "boolean" &&
+    (draft["baseBranch"] === undefined ||
+      draft["baseBranch"] === null ||
+      typeof draft["baseBranch"] === "string")
   );
 }
 

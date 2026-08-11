@@ -162,7 +162,13 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
         (input["body"] === undefined || typeof input["body"] === "string") &&
         (input["labels"] === undefined || isStringArray(input["labels"])) &&
         (input["usesWorktree"] === undefined || typeof input["usesWorktree"] === "boolean") &&
-        (input["preferredHarnessId"] === undefined || isHarnessIdShape(input["preferredHarnessId"]))
+        (input["preferredHarnessId"] === undefined ||
+          isHarnessIdShape(input["preferredHarnessId"])) &&
+        // Shape only — the NAME is validated by `createTicketCommand`, which is
+        // the one gate both doors (socket and IPC) share.
+        (input["baseBranch"] === undefined ||
+          input["baseBranch"] === null ||
+          typeof input["baseBranch"] === "string")
       );
     },
     invalidError: "Invalid ticket",
