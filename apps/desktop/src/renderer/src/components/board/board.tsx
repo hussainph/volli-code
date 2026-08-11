@@ -64,8 +64,29 @@ const boardCollision: CollisionDetection = (args) => {
 // Never mutated (every board op is pure); typed mutable to match the store.
 const EMPTY_TICKETS: Ticket[] = [];
 
-/** The kanban board: columns scroll vertically; the canvas pans horizontally. */
-export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPrefix: string }) {
+/**
+ * The kanban board: columns scroll vertically; the canvas pans horizontally.
+ *
+ * Memoized, and the two string props are why it can be: the board is the largest
+ * subtree in the window and it hangs under `AppShell`, which re-renders on app
+ * chrome state — including `sidebarWidth`, written on every pointermove of the
+ * resize grip. Memo blocks parent-driven renders only, never a hook's own
+ * update, so the board's store subscriptions behave exactly as before.
+ *
+ * Honest about what this does NOT buy: profiling a 150-ticket board during a
+ * sidebar drag showed the per-card `React.memo`s were ALREADY holding — the
+ * cards themselves did not re-render either way. The cost that scales with
+ * ticket count is the Radix context menu and dialogs each card mounts, which
+ * re-render from provider context above this boundary and so are untouched by
+ * it. This is a cheap correct boundary, not the fix for that.
+ */
+export const Board = React.memo(function Board({
+  projectId,
+  ticketPrefix,
+}: {
+  projectId: string;
+  ticketPrefix: string;
+}) {
   const storeTickets = useBoardStore((state) => state.ticketsByProject[projectId]) ?? EMPTY_TICKETS;
   const filter = useBoardStore((state) => state.filterByProject[projectId]) ?? EMPTY_TICKET_FILTER;
   // View mode and sort are per-workspace, session-only (same pattern as
@@ -322,4 +343,4 @@ export function Board({ projectId, ticketPrefix }: { projectId: string; ticketPr
       </DndContext>
     </div>
   );
-}
+});
