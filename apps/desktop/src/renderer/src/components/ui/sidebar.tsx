@@ -30,12 +30,24 @@ const SIDEBAR_WIDTH_MOBILE = "18rem";
 const SIDEBAR_WIDTH_ICON = "3rem";
 const SIDEBAR_KEYBOARD_SHORTCUT = "b";
 
-type SidebarToggleOptions = {
-  /** Repeated keyboard commands should update immediately, without waiting on
-   * decorative motion. Pointer-triggered toggles keep the short transition. */
-  instant?: boolean;
-};
-
+/*
+ * There WAS a keyboard-instant mode here: ⌘B passed `{ instant: true }`, which
+ * flipped a local `motionMode` onto the wrapper's `data-motion` for two frames
+ * so the collapse snapped instead of animating. It is gone, because it never
+ * ran. `AppShell` also writes `data-motion` on this same element, and it spreads
+ * its props AFTER this component's own attributes — so its `undefined` cleared
+ * the flag on every render this primitive tried to set it. The escape hatch was
+ * dead in the shipped app from the day the shell claimed the attribute, and ⌘B
+ * has always animated exactly like the chrome-band trigger.
+ *
+ * Removed rather than repaired, and that is the decision, not an accident of
+ * deleting the easier half: ⌘B and the trigger agreeing is the behaviour the app
+ * has, the one the hover-sidebar scratch settled, and the one the shell's own
+ * `data-motion` (terminal focus, rail geometry) is built to interrupt. A second
+ * writer for the same attribute, whose whole contract is "the other writer must
+ * not be saying anything right now", is a race waiting for a reason to happen.
+ * The shell is the single writer.
+ */
 type SidebarContextProps = {
   state: "expanded" | "collapsed";
   open: boolean;
@@ -43,7 +55,7 @@ type SidebarContextProps = {
   openMobile: boolean;
   setOpenMobile: (open: boolean) => void;
   isMobile: boolean;
-  toggleSidebar: (options?: SidebarToggleOptions) => void;
+  toggleSidebar: () => void;
 };
 
 const SidebarContext = React.createContext<SidebarContextProps | null>(null);
@@ -72,8 +84,6 @@ function SidebarProvider({
 }) {
   const isMobile = useIsMobile();
   const [openMobile, setOpenMobile] = React.useState(false);
-  const [motionMode, setMotionMode] = React.useState<"animated" | "instant">("animated");
-  const motionFrameRef = React.useRef<number | null>(null);
 
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.
@@ -94,48 +104,21 @@ function SidebarProvider({
     [setOpenProp, open],
   );
 
-  const cancelMotionReset = React.useCallback(() => {
-    if (motionFrameRef.current === null) return;
-    cancelAnimationFrame(motionFrameRef.current);
-    motionFrameRef.current = null;
-  }, []);
+  const toggleSidebar = React.useCallback(() => {
+    if (isMobile) {
+      setOpenMobile((previous) => !previous);
+    } else {
+      setOpen((previous) => !previous);
+    }
+  }, [isMobile, setOpen]);
 
-  // Helper to toggle the sidebar. Keyboard toggles suppress transition work
-  // for two paint frames, then restore pointer-triggered motion. The pending
-  // frame is always cancelled on re-toggle and unmount.
-  const toggleSidebar = React.useCallback(
-    (options?: SidebarToggleOptions) => {
-      cancelMotionReset();
-
-      if (options?.instant) {
-        setMotionMode("instant");
-        motionFrameRef.current = requestAnimationFrame(() => {
-          motionFrameRef.current = requestAnimationFrame(() => {
-            motionFrameRef.current = null;
-            setMotionMode("animated");
-          });
-        });
-      } else {
-        setMotionMode("animated");
-      }
-
-      if (isMobile) {
-        setOpenMobile((previous) => !previous);
-      } else {
-        setOpen((previous) => !previous);
-      }
-    },
-    [cancelMotionReset, isMobile, setOpen],
-  );
-
-  React.useEffect(() => cancelMotionReset, [cancelMotionReset]);
-
-  // Adds a keyboard shortcut to toggle the sidebar.
+  // Adds a keyboard shortcut to toggle the sidebar. `event.repeat` is still
+  // excluded: a held ⌘B should toggle once, not strobe the shell.
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === SIDEBAR_KEYBOARD_SHORTCUT && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
-        if (!event.repeat) toggleSidebar({ instant: true });
+        if (!event.repeat) toggleSidebar();
       }
     };
 
@@ -168,7 +151,6 @@ function SidebarProvider({
       <TooltipProvider>
         <div
           data-slot="sidebar-wrapper"
-          data-motion={motionMode}
           style={
             {
               "--sidebar-width": SIDEBAR_WIDTH,
@@ -520,8 +502,21 @@ function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">) {
   );
 }
 
+/*
+ * `width,height,padding` are gone from the transition list, and they were not
+ * merely idle. Stock shadcn names them because the icon-collapse changes all
+ * three; this app has no icon presentation left, so nothing ever animates them
+ * on purpose — but a transition does not care why a property changed. Dragging
+ * the resize grip changes the pane's width, which changes every row's width, and
+ * every row in the sidebar then ran its own 100ms width animation for each frame
+ * of the drag. That is a layout animation per row per sample, on the one
+ * interaction that already had a main thread to spare.
+ *
+ * What is left is what actually changes: the fill and ink on hover/active, and
+ * the `active:scale-[0.97]` press.
+ */
 const sidebarMenuButtonVariants = cva(
-  "peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm ring-sidebar-ring outline-hidden transition-[width,height,padding,transform,background-color,color] duration-100 ease-out group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent-veil hover:text-sidebar-accent-foreground focus-visible:ring-2 active:scale-[0.97] active:bg-sidebar-accent-veil active:text-sidebar-accent-foreground motion-reduce:transform-none disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:bg-sidebar-accent-veil data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent-veil data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0",
+  "peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm ring-sidebar-ring outline-hidden transition-[transform,background-color,color] duration-100 ease-out group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent-veil hover:text-sidebar-accent-foreground focus-visible:ring-2 active:scale-[0.97] active:bg-sidebar-accent-veil active:text-sidebar-accent-foreground motion-reduce:transform-none disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:bg-sidebar-accent-veil data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent-veil data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0",
   {
     variants: {
       variant: {

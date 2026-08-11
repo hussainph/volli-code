@@ -61,18 +61,56 @@ const WAITING_COPY: Record<ChatWaitingReason, string> = {
  * bold's 24/256, which at 12px is 0.75px of ink against 1.13px next to a ~1.1px
  * text stem. Coverage is scale-invariant, so growing the glyph could never have
  * fixed the hairline that made it read as a smudge beside its own label.
+ *
+ * A LANE, NOT JUST A FACE. The id has been `font-mono` from the start and it was
+ * not enough: it sits inside `text-label`, which bakes in +0.05em of tracking for
+ * the uppercase sans labels it was drawn for, and tracked-out monospace at 11px
+ * is a font that has given up the one property anybody wants from it. `VLT-14`
+ * measured the same rhythm as the Mona beside it and the whole line read as one
+ * grey phrase — which is exactly what "they all blend together" describes.
+ *
+ * So: {@link ID_LANE} of fixed width with the tracking handed back. The tracking
+ * is what makes it read as a token rather than a word; the lane is what makes a
+ * COLUMN out of it, and a column is the only thing that separates rows rather
+ * than glyphs. Everything after the identity — the `·` on an Active row, the
+ * title on a Previous one — now starts at the same x in every row of the band,
+ * including the ticketless ones, where the globe is centred in the same lane
+ * instead of shunting its row half a word left of its neighbours.
+ *
+ * `ch` rather than px, because in a monospace face `ch` IS the glyph advance:
+ * the lane holds a 4-character prefix and three digits at any type scale, and a
+ * longer prefix grows it rather than clipping. `min-`, so the exceptional
+ * project widens the lane instead of overflowing it.
  */
+const ID_LANE =
+  // Four decisions, none of them cosmetic.
+  //
+  // `inline-flex`, not the inline span this used to be: `min-width` does not
+  // apply to a non-replaced inline box at all, so a lane declared on one is a
+  // lane the browser reads and drops — measured at 0 effect before this.
+  //
+  // `text-label` here rather than on a wrapper, so the identity is one size in
+  // both bands instead of 11px under the Active row's meta line and 12px
+  // inheriting the Previous row's button.
+  //
+  // `font-mono` on the LANE, including the ticketless one that renders a globe
+  // and no text at all, because `ch` resolves against the element's OWN font:
+  // with the family on the id only, the two variants measured 46.2px and 47.3px
+  // and the column the lane exists to make was a pixel out on exactly the rows
+  // that had no id to line up.
+  //
+  // `tracking-normal` last, undoing `text-label`'s baked +0.05em — see above.
+  "inline-flex min-w-[7ch] shrink-0 items-center font-mono text-label tracking-normal";
+
 function RowIdentity({ ticket, ticketPrefix }: { ticket: Ticket | null; ticketPrefix: string }) {
   if (ticket === null) {
     return (
-      <span className="flex shrink-0 items-center">
+      <span className={cn(ID_LANE, "justify-center")}>
         <GlobeIcon weight="bold" aria-label="No ticket" className="size-3" />
       </span>
     );
   }
-  return (
-    <span className="shrink-0 font-mono">{displayTicketId(ticketPrefix, ticket.ticketNumber)}</span>
-  );
+  return <span className={ID_LANE}>{displayTicketId(ticketPrefix, ticket.ticketNumber)}</span>;
 }
 
 /**
@@ -226,9 +264,7 @@ export function PreviousBandRow({
             row's meta line for the smokes' contrast checks. */}
         {row.cleaned ? <span className="sr-only">Cleaned up</span> : null}
         <KindGlyph kind={row.kind} />
-        <span className="text-label">
-          <RowIdentity ticket={row.ticket} ticketPrefix={ticketPrefix} />
-        </span>
+        <RowIdentity ticket={row.ticket} ticketPrefix={ticketPrefix} />
         <span className="min-w-0 flex-1 truncate">{row.title}</span>
         {/* 0 is the model's "nothing durable can date this" sentinel — an age
             drawn from it would read as the epoch, so the row says nothing. */}

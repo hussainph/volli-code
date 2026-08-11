@@ -136,10 +136,28 @@ export function SidebarScrollArea({
   // After layout rather than in an effect: the thumb's height is a fraction of a
   // scrollHeight that only exists once the rows are laid out, and a thumb that
   // appeared one frame late would be a thumb that jumps on first scroll.
+  //
+  // No dependency array, which reads like an oversight and is the opposite. It
+  // covers the one size nothing else can see: the CONTENT's, which changes when
+  // a session joins or leaves the list. The observer below watches the
+  // SCROLLPORT's box, and a scrollport does not resize when the rows inside it
+  // grow — so dropping this would leave the thumb correct about every size
+  // except the one it is a fraction of.
+  //
+  // It was flagged as a forced synchronous layout on every sidebar render, which
+  // it is. What made that expensive was the resize grip writing the width to the
+  // store on every pointermove, re-rendering this subtree once per mouse sample;
+  // the grip now moves the pane in CSS and renders nothing until release
+  // (`sidebar-resize-handle.tsx`), so what is left here is one element read per
+  // real render, holding a correctness guarantee nothing else offers. Kept
+  // deliberately.
   React.useLayoutEffect(measure);
 
   // The sizes React does not render: the window resizing, the grip dragging the
-  // pane wider, the pane's own height changing under the chrome band.
+  // pane wider, the pane's own height changing under the chrome band. During a
+  // drag this is now the ONLY thing that fires, and it fires inside the frame's
+  // own layout pass — a read of fresh geometry rather than a request for a new
+  // one.
   React.useEffect(() => {
     const element = scrollRef.current;
     if (element === null) return;

@@ -31,6 +31,9 @@
  *
  * MOTION. The reveal is transform alone, {@link OPEN_MS} in and {@link CLOSE_MS}
  * out on `--ease-swift`, which IS the iOS drawer curve and this is a drawer.
+ * Where it travels — and what stops it travelling across the workspace rail —
+ * is the panel's own clip, described in app-shell.tsx; the same two constants
+ * time the content's half of a pinned journey, which is why they are exported.
  *
  * A hover-summoned panel is interrupted constantly, and a plain transition
  * handles the DIRECTION change correctly (it retargets from the live value) but
@@ -61,9 +64,9 @@ const SAFE_PAD_X = 32;
 const SAFE_PAD_Y = 16;
 
 /** Drawer tier, fast end — this opens far more often than a modal does. */
-const OPEN_MS = 200;
+export const OPEN_MS = 200;
 /** Exits are the system answering, not the user deciding. Mirror the path, not the clock. */
-const CLOSE_MS = 160;
+export const CLOSE_MS = 160;
 /** Below this a scaled-down reversal stops reading as motion and starts reading as a glitch. */
 const MIN_REVEAL_MS = 90;
 /** Reduced motion keeps a cross-fade, and keeps it short. */
@@ -322,12 +325,45 @@ export function useEdgeReveal({
       timerRef.current = window.setTimeout(closeNow, EXIT_GRACE_MS);
     }
 
+    /**
+     * One evaluation per FRAME, not one per event — and this is a performance
+     * rule, not a taste one.
+     *
+     * `evaluate` hit-tests against live `getBoundingClientRect()`s, which is
+     * what keeps it correct under the content row's `zoom`. But a rect read on
+     * a document with pending style or layout invalidation is a forced
+     * synchronous layout, and a mouse samples at up to 1kHz — so an unthrottled
+     * handler billed the WHOLE WINDOW a layout for every sample, all the time,
+     * whenever the panel was unpinned. Measured in the lab shell (a far smaller
+     * tree than the app's board + transcript + terminals): 600 moves cost 599
+     * layouts and 22ms of layout time, against zero while pinned. That is the
+     * pointer tax, and it was being charged everywhere, for a strip 8px wide.
+     *
+     * Coalescing costs nothing that mattered: the pointer cannot be in two
+     * places within one frame, so only the last sample of a frame could ever
+     * have decided anything, and the arming rule is a 20ms dwell that a
+     * one-frame delay in its first sample cannot change.
+     */
+    let pendingPoint: Point | null = null;
+    let frame: number | null = null;
+
+    function schedule(point: Point): void {
+      pendingPoint = point;
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        const latest = pendingPoint;
+        pendingPoint = null;
+        if (latest !== null) evaluate(latest);
+      });
+    }
+
     function handleMove(event: PointerEvent): void {
       // The hover gate, per event rather than per media query: a touch or a pen
       // tap synthesises a pointermove at the point it landed, and an edge zone
       // that opens on a tap is an edge zone that opens by accident.
       if (event.pointerType !== "mouse") return;
-      evaluate({ x: event.clientX, y: event.clientY });
+      schedule({ x: event.clientX, y: event.clientY });
     }
 
     function handleDown(event: PointerEvent): void {
@@ -345,11 +381,14 @@ export function useEdgeReveal({
     function handleUp(event: PointerEvent): void {
       pointerDownRef.current = false;
       if (event.pointerType !== "mouse") return;
-      evaluate({ x: event.clientX, y: event.clientY });
+      schedule({ x: event.clientX, y: event.clientY });
     }
 
     function handleLeaveWindow(): void {
       if (pointerDownRef.current) return;
+      // Drop whatever the last move was still going to say. It described a
+      // point inside the window, and the pointer is no longer in one.
+      pendingPoint = null;
       insideRef.current = false;
       if (phaseRef.current === "arming") closeNow();
     }
@@ -369,6 +408,7 @@ export function useEdgeReveal({
     document.addEventListener("pointerleave", handleLeaveWindow);
     window.addEventListener("keydown", handleKey);
     return () => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
       window.removeEventListener("pointermove", handleMove);
       window.removeEventListener("pointerdown", handleDown, { capture: true });
       window.removeEventListener("pointerup", handleUp, { capture: true });
