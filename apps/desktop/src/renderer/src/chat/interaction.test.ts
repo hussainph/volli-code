@@ -1,4 +1,10 @@
-import type { SessionInteraction, SessionInteractionPrompt } from "@volli/shared";
+import {
+  SESSION_ESCALATION_OPTIONS,
+  SESSION_ESCALATION_STOP_ID,
+  type SessionInteraction,
+  type SessionInteractionOption,
+  type SessionInteractionPrompt,
+} from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -91,6 +97,55 @@ function question(prompts: readonly SessionInteractionPrompt[]): SessionInteract
   };
 }
 
+/**
+ * The escalation's two options, read off the offer rather than restated.
+ *
+ * `stop` is found by its own exported id and the continuation is simply the
+ * other one, so a rename in `@volli/shared` travels here instead of leaving a
+ * fixture that keeps passing against a pair nothing offers any more.
+ */
+function escalationOptions(): {
+  keepWorking: SessionInteractionOption;
+  stopTurn: SessionInteractionOption;
+} {
+  const stopTurn = SESSION_ESCALATION_OPTIONS.find(
+    (option) => option.id === SESSION_ESCALATION_STOP_ID,
+  );
+  const keepWorking = SESSION_ESCALATION_OPTIONS.find(
+    (option) => option.id !== SESSION_ESCALATION_STOP_ID,
+  );
+  if (!stopTurn || !keepWorking) throw new Error("the escalation offer is not a pair");
+  return { keepWorking, stopTurn };
+}
+
+/**
+ * What the sandbox raises when the block stands whatever the answer: one
+ * question, the offer's own two options, no free-text answer to give.
+ */
+function escalation(overrides: Partial<SessionInteraction> = {}): SessionInteraction {
+  return {
+    id: "question:e1",
+    attachmentId: "attach-1",
+    kind: "question",
+    title: "Write outside the worktree",
+    detail: "write",
+    options: SESSION_ESCALATION_OPTIONS,
+    multiple: false,
+    prompts: [
+      {
+        id: "prompt:0",
+        label: "Write outside the worktree",
+        detail: "write",
+        options: SESSION_ESCALATION_OPTIONS,
+        multiple: false,
+        custom: false,
+      },
+    ],
+    native: { id: "esc-1", detail: null },
+    ...overrides,
+  };
+}
+
 describe("optionPolarity", () => {
   it("reads a standing grant apart from a one-time yes", () => {
     expect(optionPolarity({ id: "once" })).toBe("allow");
@@ -98,9 +153,23 @@ describe("optionPolarity", () => {
     expect(optionPolarity({ id: "reject" })).toBe("reject");
   });
 
+  it("reads an escalation's pair as the two sides of its card", () => {
+    // Not a permission — the call is refused either way — but the card still
+    // has a permitting side and a refusing one, and every layout rule below
+    // asks only that narrower question. Read as ordinary answers, both fell
+    // through to `answer` and the card came apart: the box stood open, a
+    // second refusal appeared beside the two real options, and the button
+    // spoke for neither of them.
+    const { keepWorking, stopTurn } = escalationOptions();
+    expect(optionPolarity(keepWorking)).toBe("allow");
+    expect(optionPolarity(stopTurn)).toBe("reject");
+  });
+
   it("matches declared ids case-insensitively", () => {
     expect(optionPolarity({ id: "Once" })).toBe("allow");
     expect(optionPolarity({ id: "REJECT" })).toBe("reject");
+    expect(optionPolarity({ id: "Continue" })).toBe("allow");
+    expect(optionPolarity({ id: "STOP" })).toBe("reject");
   });
 
   it("treats an id it does not recognize as an ordinary answer", () => {
@@ -461,6 +530,97 @@ describe("refusal", () => {
     expect(
       describeInteractionResolution(interaction, refusalResolution(interaction)),
     ).toMatchObject({ verdict: "rejected", lead: "You rejected", trailer: null });
+  });
+});
+
+describe("an escalation the sandbox raised", () => {
+  // The block stands whatever is answered, so the pair is "keep working" and
+  // "stop the turn" rather than a verdict on the call. Every rule here reads
+  // that pair through `optionPolarity`, which is why recognizing the two ids is
+  // not cosmetic: unrecognized, this card discarded the click it was given.
+
+  it("keeps its words beside the verdict rather than in a following message", () => {
+    const [only] = escalation().prompts ?? [];
+    if (!only) throw new Error("fixture has no prompt");
+    // `note`, because a declared refusal makes this the shape whose reply
+    // carries a message beside the decision. As `message` the words were the
+    // whole submission and the decision went with the refusal.
+    expect(promptTextCarrier(only)).toBe("note");
+  });
+
+  it("keeps the box behind a control until the turn is being stopped", () => {
+    const [only] = escalation().prompts ?? [];
+    if (!only) throw new Error("fixture has no prompt");
+    const { keepWorking, stopTurn } = escalationOptions();
+    expect(promptFieldOpen(only, {})).toBe(false);
+    expect(promptFieldOpen(only, selectOption({}, only, keepWorking.id))).toBe(false);
+    expect(promptFieldOpen(only, selectOption({}, only, stopTurn.id))).toBe(true);
+  });
+
+  it("declares the refusal it needs, so the card mints none of its own", () => {
+    // Two real options plus a third the card invented is three exits from a
+    // question that has two.
+    expect(needsOwnRefusal(escalation())).toBe(false);
+  });
+
+  it("names whichever side was chosen on the button", () => {
+    const interaction = escalation();
+    const [only] = interaction.prompts ?? [];
+    if (!only) throw new Error("fixture has no prompt");
+    const { keepWorking, stopTurn } = escalationOptions();
+    expect(interactionSubmitLabel(interaction, selectOption({}, only, keepWorking.id))).toBe(
+      "Keep working",
+    );
+    expect(interactionSubmitLabel(interaction, selectOption({}, only, stopTurn.id))).toBe(
+      "Stop the turn",
+    );
+  });
+
+  it("sends the continuation on the click that chose it", () => {
+    // One question, one choice, nothing typed: the click is the whole decision.
+    // Stopping the turn still asks twice, like every refusal — it is the
+    // verdict whose words matter.
+    const interaction = escalation();
+    const [only] = interaction.prompts ?? [];
+    if (!only) throw new Error("fixture has no prompt");
+    const { keepWorking, stopTurn } = escalationOptions();
+    const draft = emptyInteractionDraft(interaction);
+    expect(optionSubmitsOnSelect(interaction, only, keepWorking, draft)).toBe(true);
+    expect(optionSubmitsOnSelect(interaction, only, stopTurn, draft)).toBe(false);
+  });
+
+  it("submits the choice the reader made, not an empty refusal beside their words", () => {
+    // The regression this whole block guards. With both ids reading as
+    // `answer`, the box stood open, its text became a redirection, and a
+    // redirection outranks selections — so clicking "Keep working" and typing
+    // anything at all sent the empty resolution and threw the click away.
+    const interaction = escalation();
+    const [only] = interaction.prompts ?? [];
+    if (!only) throw new Error("fixture has no prompt");
+    const { keepWorking } = escalationOptions();
+    const draft = setPromptResponse(
+      selectOption(emptyInteractionDraft(interaction), only, keepWorking.id),
+      "prompt:0",
+      "  leave that file alone and carry on  ",
+    );
+    expect(interactionSubmission(interaction, draft)).toEqual({
+      resolution: {
+        optionIds: [keepWorking.id],
+        response: "leave that file alone and carry on",
+        answers: [
+          {
+            promptId: "prompt:0",
+            optionIds: [keepWorking.id],
+            response: "leave that file alone and carry on",
+          },
+        ],
+      },
+      message: null,
+    });
+    expect(interactionRedirected(interaction, draft)).toBe(false);
+    expect(interactionSubmission(interaction, draft)?.resolution).not.toEqual(
+      refusalResolution(interaction),
+    );
   });
 });
 

@@ -31,6 +31,7 @@ import type {
   RuntimeActivityObservation,
   RuntimeObservation,
   SessionInteraction,
+  SessionInteractionCancelReason,
   SessionInteractionResolution,
   SessionNativeDetail,
   SettledAssistantMessage,
@@ -146,6 +147,11 @@ export type TranslatedObservation =
       kind: "interaction.resolved";
       interactionId: string;
       resolution: SessionInteractionResolution;
+    })
+  | (TranslatedObservationBase & {
+      kind: "interaction.cancelled";
+      interactionId: string;
+      reason: SessionInteractionCancelReason;
     })
   | (TranslatedObservationBase & {
       kind: "attention.raised";
@@ -618,10 +624,14 @@ export class RuntimeObservationTranslator {
 
   #interactionObservation(
     observation: Extract<RuntimeObservation, { kind: "interaction" }>,
-  ): Extract<TranslatedObservation, { kind: "interaction.opened" | "interaction.resolved" }> {
-    // An interaction is asked once and answered once, so its own id plus the
-    // side of that pair is the whole identity — no counter, and stable across a
-    // replay of the same fact.
+  ): Extract<
+    TranslatedObservation,
+    { kind: "interaction.opened" | "interaction.resolved" | "interaction.cancelled" }
+  > {
+    // An interaction is asked once and ends once, so its own id plus which of
+    // its three states this is names the fact completely — no counter, and
+    // stable across a replay of the same fact. All three strings are durable and
+    // therefore frozen; see this module's header.
     if (observation.state === "resolved") {
       return {
         id: `${this.#namespace}:interaction:${this.#attachmentId}:${observation.interactionId}:resolved`,
@@ -629,6 +639,15 @@ export class RuntimeObservationTranslator {
         occurredAt: observation.occurredAt ?? this.#now(),
         interactionId: observation.interactionId,
         resolution: observation.resolution,
+      };
+    }
+    if (observation.state === "cancelled") {
+      return {
+        id: `${this.#namespace}:interaction:${this.#attachmentId}:${observation.interactionId}:cancelled`,
+        kind: "interaction.cancelled",
+        occurredAt: observation.occurredAt ?? this.#now(),
+        interactionId: observation.interactionId,
+        reason: observation.reason,
       };
     }
     return {

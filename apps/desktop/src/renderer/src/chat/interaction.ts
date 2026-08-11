@@ -21,6 +21,7 @@
 import {
   readInteractionAnswers,
   readInteractionPrompts,
+  SESSION_ESCALATION_STOP_ID,
   SESSION_REFUSAL_OPTION_IDS,
   type SessionEventPayload,
   type SessionInteraction,
@@ -41,9 +42,28 @@ import {
  */
 export type InteractionOptionPolarity = "allow" | "standing" | "reject" | "answer";
 
-const ALLOW_OPTION_IDS = new Set(["once", "allow", "approve", "accept", "yes"]);
+// `continue` is an escalation's permitting side. What it permits is the turn and
+// never the call — a non-overridable block refuses the call whichever option is
+// chosen — but every rule below asks the narrower question of which side of the
+// card an option sits on, and on that question it is the yes.
+const ALLOW_OPTION_IDS = new Set(["once", "allow", "approve", "accept", "yes", "continue"]);
 const STANDING_OPTION_IDS = new Set(["always", "always_allow", "alwaysallow", "remember"]);
-const REJECT_OPTION_IDS = new Set(SESSION_REFUSAL_OPTION_IDS);
+/**
+ * Wider than `SESSION_REFUSAL_OPTION_IDS`, and it must stay wider.
+ *
+ * An escalation's `stop` is the refusing side of the card: the verdict whose
+ * words matter, the one the text box opens behind, and the one whose presence
+ * saves the card from minting an out-of-band refusal beside two real options.
+ * None of that makes it a refusal on the wire. `askChoice` tests the shared
+ * refusal ids *before* it tests `stop`, so moving this id into that array would
+ * resolve every "Stop the turn" to `refuse` and the turn would never stop.
+ *
+ * So the asymmetry is the point rather than an oversight: that set answers what
+ * the runtime does with a decision, this one answers how the card is drawn and
+ * answered, and only the second one has room for an id that is refusal-shaped
+ * without being a refusal.
+ */
+const REJECT_OPTION_IDS = new Set([...SESSION_REFUSAL_OPTION_IDS, SESSION_ESCALATION_STOP_ID]);
 
 export function optionPolarity(option: { id: string }): InteractionOptionPolarity {
   const id = option.id.toLowerCase();

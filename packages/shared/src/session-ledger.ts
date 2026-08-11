@@ -73,9 +73,16 @@ export const SESSION_PERMISSION_OPTIONS: readonly SessionInteractionOption[] = [
  *
  * Beside {@link SESSION_PERMISSION_OPTIONS} and for the same reason: a producer
  * mints from this list rather than restating it. The pair is not a permission —
- * the call is refused either way — so neither id belongs to the allow/refuse
- * polarity the permission ids carry. `continue` accepts the refusal and keeps
- * the turn going; `stop` ends the turn.
+ * the call is refused either way — so neither id carries the allow/refuse
+ * meaning a permission id does. `continue` accepts the refusal and keeps the
+ * turn going; `stop` ends the turn.
+ *
+ * Which is a statement about the decision, not about the card. The renderer
+ * groups `stop` with the refusing ids so an escalation draws like every other
+ * two-sided ask, and that widening must stay renderer-local: `askChoice` tests
+ * {@link SESSION_REFUSAL_OPTION_IDS} before it tests `stop`, so an id moved into
+ * that list would resolve "Stop the turn" to a plain refusal and the turn would
+ * never stop.
  */
 export const SESSION_ESCALATION_OPTIONS: readonly SessionInteractionOption[] = [
   { id: "continue", label: "Keep working", description: null },
