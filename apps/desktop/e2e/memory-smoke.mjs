@@ -200,7 +200,16 @@ async function main() {
     if (key.startsWith("CLAUDECODE") || key.startsWith("CLAUDE_CODE")) delete env[key];
   }
 
-  const app = await _electron.launch({ executablePath: ELECTRON, args: [APP_DIR], env });
+  // An isolated Chromium profile. Sharing <userData> with a Volli the owner
+  // already has open loses the single-instance lock, so the launch quits at
+  // exit code 0 before its first window — surfacing only as "Target page,
+  // context or browser has been closed", which reads like a crash in the app.
+  const profileDir = await fs.mkdtemp(join(os.tmpdir(), "volli-memory-smoke-profile-"));
+  const app = await _electron.launch({
+    executablePath: ELECTRON,
+    args: [APP_DIR, `--user-data-dir=${profileDir}`],
+    env,
+  });
   const snapshots = [];
 
   try {
