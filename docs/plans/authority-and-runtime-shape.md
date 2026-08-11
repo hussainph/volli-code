@@ -1,10 +1,10 @@
 # Agent authority and runtime shape
 
-**Status:** Part I slices 1–3 shipped; slice 4 remains. Part II candidate 3
-shipped and the order revised — see below. Part III decision complete, not
-started.
+**Status:** Part I slices 1–3 shipped; slice 4 remains. Part II candidates 3 and
+1 shipped (1 as #205 → #206 → #207); 2, 5 and 6 remain, in the order below. Part
+III decision complete, not started — all four slices.
 
-**Date:** 2026-08-10
+**Date:** 2026-08-11
 
 **Scope:** The policy a Session executes under, the shape of the seam the Agent
 Runtime sits behind, and how a user signs in to Model Access.
