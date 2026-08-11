@@ -73,23 +73,29 @@ the mapping onto what Volli built.
 Volli's job is to earn the same default. What follows is what that requires here,
 which is less than it sounds, because much of the boundary already exists.
 
-### What is true today
+### What was true when this section was written
 
-- `AuthoritySnapshot` in `packages/shared/src/agent-runtime.ts` is a single-field
-  interface whose field is a literal: `{ mode: "auto" }`.
-- `apps/desktop/src/main/session-runtime/pi-adapter.ts` hardcodes
-  `authority: { mode: "auto" }` when it builds a runtime spec.
-- The same adapter declares the `interaction.permission` capability
-  `state: "unavailable"`, so nothing in the product can raise a permission
+Four claims below were superseded once slices 1–3 shipped. Rather than update
+them in place and erase the record of the starting point, this section stays
+as written; "Part I implementation record" below states what actually shipped
+and where the plan itself was wrong.
+
+- `AuthoritySnapshot` in `packages/shared/src/agent-runtime.ts` was a
+  single-field interface whose field was a literal: `{ mode: "auto" }`.
+- `apps/desktop/src/main/session-runtime/pi-adapter.ts` hardcoded
+  `authority: { mode: "auto" }` when it built a runtime spec.
+- The same adapter declared the `interaction.permission` capability
+  `state: "unavailable"`, so nothing in the product could raise a permission
   decision.
-- `packages/agent-runtime/src/pi/runtime.ts` constructs its `Agent` with
-  `initialState`, `streamFn`, `sessionId` and `toolExecution`, and nothing else.
+- `packages/agent-runtime/src/pi/runtime.ts` constructed its `Agent` with
+  `initialState`, `streamFn`, `sessionId` and `toolExecution`, and nothing
+  else.
 
 `CONTEXT.md` defines the Authority Snapshot as "the durable policy granted to one
 Session when it starts: which actions are automatic, which require a decision,
 which are forbidden, and the classifier model allowed to help within
-deterministic boundaries." None of that is currently recorded. The glossary
-describes the destination; the code has not arrived.
+deterministic boundaries." None of that was recorded then. The glossary
+described the destination; the code had not arrived yet.
 
 ### What is already enforced
 
@@ -115,9 +121,13 @@ outside your environment — are therefore largely unreachable for a Session in 
 Ticket worktree today. That is a real boundary enforced by the kernel, not a
 policy layer that can be reasoned around.
 
-### What is missing
+### What was missing
 
-Three things, in order of importance.
+Three things, in order of importance. The first two closed in slices 2 and 3 —
+`beforeToolCall` is wired and `authority.denied` is a durable Session Event, and
+`AUTHORITY_RULE_IDS` is the forbidden set. They stay as written for the same
+reason as the section above: the record of what the gap was is worth more than a
+paragraph edited to agree with the code. Only the third is still open.
 
 **A block is not a durable fact.** Pi's `beforeToolCall` seam, when it blocks,
 causes the loop to emit an error tool result whose text is the supplied reason.
@@ -133,9 +143,12 @@ sandbox. Inside a worktree an agent may rewrite `.git/hooks`, edit `.git/config`
 or run any git subcommand.
 
 **There is no fallback.** Anthropic's design tolerates an aggressive classifier
-because a user can be asked when it gets in the way. Volli declares
-`interaction.permission` unavailable, so a block is terminal. Without an ask
-channel there is no escalation state, only failure.
+because a user can be asked when it gets in the way. Volli has no ask channel
+wired to a block — not because anything declares one unavailable (Part II
+candidate 3 deleted that declaration along with the rest of the capability
+probe, and nothing replaced it), but because nothing yet supplies
+`SessionRuntimeSpec.ask`. A block is still terminal for a plainer reason than
+before: without an ask channel there is no escalation state, only failure.
 
 The ask channel itself is not missing — it is built end to end and unused. The
 `SessionInteraction` ledger types, the `interaction.opened` and
@@ -190,9 +203,9 @@ semantic fact rather than a failed tool, and available to Attention.
 
 #### Escalation and the ask channel
 
-Flip `interaction.permission` to available and open a real `SessionInteraction`
-when the counters trip — three consecutive blocks, or twenty in a Session. The
-renderer half already knows how to render and answer it.
+Open a real `SessionInteraction` when the counters trip — three consecutive
+blocks, or twenty in a Session. The renderer half already knows how to render
+and answer it.
 
 ### Role policy
 
@@ -280,13 +293,12 @@ one approved shell tool chains anything.
 
 ### Implementation slices
 
-1. Make `AuthoritySnapshot` a real record, persisted at Session start and
-   projected to the UI.
+1. Make `AuthoritySnapshot` a real record, constructed per attach.
 2. Wire `beforeToolCall` to a pure `evaluate(call, snapshot, location)` in
    `@volli/shared`; vendor the deterministic hard-deny layer under MIT
    attribution.
 3. Emit a denial as a durable Session fact.
-4. Flip `interaction.permission` to available and escalate on the counters.
+4. Open a real `SessionInteraction` and escalate on the counters.
 
 Follow-up, deliberately not in the first pass: the classifier, network
 allowlisting, the Main-checkout policy and its pre-image commit, per-project rule
@@ -335,6 +347,15 @@ and 4 pay a facade tax, because only they mint new observation kinds.
 
 **Where the plan above was wrong, corrected in the build:**
 
+- Slice 1 said `AuthoritySnapshot` would be "persisted at Session start." It
+  never was and still is not: `PiBinding.runtimeSpec()` constructs the record
+  on every attach (`apps/desktop/src/main/session-runtime/pi-adapter.ts:347`),
+  no Session Event carries it, no SQLite column holds it, and
+  `SessionProjection` has no field for it — so it is not projected to the UI
+  either, which the same line claimed. What shipped is the record's shape. The
+  only durable trace of authority is the consequence of a denial — the
+  `authority.denied` event and the `SessionProjection.authorityDenials` fold
+  slice 3 added.
 - The vendored hard-deny layer could not sit in `@volli/shared` beside
   `evaluate`, because `paths.ts` needs `node:fs`. Pure policy lives in shared;
   path and shell resolution live in `agent-runtime`.
@@ -487,6 +508,86 @@ someone. Recorded here so it is a decision rather than a side effect.
 otherwise history would record a denial for a call that ran. What the user
 permitted is already durable as `interaction.opened` plus `interaction.resolved`
 — the user's decision is an interaction fact, not a policy fact.
+
+**Cancelling an ask does not reach the runtime, and that is a deadlock.**
+`SessionRuntime.#cancelInteraction` (`session-runtime.ts:1358`) writes
+`interaction.cancelled` and dispatches nothing to the adapter — deliberately,
+with a docstring defending the choice at length. Once a resolver is parked, a
+withdrawal writes the durable fact, the projection drops the interaction, and
+`sessionAwaitsUser()` goes false while the Pi turn stays blocked inside
+`beforeToolCall` forever, with nothing on screen saying so. The docstring
+names its own escape hatch: whether a harness can be told to withdraw is the
+adapter's question to answer, and for an ask Volli itself raised the answer is
+plainly yes. Closing it needs an optional withdraw verb on `BindingHandle` and
+a best-effort hop from the Engine. "Every parked resolver is cancelled on
+release and on abort," above, missed cancellation — the path a person actually
+reaches from the UI.
+
+**The ask port had no way to tell its caller a question had been abandoned,
+and every abandonment path leaked one.** A review traced every way an open
+ask stops mattering — the turn is interrupted, the attachment is released,
+the app quits, `stop` is answered, or the app crashes and relaunches — and
+found that in each of them the runtime stops waiting while the host is never
+told. Nothing the host opened on the way to asking is ever closed:
+`attachment.closed` does not clear `interactions` in the projection fold, the
+boot sweep in `boot-recovery.ts` excludes Pi attachments from
+`isStaleOnBoot` by design, and `sessionAwaitsUser()` reads
+`interactions.active.length`, so it never goes false again once one is
+stranded. "Every parked resolver is cancelled on release and on abort,"
+above, described the escalation's own bookkeeping — its consecutive and
+session counters reset once a person answers — not whether the ask a host
+opened to raise the question ever closes; an escalation can move on while the
+question it asked stays open forever in whatever surface is showing it. The
+fix: `ask` now takes an `AbortSignal` second parameter, the host's only
+notice that the question it is showing has been abandoned and must be
+withdrawn.
+
+A rejected ask and an aborted ask are different facts, and the port keeps
+them apart. Rejection means the host could not obtain an answer at all, so
+the refusal stands and is recorded. Abort means nobody was asked, so nothing
+is.
+
+**`stop` reaches `agent.abort()`, and that has a defect a review just found,
+being fixed now.** `beforeToolCall` cannot end a turn on its own: Pi's
+`terminate` flag only takes effect when every finalized tool result in the
+batch sets it — the comment in `packages/agent-runtime/src/pi/runtime.ts`
+already says so, which is why it is left unset, and one refused call is not
+the whole batch agreeing to stop. `stop` instead reaches `agent.abort()` from
+inside the callback, through an `endTurn` closure assigned the statement
+after `Agent` is constructed, because the callback needs to call something
+the constructor argument cannot yet close over.
+
+Aborting from inside `beforeToolCall` does not end the turn cleanly. Pi runs
+one more loop pass after the blocked call, and that pass synthesizes an
+assistant message with `stopReason: "error"` rather than `"aborted"`.
+`classifyAssistantMessage` (`packages/agent-runtime/src/pi/transcript.ts`)
+already treats a genuine `"aborted"` stop as one to swallow — `runtime.ts`
+skips raising an Attention when `failure.reason === "aborted"` — but this
+message never reaches that guard, because Pi reports its `stopReason` as
+`"error"`, not `"aborted"`. It is classified as a runtime failure like any
+model error and surfaces as the unrecoverable "Session stopped" error banner
+(`chat-plane-model.ts`), so a deliberate stop reads as a crash. The fix has
+to distinguish this abort from a genuine model failure before it is
+classified, not after.
+
+The stop path has a second cost, independent of the first: the model
+receives Pi's own "Operation aborted" rather than the refusing rule's words.
+`beforeToolCall` returns `{ block: true, reason }` after `agent.abort()` has
+already run, and Pi checks `signal.aborted` before it looks at the block
+result, so it discards the reason and reports "Operation aborted" instead.
+The ledger still holds the truth — `authority.denied` records the refusing
+rule's reason before the abort runs — but only the ledger. The model itself
+never sees the reason it was refused for.
+
+**Recording a denial now races the Engine recording the answer.** The Engine
+writes `interaction.resolved` itself, in `#recordDelivery` after the adapter's
+dispatch returns (`session-runtime.ts:1322`), while the runtime emits
+`authority.denied` on its own ordered queue once the parked resolver settles.
+Two independent chains, so the order they land in is unspecified. Slice 3 took
+care to make a refusal land on the turn it belongs to; parking reintroduces the
+same question one level up. Both facts are true and separately timestamped, so
+this is recorded as a known interleave to pin with a test, not a thing to build
+ordering machinery for.
 
 ## Part II — Runtime shape
 
@@ -652,7 +753,7 @@ Pi adapter refuses `interaction.resolve` outright. The coverage gate certifies
 unreachable code.
 
 Read on its own, this looks like a deletion candidate. It is not. Part I step 4
-flips the adapter's declaration and gives the surface its producer, at which
+opens a real `SessionInteraction` and gives the surface its producer, at which
 point the modules are exactly what is needed. Reassess only if Part I is
 abandoned.
 

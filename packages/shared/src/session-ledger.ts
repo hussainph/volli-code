@@ -69,6 +69,23 @@ export const SESSION_PERMISSION_OPTIONS: readonly SessionInteractionOption[] = [
 ];
 
 /**
+ * What an escalation offers when the refusal stands whatever the answer.
+ *
+ * Beside {@link SESSION_PERMISSION_OPTIONS} and for the same reason: a producer
+ * mints from this list rather than restating it. The pair is not a permission —
+ * the call is refused either way — so neither id belongs to the allow/refuse
+ * polarity the permission ids carry. `continue` accepts the refusal and keeps
+ * the turn going; `stop` ends the turn.
+ */
+export const SESSION_ESCALATION_OPTIONS: readonly SessionInteractionOption[] = [
+  { id: "continue", label: "Keep working", description: null },
+  { id: "stop", label: "Stop the turn", description: null },
+];
+
+/** The escalation option that ends the turn, named once so a reader cannot drift from the offer. */
+export const SESSION_ESCALATION_STOP_ID = "stop";
+
+/**
  * The option ids that mean "no".
  *
  * Refusing is its own act, and both halves of the seam have to agree on which

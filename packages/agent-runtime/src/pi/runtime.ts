@@ -27,6 +27,7 @@ import {
 import { authorityVerdict } from "../authority/gate";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
 import { mapPiActivity } from "./activity";
+import { AuthorityEscalation } from "./escalation";
 import { inspectPiModelAccess } from "./model-access";
 import { piOwnedModels } from "./models";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
@@ -525,6 +526,19 @@ async function attachSession(
     let failure: RuntimeFailure | undefined;
     let closed = false;
     let cancelled = false;
+    /**
+     * Whether this runtime ended the turn on purpose, cleared when the next one
+     * starts.
+     *
+     * Tracked rather than read back off Pi, because Pi does not reliably say so.
+     * `agent.abort()` makes it discard the pending tool batch and re-enter its
+     * loop; the provider call that re-entry makes fails on the aborted signal,
+     * and the lazy stream behind it reports that as `stopReason: "error"`
+     * carrying the AbortSignal's own text rather than as an abort. Believing
+     * that label raises an unrecoverable Attention, which tells someone who just
+     * pressed stop that their Session broke.
+     */
+    let interrupting = false;
     type PendingMessageDelivery = {
       commandId: string | null;
       operation: "message.submit";
@@ -574,6 +588,20 @@ async function attachSession(
     const commitObservation = (observation: Parameters<SessionRuntimeSpec["observer"]>[0]) =>
       observationDelivery.deliver(observation);
 
+    const escalation = new AuthorityEscalation({
+      fallback: spec.authority.fallback,
+      priorDenials: spec.priorAuthorityDenials,
+      ask: spec.ask,
+      signal: spec.signal,
+    });
+
+    // Assigned the statement after `new Agent` and read only from inside a Pi
+    // callback, which cannot fire before a run starts. Declared here because the
+    // callback would otherwise have to close over the `const` still being
+    // constructed, and a definite-assignment `let` says that plainly instead of
+    // resting on how a temporal dead zone happens to resolve inside a closure.
+    let interruptTurn!: () => void;
+
     const agent = new Agent({
       initialState: {
         systemPrompt: composeSystemPrompt(spec),
@@ -587,15 +615,28 @@ async function attachSession(
       toolExecution: "sequential",
       // `terminate` is left unset on purpose: Pi only ends the run early when
       // every finalized result in the batch asks for it, which is not what one
-      // refused call means.
-      beforeToolCall: async ({ toolCall, args }) => {
+      // refused call means. A `stop` answer ends the turn by aborting instead,
+      // which needs no agreement from the rest of the batch — at the cost of the
+      // reason below, which Pi drops on that one path because it re-reads its
+      // cancellation before it reads the block.
+      beforeToolCall: async ({ toolCall, args }, signal) => {
         const verdict = authorityVerdict({
           tool: toolCall.name,
           args,
           authority: spec.authority,
           workspacePath: spec.workspacePath,
         });
-        if (verdict.outcome === "allow") return undefined;
+        // Pi's own per-call signal is passed on rather than dropped: a question
+        // this parks on has to lose to a cancelled run, and Pi re-reads that
+        // signal the instant this callback returns.
+        const disposition = await escalation.resolve({
+          verdict,
+          tool: toolCall.name,
+          toolCallId: toolCall.id,
+          turnId,
+          signal,
+        });
+        if (disposition.outcome === "allow") return undefined;
         // Recorded before refused, through the same ordered queue as every other
         // observation: a refusal that overtook the turn it belongs to would be
         // filed against the wrong turn, and one that raced the activity stream
@@ -603,17 +644,24 @@ async function attachSession(
         // boundary and never rejects — a ledger that cannot be written is not a
         // reason to let the call through, and the failure it holds is consumed at
         // the next command boundary like any other.
-        await commitObservation({
-          kind: "authority",
-          state: "denied",
-          turnId,
-          tool: toolCall.name,
-          cause: verdict.cause,
-          reason: verdict.reason,
-        });
-        return { block: true, reason: verdict.reason };
+        if (disposition.record) {
+          await commitObservation({
+            kind: "authority",
+            state: "denied",
+            turnId,
+            tool: toolCall.name,
+            cause: disposition.cause,
+            reason: disposition.reason,
+          });
+        }
+        if (disposition.interrupt) interruptTurn();
+        return { block: true, reason: disposition.reason };
       },
     });
+    interruptTurn = () => {
+      interrupting = true;
+      agent.abort();
+    };
     agent.steeringMode = "one-at-a-time";
     agent.followUpMode = "one-at-a-time";
 
@@ -621,6 +669,7 @@ async function attachSession(
       if (event.type === "agent_start") {
         turnId = randomUUID();
         failure = undefined;
+        interrupting = false;
         activityByToolCallId.clear();
         await commitObservation(
           await persistObservation({ kind: "turn", state: "started", turnId }),
@@ -733,7 +782,11 @@ async function attachSession(
         );
         return;
       }
-      if (failure.reason !== "aborted") {
+      // An abort Pi named as one, and an abort only this runtime knows it
+      // caused, are the same fact reported two ways: the turn ended because it
+      // was asked to. Neither is an unrecoverable failure, and neither deserves
+      // a banner offering no way out of a state the user chose.
+      if (failure.reason !== "aborted" && !interrupting) {
         const reason = attentionReasonFor(failure);
         const raised = await persistObservation({
           kind: "attention",
@@ -751,7 +804,7 @@ async function attachSession(
 
     const onAbort = (): void => {
       cancelled = true;
-      agent.abort();
+      interruptTurn();
       // The active submit promise owns any observer failure from this same run.
       /* v8 ignore next -- abort-listener failures are intentionally suppressed */
       void agent.waitForIdle().catch(() => undefined);
@@ -899,7 +952,7 @@ async function attachSession(
       },
 
       async interrupt(): Promise<void> {
-        agent.abort();
+        interruptTurn();
         await agent.waitForIdle();
       },
 
@@ -907,7 +960,7 @@ async function attachSession(
         if (closed) return;
         closed = true;
         spec.signal?.removeEventListener("abort", onAbort);
-        agent.abort();
+        interruptTurn();
         await agent.waitForIdle();
         unsubscribe?.();
         unsubscribe = undefined;
