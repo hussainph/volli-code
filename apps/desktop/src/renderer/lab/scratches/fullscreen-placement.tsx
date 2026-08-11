@@ -53,8 +53,7 @@ import { CornersOutIcon } from "@phosphor-icons/react/dist/csr/CornersOut";
 import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
 import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
-import { SlidersHorizontalIcon } from "@phosphor-icons/react/dist/csr/SlidersHorizontal";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import { ChatCircleDotsIcon } from "@phosphor-icons/react/dist/csr/ChatCircleDots";
 import {
   displayTicketId,
   type ChangeSetSnapshot,
@@ -64,7 +63,6 @@ import {
 import { AppShell } from "@renderer/components/app-shell";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
-import { TicketEnvironmentInspectorContent } from "@renderer/components/ticket/ticket-environment-inspector";
 import { TicketRail } from "@renderer/components/ticket/ticket-rail";
 import {
   TICKET_RAIL_MODE_LABELS,
@@ -89,10 +87,10 @@ const TICKET_LABEL = displayTicketId(project.ticketPrefix, TICKET.ticketNumber);
 const SESSION_ID = "ses-14b";
 
 /**
- * A static Change Set so the rail's Inspector shows counts rather than its
- * failure row. The lab has no worktree, and a red "couldn't load changes" line
- * sitting in every variant would be the loudest thing on screen in a scratch
- * about a 20px glyph.
+ * A static Change Set so the rail's repository card shows counts rather than
+ * its failure row. The lab has no worktree, and a red "couldn't load changes"
+ * line sitting in every variant would be the loudest thing on screen in a
+ * scratch about a 20px glyph.
  */
 const CHANGE_SET: ChangeSetSnapshot = {
   baseRevision: "9f2c1ab",
@@ -373,10 +371,9 @@ function PlaneFocusChip({ onEnter }: { onEnter(): void }) {
 }
 
 const MODE_ICONS: Record<TicketRailMode, PhosphorIcon> = {
-  sessions: TerminalWindowIcon,
-  files: FoldersIcon,
+  now: ChatCircleDotsIcon,
   changes: GitDiffIcon,
-  properties: SlidersHorizontalIcon,
+  files: FoldersIcon,
 };
 
 /**
@@ -442,22 +439,10 @@ function SummonedCard({ mode, onClose }: { mode: TicketRailMode; onClose(): void
           <SidebarSimpleIcon weight="fill" className="size-3 scale-x-[-1]" />
         </Button>
       </div>
-      {mode === "changes" ? (
-        <TicketEnvironmentInspectorContent
-          ticket={TICKET}
-          changeSet={CHANGE_SET}
-          onNavigate={() => {}}
-          onOpenSource={() => {}}
-          onRetry={() => {}}
-        />
-      ) : (
-        <div className="flex flex-col items-center gap-1 px-4 py-10 text-center">
-          <p className="text-ui font-medium text-muted-foreground">
-            {TICKET_RAIL_MODE_LABELS[mode]}
-          </p>
-          <p className="text-xs text-muted-foreground/80">Nothing here yet</p>
-        </div>
-      )}
+      <div className="flex flex-col items-center gap-1 px-4 py-10 text-center">
+        <p className="text-ui font-medium text-muted-foreground">{TICKET_RAIL_MODE_LABELS[mode]}</p>
+        <p className="text-xs text-muted-foreground/80">Nothing here yet</p>
+      </div>
     </div>
   );
 }
@@ -578,7 +563,6 @@ function TicketSurface({ variant }: { variant: VariantKey }) {
               onActivateSession={setActiveTabId}
               onActivateChat={() => setActiveTabId("chat:chat-14a")}
               activeTabId={activeTabId}
-              onOpenSource={() => setActiveTabId("file:gutter")}
             />
           </aside>
         ) : null}

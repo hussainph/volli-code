@@ -1,12 +1,11 @@
 /**
- * Visual proof for the VC-108 icon-mode ticket rail.
+ * Visual proof for the Calm Stack ticket rail.
  *
- * Covers the states the plan asks a shot to answer for: normal, narrow (the
- * icon-mode rail), long content (the deliberately untruncatable Sources path),
- * dark and light, and reduced motion. The failure and empty states are the two
- * it deliberately leaves alone — they are settled by
- * `ticket-environment-inspector.test.tsx`, where a fixture can produce them
- * exactly rather than by arranging for a real read to fail.
+ * Covers the states the plan asks a shot to answer for: each of the three
+ * pages, the repository card on its own, a live session, dark and light, and
+ * reduced motion. The failure and empty states are the two it deliberately
+ * leaves alone — a real read has to be made to fail to reach them, which is a
+ * fixture's job, not a screenshot's.
  *
  *   env -u ELECTRON_RUN_AS_NODE node apps/desktop/e2e/ticket-rail-shots.mjs
  */
@@ -25,7 +24,7 @@ import {
 } from "./lib/smoke-kit.mjs";
 
 const SHOT_DIR = "/tmp/vc108-shots";
-const MODES = ["sessions", "files", "changes", "properties"];
+const PAGES = ["now", "changes", "files"];
 
 /**
  * This ticket's detail, with the rail on screen — from wherever a reload left us.
@@ -41,12 +40,12 @@ async function openTicketRail(page, displayId) {
     page.evaluate(() => document.querySelector("[data-volli-surface]") !== null),
   );
   const rail = page.locator("aside");
-  const railMode = page.getByTestId("ticket-rail-mode-sessions");
+  const railTab = page.getByTestId("ticket-rail-tab-now");
   const card = page.locator("article").filter({
     has: page.locator("span.font-mono", { hasText: new RegExp(`^${displayId}$`) }),
   });
   const landing = await waitUntil("board card or restored detail", async () => {
-    if ((await railMode.count()) === 1) return "detail";
+    if ((await railTab.count()) === 1) return "detail";
     if ((await card.count()) === 1) return "board";
     return null;
   });
@@ -86,10 +85,10 @@ try {
     const created = await window.api.tickets.create({
       projectId: project.id,
       status: "todo",
-      title: "Icon-mode rail visual proof",
-      // Body refs are the Inspector's only Sources feed, and one deliberately
+      title: "Calm Stack rail visual proof",
+      // Body refs feed the Files page's Referenced section, and one deliberately
       // long path proves the narrow-rail truncation in the shots below.
-      body: "Read @docs/plan.md, @src/a-very-long-inspector-reference-that-must-truncate.tsx, and @src/third.ts.",
+      body: "Read @docs/plan.md, @src/a-very-long-referenced-path-that-must-truncate.tsx, and @src/third.ts.",
       priority: "medium",
     });
     if (!created.ok) throw new Error(created.error);
@@ -106,31 +105,32 @@ try {
     async () => (await page.getByRole("tab", { name: "Session 1", exact: true }).count()) === 1,
   ).catch(() => null);
 
-  for (const mode of MODES) {
-    await attempt(mode, `screenshot rail-${mode}.png`, async () => {
-      await aside.getByTestId(`ticket-rail-mode-${mode}`).click();
-      await waitUntil(`${mode} pressed`, async () => {
+  for (const railPage of PAGES) {
+    await attempt(railPage, `screenshot rail-${railPage}.png`, async () => {
+      await aside.getByTestId(`ticket-rail-tab-${railPage}`).click();
+      await waitUntil(`${railPage} selected`, async () => {
         return (
-          (await aside.getByTestId(`ticket-rail-mode-${mode}`).getAttribute("aria-pressed")) ===
+          (await aside.getByTestId(`ticket-rail-tab-${railPage}`).getAttribute("aria-selected")) ===
           "true"
         );
       });
       await page.waitForTimeout(300);
-      const path = join(SHOT_DIR, `rail-${mode}.png`);
+      const path = join(SHOT_DIR, `rail-${railPage}.png`);
       await page.screenshot({ path, fullPage: false });
       const stat = await fs.stat(path);
       return { ok: stat.size > 1000, detail: path };
     });
   }
 
-  // The Inspector is pinned above every mode, so the shots above already carry
-  // it. This one frames the element itself, where truncation and the Sources
-  // rows are actually legible.
-  await attempt("inspector", "screenshot rail-environment-inspector.png", async () => {
-    const inspector = aside.getByTestId("ticket-environment-inspector");
-    await waitUntil("inspector visible", async () => (await inspector.count()) === 1);
-    const path = join(SHOT_DIR, "rail-environment-inspector.png");
-    await inspector.screenshot({ path });
+  // The repository card only exists on Now, so the page shot above carries it
+  // small. This one frames the element itself, where the branch pair's
+  // truncation and the action row's balance are actually legible.
+  await attempt("repository", "screenshot rail-repository-summary.png", async () => {
+    await aside.getByTestId("ticket-rail-tab-now").click();
+    const card = aside.getByTestId("ticket-repository-summary");
+    await waitUntil("repository card visible", async () => (await card.count()) === 1);
+    const path = join(SHOT_DIR, "rail-repository-summary.png");
+    await card.screenshot({ path });
     const stat = await fs.stat(path);
     return { ok: stat.size > 1000, detail: path };
   });
@@ -138,7 +138,7 @@ try {
   await attempt("live", "screenshot rail-live-session.png", async () => {
     const sessionTab = page.getByRole("tab", { name: "Session 1", exact: true });
     if ((await sessionTab.count()) === 1) await sessionTab.click();
-    await aside.getByTestId("ticket-rail-mode-sessions").click();
+    await aside.getByTestId("ticket-rail-tab-now").click();
     await page.waitForTimeout(400);
     const path = join(SHOT_DIR, "rail-live-session.png");
     await page.screenshot({ path, fullPage: false });
@@ -148,17 +148,14 @@ try {
 
   // Reduced motion is a live media query, so the rail follows it without a
   // reload. A picture cannot show an absent transition, though, so this reads
-  // the row's computed transition on both sides of the flip and only then
+  // the tab's computed transition on both sides of the flip and only then
   // frames it: if the two agree, the `motion-reduce:` variants are not landing.
+  // The tab is the right probe — its width transition IS the header's motion.
   await attempt("reduced-motion", "screenshot rail-reduced-motion.png", async () => {
-    await aside.getByTestId("ticket-rail-mode-sessions").click();
-    const source = aside.getByTestId("ticket-environment-source").first();
-    await waitUntil(
-      "source row",
-      async () => (await aside.getByTestId("ticket-environment-source").count()) >= 1,
-    );
+    const tab = aside.getByTestId("ticket-rail-tab-changes");
+    await waitUntil("tab present", async () => (await tab.count()) === 1);
     const readTransition = () =>
-      source.evaluate((node) => {
+      tab.evaluate((node) => {
         const style = getComputedStyle(node);
         return `${style.transitionProperty} ${style.transitionDuration}`;
       });
@@ -193,7 +190,7 @@ try {
       page.evaluate(() => document.documentElement.classList.contains("light")),
     );
     const lightRail = await openTicketRail(page, ticket.displayId);
-    await lightRail.getByTestId("ticket-rail-mode-sessions").click();
+    await lightRail.getByTestId("ticket-rail-tab-now").click();
     await page.waitForTimeout(400);
     const path = join(SHOT_DIR, "rail-light.png");
     await page.screenshot({ path, fullPage: false });

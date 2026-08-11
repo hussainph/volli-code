@@ -119,7 +119,7 @@ function documentFileSource(identity: DocumentIdentity): FileSource {
  * higher up the tree, in main-content.tsx/app-shell.tsx). Layout follows the
  * browser-window metaphor: ONE full-width Chrome-style tab row at the very top,
  * spanning above both the main column (title → content plane) and the right
- * rail (icon-mode Sessions/Files/Changes/Properties navigator). Navigation is
+ * rail (the Calm Stack's Now/Diffs/Files pages). Navigation is
  * the chrome bar's ←/→ history plus Escape; there's no breadcrumb. The tab
  * plane hosts the ticket's live terminals; those stay resident (engines outlive
  * the view via the module registry, decision #8) and are positioned by the
@@ -1032,7 +1032,8 @@ export function TicketDetail({
             // Resizable details rail: a grip on its inner (left) edge widens it
             // leftward, mirroring the left sidebar's outer-edge handle. `relative`
             // makes the aside the grip's positioning context; the width persists
-            // app-wide via the ui store. Icon-mode content lives in TicketRail.
+            // app-wide via the ui store. The rail draws its own header and pages
+            // (TicketRail) — this only sizes and frames the column.
             <aside
               className="relative flex shrink-0 flex-col border-l border-sidebar-border bg-sidebar"
               style={{ width: railWidth }}
@@ -1062,7 +1063,6 @@ export function TicketDetail({
                     onPinFile={pinFileFromRail}
                   />
                 }
-                onOpenSource={previewFileFromRail}
               />
             </aside>
           )}

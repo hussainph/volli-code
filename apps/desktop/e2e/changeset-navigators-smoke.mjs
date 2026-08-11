@@ -201,7 +201,7 @@ async function main() {
       1,
       "Changes flat list renders status mix including space/non-ASCII path",
       async () => {
-        await aside.getByTestId("ticket-rail-mode-changes").click();
+        await aside.getByTestId("ticket-rail-tab-changes").click();
         await waitUntil(
           "changes panel",
           async () => (await aside.getByTestId("ticket-changes-list").count()) === 1,
@@ -338,7 +338,7 @@ async function main() {
 
     // ---- 4. Files navigator -------------------------------------------------
     await attempt(4, "Files navigator lists referenced context and worktree files", async () => {
-      await aside.getByTestId("ticket-rail-mode-files").click();
+      await aside.getByTestId("ticket-rail-tab-files").click();
       await waitUntil(
         "files list loaded",
         async () => {
@@ -363,7 +363,7 @@ async function main() {
 
     // ---- Screenshots --------------------------------------------------------
     await attempt("shot-changes", "screenshot nav-changes.png", async () => {
-      await aside.getByTestId("ticket-rail-mode-changes").click();
+      await aside.getByTestId("ticket-rail-tab-changes").click();
       await waitUntil(
         "changes list",
         async () => (await aside.getByTestId("ticket-changes-list").count()) === 1,
@@ -376,7 +376,7 @@ async function main() {
     });
 
     await attempt("shot-files", "screenshot nav-files.png", async () => {
-      await aside.getByTestId("ticket-rail-mode-files").click();
+      await aside.getByTestId("ticket-rail-tab-files").click();
       await waitUntil(
         "files list",
         async () => (await aside.getByTestId("ticket-files-list").count()) === 1,
@@ -389,7 +389,7 @@ async function main() {
     });
 
     await attempt("shot-mode", "screenshot nav-mode-strip-active.png", async () => {
-      await aside.getByTestId("ticket-rail-mode-changes").click();
+      await aside.getByTestId("ticket-rail-tab-changes").click();
       await sleep(200);
       const path = join(SHOT_DIR, "nav-mode-strip-active.png");
       // Crop to the aside so the mode strip is readable.

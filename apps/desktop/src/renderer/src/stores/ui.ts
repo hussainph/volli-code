@@ -30,11 +30,12 @@
  * like the sidebar width: it's a global chrome preference, not per-workspace,
  * so every ticket you open honors the same choice.
  *
- * `railMode` — which icon-mode navigator the ticket rail shows (Sessions /
- * Files / Changes / Properties). Persisted app-wide like `railCollapsed`.
- * Pre-icon-rail builds stored `detailsExpanded` for the old Details drawer;
- * rehydration maps an open drawer onto Properties via `resolvePersistedRailMode`
- * and stops writing `detailsExpanded`.
+ * `railMode` — which page the ticket rail shows (Now / Diffs / Files).
+ * Persisted app-wide like `railCollapsed`. Every value a shipped build could
+ * have written stays readable: `resolvePersistedRailMode` maps the retired
+ * Sessions/Properties/Session pages, and the pre-icon-rail `detailsExpanded`
+ * key, onto the page that absorbed them, and only the resolved page is written
+ * back.
  *
  * `diffPresentation` — Monaco diff layout (inline vs side-by-side, CONCEPT #51).
  * Persisted app-wide like `railCollapsed` / `railMode`: it is global chrome, not
@@ -171,7 +172,7 @@ interface UiState {
   sidebarPinned: boolean;
   /** Ticket-detail right rail collapsed? Persisted app-wide (see module doc). */
   railCollapsed: boolean;
-  /** Active ticket-rail icon mode. Persisted app-wide (see module doc). */
+  /** Active ticket-rail page. Persisted app-wide (see module doc). */
   railMode: TicketRailMode;
   /** Monaco diff presentation. Persisted app-wide (see module doc). */
   diffPresentation: DiffPresentation;
@@ -323,7 +324,8 @@ export function createUiStore(storage?: StateStorage) {
             // Any non-`true` persisted value (missing key, corrupt JSON) means
             // the rail stays expanded — the safe, visible default.
             railCollapsed: stored.railCollapsed === true,
-            // Icon-mode rail: prefer railMode; migrate legacy detailsExpanded.
+            // Prefer a page this build still offers; otherwise land a retired
+            // page (or the legacy Details drawer) on the one that absorbed it.
             railMode: resolvePersistedRailMode({
               railMode: stored.railMode,
               detailsExpanded: stored.detailsExpanded,

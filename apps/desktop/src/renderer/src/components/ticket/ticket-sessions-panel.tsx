@@ -334,11 +334,14 @@ function SessionList({
 }
 
 /**
- * The right rail's session content: a scrollable "Sessions" working set (the
- * split session-start control, plus one row per live session from the
- * unified store) and a bottom-pinned History drawer (a
- * `RailDrawer` sibling of Details) holding ended/closed durable records —
- * searchable past 4 entries — so the working set stays unlabeled and flat.
+ * The Now page's session content: a "Sessions" working set (the split
+ * session-start control, plus one row per live session from the unified store)
+ * and a History drawer holding ended/closed durable records — searchable past 4
+ * entries — so the working set stays unlabeled and flat.
+ *
+ * Both sit IN FLOW: the Now page is one scrolling column (ticket-rail.tsx), so
+ * this owns no scroller of its own and History is the last thing in the stack
+ * rather than a drawer pinned to the rail's floor.
  * The durable list (`api.sessions.listForTicket`) is re-read whenever the live
  * set changes so new sessions appear and closed ones fold into History. Rows
  * rename inline (double-click) or via the right-click menu.
@@ -499,7 +502,7 @@ export function TicketSessionsPanel({
 
   return (
     <>
-      <section className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
+      <section className="px-4 pt-5">
         <div className="flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <h2 className="text-label font-medium text-muted-foreground uppercase">Sessions</h2>
@@ -527,6 +530,7 @@ export function TicketSessionsPanel({
       </section>
       {history.length > 0 ? (
         <RailDrawer
+          className="mt-5"
           label="History"
           count={history.length}
           open={historyOpen}

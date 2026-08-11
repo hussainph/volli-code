@@ -1,30 +1,38 @@
 /**
- * Ticket detail right rail — icon-mode navigator shell (decision #46).
+ * Ticket detail right rail — the Calm Stack (decision #46;
+ * lab/scratches/ticket-right-sidebar.tsx is the design of record).
  *
- * A thin vertical mode strip switches which index the rail shows. Changing
- * mode never opens or steals a main-view tab; only deliberate list selection
- * (Sessions row / Files row / Changes row) does, via the callbacks the host
- * wires into each mode's content.
+ * The panel owns its own header: one centred pill of three pages — Now, Diffs,
+ * Files — floating above whichever page is showing. The vertical icon strip
+ * that used to run down the rail's outer edge is gone, and so is Properties as
+ * a page of its own: it folds inline into Now, under the repository card.
  *
- * Mode-content seam for follow-on navigators:
+ * Now is the resting page and answers the three questions in order: what the
+ * worktree is doing (`TicketRepositorySummary`), what the ticket is
+ * (`TicketProperties`), and who is working on it (`TicketSessionsPanel`).
+ *
+ * Nothing in here collapses the rail. That is deliberate, not an omission — a
+ * panel cannot reopen itself, so the collapse control lives outside it, in the
+ * tab strip's corner (docs/plans/fullscreen-placement.md).
+ *
+ * Page-content seam for the navigators:
  *   - Pass `filesContent` / `changesContent` to replace the empty placeholders.
  *   - On row select, call the host's open/focus helpers — typically
  *     `useWorkspaceStore.getState().previewTicketFile(projectId, ticketId, relPath)`
  *     (click) / `pinTicketFile` (dblclick) for Files and `openTicketDiff` for
- *     Changes. Sessions already call `onActivateSession(sessionId)` →
+ *     Diffs. Sessions already call `onActivateSession(sessionId)` →
  *     `setTicketActiveTab`.
  *   - Do NOT call those openers from agent/filesystem event handlers.
  */
 import * as React from "react";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
+import { ChatCircleDotsIcon } from "@phosphor-icons/react/dist/csr/ChatCircleDots";
 import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
 import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
-import { SlidersHorizontalIcon } from "@phosphor-icons/react/dist/csr/SlidersHorizontal";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import type { Ticket } from "@volli/shared";
 
-import { TicketProperties } from "@renderer/components/ticket/ticket-properties";
-import { TicketEnvironmentInspector } from "@renderer/components/ticket/ticket-environment-inspector";
+import { TicketProperties, TicketStamps } from "@renderer/components/ticket/ticket-properties";
+import { TicketRepositorySummary } from "@renderer/components/ticket/ticket-repository-summary";
 import { TicketSessionsPanel } from "@renderer/components/ticket/ticket-sessions-panel";
 import {
   TICKET_RAIL_MODE_LABELS,
@@ -33,63 +41,121 @@ import {
   selectRailMode,
   type TicketRailMode,
 } from "@renderer/components/ticket/ticket-rail-model";
-import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
 
 const MODE_ICONS: Record<TicketRailMode, PhosphorIcon> = {
-  sessions: TerminalWindowIcon,
-  files: FoldersIcon,
+  now: ChatCircleDotsIcon,
   changes: GitDiffIcon,
-  properties: SlidersHorizontalIcon,
+  files: FoldersIcon,
 };
 
-/** Compact vertical icon strip — presentational; mode state lives in the UI store. */
-export function TicketRailModeStrip({
+/**
+ * The pill's own easing — the scratch animates the selection with a
+ * near-critically-damped spring (`bounce: 0.1`), whose settle is
+ * indistinguishable from the expo-out curve it already uses for the colour
+ * change. Expressed as one curve, the whole header costs no runtime animation
+ * library and still honours `prefers-reduced-motion` through Tailwind's
+ * `motion-reduce:` variant.
+ */
+const PILL_EASE = "[transition-timing-function:cubic-bezier(0.23,1,0.32,1)]";
+
+/**
+ * The rail's header: a centred tablist where only the selected tab wears its
+ * label, so three pages fit a 160px pill at the rail's narrowest width without
+ * ever truncating a word. Presentational — page state lives in the UI store.
+ *
+ * Translucent and blurred rather than opaque: at `top-0` of a column whose
+ * pages scroll beneath it, the bar is a floating material, not a strip the
+ * layout gives away.
+ */
+function TicketRailTabs({
   mode,
   modes,
   onSelectMode,
 }: {
   mode: TicketRailMode;
-  /** Which modes this surface offers — see `availableRailModes`. */
+  /** Which pages this surface offers — see `availableRailModes`. */
   modes: readonly TicketRailMode[];
   onSelectMode(mode: TicketRailMode): void;
 }) {
+  const refs = React.useRef<Array<HTMLButtonElement | null>>([]);
+
+  function onKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const next =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? modes.length - 1
+          : (index + (event.key === "ArrowRight" ? 1 : -1) + modes.length) % modes.length;
+    const nextMode = modes[next];
+    if (nextMode === undefined) return;
+    onSelectMode(nextMode);
+    refs.current[next]?.focus();
+  }
+
   return (
-    <nav
-      aria-label="Ticket rail modes"
-      className="flex shrink-0 flex-col items-center gap-0.5 border-l border-sidebar-border py-2"
-    >
-      {modes.map((key) => {
-        const Icon = MODE_ICONS[key];
-        const label = TICKET_RAIL_MODE_LABELS[key];
-        const active = mode === key;
-        return (
-          <Button
-            key={key}
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            aria-label={label}
-            aria-pressed={active}
-            title={label}
-            data-testid={`ticket-rail-mode-${key}`}
-            onClick={() => onSelectMode(key)}
-            className={cn(
-              "rounded-md text-muted-foreground",
-              active &&
-                "bg-primary/15 text-primary ring-1 ring-inset ring-primary/40 hover:bg-primary/20 hover:text-primary",
-            )}
-          >
-            <Icon className="size-3.5" />
-          </Button>
-        );
-      })}
-    </nav>
+    <div className="sticky top-0 z-20 shrink-0 bg-sidebar/80 px-4 py-3 backdrop-blur-xl">
+      <div
+        role="tablist"
+        aria-label="Ticket rail pages"
+        className="mx-auto flex h-10 w-40 items-center gap-0.5 rounded-full border border-sidebar-border bg-background/75 p-1 shadow-xs"
+      >
+        {modes.map((key, index) => {
+          const Icon = MODE_ICONS[key];
+          const label = TICKET_RAIL_MODE_LABELS[key];
+          const active = mode === key;
+          return (
+            <button
+              key={key}
+              ref={(node) => {
+                refs.current[index] = node;
+              }}
+              type="button"
+              role="tab"
+              id={`ticket-rail-tab-${key}`}
+              aria-controls={`ticket-rail-page-${key}`}
+              aria-selected={active}
+              tabIndex={active ? 0 : -1}
+              title={label}
+              data-testid={`ticket-rail-tab-${key}`}
+              onClick={() => onSelectMode(key)}
+              onKeyDown={(event) => onKeyDown(event, index)}
+              className={cn(
+                "relative flex h-8 items-center justify-center overflow-hidden rounded-full text-ui outline-none",
+                "transition-[width,color,background-color,box-shadow,transform] duration-200 active:scale-[0.97]",
+                PILL_EASE,
+                "motion-reduce:transition-none motion-reduce:transform-none",
+                "focus-visible:ring-2 focus-visible:ring-sidebar-ring/50",
+                active
+                  ? "w-[84px] bg-sidebar-accent text-sidebar-accent-foreground shadow-xs"
+                  : "w-8 text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground",
+              )}
+            >
+              <Icon className="size-3.5 shrink-0" />
+              {/* Clipped to zero rather than unmounted: the width animates, so
+                  the label has to slide out of the same box it slid into. */}
+              <span
+                className={cn(
+                  "overflow-hidden whitespace-nowrap transition-[max-width,opacity,margin] duration-200",
+                  PILL_EASE,
+                  "motion-reduce:transition-none",
+                  active ? "ml-1.5 max-w-16 opacity-100" : "ml-0 max-w-0 opacity-0",
+                )}
+              >
+                {label}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
-function RailModePlaceholder({ label }: { label: string }) {
+function RailPagePlaceholder({ label }: { label: string }) {
   return (
     <div
       data-testid={`ticket-rail-placeholder-${label.toLowerCase()}`}
@@ -112,7 +178,6 @@ export function TicketRail({
   activeTabId,
   filesContent,
   changesContent,
-  onOpenSource,
 }: {
   projectId: string;
   ticket: Ticket;
@@ -125,7 +190,7 @@ export function TicketRail({
   onActivateChat(sessionId: string): void;
   /**
    * The main strip's active tab. The rail never changes it — it is threaded in
-   * so mode switches run through {@link selectRailMode} on the live path (see
+   * so page switches run through {@link selectRailMode} on the live path (see
    * `onSelectMode`), not only in tests.
    */
   activeTabId: string;
@@ -134,10 +199,8 @@ export function TicketRail({
    * shell stays usable until the Files agent lands.
    */
   filesContent?: React.ReactNode;
-  /** Optional Changes navigator — same seam as `filesContent`. */
+  /** Optional Diffs navigator — same seam as `filesContent`. */
   changesContent?: React.ReactNode;
-  /** Preview one Body-referenced file, so an Inspector Sources row opens the file itself. */
-  onOpenSource(relPath: string): void;
 }) {
   const storedMode = useUiStore((state) => state.railMode);
   const setRailMode = useUiStore((state) => state.setRailMode);
@@ -145,11 +208,11 @@ export function TicketRail({
   const mode = resolveRailMode(chrome);
   const modes = availableRailModes();
 
-  // Decision #46: switching navigator must not open, close, or retarget a
-  // main-view tab. The chrome transition is computed by the pure contract and
-  // only its `mode` is committed, so the store has no path by which a mode
-  // click could reach the tab strip — and the rule the tests assert is the same
-  // code the app runs, rather than a parallel description of it.
+  // Decision #46: switching page must not open, close, or retarget a main-view
+  // tab. The chrome transition is computed by the pure contract and only its
+  // `mode` is committed, so the store has no path by which a tab click could
+  // reach the tab strip — and the rule the tests assert is the same code the
+  // app runs, rather than a parallel description of it.
   const onSelectMode = React.useCallback(
     (next: TicketRailMode) => {
       setRailMode(selectRailMode({ mode, activeTabId }, next).mode);
@@ -157,36 +220,39 @@ export function TicketRail({
     [mode, activeTabId, setRailMode],
   );
 
+  const showChanges = React.useCallback(() => onSelectMode("changes"), [onSelectMode]);
+
   return (
-    <div className="flex min-h-0 flex-1" data-testid="ticket-rail">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <TicketEnvironmentInspector
-          ticket={ticket}
-          onNavigate={onSelectMode}
-          onOpenSource={onOpenSource}
-        />
-        {mode === "sessions" ? (
-          <TicketSessionsPanel
-            ticketId={ticket.id}
-            creating={creating}
-            onNewSession={onNewSession}
-            onNewChat={onNewChat}
-            onActivateSession={onActivateSession}
-            onActivateChat={onActivateChat}
-          />
-        ) : null}
-        {mode === "files" ? (filesContent ?? <RailModePlaceholder label="Files" />) : null}
-        {mode === "changes" ? (changesContent ?? <RailModePlaceholder label="Changes" />) : null}
-        {mode === "properties" ? (
-          <div
-            data-testid="ticket-rail-properties"
-            className="min-h-0 flex-1 overflow-y-auto px-4 py-5"
-          >
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="ticket-rail">
+      <TicketRailTabs mode={mode} modes={modes} onSelectMode={onSelectMode} />
+      <section
+        id={`ticket-rail-page-${mode}`}
+        role="tabpanel"
+        aria-labelledby={`ticket-rail-tab-${mode}`}
+        className="flex min-h-0 flex-1 flex-col"
+      >
+        {mode === "now" ? (
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-8 [scroll-padding-bottom:2rem]">
+            <TicketRepositorySummary
+              projectId={projectId}
+              ticket={ticket}
+              onShowChanges={showChanges}
+            />
             <TicketProperties projectId={projectId} ticket={ticket} />
+            <TicketSessionsPanel
+              ticketId={ticket.id}
+              creating={creating}
+              onNewSession={onNewSession}
+              onNewChat={onNewChat}
+              onActivateSession={onActivateSession}
+              onActivateChat={onActivateChat}
+            />
+            <TicketStamps ticket={ticket} />
           </div>
         ) : null}
-      </div>
-      <TicketRailModeStrip mode={mode} modes={modes} onSelectMode={onSelectMode} />
+        {mode === "changes" ? (changesContent ?? <RailPagePlaceholder label="Diffs" />) : null}
+        {mode === "files" ? (filesContent ?? <RailPagePlaceholder label="Files" />) : null}
+      </section>
     </div>
   );
 }

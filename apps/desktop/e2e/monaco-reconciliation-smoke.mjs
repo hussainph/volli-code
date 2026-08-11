@@ -259,7 +259,7 @@ async function findInDiff(page, text) {
  * used when a second file must stay open alongside TARGET's own tab.
  */
 async function openFileFromRail(aside, path = TARGET, { pin = false } = {}) {
-  await aside.getByTestId("ticket-rail-mode-files").click();
+  await aside.getByTestId("ticket-rail-tab-files").click();
   await waitUntil(
     "Files list",
     async () => (await aside.getByTestId("ticket-files-list").count()) === 1,
@@ -350,7 +350,7 @@ async function main() {
     await openFileFromRail(aside);
     await waitFileText(page, "export const changeSet = 1;", false);
 
-    await aside.getByTestId("ticket-rail-mode-changes").click();
+    await aside.getByTestId("ticket-rail-tab-changes").click();
     const changeRow = aside.locator(`[data-testid="ticket-changes-row"][data-path="${TARGET}"]`);
     await waitUntil("reconciliation Change row", async () => (await changeRow.count()) === 1);
 
@@ -500,7 +500,7 @@ async function main() {
 
     await openFileFromRail(aside);
     await waitFileText(page, 'export const cleanAgent = "adopted";', false);
-    await aside.getByTestId("ticket-rail-mode-changes").click();
+    await aside.getByTestId("ticket-rail-tab-changes").click();
 
     await attempt(
       3,
@@ -542,7 +542,7 @@ async function main() {
 
     await openFileFromRail(aside);
     await findInFile(page, HUMAN_MERGED_LINE);
-    await aside.getByTestId("ticket-rail-mode-changes").click();
+    await aside.getByTestId("ticket-rail-tab-changes").click();
 
     await attempt(
       5,
@@ -566,7 +566,7 @@ async function main() {
         // saved file's own row is still quiet.
         await openFileFromRail(aside, SECOND_TARGET, { pin: true });
         await waitFileText(page, 'export const sentinel = "seen";', false);
-        await aside.getByTestId("ticket-rail-mode-changes").click();
+        await aside.getByTestId("ticket-rail-tab-changes").click();
         const sentinelRow = aside.locator(
           `[data-testid="ticket-changes-row"][data-path="${SECOND_TARGET}"]`,
         );
@@ -583,7 +583,7 @@ async function main() {
         // leaving the rail anywhere but Changes.
         await openFileFromRail(aside);
         await waitFileText(page, HUMAN_MERGED_LINE, false);
-        await aside.getByTestId("ticket-rail-mode-changes").click();
+        await aside.getByTestId("ticket-rail-tab-changes").click();
 
         const updatedCount = await changeRow.getByTestId("ticket-changes-updated").count();
         return {

@@ -246,7 +246,7 @@ describe("persistence", () => {
     store.getState().toggleWorkspaceRailHidden();
     store.getState().setSidebarPinned(false);
     store.getState().toggleRailCollapsed();
-    store.getState().setRailMode("properties");
+    store.getState().setRailMode("files");
     store.getState().setDiffPresentation("side-by-side");
 
     const persisted = JSON.parse(storage.getItem("volli:ui")!) as {
@@ -259,7 +259,7 @@ describe("persistence", () => {
       workspaceRailHidden: true,
       sidebarPinned: false,
       railCollapsed: true,
-      railMode: "properties",
+      railMode: "files",
       diffPresentation: "side-by-side",
       lastHarnessId: "claude-code",
     });
@@ -401,14 +401,47 @@ describe("persistence", () => {
     expect(createUiStore(corrupt).getState().railCollapsed).toBe(false);
   });
 
-  it("rehydrates railMode from storage; legacy detailsExpanded:true migrates to properties", async () => {
+  it("rehydrates a railMode this build still offers", async () => {
     const storage = createMemoryStorage();
     createUiStore(storage).getState().setRailMode("files");
     const reloaded = createUiStore(storage);
     await reloaded.persist.rehydrate();
     expect(reloaded.getState().railMode).toBe("files");
+  });
 
-    // Pre-icon-rail builds wrote detailsExpanded instead of railMode.
+  // A user upgrading into the Calm Stack has one of these sitting in app_state.
+  // Every one has to open on a real page — never a crash, never a page this
+  // build cannot draw — and the resolved page is what gets written back.
+  it.each([
+    // The icon-mode rail's own pages, both folded into Now.
+    ["sessions", "now"],
+    ["properties", "now"],
+    // A contextual rail surface removed before the icon rail shipped.
+    ["session", "now"],
+    // Never written by any build: corrupt JSON, or a hand-edited app_state row.
+    ["bogus", "now"],
+  ])("lands the retired railMode %s on %s", (stored, expected) => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:ui",
+      JSON.stringify({
+        state: { sidebarWidth: 320, uiScale: 1, railMode: stored },
+        version: 1,
+      }),
+    );
+    const store = createUiStore(storage);
+    expect(store.getState().railMode).toBe(expected);
+
+    // And the retired string is not written back: the next launch reads a page
+    // name this build chose, not the one it inherited.
+    store.getState().setRailWidth(300);
+    const persisted = JSON.parse(storage.getItem("volli:ui")!) as {
+      state: Record<string, unknown>;
+    };
+    expect(persisted.state.railMode).toBe(expected);
+  });
+
+  it("migrates the pre-icon-rail Details drawer onto the page that absorbed it", () => {
     const legacy = createMemoryStorage();
     legacy.setItem(
       "volli:ui",
@@ -417,36 +450,16 @@ describe("persistence", () => {
         version: 1,
       }),
     );
-    expect(createUiStore(legacy).getState().railMode).toBe("properties");
+    expect(createUiStore(legacy).getState().railMode).toBe("now");
+  });
 
-    // The removed Session rail mode restores the safe default on rehydrate.
-    const removedSessionMode = createMemoryStorage();
-    removedSessionMode.setItem(
-      "volli:ui",
-      JSON.stringify({
-        state: { sidebarWidth: 320, uiScale: 1, railMode: "session" },
-        version: 1,
-      }),
-    );
-    expect(createUiStore(removedSessionMode).getState().railMode).toBe("sessions");
-
-    // Missing/corrupt railMode with Details closed defaults to sessions.
+  it("defaults a missing railMode to Now", () => {
     const missing = createMemoryStorage();
     missing.setItem(
       "volli:ui",
       JSON.stringify({ state: { sidebarWidth: 320, uiScale: 1 }, version: 1 }),
     );
-    expect(createUiStore(missing).getState().railMode).toBe("sessions");
-
-    const corrupt = createMemoryStorage();
-    corrupt.setItem(
-      "volli:ui",
-      JSON.stringify({
-        state: { sidebarWidth: 320, uiScale: 1, railMode: "bogus" },
-        version: 1,
-      }),
-    );
-    expect(createUiStore(corrupt).getState().railMode).toBe("sessions");
+    expect(createUiStore(missing).getState().railMode).toBe("now");
   });
 
   it("rehydrates sidebarWidth from storage into a fresh store", async () => {
