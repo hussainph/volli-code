@@ -445,9 +445,17 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
             the panel's own inset inside it. `pointer-events-none` because this
             is a paint boundary and nothing else — the panel below re-enables
             them, so a withdrawn panel still leaves its docked strip clickable
-            by whatever is actually under it. */}
+            by whatever is actually under it.
+
+            Deliberately NOT `aria-hidden`, however tempting the symmetry is.
+            `aria-hidden` is inherited and cannot be revoked by a descendant, so
+            putting it here took the whole sidebar — nav, sessions, footer — out
+            of the accessibility tree permanently, including while it was open
+            and on screen. The panel below already carries the conditional
+            `aria-hidden`/`inert` pair that expresses the thing actually worth
+            expressing: withdrawn is hidden, shown is not. A wrapper that exists
+            only to clip paint must stay silent about semantics. */}
         <div
-          aria-hidden
           className="pointer-events-none absolute z-20 overflow-hidden"
           style={{
             top: -CLIP_SPILL,
