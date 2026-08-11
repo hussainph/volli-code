@@ -14,9 +14,9 @@
  * and the two Session kinds — session and chat — are renamable.
  */
 import * as React from "react";
-import { CornersOutIcon } from "@phosphor-icons/react/dist/csr/CornersOut";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
+import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
@@ -135,9 +135,9 @@ interface TicketTabStripProps {
   onNewSession(): void;
   /** Mints a chat Session and opens its tab. */
   onNewChat(): void;
-  /** Focus mode is only meaningful when the active descriptor is a resident session tab. */
-  canFocusTerminal: boolean;
-  onEnterTerminalFocus(): void;
+  /** Drives the corner control's label — the details rail's current state. */
+  railCollapsed: boolean;
+  onToggleRail(): void;
 }
 
 /**
@@ -327,8 +327,8 @@ export function TicketTabStrip({
   onRenameSessionTab,
   onNewSession,
   onNewChat,
-  canFocusTerminal,
-  onEnterTerminalFocus,
+  railCollapsed,
+  onToggleRail,
 }: TicketTabStripProps) {
   const [editingId, setEditingId] = React.useState<string | null>(null);
 
@@ -336,9 +336,17 @@ export function TicketTabStrip({
     <div className="flex shrink-0 items-end border-b border-border bg-rail pt-1.5">
       {/* Tabs and the session-start control scroll as one cluster, keeping
           creation beside the last tab instead of pinning it away from its
-          destination. The focus control owns a stable slot at the far right. */}
+          destination. The rail toggle owns a stable slot at the far right. */}
       <div className="flex min-w-0 flex-1 items-end overflow-x-auto px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        <div role="tablist" aria-orientation="horizontal" className="flex items-end gap-0.5">
+        {/* Named, because the details rail draws a tablist of its own on the
+            same screen — two unlabeled ones leave AT (and any query by role)
+            with no way to say which strip it means. */}
+        <div
+          role="tablist"
+          aria-label="Ticket tabs"
+          aria-orientation="horizontal"
+          className="flex items-end gap-0.5"
+        >
           {tabs.map((tab) => (
             <TicketTab
               key={tab.id}
@@ -380,25 +388,26 @@ export function TicketTabStrip({
           width kept) with a rectangular hover (rounded-none) so it reads as a
           corner region, not a tall pill. */}
       <div className="-mt-1.5 flex shrink-0 items-stretch self-stretch border-l border-border/70 px-1.5">
+        {/* The details rail's collapse control, and the reason this corner has
+            no `disabled` state, no reserved slot and no fade: the strip spans
+            both columns, so its right corner sits directly on top of the pane
+            this button collapses, and that pane is always there to collapse.
+            (Terminal focus, which WAS conditional on the active tab's kind,
+            moved up to the chrome band's trailing slot.) */}
         <Button
           size="icon-xs"
           variant="ghost"
           className="h-full rounded-none"
-          disabled={!canFocusTerminal}
-          onClick={onEnterTerminalFocus}
-          aria-label="Enter terminal focus"
-          // No `aria-pressed`: entering focus hides this whole strip
-          // (ticket-detail.tsx renders it only while NOT focused), so the
-          // control can never be drawn in the pressed state. It is a one-way
-          // action, and a toggle that always reports "off" is worse than no
-          // toggle semantics at all — Escape is what comes back.
-          title={
-            canFocusTerminal
-              ? "Enter terminal focus"
-              : "Select a terminal tab to enter terminal focus"
-          }
+          onClick={onToggleRail}
+          // No `aria-pressed`: the label below already carries the state, and
+          // the button has no pressed appearance for it to describe — the same
+          // call the band's own panel toggles make.
+          aria-label={railCollapsed ? "Show details rail" : "Hide details rail"}
+          title={`${railCollapsed ? "Show" : "Hide"} details (⌥⌘B)`}
         >
-          <CornersOutIcon className="size-3.5" />
+          {/* scale-x-[-1] mirrors the left-sidebar glyph so it reads as the
+              RIGHT panel (VS Code's secondary-sidebar convention). */}
+          <SidebarSimpleIcon className="size-3.5 scale-x-[-1]" />
         </Button>
       </div>
     </div>

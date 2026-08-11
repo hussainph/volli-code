@@ -113,6 +113,7 @@ export default defineConfig(({ mode }) => ({
         "src/lib/new-session-shortcut.ts",
         "src/lib/new-ticket-shortcut.ts",
         "src/lib/relative-time.ts",
+        "src/lib/terminal-focus.ts",
         "src/lib/debounce.ts",
         "src/lib/escape-guard.ts",
         "src/lib/session-rpc-ipc-link.ts",

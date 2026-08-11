@@ -299,6 +299,13 @@ async function detailOpen(page) {
   return (await docTab(page).count()) === 1;
 }
 
+/** The shell's own word for its arrangement: "focused" | "framed" | "ephemeral". */
+async function shellState(page) {
+  return page.evaluate(
+    () => document.querySelector("[data-volli-shell]")?.getAttribute("data-volli-shell") ?? null,
+  );
+}
+
 /** Board is showing when the ticket's board card is mounted and no detail tab strip is. */
 async function boardOpen(page) {
   return (await cardById(page, DISPLAY_ID).count()) === 1 && !(await detailOpen(page));
@@ -879,18 +886,17 @@ async function main() {
         const noFalseClaude = (await aside.getByText("Claude Code", { exact: true }).count()) === 0;
 
         // Put this live shell ticket into Doing through the real property UI
-        // (Properties icon mode replaces the retired Details drawer). A live
-        // pane reaches the ACTIVE band from any column, so the next scenario's
-        // row does not depend on this move — it is here to exercise the
-        // property UI on the way past.
-        await aside.getByTestId("ticket-rail-mode-properties").click();
-        await aside.getByRole("button", { name: "Todo", exact: true }).click();
+        // (the Now page folds properties in — the Properties rail mode is
+        // retired). A live pane reaches the ACTIVE band from any column, so the
+        // next scenario's row does not depend on this move — it is here to
+        // exercise the property UI on the way past.
+        await aside.getByTestId("ticket-rail-tab-now").click();
+        await aside.getByRole("button", { name: "Status: Todo", exact: true }).click();
         await page.getByRole("menuitemradio", { name: "Doing", exact: true }).click();
         const doing = await waitUntil("ticket moves to Doing", async () => {
           const persisted = await readTicket(page, TICKET_ID);
           return persisted?.status === "doing";
         });
-        await aside.getByTestId("ticket-rail-mode-sessions").click();
 
         const ok =
           envOk && aliveOk && railRow && railChip && shellSource && noFalseClaude && !!doing;
@@ -1000,32 +1006,30 @@ async function main() {
     );
 
     // ===================================================================
-    // 8. ICON-MODE RAIL — Sessions default + Properties + no harness
+    // 8. RAIL PAGES — Now default, properties folded in, no harness
     //     (runs before 6b so a pre-existing terminal-focus restore failure
     //     cannot hide a real rail regression)
     // ===================================================================
     await attempt(
       8,
-      "Rail: icon-mode Sessions default with Properties metadata in-rail; no Harness row anywhere; board filter bar has no Harness chip",
+      "Rail: Now is the default page and folds sessions + status/priority in; no Harness row anywhere; board filter bar has no Harness chip",
       async () => {
         if (!(await detailOpen(page))) await openTicketViaCard(page);
         const aside = page.locator("aside");
-        // Sessions is the default icon mode.
+        // Now is the default rail page, and it holds the session list.
         const sessionsHeading =
           (await aside.getByRole("heading", { name: "Sessions" }).count()) >= 1;
         const sessionsPressed =
-          (await aside.getByTestId("ticket-rail-mode-sessions").getAttribute("aria-pressed")) ===
-          "true";
+          (await aside.getByTestId("ticket-rail-tab-now").getAttribute("aria-selected")) === "true";
 
-        // Properties mode renders status/priority directly in the rail (decision #46).
-        await aside.getByTestId("ticket-rail-mode-properties").click();
-        const propertiesShown = await waitUntil("Properties mode content", async () => {
+        // Now folds status/priority in as pills, whose accessible names carry
+        // the value ("Status: Todo") — the standalone captions are gone.
+        const propertiesShown = await waitUntil("Now page properties", async () => {
           return (
-            (await aside.getByText("Status", { exact: false }).count()) >= 1 &&
-            (await aside.getByText("Priority", { exact: false }).count()) >= 1
+            (await aside.getByRole("button", { name: /^Status: / }).count()) >= 1 &&
+            (await aside.getByRole("button", { name: /^Priority: / }).count()) >= 1
           );
         });
-        await aside.getByTestId("ticket-rail-mode-sessions").click();
 
         const noHarnessInRail = (await aside.getByText(/harness/i).count()) === 0;
         await escapeToBoard(page);
@@ -1060,9 +1064,9 @@ async function main() {
           return (await docTab(page).getAttribute("aria-selected")) === "true";
         });
 
-        const modes = ["files", "changes", "properties", "sessions"];
+        const modes = ["changes", "files", "now"];
         for (const mode of modes) {
-          await aside.getByTestId(`ticket-rail-mode-${mode}`).click();
+          await aside.getByTestId(`ticket-rail-tab-${mode}`).click();
           const stillBody = await waitUntil(
             `Ticket Body still active after ${mode} mode`,
             async () => (await docTab(page).getAttribute("aria-selected")) === "true",
@@ -1072,7 +1076,10 @@ async function main() {
           }
         }
 
+        // Scoped to the ticket's own strip: the rail draws a second tablist for
+        // its pages, and those tabs are not candidates for "an auto-opened file".
         const fileTabs = await page
+          .getByRole("tablist", { name: "Ticket tabs" })
           .getByRole("tab")
           .evaluateAll((tabs) => tabs.map((t) => t.getAttribute("aria-label") ?? ""));
         // Only the body tab and any already-open session tabs — never an auto-opened file.
@@ -1097,8 +1104,21 @@ async function main() {
     // ===================================================================
     await attempt(
       "6b",
-      "Terminal focus reclaims sidebars/tab rail, keeps one thin chrome row, preserves the live canvas, and the Exit button restores the workspace",
+      "Terminal focus appears on the band only for a session tab, reclaims sidebars/tab rail, keeps one thin chrome row, preserves the live canvas, and toggles back to the workspace",
       async () => {
+        // The band's toggle derives its own target, so it must come and go with
+        // the ticket's ACTIVE TAB KIND — the one regression moving it up from
+        // the tab strip's corner can cause.
+        await docTab(page).click();
+        const hiddenOnDoc = await waitUntil("no focus control on the Ticket Body", async () => {
+          return (await page.getByRole("button", { name: "Enter terminal focus" }).count()) === 0;
+        }).catch(() => null);
+        const sessionTab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
+        await sessionTab.click();
+        const shownOnSession = await waitUntil("focus control on the session tab", async () => {
+          return (await page.getByRole("button", { name: "Enter terminal focus" }).count()) === 1;
+        }).catch(() => null);
+
         const marked = await page.evaluate(() => {
           const canvas = Array.from(document.querySelectorAll("canvas")).find(
             (candidate) =>
@@ -1144,10 +1164,10 @@ async function main() {
           focused.asides === 0 &&
           focused.canvasVisible;
 
-        // Exit is the chrome-bar button only. Bare Escape stays with the PTY
-        // (Claude Code / vim), and the old ⌘Escape chord was dropped — it never
-        // reliably reached the renderer under Playwright/Electron and wasn't
-        // worth the fight.
+        // Exit is the band's toggle — the same button, its glyph flipped — or
+        // ⌥⌘Return. Bare Escape stays with the PTY (Claude Code / vim), and the
+        // old ⌘Escape chord was dropped: it never reliably reached the renderer
+        // under Playwright/Electron and wasn't worth the fight.
         await page.getByRole("button", { name: "Exit terminal focus" }).click();
         const restored = await waitUntil("workspace geometry restored", async () =>
           page.evaluate(() => {
@@ -1170,15 +1190,37 @@ async function main() {
         );
         const restoredGeometry =
           restored.insetLeft > 0 &&
-          restored.tablists === 1 &&
+          // Two: the ticket's tab strip and the rail's own page tablist.
+          restored.tablists === 2 &&
           restored.asides === 1 &&
           restored.canvasVisible;
+
+        // ⌥⌘Return is the same toggle on the keyboard, and it has to work in
+        // both directions — the exit direction fires while a live PTY holds
+        // keyboard focus, which is why the listener is capture-phase.
+        await page.keyboard.press("Alt+Meta+Enter");
+        const focusedByChord = await waitUntil("⌥⌘Return enters terminal focus", async () => {
+          return (await shellState(page)) === "focused";
+        }).catch(() => null);
+        await page.keyboard.press("Alt+Meta+Enter");
+        const exitedByChord = await waitUntil("⌥⌘Return exits terminal focus", async () => {
+          return (await shellState(page)) !== "focused";
+        }).catch(() => null);
+
         const ticketStillOpen = await detailOpen(page);
 
-        const ok = marked && focusGeometry && restoredGeometry && ticketStillOpen;
+        const ok =
+          marked &&
+          !!hiddenOnDoc &&
+          !!shownOnSession &&
+          focusGeometry &&
+          restoredGeometry &&
+          !!focusedByChord &&
+          !!exitedByChord &&
+          ticketStillOpen;
         return {
           ok,
-          detail: `marked=${marked} focused=${JSON.stringify(focused)} restored=${JSON.stringify(restored)} ticketOpen=${ticketStillOpen}`,
+          detail: `marked=${marked} bandHiddenOnDoc=${!!hiddenOnDoc} bandShownOnSession=${!!shownOnSession} focused=${JSON.stringify(focused)} restored=${JSON.stringify(restored)} chordIn=${!!focusedByChord} chordOut=${!!exitedByChord} ticketOpen=${ticketStillOpen}`,
         };
       },
     );
@@ -1252,13 +1294,13 @@ async function main() {
     // ===================================================================
     await attempt(
       10,
-      "Rail toggle: the chrome rail button and ⌥⌘B hide/show the right rail; left collapsed for the restart-persistence check",
+      "Rail toggle: the tab strip's corner button and ⌥⌘B hide/show the right rail; left collapsed for the restart-persistence check",
       async () => {
         if (!(await detailOpen(page))) await openTicketViaCard(page);
         const aside = page.locator("aside");
         await waitUntil("rail visible initially", async () => (await aside.count()) === 1);
 
-        // Chrome-bar mirrored toggle hides the rail.
+        // The tab strip's corner sits directly above the pane it collapses.
         await page.getByRole("button", { name: "Hide details rail" }).click();
         const hiddenByButton = await waitUntil("rail hidden by button", async () => {
           return (await aside.count()) === 0;
@@ -1333,10 +1375,15 @@ async function main() {
 
         // Rail collapsed state persisted across restart (no rail rendered yet).
         const railCollapsedPersisted = (await page.locator("aside").count()) === 0;
-        // Bring it back to assert the session record survived.
+        // Bring it back to assert the session record survived. Reported rather
+        // than thrown: if the collapse did NOT persist, ⌥⌘B hides an already-
+        // visible rail and the wait below times out saying nothing about why.
         await page.keyboard.press("Alt+Meta+b");
         const aside = page.locator("aside");
-        await waitUntil("rail restored after restart", async () => (await aside.count()) === 1);
+        const railRestored = await waitUntil(
+          "rail restored after restart",
+          async () => (await aside.count()) === 1,
+        ).catch(() => null);
 
         // The surviving (edited) comment is present; the deleted one is not.
         const commentOk = await waitUntil("persisted comment", async () => {
@@ -1381,13 +1428,14 @@ async function main() {
           titleOk &&
           !!bodyOk &&
           railCollapsedPersisted &&
+          !!railRestored &&
           !!commentOk &&
           historyCollapsed &&
           !!sessionOk &&
           !!boardViaRestartBack;
         return {
           ok,
-          detail: `docTab=${JSON.stringify(docTabId)} title=${titleOk} body=${!!bodyOk} railCollapsed=${railCollapsedPersisted} comment=${!!commentOk} historyCollapsed=${historyCollapsed} session=${!!sessionOk} restartBack=${!!boardViaRestartBack}`,
+          detail: `docTab=${JSON.stringify(docTabId)} title=${titleOk} body=${!!bodyOk} railCollapsed=${railCollapsedPersisted} railRestored=${!!railRestored} comment=${!!commentOk} historyCollapsed=${historyCollapsed} session=${!!sessionOk} restartBack=${!!boardViaRestartBack}`,
         };
       },
     );

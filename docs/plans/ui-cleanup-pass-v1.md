@@ -15,7 +15,7 @@ such override is written down below.
 | 1 | Icon-weight audit learnings | **done** — 58 sites to outline, 15 keep fill |
 | 2 | Sidebar: hover reveal + row anatomy + ghosting + scrollbar | **done** — `3a1e6bff` |
 | 3 | Session-start controls + shortcuts | **done** — `58797fcb` |
-| 4 | Fullscreen placement, planned against `ui/right-sidebar-fixes` | **planned** — `docs/plans/fullscreen-placement.md`; blocked on that branch landing |
+| 4 | Fullscreen placement — the terminal-focus / rail-toggle swap | **done** — `docs/plans/fullscreen-placement.md` |
 | 5 | Ticket composer, ported from Paper | **done** — `6daf4e09` |
 
 Split tabs (`split-tabs.tsx`) stays a lab scratch. Drag-and-select in split view
@@ -43,6 +43,9 @@ has bugs the user wants to work through separately; do not implement it here.
 - **There is no fullscreen button.** `useFullScreen` is read-only; it exists so
   the traffic-light spacer can collapse. Issue 5's control is *terminal focus*,
   an in-app zen mode. See `fullscreen-placement.md`.
+- **Terminal focus now has a chord: `⌥⌘Return`**, both directions, mirroring
+  `⌥⌘B`. It belongs to task 4 rather than task 3 — task 3 *creates* a Session,
+  this *views* one already open.
 - **The branch-listing verb the composer needs already exists** — it does not
   have to be built. Confirm what it returns before adding anything.
 
@@ -89,11 +92,15 @@ CI does not run these. Run before shipping: `pnpm run build`, then each of
 `session-start-control-shots`, `ticket-rail-shots`, `docs-shots`,
 `terminal-smoke`, `memory-smoke`, `park-smoke`. All nine pass on `c08ad8aa`.
 
-`ticket-detail-smoke` step 6b covers terminal focus in both directions, so the
-`data-volli-shell="focused"` path is no longer code-verified only.
+`ticket-detail-smoke` step 6b covers terminal focus in both directions — button
+in, button out, then ⌥⌘Return in and out — plus the band control appearing and
+disappearing with the active tab's kind. The `data-volli-shell="focused"` path is
+no longer code-verified only.
 
 `docs-shots` rewrites `apps/docs/src/assets/screenshots/` from the running app —
-expect a diff there after any chrome change, and commit it.
+expect a diff there after any chrome change, and commit it. **Owed**: the chrome
+band lost the rail toggle in task 4, so those screenshots are stale by one button
+and `docs-shots` has not been rerun since.
 
 **Live judgement calls, easy to reverse**
 

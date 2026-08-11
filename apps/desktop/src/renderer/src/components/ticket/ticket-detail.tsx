@@ -195,6 +195,7 @@ export function TicketDetail({
    */
   const durableChatIds = useChatSessionRecordIds(ticket.id);
   const railCollapsed = useUiStore((state) => state.railCollapsed);
+  const toggleRailCollapsed = useUiStore((state) => state.toggleRailCollapsed);
   const railWidth = useUiStore((state) => state.railWidth);
   const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
   const setTerminalFocusTarget = useUiStore((state) => state.setTerminalFocusTarget);
@@ -852,15 +853,6 @@ export function TicketDetail({
     [setActiveTab, ticket.id],
   );
 
-  const enterTerminalFocus = React.useCallback(() => {
-    if (activeSessionTab === undefined) return;
-    setTerminalFocusTarget({
-      projectId,
-      ticketId: ticket.id,
-      sessionId: activeSessionTab.sessionId,
-    });
-  }, [activeSessionTab, projectId, ticket.id, setTerminalFocusTarget]);
-
   // Escape closes the detail view and returns to the board — but only when
   // focus isn't inside an input/textarea/contenteditable or an open menu/
   // dialog, the same guard board.tsx's own Escape-deselect uses, so a
@@ -872,8 +864,8 @@ export function TicketDetail({
   //
   // While terminal-focused, Escape is left entirely alone so it reaches the
   // PTY (Claude Code interrupts on it; vim and friends lean on it). Exit from
-  // terminal focus is the chrome-bar button only — no Escape chord — so the
-  // PTY never fights the app for the key.
+  // terminal focus is the chrome band's toggle and its ⌥⌘Return chord — never a
+  // bare key — so the PTY never fights the app for one.
   React.useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape" || event.defaultPrevented) return;
@@ -946,8 +938,8 @@ export function TicketDetail({
             }}
             onNewSession={() => void createSession()}
             onNewChat={() => void createChat()}
-            canFocusTerminal={activeSessionTab !== undefined}
-            onEnterTerminalFocus={enterTerminalFocus}
+            railCollapsed={railCollapsed}
+            onToggleRail={toggleRailCollapsed}
           />
         )}
         <div className="flex min-h-0 flex-1 overflow-hidden">

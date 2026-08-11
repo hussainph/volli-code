@@ -3,8 +3,9 @@
 The controls trade lanes. The tab-strip corner takes the right-rail toggle; the
 chrome band's right lane takes terminal focus, as one button whose glyph flips.
 
-Planned against `ui/right-sidebar-fixes` (Calm Stack). Nothing here is
-implemented; §"Blocked" says what must land first.
+**Shipped.** The Calm Stack landed (`07fd594e`) and this was built on top of it.
+The line numbers below are the pre-Calm-Stack coordinates and are stale; the
+reasoning is not. §"What shipped" records where the plan was overruled.
 
 ## First, the premise is wrong in a way that matters
 
@@ -182,14 +183,14 @@ Read from `.../ui+right-sidebar-fixes/.../lab/scratches/ticket-right-sidebar.tsx
 One smoke covers both: **`node apps/desktop/e2e/ticket-detail-smoke.mjs`** (after
 `pnpm run build`). It is not in CI — run it locally.
 
-- **Step 6b** (L1097–1183) clicks `getByRole("button", { name: "Enter terminal focus" })`
-  at L1112 and `"Exit terminal focus"` at L1150. Both still resolve — Playwright
-  queries the whole DOM and the accessible names are unchanged. Its precondition
-  (L1082–1085 re-activates the session tab) is exactly what the band's new gate
-  requires, so it passes unedited.
-- **Step 10** (L1252–1284) clicks `"Hide details rail"` at L1261. Passes
-  unedited, for the same reason. Its `aside` counts and the restart-persistence
-  check at L1334 are untouched.
+- **Step 6b** clicks `getByRole("button", { name: "Enter terminal focus" })` and
+  `"Exit terminal focus"`. Both still resolve — Playwright queries the whole DOM
+  and the accessible names are unchanged. Its precondition (step 8b re-activates
+  the session tab) is exactly what the band's new gate requires. *It did not pass
+  unedited, though: the Calm Stack's rail added a second `role="tablist"`, so the
+  restored count is 2, not 1.*
+- **Step 10** clicks `"Hide details rail"`. Passes unedited, for the same reason.
+  Its `aside` counts and the restart-persistence check are untouched.
 - **Therefore: preserve those four accessible-name strings verbatim.** That is
   the single constraint that keeps the smoke green.
 - **What is genuinely uncovered, and the three lines to add.** Nothing today
@@ -204,28 +205,57 @@ One smoke covers both: **`node apps/desktop/e2e/ticket-detail-smoke.mjs`** (afte
   add a store action for it.
 - `ticket-rail-shots.mjs` and `docs-shots.mjs` are untouched by this plan.
 
-## Blocked on `ui/right-sidebar-fixes`
+## What the Calm Stack settled, and where the plan was overruled
 
-- **Rebase before touching `ticket-detail.tsx`.** It is the only shared file.
-  The Calm Stack will edit the `<aside>` block (L1031–1055) and the rail's
-  props; this plan edits L197, L855–862 and L949–950. Different regions, so a
-  textual merge is clean — but do not write both from the same base.
-- **Verify one geometric assumption after the rebase, before implementing.**
-  The recommendation rests on the tab strip being full-width *above* the rail
-  (`ticket-detail.tsx:891–893`). The Calm Stack's `WorkbenchMock` (1160–1203)
-  draws the strip *inside* the main column, with the sidebar as its sibling and
-  its own header at the same y. That mock is a stand-in — lines 1194–1197 say
-  the workbench strip "stays authoritative" — but if `ui/right-sidebar-fixes`
-  actually ships that composition, the corner is a seam cell between two
-  columns rather than a cap above one. The plan survives either way; only the
-  corner's `border-l` treatment needs a second look.
-- **Do not touch** `ticket-rail.tsx`, `ticket-rail-model.ts`, the `railMode`
-  enum in `stores/ui.ts`, or `e2e/ticket-rail-shots.mjs` (whose
-  `ticket-rail-mode-*` testids the Calm Stack retires). All of that is theirs.
-- Adjacent, already on the ledger: `⌥⌘B` at `use-nav-history.ts:176` fires
-  globally with no ticket gate. After this change the only visible control for it
-  lives on the ticket surface, which makes the ungated chord more obviously
-  wrong.
+The Calm Stack landed first, so every "blocked on" item above is answered:
+
+- **The geometric assumption held.** `ticket-detail.tsx` still renders one
+  full-width `TicketTabStrip` above the row that holds the main column and the
+  `<aside>`. The corner is a cap above the rail, not a seam cell between two
+  columns, so its `border-l` treatment needed no second look and the shipped
+  `-mt-1.5 … self-stretch` geometry moved across verbatim.
+- **The rail's vocabulary changed under the plan.** `railMode` is three pages
+  (`now` / `changes` / `files`), the vertical `TicketRailModeStrip` is gone, and
+  the rail draws its own `role="tablist"`. Nothing in this change touched it.
+
+Three places the plan was overruled, all in the same direction:
+
+- **No `aria-pressed` on either control.** The plan asked for
+  `aria-pressed={railCollapsed}` on the corner and `aria-pressed={focused}` on
+  the band. Both were dropped. `WorkspaceRailToggle` and the deleted
+  `RightRailToggle` already carry the written reason: a button whose LABEL flips
+  with its state and which has no pressed appearance announces "Exit terminal
+  focus, pressed", which reads as if exiting were the thing already done. The
+  four pinned accessible names force the label to flip, so the state may not
+  also ride `aria-pressed`. The ledger item this plan set out to kill was
+  "aria-pressed used decoratively" — adding two more would have re-filed it.
+- **No `weight="fill"` on the corner glyph.** `SidebarSimpleIcon` shipped at
+  regular weight in the band and every glyph in the tab strip is regular; the
+  icon-weight audit points the same way. It moved lanes, not weights.
+- **The strip's tablist gained `aria-label="Ticket tabs"`.** Two unlabeled
+  tablists now share the ticket screen — the strip's and the rail's — and
+  `getByRole("tab")` could no longer say which it meant.
+
+## Shipped
+
+- `lib/terminal-focus.ts` — the pure decision: `isTerminalFocusKeyEvent`
+  (⌥⌘Return), `terminalFocusTargetForChrome` (the nav + `settingsOpen` gate) and
+  `activeTerminalSessionId`. In the coverage gate at 100%.
+- `hooks/use-terminal-focus-shortcut.ts` — the chord, mounted from
+  `chrome-bar.tsx` because the button and the chord are one control.
+  Capture-phase and swallowed unconditionally, like ⌥⌘B: falling through would
+  hand ⌥⌘Return to the nearest composer, whose submit guard reads
+  `metaKey || ctrlKey` without excluding Option.
+- Smoke: `ticket-detail-smoke.mjs` step 6b now asserts the band control appears
+  and disappears with tab kind, and round-trips the chord in both directions;
+  step 8/8b/5 moved to the Calm Stack's `ticket-rail-tab-*` testids and
+  `Status: <value>` pill names; 6b's restored `tablists` count is 2 (strip +
+  rail). All 14 checks pass.
+
+Still open, adjacent: `⌥⌘B` at `use-nav-history.ts` is now gated on an open
+ticket, so that ledger item is closed — but `docs-shots.mjs` has NOT been rerun,
+and the chrome band lost a control, so `apps/docs/src/assets/screenshots/`
+is stale by one button.
 
 ## Settled: the terminal-focus chord lands here, not in task 3
 
