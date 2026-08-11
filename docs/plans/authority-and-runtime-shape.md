@@ -34,7 +34,7 @@ Auto is the default authority mode for every Session. The user is not asked to
 approve individual tool calls.
 
 The reasoning is Anthropic's, from making auto mode the Claude Code default on
-2026-08-14: users approve about 97% of permission prompts, which is reflexive
+2026-08-07: users approve about 97% of permission prompts, which is reflexive
 clicking rather than review, while they reject about 39% of proposed plans. A
 prompt on every action buys the appearance of control and little of the
 substance. Scrutiny belongs at the level of intent, not the individual call. (The
