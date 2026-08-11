@@ -1,10 +1,10 @@
 # Agent authority and runtime shape
 
-**Status:** Part I slices 1–3 shipped; slice 4 remains. Part II candidate 3
-shipped and the order revised — see below. Part III decision complete, not
-started.
+**Status:** Part I slices 1–3 shipped; slice 4 remains. Part II candidates 3 and
+1 shipped (1 as #205 → #206 → #207); 2, 5 and 6 remain, in the order below. Part
+III decision complete, not started — all four slices.
 
-**Date:** 2026-08-10
+**Date:** 2026-08-11
 
 **Scope:** The policy a Session executes under, the shape of the seam the Agent
 Runtime sits behind, and how a user signs in to Model Access.
@@ -748,9 +748,15 @@ the codec rather than of this kind.
 `apps/desktop/src/renderer/src/components/chat/interaction-ui.tsx`.
 
 Roughly 1400 renderer lines sit at 100% coverage verifying behaviour nothing in
-production emits: the only producer of `interaction.opened` is the lab, and the
-Pi adapter refuses `interaction.resolve` outright. The coverage gate certifies
-unreachable code.
+production emits, and the Pi adapter refuses `interaction.resolve` outright
+(`PI_INTERACTION_UNSUPPORTED`). The coverage gate certifies unreachable code.
+
+**Sharpened 2026-08-11.** This said the lab was the one producer of
+`interaction.opened`. The lab's backend half was deleted with the registry, so
+there is now *no* producer at all — the arm `RuntimeObservation` gained in the
+same stack is translated but never emitted. That strengthens the dependency
+rather than changing it: the surface is still waiting on Part I slice 4 for its
+first real producer, and there is now nothing else keeping it honest.
 
 Read on its own, this looks like a deletion candidate. It is not. Part I step 4
 opens a real `SessionInteraction` and gives the surface its producer, at which
