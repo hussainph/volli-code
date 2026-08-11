@@ -12,7 +12,6 @@
  * Active is where you look without being asked, and only one of them can win
  * that competition.
  */
-import { BroomIcon } from "@phosphor-icons/react/dist/csr/Broom";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
@@ -30,7 +29,7 @@ import type {
   SessionRowKind,
 } from "@renderer/components/sidebar/active-session-listing";
 import { SidebarMenuButton, SidebarMenuItem } from "@renderer/components/ui/sidebar";
-import { relativeTime } from "@renderer/lib/relative-time";
+import { compactAge } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
 
 const ACTIVITY_LABEL: Record<SessionActivityState, string> = {
@@ -52,21 +51,22 @@ const WAITING_COPY: Record<ChatWaitingReason, string> = {
   auth: "Sign in needed",
 };
 
-/** The app's relative-time vocabulary, trimmed for a one-line row: "12m ago" → "12m". */
-function compactAge(at: number, now: number): string {
-  return relativeTime(at, now).replace(/ ago$/, "");
-}
-
 /**
  * Identity, in the one slot both bands give it: the ticket, or a globe for a
  * Session that has none. The globe is not decoration: a ticketless row has no
  * board card or ticket rail, so this list is its only Session 4 listing surface.
+ *
+ * `bold` at 12px is the sidebar's small-glyph tier, and it is a statement about
+ * the PEN rather than the size: Phosphor draws regular at 16/256 em against
+ * bold's 24/256, which at 12px is 0.75px of ink against 1.13px next to a ~1.1px
+ * text stem. Coverage is scale-invariant, so growing the glyph could never have
+ * fixed the hairline that made it read as a smudge beside its own label.
  */
 function RowIdentity({ ticket, ticketPrefix }: { ticket: Ticket | null; ticketPrefix: string }) {
   if (ticket === null) {
     return (
       <span className="flex shrink-0 items-center">
-        <GlobeIcon weight="fill" aria-label="No ticket" className="size-3" />
+        <GlobeIcon weight="bold" aria-label="No ticket" className="size-3" />
       </span>
     );
   }
@@ -75,12 +75,16 @@ function RowIdentity({ ticket, ticketPrefix }: { ticket: Ticket | null; ticketPr
   );
 }
 
-/** Which execution surface a Previous row speaks for — the axis its filter sorts on. */
+/**
+ * Which execution surface a Previous row speaks for — the axis its filter sorts
+ * on. It LEADS the identity it qualifies rather than trailing the title, which
+ * is what clears the row's right edge for the age alone.
+ */
 function KindGlyph({ kind }: { kind: SessionRowKind }) {
   const Glyph = kind === "chat" ? ChatCircleIcon : TerminalWindowIcon;
   return (
     <span className="flex shrink-0 items-center">
-      <Glyph weight="fill" aria-label={kind === "chat" ? "Chat" : "Terminal"} className="size-3" />
+      <Glyph weight="bold" aria-label={kind === "chat" ? "Chat" : "Terminal"} className="size-3" />
     </span>
   );
 }
@@ -177,9 +181,21 @@ export function ActiveBandRow({
 /**
  * One line, and quieter than Active on every axis at once.
  *
+ * The order is the marks in the order they qualify each other: the kind glyph
+ * leads the identity, the identity leads the title, and the age is ALONE on the
+ * right. That last part is the whole of the row's geometry — one trailing mark
+ * means one right edge, so the age reserves `3ch` of tabular figures and a
+ * ticking row can no longer drag the title's truncation point back and forth as
+ * "59m" becomes "1h".
+ *
  * A cleaned row is one the rules decided was concluded business, showing only
- * because the filter asked for it back — ghosted, and marked with the broom
- * rather than a sentence explaining itself.
+ * because the filter asked for it back. It says so by ghosting and by nothing
+ * else: the broom that used to ride the row was a second signifier for a state
+ * the reader had just asked to see, and a second signifier on a row this small
+ * is clutter. The ghost is 0.80 — enough to read as withdrawn, not so little
+ * that the rows a reader turned the filter ON to find are the hardest to read.
+ * Its departure takes the state's only accessible name with it, so the row says
+ * it out of band.
  */
 export function PreviousBandRow({
   row,
@@ -200,28 +216,24 @@ export function PreviousBandRow({
         size="sm"
         isActive={selected}
         onClick={onSelect}
-        className={cn(
-          "h-6 gap-1.5 px-2 text-xs text-muted-foreground",
-          row.cleaned && "opacity-45",
-        )}
+        // `px-2` is gone rather than kept: the button's own `p-2` is already
+        // 8px, so the override was a no-op that read like a deliberate
+        // difference from the Active row above it.
+        className={cn("h-6 gap-1.5 text-xs text-muted-foreground", row.cleaned && "opacity-80")}
       >
         {/* No `session-row-dim` here: this band is uniformly muted, with no
             dim/promote pairing to join — and that class also names the Active
             row's meta line for the smokes' contrast checks. */}
+        {row.cleaned ? <span className="sr-only">Cleaned up</span> : null}
+        <KindGlyph kind={row.kind} />
         <span className="text-label">
           <RowIdentity ticket={row.ticket} ticketPrefix={ticketPrefix} />
         </span>
         <span className="min-w-0 flex-1 truncate">{row.title}</span>
-        {row.cleaned ? (
-          <span className="flex shrink-0 items-center">
-            <BroomIcon weight="fill" aria-label="Cleaned up" className="size-3" />
-          </span>
-        ) : null}
-        <KindGlyph kind={row.kind} />
         {/* 0 is the model's "nothing durable can date this" sentinel — an age
             drawn from it would read as the epoch, so the row says nothing. */}
         {row.endedOrQuietAt > 0 ? (
-          <span className="shrink-0 text-label tabular-nums">
+          <span className="min-w-[3ch] shrink-0 text-right text-label tabular-nums">
             {compactAge(row.endedOrQuietAt, now)}
           </span>
         ) : null}

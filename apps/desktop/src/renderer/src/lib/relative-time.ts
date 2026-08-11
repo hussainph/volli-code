@@ -13,6 +13,14 @@ const DAY = 24 * HOUR;
 const WEEK = 7 * DAY;
 
 /**
+ * Where the relative ladder stops and an absolute date takes over. Named once
+ * because {@link compactAge} has to know the same boundary — it formats that
+ * rollup differently, and a second literal here is a second boundary waiting to
+ * drift from this one.
+ */
+const ROLLUP_AFTER = 4 * WEEK;
+
+/**
  * The one place owning absolute-date `Intl`/`toLocaleString` option objects
  * (three call sites previously each rolled their own): `{ time: true }` adds
  * hour/minute to the date-only default. Always includes the year — unlike
@@ -40,7 +48,7 @@ export function relativeTime(epochMs: number, now: number = Date.now()): string 
   if (diff < HOUR) return `${Math.floor(diff / MINUTE)}m ago`;
   if (diff < DAY) return `${Math.floor(diff / HOUR)}h ago`;
   if (diff < WEEK) return `${Math.floor(diff / DAY)}d ago`;
-  if (diff < 4 * WEEK) return `${Math.floor(diff / WEEK)}w ago`;
+  if (diff < ROLLUP_AFTER) return `${Math.floor(diff / WEEK)}w ago`;
 
   const date = new Date(epochMs);
   const sameYear = date.getFullYear() === new Date(now).getFullYear();
@@ -49,4 +57,37 @@ export function relativeTime(epochMs: number, now: number = Date.now()): string 
     day: "numeric",
     ...(sameYear ? {} : { year: "numeric" }),
   });
+}
+
+/**
+ * {@link relativeTime} trimmed for a list row's age column: "12m ago" → "12m".
+ *
+ * The column is one glance wide — the sidebar reserves `3ch` of tabular figures
+ * for it — so the two answers `relativeTime` gives that don't fit are given
+ * forms that do, and nothing else changes.
+ *
+ * "just now" is eight characters for the first forty-five seconds, and every
+ * row this formats is in the past by construction; "now" says the same thing in
+ * the width of "12h". The rollup past four weeks is the other one: the year is
+ * omitted only WITHIN the current calendar year, so a row from December renders
+ * "Dec 6, 2025" in January — twelve characters, and the widest string the
+ * column can be asked to hold. Cross-year rows drop the day for the year, which
+ * is the part that still tells you something at that distance.
+ *
+ * The two-digit year is arithmetic rather than `{ year: "2-digit" }` because
+ * that option renders bare digits ("Dec 25") which read as a day of the month
+ * beside the same formatter's "Dec 6". The apostrophe is what makes it a year.
+ */
+export function compactAge(epochMs: number, now: number = Date.now()): string {
+  if (now - epochMs < ROLLUP_AFTER) {
+    const relative = relativeTime(epochMs, now);
+    return relative === "just now" ? "now" : relative.replace(/ ago$/, "");
+  }
+
+  const date = new Date(epochMs);
+  if (date.getFullYear() === new Date(now).getFullYear()) {
+    return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  }
+  const year = String(date.getFullYear() % 100).padStart(2, "0");
+  return `${date.toLocaleDateString(undefined, { month: "short" })} '${year}`;
 }

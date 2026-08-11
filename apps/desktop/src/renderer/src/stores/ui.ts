@@ -17,6 +17,14 @@
  * is visible — persists app-wide. Hiding it returns its full width to the
  * active workspace while project keyboard shortcuts remain available.
  *
+ * `sidebarPinned` — whether the summoned sidebar panel stands in the layout
+ * (⌘B / the chrome-band trigger) rather than being summoned by the pointer at
+ * the window's left edge. Persisted app-wide for the same reason as the two
+ * above: it is a chrome preference, not a per-workspace place. A panel that
+ * re-pinned itself on every launch would undo the choice the moment it mattered.
+ * Missing or corrupt persisted state pins it — the visible default, and today's
+ * behavior.
+ *
  * `railCollapsed` — the ticket-detail right rail's collapsed state (the
  * chrome-bar ⌥⌘B toggle, VS-Code secondary-sidebar style) — persists app-wide
  * like the sidebar width: it's a global chrome preference, not per-workspace,
@@ -159,6 +167,8 @@ interface UiState {
   newTicketOpen: boolean;
   /** Project/workspace switcher rail hidden? Persisted app-wide (see module doc). */
   workspaceRailHidden: boolean;
+  /** Sidebar panel docked rather than summoned on hover? Persisted app-wide (see module doc). */
+  sidebarPinned: boolean;
   /** Ticket-detail right rail collapsed? Persisted app-wide (see module doc). */
   railCollapsed: boolean;
   /** Active ticket-rail icon mode. Persisted app-wide (see module doc). */
@@ -182,6 +192,7 @@ interface UiState {
   setNewTicketOpen(open: boolean): void;
   toggleWorkspaceRailHidden(): void;
   setWorkspaceRailHidden(hidden: boolean): void;
+  setSidebarPinned(pinned: boolean): void;
   toggleRailCollapsed(): void;
   setRailCollapsed(collapsed: boolean): void;
   setRailMode(mode: TicketRailMode): void;
@@ -210,6 +221,7 @@ type PersistedUiState = Pick<
   | "railWidth"
   | "uiScale"
   | "workspaceRailHidden"
+  | "sidebarPinned"
   | "railCollapsed"
   | "railMode"
   | "diffPresentation"
@@ -238,6 +250,7 @@ export function createUiStore(storage?: StateStorage) {
         settingsOpen: false,
         newTicketOpen: false,
         workspaceRailHidden: false,
+        sidebarPinned: true,
         railCollapsed: false,
         railMode: DEFAULT_TICKET_RAIL_MODE,
         diffPresentation: DEFAULT_DIFF_PRESENTATION,
@@ -252,6 +265,7 @@ export function createUiStore(storage?: StateStorage) {
         toggleWorkspaceRailHidden: () =>
           set((state) => ({ workspaceRailHidden: !state.workspaceRailHidden })),
         setWorkspaceRailHidden: (hidden) => set({ workspaceRailHidden: hidden }),
+        setSidebarPinned: (pinned) => set({ sidebarPinned: pinned }),
         toggleRailCollapsed: () => set((state) => ({ railCollapsed: !state.railCollapsed })),
         setRailCollapsed: (collapsed) => set({ railCollapsed: collapsed }),
         setRailMode: (mode) => set({ railMode: mode }),
@@ -280,6 +294,7 @@ export function createUiStore(storage?: StateStorage) {
           railWidth: state.railWidth,
           uiScale: state.uiScale,
           workspaceRailHidden: state.workspaceRailHidden,
+          sidebarPinned: state.sidebarPinned,
           railCollapsed: state.railCollapsed,
           railMode: state.railMode,
           diffPresentation: state.diffPresentation,
@@ -300,6 +315,11 @@ export function createUiStore(storage?: StateStorage) {
             // Missing/corrupt state from an older build keeps the switcher
             // visible so projects never become unexpectedly undiscoverable.
             workspaceRailHidden: stored.workspaceRailHidden === true,
+            // The opposite default to the line above, for the same reason:
+            // anything other than an explicit `false` leaves the panel standing,
+            // so a missing key or corrupt JSON can never open the app on a
+            // sidebar the reader has to know to summon.
+            sidebarPinned: stored.sidebarPinned !== false,
             // Any non-`true` persisted value (missing key, corrupt JSON) means
             // the rail stays expanded — the safe, visible default.
             railCollapsed: stored.railCollapsed === true,

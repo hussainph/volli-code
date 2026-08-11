@@ -160,7 +160,10 @@ function WorkspaceRailToggle() {
     <Button
       variant="ghost"
       size="icon"
-      aria-pressed={workspaceRailHidden}
+      // No `aria-pressed`: the label below already carries the state, and the
+      // button has no pressed appearance for it to describe. Both together
+      // announce "Show workspace switcher, pressed" while the switcher is
+      // hidden, which reads as its own opposite.
       onClick={() => toggleWorkspaceRailHidden()}
       aria-label={workspaceRailHidden ? "Show workspace switcher" : "Hide workspace switcher"}
       title={`${workspaceRailHidden ? "Show" : "Hide"} workspace switcher`}
@@ -235,7 +238,7 @@ function RightRailToggle() {
       // panel (VS Code's secondary-sidebar convention). mr-1 keeps it off the
       // window's right edge.
       className="app-region-no-drag mr-1 translate-y-px"
-      aria-pressed={railCollapsed}
+      // No `aria-pressed`, for the same reason as WorkspaceRailToggle above.
       onClick={() => toggleRailCollapsed()}
       aria-label={railCollapsed ? "Show details rail" : "Hide details rail"}
       title={`${railCollapsed ? "Show" : "Hide"} details (⌥⌘B)`}

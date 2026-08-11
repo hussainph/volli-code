@@ -1,6 +1,5 @@
 import * as React from "react";
 
-import { useSidebar } from "@renderer/components/ui/sidebar";
 import { SIDEBAR_DEFAULT_WIDTH, useUiStore } from "@renderer/stores/ui";
 
 interface SidebarResizeHandleProps {
@@ -10,18 +9,23 @@ interface SidebarResizeHandleProps {
 }
 
 /**
- * Drag grip on the sidebar's outer edge: resizes the primary panel (the rail
- * is fixed-width, so all delta goes to the panel). Double-click resets to the
- * default width. Not rendered while collapsed — the icon strip isn't resizable.
+ * Drag grip on the sidebar panel's outer edge: resizes the panel (the rail is
+ * fixed-width, so all delta goes to the panel). Double-click resets to the
+ * default width.
+ *
+ * Rendered in every state now, and that follows from the panel having only one
+ * width. It used to return `null` while collapsed, because collapsed meant an
+ * icon strip and an icon strip is not resizable; collapsed now means the panel
+ * is unpinned, and an unpinned panel is the same panel at the same width, so a
+ * grip that disappeared there would make the pane resizable only while docked.
+ * It lives inside the panel (app-shell.tsx), so while the panel is withdrawn it
+ * is withdrawn and `inert` with it — there is nothing to hit at the window edge.
  */
 export function SidebarResizeHandle({ onResizingChange }: SidebarResizeHandleProps) {
-  const { state } = useSidebar();
   const setSidebarWidth = useUiStore((s) => s.setSidebarWidth);
   const dragRef = React.useRef<{ pointerId: number; startX: number; startWidth: number } | null>(
     null,
   );
-
-  if (state === "collapsed") return null;
 
   function handlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return;

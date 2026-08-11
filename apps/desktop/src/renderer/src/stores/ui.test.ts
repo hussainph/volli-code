@@ -244,6 +244,7 @@ describe("persistence", () => {
     store.getState().setRailWidth(360);
     store.getState().stepUiScale(1);
     store.getState().toggleWorkspaceRailHidden();
+    store.getState().setSidebarPinned(false);
     store.getState().toggleRailCollapsed();
     store.getState().setRailMode("properties");
     store.getState().setDiffPresentation("side-by-side");
@@ -256,6 +257,7 @@ describe("persistence", () => {
       railWidth: 360,
       uiScale: UI_SCALE_STEPS[3],
       workspaceRailHidden: true,
+      sidebarPinned: false,
       railCollapsed: true,
       railMode: "properties",
       diffPresentation: "side-by-side",
@@ -352,6 +354,32 @@ describe("persistence", () => {
       }),
     );
     expect(createUiStore(corrupt).getState().workspaceRailHidden).toBe(false);
+  });
+
+  it("rehydrates sidebarPinned from storage; corrupt/missing values keep the panel pinned", async () => {
+    const storage = createMemoryStorage();
+    createUiStore(storage).getState().setSidebarPinned(false);
+    const reloaded = createUiStore(storage);
+    await reloaded.persist.rehydrate();
+    expect(reloaded.getState().sidebarPinned).toBe(false);
+
+    // Older state has no key and opens with the panel standing.
+    const missing = createMemoryStorage();
+    missing.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { sidebarWidth: 320, uiScale: 1 }, version: 1 }),
+    );
+    expect(createUiStore(missing).getState().sidebarPinned).toBe(true);
+
+    const corrupt = createMemoryStorage();
+    corrupt.setItem(
+      "volli:ui",
+      JSON.stringify({
+        state: { sidebarWidth: 320, uiScale: 1, sidebarPinned: "no" },
+        version: 1,
+      }),
+    );
+    expect(createUiStore(corrupt).getState().sidebarPinned).toBe(true);
   });
 
   it("rehydrates railCollapsed from storage; corrupt/missing values default to expanded", async () => {

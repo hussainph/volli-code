@@ -605,15 +605,14 @@
 
 /* The two numbers the rest of this geometry is built from: the margin that
  * insets the unit, and the hairline it draws around it. `primary-sidebar.tsx`
- * sizes its two absolutely-positioned presentation panes from
- * `--sidebar-width`/`--sidebar-width-icon` minus `--rail-width` and
- * `--sidebar-edge` — it has no way to know this seam then narrows the sidebar's
- * own box by a margin and wraps it in a border of its own, so a hand-copied
- * `0.5rem` here and a bare width calc there were free to drift apart, and did
- * (measured in a 1280x800 window: the sidebar box ran 68→317 but the expanded
- * pane's content reached 327, 10px past the wall). Naming both once and reusing
- * them in every correction below makes that drift impossible rather than just
- * fixed for today. */
+ * sizes its absolutely-positioned presentation pane from `--sidebar-width`
+ * minus `--rail-width` and `--sidebar-edge` — it has no way to know this seam
+ * then narrows the sidebar's own box by a margin and wraps it in a border of its
+ * own, so a hand-copied `0.5rem` here and a bare width calc there were free to
+ * drift apart, and did (measured in a 1280x800 window: the sidebar box ran
+ * 68→317 but the pane's content reached 327, 10px past the wall). Naming both
+ * once and reusing them in every correction below makes that drift impossible
+ * rather than just fixed for today. */
 :root {
   --shell-inset: 0.5rem;
   --shell-edge: 1px;
@@ -662,83 +661,75 @@
   box-shadow: var(--shadow-card);
 }
 
-/* The collapsible wrapper clips its children so the collapse animation has an
- * edge to slide behind — which also clips the sidebar half's shadow at the top
- * and bottom of the unit, leaving the frame shaded on three sides and bare on
- * the fourth. */
+/* Written for the collapsible wrapper that used to sit around both panes: it
+ * clipped its children so the collapse animation had an edge to slide behind,
+ * and clipped the sidebar half's shadow with them, leaving the frame shaded on
+ * three sides and bare on the fourth. That wrapper is gone with the icon strip.
+ *
+ * What still matches this selector is the WORKSPACE RAIL, and that is why
+ * app-shell.tsx's `opacity-0` on a hidden rail is load-bearing rather than
+ * belt-and-braces: a hidden rail is a 0px box, `ProjectRail` centres a 36px tile
+ * inside it, and centring in nothing puts half the tile at negative x. Its own
+ * `overflow-hidden` would be the obvious answer and this rule revokes it, so
+ * only opacity takes the tile away. */
 [data-volli-shell="framed"] [data-slot="sidebar"].overflow-hidden {
   overflow: visible;
 }
 
-/* `primary-sidebar.tsx`'s two presentation panes are sized in TSX from
- * `--sidebar-width`/`--sidebar-width-icon` minus `--rail-width` and
- * `--sidebar-edge` — fixed widths, deliberately, so their text doesn't reflow
- * frame-by-frame while the collapse transition animates the sidebar's width
- * (`100%` would reintroduce that). That calc has no idea this seam then insets
- * the sidebar's own box by `--shell-inset`, so both panes ran exactly that far
- * past the right wall.
+/* `primary-sidebar.tsx`'s presentation pane is sized in TSX from
+ * `--sidebar-width` minus `--rail-width` and `--sidebar-edge` — a fixed width,
+ * deliberately, because the SAME pane serves both arrangements and their parent
+ * boxes differ by exactly the borders `--sidebar-edge` names (one when docked
+ * into this seam, two when floating inside its own card). That calc has no idea
+ * this seam then insets the sidebar's own box by `--shell-inset`, so the pane
+ * ran exactly that far past the right wall.
  *
- * Each formula below re-derives the pane's true content box for THIS seam
- * rather than patching the app's, so it names the seam's own borders, not the
- * app's. `--sidebar-edge` is handed BACK here — `sidebar-container`'s `border-r`
- * is zeroed further down, since a unit whose claim is that it has no middle has
- * nothing to draw there — and the same pixel is immediately spent again on
- * `--shell-edge`, the sidebar half's own left border, which the pane lives
- * inside. Identical width, different border; subtracting it under its own name
- * is what keeps the two independent if either moves. */
+ * The formula below re-derives the pane's true content box for THIS seam rather
+ * than patching the app's, so it names the seam's own borders, not the app's.
+ * `--sidebar-edge` is handed BACK here and the same pixel is immediately spent
+ * again on `--shell-edge`, the sidebar half's own left border, which the pane
+ * lives inside. Identical width, different border; subtracting it under its own
+ * name is what keeps the two independent if either moves. */
 [data-volli-shell="framed"] [data-sidebar-presentation="expanded"] {
   width: calc(var(--sidebar-width) - var(--rail-width) - var(--shell-inset) - var(--shell-edge));
-  /* Air against the fold, and deliberately only a little.
-   *
-   * This padding STACKS on each tier's own inset rather than replacing it — the
-   * tiers (`SidebarHeader` at `px-4`, `SidebarGroup` at `p-2`) are full-bleed to
-   * the pane, so whatever goes here lands on top of 8px or 16px that is already
-   * there. Measuring the pane's own edge makes any value look one-for-one;
-   * measuring the INK is what shows the cost. At 13px the nav rows read 8px left
-   * against 21px right and the header 16 against 29, which puts the selected
-   * row's pill visibly off-centre.
-   *
-   * 6px is the compromise: rows land 8/14, header 16/22. Enough that nothing
-   * crowds the seam, small enough that the asymmetry reads as intent. Asymmetry
-   * at all is the right shape here — the right wall is a hard fold against the
-   * card, the left edge a soft one against the canvas — but it has to stay under
-   * the threshold where the pill stops looking centred. */
-  padding-right: 6px;
 }
 
-[data-volli-shell="framed"] [data-sidebar-presentation="collapsed"] {
-  width: calc(
-    var(--sidebar-width-icon) - var(--rail-width) - var(--shell-inset) - var(--shell-edge)
-  );
+/* Air against the fold, and deliberately almost none — outside the framed scope,
+ * because the pane has the same right edge floating over the canvas as it does
+ * docked into the seam, and a fold that only existed in one of them would be a
+ * fold that moved on ⌘B.
+ *
+ * This padding STACKS on each tier's own inset rather than replacing it — the
+ * tiers (`SidebarHeader` at `px-4`, `SidebarGroup` at `p-2`) are full-bleed to
+ * the pane, so whatever goes here lands on top of 8px or 16px that is already
+ * there. Measuring the pane's own edge makes any value look one-for-one;
+ * measuring the INK is what shows the cost. At 13px the nav rows read 8px left
+ * against 21px right, which puts the selected row's pill visibly off-centre.
+ *
+ * It was 6px, chosen as the largest value that still read as intent rather than
+ * as drift. What moved it to 2 is that the fold was never the biggest number on
+ * this edge: the sidebar's scroll container used to reserve 10px for a classic
+ * scrollbar the moment its list overflowed, so every row's ink slid inward and
+ * back out as the list grew. That reservation is gone (`sidebar-scroll.tsx`
+ * draws an overlay thumb in the channel the row pill already leaves), and with
+ * the edge finally still, 2px is the smallest value at which a hard seam still
+ * reads differently from the soft canvas edge opposite it. */
+[data-sidebar-presentation="expanded"] {
+  padding-right: 2px;
 }
 
-/* The grip is `absolute inset-y-0 right-0` against the fixed sidebar container,
- * which spans the full contain-layout row (y 40→800 in an 800px window) — 8px
- * taller at each end than the wall this seam actually draws (y 48→792, from the
+/* The grip is `absolute inset-y-0 right-0` against the panel's box, which docked
+ * spans the full contain-layout row (y 40→800 in an 800px window) — 8px taller
+ * at each end than the wall this seam actually draws (y 48→792, from the
  * sidebar's own `--shell-inset` margin). `right` is already correct since the
- * sidebar half has no right margin; only the two ends needed pulling in. */
+ * sidebar half has no right margin; only the two ends need pulling in. Floating,
+ * the panel's box is already inset at both ends and this rule doesn't match. */
 [data-volli-shell="framed"] [data-slot="sidebar-resize-handle"] {
   top: var(--shell-inset);
   bottom: var(--shell-inset);
 }
 
-/* …and the OTHER thing at those coordinates, which is what was actually being
- * seen. `sidebar-container` carries a 1px right border of its own and, being
- * `fixed inset-y-0`, spans the whole content row against a unit that runs
- * 48→792 — so a stub of grey line poked out of each rounded corner, reading
- * exactly like the resize grip overflowing. Two unrelated elements, same 1px
- * column, same symptom.
- *
- * Zeroed rather than inset, because in this seam it has nothing to divide. The
- * sidebar and the card meet as a colour change with no gutter, and both halves
- * already give up the border facing that seam — a third line drawn down the
- * middle would contradict the one thing the shell is claiming. It is also what
- * makes the card's left margin 0 rather than −1px, directly above. */
-[data-volli-shell="framed"] [data-slot="sidebar-container"] {
-  border-right-width: 0;
-}
-
-/* Same bug, seen from outside the unit instead of inside it: `project-rail.tsx`
+/* `project-rail.tsx`
  * centers its tile column and its `AddProjectTile` row inside the rail's own
  * 60px box, which is correct everywhere else. This geometry doesn't touch the
  * rail at all, but it DOES move what the eye reads as the rail's far edge: that
@@ -756,10 +747,15 @@
  * hidden (the chrome band's workspace-switcher toggle), and hiding it sets
  * `--rail-width: 0px` — it does NOT unmount the element. A border-box width can
  * never fall below its own padding, so a flat 8px floored a rail asking for 0
- * at 8 instead, and every pane formula above still subtracted 0 — leaving both
- * presentation layers exactly 8px wider than the pane clipping them. Deriving
- * the cap from `--rail-width` keeps the padding from ever exceeding the box it
- * is padding. */
+ * at 8 instead, and the pane formula above still subtracted 0 — leaving the
+ * presentation layer exactly 8px wider than the pane clipping it. Deriving the
+ * cap from `--rail-width` keeps the padding from ever exceeding the box it is
+ * padding.
+ *
+ * The rail declares its OWN `--rail-width` (app-shell.tsx) because the shell
+ * sets that token to 0 at provider level: the rail is a flow sibling of the
+ * panel now, so the pane's width calc must stop subtracting it while this rule
+ * still has to read the real 60. */
 [data-volli-shell="framed"] [data-workspace-rail] {
   padding-left: min(var(--shell-inset), var(--rail-width));
 }
@@ -825,13 +821,6 @@ article.bg-card {
 
 [data-sidebar-presentation="expanded"] [data-sidebar="menu-sub"] {
   display: flex !important;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  [data-slot="sidebar-gap"],
-  [data-slot="sidebar-container"] {
-    transition-duration: 100ms;
-  }
 }
 
 /* Scrollbars (#49): one global overlay-style treatment instead of Chromium's
