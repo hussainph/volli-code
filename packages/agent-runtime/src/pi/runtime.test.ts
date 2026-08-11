@@ -1126,6 +1126,123 @@ describe("startSession", () => {
     await handle.close();
   });
 
+  /**
+   * A Main checkout one refusal away from its own threshold, so the first
+   * `git reset --hard` is the one that asks. The counting itself is settled in
+   * `escalation.test.ts`; what these cover is the wiring — whether the answer
+   * reaches the tool, the ledger, and the turn.
+   */
+  function escalatingAttachment(ask: NonNullable<SessionRuntimeSpec["ask"]>): {
+    attachment: Attachment;
+    exec: ReturnType<typeof vi.fn>;
+    containedEnv: SessionExecutionEnv;
+  } {
+    const attachment = fixture({ tools: { tools: ["execute"] } });
+    attachment.spec.authority = {
+      ...attachment.spec.authority,
+      location: "main-checkout",
+      fallback: { consecutiveDenials: 1, sessionDenials: 20 },
+    };
+    attachment.spec.ask = ask;
+    const exec = vi.fn(async () => ({
+      ok: true as const,
+      value: { stdout: "", stderr: "", exitCode: 0 },
+    }));
+    const containedEnv = {
+      cwd: attachment.worktreePath,
+      prepareProcessExecution: async () => ({ ok: true as const, value: undefined }),
+      exec,
+      cleanup: async () => undefined,
+    } as unknown as SessionExecutionEnv;
+    return { attachment, exec, containedEnv };
+  }
+
+  function escalatingRuntime(
+    attachment: Attachment,
+    containedEnv: SessionExecutionEnv,
+    onSecondCall?: (context: Context) => void,
+  ): ReturnType<typeof createPiAgentRuntime> {
+    return createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      executionEnvFactory: async () => containedEnv,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("bash", { command: "git reset --hard" });
+            emit.finish();
+          },
+          (emit, context) => {
+            onSecondCall?.(context);
+            emit.text("Understood.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+  }
+
+  it("runs the refused call and records nothing when a person overrules the refusal", async () => {
+    const ask = vi.fn(async () => "allow" as const);
+    const { attachment, exec, containedEnv } = escalatingAttachment(ask);
+    const handle = await escalatingRuntime(attachment, containedEnv).startSession(attachment.spec);
+
+    await handle.submitUserMessage("Reset the tree.");
+    await handle.close();
+
+    expect(ask).toHaveBeenCalledExactlyOnceWith({
+      cause: "command.git-discards-work",
+      tool: "bash",
+      reason: expect.stringContaining("discards uncommitted work"),
+      trip: "consecutive",
+      overridable: true,
+    });
+    // The whole point of asking after the counters rather than before the
+    // observation: history must not hold a denial for a call that then ran.
+    expect(exec).toHaveBeenCalledOnce();
+    expect(kinds(attachment.observations)).not.toContain("authority");
+  });
+
+  it("records the denial and then ends the turn when a person stops it", async () => {
+    const { attachment, exec, containedEnv } = escalatingAttachment(async () => "stop");
+    const handle = await escalatingRuntime(attachment, containedEnv).startSession(attachment.spec);
+
+    await handle.submitUserMessage("Reset the tree.");
+    await handle.close();
+
+    expect(exec).not.toHaveBeenCalled();
+    expect(attachment.observations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "authority",
+          state: "denied",
+          cause: "command.git-discards-work",
+        }),
+      ]),
+    );
+    // Aborting rather than `terminate`, so the turn ends on this one refusal
+    // instead of waiting for the rest of Pi's batch to agree.
+    expect(kinds(attachment.observations)).toContain("turn:interrupted");
+  });
+
+  it("blocks without recording anything when the question goes unanswered", async () => {
+    const { attachment, exec, containedEnv } = escalatingAttachment(async () => {
+      throw new Error("the host stopped waiting");
+    });
+    let toolResultContext: Context | undefined;
+    const handle = await escalatingRuntime(attachment, containedEnv, (context) => {
+      toolResultContext = context;
+    }).startSession(attachment.spec);
+
+    await handle.submitUserMessage("Reset the tree.");
+    await handle.close();
+
+    // Nobody decided anything, so nothing is written down — but the call is
+    // still refused, and the model is still told exactly why.
+    expect(exec).not.toHaveBeenCalled();
+    expect(kinds(attachment.observations)).not.toContain("authority");
+    expect(JSON.stringify(toolResultContext?.messages)).toContain("discards uncommitted work");
+  });
+
   it("runs the real Pi loop against the worktree and settles durable history", async () => {
     const { spec, observations, sessionDataDir } = fixture();
     let secondCallContext: Context | undefined;

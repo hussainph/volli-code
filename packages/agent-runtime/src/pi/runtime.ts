@@ -27,6 +27,7 @@ import {
 import { authorityVerdict } from "../authority/gate";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
 import { mapPiActivity } from "./activity";
+import { AuthorityEscalation } from "./escalation";
 import { inspectPiModelAccess } from "./model-access";
 import { piOwnedModels } from "./models";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
@@ -574,6 +575,20 @@ async function attachSession(
     const commitObservation = (observation: Parameters<SessionRuntimeSpec["observer"]>[0]) =>
       observationDelivery.deliver(observation);
 
+    const escalation = new AuthorityEscalation({
+      fallback: spec.authority.fallback,
+      priorDenials: spec.priorAuthorityDenials,
+      ask: spec.ask,
+      signal: spec.signal,
+    });
+
+    // Assigned the statement after `new Agent` and read only from inside a Pi
+    // callback, which cannot fire before a run starts. Declared here because the
+    // callback would otherwise have to close over the `const` still being
+    // constructed, and a definite-assignment `let` says that plainly instead of
+    // resting on how a temporal dead zone happens to resolve inside a closure.
+    let endTurn!: () => void;
+
     const agent = new Agent({
       initialState: {
         systemPrompt: composeSystemPrompt(spec),
@@ -587,15 +602,20 @@ async function attachSession(
       toolExecution: "sequential",
       // `terminate` is left unset on purpose: Pi only ends the run early when
       // every finalized result in the batch asks for it, which is not what one
-      // refused call means.
-      beforeToolCall: async ({ toolCall, args }) => {
+      // refused call means. A `stop` answer ends the turn by aborting instead,
+      // which needs no agreement from the rest of the batch.
+      beforeToolCall: async ({ toolCall, args }, signal) => {
         const verdict = authorityVerdict({
           tool: toolCall.name,
           args,
           authority: spec.authority,
           workspacePath: spec.workspacePath,
         });
-        if (verdict.outcome === "allow") return undefined;
+        // Pi's own per-call signal is passed on rather than dropped: a question
+        // this parks on has to lose to a cancelled run, and Pi re-reads that
+        // signal the instant this callback returns.
+        const disposition = await escalation.resolve(verdict, toolCall.name, signal);
+        if (disposition.outcome === "proceed") return undefined;
         // Recorded before refused, through the same ordered queue as every other
         // observation: a refusal that overtook the turn it belongs to would be
         // filed against the wrong turn, and one that raced the activity stream
@@ -603,17 +623,21 @@ async function attachSession(
         // boundary and never rejects — a ledger that cannot be written is not a
         // reason to let the call through, and the failure it holds is consumed at
         // the next command boundary like any other.
-        await commitObservation({
-          kind: "authority",
-          state: "denied",
-          turnId,
-          tool: toolCall.name,
-          cause: verdict.cause,
-          reason: verdict.reason,
-        });
-        return { block: true, reason: verdict.reason };
+        if (disposition.record) {
+          await commitObservation({
+            kind: "authority",
+            state: "denied",
+            turnId,
+            tool: toolCall.name,
+            cause: disposition.cause,
+            reason: disposition.reason,
+          });
+        }
+        if (disposition.endTurn) endTurn();
+        return { block: true, reason: disposition.reason };
       },
     });
+    endTurn = () => agent.abort();
     agent.steeringMode = "one-at-a-time";
     agent.followUpMode = "one-at-a-time";
 

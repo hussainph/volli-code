@@ -55,10 +55,13 @@ export interface AuthorityFallback {
  * Nothing persists it yet. It is constructed per attach and lives as long as the
  * attachment does, so {@link rulePackId} and {@link rulePackHash} are presently
  * ceremony: both ends compute them from the same compile-time constant inside
- * one process, and no reader compares them against anything older. They are here
- * because the denial ledger is the next phase and a record is easier to write
- * than to retrofit — but until that lands, the hash pins nothing and would
- * detect nothing.
+ * one process, and no reader compares them against anything older. The denial
+ * ledger they were written ahead of has since shipped — `authority.denied` is a
+ * durable Session Event and `SessionProjection.authorityDenials` folds it — and
+ * the snapshot that produced those denials still is not recorded anywhere. That
+ * is the real, slightly awkward state today: a denial can be read back long
+ * after the pack that ruled on it has changed, with nothing durable to say
+ * which pack that was. The hash pins nothing until the snapshot itself is.
  *
  * What the pinning is *for*, once there is something to pin against: a Session
  * must not have its authority changed under it by an unrelated Settings edit,

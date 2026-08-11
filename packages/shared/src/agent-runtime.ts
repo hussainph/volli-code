@@ -16,7 +16,12 @@
 
 import type { ActivityDescriptor } from "./session-activity";
 import type { AuthorityDenialCause, AuthoritySnapshot, CodingToolId } from "./authority";
-import type { SessionInteraction, SessionInteractionResolution } from "./session-ledger";
+import {
+  SESSION_PERMISSION_OPTIONS,
+  type SessionInteraction,
+  type SessionInteractionOption,
+  type SessionInteractionResolution,
+} from "./session-ledger";
 
 export type SessionRole = "project" | "ticket" | "subagent";
 
@@ -144,6 +149,114 @@ export interface RuntimeRecoveryRef {
   sessionFilePath: string;
 }
 
+/**
+ * Which half of {@link AuthorityFallback} sent the runtime to ask.
+ *
+ * Worth naming rather than collapsing, because the two mean different things to
+ * the person answering: a run of refusals back to back means the policy is in
+ * the way of one line of work, while a total across the Session means it is in
+ * the way of the Session.
+ */
+export type RuntimeAskTrip = "consecutive" | "session";
+
+/**
+ * One escalation: a question the runtime blocks on because its own policy keeps
+ * refusing.
+ *
+ * Deliberately a port and not an observation. An observation states what
+ * happened and expects no reply; this needs an answer before the tool call it
+ * belongs to can proceed either way. Keeping it a typed port is also what keeps
+ * `@volli/agent-runtime` free of ledger types — the host owns the interaction
+ * record, and the runtime owns only the question.
+ */
+export interface RuntimeAskRequest {
+  /** The rule that refused, or `call.unreadable` when the gate refused before any ran. */
+  cause: AuthorityDenialCause;
+  /** The runtime tool name as requested, which may not be a tool Volli offers. */
+  tool: string;
+  /** The refusing rule's own words, as the model would otherwise have received them. */
+  reason: string;
+  trip: RuntimeAskTrip;
+  /**
+   * Whether consent could carry this call out.
+   *
+   * Not a measure of how alarming the rule sounds. An overridable refusal is one
+   * the sandbox would honour if this layer stood aside, so "yes" does something;
+   * for everything else the refusal stands whatever the answer, and offering to
+   * allow it would be a lie.
+   */
+  overridable: boolean;
+}
+
+/**
+ * What a person decided about one escalation.
+ *
+ * `allow` grants exactly this call and is reachable only from an overridable
+ * ask: there is no durable policy store to write a standing answer into, so
+ * nothing here can mean "always". `stop` ends the turn, not the Session.
+ */
+export type RuntimeAskOutcome = "allow" | "refuse" | "stop";
+
+/** What one escalation puts in front of a person. */
+export interface RuntimeAskOffer {
+  kind: SessionInteraction["kind"];
+  options: readonly SessionInteractionOption[];
+}
+
+const PERMISSION_OPTION_IDS = { once: "once", reject: "reject" } as const;
+
+const REPORTED_ASK_OPTIONS: readonly SessionInteractionOption[] = [
+  { id: "continue", label: "Keep working", description: null },
+  { id: "stop", label: "Stop the turn", description: null },
+];
+
+/**
+ * The choices one escalation offers, in Volli's own interaction vocabulary.
+ *
+ * Stated once, here, because the surface that offers a choice and the runtime
+ * that acts on it are one decision read twice, and the option ids are the wire
+ * between them. Two things about the pairs are deliberate.
+ *
+ * `always` is absent from the overridable pair even though
+ * {@link SESSION_PERMISSION_OPTIONS} declares it: there is no durable policy
+ * store to write a standing grant into, and an option that silently meant
+ * `once` would be a lie told in the one place a person is being asked to trust
+ * us. It is filtered from that list rather than restated as literals, so the
+ * labels stay defined in the one place the ledger defines them.
+ *
+ * A refusal that cannot be overridden still asks, because it is still a real
+ * question — not "may it run", which is settled, but "is this policy in your
+ * way badly enough to stop". That is why it is an interaction and not an
+ * Attention: it has a consequence either way.
+ */
+export function askOffer(request: RuntimeAskRequest): RuntimeAskOffer {
+  if (!request.overridable) return { kind: "question", options: REPORTED_ASK_OPTIONS };
+  const offered = new Set<string>([PERMISSION_OPTION_IDS.once, PERMISSION_OPTION_IDS.reject]);
+  return {
+    kind: "permission",
+    options: SESSION_PERMISSION_OPTIONS.filter((option) => offered.has(option.id)),
+  };
+}
+
+/**
+ * Read a person's chosen option ids back as an outcome.
+ *
+ * Fails to a refusal. Every id this does not recognise — an empty answer, a
+ * stale option from a build that offered something else, free text where a
+ * choice was expected — leaves the call refused, which is the state it was
+ * already in. The only answers that change anything are the two this
+ * deliberately spells out.
+ */
+export function askOutcome(
+  request: RuntimeAskRequest,
+  optionIds: readonly string[],
+): RuntimeAskOutcome {
+  if (request.overridable) {
+    return optionIds.includes(PERMISSION_OPTION_IDS.once) ? "allow" : "refuse";
+  }
+  return optionIds.includes("stop") ? "stop" : "refuse";
+}
+
 /** Everything the Agent Runtime needs to start one Session, whatever its Role. */
 export interface SessionRuntimeSpec {
   identity: RuntimeSessionIdentity;
@@ -161,6 +274,32 @@ export interface SessionRuntimeSpec {
   /** Opaque Pi sidecar locator from the durable Session Attachment. */
   recovery?: RuntimeRecoveryRef;
   signal?: AbortSignal;
+  /**
+   * Refusals this Session already accrued, before this attachment existed.
+   *
+   * Carried beside {@link AuthoritySnapshot} rather than inside it because a
+   * count is live machine state and not policy — the snapshot's own rule is that
+   * the facts its rules read stay live while the policy is pinned. The per-
+   * Session half of {@link AuthorityFallback} is a fact about the Session, so a
+   * counter starting from zero on every attach would never reach its threshold;
+   * the consecutive half has no equivalent, since an allowed call is not an
+   * event and only a live runtime sees both answers.
+   */
+  priorAuthorityDenials?: number;
+  /**
+   * Ask a person, and block until they answer.
+   *
+   * Optional, and its absence is a working configuration rather than a
+   * degradation: with no host to ask, the fallback thresholds have nothing to
+   * escalate to and every refusal stays silent, which is exactly what shipped
+   * before this port existed.
+   *
+   * There is no timeout, invented or otherwise. An unanswered question parks the
+   * turn for as long as it takes; the host ends the wait by rejecting the
+   * promise, which the runtime reads as a refusal it must not record — the
+   * person never decided anything.
+   */
+  ask?: (request: RuntimeAskRequest) => Promise<RuntimeAskOutcome>;
   /** Resolves only after the observation reaches its required consumer boundary. */
   observer: (observation: RuntimeObservation) => Promise<void>;
 }

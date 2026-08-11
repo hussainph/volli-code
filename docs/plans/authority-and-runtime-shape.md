@@ -190,9 +190,9 @@ semantic fact rather than a failed tool, and available to Attention.
 
 #### Escalation and the ask channel
 
-Flip `interaction.permission` to available and open a real `SessionInteraction`
-when the counters trip — three consecutive blocks, or twenty in a Session. The
-renderer half already knows how to render and answer it.
+Open a real `SessionInteraction` when the counters trip — three consecutive
+blocks, or twenty in a Session. The renderer half already knows how to render
+and answer it.
 
 ### Role policy
 
@@ -280,13 +280,12 @@ one approved shell tool chains anything.
 
 ### Implementation slices
 
-1. Make `AuthoritySnapshot` a real record, persisted at Session start and
-   projected to the UI.
+1. Make `AuthoritySnapshot` a real record, constructed per attach.
 2. Wire `beforeToolCall` to a pure `evaluate(call, snapshot, location)` in
    `@volli/shared`; vendor the deterministic hard-deny layer under MIT
    attribution.
 3. Emit a denial as a durable Session fact.
-4. Flip `interaction.permission` to available and escalate on the counters.
+4. Open a real `SessionInteraction` and escalate on the counters.
 
 Follow-up, deliberately not in the first pass: the classifier, network
 allowlisting, the Main-checkout policy and its pre-image commit, per-project rule
@@ -335,6 +334,15 @@ and 4 pay a facade tax, because only they mint new observation kinds.
 
 **Where the plan above was wrong, corrected in the build:**
 
+- Slice 1 said `AuthoritySnapshot` would be "persisted at Session start." It
+  never was and still is not: `PiBinding.runtimeSpec()` constructs the record
+  on every attach (`apps/desktop/src/main/session-runtime/pi-adapter.ts:347`),
+  no Session Event carries it, no SQLite column holds it, and
+  `SessionProjection` has no field for it — so it is not projected to the UI
+  either, which the same line claimed. What shipped is the record's shape. The
+  only durable trace of authority is the consequence of a denial — the
+  `authority.denied` event and the `SessionProjection.authorityDenials` fold
+  slice 3 added.
 - The vendored hard-deny layer could not sit in `@volli/shared` beside
   `evaluate`, because `paths.ts` needs `node:fs`. Pure policy lives in shared;
   path and shell resolution live in `agent-runtime`.
@@ -487,6 +495,36 @@ someone. Recorded here so it is a decision rather than a side effect.
 otherwise history would record a denial for a call that ran. What the user
 permitted is already durable as `interaction.opened` plus `interaction.resolved`
 — the user's decision is an interaction fact, not a policy fact.
+
+**Cancelling an ask does not reach the runtime, and that is a deadlock.**
+`SessionRuntime.#cancelInteraction` (`session-runtime.ts:1358`) writes
+`interaction.cancelled` and dispatches nothing to the adapter — deliberately,
+with a docstring defending the choice at length. Once a resolver is parked, a
+withdrawal writes the durable fact, the projection drops the interaction, and
+`sessionAwaitsUser()` goes false while the Pi turn stays blocked inside
+`beforeToolCall` forever, with nothing on screen saying so. The docstring
+names its own escape hatch: whether a harness can be told to withdraw is the
+adapter's question to answer, and for an ask Volli itself raised the answer is
+plainly yes. Closing it needs an optional withdraw verb on `BindingHandle` and
+a best-effort hop from the Engine. "Every parked resolver is cancelled on
+release and on abort," above, missed cancellation — the path a person actually
+reaches from the UI.
+
+**`stop` has no mechanism yet.** `beforeToolCall` cannot end a turn on its
+own. Pi's `terminate` flag only takes effect when every finalized tool result
+in the batch sets it — the comment in `packages/agent-runtime/src/pi/runtime.ts`
+already says so, which is why it is left unset. `stop` has to reach
+`agent.abort()` from inside the callback instead.
+
+**Recording a denial now races the Engine recording the answer.** The Engine
+writes `interaction.resolved` itself, in `#recordDelivery` after the adapter's
+dispatch returns (`session-runtime.ts:1322`), while the runtime emits
+`authority.denied` on its own ordered queue once the parked resolver settles.
+Two independent chains, so the order they land in is unspecified. Slice 3 took
+care to make a refusal land on the turn it belongs to; parking reintroduces the
+same question one level up. Both facts are true and separately timestamped, so
+this is recorded as a known interleave to pin with a test, not a thing to build
+ordering machinery for.
 
 ## Part II — Runtime shape
 
@@ -652,7 +690,7 @@ Pi adapter refuses `interaction.resolve` outright. The coverage gate certifies
 unreachable code.
 
 Read on its own, this looks like a deletion candidate. It is not. Part I step 4
-flips the adapter's declaration and gives the surface its producer, at which
+opens a real `SessionInteraction` and gives the surface its producer, at which
 point the modules are exactly what is needed. Reassess only if Part I is
 abandoned.
 
