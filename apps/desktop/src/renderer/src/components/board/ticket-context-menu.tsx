@@ -89,18 +89,26 @@ export function TicketContextMenu({
   projectId: string;
   children: React.ReactNode;
 }) {
-  // Archiving kills the ticket's live sessions (stores/board.ts), so gate it
-  // behind a confirm when any is busy. The dialog is a SIBLING of the menu — the
-  // menu unmounts on item select, but this component (and its guard state)
-  // survives, so the confirm can open after the menu is gone.
+  // Archiving kills the ticket's live TERMINALS (stores/board.ts), so gate it
+  // behind a confirm when any is busy — the confirm says archiving will end
+  // them, and for a terminal that is exactly what happens. It says nothing about
+  // the ticket's chats because archiving does not touch them: the worktree
+  // survives (only Archive & clean removes it) and the Session outlives the
+  // board. The dialog is a SIBLING of the menu — the menu unmounts on item
+  // select, but this component (and its guard state) survives, so the confirm
+  // can open after the menu is gone.
   const closeGuard = useCloseGuard();
   const [removeWorktreeOpen, setRemoveWorktreeOpen] = React.useState(false);
 
-  // Reactive so the item disables the instant a session boots/exits, not just
-  // at click time — a live session means an agent may still be mid-edit in the
-  // worktree, so removal (even the non-forced path) is refused here rather than
-  // racing main's own dirty check.
-  const hasLiveSessions = useSessionsStore((state) =>
+  // Reactive so the item disables the instant a terminal boots/exits, not just
+  // at click time. Terminals ONLY: this store holds PTY panes, and a chat
+  // Session never enters it. That is not an omission — a live PTY has a shell
+  // sitting in the worktree whatever it is doing, and deleting the directory
+  // under it breaks it, which is the same rule main's own guard applies to the
+  // terminal half. Whether a CHAT blocks the removal is a question about its
+  // Session's open turn, not about a pane, and main answers it (data-ipc.ts's
+  // `busyWorktreeSites`) rather than being second-guessed from here.
+  const hasLiveTerminals = useSessionsStore((state) =>
     (state.byOwner[ticket.id]?.tabs ?? []).some((tab) =>
       sessionPanes(tab.layout).some((pane) => pane.exitCode === null),
     ),
@@ -195,7 +203,7 @@ export function TicketContextMenu({
           {ticket.worktreePath !== null ? (
             <ContextMenuItem
               icon={TrashIcon}
-              disabled={hasLiveSessions}
+              disabled={hasLiveTerminals}
               onSelect={() => setRemoveWorktreeOpen(true)}
             >
               Remove worktree…

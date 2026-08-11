@@ -171,7 +171,7 @@ describe("volli:retention-archive-clean", () => {
     expect(dataChangedSends.some((s) => s.channel === "volli:data-changed")).toBe(true);
   });
 
-  it("refuses to archive a worktree that still holds a live Session", async () => {
+  it("refuses to archive a worktree an agent is still working in", async () => {
     const worktreePath = "/worktrees/VC-1";
     seedTicket({
       usesWorktree: true,
@@ -181,7 +181,11 @@ describe("volli:retention-archive-clean", () => {
     });
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
-      { liveSessionCwds: () => [`${worktreePath}/packages/app`] },
+      {
+        busyWorktreeSites: async () => [
+          { directory: `${worktreePath}/packages/app`, surface: "agent" },
+        ],
+      },
     );
 
     const result = await invoke<Promise<Result>>("volli:retention-archive-clean", {
@@ -190,7 +194,7 @@ describe("volli:retention-archive-clean", () => {
 
     expect(result).toEqual({
       ok: false,
-      error: "Close the live sessions running in this worktree before archiving it.",
+      error: "An agent is still running in this worktree. Stop it first.",
     });
     expect(getTicketRow(ctx.db, "t1")!.archived_at).toBeNull();
   });

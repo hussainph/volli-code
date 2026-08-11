@@ -31,7 +31,7 @@ import type {
 } from "@volli/shared";
 import type { ManagedConflict } from "./harness-install";
 import { isInternalNavigationTarget } from "./navigation";
-import type { DbHandle } from "./data-ipc";
+import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
 import { getProjectById, listProjects } from "./db/projects-repo";
@@ -596,16 +596,55 @@ app.whenReady().then(async () => {
     if (sessionIds.length > 0) broadcastSessionsInterrupted(ticketId, sessionIds);
     return sessionIds;
   };
+  /**
+   * Where work is genuinely in flight right now, for the destructive worktree
+   * guards. The two surfaces answer differently ON PURPOSE.
+   *
+   * A live PTY holds its cwd whatever it is doing: a shell whose directory was
+   * deleted underneath it is broken whether or not anything was running in it.
+   *
+   * An agent binding does not. It opens on attach and is dropped only by the
+   * executor closing itself or by app shutdown, so it survives an idle chat and
+   * outlives the tab that opened it — reading its mere existence as "busy" is
+   * what made a ticket with one empty chat in it permanently unarchivable, with
+   * nothing the user could close to clear it. So a binding counts only while its
+   * Session has a turn open, which is the same `turnActive` the Session listing
+   * reads to call a chat "working" (session-control/chat-attachment.ts). A turn
+   * that is open but blocked on a question still counts: the loop is suspended
+   * inside it and resumes writing into that directory the moment it is answered.
+   *
+   * A Session whose history cannot be read leaves its binding OUT — the
+   * fail-open stance the renderer's busy probe already takes, for the same
+   * reason: every one of these acts is independently refused on a dirty
+   * worktree, and a ticket nothing can ever archive is the worse failure.
+   */
+  const busyWorktreeSites = async (): Promise<readonly BusyWorktreeSite[]> => {
+    const sites: BusyWorktreeSite[] = (ptyManagerRef?.liveSessionCwds() ?? []).map((directory) => ({
+      directory,
+      surface: "terminal",
+    }));
+    if (sessionRuntime === null) return sites;
+    const runtime = sessionRuntime;
+    const agents = await Promise.all(
+      runtime.openNativeBindings().map(async ({ sessionId, directory }) => {
+        try {
+          const { projection } = await runtime.projection({ sessionId });
+          return projection.turnActive ? ({ directory, surface: "agent" } as const) : null;
+        } catch (error) {
+          console.warn(`[volli] could not read Session ${sessionId}:`, errorMessage(error));
+          return null;
+        }
+      }),
+    );
+    return [...sites, ...agents.filter((site) => site !== null)];
+  };
   // Standard macOS menu, but with the View-menu zoom roles replaced by
   // renderer-driven CSS zoom (see menu.ts for the rationale). Registered here
   // (rather than up with the other pre-window setup) because File > Export
   // Database needs `dbHandle`, which doesn't exist yet at that point.
   registerDataIpcHandlers(dbHandle, {
     sessionEngine: sessionEngine ?? undefined,
-    liveSessionCwds: () => [
-      ...(ptyManagerRef?.liveSessionCwds() ?? []),
-      ...(sessionRuntime?.liveNativeBindingDirectories() ?? []),
-    ],
+    busyWorktreeSites,
     // Backward-move interrupt (issue #78): a user move that leaves the active
     // columns Esc's the ticket's live agent sessions, announced via toast.
     interruptTicketSessions: interruptTicketSessionsAnnounced,

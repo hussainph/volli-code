@@ -1108,7 +1108,7 @@ describe("volli:worktree-remove", () => {
     });
   });
 
-  it("refuses (main-side) when a live session runs in the ticket's worktree, never calling remove", async () => {
+  it("refuses (main-side) when a terminal runs in the ticket's worktree, never calling remove", async () => {
     const projectId = createProject();
     const ticket = createTicket(projectId);
     const worktreePath = `${worktreesHome()}/VC-9-live`;
@@ -1118,7 +1118,11 @@ describe("volli:worktree-remove", () => {
     // A session whose cwd is INSIDE the worktree must block the removal.
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
-      { liveSessionCwds: () => [`${worktreePath}/packages`] },
+      {
+        busyWorktreeSites: async () => [
+          { directory: `${worktreePath}/packages`, surface: "terminal" },
+        ],
+      },
     );
 
     const result = await invoke<Promise<WorktreeRemoveResult>>("volli:worktree-remove", {
@@ -1128,7 +1132,56 @@ describe("volli:worktree-remove", () => {
 
     expect(result).toEqual({
       ok: false,
-      error: "Close the live sessions running in this worktree before removing it.",
+      error: "A terminal is still running in this worktree. Close it first.",
+    });
+    expect(vi.mocked(removeWorktree)).not.toHaveBeenCalled();
+  });
+
+  // The defect this guard used to have: an attached chat reported its worktree
+  // busy for as long as the app ran, whether or not anything was in flight and
+  // long after its tab was closed, and nothing the user could do cleared it.
+  // A worktree nothing is working in is removed without a fight.
+  it("removes a worktree no busy site names", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const worktreePath = `${worktreesHome()}/VC-9-quiet`;
+    invoke<TicketResult>("volli:ticket-update", { ticketId: ticket.id, worktreePath });
+    vi.mocked(removeWorktree).mockResolvedValue({ ok: true, value: undefined });
+
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { busyWorktreeSites: async () => [] });
+
+    const result = await invoke<Promise<WorktreeRemoveResult>>("volli:worktree-remove", {
+      ticketId: ticket.id,
+      force: false,
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(vi.mocked(removeWorktree)).toHaveBeenCalledWith(expect.anything(), ticket.id, {
+      force: false,
+    });
+  });
+
+  it("names stopping the agent when the busy surface is one, not closing a terminal", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const worktreePath = `${worktreesHome()}/VC-9-agent`;
+    invoke<TicketResult>("volli:ticket-update", { ticketId: ticket.id, worktreePath });
+
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { busyWorktreeSites: async () => [{ directory: worktreePath, surface: "agent" }] },
+    );
+
+    const result = await invoke<Promise<WorktreeRemoveResult>>("volli:worktree-remove", {
+      ticketId: ticket.id,
+      force: false,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "An agent is still running in this worktree. Stop it first.",
     });
     expect(vi.mocked(removeWorktree)).not.toHaveBeenCalled();
   });
@@ -1271,14 +1324,16 @@ describe("volli:worktree-orphan-delete", () => {
     expect(existsSync(target)).toBe(true);
   });
 
-  it("refuses when a live session runs at or under the target", async () => {
+  it("refuses when something is still working at or under the target", async () => {
     const target = join(worktreesHome(), "VC-2-live");
     mkdirSync(target, { recursive: true });
 
     handlers.clear();
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
-      { liveSessionCwds: () => [join(target, "src")] },
+      {
+        busyWorktreeSites: async () => [{ directory: join(target, "src"), surface: "terminal" }],
+      },
     );
 
     const result = await invoke<Promise<WorktreeOrphanDeleteResult>>(
@@ -1288,7 +1343,7 @@ describe("volli:worktree-orphan-delete", () => {
 
     expect(result).toEqual({
       ok: false,
-      error: "Close the live sessions running in this worktree before deleting it.",
+      error: "A terminal is still running in this worktree. Close it first.",
     });
     expect(existsSync(target)).toBe(true);
   });

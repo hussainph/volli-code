@@ -331,22 +331,24 @@ describe("SessionRuntime durable boundary invariants", () => {
     ).toEqual([expect.objectContaining({ id: "permission-1" })]);
   });
 
-  it("reports only the directories held by live native bindings", async () => {
+  it("names the Session and directory of every open native binding", async () => {
     const { runtime } = composition({ directory: () => "/w/VC-5" });
-    expect(runtime.liveNativeBindingDirectories()).toEqual([]);
+    expect(runtime.openNativeBindings()).toEqual([]);
     const created = await create(runtime);
     await attach(runtime, created.sessionId);
     const attachmentId = (await runtime.snapshot({ sessionId: created.sessionId })).projection
       .liveExecutor!.id;
 
-    expect(runtime.liveNativeBindingDirectories()).toEqual(["/w/VC-5"]);
+    expect(runtime.openNativeBindings()).toEqual([
+      { sessionId: created.sessionId, directory: "/w/VC-5" },
+    ]);
 
     await runtime.command({
       commandId: "release-live-directory",
       sessionId: created.sessionId,
       command: { kind: "adapter.release", attachmentId },
     });
-    expect(runtime.liveNativeBindingDirectories()).toEqual([]);
+    expect(runtime.openNativeBindings()).toEqual([]);
   });
 
   // The other half: a binding rebuilt from history — a replayed attach, or the
