@@ -930,6 +930,117 @@ describe("receipt", () => {
       }).trailer,
     ).toBeNull();
   });
+
+  it("reads a kept-working escalation as its own verdict, not a grant", () => {
+    const interaction = escalation();
+    const [only] = interaction.prompts ?? [];
+    if (!only) throw new Error("fixture has no prompt");
+    const { keepWorking } = escalationOptions();
+    const draft = selectOption(emptyInteractionDraft(interaction), only, keepWorking.id);
+    expect(
+      describeInteractionResolution(interaction, interactionResolution(interaction, draft)),
+    ).toEqual({
+      verdict: "continued",
+      lead: "You kept working past",
+      subject: "Write outside the worktree",
+      trailer: null,
+    });
+  });
+
+  it("reads a stopped escalation as its own verdict, not a refusal", () => {
+    const interaction = escalation();
+    const [only] = interaction.prompts ?? [];
+    if (!only) throw new Error("fixture has no prompt");
+    const { stopTurn } = escalationOptions();
+    const draft = selectOption(emptyInteractionDraft(interaction), only, stopTurn.id);
+    expect(
+      describeInteractionResolution(interaction, interactionResolution(interaction, draft)),
+    ).toEqual({
+      verdict: "stopped",
+      lead: "You stopped the turn at",
+      subject: "Write outside the worktree",
+      trailer: null,
+    });
+  });
+
+  it("keeps a typed note off the trailer when the turn stops", () => {
+    // The note rides on the resolution's `response`, the same field a
+    // permission reply carries its message in. `receiptTrailer` short-circuits
+    // on the verdict before it ever looks at labels, so the note must not leak
+    // into a trailer the lead already says in full.
+    const interaction = escalation();
+    const [only] = interaction.prompts ?? [];
+    if (!only) throw new Error("fixture has no prompt");
+    const { stopTurn } = escalationOptions();
+    const draft = setPromptResponse(
+      selectOption(emptyInteractionDraft(interaction), only, stopTurn.id),
+      "prompt:0",
+      "leave that file, I will finish it by hand",
+    );
+    expect(
+      describeInteractionResolution(interaction, interactionResolution(interaction, draft)),
+    ).toEqual({
+      verdict: "stopped",
+      lead: "You stopped the turn at",
+      subject: "Write outside the worktree",
+      trailer: null,
+    });
+  });
+
+  it("never reads a kept-working escalation as an allow — the regression this verdict fixes", () => {
+    // `continue` sits in ALLOW_OPTION_IDS so the card still draws with a
+    // permitting side, but reading that polarity as the verdict printed "You
+    // allowed <title> once" for a block that stands whichever option is
+    // chosen. A refactor that reorders the verdict chain and lets polarity
+    // answer this again should fail here, with a message that names exactly
+    // what came back instead of surfacing later as a wrong transcript line.
+    const interaction = escalation();
+    const [only] = interaction.prompts ?? [];
+    if (!only) throw new Error("fixture has no prompt");
+    const { keepWorking } = escalationOptions();
+    const draft = selectOption(emptyInteractionDraft(interaction), only, keepWorking.id);
+    const receipt = describeInteractionResolution(
+      interaction,
+      interactionResolution(interaction, draft),
+    );
+    expect(receipt.verdict).not.toBe("allowed");
+    expect(receipt.trailer).not.toBe("once");
+  });
+
+  it("still reads an out-of-band refusal on an escalation as rejected", () => {
+    // `declined` is read off the resolution before the escalation id is, so a
+    // reader who selected and said nothing still lands on the refusal this
+    // card mints — the escalation check must not treat the absence of
+    // `continue`/`stop` as a quieter answer of its own.
+    const interaction = escalation();
+    expect(
+      describeInteractionResolution(interaction, refusalResolution(interaction)),
+    ).toMatchObject({ verdict: "rejected", lead: "You rejected", trailer: null });
+  });
+
+  it("reads the escalation ids case-insensitively, the same as every other option id", () => {
+    const { keepWorking, stopTurn } = escalationOptions();
+    const casedContinue = { ...keepWorking, id: keepWorking.id.toUpperCase() };
+    const casedStop = {
+      ...stopTurn,
+      id: stopTurn.id.charAt(0).toUpperCase() + stopTurn.id.slice(1),
+    };
+    const [basePrompt] = escalation().prompts ?? [];
+    if (!basePrompt) throw new Error("fixture has no prompt");
+    const casedPrompt = { ...basePrompt, options: [casedContinue, casedStop] };
+    const interaction = escalation({
+      options: [casedContinue, casedStop],
+      prompts: [casedPrompt],
+    });
+    expect(
+      describeInteractionResolution(interaction, { optionIds: [casedContinue.id], response: null })
+        .verdict,
+    ).toBe("continued");
+    expect(
+      describeInteractionResolution(interaction, { optionIds: [casedStop.id], response: null })
+        .verdict,
+    ).toBe("stopped");
+  });
 });
 
 describe("interactionQuestions", () => {

@@ -93,6 +93,15 @@ export const SESSION_ESCALATION_OPTIONS: readonly SessionInteractionOption[] = [
 export const SESSION_ESCALATION_STOP_ID = "stop";
 
 /**
+ * The escalation option that accepts the refusal and lets the turn run on.
+ *
+ * Named for the same reason as its sibling, and needed separately because a
+ * reader cannot recover it from polarity: it and a permission's `once` both
+ * permit the turn to continue, and only one of them permitted a call.
+ */
+export const SESSION_ESCALATION_CONTINUE_ID = "continue";
+
+/**
  * The option ids that mean "no".
  *
  * Refusing is its own act, and both halves of the seam have to agree on which

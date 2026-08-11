@@ -1,14 +1,21 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import type { BindingHandle, NativeAttachmentSpec, ObservationSink } from "@volli/session-engine";
+import type {
+  BindingHandle,
+  HarnessCommand,
+  NativeAttachmentSpec,
+  ObservationSink,
+} from "@volli/session-engine";
 import { NativeAttachmentError, sessionRootThreadId } from "@volli/session-engine";
 import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
+  errorMessage,
   type AgentRuntime,
   type DeliveryOutcome,
   type ModelAccessSnapshot,
   type ModelSelectionOutcome,
+  type RuntimeAskRequest,
   type RuntimeAttachmentHandle,
   type RuntimeObservation,
   type SessionRuntimeSpec,
@@ -58,9 +65,12 @@ function userMessage(text: string, id = "message-1"): UIMessage {
 /** Records what the binding forwards; translating it is the Session Engine's job. */
 class RecordingSink implements ObservationSink {
   readonly observations: RuntimeObservation[] = [];
+  /** A Session write that will not commit — set to fail every emit from here on. */
+  emitFailure: unknown = null;
 
   async emit(observation: RuntimeObservation): Promise<void> {
     this.observations.push(observation);
+    if (this.emitFailure !== null) throw this.emitFailure;
   }
 }
 
@@ -182,6 +192,101 @@ async function attached(
   const sink = new RecordingSink();
   const binding = await adapter.attach(spec, sink);
   return { binding, runtime, sink };
+}
+
+/** The interaction id the request below is asked under, spelled out because it is durable. */
+const ASK_INTERACTION_ID = "ask:call-7";
+
+const ASK_REASON = "`git reset --hard` discards uncommitted work in this checkout.";
+
+function askRequest(overrides: Partial<RuntimeAskRequest> = {}): RuntimeAskRequest {
+  return {
+    cause: "command.git-discards-work",
+    tool: "execute",
+    toolCallId: "call-7",
+    turnId: "turn-1",
+    reason: ASK_REASON,
+    trip: "consecutive",
+    overridable: true,
+    ...overrides,
+  };
+}
+
+/** How one ask ended. */
+type AskOutcome = { answered: string } | { failed: string };
+
+/**
+ * Escalate the way the runtime does, and read the result the way it reads it.
+ *
+ * Both settlements are captured eagerly and on purpose. A withdrawal rejects on
+ * a microtask no test has reached yet, and a rejection nobody is holding is an
+ * unhandled rejection — so the promise is folded into a value here, which is
+ * also exactly what the runtime does with it: an answer is honoured, and any
+ * failure at all means the host could not obtain one.
+ */
+function ask(
+  runtime: FakeRuntime,
+  overrides: Partial<RuntimeAskRequest> = {},
+  signal: AbortSignal = new AbortController().signal,
+): Promise<AskOutcome> {
+  const port = runtime.spec.ask;
+  if (port === undefined) throw new Error("The binding wired no ask port");
+  return port(askRequest(overrides), signal).then(
+    (answered): AskOutcome => ({ answered }),
+    (error: unknown): AskOutcome => ({ failed: errorMessage(error) }),
+  );
+}
+
+/** What a withdrawn question settles as, whoever stopped asking it. */
+const WITHDRAWN: AskOutcome = { failed: "The question was withdrawn before anyone answered it." };
+
+/** Runs the microtask queue out, so a question the runtime asked has actually parked. */
+function flush(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
+/**
+ * The answering command as the Session Engine sends it.
+ *
+ * Everything but the interaction id and the option ids is filler, and that is
+ * the point: the binding answers against the request the *runtime* made, so the
+ * record the Engine hands back needs to carry nothing the binding trusts.
+ */
+function answerCommand(
+  interactionId: string,
+  optionIds: readonly string[],
+  commandId = "command-answer",
+): HarnessCommand {
+  return {
+    kind: "interaction.resolve",
+    commandId,
+    sessionId: SESSION_ID,
+    attachmentId: ATTACHMENT_ID,
+    interaction: {
+      id: interactionId,
+      attachmentId: ATTACHMENT_ID,
+      kind: "permission",
+      title: "Allow this execute call?",
+      detail: null,
+      options: [],
+      multiple: false,
+      native: { id: null, detail: null },
+    },
+    resolution: { optionIds, response: null },
+  };
+}
+
+/** The `interaction.cancelled` observation a withdrawal announces. */
+function cancelled(occurredAt: number, interactionId = ASK_INTERACTION_ID): RuntimeObservation {
+  return {
+    kind: "interaction",
+    state: "cancelled",
+    occurredAt,
+    interactionId,
+    reason: "withdrawn",
+  };
 }
 
 describe("Pi native adapter identity", () => {
@@ -731,30 +836,6 @@ describe("Pi native adapter dispatch", () => {
     expect(receipt.status).toBe("accepted");
   });
 
-  it("rejects an interaction resolution, because Pi raises none to resolve", async () => {
-    const { binding } = await attached();
-
-    const receipt = await binding.dispatch({
-      kind: "interaction.resolve",
-      commandId: "command-3",
-      sessionId: SESSION_ID,
-      attachmentId: ATTACHMENT_ID,
-      interaction: {
-        id: "interaction-1",
-        attachmentId: ATTACHMENT_ID,
-        kind: "permission",
-        title: "Allow?",
-        detail: null,
-        options: [],
-        multiple: false,
-        native: { id: null, detail: null },
-      },
-      resolution: { optionIds: ["once"], response: null },
-    });
-
-    expect(receipt).toMatchObject({ status: "rejected", code: "PI_INTERACTION_UNSUPPORTED" });
-  });
-
   it("refuses every command once released", async () => {
     const { binding } = await attached();
     await binding.release("requested");
@@ -767,6 +848,198 @@ describe("Pi native adapter dispatch", () => {
     });
 
     expect(receipt).toMatchObject({ status: "rejected", code: "PI_ATTACHMENT_CLOSED" });
+  });
+});
+
+describe("Pi native adapter escalation", () => {
+  it("puts a blocked call to a person, and grants exactly the call they allowed", async () => {
+    const { binding, runtime, sink } = await attached();
+
+    const answer = ask(runtime);
+    await flush();
+
+    expect(sink.observations).toEqual([
+      {
+        kind: "interaction",
+        state: "opened",
+        occurredAt: 1000,
+        interaction: {
+          // Spelled out rather than matched on shape. This string is durable —
+          // the Engine mints `pi:interaction:<attachment>:ask:call-7:opened`
+          // from it, and rederives that id from live data on every relaunch, so
+          // a rename would not fail here, it would duplicate every question a
+          // Session ever asked.
+          id: "ask:call-7",
+          kind: "permission",
+          title: "Allow this execute call?",
+          detail: ASK_REASON,
+          // `always` is deliberately absent: there is no durable policy store to
+          // write a standing grant into.
+          options: [
+            { id: "once", label: "Allow once", description: null },
+            { id: "reject", label: "Reject", description: null },
+          ],
+          multiple: false,
+          native: binding.native,
+        },
+      },
+    ]);
+
+    const receipt = await binding.dispatch(answerCommand(ASK_INTERACTION_ID, ["once"]));
+
+    expect(receipt).toMatchObject({ commandId: "command-answer", status: "accepted" });
+    expect(await answer).toEqual({ answered: "allow" });
+    // No `interaction.resolved` observation: the Engine writes that fact itself
+    // from the receipt above, and a second one here would record one answer twice.
+    expect(sink.observations).toHaveLength(1);
+  });
+
+  it("reads a rejected permission back as the refusal it already was", async () => {
+    const { binding, runtime } = await attached();
+
+    const answer = ask(runtime);
+    await flush();
+    await binding.dispatch(answerCommand(ASK_INTERACTION_ID, ["reject"]));
+
+    expect(await answer).toEqual({ answered: "refuse" });
+  });
+
+  it("offers a refusal nobody may overrule the two things a person can still decide", async () => {
+    const { binding, runtime, sink } = await attached();
+
+    const answer = ask(runtime, {
+      cause: "command.persistence",
+      tool: "write",
+      overridable: false,
+      reason: "This command installs a login item, which outlives the Session.",
+    });
+    await flush();
+
+    expect(sink.observations[0]).toMatchObject({
+      state: "opened",
+      interaction: {
+        kind: "question",
+        // A statement, not a request: neither option grants anything, so a title
+        // phrased as a permission would misdescribe both controls under it.
+        title: "Blocked this write call",
+        options: [
+          { id: "continue", label: "Keep working", description: null },
+          { id: "stop", label: "Stop the turn", description: null },
+        ],
+      },
+    });
+
+    await binding.dispatch(answerCommand(ASK_INTERACTION_ID, ["stop"]));
+
+    expect(await answer).toEqual({ answered: "stop" });
+  });
+
+  it("rejects an answer to a question nothing is waiting on", async () => {
+    const { binding, runtime } = await attached();
+
+    const answer = ask(runtime);
+    await flush();
+
+    const unasked = await binding.dispatch(
+      answerCommand("ask:call-elsewhere", ["once"], "command-unasked"),
+    );
+    await binding.dispatch(answerCommand(ASK_INTERACTION_ID, ["once"]));
+    const again = await binding.dispatch(
+      answerCommand(ASK_INTERACTION_ID, ["reject"], "command-again"),
+    );
+
+    // A question from another attachment and a question already answered are
+    // the same fact from here: nothing is parked under that id.
+    expect(unasked).toMatchObject({ status: "rejected", code: "PI_INTERACTION_UNKNOWN" });
+    expect(again).toMatchObject({ status: "rejected", code: "PI_INTERACTION_UNKNOWN" });
+    expect(await answer).toEqual({ answered: "allow" });
+  });
+
+  it("never parks on a question the Session could not record", async () => {
+    const { binding, runtime, sink } = await attached();
+    sink.emitFailure = new Error("the interaction never committed");
+
+    // Rejecting rather than waiting is the honest account: the runtime reads it
+    // as "the host could not obtain an answer" and records the refusal, which is
+    // what a question nobody was shown deserves.
+    expect(await ask(runtime)).toEqual({ failed: "the interaction never committed" });
+
+    sink.emitFailure = null;
+    const receipt = await binding.dispatch(answerCommand(ASK_INTERACTION_ID, ["once"]));
+
+    expect(receipt).toMatchObject({ status: "rejected", code: "PI_INTERACTION_UNKNOWN" });
+  });
+
+  it("withdraws the question when the turn it belongs to stops waiting", async () => {
+    const { binding, runtime, sink } = await attached();
+    const turn = new AbortController();
+
+    const answer = ask(runtime, {}, turn.signal);
+    await flush();
+    turn.abort();
+    await flush();
+
+    expect(sink.observations.at(-1)).toEqual(cancelled(1001));
+    expect(await answer).toEqual(WITHDRAWN);
+    const late = await binding.dispatch(answerCommand(ASK_INTERACTION_ID, ["once"]));
+    expect(late).toMatchObject({ status: "rejected", code: "PI_INTERACTION_UNKNOWN" });
+  });
+
+  it("withdraws a question whose turn gave up while the question was being recorded", async () => {
+    const { runtime, sink } = await attached();
+
+    const answer = ask(runtime, {}, AbortSignal.abort());
+
+    // The `opened` fact committed before the signal could be read, so the card
+    // exists and has to be closed even though nobody was ever going to answer it.
+    expect(await answer).toEqual(WITHDRAWN);
+    expect(sink.observations).toHaveLength(2);
+    expect(sink.observations[1]).toEqual(cancelled(1001));
+  });
+
+  it("stops asking a question the Session cancelled, without recording it twice", async () => {
+    const { binding, runtime, sink } = await attached();
+
+    const answer = ask(runtime);
+    await flush();
+    await binding.withdrawInteraction?.(ASK_INTERACTION_ID);
+    // Best-effort by contract: a question that already ended is not a failure.
+    await binding.withdrawInteraction?.(ASK_INTERACTION_ID);
+
+    expect(await answer).toEqual(WITHDRAWN);
+    // The Engine wrote `interaction.cancelled` before it called this, so the
+    // only observation this Session ever saw is the question itself.
+    expect(sink.observations).toHaveLength(1);
+    expect(sink.observations[0]).toMatchObject({ state: "opened" });
+  });
+
+  it("withdraws every parked question before release stops admitting facts", async () => {
+    const { binding, runtime, sink } = await attached();
+
+    const answer = ask(runtime);
+    await flush();
+    await binding.release("requested");
+
+    // Announced, and therefore announced first: `#observe` drops everything once
+    // the released flag is set, so a card cancelled a line later would stay up
+    // with nothing left alive to answer it.
+    expect(sink.observations.at(-1)).toEqual(cancelled(1001));
+    expect(await answer).toEqual(WITHDRAWN);
+    expect(runtime.closes).toBe(1);
+  });
+
+  it("settles every parked question even when the withdrawal cannot be recorded", async () => {
+    const { binding, runtime, sink } = await attached();
+
+    const answer = ask(runtime);
+    await flush();
+    sink.emitFailure = new Error("the ledger is gone");
+    await binding.release("requested");
+
+    // The card is stranded either way and that is the sink's failure to report.
+    // What release must never do is hang on a promise nothing will settle.
+    expect(await answer).toEqual(WITHDRAWN);
+    expect(runtime.closes).toBe(1);
   });
 });
 

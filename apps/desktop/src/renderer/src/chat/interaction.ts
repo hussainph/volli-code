@@ -21,6 +21,7 @@
 import {
   readInteractionAnswers,
   readInteractionPrompts,
+  SESSION_ESCALATION_CONTINUE_ID,
   SESSION_ESCALATION_STOP_ID,
   SESSION_REFUSAL_OPTION_IDS,
   type SessionEventPayload,
@@ -46,7 +47,14 @@ export type InteractionOptionPolarity = "allow" | "standing" | "reject" | "answe
 // never the call — a non-overridable block refuses the call whichever option is
 // chosen — but every rule below asks the narrower question of which side of the
 // card an option sits on, and on that question it is the yes.
-const ALLOW_OPTION_IDS = new Set(["once", "allow", "approve", "accept", "yes", "continue"]);
+const ALLOW_OPTION_IDS = new Set([
+  "once",
+  "allow",
+  "approve",
+  "accept",
+  "yes",
+  SESSION_ESCALATION_CONTINUE_ID,
+]);
 const STANDING_OPTION_IDS = new Set(["always", "always_allow", "alwaysallow", "remember"]);
 /**
  * Wider than `SESSION_REFUSAL_OPTION_IDS`, and it must stay wider.
@@ -621,7 +629,7 @@ export function footInteraction(
  * summary of them.
  */
 export interface InteractionReceipt {
-  verdict: "allowed" | "standing" | "rejected" | "answered";
+  verdict: "allowed" | "standing" | "rejected" | "answered" | "continued" | "stopped";
   /** `You allowed`, `You rejected`, … */
   lead: string;
   subject: string;
@@ -634,6 +642,8 @@ const RECEIPT_LEADS: Record<InteractionReceipt["verdict"], string> = {
   standing: "You allowed",
   rejected: "You rejected",
   answered: "You answered",
+  continued: "You kept working past",
+  stopped: "You stopped the turn at",
 };
 
 export function describeInteractionResolution(
@@ -684,17 +694,34 @@ export function describeInteractionResolution(
     resolution.optionIds.length === 0 &&
     (resolution.response ?? "") === "" &&
     answers.every((answer) => answer.optionIds.length === 0 && (answer.response ?? "") === "");
+  // An escalation is read by id, and read before polarity, because polarity
+  // deliberately cannot tell its `continue` from a permission's `once`. Both
+  // let the turn run on; only one of them permitted a call. An escalation's
+  // block stands whichever option is chosen, so borrowing the permission
+  // wording here would print a grant that never happened — and `once` on the
+  // end of it would promise the question comes back next time, when what was
+  // really answered is whether to keep going at all.
+  const escalated = chosen.some(
+    (option) => option.id.toLowerCase() === SESSION_ESCALATION_CONTINUE_ID,
+  )
+    ? "continued"
+    : chosen.some((option) => option.id.toLowerCase() === SESSION_ESCALATION_STOP_ID)
+      ? "stopped"
+      : null;
   // A refusal outranks everything else in the same resolution: what a reader
   // said no to is the fact the transcript owes them, even where they answered
-  // three other questions in the same submit.
-  const verdict =
-    declined || chose("reject")
-      ? "rejected"
-      : chose("standing")
-        ? "standing"
-        : chose("allow")
-          ? "allowed"
-          : "answered";
+  // three other questions in the same submit. Selecting nothing still outranks
+  // the pair above — that is the out-of-band refusal, not a choice between them.
+  const verdict = declined
+    ? "rejected"
+    : (escalated ??
+      (chose("reject")
+        ? "rejected"
+        : chose("standing")
+          ? "standing"
+          : chose("allow")
+            ? "allowed"
+            : "answered"));
   return {
     verdict,
     lead: RECEIPT_LEADS[verdict],
@@ -709,7 +736,9 @@ function receiptTrailer(
 ): string | null {
   if (verdict === "allowed") return "once";
   if (verdict === "standing") return "always";
-  if (verdict === "rejected") return null;
+  // Nothing to qualify: the lead already says what was decided, and the labels
+  // the fallback would list back are the two this pair offered.
+  if (verdict === "rejected" || verdict === "continued" || verdict === "stopped") return null;
   const labels = chosen.map((option) => option.label).filter((label) => label.length > 0);
   return labels.length > 0 ? labels.join(", ") : null;
 }

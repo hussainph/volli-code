@@ -35,6 +35,20 @@
  *    and the Session Engine keeps the binding live across one, so
  *    `executor.interrupt` goes to the handle's own `interrupt()` and the
  *    AbortController stays what `release` pulls.
+ *
+ * 3. **Asking.** The runtime blocks a tool call on a person and waits with no
+ *    timeout of its own; the Session seam carries commands one way and receipts
+ *    the other, and has no verb that means "wait here until somebody answers".
+ *    The join is a parked promise. {@link PiBinding.#ask} announces the question
+ *    as an `interaction` observation, keeps its resolvers in a map, and returns
+ *    a promise that {@link PiBinding.dispatch} settles when the answering
+ *    command comes back the other way. The interaction id is the whole of what
+ *    the two halves share — the runtime names a tool call and a Session command
+ *    names an interaction — which is why {@link askInteractionId} derives one
+ *    from the other and why that derivation is frozen. What is deliberately
+ *    absent is durability: the question, the answer and the withdrawal are all
+ *    Session facts, and this file emits observations for the Engine to write
+ *    rather than writing any of them itself.
  */
 
 import { createPiAgentRuntime, type PiRuntimeHostOptions } from "@volli/agent-runtime";
@@ -51,6 +65,8 @@ import type {
 } from "@volli/session-engine";
 import { NativeAttachmentError } from "@volli/session-engine";
 import {
+  askChoice,
+  askOffer,
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   errorMessage,
@@ -58,6 +74,8 @@ import {
   type DeliveryOutcome,
   type ModelSelection,
   type ModelSelectionOutcome,
+  type RuntimeAskChoice,
+  type RuntimeAskRequest,
   type RuntimeAttachmentHandle,
   type RuntimeObservation,
   type RuntimeRecoveryRef,
@@ -291,6 +309,50 @@ function piNativeAdapter(
   };
 }
 
+/**
+ * The interaction id one blocked tool call is asked under.
+ *
+ * Durable, not live. This string lands inside
+ * `pi:interaction:<attachmentId>:<id>:opened` on disk, and every relaunch
+ * re-derives that event id from the same data and dedupes it by exact match — so
+ * changing how this is built would not fail, it would write a second copy of
+ * every question a Session ever asked. Keep the shape, and the `ask:` segment
+ * with it.
+ *
+ * The tool call id is the identity because the runtime blocks exactly one
+ * question per call it refuses, and because a question that cannot name the call
+ * that raised it can only ever be shown at the foot of a transcript.
+ */
+function askInteractionId(toolCallId: string): string {
+  return `ask:${toolCallId}`;
+}
+
+/**
+ * What the question says, in the two shapes an escalation arrives in.
+ *
+ * A refusal a person may overrule is a question about this one call; a refusal
+ * that stands whatever the answer is a statement that it did not run. The
+ * difference is not tone, it is the options: {@link askOffer} answers the second
+ * case with "Keep working" and "Stop the turn", neither of which grants
+ * anything, so a title phrased as a permission request would describe controls
+ * that do not exist. The refusing rule's own words are the explanation and go in
+ * `detail`; the title only has to name the call.
+ */
+function askTitle(request: RuntimeAskRequest): string {
+  return request.overridable
+    ? `Allow this ${request.tool} call?`
+    : `Blocked this ${request.tool} call`;
+}
+
+/** One question in front of a person, and everything needed to stop asking it. */
+interface ParkedAsk {
+  /** The request as the runtime made it; an answer is read back against it. */
+  request: RuntimeAskRequest;
+  settle: PromiseWithResolvers<RuntimeAskChoice>;
+  /** Drops this question's listener from the runtime's withdrawal signal. */
+  forget: () => void;
+}
+
 interface PiBindingOptions {
   spec: NativeAttachmentSpec;
   sink: ObservationSink;
@@ -306,6 +368,8 @@ class PiBinding implements BindingHandle {
   readonly #recovery: RuntimeRecoveryRef | undefined;
   readonly #now: () => number;
   readonly #abort = new AbortController();
+  /** Questions the runtime is parked on, by the interaction id they were asked under. */
+  readonly #asked = new Map<string, ParkedAsk>();
   #handle: RuntimeAttachmentHandle | null = null;
   #native: SessionNativeReference = { id: null, detail: null };
   #released = false;
@@ -358,6 +422,7 @@ class PiBinding implements BindingHandle {
       ...(this.#recovery === undefined ? {} : { recovery: this.#recovery }),
       signal: this.#abort.signal,
       observer: (observation) => this.#observe(observation),
+      ask: (request, signal) => this.#ask(request, signal),
     };
   }
 
@@ -427,12 +492,23 @@ class PiBinding implements BindingHandle {
         } catch (error) {
           return this.#unknown(command.commandId, error);
         }
-      case "interaction.resolve":
-        return this.#rejected(
-          command.commandId,
-          "PI_INTERACTION_UNSUPPORTED",
-          "Pi raises no interactions in this migration slice, so there is none to resolve.",
-        );
+      case "interaction.resolve": {
+        const parked = this.#take(command.interaction.id);
+        if (parked === undefined) {
+          return this.#rejected(
+            command.commandId,
+            "PI_INTERACTION_UNKNOWN",
+            "Nothing is waiting on this question: it was answered already, it was withdrawn, or it was asked by an earlier attachment.",
+          );
+        }
+        // No `interaction.resolved` observation from here. The Session Engine
+        // writes that fact itself from the receipt this returns, so announcing
+        // it as well would record one answer twice — and the reading it takes,
+        // `askChoice`, is the runtime's private reading of a decision the ledger
+        // already holds in the person's own option ids.
+        parked.settle.resolve(askChoice(parked.request, command.resolution.optionIds));
+        return this.#accepted(command.commandId);
+      }
     }
   }
 
@@ -460,14 +536,40 @@ class PiBinding implements BindingHandle {
   }
 
   /**
+   * The Session cancelled a question the runtime is still parked on.
+   *
+   * Announces nothing, and that is the whole difference between this and every
+   * other way an ask ends. Cancelling is the Engine's own durable act — it
+   * writes `interaction.cancelled` before it calls this, because the fact is
+   * that nobody was told an answer — so a second announcement from here would
+   * record one withdrawal twice.
+   */
+  async withdrawInteraction(interactionId: string): Promise<void> {
+    await this.#withdraw(interactionId, false);
+  }
+
+  /**
    * End the live attachment, never the Session.
    *
    * The sink closes first: the Session Engine writes `attachment.closed` itself
    * once this resolves, and Pi's own close observation would otherwise say the
    * same thing a second time in the other direction.
+   *
+   * Everything still parked on a person is withdrawn *before* that, though,
+   * because {@link PiBinding.#observe} admits nothing once the flag is set: a
+   * cancellation announced after it would be dropped on the floor, leaving a
+   * question on screen that no later fact can ever clear and nothing left alive
+   * to answer it. Each withdrawal takes its own listener with it, so the abort
+   * below finds nothing left to withdraw — and a question that raced this loop
+   * is harmless either way, because the claim in {@link PiBinding.#take} lets
+   * only one path end any of them.
    */
   async release(_reason: ReleaseReason): Promise<void> {
     if (this.#released) return;
+    // Iterated live rather than over a snapshot: an escalation that slipped in
+    // between two awaits here is one this loop still has to withdraw, and a
+    // question the map no longer holds is one something else already ended.
+    for (const interactionId of this.#asked.keys()) await this.#withdraw(interactionId, true);
     this.#released = true;
     this.#abort.abort();
     await this.#handle?.close();
@@ -509,6 +611,112 @@ class PiBinding implements BindingHandle {
       // only truthful receipt: the turn may well have run.
       return this.#unknown(command.commandId, error);
     }
+  }
+
+  /**
+   * Put one blocked tool call to a person, and do not come back until answered.
+   *
+   * The wait is unbounded by design: the runtime awaits this with no timeout of
+   * its own, so nothing here needs to invent one and a question left up
+   * overnight costs a parked promise. `signal` is the other half of that
+   * bargain — it is the only notice this side gets that the turn the question
+   * belongs to has stopped waiting, and a host that ignores it strands the card
+   * it opened.
+   *
+   * The `opened` emit is awaited, and its failure deliberately left to
+   * propagate. A question whose fact never committed is a question nobody was
+   * shown, so parking on it would block the turn on an answer that cannot
+   * arrive; rejecting instead tells the runtime the host could not obtain one,
+   * which lets the refusal stand and be recorded. That is the honest account of
+   * a question that was never asked.
+   */
+  async #ask(request: RuntimeAskRequest, signal: AbortSignal): Promise<RuntimeAskChoice> {
+    const offer = askOffer(request);
+    const interactionId = askInteractionId(request.toolCallId);
+    await this.#observe({
+      kind: "interaction",
+      state: "opened",
+      occurredAt: this.#now(),
+      interaction: {
+        id: interactionId,
+        kind: offer.kind,
+        title: askTitle(request),
+        detail: request.reason,
+        options: offer.options,
+        multiple: false,
+        // `prompts` is left off rather than written out. A record without them
+        // is read as the one question its flat fields ask, and stating that
+        // single prompt here would be the same derivation made twice — once
+        // durably, where a later disagreement could not be corrected.
+        native: this.#native,
+      },
+    });
+    const withdraw = (): void => {
+      void this.#withdraw(interactionId, true);
+    };
+    const parked: ParkedAsk = {
+      request,
+      settle: Promise.withResolvers<RuntimeAskChoice>(),
+      forget: () => signal.removeEventListener("abort", withdraw),
+    };
+    this.#asked.set(interactionId, parked);
+    // Read rather than trusted to the listener: a signal that aborted while the
+    // `opened` fact was committing will never fire again, and this question
+    // would then park for the life of the Session on a turn that gave up on it.
+    if (signal.aborted) withdraw();
+    else signal.addEventListener("abort", withdraw, { once: true });
+    return parked.settle.promise;
+  }
+
+  /**
+   * Claim a parked question, so that exactly one path can end it.
+   *
+   * The map delete is the dedupe, and everything that ends an ask goes through
+   * here to get it: an answer, a withdrawal, an abort and a release all reach
+   * for the same question, and the second one to arrive must find nothing.
+   *
+   * Dropping the abort listener is not what makes that work — a withdrawal
+   * arriving after the claim finds nothing and does nothing. What it buys is
+   * that a question which has ended holds no reference back into this binding,
+   * so how long the runtime keeps its signal around afterwards cannot matter.
+   */
+  #take(interactionId: string): ParkedAsk | undefined {
+    const parked = this.#asked.get(interactionId);
+    if (parked === undefined) return undefined;
+    this.#asked.delete(interactionId);
+    parked.forget();
+    return parked;
+  }
+
+  /**
+   * Stop asking one question, telling the Session unless it already knows.
+   *
+   * The parked promise is *rejected*, never resolved with a refusal. A refusal
+   * is a decision, and a withdrawal is the absence of one; resolving would print
+   * a choice nobody made, which is the exact failure `interaction.cancelled`
+   * exists to avoid. The runtime reads a rejection as "the host could not obtain
+   * an answer" and lets its own refusal stand, which is what actually happened.
+   */
+  async #withdraw(interactionId: string, announce: boolean): Promise<void> {
+    const parked = this.#take(interactionId);
+    if (parked === undefined) return;
+    try {
+      if (announce) {
+        await this.#observe({
+          kind: "interaction",
+          state: "cancelled",
+          occurredAt: this.#now(),
+          interactionId,
+          reason: "withdrawn",
+        });
+      }
+    } catch {
+      // A cancellation the Session could not record still ends here. Whatever
+      // failed is the sink's own failure to report, and there is nothing this
+      // side could do about it in any case; what it must not do is leave the
+      // runtime parked on a promise that release is waiting to settle.
+    }
+    parked.settle.reject(new Error("The question was withdrawn before anyone answered it."));
   }
 
   #accepted(commandId: string): DeliveryReceipt {
