@@ -2,8 +2,8 @@
 
 **Status:** Part I slices 1–4 shipped, except slice 4's second half — the drawer
 above the composer — and the five other items its checklist names. Part II
-candidates 1 and 3 shipped; candidate 2 is next. Part III decision complete, not
-started.
+candidates 3 and 1 shipped (1 as #205 → #206 → #207); 2, 5 and 6 remain, in the
+order below. Part III decision complete, not started — all four slices.
 
 **Date:** 2026-08-11
 
@@ -548,11 +548,13 @@ rather than of this kind.
 
 **Resolved by Part I slice 4; nothing to action.** The premise was that roughly
 1400 renderer lines sat at 100% coverage verifying behaviour nothing in
-production emitted. Both halves of that are now false: the Pi adapter emits
-`interaction.opened` for every escalation and answers `interaction.resolve` from
-its parked map. `apps/desktop/src/renderer/src/chat/interaction.ts` and
-`interaction-ui.tsx` are exactly what is needed. Do not revisit this as a
-deletion candidate.
+production emitted, while the Pi adapter refused `interaction.resolve` outright
+(`PI_INTERACTION_UNSUPPORTED`) — a coverage gate certifying unreachable code.
+Both halves of that are now false: the adapter emits `interaction.opened` for
+every escalation and answers `interaction.resolve` from its parked map.
+`apps/desktop/src/renderer/src/chat/interaction.ts` and
+`apps/desktop/src/renderer/src/components/chat/interaction-ui.tsx` are exactly
+what is needed. Do not revisit this as a deletion candidate.
 
 ### 5. One Session-start module
 
