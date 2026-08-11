@@ -32,8 +32,10 @@ export interface TicketSessionRow {
 }
 
 /**
- * Truthful, compact source metadata for the rail. Only agent launches expose a
- * harness. Bare shells and pre-metadata sessions never inherit the default
+ * Truthful, compact source metadata: the sidebar's session rows print it, and
+ * the rail's history search matches on it — the rail's own rows stopped drawing
+ * it when they went to one line and put the kind in a leading glyph. Only agent
+ * launches expose a harness. Bare shells and pre-metadata sessions never inherit the default
  * Claude label; split placement remains visible without becoming the title.
  *
  * The harness named is the one RUNNING, not the one the session launched with:
@@ -218,8 +220,8 @@ export function filterSessionHistory(
  * nothing to resume — opening the Session is already everything a resume would
  * buy. `isOpen` mirrors `groupSessionRows`'s current/history split off whether
  * the Session's structured attachment is still live; the finer state the record
- * also carries (`activity`, `lastActivityAt`) is the sidebar's to draw, and no
- * rail row reads it yet.
+ * carries (`activity`, `lastActivityAt`) is what the rail's row trails with, so
+ * a chat and a terminal report themselves in one vocabulary.
  */
 export interface TicketChatSessionRow {
   record: ChatSessionRecord;

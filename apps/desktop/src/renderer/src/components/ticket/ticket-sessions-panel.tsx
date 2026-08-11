@@ -3,6 +3,7 @@ import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwis
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
+import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { errorMessage, type SessionListingRow, type SessionRecord } from "@volli/shared";
 
 import { renameChatSession } from "@renderer/chat/rename";
@@ -17,6 +18,7 @@ import {
 } from "@renderer/components/ui/context-menu";
 import { Input } from "@renderer/components/ui/input";
 import { RailDrawer } from "@renderer/components/ticket/rail-drawer";
+import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import {
   buildTicketChatSessionRows,
   buildTicketSessionRows,
@@ -25,10 +27,7 @@ import {
   filterSessionHistory,
   groupSessionRows,
   mergeSessionRailRows,
-  sessionSourceLabel,
   type SessionRailRow,
-  type TicketChatSessionRow,
-  type TicketSessionRow,
   type TicketSessionStatus,
 } from "@renderer/components/ticket/session-history";
 import { relativeTime } from "@renderer/lib/relative-time";
@@ -57,33 +56,61 @@ const STATUS_LABEL: Record<TicketSessionStatus, string> = {
   setup: "Setup",
 };
 
-/** Honest PTY-derived status, kept quiet: a small colored dot + label-size muted
- * text (the sidebar's ACTIVE SESSIONS dot treatment) — pill chrome read too loud
- * in the 300px rail. `setup` (the worktree's `setting-up` ensure phase) borrows
- * the same dot-plus-label vocabulary rather than inventing a new one. */
-function StatusChip({ status }: { status: TicketSessionStatus }) {
+/** The dot's tone per status — the sidebar's ACTIVE SESSIONS vocabulary, so one
+ * agent waiting on you paints the same amber on both surfaces. `setup` (the
+ * worktree's `setting-up` ensure phase) borrows `working`'s green rather than
+ * inventing a colour for a state that is working. */
+const STATUS_TONE: Record<TicketSessionStatus, string> = {
+  working: "bg-emerald-500",
+  setup: "bg-emerald-500",
+  waiting: "bg-amber-500",
+  idle: "bg-muted-foreground/50",
+  parked: "bg-muted-foreground/35",
+  exited: "bg-muted-foreground/25",
+};
+
+/** A row that has stopped: one tone for every past session, live or not. */
+const PAST_TONE = "bg-muted-foreground/35";
+
+/**
+ * Every row's right edge: one tone dot, one short phrase, at label size. A live
+ * row says what it is doing and a past one says when it stopped, in the same
+ * two-part shape either way — which is what lets the column be read down rather
+ * than row by row. Pill chrome read too loud in the 300px rail.
+ */
+function RowStatus({ tone, children }: { tone: string; children: React.ReactNode }) {
   return (
     <span className="flex shrink-0 items-center gap-1.5 text-label text-muted-foreground">
-      <span
-        className={cn(
-          "size-1.5 rounded-full",
-          (status === "working" || status === "setup") && "bg-emerald-500",
-          status === "waiting" && "bg-amber-500",
-          status === "idle" && "bg-muted-foreground/50",
-          status === "parked" && "bg-muted-foreground/35",
-          status === "exited" && "bg-muted-foreground/25",
-        )}
-      />
-      {STATUS_LABEL[status]}
+      <span className={cn("size-1.5 rounded-full", tone)} />
+      {children}
     </span>
   );
 }
 
+/**
+ * One session, flat: kind glyph, title, status — one line, no frame. The frame
+ * and the second metadata line the rail used to draw made three sessions look
+ * like three cards to inspect; the roster's job is to be read down in a glance,
+ * so the border only appears under the pointer and the kind moved off the
+ * second line and into the leading glyph
+ * (lab/scratches/ticket-right-sidebar.tsx: `SessionRows`).
+ *
+ * That glyph is `ChatCircle`/`TerminalWindow` — the pair the sidebar's session
+ * bands, the tab strip and the new-session menu all already use for the two
+ * kinds — rather than the scratch's `ChatCircleDots`, which is the rail's own
+ * Now-tab icon and would have put the page's glyph on every row inside it. It
+ * is labelled, not decorative: with the source line gone it is the only place
+ * the kind is stated at all.
+ *
+ * A past terminal row is inert for activation (its pane is gone; Resume is in
+ * the menu), so it draws as a div and never lights up under the pointer — which
+ * is the honest way to say "not a target" without dimming a title a person may
+ * still want to read.
+ */
 function SessionRow({
-  record,
+  kind,
   title,
   trailing,
-  isOpen,
   editing,
   onActivate,
   onStartRename,
@@ -91,66 +118,62 @@ function SessionRow({
   onCancelRename,
   onResume,
 }: {
-  record: SessionRecord;
+  kind: "chat" | "terminal";
   /** The live tab title when open (so optimistic renames show), else the durable record title. */
   title: string;
   /** Right-edge metadata: live status for current rows, relative end time for history rows. */
   trailing: React.ReactNode;
-  isOpen: boolean;
   editing: boolean;
-  onActivate(): void;
+  /** `null` where there is nothing to open — a closed terminal record's pane is gone. */
+  onActivate: (() => void) | null;
   onStartRename(): void;
   onCommitRename(next: string): void;
   onCancelRename(): void;
   /** Present only for resumable history rows (interrupt/resume, issue #78). */
   onResume?(): void;
 }) {
-  const titleNode = editing ? (
-    <InlineRename
-      value={title}
-      ariaLabel={`Rename ${title}`}
-      className="h-5 w-full text-xs"
-      onCommit={onCommitRename}
-      onCancel={onCancelRename}
-    />
-  ) : (
-    <span className="truncate text-xs text-foreground" onDoubleClick={onStartRename}>
-      {title}
-    </span>
-  );
-
+  const Glyph = kind === "chat" ? ChatCircleIcon : TerminalWindowIcon;
   const content = (
     <>
-      <span className="flex min-w-0 flex-1 flex-col">
-        {titleNode}
-        <span className="truncate text-label text-muted-foreground">
-          {sessionSourceLabel({ kind: "terminal", record })}
+      <Glyph
+        aria-label={kind === "chat" ? "Chat" : "Terminal"}
+        className="size-4 shrink-0 text-muted-foreground"
+      />
+      {editing ? (
+        <InlineRename
+          value={title}
+          ariaLabel={`Rename ${title}`}
+          // `text-ui`, not the input default: the field replaces the title in
+          // place, so a size step here would resize the row's text the moment
+          // you double-clicked it. h-5 is that line's own height.
+          className="h-5 min-w-0 flex-1 text-ui"
+          onCommit={onCommitRename}
+          onCancel={onCancelRename}
+        />
+      ) : (
+        <span className="min-w-0 flex-1 truncate text-ui" onDoubleClick={onStartRename}>
+          {title}
         </span>
-      </span>
+      )}
       {trailing}
     </>
   );
 
-  // A live row (its terminal tab is still open) activates that tab; a past row
-  // is inert for activation — resume is future work — but both can be renamed.
+  const shell = "flex w-full items-center gap-2 rounded-lg border border-transparent px-2 py-2";
+  // While editing the row is a plain div: an input inside the activating button
+  // would both nest an interactive control and open the Session on every click
+  // into the field.
   const row =
-    isOpen && !editing ? (
+    onActivate !== null && !editing ? (
       <button
         type="button"
         onClick={onActivate}
-        className="flex w-full items-center gap-2 rounded-md border border-border/60 px-2 py-1 text-left transition-colors hover:bg-accent"
+        className={cn(shell, "text-left hover:border-sidebar-border hover:bg-sidebar-accent/60")}
       >
         {content}
       </button>
     ) : (
-      <div
-        className={cn(
-          "flex w-full items-center gap-2 rounded-md border px-2 py-1",
-          isOpen ? "border-border/60" : "border-transparent opacity-60",
-        )}
-      >
-        {content}
-      </div>
+      <div className={shell}>{content}</div>
     );
 
   return (
@@ -163,83 +186,6 @@ function SessionRow({
               Resume
             </ContextMenuItem>
           ) : null}
-          <ContextMenuItem icon={PencilSimpleIcon} onSelect={onStartRename}>
-            Rename
-          </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
-    </li>
-  );
-}
-
-/**
- * A chat Session's row: title and liveness, in the frame `SessionRow` draws,
- * and renaming the same two ways (double-click, right-click) — the title is
- * the Session's own, whether a terminal or a structured adapter is attached to
- * it.
- *
- * Always activatable, unlike a terminal row — a chat Session is durable, so one
- * whose attachment has closed still opens onto its own history, and reattaching
- * is the Retry the plane already offers. Resume stays out for the same reason:
- * there is nothing to resume that opening it doesn't already do.
- */
-function ChatSessionRow({
-  row,
-  editing,
-  onActivate,
-  onStartRename,
-  onCommitRename,
-  onCancelRename,
-}: {
-  row: TicketChatSessionRow;
-  editing: boolean;
-  onActivate(): void;
-  onStartRename(): void;
-  onCommitRename(next: string): void;
-  onCancelRename(): void;
-}) {
-  const content = (
-    <span className="flex min-w-0 flex-1 flex-col">
-      {editing ? (
-        <InlineRename
-          value={row.title}
-          ariaLabel={`Rename ${row.title}`}
-          className="h-5 w-full text-xs"
-          onCommit={onCommitRename}
-          onCancel={onCancelRename}
-        />
-      ) : (
-        <span className="truncate text-xs text-foreground" onDoubleClick={onStartRename}>
-          {row.title}
-        </span>
-      )}
-      <span className="truncate text-label text-muted-foreground">
-        {sessionSourceLabel({ kind: "chat", record: row.record })}
-      </span>
-    </span>
-  );
-
-  const className = cn(
-    "flex w-full items-center gap-2 rounded-md border px-2 py-1 text-left transition-colors",
-    row.isOpen ? "border-border/60" : "border-transparent opacity-60",
-  );
-
-  // While editing the row is a plain div: an input inside the activating button
-  // would both nest an interactive control and open the Session on every click
-  // into the field.
-  const element = editing ? (
-    <div className={className}>{content}</div>
-  ) : (
-    <button type="button" onClick={onActivate} className={cn(className, "hover:bg-accent")}>
-      {content}
-    </button>
-  );
-
-  return (
-    <li>
-      <ContextMenu>
-        <ContextMenuTrigger asChild>{element}</ContextMenuTrigger>
-        <ContextMenuContent>
           <ContextMenuItem icon={PencilSimpleIcon} onSelect={onStartRename}>
             Rename
           </ContextMenuItem>
@@ -281,12 +227,32 @@ function SessionList({
     <ul className="flex flex-col gap-1">
       {rows.map((entry) => {
         if (entry.kind === "chat") {
-          const { sessionId } = entry.row.record;
+          const { record, title } = entry.row;
+          const { sessionId } = record;
           return (
-            <ChatSessionRow
+            <SessionRow
               key={sessionId}
-              row={entry.row}
+              kind="chat"
+              title={title}
+              // A chat Session's activity is the same vocabulary a terminal
+              // row's status is (`ChatSessionRecord.activity` is a subset of
+              // `SessionActivityState`), so the two kinds trail with one column
+              // rather than a status beside a "Chat · Live". A row in History
+              // has no live state left to report, only when it last said
+              // anything.
+              trailing={
+                variant === "current" ? (
+                  <RowStatus tone={STATUS_TONE[record.activity]}>
+                    {STATUS_LABEL[record.activity]}
+                  </RowStatus>
+                ) : (
+                  <RowStatus tone={PAST_TONE}>{relativeTime(record.lastActivityAt, now)}</RowStatus>
+                )
+              }
               editing={editingId === sessionId}
+              // Always activatable, unlike a terminal row — a chat Session is
+              // durable, so one whose attachment has closed still opens onto its
+              // own history, and reattaching is the Retry the plane offers.
               onActivate={() => onActivateChat(sessionId)}
               onStartRename={() => setEditingId(sessionId)}
               onCommitRename={(next) => onCommitChatRename(sessionId, next)}
@@ -294,30 +260,33 @@ function SessionList({
             />
           );
         }
-        const { record, title, isOpen, isRoot, tabId, status } = entry.row;
+        const { record, title, isRoot, tabId, status } = entry.row;
         return (
           <SessionRow
             key={record.id}
-            record={record}
+            kind="terminal"
             title={title}
             trailing={
               variant === "current" ? (
-                <StatusChip status={status} />
+                <RowStatus tone={STATUS_TONE[status]}>{STATUS_LABEL[status]}</RowStatus>
               ) : (
-                <span className="shrink-0 text-label text-muted-foreground/70">
+                <RowStatus tone={PAST_TONE}>
                   {relativeTime(record.endedAt ?? record.createdAt, now)}
-                </span>
+                </RowStatus>
               )
             }
-            isOpen={isOpen}
             editing={editingId === record.id}
             // Exited-but-open panes live in History but still activate their tab
-            // and exact split pane; closed records remain inert until resume lands.
-            onActivate={() => {
-              if (tabId === undefined) return;
-              onActivateSession(tabId);
-              setActivePane(ticketId, tabId, record.id);
-            }}
+            // and exact split pane; closed records (no live tab, so no `tabId`)
+            // remain inert until resume lands.
+            onActivate={
+              tabId === undefined
+                ? null
+                : () => {
+                    onActivateSession(tabId);
+                    setActivePane(ticketId, tabId, record.id);
+                  }
+            }
             onStartRename={() => setEditingId(record.id)}
             onCommitRename={(next) => onCommitRename(record, isRoot, next)}
             onCancelRename={() => setEditingId(null)}
@@ -334,10 +303,10 @@ function SessionList({
 }
 
 /**
- * The Now page's session content: a "Sessions" working set (the split
- * session-start control, plus one row per live session from the unified store)
- * and a History drawer holding ended/closed durable records — searchable past 4
- * entries — so the working set stays unlabeled and flat.
+ * The Now page's session content: a "Sessions" working set (one flat row per
+ * live session from the unified store) and a History drawer holding
+ * ended/closed durable records — searchable past 4 entries — so the working set
+ * stays unlabeled and flat.
  *
  * Both sit IN FLOW: the Now page is one scrolling column (ticket-rail.tsx), so
  * this owns no scroller of its own and History is the last thing in the stack
@@ -465,7 +434,7 @@ export function TicketSessionsPanel({
     );
   };
 
-  const terminalRows: TicketSessionRow[] = buildTicketSessionRows({
+  const terminalRows = buildTicketSessionRows({
     records,
     tabs,
     lastOutputAt,
@@ -502,15 +471,27 @@ export function TicketSessionsPanel({
 
   return (
     <>
-      <section className="px-4 pt-5">
-        <div className="flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-label font-medium text-muted-foreground uppercase">Sessions</h2>
-            {/* Right-aligned against the rail's own edge, so the menu hangs
-                back into the rail instead of off the window. The chord hint is
-                honest here now: this rail only exists inside a ticket, and
-                inside a ticket ⌘T / ⌥⌘T mint a Session on that ticket — the
-                same one this control does. */}
+      <section className={cn("flex flex-col gap-1 pt-5", RAIL_PANEL_INSET)}>
+        {/* The heading is inset by the rows' own `px-2`, not by the section's
+            edge: a label that hangs left of the list it names reads as a
+            divider between blocks rather than as that list's title. It keeps
+            the h-5 header ROW the scratch drew around it — that height came
+            from the control that used to sit at its right, and holding it means
+            the list below starts where the reviewed design put it, whatever
+            ends up in the row. */}
+        <div className="mb-1.5 flex h-5 items-center px-2">
+          <h2 className="text-label font-medium text-muted-foreground uppercase">Sessions</h2>
+        </div>
+        {current.length === 0 ? (
+          // The one place this panel offers to start a Session. Creation lives
+          // in the tab strip's action cluster now (ticket-tabs.tsx) — labelled,
+          // above this very column, and never scrolled away — so a second copy
+          // over a populated roster would be the same act twice in one glance.
+          // An empty roster is the exception: there is nothing to read, so the
+          // block is nothing but the invitation, and a dead end here would send
+          // a first-run user hunting for the strip.
+          <div className="flex flex-col items-center gap-2.5 rounded-lg border border-dashed border-sidebar-border py-5 text-center">
+            <p className="text-xs text-muted-foreground">No active sessions</p>
             <NewSessionControl
               disabled={effectiveCreating}
               placement="rail"
@@ -520,16 +501,9 @@ export function TicketSessionsPanel({
               onNewTerminal={onNewSession}
             />
           </div>
-          {current.length === 0 ? (
-            <div className="flex flex-col items-center gap-1.5 rounded-md border border-dashed border-border py-6 text-center">
-              {/* Chat, not a terminal — the control above this panel starts one. */}
-              <ChatCircleIcon className="size-4 text-muted-foreground" />
-              <p className="text-xs text-muted-foreground">No active sessions</p>
-            </div>
-          ) : (
-            <SessionList rows={current} variant="current" now={now} {...listProps} />
-          )}
-        </div>
+        ) : (
+          <SessionList rows={current} variant="current" now={now} {...listProps} />
+        )}
       </section>
       {history.length > 0 ? (
         <RailDrawer

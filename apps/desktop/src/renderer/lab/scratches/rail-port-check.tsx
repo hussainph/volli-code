@@ -7,7 +7,6 @@
  * exists to be screenshotted against `ticket-right-sidebar`, which is the
  * design of record.
  */
-import * as React from "react";
 import type { ChangeSetSnapshot, DirEntry, Ticket, WorktreeChangeSetResult } from "@volli/shared";
 
 import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
