@@ -17,7 +17,10 @@
 import type { ActivityDescriptor } from "./session-activity";
 import type { AuthorityDenialCause, AuthoritySnapshot, CodingToolId } from "./authority";
 import {
+  SESSION_ESCALATION_OPTIONS,
+  SESSION_ESCALATION_STOP_ID,
   SESSION_PERMISSION_OPTIONS,
+  SESSION_REFUSAL_OPTION_IDS,
   type SessionInteraction,
   type SessionInteractionOption,
   type SessionInteractionResolution,
@@ -174,28 +177,48 @@ export interface RuntimeAskRequest {
   cause: AuthorityDenialCause;
   /** The runtime tool name as requested, which may not be a tool Volli offers. */
   tool: string;
+  /**
+   * The runtime's own id for the call being judged.
+   *
+   * Carried so a producer can correlate the question to the activity row it is
+   * about. Without it an ask can only ever be shown at the foot of the
+   * transcript, never against the call that raised it.
+   */
+  toolCallId: string;
+  /** The turn the blocked call belongs to. Null before the first turn opens. */
+  turnId: string | null;
   /** The refusing rule's own words, as the model would otherwise have received them. */
   reason: string;
   trip: RuntimeAskTrip;
   /**
-   * Whether consent could carry this call out.
+   * Whether a person may overrule this refusal.
    *
-   * Not a measure of how alarming the rule sounds. An overridable refusal is one
-   * the sandbox would honour if this layer stood aside, so "yes" does something;
-   * for everything else the refusal stands whatever the answer, and offering to
-   * allow it would be a lie.
+   * Not "could the call run if this layer stood aside" — for the hard-deny rules
+   * that is true and is exactly why they are not overridable. See
+   * {@link OVERRIDABLE_AUTHORITY_RULES}, which keeps the two reasons apart: some
+   * refusals an override could not honour anyway, because the sandbox denies
+   * them too or the tool is not loaded; the rest are perfectly grantable and
+   * must not be granted, because a login item or a disabled certificate check
+   * outlives the Session that asked for it.
+   *
+   * The runtime enforces this rather than trusting it: a host that answers
+   * `allow` to a refusal that is not overridable is not obeyed.
    */
   overridable: boolean;
 }
 
 /**
- * What a person decided about one escalation.
+ * What a person chose when the runtime stopped and asked.
  *
- * `allow` grants exactly this call and is reachable only from an overridable
- * ask: there is no durable policy store to write a standing answer into, so
- * nothing here can mean "always". `stop` ends the turn, not the Session.
+ * `allow` grants exactly this call: there is no durable policy store to write a
+ * standing answer into, so nothing here can mean "always". `stop` ends the turn,
+ * not the Session.
+ *
+ * Named a choice rather than an outcome or an answer deliberately — `CONTEXT.md`
+ * reserves both of those for the durable Session Interaction vocabulary, and
+ * this is the runtime's private reading of a decision that is recorded there.
  */
-export type RuntimeAskOutcome = "allow" | "refuse" | "stop";
+export type RuntimeAskChoice = "allow" | "refuse" | "stop";
 
 /** What one escalation puts in front of a person. */
 export interface RuntimeAskOffer {
@@ -205,17 +228,14 @@ export interface RuntimeAskOffer {
 
 const PERMISSION_OPTION_IDS = { once: "once", reject: "reject" } as const;
 
-const REPORTED_ASK_OPTIONS: readonly SessionInteractionOption[] = [
-  { id: "continue", label: "Keep working", description: null },
-  { id: "stop", label: "Stop the turn", description: null },
-];
-
 /**
  * The choices one escalation offers, in Volli's own interaction vocabulary.
  *
- * Stated once, here, because the surface that offers a choice and the runtime
- * that acts on it are one decision read twice, and the option ids are the wire
- * between them. Two things about the pairs are deliberate.
+ * Both pairs are minted from the ledger's own lists rather than written out
+ * here, because the surface that offers a choice and the runtime that reads the
+ * answer are one decision made twice, and the option ids are the wire between
+ * them. A literal restated on either side compiles cleanly and fails silently.
+ * Two things about the pairs are deliberate.
  *
  * `always` is absent from the overridable pair even though
  * {@link SESSION_PERMISSION_OPTIONS} declares it: there is no durable policy
@@ -230,7 +250,7 @@ const REPORTED_ASK_OPTIONS: readonly SessionInteractionOption[] = [
  * Attention: it has a consequence either way.
  */
 export function askOffer(request: RuntimeAskRequest): RuntimeAskOffer {
-  if (!request.overridable) return { kind: "question", options: REPORTED_ASK_OPTIONS };
+  if (!request.overridable) return { kind: "question", options: SESSION_ESCALATION_OPTIONS };
   const offered = new Set<string>([PERMISSION_OPTION_IDS.once, PERMISSION_OPTION_IDS.reject]);
   return {
     kind: "permission",
@@ -247,14 +267,20 @@ export function askOffer(request: RuntimeAskRequest): RuntimeAskOffer {
  * already in. The only answers that change anything are the two this
  * deliberately spells out.
  */
-export function askOutcome(
+export function askChoice(
   request: RuntimeAskRequest,
   optionIds: readonly string[],
-): RuntimeAskOutcome {
+): RuntimeAskChoice {
+  // Refusal is read first, so an answer carrying both a grant and a refusal
+  // resolves toward the state the call was already in. A multi-select that
+  // accumulated `once` and `reject` together is incoherent, and resolving an
+  // incoherent permission toward execution is the wrong direction to be wrong in.
+  const chosen = optionIds.map((id) => id.toLowerCase());
+  if (chosen.some((id) => SESSION_REFUSAL_OPTION_IDS.includes(id))) return "refuse";
   if (request.overridable) {
-    return optionIds.includes(PERMISSION_OPTION_IDS.once) ? "allow" : "refuse";
+    return chosen.includes(PERMISSION_OPTION_IDS.once) ? "allow" : "refuse";
   }
-  return optionIds.includes("stop") ? "stop" : "refuse";
+  return chosen.includes(SESSION_ESCALATION_STOP_ID) ? "stop" : "refuse";
 }
 
 /** Everything the Agent Runtime needs to start one Session, whatever its Role. */
@@ -294,12 +320,24 @@ export interface SessionRuntimeSpec {
    * escalate to and every refusal stays silent, which is exactly what shipped
    * before this port existed.
    *
-   * There is no timeout, invented or otherwise. An unanswered question parks the
-   * turn for as long as it takes; the host ends the wait by rejecting the
-   * promise, which the runtime reads as a refusal it must not record — the
-   * person never decided anything.
+   * There is no timeout, invented or otherwise — an unanswered question parks
+   * the turn for as long as it takes. `signal` is how the wait ends without an
+   * answer, and a host must listen to it: it fires when the turn is interrupted
+   * or the attachment is released, and it is the host's only notice that the
+   * question it is showing has been abandoned and must be withdrawn. A host that
+   * ignores it strands whatever it opened, because the runtime stops waiting
+   * either way.
+   *
+   * Rejecting the promise is a different statement, and the runtime treats it as
+   * one: it means the host cannot obtain an answer at all, so the refusal stands
+   * and *is recorded*. Aborting means nobody was asked; rejecting means nobody
+   * could be.
+   *
+   * A host that opens a durable record for the question should commit it before
+   * parking, and commit the answer before resolving — otherwise a relaunch
+   * mid-wait loses the question while the runtime is still blocked on it.
    */
-  ask?: (request: RuntimeAskRequest) => Promise<RuntimeAskOutcome>;
+  ask?: (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>;
   /** Resolves only after the observation reaches its required consumer boundary. */
   observer: (observation: RuntimeObservation) => Promise<void>;
 }

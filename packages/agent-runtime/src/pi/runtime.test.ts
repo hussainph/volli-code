@@ -1189,20 +1189,27 @@ describe("startSession", () => {
     await handle.submitUserMessage("Reset the tree.");
     await handle.close();
 
-    expect(ask).toHaveBeenCalledExactlyOnceWith({
-      cause: "command.git-discards-work",
-      tool: "bash",
-      reason: expect.stringContaining("discards uncommitted work"),
-      trip: "consecutive",
-      overridable: true,
-    });
+    // The question names the call it is about, not merely the tool, so a
+    // surface can show it against the activity row that raised it.
+    expect(ask).toHaveBeenCalledExactlyOnceWith(
+      {
+        cause: "command.git-discards-work",
+        tool: "bash",
+        toolCallId: "tc-0",
+        turnId: expect.any(String),
+        reason: expect.stringContaining("discards uncommitted work"),
+        trip: "consecutive",
+        overridable: true,
+      },
+      expect.any(AbortSignal),
+    );
     // The whole point of asking after the counters rather than before the
     // observation: history must not hold a denial for a call that then ran.
     expect(exec).toHaveBeenCalledOnce();
     expect(kinds(attachment.observations)).not.toContain("authority");
   });
 
-  it("records the denial and then ends the turn when a person stops it", async () => {
+  it("records the denial and interrupts the turn without calling the Session broken", async () => {
     const { attachment, exec, containedEnv } = escalatingAttachment(async () => "stop");
     const handle = await escalatingRuntime(attachment, containedEnv).startSession(attachment.spec);
 
@@ -1220,11 +1227,18 @@ describe("startSession", () => {
       ]),
     );
     // Aborting rather than `terminate`, so the turn ends on this one refusal
-    // instead of waiting for the rest of Pi's batch to agree.
+    // instead of waiting for the rest of Pi's batch to agree. The cost of that
+    // choice is everything below: Pi discards the block, answers the call with
+    // its own "Operation aborted", re-enters its loop, and fails the next
+    // provider call on the aborted signal — which its lazy stream reports as
+    // `stopReason: "error"` carrying the AbortSignal's text. Read literally that
+    // is an unrecoverable runtime failure, and the person who chose "Stop the
+    // turn" would be shown a Session that broke.
     expect(kinds(attachment.observations)).toContain("turn:interrupted");
+    expect(kinds(attachment.observations)).not.toContain("attention");
   });
 
-  it("blocks without recording anything when the question goes unanswered", async () => {
+  it("records the denial when the host cannot obtain an answer, and tells the model why", async () => {
     const { attachment, exec, containedEnv } = escalatingAttachment(async () => {
       throw new Error("the host stopped waiting");
     });
@@ -1236,11 +1250,48 @@ describe("startSession", () => {
     await handle.submitUserMessage("Reset the tree.");
     await handle.close();
 
-    // Nobody decided anything, so nothing is written down — but the call is
-    // still refused, and the model is still told exactly why.
+    // Nothing was cancelled here: Pi applies the block, the call is refused, and
+    // the model is told exactly why. A refusal the model received is a refusal
+    // history has to hold, or a Session whose host can never answer accrues
+    // denials the ledger never sees and a threshold that never arrives.
+    expect(exec).not.toHaveBeenCalled();
+    expect(attachment.observations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "authority",
+          state: "denied",
+          cause: "command.git-discards-work",
+        }),
+      ]),
+    );
+    expect(JSON.stringify(toolResultContext?.messages)).toContain("discards uncommitted work");
+  });
+
+  it("records nothing when the attachment is released while the question is open", async () => {
+    const controller = new AbortController();
+    const asked = Promise.withResolvers<AbortSignal>();
+    const { attachment, exec, containedEnv } = escalatingAttachment(
+      (_request, signal) =>
+        new Promise(() => {
+          asked.resolve(signal);
+        }),
+    );
+    attachment.spec.signal = controller.signal;
+    const handle = await escalatingRuntime(attachment, containedEnv).startSession(attachment.spec);
+
+    const delivery = handle.submitUserMessage("Reset the tree.");
+    const withdrawn = await asked.promise;
+    controller.abort();
+    await delivery;
+
+    // Nobody decided anything, so nothing is written down — and the host is told
+    // through its own signal that the question it is showing is now moot.
+    expect(withdrawn.aborted).toBe(true);
     expect(exec).not.toHaveBeenCalled();
     expect(kinds(attachment.observations)).not.toContain("authority");
-    expect(JSON.stringify(toolResultContext?.messages)).toContain("discards uncommitted work");
+    expect(kinds(attachment.observations)).not.toContain("attention");
+    expect(kinds(attachment.observations)).toContain("turn:interrupted");
+    await handle.close();
   });
 
   it("runs the real Pi loop against the worktree and settles durable history", async () => {
@@ -2573,6 +2624,58 @@ describe("startSession", () => {
 
     await handle.close();
     expect(kinds(observations)).toContain("attachment:closed");
+  });
+
+  it("interrupts a running tool without calling the Session broken", async () => {
+    const attachment = fixture({ tools: { tools: ["execute"] } });
+    const running = Promise.withResolvers<void>();
+    const released = Promise.withResolvers<void>();
+    const containedEnv = {
+      cwd: attachment.worktreePath,
+      prepareProcessExecution: async () => ({ ok: true as const, value: undefined }),
+      exec: async () => {
+        running.resolve();
+        await released.promise;
+        return { ok: true as const, value: { stdout: "", stderr: "", exitCode: 0 } };
+      },
+      cleanup: async () => undefined,
+    } as unknown as SessionExecutionEnv;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      executionEnvFactory: async () => containedEnv,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("bash", { command: "echo hi" });
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("Understood.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession({
+      ...attachment.spec,
+      authority: { ...attachment.spec.authority, tools: ["execute"] },
+    });
+
+    const delivery = handle.submitUserMessage("run it");
+    await running.promise;
+    const interrupted = handle.interrupt();
+    released.resolve();
+    await interrupted;
+    await delivery;
+
+    // Interrupting between provider calls, rather than mid-stream, is the case
+    // Pi never labels as an abort: the tool result becomes "Operation aborted",
+    // the loop re-enters, and the provider call that re-entry makes fails on the
+    // aborted signal as a plain `stopReason: "error"`. Reading that literally
+    // told the user their Session broke because they pressed stop.
+    expect(kinds(attachment.observations)).toContain("turn:interrupted");
+    expect(kinds(attachment.observations)).not.toContain("attention");
+    await handle.close();
   });
 
   it("interrupts when the caller's abort signal fires", async () => {
