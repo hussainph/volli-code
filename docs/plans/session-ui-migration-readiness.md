@@ -9,8 +9,8 @@
 Sessions 1–5 are landed. Chat is part of the production Session UI, and a chat
 that has no ticket opens its own conversation from Sessions.
 
-OpenCode surface parity is outside this plan. See
-`docs/plans/opencode-surface-audit.md` for that work.
+OpenCode surface parity was outside this historical plan and is no longer part
+of the target product architecture.
 
 ## Current model
 

@@ -1,143 +1,90 @@
 ---
-title: Install Volli Code
-description: Install Volli Code for macOS, install a coding agent for it to run, and set up the volli command.
+title: Build Volli Code from source
+description: Build and run the current macOS development version of Volli Code, then choose a default model for Sessions.
 sidebar:
-  label: Install
+  label: Build from source
 ---
 
-import {
-  Aside,
-  CardGrid,
-  LinkCard,
-  Steps,
-  Tabs,
-  TabItem,
-} from "@astrojs/starlight/components";
+import { Aside, CardGrid, LinkCard, Steps } from "@astrojs/starlight/components";
 
-Volli Code runs on macOS only. You can install the packaged app or build it from
-source. Volli is open source, so both give you the same working application.
+Volli Code currently ships as a source build for macOS. There is no packaged
+download yet.
 
-## Before you start
+## Requirements
 
-You need [git](https://git-scm.com) installed, and at least one coding-agent CLI.
-Volli launches agents but doesn't bundle or install them. Install whichever you
-plan to use:
+You need a Mac, [git](https://git-scm.com), Node `^24.13.0`, and pnpm
+`11.10.0`. The repository pins the Node and pnpm versions it uses.
 
-- [Claude Code](https://claude.com/claude-code)
-- [Codex](https://developers.openai.com/codex/cli)
-- [Opencode](https://opencode.ai)
+<Steps>
 
-Add the [GitHub CLI](https://cli.github.com) if you want Volli to push branches
-and open pull requests for you. Everything else works without it.
+1. Clone the repository and install dependencies.
 
-## Install the app
+   ```sh
+   git clone https://github.com/hussainph/volli-code.git
+   cd volli-code
+   pnpm install
+   ```
 
-<Tabs>
-  <TabItem label="Download">
-    <Aside type="caution" title="Not released yet">
-      The first packaged build ships at launch. Until then,
-      [the releases page](https://github.com/hussainph/volli-code/releases) is
-      empty. Build from source.
-    </Aside>
+2. Start the development app.
 
-    <Steps>
+   ```sh
+   pnpm dev
+   ```
 
-    1. Download the latest release from
-       [GitHub releases](https://github.com/hussainph/volli-code/releases/latest).
+   This runs the renderer with hot reload and relaunches Electron after main
+   process changes.
 
-    2. Open the downloaded file and drag Volli Code to your Applications folder.
+3. To run a built copy instead, build first.
 
-    3. Launch it from Applications.
+   ```sh
+   pnpm run build
+   pnpm start
+   ```
 
-    </Steps>
+</Steps>
 
-  </TabItem>
-  <TabItem label="Build from source">
-    You need Node `^24.13.0` and pnpm `11.10.0`. The repository pins both.
+<Aside type="tip">
+  If a native dependency fails to build, run
+  `pnpm -C apps/desktop run rebuild:native`. This rebuilds the native modules
+  for Electron.
+</Aside>
 
-    <Steps>
+## Choose Model Access
 
-    1. Clone the repository and install dependencies.
+Before you start a structured Session, open **Settings** and choose a default
+model in **Model Access**. Model Access shows the accounts and models available
+to Volli without exposing credentials in the app's Session history.
 
-       ```sh
-       git clone https://github.com/hussainph/volli-code.git
-       cd volli-code
-       pnpm install
-       ```
-
-       Installing also rebuilds Volli's native modules against Electron's ABI.
-       That step runs on its own and takes a minute the first time.
-
-    2. Run the app.
-
-       ```sh
-       pnpm dev
-       ```
-
-       This starts the renderer with hot reload and relaunches Electron when the
-       main process changes. Use it if you plan to change the code.
-
-    3. Or build once and run the built app.
-
-       ```sh
-       pnpm run build
-       pnpm start
-       ```
-
-    </Steps>
-
-    <Aside type="tip">
-      If `pnpm install` fails while compiling `node-pty` or `better-sqlite3`, run
-      `pnpm -C apps/desktop run rebuild:native`. Those two are native addons and
-      need rebuilding against Electron after any dependency change.
-    </Aside>
-
-  </TabItem>
-</Tabs>
-
-## First launch
-
-Volli offers to install the `volli` command and its agent skills the first time
-you open it:
-
-> **Install the Volli CLI and agent skills?**
-> Adds the volli command to `/usr/local/bin` and installs its skill for the
-> agents you already have.
-
-Choosing **Install** asks for your admin password, because `/usr/local/bin`
-needs it. Choosing **Not Now** costs you nothing: the terminal sessions Volli
-opens have `volli` on `PATH` either way. Installing it puts the command in
-terminals Volli didn't start, and gives your agents a skill describing how
-Volli expects them to use it.
-
-You can run it later from **File → Install Volli CLI & Agent Skills…**, and
-undo it from **File → Remove Volli CLI & Agent Skills…**.
+If a provider needs sign-in or a refresh, use the recovery action shown there.
+Volli does not silently switch to a different model or account.
 
 ## The `volli` CLI
 
-Volli ships a `volli` command that agents use to read tickets and report back.
-Every terminal session Volli opens has it on `PATH`, pointed at the running app
-through a local Unix socket.
+Volli includes a local `volli` command for working with the running app. The
+app can install it for terminals outside Volli; the terminal companions it
+opens already receive it on `PATH`.
 
-You can run the same commands yourself from any session terminal:
+Run this from a supported terminal companion to confirm its context:
 
 ```sh
 volli identify
 ```
 
-If that prints the current project and ticket, the app and the CLI are talking to
-each other. See the [CLI reference](/reference/cli/) for everything it can do.
+See the [CLI reference](/reference/cli/) for commands and connection details.
 
-## Where Volli keeps your data
+## Local data
 
-Everything is local:
+Volli keeps its data on your Mac:
 
-- Projects, tickets, labels, and the event log live in a SQLite database in
+- Projects, tickets, labels, and history live in a SQLite database in
   Electron's `userData` directory.
 - Ticket worktrees live under `~/.volli/worktrees/`.
-- Terminal transcripts are files on disk, indexed alongside the database.
+- Session transcripts are stored on disk and indexed locally.
 
-Removing a project from Volli never touches the folder on disk.
+Model requests leave the app for the provider you select through Model Access.
+Volli does not expose provider credentials in the renderer or Session history.
+
+Removing a project from Volli does not remove its folder from disk.
 
 ## Next steps
 
@@ -145,11 +92,11 @@ Removing a project from Volli never touches the folder on disk.
   <LinkCard
     title="Quickstart"
     href="/start/quickstart/"
-    description="Add a project, write a ticket, and watch an agent pick it up."
+    description="Add a project and open your first Ticket Session."
   />
   <LinkCard
     title="Troubleshooting"
     href="/reference/troubleshooting/"
-    description="Native module errors, agents that won't start, and CLI connection failures."
+    description="Resolve source-build, Model Access, and CLI connection problems."
   />
 </CardGrid>

@@ -1,93 +1,82 @@
 ---
 title: Troubleshooting
-description: Fixes for CLI connection failures, native module errors, agents that won't start, and questions about where Volli keeps your data.
+description: Resolve source-build, Model Access, worktree, and local CLI connection problems in Volli Code.
 sidebar:
   label: Troubleshooting
 ---
 
+## I cannot start a structured Session
+
+Choose a default model in **Settings → Model Access**. If no model is selected,
+Volli refuses to start the Session rather than selecting one for you.
+
+If a provider is unavailable, open **Model Access** and use its recovery action
+to sign in again or refresh availability. The page lists only the models Volli
+can use without exposing credentials.
+
 ## `volli` exits with code 3
 
-The CLI couldn't reach the app.
+The local CLI could not reach the running app.
 
-1. Check Volli is running.
-2. Run `volli identify`. If it prints your project and ticket, the connection is
-   fine and the problem is elsewhere.
-3. Check `VOLLI_SOCKET` is set in the shell you're using.
+1. Check that Volli is open.
+2. Run `volli identify` from the terminal companion.
+3. Check that the terminal has `VOLLI_SOCKET` set.
 
-Volli sets `VOLLI_SOCKET` in the sessions it starts. A terminal you opened
-yourself, outside Volli, won't have it.
+Volli sets the socket context for terminal companions it starts. A terminal you
+open elsewhere may need the CLI installed and connected separately.
 
 ## `volli: command not found`
 
-You're in a terminal Volli didn't start. The command is on `PATH` inside
-Volli's own sessions. Run it from a session in the app.
+Install the local CLI from Volli, or run the command in a terminal companion
+opened by the app. The app's terminal companions already receive `volli` on
+`PATH`.
 
-## An agent doesn't start when a ticket reaches Doing
+## `pnpm install` fails on a native module
 
-Volli launches agent CLIs but doesn't install them. Check the harness is
-installed and works on its own:
-
-```sh
-claude --version
-```
-
-Then check it's authenticated. Volli doesn't manage agent credentials, so an
-agent that needs a login will fail to start without one.
-
-Confirm the ticket is using the harness you expect. The harness is set per
-ticket, and Volli defaults to whichever you used last.
-
-## `pnpm install` fails on node-pty or better-sqlite3
-
-Both are native addons and have to be compiled against Electron's ABI rather than
-your system Node's. Rebuild them:
+The development build uses native modules that must match Electron's ABI. Run:
 
 ```sh
 pnpm -C apps/desktop run rebuild:native
 ```
 
-Run this after any dependency change that touches either package.
+Then run `pnpm install` again if needed.
 
-## The terminal ignores my app theme
+## My ticket worktree is still on disk
 
-A named theme in your Ghostty config takes precedence over Volli's generated
-colors. This is expected.
+Volli retains worktrees when a ticket is archived. It does not force-remove a
+worktree with uncommitted work.
 
-To let the terminal follow the app theme, remove the `theme` key from your
-Ghostty configuration and from Volli's terminal settings. See
-[Theming](/guides/theming/).
-
-## A shortcut does nothing
-
-Terminals claim keystrokes first, so `⌘K` and `Esc` don't reach the app while a
-terminal has focus. Click outside the terminal and try again.
-
-Single-letter shortcuts like `C` are suppressed whenever you're typing: in a
-text field, in the editor, or with a dialog open.
-
-## My worktree is still on disk after archiving
-
-Volli retains worktrees and won't force-remove one that has uncommitted
-changes. Nothing you've done is lost.
-
-Once the work is landed, remove it yourself:
+After the branch is landed, remove the worktree yourself:
 
 ```sh
 git worktree remove ~/.volli/worktrees/<project>/<TICKET-ID>-<slug>
 ```
 
+## A shortcut does nothing
+
+Terminals can claim keystrokes before the app does. Click outside the terminal
+companion and try the shortcut again.
+
+Single-letter shortcuts are suppressed while you are typing in a text field,
+editor, or dialog.
+
+## The terminal does not follow my app theme
+
+A named theme in your Ghostty configuration takes precedence over Volli's
+generated colors. Remove the `theme` key from Ghostty and Volli terminal
+settings if you want the terminal to follow the app theme. See
+[Theming](/guides/theming/).
+
 ## Where Volli keeps things
 
-- **Database**: projects, tickets, labels, and event log, in a SQLite file in
-  Electron's `userData` directory
-- **Worktrees**: `~/.volli/worktrees/`
-- **Transcripts**: files on disk, indexed alongside the database
+- **Database:** projects, tickets, labels, and local history in a SQLite file
+  in Electron's `userData` directory.
+- **Worktrees:** `~/.volli/worktrees/`.
+- **Session transcripts:** files on disk, indexed locally.
 
-Everything is local. Removing a project from Volli never touches the folder on
-disk.
+Removing a project from Volli does not remove its folder from disk.
 
-## Reporting a bug
+## Report a bug
 
-Volli is open source. Open an issue at
-[github.com/hussainph/volli-code](https://github.com/hussainph/volli-code/issues)
-and include what `volli identify` prints.
+Include the output of `volli identify` and the steps that led to the problem in
+a GitHub issue: [hussainph/volli-code](https://github.com/hussainph/volli-code/issues).

@@ -3,34 +3,40 @@ import FeatureGlyph from "./FeatureGlyph.astro";
 
 const items = [
   {
-    title: "Program every phase",
+    title: "Plan the Ticket",
     description:
-      "Run your own prompts and automations as work enters each phase, from planning and worktree setup through review and delivery.",
+      "Capture the scope, constraints, and review target in one durable board record before implementation begins.",
     illustration: "phases" as const,
   },
   {
-    title: "Let agents work the plan",
+    title: "Start an isolated Session",
     description:
-      "Any agent can use the Volli CLI to create tickets, break work into subtasks, and schedule what should run next.",
+      "Start a Pi-backed Ticket Session with the Ticket as its starting context. For implementation work, use the Ticket’s separate Git worktree.",
     illustration: "agents" as const,
   },
   {
-    title: "Keep context with the work",
+    title: "Keep context and history",
     description:
-      "Each ticket carries its brief, scratchpad, branch, live TUI, review state, and history.",
+      "Sessions retain their identity and locally ordered history through reconnects, restarts, and terminal changes.",
     illustration: "context" as const,
   },
   {
-    title: "Run in parallel, stay oriented",
+    title: "Inspect changes and review",
     description:
-      "Execute many isolated tasks at once while Volli shows what is running, blocked, or waiting for review.",
+      "Use the live Change Set and review state to see a Ticket’s work relative to its base branch, before you move it forward.",
+    illustration: "phases" as const,
+  },
+  {
+    title: "Run work in parallel",
+    description:
+      "Keep multiple Tickets and Sessions moving without losing track of which work is active, blocked, or ready for review.",
     illustration: "parallel" as const,
   },
   {
-    title: "Bring any CLI agent",
+    title: "Automations, in development",
     description:
-      "Use Claude Code, Codex, OpenCode, or a custom harness without rebuilding the workflow around it.",
-    illustration: "harnesses" as const,
+      "Saved Automations will start Sessions from board triggers and carry instructions, runtime choice, and outcomes into Ticket history. They are not available yet.",
+    illustration: "parallel" as const,
   },
 ];
 ---

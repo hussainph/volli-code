@@ -67,6 +67,15 @@ a:focus-visible {
   margin: 0 auto;
 }
 
+.hero-preview-label {
+  width: 100%;
+  max-width: 1280px;
+  margin: 14px auto 0;
+  color: var(--quiet);
+  font-size: 12px;
+  letter-spacing: 0.01em;
+}
+
 .footer-brand img {
   display: block;
   border-radius: 22%;
