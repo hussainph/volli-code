@@ -30,7 +30,7 @@
  *      id, $VOLLI_ARTIFACTS_DIR == the project's `.volli/artifacts` path — the
  *      global-artifacts env contract; VOLLI_TICKET_DIR is gone); switching
  *      Doc ↔ session keeps the terminal alive; the rail shows a chip and the
- *      truthful Shell source label (never the default Claude harness).
+ *      no invented harness name (the roster prints none since the Calm Stack).
  *   6. Resident keep-alive — navigating ticket → board → ticket keeps the SAME
  *      terminal canvas DOM node mounted (marked node survives) and the shell
  *      alive (the overlay hosts terminals, the detail is only a view over it).
@@ -50,7 +50,7 @@
  *      reopens (persisted openTicketId), the edited title/body + surviving
  *      comment are intact, the rail is STILL collapsed (persisted), and the
  *      renamed session is tucked into the collapsed History drawer, then remains
- *      findable when expanded with its Shell + ended-ago metadata. Back returns to
+ *      findable when expanded with its ended-ago metadata. Back returns to
  *      the board even though the in-memory nav history starts fresh.
  *  12. File-tab save guard — a repository file opened as a ticket file tab is an
  *      explicit-⌘S Monaco document (CONCEPT #49), so an unsaved draft must be
@@ -833,7 +833,7 @@ async function main() {
     // ===================================================================
     await attempt(
       5,
-      "Ticket session: rail Terminal control boots a PTY, env injection ($VOLLI_TICKET/$VOLLI_ARTIFACTS_DIR), keep-alive across tabs, truthful Shell metadata",
+      "Ticket session: rail Terminal control boots a PTY, env injection ($VOLLI_TICKET/$VOLLI_ARTIFACTS_DIR), keep-alive across tabs, no invented harness name",
       async () => {
         await fs.rm(PROBE_ENV, { force: true });
         await fs.rm(PROBE_ALIVE, { force: true });
@@ -882,8 +882,14 @@ async function main() {
 
         const railRow = (await aside.getByText(SESSION_INITIAL, { exact: true }).count()) >= 1;
         const railChip = (await aside.getByText(/^(Working|Idle|Exited)$/).count()) >= 1;
-        const shellSource = (await aside.getByText("Shell", { exact: true }).count()) === 1;
+        // The Calm Stack roster is one flat line per Session — glyph, title,
+        // status — so the harness name is no longer printed here at all. What
+        // this check was really guarding is that the rail never INVENTS a
+        // harness, and that survives the redesign: the absence assertion is the
+        // half with teeth. The name itself is still in History and in the
+        // sidebar's bands.
         const noFalseClaude = (await aside.getByText("Claude Code", { exact: true }).count()) === 0;
+        const noHarnessInRoster = (await aside.getByText("Shell", { exact: true }).count()) === 0;
 
         // Put this live shell ticket into Doing through the real property UI
         // (the Now page folds properties in — the Properties rail mode is
@@ -899,10 +905,10 @@ async function main() {
         });
 
         const ok =
-          envOk && aliveOk && railRow && railChip && shellSource && noFalseClaude && !!doing;
+          envOk && aliveOk && railRow && railChip && noHarnessInRoster && noFalseClaude && !!doing;
         return {
           ok,
-          detail: `env=${JSON.stringify(envLines)} envOk=${envOk} alive=${aliveOk} railRow=${railRow} railChip=${railChip} shell=${shellSource} noClaude=${noFalseClaude} doing=${!!doing}`,
+          detail: `env=${JSON.stringify(envLines)} envOk=${envOk} alive=${aliveOk} railRow=${railRow} railChip=${railChip} noHarnessInRoster=${noHarnessInRoster} noClaude=${noFalseClaude} doing=${!!doing}`,
         };
       },
     );
@@ -1423,8 +1429,10 @@ async function main() {
         });
 
         // The prior session no longer clutters the working set: History is
-        // collapsed by default. Expanding it restores the renamed row and its
-        // truthful source/status metadata.
+        // collapsed by default. Expanding it restores the renamed row and when
+        // it ended. The harness name went with the roster's second line in the
+        // Calm Stack redesign, so this asserts identity and pastness — the two
+        // things a history row exists to carry.
         const historyButton = aside.getByRole("button", { name: /History/ });
         const historyCollapsed =
           (await historyButton.getAttribute("aria-expanded")) === "false" &&
@@ -1434,11 +1442,10 @@ async function main() {
           "prior renamed session expands from history",
           async () => {
             const row = (await aside.getByText(SESSION_RENAMED, { exact: true }).count()) >= 1;
-            const shell = (await aside.getByText("Shell", { exact: true }).count()) >= 1;
             // History rows trail with when the session ended, not a redundant
             // "Exited" chip — the drawer itself already says these are past.
             const endedAgo = (await aside.getByText(/^(just now|\d+[mhdw] ago)$/).count()) >= 1;
-            return row && shell && endedAgo;
+            return row && endedAgo;
           },
         );
         // Navigation history is deliberately in-memory, so a relaunch has no
