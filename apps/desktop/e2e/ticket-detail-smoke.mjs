@@ -1104,11 +1104,18 @@ async function main() {
     // ===================================================================
     await attempt(
       "6b",
-      "Terminal focus appears on the band only for a session tab, reclaims sidebars/tab rail, keeps one thin chrome row, preserves the live canvas, and toggles back to the workspace",
+      "Terminal focus is offered on the terminal pane only, reclaims sidebars/tab rail, keeps one thin chrome row, preserves the live canvas, and exits from the band",
       async () => {
-        // The band's toggle derives its own target, so it must come and go with
-        // the ticket's ACTIVE TAB KIND — the one regression moving it up from
-        // the tab strip's corner can cause.
+        // The enter control lives ON the pane now (session-split-layout.tsx's
+        // PaneFocusControl), not on the chrome band — it acts on one terminal, so
+        // it is mounted inside that terminal's visible pane tree and cannot exist
+        // where a terminal isn't. That makes this check structural rather than a
+        // test of a derivation: switching to the Ticket Body unmounts the pane,
+        // and with it the control.
+        //
+        // It is hover-revealed (opacity-0 until the pointer is on the pane), which
+        // Playwright still counts as visible and still clicks — opacity does not
+        // affect hit-testing, and the button keeps its own box.
         await docTab(page).click();
         const hiddenOnDoc = await waitUntil("no focus control on the Ticket Body", async () => {
           return (await page.getByRole("button", { name: "Enter terminal focus" }).count()) === 0;
@@ -1118,6 +1125,22 @@ async function main() {
         const shownOnSession = await waitUntil("focus control on the session tab", async () => {
           return (await page.getByRole("button", { name: "Enter terminal focus" }).count()) === 1;
         }).catch(() => null);
+        // …and it is on the CANVAS, not the band. It sits at the top-right of the
+        // tab's whole pane group rather than inside one split leaf, because the
+        // focus target is the tab (`TerminalFocusTarget.sessionId` is the root
+        // tab id) — a button inside the top-right leaf would claim to focus that
+        // leaf. So the check is positional: outside the app-region drag row, and
+        // below it on screen.
+        const controlOffBand = await page.evaluate(() => {
+          const button = Array.from(document.querySelectorAll("button")).find(
+            (candidate) => candidate.getAttribute("aria-label") === "Enter terminal focus",
+          );
+          if (!button) return false;
+          if (button.closest(".app-region-drag") !== null) return false;
+          const band = document.querySelector(".app-region-drag");
+          const bandBottom = band?.getBoundingClientRect().bottom ?? 0;
+          return button.getBoundingClientRect().top >= bandBottom;
+        });
 
         const marked = await page.evaluate(() => {
           const canvas = Array.from(document.querySelectorAll("canvas")).find(
@@ -1164,10 +1187,14 @@ async function main() {
           focused.asides === 0 &&
           focused.canvasVisible;
 
-        // Exit is the band's toggle — the same button, its glyph flipped — or
-        // ⌥⌘Return. Bare Escape stays with the PTY (Claude Code / vim), and the
-        // old ⌘Escape chord was dropped: it never reliably reached the renderer
-        // under Playwright/Electron and wasn't worth the fight.
+        // Exit is the BAND's persistent control, and it is deliberately not the
+        // same button as the one that entered: in zen mode the band is the only
+        // chrome left (the tab strips and sidebars are gone), so the way out has
+        // to be visible and in a fixed place rather than hover-revealed over a
+        // terminal the user is driving from the keyboard. ⌥⌘Return does the same
+        // job. Bare Escape stays with the PTY (Claude Code / vim), and the old
+        // ⌘Escape chord was dropped: it never reliably reached the renderer under
+        // Playwright/Electron and wasn't worth the fight.
         await page.getByRole("button", { name: "Exit terminal focus" }).click();
         const restored = await waitUntil("workspace geometry restored", async () =>
           page.evaluate(() => {
@@ -1213,6 +1240,7 @@ async function main() {
           marked &&
           !!hiddenOnDoc &&
           !!shownOnSession &&
+          controlOffBand &&
           focusGeometry &&
           restoredGeometry &&
           !!focusedByChord &&
@@ -1220,7 +1248,7 @@ async function main() {
           ticketStillOpen;
         return {
           ok,
-          detail: `marked=${marked} bandHiddenOnDoc=${!!hiddenOnDoc} bandShownOnSession=${!!shownOnSession} focused=${JSON.stringify(focused)} restored=${JSON.stringify(restored)} chordIn=${!!focusedByChord} chordOut=${!!exitedByChord} ticketOpen=${ticketStillOpen}`,
+          detail: `marked=${marked} hiddenOnDoc=${!!hiddenOnDoc} shownOnSession=${!!shownOnSession} onPaneNotBand=${controlOffBand} focused=${JSON.stringify(focused)} restored=${JSON.stringify(restored)} chordIn=${!!focusedByChord} chordOut=${!!exitedByChord} ticketOpen=${ticketStillOpen}`,
         };
       },
     );

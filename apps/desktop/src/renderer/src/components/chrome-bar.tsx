@@ -3,30 +3,23 @@ import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { CornersInIcon } from "@phosphor-icons/react/dist/csr/CornersIn";
-import { CornersOutIcon } from "@phosphor-icons/react/dist/csr/CornersOut";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { SidebarIcon } from "@phosphor-icons/react/dist/csr/Sidebar";
 
 import { CommandPalette } from "@renderer/components/command-palette";
-import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
 import { Button } from "@renderer/components/ui/button";
 import { SidebarTrigger } from "@renderer/components/ui/sidebar";
 import { useCommandPaletteShortcut } from "@renderer/hooks/use-command-palette-shortcut";
 import { useFullScreen } from "@renderer/hooks/use-fullscreen";
 import { navBack, navForward } from "@renderer/hooks/use-nav-history";
-import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { useTerminalFocusShortcut } from "@renderer/hooks/use-terminal-focus-shortcut";
 import { cn } from "@renderer/lib/utils";
 import { canGoBack, canGoForward } from "@renderer/lib/nav-history";
-import {
-  activeTerminalSessionId,
-  terminalFocusTargetForChrome,
-} from "@renderer/lib/terminal-focus";
 import { useBoardStore } from "@renderer/stores/board";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
-import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { displayTicketId } from "@volli/shared";
 
 /**
@@ -85,13 +78,11 @@ export function ChromeBar() {
             {/* The content-area tab strip (if any) lives below in MainContent, not here. */}
           </>
         )}
-        {/* Both OUTSIDE the ternary, at a fixed position in this element's
-            children, so React reconciles the trailing toggle as the same node
-            across the focus transition instead of unmounting and remounting it.
-            Enter and exit are one button at one point on screen; a remount would
-            make them two buttons that happen to share a slot. */}
+        {/* Outside the ternary so the spacer keeps its slot in this element's
+            children across the focus transition rather than being reconciled
+            against the breadcrumb. */}
         <div className="flex-1" />
-        <TerminalFocusToggle />
+        <TerminalFocusExit />
       </div>
       <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
     </>
@@ -105,7 +96,12 @@ export function ChromeBar() {
  * this single 40px row.
  *
  * It carries no exit control of its own — leaving is the band's persistent
- * `TerminalFocusToggle`, which never moved.
+ * {@link TerminalFocusExit}, in the trailing slot.
+ *
+ * The owner half names the ticket when a ticket owns the Session and the project
+ * when none does. That is not a fallback string: a ticketless Session genuinely
+ * belongs to the project, and in zen mode the rail that would otherwise say
+ * which project you are in is gone.
  */
 function TerminalFocusBreadcrumb() {
   const target = useUiStore((state) => state.terminalFocusTarget);
@@ -115,26 +111,30 @@ function TerminalFocusBreadcrumb() {
       : state.projects.find((candidate) => candidate.id === target.projectId),
   );
   const ticket = useBoardStore((state) =>
-    target === null
+    target === null || target.ticketId === null
       ? undefined
       : state.ticketsByProject[target.projectId]?.find(
           (candidate) => candidate.id === target.ticketId,
         ),
   );
+  // One lookup for both kinds: the sessions store is keyed by `ownerKey`, which
+  // is a ticketId for a ticket Session and a projectId for a ticketless one.
   const sessionTitle = useSessionsStore((state) =>
     target === null
       ? undefined
-      : state.byOwner[target.ticketId]?.tabs.find(
+      : state.byOwner[target.ticketId ?? target.projectId]?.tabs.find(
           (candidate) => candidate.sessionId === target.sessionId,
         )?.title,
   );
 
   if (target === null) return null;
 
-  const ticketLabel =
-    project !== undefined && ticket !== undefined
-      ? displayTicketId(project.ticketPrefix, ticket.ticketNumber)
-      : "Ticket";
+  const ownerLabel =
+    target.ticketId === null
+      ? (project?.name ?? "Sessions")
+      : project !== undefined && ticket !== undefined
+        ? displayTicketId(project.ticketPrefix, ticket.ticketNumber)
+        : "Ticket";
 
   return (
     <div
@@ -143,7 +143,9 @@ function TerminalFocusBreadcrumb() {
       // trailing focus toggle carries translate-y-px to meet the traffic lights.
       className="pointer-events-none absolute left-1/2 top-[21px] flex max-w-[45vw] -translate-x-1/2 -translate-y-1/2 items-center gap-2 text-xs text-muted-foreground"
     >
-      <span className="shrink-0 font-medium text-foreground">{ticketLabel}</span>
+      <span className="max-w-[40%] shrink-0 truncate font-medium text-foreground">
+        {ownerLabel}
+      </span>
       <span aria-hidden="true">/</span>
       <span className="truncate">{sessionTitle ?? "Terminal"}</span>
     </div>
@@ -216,64 +218,31 @@ function NavHistoryButtons() {
 }
 
 /**
- * The band's trailing slot: ONE persistent button that enters and exits terminal
- * focus, its glyph flipping `CornersOut ⇄ CornersIn`.
+ * The band's trailing slot: the way OUT of terminal focus, and nothing else.
  *
- * It took this slot from the right-rail toggle, which moved down into the tab
- * strip's corner — that corner sits directly on top of the pane it collapses,
- * which is a mapping the band could never offer, and this slot is where the
- * old Exit button already lived. So entering and leaving now happen at one
- * point on screen instead of two 40px apart.
+ * The way in moved onto the pane it acts on (`session-split-layout.tsx`'s
+ * `PaneFocusControl`). Entering is a statement about one terminal, so it belongs
+ * on that terminal; the band is window chrome and could only ever offer it by
+ * first deriving whether a terminal was on screen at all — a control conditional
+ * on facts it has no business holding, and the reason terminal focus stayed
+ * accidentally ticket-only for as long as it did.
  *
- * No `weight` change across the flip and no crossfade: `app-shell.tsx` forces
- * `data-motion="instant"` through the first frame of the transition to collapse
- * the PTY resize cascade, and a glyph animating against that would be the one
- * thing on screen fighting the freeze. The shape alone says the state.
+ * Exit stays here, and the asymmetry is the point rather than a leftover. In zen
+ * mode this 40px row is the only chrome left: the tab strips are gone, the
+ * sidebars are gone, and the pane fills everything below. A hover-revealed
+ * corner control on a terminal the user is driving from the keyboard is not a
+ * way out of a mode — it is a thing you have to remember exists and then go
+ * hunting for with a mouse. So the exit is persistent, visible, and always in
+ * the same place, with ⌥⌘Return doing the same job without a pointer.
  *
- * It derives its own target rather than taking one from the ticket view: the
- * band is window chrome mounted above every page, and prop-drilling from a view
- * that unmounts on navigation would make the control's existence depend on the
- * view rather than on the state.
+ * No crossfade on appearing: `app-shell.tsx` forces `data-motion="instant"`
+ * through the first frame of the transition to collapse the PTY resize cascade,
+ * and a glyph animating against that would be the one thing on screen fighting
+ * the freeze.
  */
-function TerminalFocusToggle() {
+function TerminalFocusExit() {
   const focused = useUiStore((state) => state.terminalFocusTarget !== null);
-  const settingsOpen = useUiStore((state) => state.settingsOpen);
-  const projectId = useSelectedProject()?.id ?? null;
-  const nav = useWorkspaceStore((state) =>
-    projectId === null
-      ? DEFAULT_WORKSPACE_UI.nav
-      : (state.byProject[projectId]?.nav ?? DEFAULT_WORKSPACE_UI.nav),
-  );
-  const openTicketId = useWorkspaceStore((state) =>
-    projectId === null ? null : (state.byProject[projectId]?.openTicketId ?? null),
-  );
-  const activeTabId = useWorkspaceStore((state) =>
-    projectId === null || openTicketId === null
-      ? TICKET_BODY_TAB_ID
-      : (state.byProject[projectId]?.ticketTabs[openTicketId]?.active ?? TICKET_BODY_TAB_ID),
-  );
-  // Every selector above returns a PRIMITIVE, and this one especially: a
-  // selector that built `{sessionId}` or sliced a fresh array would hand
-  // Zustand a new identity on every store write anywhere in the app and
-  // re-render this button forever. Neither lint nor typecheck can see that.
-  const activeSessionId = useSessionsStore((state) =>
-    activeTerminalSessionId(
-      activeTabId,
-      openTicketId === null ? undefined : state.byOwner[openTicketId]?.tabs,
-    ),
-  );
-
-  const target = terminalFocusTargetForChrome({
-    selectedProjectId: projectId,
-    nav,
-    settingsOpen,
-    openTicketId,
-    activeSessionId,
-  });
-  if (!focused && target === null) return null;
-
-  const label = focused ? "Exit terminal focus" : "Enter terminal focus";
-  const Glyph = focused ? CornersInIcon : CornersOutIcon;
+  if (!focused) return null;
 
   return (
     <Button
@@ -285,12 +254,12 @@ function TerminalFocusToggle() {
       // No `aria-pressed`, for the same reason as WorkspaceRailToggle above:
       // the label already carries the state, and "Exit terminal focus, pressed"
       // reads as if exiting were the thing already done.
-      onClick={() => useUiStore.getState().setTerminalFocusTarget(focused ? null : target)}
-      aria-label={label}
-      title={`${label} (⌥⌘⏎)`}
+      onClick={() => useUiStore.getState().setTerminalFocusTarget(null)}
+      aria-label="Exit terminal focus"
+      title="Exit terminal focus (⌥⌘⏎)"
     >
-      <Glyph weight="bold" />
-      <span className="sr-only">{label}</span>
+      <CornersInIcon weight="bold" />
+      <span className="sr-only">Exit terminal focus</span>
     </Button>
   );
 }

@@ -507,12 +507,15 @@ export function TicketSessionsPanel({
           <div className="flex items-center justify-between">
             <h2 className="text-label font-medium text-muted-foreground uppercase">Sessions</h2>
             {/* Right-aligned against the rail's own edge, so the menu hangs
-                back into the rail instead of off the window. No chord hint: ⌘T
-                is global and this control is the ticket's. */}
+                back into the rail instead of off the window. The chord hint is
+                honest here now: this rail only exists inside a ticket, and
+                inside a ticket ⌘T / ⌥⌘T mint a Session on that ticket — the
+                same one this control does. */}
             <NewSessionControl
               disabled={effectiveCreating}
               placement="rail"
               align="end"
+              shortcuts
               onNewChat={onNewChat}
               onNewTerminal={onNewSession}
             />

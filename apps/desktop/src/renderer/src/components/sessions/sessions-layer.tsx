@@ -33,6 +33,7 @@ import {
   type TerminalSplitDirection,
 } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
+import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { subscribeWorktreePhases } from "@renderer/stores/worktree";
 import { cn } from "@renderer/lib/utils";
@@ -240,6 +241,28 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
   // They stay mounted — only their visibility flips (see the keep-alive below).
   const activeChatSessionId = activeTabId === null ? null : parseChatTabId(activeTabId);
 
+  // Terminal focus can now land on THIS surface's terminals too, so this surface
+  // owes the same invariant a ticket's detail view owes for its own: the target
+  // must keep naming the terminal that is actually in front.
+  const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
+  const scratchFocused =
+    terminalFocusTarget !== null &&
+    terminalFocusTarget.ticketId === null &&
+    terminalFocusTarget.projectId === selectedId &&
+    terminalFocusTarget.sessionId === activeTabId;
+  // A ticket target is enforced at the store layer (`clearTerminalFocusUnlessTicket`)
+  // because no single ticket view outlives every ticket. A ticketless one needs no
+  // such twin: this layer IS the app's always-mounted owner of the surface, so it
+  // can simply watch. Selecting another tab, closing the focused one, switching
+  // project, or navigating off Sessions all land here as "no longer in front" —
+  // and app-shell, which hides every piece of chrome while a target is set, must
+  // never be left holding one around a terminal nobody can see.
+  React.useEffect(() => {
+    if (terminalFocusTarget === null || terminalFocusTarget.ticketId !== null) return;
+    if (visible && scratchFocused) return;
+    useUiStore.getState().setTerminalFocusTarget(null);
+  }, [terminalFocusTarget, scratchFocused, visible]);
+
   // The receipt for what was derived, and the only write of it: a tab that
   // closed under the recorded id is answered by re-deriving, never by repairing
   // what was stored.
@@ -362,7 +385,11 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
       {/* SCRATCH surface — flow layout, hidden (not unmounted) when Sessions
           isn't the active page. */}
       <div className={cn("flex min-h-0 flex-1 flex-col bg-background", !visible && "hidden")}>
-        {selected && (
+        {/* The strip steps aside in zen exactly as the ticket's does: the point
+            of terminal focus is that the terminal gets every pixel below the
+            band, and a strip that stayed would be this surface disagreeing with
+            the other one about what "focus" means. */}
+        {selected && !scratchFocused && (
           <ScratchTabs
             terminalTabs={terminalTabs}
             chatIds={openChatIds}

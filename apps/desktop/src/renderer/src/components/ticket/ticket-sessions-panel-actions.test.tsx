@@ -33,8 +33,13 @@ describe("TicketSessionsPanel", () => {
     expect(html).not.toContain('aria-label="New session"');
   });
 
-  it("does not claim the global ⌘T for a ticket-scoped control", () => {
-    expect(panel(false)).not.toContain("aria-keyshortcuts");
+  it("announces the chord, which now starts what this control starts", () => {
+    // This rail only exists inside a ticket, and ⌘T / ⌥⌘T resolve against the
+    // surface in front (lib/new-session-shortcut.ts) — so inside a ticket they
+    // mint a Session on that ticket, exactly as this control does. The rule is
+    // unchanged ("only advertise a key that does what the item does"); the chord
+    // is what moved.
+    expect(buttonTag(panel(false), "New chat")).toContain('aria-keyshortcuts="Meta+T"');
   });
 
   it("disables both halves while the ticket worktree is booting", () => {

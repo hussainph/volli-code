@@ -14,9 +14,12 @@
  * and the two Session kinds — session and chat — are renamable.
  */
 import * as React from "react";
+import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
+import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
+import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
@@ -26,9 +29,13 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
+import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
+import { sessionPanes, useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
+import { errorMessage, type TerminalIoResult } from "@volli/shared";
 
 /**
  * Roving-tabindex arrow navigation across a strip's `role="tab"` children.
@@ -50,6 +57,26 @@ function moveTabFocus(from: HTMLElement, to: "prev" | "next" | "first" | "last")
           ? tabs[(i + 1) % tabs.length]
           : tabs[(i - 1 + tabs.length) % tabs.length];
   target?.focus();
+}
+
+/**
+ * Hand focus to the tab that will survive this close — the one to the right, or
+ * the left when the closed tab was last.
+ *
+ * Called BEFORE the close lands, from inside the × that is about to unmount, so
+ * focus never spends a frame on `<body>` and the next Arrow keeps moving from
+ * where the closed tab was. Shared verbatim with the Sessions strip, because
+ * "where does focus go when a tab closes" is not a question the two surfaces get
+ * to answer differently.
+ */
+function focusNeighborTab(from: HTMLElement): void {
+  const tab = from.closest<HTMLElement>('[role="tab"]');
+  const tablist = tab?.closest('[role="tablist"]');
+  if (!tab || !tablist) return;
+  const tabs = Array.from(tablist.querySelectorAll<HTMLElement>('[role="tab"]'));
+  const i = tabs.indexOf(tab);
+  if (i === -1) return;
+  (tabs[i + 1] ?? tabs[i - 1])?.focus();
 }
 
 export type TicketTabKind = "body" | "session" | "file" | "diff" | "chat";
@@ -76,6 +103,99 @@ export const TAB_STATUS_CLASS: Record<TicketTabStatus, string> = {
 /** Whether a ticket-strip tab of this kind shows a close affordance. */
 export function isClosableTicketTab(kind: TicketTabKind): boolean {
   return kind === "session" || kind === "file" || kind === "diff" || kind === "chat";
+}
+
+/**
+ * What a terminal tab knows about its own PTY tree — the only vocabulary either
+ * strip needs to draw one.
+ *
+ * It lives here, beside {@link TAB_STATUS_CLASS}, because this module is already
+ * where the two strips agree about what a Session tab looks like, and because
+ * the dependency only runs one way (the Sessions strip imports this file; not
+ * the reverse). It used to live inline in `session-tabs.tsx`, which is why a
+ * ticket's terminal tab said nothing at all about being parked or dead while the
+ * project's said both.
+ */
+export interface TerminalTabState {
+  /** Every pane's PTY has ended. */
+  exited: boolean;
+  /** The first exit code found, for the hover line. */
+  exitCode: number | null;
+  /** Every LIVE pane is parked (issue #51 warm-park tier). */
+  parked: boolean;
+  /** At least one live pane is pinned out of the auto-park sweep. */
+  keptAwake: boolean;
+  /** The panes a park/wake/pin action runs over. Empty ⇒ no park controls. */
+  livePaneIds: readonly string[];
+}
+
+/**
+ * Read a tab's park/exit facts off the store's own two maps.
+ *
+ * `parked` is vacuously true with no live panes, which is why every reader gates
+ * on `!exited` as well: an exited tab must never wear the moon badge or offer
+ * "Park Now".
+ */
+export function terminalTabState(
+  tab: SessionTab,
+  parkState: Record<string, { parked: boolean; keepAwake: boolean }>,
+): TerminalTabState {
+  const panes = sessionPanes(tab.layout);
+  const livePanes = panes.filter((pane) => pane.exitCode === null);
+  return {
+    exited: panes.every((pane) => pane.exitCode !== null),
+    exitCode: panes.find((pane) => pane.exitCode !== null)?.exitCode ?? null,
+    parked: livePanes.every((pane) => parkState[pane.sessionId]?.parked ?? false),
+    keptAwake: livePanes.some((pane) => parkState[pane.sessionId]?.keepAwake ?? false),
+    livePaneIds: livePanes.map((pane) => pane.sessionId),
+  };
+}
+
+/**
+ * The same facts for a tab named only by its session id — what the ticket strip
+ * has, since `ticket-detail.tsx` hands it descriptors rather than store records.
+ *
+ * `sessionOwner` resolves any pane (root or split leaf) to its owner, so one
+ * index lookup finds the container without the caller knowing whether a ticket
+ * or a project owns it. Null for every other tab kind, and callable
+ * unconditionally with `null` so a component that renders all five kinds can
+ * still ask.
+ */
+/**
+ * Runs a park/wake/pin mutation against every live pane of a tab (issue #51
+ * warm-park tier) and surfaces any failure — CLAUDE.md's "never silently swallow
+ * errors" applies to these fire-and-forget context-menu actions the same as any
+ * other mutation. Shared by both strips, for the same reason the derivation
+ * above is.
+ */
+export function runOnLivePanes(
+  paneIds: readonly string[],
+  action: (paneId: string) => Promise<TerminalIoResult>,
+  failureLabel: string,
+): void {
+  for (const paneId of paneIds) {
+    action(paneId)
+      .then((result) => {
+        if (!result.ok) toastError(`${failureLabel} failed: ${result.error}`);
+      })
+      .catch((error: unknown) => {
+        toastError(`${failureLabel} failed: ${errorMessage(error)}`);
+      });
+  }
+}
+
+function useTerminalTabState(sessionId: string | null): TerminalTabState | null {
+  // Returns a store-held object, never a fresh one — a selector that built its
+  // own would hand React a snapshot that never compares equal.
+  const tab = useSessionsStore((state) => {
+    if (sessionId === null) return undefined;
+    const ownerId = state.sessionOwner[sessionId];
+    return ownerId === undefined
+      ? undefined
+      : state.byOwner[ownerId]?.tabs.find((candidate) => candidate.sessionId === sessionId);
+  });
+  const parkState = useSessionsStore((state) => state.parkState);
+  return tab === undefined ? null : terminalTabState(tab, parkState);
 }
 
 export interface TicketTabDescriptor {
@@ -176,6 +296,31 @@ function TicketTab({
   const closable = isClosableTicketTab(tab.kind);
   const dirty = tab.dirty === true;
   const preview = tab.preview === true;
+  // A terminal tab's own PTY facts. Called for every kind (hooks are not
+  // conditional) and null for the four that have no PTY.
+  const terminal = useTerminalTabState(tab.kind === "session" ? tab.id : null);
+  const parked = terminal !== null && terminal.parked && !terminal.exited;
+  const exited = terminal?.exited === true;
+  const showParkControls = (terminal?.livePaneIds.length ?? 0) > 0;
+
+  // Select the tab and, if it was fully parked, wake it. Clicking the ALREADY
+  // active tab changes no visibility state, so `TerminalView`'s own reveal-wake
+  // never re-fires and the promised wake-on-click has to be explicit. Idempotent
+  // for the select-a-different-tab case, where the visibility wiring wakes it too.
+  const activate = () => {
+    onSelect();
+    if (parked && terminal !== null) {
+      runOnLivePanes(terminal.livePaneIds, (id) => window.api.terminal.wake(id), "Wake");
+    }
+  };
+
+  // The one line a hover can add to what the tab already says. Silent for every
+  // tab whose label is the whole truth.
+  const hint = exited
+    ? `Exited (${terminal?.exitCode ?? "?"})`
+    : parked
+      ? "Parked to save memory. Click to wake."
+      : tab.label;
 
   const inner = (
     // The tab itself is the focusable role="tab" — the direct child of the
@@ -191,7 +336,7 @@ function TicketTab({
       aria-selected={active}
       data-preview={preview ? "true" : undefined}
       tabIndex={active ? 0 : -1}
-      onClick={onSelect}
+      onClick={activate}
       onDoubleClick={renamable ? onStartRename : preview && onPin !== undefined ? onPin : undefined}
       onKeyDown={(event) => {
         switch (event.key) {
@@ -214,10 +359,11 @@ function TicketTab({
           case "Enter":
           case " ":
             event.preventDefault();
-            onSelect();
+            activate();
             break;
         }
       }}
+      title={hint}
       className={cn(
         "group relative flex h-8 shrink-0 items-center rounded-t-lg text-sm outline-none transition-[color,background-color,box-shadow,transform] duration-150 ease-out active:scale-[0.97] motion-reduce:transform-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
         closable ? "pr-1 pl-3" : "px-3.5",
@@ -234,6 +380,27 @@ function TicketTab({
           aria-hidden
           className={cn("mr-1.5 size-2 shrink-0 rounded-full", TAB_STATUS_CLASS[tab.status])}
         />
+      ) : terminal !== null ? (
+        // A terminal tab's liveness, in the SAME leading slot and at the same
+        // size as a chat tab's dot, so the column reads as liveness whatever the
+        // kind. Without this a ticket's terminal tab was the one Session tab on
+        // either strip that said nothing at all about being parked or dead — you
+        // found out by clicking it.
+        parked ? (
+          <MoonIcon
+            aria-hidden
+            weight="bold"
+            className="mr-1.5 size-3 shrink-0 text-muted-foreground"
+          />
+        ) : (
+          <span
+            aria-hidden
+            className={cn(
+              "mr-1.5 size-2 shrink-0 rounded-full",
+              exited ? "bg-muted-foreground/40" : active ? "bg-primary" : "bg-muted-foreground",
+            )}
+          />
+        )
       ) : null}
       {tab.badge === "worktree" ? (
         // A quiet dot marking a file resolved from the ticket's worktree copy
@@ -256,7 +423,14 @@ function TicketTab({
         // The clickable/selectable target is the tab div (role="tab") above,
         // so the label is a plain span — no nested interactive control.
         // Preview File tabs are italic (same convention as Project Files).
-        <span className={cn("max-w-40 truncate font-medium", preview && "italic")}>
+        // An exited terminal is struck through, the same as on the other strip.
+        <span
+          className={cn(
+            "max-w-40 truncate font-medium",
+            preview && "italic",
+            exited && "line-through",
+          )}
+        >
           {tab.label}
         </span>
       )}
@@ -264,9 +438,11 @@ function TicketTab({
         <button
           type="button"
           aria-label={`Close ${tab.label}`}
-          // Stop the click from bubbling to the tab's own onClick (select).
+          // Stop the click from bubbling to the tab's own onClick (select), and
+          // pass the keyboard on to a tab that will still be here afterwards.
           onClick={(event) => {
             event.stopPropagation();
+            focusNeighborTab(event.currentTarget);
             onClose();
           }}
           className={cn(
@@ -311,6 +487,58 @@ function TicketTab({
             Keep Open
           </ContextMenuItem>
         )}
+        {/* The warm-park tier (issue #51) is about a PTY holding memory, and a
+            ticket's PTY holds exactly as much as the project's — these items
+            were simply never ported over when this strip learned about Sessions.
+            Chat tabs get none of it: a chat's stream, fold and queue live in the
+            resident client, so there is nothing here to hand memory back from. */}
+        {terminal !== null && showParkControls ? (
+          <>
+            <ContextMenuSeparator />
+            {parked ? (
+              <ContextMenuItem
+                icon={SunIcon}
+                onSelect={() =>
+                  runOnLivePanes(terminal.livePaneIds, (id) => window.api.terminal.wake(id), "Wake")
+                }
+              >
+                Wake
+              </ContextMenuItem>
+            ) : (
+              <ContextMenuItem
+                icon={MoonIcon}
+                onSelect={() =>
+                  runOnLivePanes(terminal.livePaneIds, (id) => window.api.terminal.park(id), "Park")
+                }
+              >
+                Park Now
+              </ContextMenuItem>
+            )}
+            <ContextMenuItem
+              icon={terminal.keptAwake ? PushPinSlashIcon : PushPinIcon}
+              onSelect={() =>
+                runOnLivePanes(
+                  terminal.livePaneIds,
+                  (id) => window.api.terminal.setKeepAwake(id, !terminal.keptAwake),
+                  terminal.keptAwake ? "Allow Parking" : "Keep Awake",
+                )
+              }
+            >
+              {terminal.keptAwake ? "Allow Parking" : "Keep Awake"}
+            </ContextMenuItem>
+          </>
+        ) : null}
+        {/* Closing from the menu, not only from a × you have to hover to see —
+            the Sessions strip has offered this since it shipped, and a Session
+            is the one tab kind whose close the keyboard can otherwise not reach. */}
+        {renamable ? (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem icon={XIcon} variant="destructive" onSelect={onClose}>
+              Close
+            </ContextMenuItem>
+          </>
+        ) : null}
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -334,9 +562,12 @@ export function TicketTabStrip({
 
   return (
     <div className="flex shrink-0 items-end border-b border-border bg-rail pt-1.5">
-      {/* Tabs and the session-start control scroll as one cluster, keeping
-          creation beside the last tab instead of pinning it away from its
-          destination. The rail toggle owns a stable slot at the far right. */}
+      {/* Tabs own the left and scroll; actions own the right and do not. The
+          session-start control used to ride INSIDE this scroller, immediately
+          after the last tab, and that is what made it read as one more tab: same
+          row, same baseline, same ghost hover surface as an inactive tab, and in
+          dark mode the two surfaces are the same token. Distance is only half
+          the fix — see the cluster below for the other half. */}
       <div className="flex min-w-0 flex-1 items-end overflow-x-auto px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {/* Named, because the details rail draws a tablist of its own on the
             same screen — two unlabeled ones leave AT (and any query by role)
@@ -369,35 +600,47 @@ export function TicketTabStrip({
             />
           ))}
         </div>
-        {/* No chord hint here: ⌘T is global, and this control is the ticket's.
-            The menu hangs from the control's start edge — it sits mid-strip,
-            after the last tab, not against a window edge. */}
-        <NewSessionControl
-          disabled={creating}
-          placement="strip"
-          align="start"
-          className="mb-1 ml-0.5"
-          onNewChat={onNewChat}
-          onNewTerminal={onNewSession}
-        />
       </div>
-      {/* Full-height corner control: self-stretch ignores the parent's items-end
-          and -mt-1.5 cancels its pt-1.5 so this column spans the strip's true
-          top edge to bottom (the framed card's rounded-t-lg + overflow clips the
-          outer corner). The button fills that height (h-full over size-5's height,
-          width kept) with a rectangular hover (rounded-none) so it reads as a
-          corner region, not a tall pill. */}
-      <div className="-mt-1.5 flex shrink-0 items-stretch self-stretch border-l border-border/70 px-1.5">
+      {/* The strip's actions, past a divider. Everything here is about the
+          STRIP; nothing here is a place you can be. The rule is dividing the two
+          populations, and vertical centring is the rest of the fix: the tabs sit
+          on the strip's bottom edge (items-end) because they fuse with the
+          content plane, so a control centred in the band's full height cannot be
+          mistaken for one of them however it is styled.
+
+          -mt-1.5 cancels the strip's pt-1.5 so this column spans the true top
+          edge to bottom (the framed card's rounded-t-lg + overflow clips the
+          outer corner). */}
+      <div className="-mt-1.5 flex shrink-0 items-stretch self-stretch border-l border-border/70 pr-1.5 pl-2">
+        <div className="flex items-center">
+          {/* The chord hint belongs here now: ⌘T / ⌥⌘T resolve against the
+              surface in front (`lib/new-session-shortcut.ts`), so inside a ticket
+              they start exactly what this control starts. `align="end"` because
+              the control now sits at the strip's right edge — the menu hangs back
+              into the window rather than off it. */}
+          <NewSessionControl
+            disabled={creating}
+            placement="strip"
+            align="end"
+            shortcuts
+            onNewChat={onNewChat}
+            onNewTerminal={onNewSession}
+          />
+        </div>
         {/* The details rail's collapse control, and the reason this corner has
             no `disabled` state, no reserved slot and no fade: the strip spans
             both columns, so its right corner sits directly on top of the pane
-            this button collapses, and that pane is always there to collapse.
-            (Terminal focus, which WAS conditional on the active tab's kind,
-            moved up to the chrome band's trailing slot.) */}
+            this button collapses, and that pane is always there to collapse. It
+            keeps its full-height rectangular hover (h-full over size-5's height,
+            rounded-none) so it reads as a corner REGION rather than a tall pill —
+            which is also what tells it apart from the pill beside it.
+            (Terminal focus, which WAS conditional on the active tab's kind and
+            then briefly lived on the chrome band, is now drawn on the terminal
+            pane itself — see `session-split-layout.tsx`.) */}
         <Button
           size="icon-xs"
           variant="ghost"
-          className="h-full rounded-none"
+          className="ml-1 h-full rounded-none"
           onClick={onToggleRail}
           // No `aria-pressed`: the label below already carries the state, and
           // the button has no pressed appearance for it to describe — the same

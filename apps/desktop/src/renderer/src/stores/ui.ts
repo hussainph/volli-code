@@ -41,15 +41,18 @@
  * Persisted app-wide like `railCollapsed` / `railMode`: it is global chrome, not
  * a per-ticket choice, so every diff tab honors the same presentation.
  *
- * `terminalFocusTarget` — the ticket terminal tab temporarily owning the app
- * canvas. It is deliberately session-only: live PTYs do not survive relaunch,
- * and entering a new app lifetime with its chrome hidden around a missing
- * session would strand the user in an invalid view. The invariant "the target
- * names a tab of the currently open ticket" lives here at the store layer via
- * `clearTerminalFocusForTicket` / `clearTerminalFocusUnlessTicket`, so it doesn't
- * hinge on a particular ticket-detail view staying mounted: any surface that
- * changes the open ticket enforces it, and app-shell (which hides all chrome
- * while a target is set) can never be stranded around a ticket that's gone.
+ * `terminalFocusTarget` — the terminal tab temporarily owning the app canvas,
+ * whether a ticket owns it or the project does. It is deliberately session-only:
+ * live PTYs do not survive relaunch, and entering a new app lifetime with its
+ * chrome hidden around a missing session would strand the user in an invalid
+ * view. The invariant "the target names a tab of the surface that is actually in
+ * front" is enforced by whichever surface hosts it — for a ticket target, here
+ * at the store layer via `clearTerminalFocusForTicket` /
+ * `clearTerminalFocusUnlessTicket` so it doesn't hinge on a particular
+ * ticket-detail view staying mounted; for a ticketless one, by `sessions-layer`,
+ * which is the app's always-mounted owner of that surface and so needs no
+ * store-layer twin. Either way app-shell (which hides all chrome while a target
+ * is set) can never be stranded around a session that's gone.
  *
  * Per-workspace UI state (the active nav page) lives in stores/workspace.ts.
  */
@@ -80,10 +83,17 @@ export type DiffPresentation = "inline" | "side-by-side";
 
 const DEFAULT_DIFF_PRESENTATION: DiffPresentation = "inline";
 
-/** Identity of the ticket terminal tab temporarily owning the app canvas. */
+/** Identity of the terminal tab temporarily owning the app canvas. */
 export interface TerminalFocusTarget {
   projectId: string;
-  ticketId: string;
+  /**
+   * The ticket that owns the Session, or `null` for one of the project's
+   * ticketless Sessions — the Sessions page hosts terminals too, and a PTY there
+   * fills a canvas exactly as well as one under a ticket. Not "unknown": it is
+   * the same durable fact `scratchScope` carries, and it is what the two
+   * `clearTerminalFocus*` guards below discriminate on.
+   */
+  ticketId: string | null;
   /** Root session/tab id; split-pane focus remains owned by the session store. */
   sessionId: string;
 }
@@ -211,6 +221,11 @@ interface UiState {
    * open ticket changes, so a target left over from a previous ticket can't
    * strand app-shell with all chrome hidden — the guarantee no longer depends on
    * a specific ticket-detail instance staying mounted to notice the change.
+   *
+   * A ticketless target (`ticketId: null`) is cleared too, and that is right
+   * rather than incidental: a ticket has just come to the front, so a terminal
+   * on the project's Sessions page is by definition no longer the thing on
+   * screen.
    */
   clearTerminalFocusUnlessTicket(ticketId: string): void;
   setLastHarnessId(harnessId: HarnessId): void;

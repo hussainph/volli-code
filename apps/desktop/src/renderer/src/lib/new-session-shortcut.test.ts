@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   newSessionKindForKeyEvent,
   newSessionLandingForChrome,
+  type NewSessionChrome,
   type NewSessionKeyEvent,
 } from "./new-session-shortcut";
 
@@ -70,31 +71,72 @@ describe("newSessionKindForKeyEvent", () => {
   });
 });
 
+/** The plain board of a selected project: nothing in front but the cards. */
+function chrome(overrides: Partial<NewSessionChrome> = {}): NewSessionChrome {
+  return {
+    selectedProjectId: "p1",
+    nav: "board",
+    settingsOpen: false,
+    openTicketId: null,
+    ...overrides,
+  };
+}
+
 describe("newSessionLandingForChrome", () => {
-  it("mints on the selected project and moves to Sessions", () => {
-    expect(newSessionLandingForChrome({ selectedProjectId: "p1", nav: "board" })).toEqual({
+  it("mints on the project and moves to Sessions from the bare board", () => {
+    expect(newSessionLandingForChrome(chrome())).toEqual({
       projectId: "p1",
+      ticketId: null,
       navigateTo: "sessions",
     });
   });
 
   it("stays put when Sessions is already the page", () => {
-    expect(newSessionLandingForChrome({ selectedProjectId: "p1", nav: "sessions" })).toEqual({
+    expect(newSessionLandingForChrome(chrome({ nav: "sessions" }))).toEqual({
       projectId: "p1",
+      ticketId: null,
       navigateTo: null,
     });
   });
 
-  it("stays global with a ticket open — the chord has one meaning everywhere", () => {
+  it("mints on the OPEN TICKET, without moving the page under it", () => {
     // Ticket detail is a STATE of the board nav (`openTicketWorkspace` patches
-    // `{ nav: "board", openTicketId }`), so this IS the in-a-ticket chrome.
-    expect(newSessionLandingForChrome({ selectedProjectId: "p1", nav: "board" })).toEqual({
+    // `{ nav: "board", openTicketId }`), so this IS the in-a-ticket chrome — and
+    // the ticket is already the surface in front, so there is nowhere to go.
+    expect(newSessionLandingForChrome(chrome({ openTicketId: "t1" }))).toEqual({
       projectId: "p1",
+      ticketId: "t1",
+      navigateTo: null,
+    });
+  });
+
+  it("ignores a ticket left open behind another page", () => {
+    // `setNav` deliberately does NOT clear `openTicketId`, so a ticket you
+    // opened is still recorded while you stand on Files or Sessions. Minting
+    // onto it from there would put a Session somewhere nobody is looking.
+    for (const nav of ["files", "sessions", "configure"] as const) {
+      expect(newSessionLandingForChrome(chrome({ nav, openTicketId: "t1" }))).toEqual({
+        projectId: "p1",
+        ticketId: null,
+        navigateTo: nav === "sessions" ? null : "sessions",
+      });
+    }
+  });
+
+  it("ignores a ticket under an open Settings sheet", () => {
+    // Settings is chrome layered OVER the workspace, so the ticket is not what
+    // is in front — the same reading `terminalFocusTargetForChrome` makes.
+    expect(newSessionLandingForChrome(chrome({ openTicketId: "t1", settingsOpen: true }))).toEqual({
+      projectId: "p1",
+      ticketId: null,
       navigateTo: "sessions",
     });
   });
 
   it("starts nothing with no project selected", () => {
-    expect(newSessionLandingForChrome({ selectedProjectId: null, nav: "board" })).toBeNull();
+    expect(newSessionLandingForChrome(chrome({ selectedProjectId: null }))).toBeNull();
+    expect(
+      newSessionLandingForChrome(chrome({ selectedProjectId: null, openTicketId: "t1" })),
+    ).toBeNull();
   });
 });

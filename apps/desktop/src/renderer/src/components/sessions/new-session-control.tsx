@@ -87,11 +87,15 @@ export function NewSessionControl({
   /**
    * Announce ⌘T / ⌥⌘T beside the menu items.
    *
-   * ON only where a press of the chord starts the same thing the item does.
-   * The chords are global (`lib/new-session-shortcut.ts`), so the project's
-   * Sessions surface may announce them and a ticket's controls may not — a
-   * ticket menu saying "⌘T" beside Chat would be teaching a Session into the
-   * wrong owner.
+   * ON only where a press of the chord starts the same thing the item does —
+   * which, since the chords began resolving against the surface in front
+   * (`lib/new-session-shortcut.ts`), is every mount that lives ON one of those
+   * surfaces. A ticket's controls announce the chords because inside a ticket
+   * the chord mints a ticket Session; the Sessions strip announces them because
+   * on that page it mints a ticketless one. The flag survives rather than
+   * becoming a constant because "a menu may only advertise a key that does what
+   * the item does" is the rule, not "everything advertises": a control that ever
+   * appears somewhere the chord resolves elsewhere must be able to stay quiet.
    */
   shortcuts?: boolean;
   className?: string;

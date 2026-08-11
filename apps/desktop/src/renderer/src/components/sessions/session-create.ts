@@ -13,17 +13,20 @@ import { errorMessage, type HarnessId, type Project } from "@volli/shared";
 
 import { chatTabId, nextChatOrdinal } from "@renderer/components/ticket/ticket-chat-tab";
 import { toastError } from "@renderer/lib/toast";
+import { useBoardStore } from "@renderer/stores/board";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import {
   findSessionPane,
   ownerKey,
   scratchScope,
+  ticketScope,
   useSessionsStore,
   type SessionLaunch,
   type SessionScope,
   type TerminalSplitDirection,
 } from "@renderer/stores/sessions";
+import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { disposeEngine, getOrCreateEngine } from "@renderer/terminal/registry";
 
@@ -379,6 +382,60 @@ export async function startScratchChat(projectId: string): Promise<void> {
     land: (sessionId) => {
       useChatSessionsStore.getState().openChatTab(projectId, sessionId);
       useWorkspaceStore.getState().setSessionsActiveTab(projectId, chatTabId(sessionId));
+      return true;
+    },
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* A ticket's own Sessions — the same two paths, one owner up                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Start one of a TICKET's Sessions and put its tab in front.
+ *
+ * The ticket half of {@link startScratchTerminal}, and it exists for the same
+ * reason: ⌘T / ⌥⌘T resolve against what is on screen now
+ * (`lib/new-session-shortcut.ts`), so inside a ticket the chord has to land a
+ * Session exactly where the ticket's own control lands one. A chord that opened
+ * a tab the button would not have — or left it behind the tab that was already
+ * in front — is the class of bug you only find by pressing the key.
+ *
+ * The tab is recorded on the ticket's `active` id explicitly, not left to the
+ * session container: `ticket-detail.tsx` renders whichever tab that id names, so
+ * a fresh Session opened while another tab was active would otherwise land
+ * behind it and the chord would look like it had done nothing.
+ */
+export async function startTicketTerminal(projectId: string, ticketId: string): Promise<void> {
+  const sessionId = await createTerminalSession(ticketScope(projectId, ticketId));
+  if (sessionId === null) return;
+  useWorkspaceStore.getState().setTicketActiveTab(projectId, ticketId, sessionId);
+}
+
+/**
+ * The chat half of {@link startTicketTerminal}.
+ *
+ * Both counts are read at call time rather than passed in, so a chord fired
+ * without the rail on screen numbers the chat off the same two facts the strip
+ * would have: the ticket's durable chat rows, and the tabs currently open on it.
+ */
+export async function startTicketChat(projectId: string, ticketId: string): Promise<void> {
+  const openChats = useChatSessionsStore.getState().openTabs[ticketId]?.length ?? 0;
+  const durableChats = (useTicketSessionRecordsStore.getState().byTicket[ticketId] ?? []).filter(
+    (row) => row.kind === "chat",
+  ).length;
+  await bootChatSession(ticketScope(projectId, ticketId), {
+    title: `Chat ${nextChatOrdinal(durableChats, openChats)}`,
+    land: (sessionId) => {
+      // The ticket itself may have been deleted while the create was in flight;
+      // a tab on a card that no longer exists is unreachable, so let the Session
+      // go (its durable row stands — see {@link bootChatSession}).
+      const tickets = useBoardStore.getState().ticketsByProject[projectId] ?? [];
+      if (!tickets.some((candidate) => candidate.id === ticketId)) return false;
+      useChatSessionsStore.getState().openChatTab(ticketId, sessionId);
+      useWorkspaceStore.getState().setTicketActiveTab(projectId, ticketId, chatTabId(sessionId));
+      // So the rail's row for it appears without waiting on a terminal event.
+      void useTicketSessionRecordsStore.getState().refresh(ticketId);
       return true;
     },
   });
