@@ -585,9 +585,16 @@ function EnvironmentSummary({
 
   if (variant === "calm") {
     return (
+      // The lift is `var(--shadow-raised)`, the generated tier-1 shadow. This
+      // read `hsl(var(--foreground)/0.06)` when it was reviewed, and
+      // `--foreground` is a hex — so the whole `box-shadow` was invalid and the
+      // browser dropped it, which is why the card that shipped from this scratch
+      // is flat (`ticket-repository-summary.tsx` says so at its own return).
+      // Copy the token, never the hsl() form: no color token in this app is
+      // channel-triplet shaped.
       <section
         className={cn(
-          "overflow-hidden rounded-xl border border-sidebar-border/70 bg-background/55 shadow-[0_1px_2px_hsl(var(--foreground)/0.06),0_8px_24px_hsl(var(--foreground)/0.04)] dark:bg-sidebar-accent/45 dark:shadow-none",
+          "overflow-hidden rounded-xl border border-sidebar-border/70 bg-background/55 shadow-[var(--shadow-raised)] dark:bg-sidebar-accent/45 dark:shadow-none",
           narrow ? "mx-3" : "mx-4",
         )}
       >

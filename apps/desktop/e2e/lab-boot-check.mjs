@@ -7,14 +7,78 @@
  * provider that is missing only in the real tree still passes. The browser is
  * the only witness, and an uncaught error is the only signal, so collect them
  * rather than eyeballing a screenshot.
+ *
+ *   Run (in another terminal):  pnpm lab
+ *   Then:                       node apps/desktop/e2e/lab-boot-check.mjs
+ *
+ * MANUALLY-RUN (needs the lab dev server and a Chromium); NOT wired into
+ * `vp test`.
  */
+import { existsSync } from "node:fs";
+
 import { chromium } from "playwright-core";
 
-const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const LAB = "http://localhost:5178/lab/";
+// `pnpm lab` runs `vp dev --mode lab --port 5174` under `strictPort`
+// (apps/desktop/vite.config.ts), so this port is not a guess and a clash there
+// fails loudly rather than landing somewhere else. Overridable only because a
+// second checkout may be holding it.
+const PORT = process.env.VOLLI_LAB_PORT ?? "5174";
+const LAB = `http://localhost:${PORT}/lab/`;
 const SCRATCHES = ["app-shell", "ticket-right-sidebar", "rail-port-check", "hover-sidebar"];
 
-const browser = await chromium.launch({ executablePath: CHROME, headless: true });
+/**
+ * A Chromium to drive.
+ *
+ * `playwright-core` ships no browsers, so something has to name one. Order:
+ * an explicit override, then Playwright's own registry (present whenever
+ * anything in this repo has run `playwright install`), then the two paths a
+ * developer machine actually has. Hard-coding one of those last two is what
+ * made this check machine-specific.
+ */
+function resolveBrowser() {
+  const override = process.env.VOLLI_CHROME ?? process.env.CHROME_PATH;
+  if (override !== undefined && override !== "") return override;
+
+  let registry;
+  try {
+    registry = chromium.executablePath();
+  } catch {
+    registry = undefined;
+  }
+  if (registry !== undefined && existsSync(registry)) return registry;
+
+  const candidates = [
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+  ];
+  const found = candidates.find((path) => existsSync(path));
+  if (found !== undefined) return found;
+
+  throw new Error(
+    "no Chromium found — run `pnpm exec playwright install chromium` or set VOLLI_CHROME",
+  );
+}
+
+/** Fail on a dev server that is not up, rather than on an opaque connect error. */
+async function assertLabIsServing() {
+  try {
+    const response = await fetch(LAB, { redirect: "follow" });
+    if (response.ok) return;
+    throw new Error(`HTTP ${response.status}`);
+  } catch (error) {
+    throw new Error(
+      `the lab is not serving ${LAB} (${error instanceof Error ? error.message : String(error)}) — start it with \`pnpm lab\``,
+      { cause: error },
+    );
+  }
+}
+
+await assertLabIsServing();
+
+const browser = await chromium.launch({ executablePath: resolveBrowser(), headless: true });
 let failed = 0;
 
 for (const scratch of SCRATCHES) {

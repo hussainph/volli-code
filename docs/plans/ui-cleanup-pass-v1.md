@@ -12,7 +12,7 @@ such override is written down below.
 
 | # | Task | State |
 |---|------|-------|
-| 1 | Icon-weight audit learnings | **done** — 58 sites to outline, 15 keep fill |
+| 1 | Icon-weight audit learnings | **done** — see the count below |
 | 2 | Sidebar: hover reveal + row anatomy + ghosting + scrollbar | **done** — `3a1e6bff` |
 | 3 | Session-start controls + shortcuts | **done** — `58797fcb` |
 | 4 | Fullscreen placement — the terminal-focus / rail-toggle swap | **done** — `docs/plans/fullscreen-placement.md` |
@@ -20,6 +20,30 @@ such override is written down below.
 
 Split tabs (`split-tabs.tsx`) stays a lab scratch. Drag-and-select in split view
 has bugs the user wants to work through separately; do not implement it here.
+
+### The icon sweep, counted rather than estimated
+
+"58 to outline, 15 keep fill" was a planning estimate and was never true of the
+tree. The measurement anyone can rerun is
+`grep -rn 'weight="fill"' apps/desktop/src/renderer/src`, which stands at **22**
+sites. They fall into four groups, and only the last is unfinished:
+
+- **The one that went wrong.** Denied / blocked / errored marks in the
+  transcript and the rail — `chat/activity-ui.tsx` ×3, `chat/interaction-ui.tsx`
+  ×3, `chat/chat-plane.tsx`, `ticket/rail-panel-parts.tsx`,
+  `theme/canvas-editor.tsx`, `ticket/ticket-changes-panel.tsx`,
+  `board/ticket-card.tsx` — plus the stop square in `chat/composer-ui.tsx`. Each
+  is the exception among its neighbours, which is what the rule asks fill to
+  mark.
+- **Filled by definition.** `ui/context-menu.tsx`'s radio dot, and
+  `ticket/ticket-repository-summary.tsx`'s GitHub mark, which is a brand logo
+  and not an icon this app draws.
+- **A four-icon toast vocabulary.** `ui/sonner.tsx` ×4: success / info /
+  warning / error. A toast has no neighbours to be the exception among, and the
+  filled disc is the whole type signal.
+- **Dead, not deliberate.** `ticket/ticket-session-actions.tsx` ×2 and
+  `sessions/new-session-menu.tsx` ×2 — the four in the two zero-caller modules
+  listed under "Carried items". They go with those files, not with a sweep.
 
 ## Round two — the live-app nitpicks
 
@@ -75,9 +99,19 @@ four wrong fixes.
 - **The archive refusal was not in the renderer.** `exitCode === null` in
   `ticket-context-menu.tsx` was already terminal-only and already correct — chats
   never enter that store. The refusal came from main, where a *binding* counted
-  as busy, and `adapter.release` has no production caller, so one chat pinned a
+  as busy, and `adapter.release` had no production caller, so one chat pinned a
   worktree for the life of the process. Its comments claimed the renderer
   conflation, which is how the wrong file got blamed.
+
+  Both halves are closed now, but they were closed a round apart, and only
+  moving the predicate shipped first. Gating on `turnActive` stopped the false
+  refusal while leaving the binding itself to leak — so a destroy then *passed*
+  the gate and left a live chat aimed at a directory that no longer existed.
+  `worktree/agent-sites.ts` is the second half: every binding rooted at the
+  checkout is released immediately before `git worktree remove`, on all three
+  destroy paths. Release is best-effort by design — refusing a delete on a
+  failed release would rebuild the unremovable worktree this whole item began
+  as, since the force step is only reachable from the dirty refusal.
 - **The sidebar's old animation was never replaced.** The content push still
   runs; the card animates 326→68 exactly as before. The defect was the travel —
   both reveals parked a full window's width away and slid in unclipped over a
@@ -121,16 +155,20 @@ that drag now produces one commit and zero attributed renders.
 
 ### Still open
 
-- **`HISTORY` in the rail** awaits a ruling. The scratch has none, but it is a
-  fixture with no Session ledger behind it, so its absence is probably an
-  artifact rather than a decision to retire durable history.
 - **The stored default model is still `azure-openai-responses`.** Code cannot
   repair it silently and no agent may write to the live DB. One visit to
   Settings fixes it; until then new Sessions record Azure, but now say so
   before a message is spent rather than after.
-- **The rail card is flat in light mode**, which is what was reviewed. The
-  scratch's intent was a soft ambient lift; that needs a real token, not the
-  broken `hsl(var(--foreground)/0.06)` string.
+- **The rail card is still flat in light mode.** The token question is settled —
+  the lift wants `var(--shadow-raised)`, the generated tier-1 shadow, and
+  `ticket-right-sidebar.tsx` now carries that instead of the invalid
+  `hsl(var(--foreground)/0.06)` it was reviewed with (`--foreground` is a hex, so
+  the browser dropped the whole declaration). What is left is porting it into
+  `ticket-repository-summary.tsx`, whose comment still argues for the flat card.
+- **`lab-boot-check` has never once run.** It pointed at port 5178 for its whole
+  life and `pnpm lab` serves 5174, so the guard added because "the browser is the
+  only witness" has witnessed nothing. The port and the browser lookup are fixed;
+  the four scratches it names are unverified until someone runs it.
 - **The context menu is now the remaining per-card Radix mass** — 310
   `ContextMenu` + 165 `Popper` fibers at 150 tickets. Hoisting it means
   replacing Radix's `Trigger` with a board-level menu positioned from the
@@ -152,7 +190,6 @@ that drag now produces one commit and zero attributed renders.
 - **Ghost at 0.80**, not the scratch's dial default.
 - **No broom on cleaned rows.** The ghosting *is* the signifier; a second one is
   clutter. (User: "trust the user knows the filter is on".)
-- **⌘T starts a global chat session** — not a ticket-scoped one.
 - **Composer scope: craft + branch row.** Paper's layout, the harness picker
   moved out of the footer into the chip row, and a real `base → new worktree`
   row wired to actual git refs. Automation presets are NOT in scope.
@@ -204,22 +241,41 @@ this work. What remains is what the implementation itself turned up.
   button, and the row-anatomy scratch sets that attribute too — so what was
   reviewed as "ghost + indent" was always ghost alone. Shipping the indent means
   relaxing those rules, which changes every sidebar row's height.
-## Desktop smokes — run locally, all green
+## Desktop smokes — run locally
 
 CI does not run these. Run before shipping: `pnpm run build`, then each of
 `ticket-detail-smoke`, `composer-basics-smoke`, `composer-kickoff-smoke`,
-`session-start-control-shots`, `ticket-rail-shots`, `docs-shots`,
-`terminal-smoke`, `memory-smoke`, `park-smoke`. All nine pass on `c08ad8aa`.
+`ticket-rail-shots`, `docs-shots`, `terminal-smoke`, `memory-smoke`,
+`park-smoke`.
+
+**What is actually evidenced:** all eight passed on `c08ad8aa`. That SHA is now
+~20 commits back, and `ticket-detail-smoke`, `composer-kickoff-smoke` and
+`pi-ticket-chat-smoke` have all been edited since (`93e86903`, `16ccb956`,
+`bba9169e`, and the review round after them). **No recorded run covers the
+current tree** — this list is what to run, not a claim that it is green. Rerun
+and replace this paragraph with the SHA it passed on.
 
 `ticket-detail-smoke` step 6b covers terminal focus in both directions — button
 in, button out, then ⌥⌘Return in and out — plus the band control appearing and
 disappearing with the active tab's kind. The `data-volli-shell="focused"` path is
-no longer code-verified only.
+no longer code-verified only. Its check 6 also carries the one positive
+assertion that a Session resolves its harness truthfully: since the Calm Stack,
+neither the rail's roster nor its History prints a harness name (History keeps
+the label only as a search key), so the sidebar's ACTIVE band second line is the
+only surface left that does.
 
 `docs-shots` rewrites `apps/docs/src/assets/screenshots/` from the running app —
-expect a diff there after any chrome change, and commit it. **Owed**: the chrome
-band lost the rail toggle in task 4, so those screenshots are stale by one button
-and `docs-shots` has not been rerun since.
+expect a diff there after any chrome change, and commit it. It was last rerun in
+`0a8870fb`, which is after the chrome swap, so `board.png` and
+`ticket-workspace.png` are current.
+
+**Deleted with the review round**: `ui-cleanup-shots`, `lab-rail-compare` and
+`session-start-control-shots` were one-shot contact sheets hard-coded to this
+branch's five tasks, and one said so in its own header. Their job was to be
+looked at once. `lab-boot-check` stays — it is the "the browser is the only
+witness" guard, it is not branch-specific, and it now points at the port
+`pnpm lab` actually serves (5174, not 5178) and finds a Chromium rather than
+assuming one path.
 
 **Live judgement calls, easy to reverse**
 

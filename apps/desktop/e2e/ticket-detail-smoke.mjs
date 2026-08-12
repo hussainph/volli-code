@@ -29,11 +29,14 @@
  *      injection is proven with the file-probe pattern ($VOLLI_TICKET == display
  *      id, $VOLLI_ARTIFACTS_DIR == the project's `.volli/artifacts` path — the
  *      global-artifacts env contract; VOLLI_TICKET_DIR is gone); switching
- *      Doc ↔ session keeps the terminal alive; the rail shows a chip and the
- *      no invented harness name (the roster prints none since the Calm Stack).
+ *      Doc ↔ session keeps the terminal alive; the rail shows a status chip and
+ *      invents NO harness name (since the Calm Stack neither the roster nor
+ *      History prints one — check 6 carries the positive half).
  *   6. Resident keep-alive — navigating ticket → board → ticket keeps the SAME
  *      terminal canvas DOM node mounted (marked node survives) and the shell
- *      alive (the overlay hosts terminals, the detail is only a view over it).
+ *      alive (the overlay hosts terminals, the detail is only a view over it);
+ *      the ACTIVE band's meta line carries the truthful source ("Shell", never
+ *      the default Claude harness) — the one surface that still prints it.
  *   7. Session rename — double-click the session tab, type, Enter; the new title
  *      shows on both the tab and the rail row.
  *   8. Icon-mode rail — Sessions is the default mode; Properties renders
@@ -883,11 +886,15 @@ async function main() {
         const railRow = (await aside.getByText(SESSION_INITIAL, { exact: true }).count()) >= 1;
         const railChip = (await aside.getByText(/^(Working|Idle|Exited)$/).count()) >= 1;
         // The Calm Stack roster is one flat line per Session — glyph, title,
-        // status — so the harness name is no longer printed here at all. What
-        // this check was really guarding is that the rail never INVENTS a
-        // harness, and that survives the redesign: the absence assertion is the
-        // half with teeth. The name itself is still in History and in the
-        // sidebar's bands.
+        // status — so the harness name is no longer printed anywhere under this
+        // `aside`: not on a roster row, and not in History either, where
+        // `session-history.ts` keeps it only as a SEARCH key and never renders
+        // it. So both halves here are absence assertions, and absence alone
+        // cannot tell a rail that resolves the right harness from one that
+        // resolves none. The positive half — that the source resolved, and
+        // resolved truthfully — moves to check 6, at the ACTIVE band's second
+        // line (`session-band-row.tsx:147`), which is the one surface in the
+        // app that still prints it.
         const noFalseClaude = (await aside.getByText("Claude Code", { exact: true }).count()) === 0;
         const noHarnessInRoster = (await aside.getByText("Shell", { exact: true }).count()) === 0;
 
@@ -958,6 +965,18 @@ async function main() {
         // "before" sample honestly unpromoted instead of an intermittent hover.
         await page.mouse.move(0, 0);
         await sleep(200);
+
+        // THE TRUTHFUL SOURCE LABEL, at the surface that still prints it.
+        // Check 5 can only say the rail invents nothing; a rail that drew the
+        // row and the chip while resolving no harness at all would satisfy it.
+        // This is the positive half: a Session booted by the rail's Terminal
+        // control resolves to `Shell`, not to the default Claude harness, and
+        // the meta line is `VC-1 · Shell · <activity>` (`session-band-row.tsx`
+        // joins them with `·`, so this is a substring question, not an exact
+        // one).
+        const metaText = (await activeSessionRow.locator(SESSION_ROW_META).textContent()) ?? "";
+        const truthfulSource = metaText.includes("Shell") && !metaText.includes("Claude Code");
+
         const subtextBefore = await activeSessionRow
           .locator(SESSION_ROW_META)
           .evaluate((element) => getComputedStyle(element).color);
@@ -1003,10 +1022,15 @@ async function main() {
         });
 
         const ok =
-          marked && !!exactTabSelected && !!nodeSurvived && !!shellAlive && subtextHighlighted;
+          marked &&
+          !!exactTabSelected &&
+          !!nodeSurvived &&
+          !!shellAlive &&
+          subtextHighlighted &&
+          truthfulSource;
         return {
           ok,
-          detail: `marked=${marked} exactTab=${!!exactTabSelected} nodeSurvived=${!!nodeSurvived} shellAlive=${!!shellAlive} subtextBefore=${subtextBefore} subtext=${JSON.stringify(subtextHighlight)}`,
+          detail: `marked=${marked} exactTab=${!!exactTabSelected} nodeSurvived=${!!nodeSurvived} shellAlive=${!!shellAlive} truthfulSource=${truthfulSource} meta=${JSON.stringify(metaText)} subtextBefore=${subtextBefore} subtext=${JSON.stringify(subtextHighlight)}`,
         };
       },
     );
@@ -1430,9 +1454,12 @@ async function main() {
 
         // The prior session no longer clutters the working set: History is
         // collapsed by default. Expanding it restores the renamed row and when
-        // it ended. The harness name went with the roster's second line in the
-        // Calm Stack redesign, so this asserts identity and pastness — the two
-        // things a history row exists to carry.
+        // it ended. A history row is the SAME one-line row as the roster's
+        // (`ticket-sessions-panel.tsx` renders both), so it prints no harness
+        // name either — `session-history.ts` keeps the label only to match on
+        // when you search. What is left is what a history row exists to carry:
+        // identity and pastness. Source truthfulness is check 6's, at the
+        // sidebar band that still prints it.
         const historyButton = aside.getByRole("button", { name: /History/ });
         const historyCollapsed =
           (await historyButton.getAttribute("aria-expanded")) === "false" &&
