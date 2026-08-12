@@ -1,8 +1,15 @@
 /**
- * App-wide (workspace-independent) UI state. `sidebarWidth` — the full
- * two-tier sidebar width (60px rail + resizable panel) — persists to
- * localStorage so the grip position survives relaunch. Same interim-storage
- * caveat as the projects store: dev and packaged origins don't share data.
+ * App-wide (workspace-independent) UI state.
+ *
+ * "Persists app-wide" below means one thing throughout: through
+ * {@link appStateStorage}, the `app_state` preload bridge onto main's SQLite —
+ * never `localStorage`, which this renderer does not use for anything (see
+ * CLAUDE.md). The distinction is not pedantry: a renderer-owned store would be
+ * per-origin, so dev and packaged builds would each keep their own copy of every
+ * chrome preference below, and none of it would survive as domain data.
+ *
+ * `sidebarWidth` — the full two-tier sidebar width (60px rail + resizable
+ * panel) — persists so the grip position survives relaunch.
  * `railWidth` — the ticket-detail right rail's width, resizable via its own
  * left-edge grip (see rail-resize-handle.tsx) — persists app-wide by the same
  * reasoning: it's a global chrome preference, not per-workspace state.
@@ -24,6 +31,14 @@
  * re-pinned itself on every launch would undo the choice the moment it mattered.
  * Missing or corrupt persisted state pins it — the visible default, and today's
  * behavior.
+ *
+ * It holds the user's OWN answer and only that. Fullscreen also unpins the
+ * panel, but that is an inference read off a window mode, and it is kept in
+ * app-shell's session-local state rather than written here: a quit taken while
+ * still in fullscreen would otherwise leave `false` on disk and open the next
+ * windowed launch with the panel gone and nothing to say the user never asked
+ * for it. Durable storage answers "what did they choose", not "what was on
+ * screen when the process died".
  *
  * `railCollapsed` — the ticket-detail right rail's collapsed state (the
  * chrome-bar ⌥⌘B toggle, VS-Code secondary-sidebar style) — persists app-wide

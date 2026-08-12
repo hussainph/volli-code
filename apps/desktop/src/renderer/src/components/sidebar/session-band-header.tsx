@@ -116,6 +116,13 @@ export function SessionBandFilterMenu({
             narrowed ? "text-sidebar-accent-foreground" : "text-muted-foreground",
           )}
         >
+          {/* `bold` OVERRIDES the audit, which records `regular` for this site
+              (lab/scratches/icon-weight-audit.tsx) — and it does so because the
+              audit drew it at 14px and it ships at 12. CLAUDE.md's fifth clause
+              is what wins here: bold is the small-size tier, because at ≤12px
+              regular draws lighter than the label beside it, and coverage is
+              scale-invariant so no `size-*` can fix that. Not `fill`, which is
+              4.6x here — the widest gap in the app, and a different mark. */}
           <FunnelSimpleIcon weight="bold" className="size-3" />
         </button>
       </DropdownMenuTrigger>

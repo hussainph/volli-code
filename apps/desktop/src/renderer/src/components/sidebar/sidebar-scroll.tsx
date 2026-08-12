@@ -91,11 +91,26 @@ export function SidebarScrollArea({
   children: React.ReactNode;
 }) {
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
+  const thumbRef = React.useRef<HTMLDivElement | null>(null);
   const fadeRef = React.useRef<number | null>(null);
+  /**
+   * A drag, measured once. Every quantity here is fixed for the whole gesture —
+   * dragging a thumb changes neither the scrollport's height nor its content's —
+   * so reading them per pointer sample bought nothing and cost a forced layout
+   * each time. See {@link handleThumbMove}.
+   */
   const dragRef = React.useRef<{
     pointerId: number;
     startY: number;
-    startScrollTop: number;
+    /** Where the thumb stood when the press landed, in scrollport px. */
+    startTop: number;
+    /** The thumb's own range: scrollport height less the thumb's. */
+    travel: number;
+    /** The content's: scrollHeight less the scrollport's. */
+    maxScroll: number;
+    /** The latest position the pointer has asked for, applied on the next frame. */
+    top: number;
+    frame: number | null;
   } | null>(null);
   const [thumb, setThumb] = React.useState<ThumbGeometry | null>(null);
   const [edges, setEdges] = React.useState<ScrollEdges>({ atTop: true, atBottom: true });
@@ -112,6 +127,13 @@ export function SidebarScrollArea({
   const measure = React.useCallback(() => {
     const element = scrollRef.current;
     if (element === null) return;
+    // A thumb drag drives the thumb straight from the pointer and React is out
+    // of the loop until release (see {@link handleThumbMove}). Measuring here
+    // would put it back in: three element reads and a fresh `{top, height}` per
+    // sample, whose commit then re-runs the layout effect below — and the render
+    // would write a stale `top` over the live one anyway, because React diffs
+    // against the props it last rendered rather than against the DOM.
+    if (dragRef.current !== null) return;
     const { clientHeight, scrollHeight, scrollTop } = element;
     // Sub-pixel scrollHeights mean the bottom never reaches equality exactly, so
     // the last pixel would keep a fade the reader has already scrolled past.
@@ -137,12 +159,9 @@ export function SidebarScrollArea({
   // scrollHeight that only exists once the rows are laid out, and a thumb that
   // appeared one frame late would be a thumb that jumps on first scroll.
   //
-  // No dependency array, which reads like an oversight and is the opposite. It
-  // covers the one size nothing else can see: the CONTENT's, which changes when
-  // a session joins or leaves the list. The observer below watches the
-  // SCROLLPORT's box, and a scrollport does not resize when the rows inside it
-  // grow — so dropping this would leave the thumb correct about every size
-  // except the one it is a fraction of.
+  // No dependency array, which reads like an oversight and is the opposite: it
+  // is what catches a content height that changed during a render of THIS
+  // subtree, before anything can be observed.
   //
   // It was flagged as a forced synchronous layout on every sidebar render, which
   // it is. What made that expensive was the resize grip writing the width to the
@@ -163,16 +182,53 @@ export function SidebarScrollArea({
     if (element === null) return;
     const observer = new ResizeObserver(measure);
     observer.observe(element);
+    // And the CONTENT's height, which the scrollport's own box cannot report —
+    // a scrollport does not resize when the rows inside it grow. The layout
+    // effect above was documented as covering this and does not: sessions
+    // arrive on `ActiveSessions`'s own store subscription, so the list grows
+    // inside a child that re-renders alone, and a parent that never re-rendered
+    // never re-measured. Caught in the browser rather than in types: the panel
+    // stood with a 75px thumb on a list whose real fraction was 30px, and
+    // stayed wrong until the first scroll happened to call `measure` for it.
+    for (const child of element.children) observer.observe(child);
     return () => observer.disconnect();
   }, [measure]);
 
-  React.useEffect(() => () => window.clearTimeout(fadeRef.current ?? undefined), []);
+  React.useEffect(
+    () => () => {
+      window.clearTimeout(fadeRef.current ?? undefined);
+      const frame = dragRef.current?.frame ?? null;
+      if (frame !== null) window.cancelAnimationFrame(frame);
+    },
+    [],
+  );
 
-  function handleScroll(): void {
-    measure();
+  /** Raises the thumb and restarts its fade. Idempotent while it is already up. */
+  function markScrolling(): void {
     setScrolling(true);
     window.clearTimeout(fadeRef.current ?? undefined);
     fadeRef.current = window.setTimeout(() => setScrolling(false), FADE_MS);
+  }
+
+  function handleScroll(): void {
+    const drag = dragRef.current;
+    if (drag === null) {
+      measure();
+      markScrolling();
+      return;
+    }
+    // Our own write, coming back to us. The thumb is already where the pointer
+    // put it, so the only thing left for React during a drag is which ends are
+    // cut — and that follows from numbers cached at the press rather than from
+    // the DOM. `setEdges` bails when nothing changed, so a whole drag commits at
+    // most twice: once leaving the top, once reaching the bottom.
+    const scrollTop = (drag.top / drag.travel) * drag.maxScroll;
+    const atTop = scrollTop <= 0;
+    const atBottom = scrollTop >= drag.maxScroll - 1;
+    setEdges((current) =>
+      current.atTop === atTop && current.atBottom === atBottom ? current : { atTop, atBottom },
+    );
+    markScrolling();
   }
 
   function handleThumbDown(event: React.PointerEvent<HTMLDivElement>): void {
@@ -181,30 +237,69 @@ export function SidebarScrollArea({
     // Keeps the drag from starting a text selection or stealing focus from the
     // row the reader was on.
     event.preventDefault();
+    const { clientHeight, scrollHeight, scrollTop } = element;
+    // The thumb travels the scrollport minus its own height while the content
+    // travels its whole overflow. Both are settled the moment the press lands.
+    const travel = clientHeight - thumbHeightFor(clientHeight, scrollHeight);
+    const maxScroll = scrollHeight - clientHeight;
+    if (travel <= 0 || maxScroll <= 0) return;
+    const startTop = (scrollTop / maxScroll) * travel;
     dragRef.current = {
       pointerId: event.pointerId,
       startY: event.clientY,
-      startScrollTop: element.scrollTop,
+      startTop,
+      travel,
+      maxScroll,
+      top: startTop,
+      frame: null,
     };
     event.currentTarget.setPointerCapture(event.pointerId);
     setDragging(true);
   }
 
+  /**
+   * THE DRAG DOES NOT GO THROUGH REACT — the same rule the resize grip is built
+   * on (`sidebar-resize-handle.tsx`), and for the same measured reason.
+   *
+   * It read `clientHeight`/`scrollHeight` per sample and wrote `scrollTop`,
+   * which fired `handleScroll` → `measure()` (three more reads) → a fresh
+   * `{top, height}` → a render → the layout effect measuring again. Two forced
+   * layouts and one commit per pointer sample, on a pane that a mouse samples at
+   * up to 1kHz: exactly the pattern the grip was rewritten to remove, arriving
+   * back on the surface next door.
+   *
+   * Now the geometry is cached at the press, the pointer only updates a number,
+   * and one rAF per frame writes the thumb's `top` and the scrollport's
+   * `scrollTop`. Coalescing costs nothing that could have mattered — the pointer
+   * cannot be in two places within one frame, so only a frame's last sample
+   * could ever have decided where the thumb goes.
+   */
   function handleThumbMove(event: React.PointerEvent<HTMLDivElement>): void {
     const drag = dragRef.current;
+    if (drag === null || event.pointerId !== drag.pointerId) return;
+    drag.top = Math.min(drag.travel, Math.max(0, drag.startTop + (event.clientY - drag.startY)));
+    if (drag.frame !== null) return;
+    drag.frame = window.requestAnimationFrame(() => {
+      drag.frame = null;
+      applyDrag(drag.top, drag.travel, drag.maxScroll);
+    });
+  }
+
+  function applyDrag(top: number, travel: number, maxScroll: number): void {
     const element = scrollRef.current;
-    if (drag === null || element === null || event.pointerId !== drag.pointerId) return;
-    const { clientHeight, scrollHeight } = element;
-    // The thumb travels the scrollport minus its own height while the content
-    // travels its whole overflow, so the pointer's delta scales by their ratio.
-    const travel = clientHeight - thumbHeightFor(clientHeight, scrollHeight);
-    if (travel <= 0) return;
-    const ratio = (scrollHeight - clientHeight) / travel;
-    element.scrollTop = drag.startScrollTop + (event.clientY - drag.startY) * ratio;
+    if (element === null) return;
+    if (thumbRef.current !== null) thumbRef.current.style.top = `${top}px`;
+    element.scrollTop = (top / travel) * maxScroll;
   }
 
   function endThumbDrag(event: React.PointerEvent<HTMLDivElement>): void {
-    if (dragRef.current === null || event.pointerId !== dragRef.current.pointerId) return;
+    const drag = dragRef.current;
+    if (drag === null || event.pointerId !== drag.pointerId) return;
+    if (drag.frame !== null) window.cancelAnimationFrame(drag.frame);
+    // Land the last sample before React is allowed back in: `setDragging` below
+    // schedules the render whose layout effect re-measures, and it has to
+    // measure where the pointer left the pane rather than one frame short of it.
+    applyDrag(drag.top, drag.travel, drag.maxScroll);
     dragRef.current = null;
     setDragging(false);
   }
@@ -221,6 +316,7 @@ export function SidebarScrollArea({
       </SidebarContent>
       {thumb !== null ? (
         <div
+          ref={thumbRef}
           aria-hidden
           onPointerDown={handleThumbDown}
           onPointerMove={handleThumbMove}

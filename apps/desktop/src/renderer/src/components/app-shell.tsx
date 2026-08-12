@@ -20,18 +20,15 @@ import {
 } from "@renderer/components/sidebar/sidebar-resize-handle";
 import { Sidebar, SidebarInset, SidebarProvider } from "@renderer/components/ui/sidebar";
 import { Toaster } from "@renderer/components/ui/sonner";
-import { takeBootNotice } from "@renderer/lib/boot-notice";
-import { takeCliLaunchNotice } from "@renderer/lib/cli-launch-notice";
-import { toastError } from "@renderer/lib/toast";
 import { useFullScreen } from "@renderer/hooks/use-fullscreen";
 import { useNavHistory } from "@renderer/hooks/use-nav-history";
 import { useNewTicketShortcut } from "@renderer/hooks/use-new-ticket-shortcut";
+import { useProjectRootsSync } from "@renderer/hooks/use-project-roots-sync";
 import { useProjectShortcuts } from "@renderer/hooks/use-project-shortcuts";
+import { useBootNotice, useCliLaunchNotice } from "@renderer/hooks/use-startup-notices";
+import { useZoomCommands } from "@renderer/hooks/use-zoom-commands";
 import { cn } from "@renderer/lib/utils";
-import { errorMessage } from "@volli/shared";
-import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
-import { toast } from "sonner";
 
 const WORKSPACE_RAIL_WIDTH = 60;
 /** globals.css `--shell-inset`, in the one place TS has to agree with it. */
@@ -138,14 +135,18 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
   useCliLaunchNotice();
   const sidebarWidth = useUiStore((state) => state.sidebarWidth);
   const workspaceRailHidden = useUiStore((state) => state.workspaceRailHidden);
-  const pinned = useUiStore((state) => state.sidebarPinned);
+  const pinChoice = useUiStore((state) => state.sidebarPinned);
   const setSidebarPinned = useUiStore((state) => state.setSidebarPinned);
   const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
   const uiScale = useUiStore((state) => state.uiScale);
   const fullScreen = useFullScreen();
   const [resizing, setResizing] = React.useState(false);
   const [geometryInstant, setGeometryInstant] = React.useState(false);
+  const [pinSuspended, setPinSuspended] = React.useState(false);
   const terminalFocused = terminalFocusTarget !== null;
+  // What the layout below reads. The stored choice, minus a suspension nothing
+  // durable ever hears about — see the fullscreen effect.
+  const pinned = pinChoice && !pinSuspended;
 
   const panelRef = React.useRef<HTMLDivElement | null>(null);
   const zoneRef = React.useRef<HTMLDivElement | null>(null);
@@ -201,35 +202,33 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
     return () => window.cancelAnimationFrame(frame);
   }, [railWidth, terminalFocused]);
 
-  /* Fullscreen infers the pin state in ONE direction and remembers rather than
-   * overwrites. Entering fullscreen is an explicit "give me the content", so
-   * unpinning is reading the room. Leaving it is not a request for chrome, so
-   * the pre-fullscreen value comes back — unless a deliberate ⌘B inside
-   * fullscreen already answered the question, in which case that answer wins. */
-  const pinBeforeFullScreen = React.useRef<boolean | null>(null);
-  const pinTouchedInFullScreen = React.useRef(false);
-  const fullScreenRef = React.useRef(fullScreen);
+  /* Fullscreen SUSPENDS the pin; it does not answer it.
+   *
+   * Entering fullscreen is an explicit "give me the content", so unpinning is
+   * reading the room — but it is an inference read off a window mode, and it has
+   * no business outliving the window. Written through `setSidebarPinned` it did:
+   * that key persists (stores/ui.ts), so pinning the panel, entering fullscreen
+   * and quitting there left `false` on disk, and the next launch opened WINDOWED
+   * with the panel gone and nothing anywhere recording that the user never asked
+   * for it. Durable storage answers "what did they choose".
+   *
+   * So the suspension is local state that dies with the process, the stored
+   * choice is untouched, and leaving fullscreen simply lifts it — no remembered
+   * value to restore, because nothing was overwritten. A deliberate ⌘B inside
+   * fullscreen still wins, and now for the plain reason rather than a bookkeeping
+   * one: `setPinned` lifts the suspension and writes the choice, so from that
+   * moment the panel is answering the user rather than the window. */
   const previousFullScreen = React.useRef(fullScreen);
-  fullScreenRef.current = fullScreen;
 
   React.useEffect(() => {
     if (previousFullScreen.current === fullScreen) return;
     previousFullScreen.current = fullScreen;
-    if (fullScreen) {
-      pinBeforeFullScreen.current = pinned;
-      pinTouchedInFullScreen.current = false;
-      setSidebarPinned(false);
-      return;
-    }
-    const remembered = pinBeforeFullScreen.current;
-    pinBeforeFullScreen.current = null;
-    if (!pinTouchedInFullScreen.current && remembered !== null) setSidebarPinned(remembered);
-    pinTouchedInFullScreen.current = false;
-  }, [fullScreen, pinned, setSidebarPinned]);
+    setPinSuspended(fullScreen);
+  }, [fullScreen]);
 
   const setPinned = React.useCallback(
     (next: boolean) => {
-      if (fullScreenRef.current) pinTouchedInFullScreen.current = true;
+      setPinSuspended(false);
       // Told rather than measured: a pin toggle is never an interruption. The
       // panel is parked at rest and makes the whole journey or none of it, and
       // the hook's own reset runs in an effect — by which time the DOM already
@@ -586,63 +585,4 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
       <HarnessTrustDialog />
     </SidebarProvider>
   );
-}
-
-/**
- * Bridges the native View-menu zoom items (⌘+/⌘-/⌘0) to the ui store. The
- * menu handlers live in the main process (menu.ts) because global accelerators
- * must; they only fire an event, and the store — not Electron's page zoom —
- * owns UI scale so the chrome band stays at native scale (see the zoom
- * invariant on the content row above).
- */
-function useZoomCommands() {
-  React.useEffect(() => {
-    return window.api.window.onZoomCommand((cmd) => {
-      const { stepUiScale, resetUiScale } = useUiStore.getState();
-      if (cmd === "in") stepUiScale(1);
-      else if (cmd === "out") stepUiScale(-1);
-      else resetUiScale();
-    });
-  }, []);
-}
-
-/**
- * Surfaces a one-shot boot notice (e.g. a failed legacy import) as a toast on
- * mount. boot() runs before the Toaster mounts, so it stashes the message
- * rather than toasting directly (see lib/boot-notice.ts). `takeBootNotice`
- * clears as it reads, so StrictMode's double-invoke surfaces it exactly once.
- */
-function useBootNotice() {
-  React.useEffect(() => {
-    const notice = takeBootNotice();
-    if (notice !== null) toastError(notice);
-  }, []);
-}
-
-function useCliLaunchNotice() {
-  React.useEffect(() => {
-    const notice = takeCliLaunchNotice(window.api.app.launchedByCli);
-    if (notice !== null) toast.info(notice);
-  }, []);
-}
-
-/** Mirrors tracked project paths into the main process's fs-root allowlist. */
-function useProjectRootsSync() {
-  // Key on the SET of paths, not the array identity: a rail reorder churns a
-  // fresh projects array on every pointer-cross (live shuffle) yet never
-  // changes the allowlist, so an order-independent digest keeps a single drag
-  // from firing a burst of redundant syncRoots IPC round-trips.
-  const rootsKey = useProjectsStore((state) =>
-    state.projects
-      .map((project) => project.path)
-      .toSorted()
-      .join("\n"),
-  );
-
-  React.useEffect(() => {
-    const paths = useProjectsStore.getState().projects.map((project) => project.path);
-    window.api.projects.syncRoots(paths).catch((error: unknown) => {
-      toastError(`Couldn't sync project roots: ${errorMessage(error)}`);
-    });
-  }, [rootsKey]);
 }

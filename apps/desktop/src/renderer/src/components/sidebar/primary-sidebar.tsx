@@ -27,8 +27,14 @@ import { useUiStore } from "@renderer/stores/ui";
  * carrying the collapsed icon strip, cross-faded against this one while the
  * shell animated its width. The strip is gone — collapsed is now genuinely zero
  * and the panel is summoned by the pointer or pinned by ⌘B (app-shell.tsx) —
- * so with nothing to cross-fade against, the layer, its transition and the
- * `--sidebar-width-icon` token it sized itself from all went with it.
+ * so with nothing to cross-fade against, the layer and its transition went with
+ * it. What the strip sized itself from, `--sidebar-width-icon`, did NOT: the
+ * token is still declared and still written onto the wrapper by
+ * `components/ui/sidebar.tsx`, along with the `collapsible="icon"` variants,
+ * `data-slot="sidebar-gap"` and `data-slot="sidebar-container"` that read it.
+ * Nothing in this app sets `collapsible` to anything but `"none"` any more, so
+ * all of it is unreachable rather than gone — a deletion of its own, tracked in
+ * the branch ledger, not a claim this file gets to make.
  *
  * What stays is the fixed width, which was never about the cross-fade: the pane
  * sizes itself off the shell's width tokens rather than `100%` so it is the same

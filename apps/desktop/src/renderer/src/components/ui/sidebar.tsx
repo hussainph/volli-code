@@ -303,7 +303,13 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
       }}
       {...props}
     >
-      <SidebarSimpleIcon weight="fill" />
+      {/* Outline, the baseline. `fill` marks the one item that is the EXCEPTION
+          among its neighbours (CLAUDE.md), and a control's own noun is never
+          that — this glyph is the trigger, not the odd one out in a list of
+          them. The audit measures SidebarSimple's fill at 1.34x regular's ink
+          anyway: too weak to carry a state even if there were one to carry, and
+          this control has no visual on-state at all (a separate sweep). */}
+      <SidebarSimpleIcon />
       <span className="sr-only">Toggle Sidebar</span>
     </Button>
   );

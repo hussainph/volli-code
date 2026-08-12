@@ -187,7 +187,7 @@ export interface EdgeReveal {
   /** The strip has the pointer and is counting toward open. Drives the sliver's highlight. */
   arming: boolean;
   onPanelClick(event: React.MouseEvent): void;
-  onPanelFocus(): void;
+  onPanelFocus(event: React.FocusEvent): void;
   onPanelBlur(): void;
 }
 
@@ -316,8 +316,10 @@ export function useEdgeReveal({
     }
 
     function beginClose(): void {
-      // Keyboard users are not hovering. If focus is in the pane, the pointer's
-      // opinion about where it is does not get to dismiss it.
+      // Keyboard users are not hovering. If focus was taken BY THE KEYBOARD and
+      // is still in the pane, the pointer's opinion about where it is does not
+      // get to dismiss it — see `onPanelFocus` for why the qualifier is the
+      // whole rule rather than a refinement of it.
       if (focusWithinRef.current) return;
       if (phaseRef.current === "closing") return;
       enter("closing");
@@ -384,13 +386,39 @@ export function useEdgeReveal({
       schedule({ x: event.clientX, y: event.clientY });
     }
 
+    /**
+     * The release that never arrives. `pointerup`/`pointercancel` are the honest
+     * end of a press and they cover every case where the window is still the one
+     * receiving events — but ⌘-Tab away mid-drag, or let a native menu swallow
+     * the release, and neither fires. `pointerDownRef` then stays `true`, and
+     * because `evaluate` returns immediately on it the edge reveal is dead for
+     * the rest of the process with nothing on screen to say so and no gesture
+     * that can clear it.
+     *
+     * So the flag also expires with the window's attention. A press cannot
+     * outlive the window losing focus or the document being hidden — if it were
+     * genuinely still held, the pointer's next move re-arms nothing worse than a
+     * peek, whereas the failure it replaces has no recovery at all.
+     */
+    function releasePointerFlag(): void {
+      pointerDownRef.current = false;
+    }
+
     function handleLeaveWindow(): void {
       if (pointerDownRef.current) return;
       // Drop whatever the last move was still going to say. It described a
       // point inside the window, and the pointer is no longer in one.
       pendingPoint = null;
       insideRef.current = false;
+      // Leaving by the window's own edge is leaving. The grace corridor exists
+      // so overshooting a nav row does not dismiss the panel, and it does that
+      // job just as well here — the pointer has {@link EXIT_GRACE_MS} to come
+      // back before the panel withdraws. Cancelling only the ARMING phase was
+      // the asymmetry: a peeked-open panel whose pointer went up to the menu bar
+      // stood over the content indefinitely, because the one event that says the
+      // pointer is gone was the one route out that started no timer.
       if (phaseRef.current === "arming") closeNow();
+      else if (phaseRef.current === "open" || phaseRef.current === "closing") beginClose();
     }
 
     function handleKey(event: KeyboardEvent): void {
@@ -405,6 +433,8 @@ export function useEdgeReveal({
     window.addEventListener("pointerdown", handleDown, { capture: true });
     window.addEventListener("pointerup", handleUp, { capture: true });
     window.addEventListener("pointercancel", handleUp, { capture: true });
+    window.addEventListener("blur", releasePointerFlag);
+    document.addEventListener("visibilitychange", releasePointerFlag);
     document.addEventListener("pointerleave", handleLeaveWindow);
     window.addEventListener("keydown", handleKey);
     return () => {
@@ -413,6 +443,8 @@ export function useEdgeReveal({
       window.removeEventListener("pointerdown", handleDown, { capture: true });
       window.removeEventListener("pointerup", handleUp, { capture: true });
       window.removeEventListener("pointercancel", handleUp, { capture: true });
+      window.removeEventListener("blur", releasePointerFlag);
+      document.removeEventListener("visibilitychange", releasePointerFlag);
       document.removeEventListener("pointerleave", handleLeaveWindow);
       window.removeEventListener("keydown", handleKey);
     };
@@ -436,16 +468,47 @@ export function useEdgeReveal({
     [enabled, clearTimer, closeNow],
   );
 
-  const onPanelFocus = React.useCallback(() => {
-    focusWithinRef.current = true;
-    if (enabled && phaseRef.current !== "open") openNow();
-  }, [enabled, openNow]);
+  /**
+   * Focus holds the panel open only when the KEYBOARD took it.
+   *
+   * Any focusin used to count, and a click is a focusin. Peek the panel open,
+   * click the band's filter trigger, tick an item: Radix restores focus to the
+   * trigger, which `onPanelClick` deliberately skips (a menu trigger is not a
+   * destination), and the panel was then held by a focus nobody navigated to.
+   * Move the pointer back onto the board and it simply stood there — no hover,
+   * no gesture, and only Escape or a press outside to clear it.
+   *
+   * `:focus-visible` is the browser's own answer to exactly this question, and
+   * it is the right one twice over: false for a click on a button, and carried
+   * through Radix's programmatic restore according to how the menu was actually
+   * dismissed — Enter or Escape keeps it, a click does not. Reading it off the
+   * element beats tracking a last-input-modality flag of our own, which would be
+   * the same heuristic reimplemented and one more thing to keep in sync.
+   */
+  const onPanelFocus = React.useCallback(
+    (event: React.FocusEvent) => {
+      const keyboard = event.target instanceof Element && event.target.matches(":focus-visible");
+      focusWithinRef.current = keyboard;
+      // Summoning on focus is for the reader who Tabbed here from the chrome
+      // band. Pointer-acquired focus is the tail of a click inside a panel that
+      // was already open, so it has nothing to summon and no claim to cancel a
+      // withdrawal the pointer has already decided on.
+      if (keyboard && enabled && phaseRef.current !== "open") openNow();
+    },
+    [enabled, openNow],
+  );
 
   const onPanelBlur = React.useCallback(() => {
     // Deferred, because focusout fires before the next element takes focus —
     // read synchronously, every Tab between two rows looks like leaving.
     queueMicrotask(() => {
       if (panelRef.current?.contains(document.activeElement) === true) return;
+      // A menu opened FROM the panel is not leaving it. Radix renders into a
+      // portal on `document.body`, so opening the band's filter with the
+      // keyboard moves focus outside the panel's subtree by DOM containment
+      // while staying inside it in every sense the user has — and closing the
+      // panel there takes the pane out from under the menu it just opened.
+      if (inPortalledOverlay(document.activeElement)) return;
       focusWithinRef.current = false;
       if (enabled && !insideRef.current && phaseRef.current !== "closed") closeNow();
     });
