@@ -197,10 +197,10 @@ export interface RuntimeAskRequest {
    * Not "could the call run if this layer stood aside" — for the hard-deny rules
    * that is true and is exactly why they are not overridable. See
    * {@link OVERRIDABLE_AUTHORITY_RULES}, which keeps the two reasons apart: some
-   * refusals an override could not honour anyway, because the sandbox denies
-   * them too or the tool is not loaded; the rest are perfectly grantable and
-   * must not be granted, because a login item or a disabled certificate check
-   * outlives the Session that asked for it.
+   * refusals an override could not honour anyway, because the tool is not
+   * loaded; the rest are perfectly grantable and must not be granted, because a
+   * login item or a disabled certificate check outlives the Session that asked
+   * for it.
    *
    * The runtime enforces this rather than trusting it: a host that answers
    * `allow` to a refusal that is not overridable is not obeyed.
@@ -294,7 +294,26 @@ export interface SessionRuntimeSpec {
   workspacePath: string;
   venue: ExecutionVenue;
   model: ModelSelection;
-  authority: AuthoritySnapshot;
+  /**
+   * The policy every tool call is checked against — when the Session was given
+   * one at all.
+   *
+   * Optional, and absent throughout the product: Volli runs Pi ungated, and the
+   * desktop adapter supplies no Snapshot. Absence is not a Snapshot that allows
+   * everything. With no Snapshot the runtime installs no `beforeToolCall`, so
+   * the rule pack, the fallback thresholds and {@link ask} are structurally
+   * unreachable rather than merely permissive — which is why this is an absent
+   * field and not an `ungated` member on {@link AuthoritySnapshot}. A Snapshot
+   * that meant "do not consult me" would still have to carry a pack id, a pack
+   * hash and two thresholds describing rules nobody will ever run, and the one
+   * path that must not reach the gate would depend on every caller remembering
+   * to check.
+   *
+   * The machinery is kept whole for
+   * `docs/plans/authority-two-axis-rearchitecture.md`, which changes the policy
+   * the mechanism carries rather than the mechanism.
+   */
+  authority?: AuthoritySnapshot;
   brief: RuntimeBrief;
   promptResources?: readonly PromptResource[];
   tools: RuntimeToolBundle;

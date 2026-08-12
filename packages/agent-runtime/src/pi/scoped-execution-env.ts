@@ -57,20 +57,6 @@ export interface ScopedExecutionEnvOptions {
   fileOperations?: FileOperations;
 }
 
-/**
- * The contained execution capability Pi's coding tools receive.
- *
- * Named for the Session rather than the Ticket because the root it contains is
- * whatever that Session's workspace is: a Ticket worktree, or the project's
- * Main checkout for a project Session. Nothing here reads the difference.
- */
-export interface SessionExecutionEnv extends ExecutionEnv {
-  /** Proves the process boundary before Pi's bash tool is advertised. */
-  prepareProcessExecution(): Promise<Result<void, ExecutionError>>;
-  /** Releases active commands and owned output spools when an attachment ends. */
-  cleanup(): Promise<void>;
-}
-
 const processPreflights = new WeakMap<object, Promise<void>>();
 
 function deepFreeze<T>(value: T): T {
@@ -272,10 +258,21 @@ async function prepareSandbox(sandbox: SandboxRuntime): Promise<void> {
 }
 
 /**
- * The filesystem capability supplied to Pi's contained coding tools.
- * Process execution is fail-closed until SRT's process-global boundary is ready.
+ * The Seatbelt-backed execution capability — built and tested, and no longer
+ * installed.
+ *
+ * The runtime hands Pi its own uncontained environment now, so this reaches a
+ * Session only through an injected `executionEnvFactory`. It is kept whole
+ * because `docs/plans/authority-two-axis-rearchitecture.md` rebuilds the
+ * boundary on it, and a boundary is a bad thing to delete and rewrite from
+ * memory.
+ *
+ * What it contains is whatever that Session's workspace is — a Ticket worktree,
+ * or the project's Main checkout for a Ticket that never took one — and nothing
+ * here reads the difference. Process execution stays fail-closed on its own
+ * terms: {@link exec} proves SRT's boundary before it spawns anything.
  */
-export class ScopedExecutionEnv implements SessionExecutionEnv {
+export class ScopedExecutionEnv implements ExecutionEnv {
   readonly cwd: string;
   readonly #delegate: NodeExecutionEnv;
   readonly #sandbox: SandboxRuntime;
@@ -303,7 +300,15 @@ export class ScopedExecutionEnv implements SessionExecutionEnv {
     return new ScopedExecutionEnv(await realpath(root), options);
   }
 
-  /** Proves the shared SRT process boundary before Pi advertises bash. */
+  /**
+   * Proves the shared SRT process boundary.
+   *
+   * {@link exec} runs this before every spawn, so containment cannot be skipped
+   * by a caller that forgets to ask for it. Public so the boundary can still be
+   * inspected before a command depends on it; the runtime no longer preflights
+   * it at attach, because an attachment running Pi's own environment has no
+   * boundary to prove and must not fail for want of one.
+   */
   async prepareProcessExecution(): Promise<Result<void, ExecutionError>> {
     try {
       await prepareSandbox(this.#sandbox);

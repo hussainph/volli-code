@@ -6,8 +6,8 @@
  * `@`. Policy that resolves the raw argument therefore inspects a different file
  * than the tool opens — `write { path: "@.git/hooks/pre-commit" }` reads as
  * `<workspace>/@.git/…` to a rule and lands on `<workspace>/.git/hooks/…` on
- * disk. The sandbox does not catch it either: `denyWrite` wraps `exec`, and file
- * tools go straight to Node's fs.
+ * disk. The sandbox never caught it either, even when it was installed:
+ * `denyWrite` wraps `exec`, and file tools go straight to Node's fs.
  *
  * Source: `@earendil-works/pi-agent-core@0.84.1`,
  * `dist/harness/tools/path-utils.js`, `normalizeToolPath`. Copied rather than

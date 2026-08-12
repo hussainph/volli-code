@@ -8,12 +8,26 @@
  * process, and no model, while the parts that must touch a disk stay in the one
  * package allowed to.
  *
- * This layer is defence in depth, not the boundary. The boundary is the Seatbelt
- * sandbox in `@volli/agent-runtime`, which denies the network outright, hands
- * children a credential-free environment, and scopes reads and writes to the
- * Session workspace. What a policy decision adds is a *countable, nameable*
- * refusal for the residual risk inside that scope — the things a kernel cannot
- * see the intent of, like rewriting `.git/hooks` on the way to a commit.
+ * This layer was written as defence in depth beneath a boundary, and neither
+ * one ships today. `SessionRuntimeSpec.authority` is optional and no product
+ * caller supplies one, so Pi is handed no `beforeToolCall` and nothing below is
+ * ever consulted; the Seatbelt sandbox that used to sit under it is no longer
+ * installed either, so a Session's tools carry the authority of whoever is
+ * running Volli. That is a deliberate decision to run Pi at its own defaults,
+ * not an erosion — and `docs/plans/authority-two-axis-rearchitecture.md` is
+ * where both axes come back. It changes the policy this mechanism carries
+ * rather than the mechanism, which is why everything below is kept whole.
+ *
+ * Read the reasoning below with that in mind. Several rules were deliberately
+ * scoped against a kernel boundary they could assume beneath them; those
+ * arguments describe the layering this pack was designed for, not what a
+ * Session runs under now.
+ *
+ * What a policy decision would add, once there is something to add it to, is a
+ * *countable, nameable* refusal for the risk a kernel cannot see the intent of.
+ * A `git reset --hard` over a person's uncommitted work is permitted by every
+ * boundary ever proposed here and is still the wrong thing to do. Nothing
+ * refuses it today.
  */
 
 /**
@@ -52,10 +66,12 @@ export interface AuthorityFallback {
  * The policy one Session executes under, in the shape its durable record will
  * take.
  *
- * Nothing persists it yet. It is constructed per attach and lives as long as the
- * attachment does, so {@link rulePackId} and {@link rulePackHash} are presently
- * ceremony: both ends compute them from the same compile-time constant inside
- * one process, and no reader compares them against anything older. The denial
+ * Nothing persists it, and with the gate off nothing in the product constructs
+ * one either — a Snapshot reaches the runtime only when a caller hands it one,
+ * and then lives as long as that attachment. {@link rulePackId} and
+ * {@link rulePackHash} are ceremony twice over: computed from a compile-time
+ * constant inside one process, and compared by no reader against anything
+ * older. The denial
  * ledger they were written ahead of has since shipped — `authority.denied` is a
  * durable Session Event and `SessionProjection.authorityDenials` folds it — and
  * the snapshot that produced those denials still is not recorded anywhere. That
@@ -77,16 +93,17 @@ export interface AuthoritySnapshot {
   rulePackHash: string;
   /**
    * The model allowed to judge calls the deterministic rules cannot. Null, and
-   * deliberately so: with the network denied, no credentials in the child
-   * environment, and the filesystem scoped and symlink-proof, the categories a
-   * classifier is best at are largely unreachable.
+   * no longer for the reason originally written here: that with the network
+   * denied and the filesystem scoped, the categories a classifier is best at
+   * were largely unreachable. Both premises are gone, and
+   * `docs/plans/authority-two-axis-rearchitecture.md` names that argument as the
+   * mistake the whole rework exists to undo — containment was one dial doing two
+   * jobs.
    *
-   * Not *entirely* unreachable, and the field is null with that understood. What
-   * a classifier adds is an intent check — whether the user actually asked for
-   * this — and no kernel guarantees anything about intent. A branch sweep or an
-   * over-broad `rm` wholly inside the workspace passes every rule here and every
-   * sandbox rule too. The seam predates the need; the gap is accepted, not
-   * absent.
+   * It is null today only because nothing constructs a Snapshot at all. What a
+   * classifier would add is an intent check — whether the user actually asked
+   * for this — which no boundary has ever answered: a branch sweep or an
+   * over-broad `rm` wholly inside the workspace passes every rule here.
    */
   classifierModel: string | null;
   fallback: AuthorityFallback;
@@ -114,8 +131,10 @@ export interface PolicyCommandSegment {
  * A lexed shell command line.
  *
  * Porting a lexer copies its bypass surface: `eval`, `base64`, command
- * substitution and `xargs` all defeat it. Sound as a layer beneath Seatbelt,
- * unsound as a standalone boundary, and it is only ever used as the former.
+ * substitution and `xargs` all defeat it. It is sound only as a layer beneath a
+ * boundary that does not depend on it, and unsound as one on its own — so it
+ * must never become the thing a Session's safety rests on. Nothing runs it
+ * today; the boundary it was written under is not installed.
  */
 export interface PolicyCommand {
   raw: string;
@@ -213,20 +232,25 @@ export type AuthorityDenialCause = AuthorityRuleId | "call.unreadable";
  * The rules a person may overrule when Volli stops and asks.
  *
  * The test is not how alarming a rule sounds — it is whether an answer of "yes"
- * could do anything. A rule is overridable when the sandbox would carry the call
- * out if the policy stood aside, *and* a reasonable person could want it: writing
- * a `pre-commit` hook is ordinary work, and so is a `git reset --hard` in a
- * checkout the person owns.
+ * could do anything. A rule is overridable when the call would actually be
+ * carried out if the policy stood aside, *and* a reasonable person could want
+ * it: writing a `pre-commit` hook is ordinary work, and so is a `git reset
+ * --hard` in a checkout the person owns.
  *
- * Everything else only reports. Two different reasons for that, both worth
- * keeping straight. `path.outside-workspace`, `command.git-escapes-workspace` and
- * `tool.not-bundled` are refusals an override cannot honour — Seatbelt denies the
- * first two whatever this layer decides, and a tool that is not loaded cannot be
- * called into existence by consent. The hard-deny rules are the opposite case:
- * they are perfectly grantable and must not be granted, because a login item, a
- * disabled certificate check or a weakened SIP outlives the Session that asked
- * for it, and a person answering a question mid-task is not in a position to
- * weigh that.
+ * Everything else only reports. `tool.not-bundled` is a refusal an override
+ * cannot honour: a tool that is not loaded cannot be called into existence by
+ * consent. The hard-deny rules are the opposite case — perfectly grantable and
+ * not to be granted, because a login item, a disabled certificate check or a
+ * weakened SIP outlives the Session that asked for it, and a person answering a
+ * question mid-task is not in a position to weigh that.
+ *
+ * `path.outside-workspace` and `command.git-escapes-workspace` are here on a
+ * reason that has since expired. Seatbelt denied them whatever this layer
+ * decided, so consent was moot; with the sandbox no longer installed they are
+ * grantable rather than moot. The list has not been re-derived for that — the
+ * pack is dormant, and reopening the question belongs to
+ * `docs/plans/authority-two-axis-rearchitecture.md` rather than to a quiet edit
+ * here.
  */
 export const OVERRIDABLE_AUTHORITY_RULES = [
   "path.git-internals",

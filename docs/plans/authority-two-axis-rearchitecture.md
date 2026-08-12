@@ -5,6 +5,30 @@ This supersedes the Part I product decision in
 shipped remains accurate and is worth reading first; what it got wrong is the
 conclusion it drew from it.
 
+## Status
+
+Both axes are off. Pi runs at its own defaults: ungated and uncontained.
+
+**The gate is off.** `SessionRuntimeSpec.authority` is optional and the desktop
+adapter supplies no Snapshot, so the Pi runtime installs no `beforeToolCall` at
+all and the rule pack, the fallback thresholds and the escalation port are never
+reached.
+
+**Containment is off.** `executionEnvFactory` now defaults to Pi's own
+`NodeExecutionEnv`, so nothing wraps process execution in Seatbelt and nothing
+scopes the file tools to the workspace. A Session's commands run as the user
+running Volli, with the network reachable and the environment's credentials
+intact, and reads and writes outside the workspace succeed. Attachment no longer
+fails when `sandbox-exec` is unavailable, because it no longer asks.
+
+`ScopedExecutionEnv`, its tests and the `@anthropic-ai/sandbox-runtime`
+dependency are kept, and `executionEnvFactory` still accepts an injected
+environment — slice 6 rebuilds the capability axis on exactly that. Nothing in
+the product supplies one today.
+
+Everything below describes the policy that replaces the deferred one, not
+behaviour that runs today.
+
 ## The mistake
 
 Part I made one bet: containment is the safety story. Seatbelt denies the

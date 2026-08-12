@@ -8,8 +8,6 @@ import type {
 } from "@volli/session-engine";
 import { NativeAttachmentError, sessionRootThreadId } from "@volli/session-engine";
 import {
-  BUILTIN_RULE_PACK_HASH,
-  BUILTIN_RULE_PACK_ID,
   errorMessage,
   type AgentRuntime,
   type DeliveryOutcome,
@@ -353,15 +351,9 @@ describe("Pi native adapter attach", () => {
     expect(spec.venue).toBe("local");
     expect(spec.workspacePath).toBe("/work/volli/.worktrees/VC-12");
     expect(spec.model).toEqual(context.model);
-    expect(spec.authority).toEqual({
-      mode: "auto",
-      location: "worktree",
-      tools: ["read", "edit", "write", "execute"],
-      rulePackId: BUILTIN_RULE_PACK_ID,
-      rulePackHash: BUILTIN_RULE_PACK_HASH,
-      classifierModel: null,
-      fallback: { consecutiveDenials: 3, sessionDenials: 20 },
-    });
+    // Ungated: no Snapshot means the runtime installs no gate at all, so the
+    // rule pack cannot run however the resolved location reads.
+    expect(spec.authority).toBeUndefined();
     expect(spec.tools).toEqual({ tools: ["read", "edit", "write", "execute"] });
     expect(spec.brief).toEqual({ text: "VC-12: Host the Pi runtime" });
     expect(spec.signal?.aborted).toBe(false);

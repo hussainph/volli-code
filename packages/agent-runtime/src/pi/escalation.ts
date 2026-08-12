@@ -242,8 +242,8 @@ export class AuthorityEscalation {
     // Read once and used twice — to describe the question and to bound what its
     // answer is allowed to do. A host answering `allow` to a rule that is not
     // overridable is not obeyed: those rules are grantable and must not be
-    // granted, the sandbox does not stop them either, and this is the layer that
-    // enforces the distinction rather than the layer that trusts its caller.
+    // granted, nothing below stops them, and this is the layer that enforces the
+    // distinction rather than the layer that trusts its caller.
     const overridable = isOverridableAuthorityRule(verdict.cause);
     const answer = await this.#askUntilAnsweredOrAbandoned(
       ask,

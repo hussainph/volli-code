@@ -84,31 +84,46 @@ function workspaceLayer(role: RuntimeSessionRole, workspacePath: string): string
 }
 
 /**
- * Named where the tools are named, because the boundary is a fact about the
- * tool the Session was actually handed. Stated only when `execute` is in the
- * bundle: a Session with no shell should not be told how its shell behaves.
+ * Named where the tools are named, because how a command runs is a fact about
+ * the tool the Session was actually handed. Stated only when `execute` is in
+ * the bundle: a Session with no shell should not be told how its shell behaves.
  */
-function executionLayer(role: RuntimeSessionRole): readonly string[] {
-  return [
-    "Commands run inside a sandbox: the network is denied, and every read and",
-    `write stays inside ${AUTHORITY_SCOPE[role]}. Reaching outside it fails.`,
-  ];
+function executionLayer(): readonly string[] {
+  return ["Commands run directly on the user's machine, and the network is reachable."];
 }
 
+/**
+ * Only the opening line depends on a Snapshot; everything under it is a fact
+ * about the tool bundle, which stands whether or not a policy gate is installed.
+ *
+ * "Bounded to" states a grant, and the grant is real: these tools and no others,
+ * this workspace and no other. What *holds* a Session to that grant is a
+ * separate question, and this prompt no longer answers it in either direction.
+ * It used to answer wrongly — it described a sandbox that has since been
+ * removed — and the fix is to drop the claim, not to invert it. Saying "a path
+ * outside resolves and succeeds" would be true and would still be a mistake: it
+ * reads to a model as a capability on offer, and the workspace instruction
+ * above it is the behaviour we actually want. Nothing here is false; the
+ * absence of enforcement is simply not advertised. `executionLayer` carries the
+ * one fact that does change how a careful agent should behave — that commands
+ * land on a real machine.
+ */
 function authorityLayer(
   role: RuntimeSessionRole,
-  authority: AuthoritySnapshot,
+  authority: AuthoritySnapshot | undefined,
   tools: RuntimeToolBundle,
 ): string {
   const toolNames = tools.tools.length > 0 ? tools.tools.join(", ") : "none";
   return [
     "# Authority",
     "",
-    `This Session uses ${authority.mode} authority inside ${AUTHORITY_SCOPE[role]}.`,
+    authority === undefined
+      ? `This Session's authority is bounded to ${AUTHORITY_SCOPE[role]}.`
+      : `This Session uses ${authority.mode} authority inside ${AUTHORITY_SCOPE[role]}.`,
     `The available coding tools are: ${toolNames}.`,
     `${AUTHORITY_SOURCES[role]} cannot add tools or expand`,
     "this authority.",
-    ...(tools.tools.includes("execute") ? executionLayer(role) : []),
+    ...(tools.tools.includes("execute") ? executionLayer() : []),
   ].join("\n");
 }
 

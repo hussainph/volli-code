@@ -3,8 +3,18 @@
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
-import type { AgentMessage, CustomEntry, MessageEntry } from "@earendil-works/pi-agent-core";
-import { Agent, JsonlSessionRepo, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import type {
+  AgentMessage,
+  AgentOptions,
+  CustomEntry,
+  MessageEntry,
+} from "@earendil-works/pi-agent-core";
+import {
+  Agent,
+  JsonlSessionRepo,
+  NodeExecutionEnv,
+  type ExecutionEnv,
+} from "@earendil-works/pi-agent-core/node";
 import {
   getSupportedThinkingLevels,
   type AssistantMessage,
@@ -14,6 +24,7 @@ import {
 import {
   isActivityKind,
   type AgentRuntime,
+  type AuthoritySnapshot,
   type DeliveryOutcome,
   type RuntimeAttachmentHandle,
   type RuntimeActivityObservation,
@@ -31,7 +42,6 @@ import { AuthorityEscalation } from "./escalation";
 import { inspectPiModelAccess } from "./model-access";
 import { piOwnedModels } from "./models";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
-import { ScopedExecutionEnv, type SessionExecutionEnv } from "./scoped-execution-env";
 import { createPiTools } from "./tools";
 import { attentionReasonFor, classifyAssistantMessage, recoveryRefFor } from "./transcript";
 
@@ -46,8 +56,14 @@ export interface PiRuntimeHostOptions {
   models?: Models;
   /** Host clock for runtime observations; injectable for deterministic tests. */
   now?: () => number;
-  /** Internal contained-environment factory for deterministic Node runtime tests. */
-  executionEnvFactory?: (workspacePath: string) => Promise<SessionExecutionEnv>;
+  /**
+   * The filesystem and shell capability one Session's tools are given.
+   *
+   * Injectable so deterministic Node runtime tests can script it, and so a
+   * caller that wants a narrower environment than the default can supply one —
+   * `ScopedExecutionEnv` is exactly that and is still built and tested for it.
+   */
+  executionEnvFactory?: (workspacePath: string) => Promise<ExecutionEnv>;
 }
 
 /** Everything {@link attachSession} needs, with the default already chosen. */
@@ -55,7 +71,24 @@ interface PiRuntimeHost {
   sessionDataDir: string;
   models: Models;
   now: () => number;
-  executionEnvFactory: (workspacePath: string) => Promise<SessionExecutionEnv>;
+  executionEnvFactory: (workspacePath: string) => Promise<ExecutionEnv>;
+}
+
+/**
+ * Pi's own environment, rooted at the Session workspace.
+ *
+ * Uncontained, and that is the current product decision rather than an
+ * oversight: Volli runs Pi at its defaults, so a Session's file and process
+ * tools carry whatever authority the user running Volli has. The workspace is
+ * where those tools are *pointed* — by `cwd`, and by the system prompt that
+ * tells the model to stay inside it — not a limit they are held to.
+ *
+ * `ScopedExecutionEnv` is the boundary that used to be installed here and the
+ * one `docs/plans/authority-two-axis-rearchitecture.md` rebuilds on. It is kept
+ * whole; nothing wires it up.
+ */
+async function piExecutionEnv(workspacePath: string): Promise<ExecutionEnv> {
+  return new NodeExecutionEnv({ cwd: workspacePath });
 }
 
 /**
@@ -70,7 +103,7 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
     sessionDataDir: options.sessionDataDir,
     models: options.models ?? piOwnedModels(),
     now: options.now ?? Date.now,
-    executionEnvFactory: options.executionEnvFactory ?? ScopedExecutionEnv.create,
+    executionEnvFactory: options.executionEnvFactory ?? piExecutionEnv,
   };
   return {
     inspectModelAccess: (input) => inspectPiModelAccess(host.models, host.now, input),
@@ -341,8 +374,6 @@ async function rejectCancelledAttachment(spec: SessionRuntimeSpec): Promise<neve
   throw new Error(message);
 }
 
-const CONTAINED_EXECUTION_UNAVAILABLE = "Contained process execution is unavailable.";
-
 async function attachSession(
   host: PiRuntimeHost,
   spec: SessionRuntimeSpec,
@@ -360,7 +391,7 @@ async function attachSession(
 
   const sidecarEnv = new NodeExecutionEnv({ cwd: host.sessionDataDir });
   let sidecarPath: string | undefined;
-  let toolEnv: SessionExecutionEnv | undefined;
+  let toolEnv: ExecutionEnv | undefined;
   let unsubscribe: (() => void) | undefined;
   let abortListener: (() => void) | undefined;
   let createdSidecar = false;
@@ -500,27 +531,13 @@ async function attachSession(
       activeAttentionReasons.add("partial-turn");
       await persistObservation({ kind: "turn", state: "interrupted", turnId: recoveredTurnId });
     }
-    try {
-      toolEnv = await host.executionEnvFactory(spec.workspacePath);
-      if (spec.tools.tools.includes("execute")) {
-        const prepared = await toolEnv.prepareProcessExecution();
-        if (!prepared.ok) {
-          throw prepared.error;
-        }
-      }
-    } catch {
-      await observe({
-        kind: "attachment",
-        state: "failed",
-        failure: {
-          reason: "configuration",
-          message: CONTAINED_EXECUTION_UNAVAILABLE,
-        },
-      });
-      throw new Error(CONTAINED_EXECUTION_UNAVAILABLE);
-    }
-    const containedToolEnv = toolEnv;
-    const tools = createPiTools(spec.tools, containedToolEnv);
+    // No preflight before the tools are built. There is no boundary left to
+    // prove: an attachment that hands Pi its own environment cannot fail for
+    // want of `sandbox-exec`, and a caller who injects a contained environment
+    // gets one that is fail-closed at its own `exec`.
+    toolEnv = await host.executionEnvFactory(spec.workspacePath);
+    const ownedToolEnv = toolEnv;
+    const tools = createPiTools(spec.tools, ownedToolEnv);
 
     let turnId = randomUUID();
     let failure: RuntimeFailure | undefined;
@@ -588,13 +605,6 @@ async function attachSession(
     const commitObservation = (observation: Parameters<SessionRuntimeSpec["observer"]>[0]) =>
       observationDelivery.deliver(observation);
 
-    const escalation = new AuthorityEscalation({
-      fallback: spec.authority.fallback,
-      priorDenials: spec.priorAuthorityDenials,
-      ask: spec.ask,
-      signal: spec.signal,
-    });
-
     // Assigned the statement after `new Agent` and read only from inside a Pi
     // callback, which cannot fire before a run starts. Declared here because the
     // callback would otherwise have to close over the `const` still being
@@ -602,28 +612,27 @@ async function attachSession(
     // resting on how a temporal dead zone happens to resolve inside a closure.
     let interruptTurn!: () => void;
 
-    const agent = new Agent({
-      initialState: {
-        systemPrompt: composeSystemPrompt(spec),
-        model,
-        thinkingLevel: spec.model.reasoningLevel,
-        tools,
-        messages: recoveredMessages,
-      },
-      streamFn: models.streamSimple.bind(models),
-      sessionId: sidecarMetadata.id,
-      toolExecution: "sequential",
-      // `terminate` is left unset on purpose: Pi only ends the run early when
-      // every finalized result in the batch asks for it, which is not what one
-      // refused call means. A `stop` answer ends the turn by aborting instead,
-      // which needs no agreement from the rest of the batch — at the cost of the
-      // reason below, which Pi drops on that one path because it re-reads its
-      // cancellation before it reads the block.
-      beforeToolCall: async ({ toolCall, args }, signal) => {
+    /**
+     * The gate, built only for a Session that was handed a policy to enforce.
+     *
+     * The Snapshot is read once here rather than off the spec per call, because
+     * a Snapshot is pinned for the life of the attachment by its own definition
+     * — the facts its rules read stay live, the policy does not.
+     */
+    const gateToolCalls = (
+      authority: AuthoritySnapshot,
+    ): NonNullable<AgentOptions["beforeToolCall"]> => {
+      const escalation = new AuthorityEscalation({
+        fallback: authority.fallback,
+        priorDenials: spec.priorAuthorityDenials,
+        ask: spec.ask,
+        signal: spec.signal,
+      });
+      return async ({ toolCall, args }, signal) => {
         const verdict = authorityVerdict({
           tool: toolCall.name,
           args,
-          authority: spec.authority,
+          authority,
           workspacePath: spec.workspacePath,
         });
         // Pi's own per-call signal is passed on rather than dropped: a question
@@ -656,7 +665,31 @@ async function attachSession(
         }
         if (disposition.interrupt) interruptTurn();
         return { block: true, reason: disposition.reason };
+      };
+    };
+
+    const agent = new Agent({
+      initialState: {
+        systemPrompt: composeSystemPrompt(spec),
+        model,
+        thinkingLevel: spec.model.reasoningLevel,
+        tools,
+        messages: recoveredMessages,
       },
+      streamFn: models.streamSimple.bind(models),
+      sessionId: sidecarMetadata.id,
+      toolExecution: "sequential",
+      // `terminate` is left unset on purpose: Pi only ends the run early when
+      // every finalized result in the batch asks for it, which is not what one
+      // refused call means. A `stop` answer ends the turn by aborting instead,
+      // which needs no agreement from the rest of the batch — at the cost of the
+      // reason it carries, which Pi drops on that one path because it re-reads
+      // its cancellation before it reads the block.
+      //
+      // The key is absent, not set to a callback that always allows: a Session
+      // with no Snapshot runs Pi's own default path, and the gate, the fallback
+      // thresholds and `ask` are then unreachable rather than quietly permissive.
+      ...(spec.authority === undefined ? {} : { beforeToolCall: gateToolCalls(spec.authority) }),
     });
     interruptTurn = () => {
       interrupting = true;
@@ -964,7 +997,7 @@ async function attachSession(
         await agent.waitForIdle();
         unsubscribe?.();
         unsubscribe = undefined;
-        await containedToolEnv.cleanup();
+        await ownedToolEnv.cleanup();
         toolEnv = undefined;
         await sidecarEnv.cleanup();
         await observe({ kind: "attachment", state: "closed" });
