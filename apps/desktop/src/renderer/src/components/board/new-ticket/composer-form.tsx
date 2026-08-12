@@ -79,10 +79,19 @@ export function ComposerForm({
   const [submitting, setSubmitting] = React.useState(false);
   // The chip's own choice, or null for "whatever the project's default is".
   // Never read directly — `baseBranch` below is the resolved answer.
-  const [chosenBase, setChosenBase] = React.useState<string | null>(restored?.baseBranch ?? null);
+  //
+  // Scoped to the project it was chosen FOR, both here and on retarget below. A
+  // ref name means nothing in another repo: a draft restored onto the fallback
+  // project (its own was removed) would otherwise arrive holding the removed
+  // project's base, and two repos that each have a `develop` would sail through
+  // every check `resolveBaseBranch` can make while branching the work off an
+  // unrelated commit.
+  const [chosenBase, setChosenBase] = React.useState<string | null>(() =>
+    restored?.projectId === target.id ? (restored.baseBranch ?? null) : null,
+  );
 
-  // The target project's refs, re-read per open and per retarget. `null` while
-  // in flight; `resolveBaseBranch` holds the chip's choice until they land and
+  // The target project's refs, re-read per open and per retarget.
+  // `resolveBaseBranch` holds the chip's choice while the read is in flight and
   // then drops one the project turns out not to have — the same revalidation
   // the restored `target` gets above, for the same reason (a draft can outlive
   // the branch it named).
@@ -91,8 +100,16 @@ export function ComposerForm({
   // retarget: the base a ticket starts from is the target project's business, so
   // reading it off `target` rather than off the listing keeps the two chips from
   // ever describing different projects.
-  const { listing: branchListing, error: branchError } = useBranchListing(target.id);
-  const baseBranch = resolveBaseBranch(chosenBase, branchListing, target.baseBranch ?? null);
+  const branchState = useBranchListing(target.id);
+  const baseBranch = resolveBaseBranch(chosenBase, branchState, target.baseBranch ?? null);
+
+  // Retarget: the new project's refs are a different repo's, so the base picked
+  // in the old one is dropped rather than carried across and re-checked. It is
+  // the project's configured base that stands in until the new listing lands.
+  const handleRetarget = React.useCallback((project: Project) => {
+    setTarget(project);
+    setChosenBase(null);
+  }, []);
 
   // Implicit save: every field change re-caches the draft (the storage layer
   // debounces the SQLite write), so closing the dialog ANY way keeps the work.
@@ -234,7 +251,7 @@ export function ComposerForm({
         <ComposerBreadcrumb
           projects={projects}
           target={target}
-          onRetarget={setTarget}
+          onRetarget={handleRetarget}
           expanded={expanded}
           onToggleExpand={onToggleExpand}
           onClose={onClose}
@@ -291,12 +308,13 @@ export function ComposerForm({
           onLabelsChange={setLabels}
           harnessId={lastHarnessId}
           onHarnessChange={(harnessId) => useUiStore.getState().setLastHarnessId(harnessId)}
-          branchListing={branchListing}
-          branchError={branchError}
-          baseBranch={baseBranch}
-          onBaseBranchChange={setChosenBase}
-          usesWorktree={usesWorktree}
-          onUsesWorktreeChange={setUsesWorktree}
+          branch={{
+            state: branchState,
+            baseBranch,
+            onBaseBranchChange: setChosenBase,
+            usesWorktree,
+            onUsesWorktreeChange: setUsesWorktree,
+          }}
         />
       </div>
 

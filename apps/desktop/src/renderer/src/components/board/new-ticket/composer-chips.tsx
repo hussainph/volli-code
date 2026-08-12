@@ -1,4 +1,4 @@
-import type { HarnessId, WorktreeBranchListing } from "@volli/shared";
+import type { HarnessId } from "@volli/shared";
 import {
   TICKET_PRIORITIES,
   TICKET_PRIORITY_LABELS,
@@ -8,7 +8,10 @@ import {
   type TicketStatus,
 } from "@volli/shared";
 
-import { ComposerBranchRow } from "@renderer/components/board/new-ticket/composer-branch";
+import {
+  ComposerBranchRow,
+  type ComposerBranchRowProps,
+} from "@renderer/components/board/new-ticket/composer-branch";
 import { composerChipClass } from "@renderer/components/board/new-ticket/composer-chip";
 import { ComposerHarnessChip } from "@renderer/components/board/new-ticket/composer-harness";
 import { ComposerLabels } from "@renderer/components/board/new-ticket/composer-labels";
@@ -100,6 +103,11 @@ function PriorityChip({
  * right names the git ground it lands on, and the two never interleave, so the
  * row can be read as two thoughts instead of six controls. All of it is local
  * state — nothing is persisted until the ticket is created.
+ *
+ * The branch half arrives as ONE `branch` prop rather than five loose ones.
+ * This row does not read or decide anything about a base; passing the pair's
+ * state through field by field only gave every future change to it a second
+ * place to be spelled out.
  */
 export function ComposerChips({
   projectId,
@@ -111,12 +119,7 @@ export function ComposerChips({
   onLabelsChange,
   harnessId,
   onHarnessChange,
-  branchListing,
-  branchError,
-  baseBranch,
-  onBaseBranchChange,
-  usesWorktree,
-  onUsesWorktreeChange,
+  branch,
 }: {
   projectId: string;
   status: TicketStatus;
@@ -127,12 +130,7 @@ export function ComposerChips({
   onLabelsChange: (labels: string[]) => void;
   harnessId: HarnessId;
   onHarnessChange: (harnessId: HarnessId) => void;
-  branchListing: WorktreeBranchListing | null;
-  branchError: string | null;
-  baseBranch: string | null;
-  onBaseBranchChange: (branch: string) => void;
-  usesWorktree: boolean;
-  onUsesWorktreeChange: (usesWorktree: boolean) => void;
+  branch: ComposerBranchRowProps;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -140,14 +138,7 @@ export function ComposerChips({
       <PriorityChip priority={priority} onChange={onPriorityChange} />
       <ComposerLabels projectId={projectId} value={labels} onChange={onLabelsChange} />
       <ComposerHarnessChip harnessId={harnessId} onChange={onHarnessChange} />
-      <ComposerBranchRow
-        listing={branchListing}
-        error={branchError}
-        baseBranch={baseBranch}
-        onBaseBranchChange={onBaseBranchChange}
-        usesWorktree={usesWorktree}
-        onUsesWorktreeChange={onUsesWorktreeChange}
-      />
+      <ComposerBranchRow {...branch} />
     </div>
   );
 }

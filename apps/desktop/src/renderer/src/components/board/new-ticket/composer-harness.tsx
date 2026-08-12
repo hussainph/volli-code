@@ -44,6 +44,42 @@ import { hydrateHarnessCatalog, useHarnessCatalogStore } from "@renderer/stores/
  * choosing depends on it: the user wrote the manifest, and the launch door
  * refuses an untrusted id whatever this list says.
  */
+
+/** A pickable harness, as this row names it. */
+interface HarnessOption {
+  id: HarnessId;
+  label: string;
+}
+
+/**
+ * The pickable harnesses: the built-ins first, then every registered manifest —
+ * one entry per id. A manifest that reuses a first-class id names the SAME
+ * harness, so it neither earns a second row nor renames the built-in.
+ */
+function harnessOptions(registered: readonly HarnessOption[]): HarnessOption[] {
+  const byId = new Map<HarnessId, string>(
+    FIRST_CLASS_HARNESS_IDS.map((id): [HarnessId, string] => [id, HARNESS_LABELS[id]]),
+  );
+  for (const adapter of registered) {
+    if (!byId.has(adapter.id)) byId.set(adapter.id, adapter.label);
+  }
+  return [...byId].map(([id, label]) => ({ id, label }));
+}
+
+/**
+ * The label for `harnessId` off that one list — `harnessLabel` only as the last
+ * resort, since it can do no better than the raw slug for a harness
+ * `@volli/shared` does not ship.
+ *
+ * The chip and the kickoff button both read THIS. They resolved the same
+ * question in opposite orders once (labels first here, registered first there),
+ * so a manifest reusing a first-class id made the chip and the button's
+ * accessible name name two different harnesses for one choice.
+ */
+function activeHarnessLabel(options: readonly HarnessOption[], harnessId: HarnessId): string {
+  return options.find((harness) => harness.id === harnessId)?.label ?? harnessLabel(harnessId);
+}
+
 export function ComposerHarnessChip({
   harnessId,
   onChange,
@@ -59,14 +95,8 @@ export function ComposerHarnessChip({
     void hydrateHarnessCatalog();
   }, []);
 
-  const harnesses: { id: HarnessId; label: string }[] = [
-    ...FIRST_CLASS_HARNESS_IDS.map((id) => ({ id, label: HARNESS_LABELS[id] })),
-    ...registered.map((adapter) => ({ id: adapter.id, label: adapter.label })),
-  ];
-  // The manifest's own label, since `harnessLabel` can only fall back to the raw
-  // slug for a harness @volli/shared does not ship.
-  const activeLabel =
-    harnesses.find((harness) => harness.id === harnessId)?.label ?? harnessLabel(harnessId);
+  const harnesses = harnessOptions(registered);
+  const activeLabel = activeHarnessLabel(harnesses, harnessId);
 
   return (
     <DropdownMenu>
@@ -101,5 +131,5 @@ export function ComposerHarnessChip({
 /** The active harness's label — the kickoff button carries it in its accessible name. */
 export function useActiveHarnessLabel(harnessId: HarnessId): string {
   const registered = useHarnessCatalogStore((state) => state.registered);
-  return registered.find((adapter) => adapter.id === harnessId)?.label ?? harnessLabel(harnessId);
+  return activeHarnessLabel(harnessOptions(registered), harnessId);
 }
