@@ -17,7 +17,7 @@ import type { ModelSelection, SessionInteractionResolution } from "@volli/shared
 import { useStore, type StoreApi } from "zustand";
 
 import { getChatClient } from "@renderer/chat/registry";
-import type { ChatMessageDelivery, ChatSessionSlice } from "@renderer/chat/client";
+import type { ChatMessageDelivery, ChatSessionSlice, MessageDelivery } from "@renderer/chat/client";
 import type { QueuedMessage } from "@renderer/chat/session-model";
 import { useChatSessionsStore, type ChatSessionsState } from "@renderer/stores/chat-sessions";
 
@@ -27,7 +27,7 @@ export interface SessionController {
   selectModel(selection: ModelSelection): Promise<boolean>;
   enqueue(message: QueuedMessage): void;
   dequeue(id: string): void;
-  submit(text: string, delivery: ChatMessageDelivery): Promise<boolean>;
+  submit(text: string, delivery: ChatMessageDelivery): Promise<MessageDelivery>;
   interrupt(): Promise<boolean>;
   resolveInteraction(
     interactionId: string,
@@ -68,7 +68,10 @@ function bind(sessionId: string, store: ChatSessionsStore): Omit<SessionControll
     dequeue: (id) => {
       store.getState().dequeue(sessionId, id);
     },
-    submit: (text, delivery) => getChatClient(sessionId)?.submit(text, delivery) ?? refused,
+    // A lookup that misses is a Session this surface no longer has: nothing was
+    // sent and nothing is durable, which is exactly `refused`.
+    submit: (text, delivery) =>
+      getChatClient(sessionId)?.submit(text, delivery) ?? Promise.resolve("refused" as const),
     interrupt: () => getChatClient(sessionId)?.interrupt() ?? refused,
     resolveInteraction: (interactionId, resolution) =>
       getChatClient(sessionId)?.resolveInteraction(interactionId, resolution) ?? refused,

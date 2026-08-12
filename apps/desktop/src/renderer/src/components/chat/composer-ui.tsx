@@ -62,6 +62,8 @@ export interface SessionComposerProps {
   textareaRef?: React.Ref<HTMLTextAreaElement>;
   models: readonly ComposerModel[];
   selection: ComposerModelSelection;
+  /** The Session's provider as the catalog names it — see {@link modelPillLabel}. */
+  selectionProviderLabel?: string;
   onSelectionChange(next: ComposerModelSelection): void;
   /** Model policy is immutable during an active turn. */
   modelChoiceDisabled?: boolean;
@@ -82,6 +84,7 @@ export function SessionComposer({
   textareaRef,
   models,
   selection,
+  selectionProviderLabel,
   onSelectionChange,
   modelChoiceDisabled = false,
   working,
@@ -186,6 +189,7 @@ export function SessionComposer({
           <ModelPill
             models={models}
             selection={selection}
+            selectionProviderLabel={selectionProviderLabel}
             disabled={modelChoiceDisabled}
             onChange={onSelectionChange}
           />
@@ -244,9 +248,23 @@ export interface ComposerModelSelection {
   reasoningLevel: string;
 }
 
+/**
+ * `sonnet-4.5 · high`, or `Azure OpenAI · gpt-5.6-luna` where the name alone
+ * would not say which model this is.
+ *
+ * A model name is not unique across providers, and this pill runs into that
+ * twice. A selection the list does not hold — the Session is pinned to a
+ * provider nobody is signed in to — falls back to its raw id, which is the same
+ * id a signed-in provider may also carry; and two listed providers can both
+ * ship a model called "GPT-5.6 Luna". Both read as an ordinary pill naming a
+ * model that is not the one this Session will send to. Where the name is
+ * ambiguous the provider leads it, exactly as Settings' model rows do.
+ */
 export function modelPillLabel(
   models: readonly ComposerModel[],
   selection: ComposerModelSelection,
+  /** The Session's provider as the catalog names it, for a model no longer listed. */
+  selectionProviderLabel?: string,
 ): string {
   const model = models.find(
     (candidate) =>
@@ -254,17 +272,25 @@ export function modelPillLabel(
   );
   const name = model?.label ?? selection.modelId;
   if (!name) return "Model";
-  return selection.reasoningLevel ? `${name} · ${selection.reasoningLevel}` : name;
+  const ambiguous =
+    model === undefined ||
+    models.some((candidate) => candidate !== model && candidate.label === name);
+  const qualified = ambiguous
+    ? `${model?.providerLabel ?? selectionProviderLabel ?? selection.providerId} · ${name}`
+    : name;
+  return selection.reasoningLevel ? `${qualified} · ${selection.reasoningLevel}` : qualified;
 }
 
 function ModelPill({
   models,
   selection,
+  selectionProviderLabel,
   disabled,
   onChange,
 }: {
   models: readonly ComposerModel[];
   selection: ComposerModelSelection;
+  selectionProviderLabel?: string;
   disabled: boolean;
   onChange(next: ComposerModelSelection): void;
 }) {
@@ -288,7 +314,9 @@ function ModelPill({
           disabled={disabled || models.length === 0}
           className="min-w-0 text-muted-foreground"
         >
-          <span className="min-w-0 truncate">{modelPillLabel(models, selection)}</span>
+          <span className="min-w-0 truncate">
+            {modelPillLabel(models, selection, selectionProviderLabel)}
+          </span>
           <CaretUpDownIcon className="size-3 shrink-0" />
         </Button>
       </PopoverTrigger>

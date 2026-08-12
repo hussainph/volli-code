@@ -20,7 +20,8 @@ import { REASONING_LEVELS } from "@volli/shared";
 import type { UIMessage } from "ai";
 
 import type { InteractionSubmission } from "@renderer/chat/interaction";
-import type { ComposerIntent } from "@renderer/chat/session-model";
+import type { ComposerIntent, QueuedMessage } from "@renderer/chat/session-model";
+import type { HeldMessage } from "@renderer/stores/chat-drafts";
 
 export function composerModelSelection(input: {
   providerId: string;
@@ -151,6 +152,56 @@ export function messageRoute(intent: ComposerIntent, deliverable: boolean): Mess
   return intent !== "queue" && deliverable ? "send" : "hold";
 }
 
+/**
+ * Every message this Session is holding for you, in one strip.
+ *
+ * Two lists say it, for two different spans. The release queue is what the
+ * resident client drains and it lives as long as the window does; the persisted
+ * held list is what survives one, and it is also where a message nothing took
+ * goes rather than being welded onto whatever was typed after it. A message
+ * that is in both — the ordinary queued one — is one row, because the id is the
+ * same message in two records and not two messages.
+ *
+ * `sending` is excluded on purpose: the transcript is already drawing that
+ * message, and a copy of it under the composer reads as one that failed to
+ * leave.
+ */
+export function heldStrip(
+  held: readonly HeldMessage[],
+  queue: readonly QueuedMessage[],
+): readonly QueuedMessage[] {
+  const rows: QueuedMessage[] = [];
+  const drawn = new Set<string>();
+  for (const entry of held) {
+    if (entry.state === "sending") continue;
+    rows.push({ id: entry.id, text: entry.text });
+    drawn.add(entry.id);
+  }
+  for (const entry of queue) if (!drawn.has(entry.id)) rows.push(entry);
+  return rows;
+}
+
+/**
+ * The held copies the release queue has finished with, and nothing else.
+ *
+ * A `queued` copy exists for one reason: the queue is renderer memory, so
+ * without it a reload loses a message a person typed. Once the queue no longer
+ * names it, the release either delivered it or the person removed the row —
+ * both are answers, and neither leaves this surface holding the words.
+ *
+ * Only `queued` is read. `sending` has a round trip still open on it, and
+ * `unsent` is a message the queue never had.
+ */
+export function settledHeldIds(
+  held: readonly HeldMessage[],
+  queue: readonly QueuedMessage[],
+): readonly string[] {
+  const live = new Set(queue.map((entry) => entry.id));
+  return held.flatMap((entry) =>
+    entry.state === "queued" && !live.has(entry.id) ? [entry.id] : [],
+  );
+}
+
 /* ---------------------------------------------------------------- blocked */
 
 /**
@@ -272,15 +323,28 @@ export function sessionBlocker(
   // loads, every model reads as unavailable.
   const sessionModel = input.catalogState === "ready" ? input.sessionModel : null;
   if (sessionModel !== null && sessionModel.state !== "available") {
-    return {
-      message:
-        sessionModel.state === "authentication-required"
-          ? `Sign-in required for ${sessionModel.providerLabel}`
-          : "Model unavailable",
-      detail: null,
-      tone: "error",
-      action: settings,
-    };
+    return sessionModel.state === "authentication-required"
+      ? {
+          // The same fact the harness reports as `auth_required`, read before a
+          // message is spent on it instead of after — so it goes to the same
+          // place. What it does NOT carry is the exact-run Retry beside it:
+          // nothing has run.
+          message: `Sign-in required for ${sessionModel.providerLabel}`,
+          detail: null,
+          tone: "error",
+          action: signInDestination(input.terminalAvailable, terminal, settings),
+        }
+      : {
+          // No action, because the two this row could offer are both wrong.
+          // Settings writes the app DEFAULT, copied into a Session at birth and
+          // never re-read, so it cannot repin this one; Retry re-runs a model
+          // that is gone. The pill directly under this row is the repair, and a
+          // ready catalog means it is already offering something runnable.
+          message: `Model unavailable for ${sessionModel.providerLabel}`,
+          detail: null,
+          tone: "error",
+          action: null,
+        };
   }
   const attention = input.attention.primary;
   if (attention) {
@@ -325,6 +389,48 @@ function answeredByCard(kind: SessionAttention["kind"]): boolean {
 }
 
 /**
+ * Where you go to sign a provider in — one answer, wherever the fact came from.
+ *
+ * A signed-out provider reaches this surface twice: as the harness's own
+ * `auth_required` after a run died, and as the Session's pinned model reading
+ * unavailable in a catalog that has answered. They are the same fact, so they
+ * cannot lead two different ways. Sign-in is provider-owned and happens in the
+ * manual Ticket terminal where one exists; a project chat has none, and
+ * Settings → Accounts runs the same external sign-in for it.
+ */
+function signInDestination(
+  terminalAvailable: boolean,
+  terminal: SessionBlockerAction,
+  settings: SessionBlockerAction,
+): SessionBlockerAction {
+  return terminalAvailable ? terminal : settings;
+}
+
+/**
+ * A provider-owned recovery: where to fix it, and — only once a run has
+ * actually failed — the exact retry of that run beside it.
+ */
+function providerRecovery(input: {
+  message: string;
+  detail: string | null;
+  terminalAvailable: boolean;
+  terminal: SessionBlockerAction;
+  settings: SessionBlockerAction;
+  retryRuntime: SessionBlockerAction;
+}): SessionBlockerState {
+  const action = signInDestination(input.terminalAvailable, input.terminal, input.settings);
+  return {
+    message: input.message,
+    detail: input.detail,
+    tone: "error",
+    action,
+    // A Retry of the failed run only means anything after the sign-in it
+    // follows can actually happen, which is the terminal handoff.
+    ...(input.terminalAvailable ? { secondaryAction: input.retryRuntime } : {}),
+  };
+}
+
+/**
  * One line and one recovery action per attention kind, except Pi auth/config:
  * its existing terminal handoff and exact Retry are intentionally adjacent.
  *
@@ -363,25 +469,23 @@ function attentionBlocker(
   const detail = attention.detail;
   switch (attention.kind) {
     case "auth_required":
-      return terminalAvailable
-        ? {
-            message: "Sign-in required",
-            detail,
-            tone: "error",
-            action: terminal,
-            secondaryAction: retryRuntime,
-          }
-        : { message: "Sign-in required", detail, tone: "error", action: settings };
+      return providerRecovery({
+        message: "Sign-in required",
+        detail,
+        terminalAvailable,
+        terminal,
+        settings,
+        retryRuntime,
+      });
     case "configuration_invalid":
-      return terminalAvailable
-        ? {
-            message: "Configuration invalid",
-            detail,
-            tone: "error",
-            action: terminal,
-            secondaryAction: retryRuntime,
-          }
-        : { message: "Configuration invalid", detail, tone: "error", action: settings };
+      return providerRecovery({
+        message: "Configuration invalid",
+        detail,
+        terminalAvailable,
+        terminal,
+        settings,
+        retryRuntime,
+      });
     case "transport_retrying":
       return { message: "Reconnecting", detail, tone: "waiting", action: retry };
     case "adapter_disconnected":

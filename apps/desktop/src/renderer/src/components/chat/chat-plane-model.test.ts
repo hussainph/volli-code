@@ -15,9 +15,12 @@ import type {
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
+import type { HeldMessage } from "@renderer/stores/chat-drafts";
+
 import {
   answerInteraction,
   composerModelSelection,
+  heldStrip,
   holdList,
   messageRoute,
   resolvingWith,
@@ -25,11 +28,16 @@ import {
   sameMessages,
   sessionBlocker,
   sessionModelStanding,
+  settledHeldIds,
   terminalCompanionTabId,
   withdrawInteraction,
   type SessionBlockerActs,
   type SessionBlockerInput,
 } from "./chat-plane-model";
+
+function heldMessage(id: string, text: string, state: HeldMessage["state"]): HeldMessage {
+  return { id, text, state };
+}
 
 describe("composer model selection", () => {
   it("accepts only product reasoning levels at the durable command boundary", () => {
@@ -259,13 +267,50 @@ describe("sessionBlocker", () => {
       tone: "error",
       action: { label: "Settings", act: NO_OP },
     });
+  });
+
+  // One fact, one destination. The catalog reading a provider as signed out and
+  // the harness raising `auth_required` about it are the same fact arriving from
+  // two directions, and which one spoke first must not decide where the reader
+  // is sent.
+  it("routes a signed-out pinned model exactly where the harness's own report goes", () => {
+    const pinned = {
+      sessionModel: {
+        providerLabel: "Azure OpenAI Responses",
+        state: "authentication-required" as const,
+      },
+    };
+
+    expect(
+      sessionBlocker(blockerInput({ ...pinned, terminalAvailable: true }), ACTS, false)?.action
+        ?.label,
+    ).toBe("Open Terminal");
+    expect(
+      sessionBlocker(
+        { ...raised(attention("auth_required")), terminalAvailable: true },
+        ACTS,
+        false,
+      )?.action?.label,
+    ).toBe("Open Terminal");
+  });
+
+  // Settings writes the app DEFAULT, copied into a Session at birth and never
+  // re-read: it cannot repin a Session already born on a model that has gone.
+  // The pill under this row can, so the row offers no button rather than one
+  // that spends the reader's attempt and leaves them where they started.
+  it("offers no action for a model Settings would not repin", () => {
     expect(
       sessionBlocker(
         blockerInput({ sessionModel: { providerLabel: "OpenAI", state: "unavailable" } }),
         ACTS,
         false,
-      )?.message,
-    ).toBe("Model unavailable");
+      ),
+    ).toEqual({
+      message: "Model unavailable for OpenAI",
+      detail: null,
+      tone: "error",
+      action: null,
+    });
   });
 
   it("outranks the harness's own report of the same fact, but never the transport's", () => {
@@ -629,6 +674,62 @@ describe("sameMessages", () => {
       false,
     );
     expect(sameMessages([settled], [settled, streaming])).toBe(false);
+  });
+});
+
+describe("heldStrip", () => {
+  it("draws one row for a message both records name", () => {
+    expect(
+      heldStrip([heldMessage("m1", "ship it", "queued")], [{ id: "m1", text: "ship it" }]),
+    ).toEqual([{ id: "m1", text: "ship it" }]);
+  });
+
+  // The transcript is already showing it. A second copy under the composer
+  // reads as a message that failed to leave.
+  it("draws nothing for a message with a round trip still open on it", () => {
+    expect(heldStrip([heldMessage("m1", "ship it", "sending")], [])).toEqual([]);
+  });
+
+  // A crash between the box emptying and anything accepting the words. The
+  // whole point of persisting them is that they come back as their own message
+  // rather than welded onto whatever was typed next.
+  it("draws a message nothing took, in its own row", () => {
+    expect(heldStrip([heldMessage("m1", "ship it", "unsent")], [])).toEqual([
+      { id: "m1", text: "ship it" },
+    ]);
+  });
+
+  it("keeps a queued message no held copy names — a card's redirection", () => {
+    expect(
+      heldStrip(
+        [heldMessage("m1", "one", "queued")],
+        [
+          { id: "m1", text: "one" },
+          { id: "m2", text: "two" },
+        ],
+      ),
+    ).toEqual([
+      { id: "m1", text: "one" },
+      { id: "m2", text: "two" },
+    ]);
+  });
+});
+
+describe("settledHeldIds", () => {
+  it("retires the copy once the release queue has let go of it", () => {
+    expect(settledHeldIds([heldMessage("m1", "ship it", "queued")], [])).toEqual(["m1"]);
+  });
+
+  it("keeps the copy while the queue still names it", () => {
+    expect(
+      settledHeldIds([heldMessage("m1", "ship it", "queued")], [{ id: "m1", text: "ship it" }]),
+    ).toEqual([]);
+  });
+
+  it("leaves alone what the queue never had", () => {
+    expect(
+      settledHeldIds([heldMessage("m1", "one", "sending"), heldMessage("m2", "two", "unsent")], []),
+    ).toEqual([]);
   });
 });
 

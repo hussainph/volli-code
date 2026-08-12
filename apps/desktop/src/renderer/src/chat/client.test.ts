@@ -1018,7 +1018,7 @@ describe("submit", () => {
   it("keeps model policy out of message commands", async () => {
     const { client, rpc, sessionId } = await ready();
 
-    await expect(client.submit("  ship it  ", "steer")).resolves.toBe(true);
+    await expect(client.submit("  ship it  ", "steer")).resolves.toBe("delivered");
 
     expect(rpc.submissions()).toEqual([
       {
@@ -1055,7 +1055,7 @@ describe("submit", () => {
       };
     });
 
-    await expect(client.submit("go", "queue")).resolves.toBe(true);
+    await expect(client.submit("go", "queue")).resolves.toBe("delivered");
 
     expect(rpc.submissions()[0]!.command).not.toHaveProperty("model");
     expect(rpc.submissions()[0]!.command).not.toHaveProperty("variant");
@@ -1073,14 +1073,14 @@ describe("submit", () => {
   it("refuses blank text", async () => {
     const { client, rpc } = await ready();
 
-    await expect(client.submit("   ", "queue")).resolves.toBe(false);
+    await expect(client.submit("   ", "queue")).resolves.toBe("refused");
     expect(rpc.submissions()).toHaveLength(0);
   });
 
   it("refuses while there is nowhere to deliver", async () => {
     const { client, rpc } = await adopted();
 
-    await expect(client.submit("go", "queue")).resolves.toBe(false);
+    await expect(client.submit("go", "queue")).resolves.toBe("refused");
     expect(rpc.submissions()).toHaveLength(0);
   });
 
@@ -1088,16 +1088,20 @@ describe("submit", () => {
     const { client, store, sessionId, rpc } = await ready();
     store.getState().closeChatSession(sessionId);
 
-    await expect(client.submit("go", "queue")).resolves.toBe(false);
+    await expect(client.submit("go", "queue")).resolves.toBe("refused");
     expect(rpc.submissions()).toHaveLength(0);
   });
 
-  it("reports a message the harness refused", async () => {
+  // A refusal is a COMPLETED round trip: the runtime commits the durable
+  // intent and the transcript artifact before it ever asks the executor, so
+  // these words are in the ledger. Anything that hands them back to a composer
+  // is offering to send them twice.
+  it("reports a message the harness refused as recorded, not lost", async () => {
     const { client, slice } = await ready((fake) => {
       fake.answer = (request) => (request.command.kind === "message.submit" ? REFUSED : ACCEPTED);
     });
 
-    await expect(client.submit("go", "queue")).resolves.toBe(false);
+    await expect(client.submit("go", "queue")).resolves.toBe("recorded");
     expect(slice()!.sessionError).toBe("Message not delivered: Pi is unavailable");
   });
 
@@ -1108,7 +1112,7 @@ describe("submit", () => {
       };
     });
 
-    await expect(client.submit("go", "queue")).resolves.toBe(false);
+    await expect(client.submit("go", "queue")).resolves.toBe("refused");
     expect(slice()!.sessionError).toBe("Message not delivered: socket hang up");
   });
 });
@@ -1131,7 +1135,7 @@ describe("auto-title on delivery", () => {
     const renameMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
 
-    await expect(client.submit("Fix the parser\nmore detail", "steer")).resolves.toBe(true);
+    await expect(client.submit("Fix the parser\nmore detail", "steer")).resolves.toBe("delivered");
     await settle();
 
     expect(renameMock).toHaveBeenCalledWith({ sessionId, title: "Fix the parser" });
@@ -1165,7 +1169,7 @@ describe("auto-title on delivery", () => {
     const renameMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
 
-    await expect(client.submit("Fix the parser", "steer")).resolves.toBe(true);
+    await expect(client.submit("Fix the parser", "steer")).resolves.toBe("delivered");
     await settle();
 
     expect(renameMock).not.toHaveBeenCalled();
@@ -1177,7 +1181,7 @@ describe("auto-title on delivery", () => {
     const renameMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
 
-    await expect(client.submit("Fix the parser", "steer")).resolves.toBe(true);
+    await expect(client.submit("Fix the parser", "steer")).resolves.toBe("delivered");
     await settle();
 
     expect(renameMock).not.toHaveBeenCalled();
@@ -1189,7 +1193,7 @@ describe("auto-title on delivery", () => {
     const renameMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
 
-    await expect(client.submit("   ", "steer")).resolves.toBe(false);
+    await expect(client.submit("   ", "steer")).resolves.toBe("refused");
 
     expect(renameMock).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
@@ -1200,7 +1204,7 @@ describe("auto-title on delivery", () => {
     const renameMock = vi.fn().mockRejectedValue(new Error("ipc down"));
     vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
 
-    await expect(client.submit("Fix the parser", "steer")).resolves.toBe(true);
+    await expect(client.submit("Fix the parser", "steer")).resolves.toBe("delivered");
     await settle();
 
     expect(renameMock).toHaveBeenCalled();
