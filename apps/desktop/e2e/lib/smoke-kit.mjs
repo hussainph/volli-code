@@ -26,6 +26,9 @@
  *                      SQLite. (Driving the native folder picker isn't feasible
  *                      under Playwright; this is the established seeding path — see
  *                      board-smoke.mjs / global-artifacts-smoke.mjs.)
+ *   • ensurePiAuthInto() — copies the real `~/.pi/agent/auth.json` into a smoke's
+ *                      isolated HOME, so a live Pi turn is possible without
+ *                      touching the developer's own profile.
  *   • seedDefaultModel() — records the app-wide default model every structured
  *                      Session (Ticket or Project) now requires before it can
  *                      start, over the same `modelAccess.setDefault` tRPC
@@ -329,6 +332,38 @@ export async function readSeededProjects(page) {
     for (const p of boot.data.projects) byName[p.name] = p;
     return { projects: boot.data.projects, byName };
   });
+}
+
+// ---- Pi credentials ----------------------------------------------------------
+
+/** Where a real `pi` login puts its credentials on this machine. */
+export const REAL_PI_AUTH = join(os.homedir(), ".pi", "agent", "auth.json");
+
+/**
+ * Copy the real Pi credentials into an isolated `HOME`, so a smoke can drive a
+ * live turn without ever touching the developer's own profile.
+ *
+ * Pi's credential store reads `$PI_CODING_AGENT_DIR` else `~/.pi/agent/auth.json`
+ * under whatever `HOME` the process was launched with
+ * (`packages/agent-runtime/src/pi/models.ts`), so a smoke that overrides `HOME`
+ * — the same posture `VOLLI_WORKTREE_HOME_DIR` takes for worktrees — has to put
+ * a copy there first or the app boots into a login-required dead end.
+ *
+ * Never reads or prints the contents: `fs.copyFile`, byte for byte. Fails fast
+ * with a message naming the missing file rather than letting the app start.
+ *
+ * @param {string} homeDir  The isolated HOME the app will be launched with.
+ */
+export async function ensurePiAuthInto(homeDir) {
+  if (!(await pathExists(REAL_PI_AUTH))) {
+    throw new Error(
+      `Real Pi credentials not found at ${REAL_PI_AUTH}. This smoke drives a live Pi turn and ` +
+        "needs a working `pi` login (openai-codex / ChatGPT subscription) on this machine first.",
+    );
+  }
+  const dest = join(homeDir, ".pi", "agent", "auth.json");
+  await fs.mkdir(dirname(dest), { recursive: true });
+  await fs.copyFile(REAL_PI_AUTH, dest);
 }
 
 // ---- model access ------------------------------------------------------------

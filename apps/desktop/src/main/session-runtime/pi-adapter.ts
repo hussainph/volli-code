@@ -344,6 +344,14 @@ function askTitle(request: RuntimeAskRequest): string {
     : `Blocked this ${request.tool} call`;
 }
 
+/**
+ * What an answer meets when nothing is waiting for it, said once because both
+ * ends of the resolve path can reach it: the question was never this
+ * attachment's, or it stopped being anyone's while the answer was in flight.
+ */
+const UNKNOWN_INTERACTION =
+  "Nothing is waiting on this question: it was answered already, it was withdrawn, or it was asked by an earlier attachment.";
+
 /** One question in front of a person, and everything needed to stop asking it. */
 interface ParkedAsk {
   /** The request as the runtime made it; an answer is read back against it. */
@@ -504,19 +512,56 @@ class PiBinding implements BindingHandle {
           return this.#unknown(command.commandId, error);
         }
       case "interaction.resolve": {
-        const parked = this.#take(command.interaction.id);
-        if (parked === undefined) {
+        // Looked up WITHOUT claiming, because the answer has to be a Session
+        // fact before the question stops waiting — see the emit below.
+        if (!this.#asked.has(command.interaction.id)) {
+          return this.#rejected(command.commandId, "PI_INTERACTION_UNKNOWN", UNKNOWN_INTERACTION);
+        }
+        // The answer is announced from here, and it has to be: the Session
+        // Engine writes `interaction.resolved` from THIS observation and from
+        // nowhere else. The delivery receipt this returns is a receipt, not a
+        // fact — `projectSession` folds it into `receipts` and never looks at
+        // its `result` — so a Session whose adapter stayed silent would settle
+        // the parked call, resume the turn, and leave the question active
+        // forever: a card that cannot be cleared, `sessionAwaitsUser()` stuck
+        // true, and every later question hidden behind it.
+        //
+        // Emitted BEFORE the ask is settled, mirroring {@link PiBinding.#ask},
+        // which refuses to park on a question the Session could not record. The
+        // same bargain read the other way: an answer the Session could not
+        // record must not be reported as delivered, because the turn would
+        // resume on a decision history has no account of.
+        try {
+          await this.#observe({
+            kind: "interaction",
+            state: "resolved",
+            occurredAt: this.#now(),
+            interactionId: command.interaction.id,
+            resolution: command.resolution,
+          });
+        } catch (error) {
+          // Nothing was claimed, so the question is still parked and still
+          // active: the card stays answerable and pressing it again retries.
+          // That recoverable state is the whole reason the claim happens after
+          // the emit — claiming first would leave the ask unparked AND
+          // unrecorded, and the retry would meet PI_INTERACTION_UNKNOWN with the
+          // turn blocked behind a card nothing can ever answer.
           return this.#rejected(
             command.commandId,
-            "PI_INTERACTION_UNKNOWN",
-            "Nothing is waiting on this question: it was answered already, it was withdrawn, or it was asked by an earlier attachment.",
+            "PI_INTERACTION_NOT_RECORDED",
+            `This answer could not be recorded, so it was not delivered. Try again: ${errorMessage(error)}`,
           );
         }
-        // No `interaction.resolved` observation from here. The Session Engine
-        // writes that fact itself from the receipt this returns, so announcing
-        // it as well would record one answer twice — and the reading it takes,
-        // `askChoice`, is the runtime's private reading of a decision the ledger
-        // already holds in the person's own option ids.
+        const parked = this.#take(command.interaction.id);
+        // Lost the claim while the fact was committing — a withdrawal or a
+        // release got here first. History keeps the resolution, which is true:
+        // a person did answer. What is no longer true is that the runtime is
+        // waiting for it, so this reports a decision that reached nobody.
+        if (parked === undefined) {
+          return this.#rejected(command.commandId, "PI_INTERACTION_UNKNOWN", UNKNOWN_INTERACTION);
+        }
+        // `askChoice` is the runtime's own private reading of a decision the
+        // ledger already holds in the person's own option ids.
         parked.settle.resolve(askChoice(parked.request, command.resolution.optionIds));
         return this.#accepted(command.commandId);
       }
