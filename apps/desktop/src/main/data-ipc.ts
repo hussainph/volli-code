@@ -123,6 +123,7 @@ import { detectProjectBaseBranch } from "./project-base-branch";
 import { broadcastDataChanged } from "./broadcast";
 import { orphanReport } from "./orphan-sweep";
 import {
+  type AgentSiteReleaseReport,
   archiveAndClean,
   commitTicketRemaining,
   getRetentionTtlDays,
@@ -189,6 +190,12 @@ export interface BusyWorktreeSite {
  * canonicalizes both operands, so a terminal running inside a worktree — or an
  * agent mid-turn in it — blocks a remove/orphan-delete that would pull the
  * directory out from under it.
+ *
+ * The supplier is already asked about one target, so this is a second filter
+ * over an answer that should already be scoped: it is what makes the guard
+ * independent of how carefully the supplier reads `target`, and terminals in
+ * particular are reported unscoped because a live PTY holds its cwd whatever it
+ * is doing.
  */
 function busySiteWithin(
   target: string,
@@ -249,18 +256,31 @@ export function registerDataIpcHandlers(
   options: {
     detectBaseBranch?: (projectPath: string) => string | null;
     /**
-     * Every directory a local execution surface is doing work in: the cwd of
-     * each live PTY, plus the worktree of each agent binding with a turn open.
-     * The worktree remove/orphan-delete/archive guards refuse to touch a
-     * directory named here. Absent (tests, degraded boot) means "assume none" —
-     * the guards then rely on the git/dirtiness checks.
+     * Every directory a local execution surface is doing work in that could
+     * block destroying `target`: the cwd of each live PTY, plus the worktree of
+     * each agent binding under `target` with a turn open. The worktree
+     * remove/orphan-delete/archive guards refuse to touch a directory named
+     * here. Absent (tests, degraded boot) means "assume none" — the guards then
+     * rely on the git/dirtiness checks.
      *
      * Async because agent busyness is a fact about the Session's ledger, not
      * about the binding holding the directory: a binding stays open across an
      * idle chat and outlives its tab, so reading "attached" as "busy" is what
      * made a ticket with one empty chat in it permanently unarchivable.
+     *
+     * It takes the target because that read is the expensive one — one durable
+     * projection per binding — and a launch with a dozen chats open would
+     * otherwise pay for all of them, plus the cache eviction that costs, on
+     * every destructive action. The guard filters the answer again anyway.
      */
-    busyWorktreeSites?: () => Promise<readonly BusyWorktreeSite[]>;
+    busyWorktreeSites?: (target: string) => Promise<readonly BusyWorktreeSite[]>;
+    /**
+     * Ends every structured binding rooted at a directory that is about to stop
+     * existing, so no Session is left dispatching an agent into a deleted path.
+     * `remove` runs it inside the ticket paths; orphan-delete calls it here.
+     * Absent (tests, degraded boot) means there is nothing structured to end.
+     */
+    releaseAgentSites?: (directory: string) => Promise<AgentSiteReleaseReport>;
     /**
      * Interrupts every live agent attachment of a ticket after a committed
      * backward move. The manager records intent and confirmed Esc delivery in
@@ -598,10 +618,14 @@ export function registerDataIpcHandlers(
       const busy =
         worktreePath === null
           ? null
-          : busySiteWithin(worktreePath, (await options.busyWorktreeSites?.()) ?? []);
+          : busySiteWithin(worktreePath, (await options.busyWorktreeSites?.(worktreePath)) ?? []);
       if (busy !== null) return { ok: false, error: busyRefusal(busy) };
+      // `remove` ends the bindings rooted in the checkout as its last act before
+      // deleting it — after its own dirty re-check, so a refusal costs the user
+      // no chat.
       const result = await removeWorktree(worktreeDeps(db), input.ticketId, {
         force: input.force,
+        releaseAgentSites: options.releaseAgentSites,
       });
       if (!result.ok) return { ok: false, error: result.error };
       // The directory is gone; every window's recursive watch on it must go
@@ -674,8 +698,14 @@ export function registerDataIpcHandlers(
         };
       }
       //   (c) never delete out from under work still in flight in it.
-      const busy = busySiteWithin(target, (await options.busyWorktreeSites?.()) ?? []);
+      const busy = busySiteWithin(target, (await options.busyWorktreeSites?.(target)) ?? []);
       if (busy !== null) return { ok: false, error: busyRefusal(busy) };
+      // A ticket delete only nulls `sessions.ticket_id`, so a Session can still
+      // be bound to an orphan — end it here, in the same beat as the delete, the
+      // way `remove` does on the ticket paths. Nothing gates on the result: the
+      // Settings row that reached this channel printed the orphan's own
+      // dirtiness reason behind a confirm, and this is the ONLY way to clear one.
+      await options.releaseAgentSites?.(target);
       await rm(target, { recursive: true, force: true });
       // A dirty orphan left the board's attention list. An orphan is by
       // definition unlinked from any live ticket, so there's no ticket to
@@ -860,9 +890,11 @@ export function registerDataIpcHandlers(
       const busy =
         worktreePath === null
           ? null
-          : busySiteWithin(worktreePath, (await options.busyWorktreeSites?.()) ?? []);
+          : busySiteWithin(worktreePath, (await options.busyWorktreeSites?.(worktreePath)) ?? []);
       if (busy !== null) return { ok: false, error: busyRefusal(busy) };
-      const result = await archiveAndClean(worktreeDeps(db), input.ticketId);
+      const result = await archiveAndClean(worktreeDeps(db), input.ticketId, {
+        releaseAgentSites: options.releaseAgentSites,
+      });
       if (!result.ok) return { ok: false, error: result.error };
       // Same as worktree-remove: the archived worktree's directory is gone, so
       // no window may keep a recursive watch pinned to it.

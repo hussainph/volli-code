@@ -198,6 +198,44 @@ describe("volli:retention-archive-clean", () => {
     });
     expect(getTicketRow(ctx.db, "t1")!.archived_at).toBeNull();
   });
+
+  // Same delete, so the same release: archive-and-clean goes through `remove`,
+  // which ends the bindings rooted in the checkout right before it goes. The
+  // path below is already gone from disk, which is the stale-pointer case — and
+  // the one where a Session left bound to it is the whole defect.
+  it("scopes the busy read to the ticket's worktree and releases what is bound to it", async () => {
+    const worktreePath = "/worktrees/VC-1";
+    seedTicket({
+      usesWorktree: true,
+      worktreePath,
+      branch: "volli/VC-1-quiet",
+      baseBranch: "main",
+    });
+    const asked: string[] = [];
+    const released: string[] = [];
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      {
+        busyWorktreeSites: async (target) => {
+          asked.push(target);
+          return [];
+        },
+        releaseAgentSites: async (directory) => {
+          released.push(directory);
+          return { released: ["chat-1"], stillOpen: [] };
+        },
+      },
+    );
+
+    const result = await invoke<Promise<Result>>("volli:retention-archive-clean", {
+      ticketId: "t1",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(asked).toEqual([worktreePath]);
+    expect(released).toEqual([worktreePath]);
+    expect(getTicketRow(ctx.db, "t1")!.archived_at).not.toBeNull();
+  });
 });
 
 describe("volli:retention-poll", () => {

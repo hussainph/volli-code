@@ -298,6 +298,13 @@ export interface SessionRuntime {
 export interface OpenNativeBinding {
   sessionId: string;
   directory: string;
+  /**
+   * The attachment this binding belongs to, so a host that has to END it can
+   * name it. `adapter.release` is routed by attachment id, and a caller holding
+   * only the Session would have to re-read the projection to find one — the
+   * exact replay this listing exists to let callers avoid.
+   */
+  attachmentId: string;
 }
 
 /** The host-owned runtime plus the live local bindings only its process can know about. */
@@ -315,6 +322,11 @@ export interface HostedSessionRuntime extends SessionRuntime {
    * It used to return bare directories, which left every caller no choice but to
    * read "attached" as "busy" — and that is how opening an empty chat made its
    * ticket permanently unarchivable, with no reachable way to close anything.
+   *
+   * It is also the only way a host can find the bindings rooted in a directory
+   * it is about to delete. A binding survives its tab, so nothing else knows
+   * that a Session is still pointed at a checkout that is going away; naming the
+   * attachment here is what lets the host release it before the directory goes.
    */
   openNativeBindings(): readonly OpenNativeBinding[];
 }
@@ -519,6 +531,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     return [...this.#bindings.values()].map(({ spec }) => ({
       sessionId: spec.sessionId,
       directory: spec.directory,
+      attachmentId: spec.attachmentId,
     }));
   }
 

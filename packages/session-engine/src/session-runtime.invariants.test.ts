@@ -331,7 +331,7 @@ describe("SessionRuntime durable boundary invariants", () => {
     ).toEqual([expect.objectContaining({ id: "permission-1" })]);
   });
 
-  it("names the Session and directory of every open native binding", async () => {
+  it("names the Session, attachment and directory of every open native binding", async () => {
     const { runtime } = composition({ directory: () => "/w/VC-5" });
     expect(runtime.openNativeBindings()).toEqual([]);
     const created = await create(runtime);
@@ -339,8 +339,11 @@ describe("SessionRuntime durable boundary invariants", () => {
     const attachmentId = (await runtime.snapshot({ sessionId: created.sessionId })).projection
       .liveExecutor!.id;
 
+    // The attachment id travels with the listing so a host that has to end this
+    // binding — a worktree being deleted — can route `adapter.release` without
+    // re-reading the projection to find it.
     expect(runtime.openNativeBindings()).toEqual([
-      { sessionId: created.sessionId, directory: "/w/VC-5" },
+      { sessionId: created.sessionId, directory: "/w/VC-5", attachmentId },
     ]);
 
     await runtime.command({

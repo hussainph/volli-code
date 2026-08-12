@@ -8,8 +8,15 @@
 export { ensure } from "./ensure";
 export type { EnsureOutcome } from "./ensure";
 export { remove } from "./remove";
+export type { WorktreeRemoveOptions } from "./remove";
 export { listBranches } from "./state";
 export { sweepOrphans } from "./sweep";
+
+// What the structured runtime has open inside a worktree: the directory-scoped
+// busy question the destructive guards ask, and the release the destroy runs so
+// no Session is left pointed at a checkout that no longer exists.
+export { agentSitesWithin, agentTurnOpenWithin, releaseAgentSites } from "./agent-sites";
+export type { AgentSiteReleaseReport, AgentSiteRuntime } from "./agent-sites";
 
 // Done-flow (§8): the finer status query, both diff modes, the one-click commit
 // safety net, and the async network verbs (fetch/push/gh) with their taxonomy.
@@ -109,4 +116,5 @@ export type {
   WorktreeIdentity,
   RunGit,
   RunGitAsync,
+  StatMtimeMs,
 } from "./types";

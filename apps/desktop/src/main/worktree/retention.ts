@@ -24,7 +24,7 @@ import { getAllAppState, setAppState } from "../db/app-state-repo";
 import { prepared } from "../db/prepared";
 import { getTicketRow } from "../db/tickets-repo";
 import { archiveTicketCommand } from "../ticket-commands";
-import { remove } from "./remove";
+import { remove, type WorktreeRemoveOptions } from "./remove";
 import { err, ok, type WorktreeDeps, type WorktreeResult } from "./types";
 
 /** The `app_state` key the retention settings JSON lives under. */
@@ -138,6 +138,7 @@ const USER_ACTOR: TicketEventActor = { kind: "user" };
 export async function archiveAndClean(
   deps: WorktreeDeps,
   ticketId: string,
+  opts: Pick<WorktreeRemoveOptions, "releaseAgentSites"> = {},
 ): Promise<WorktreeResult<void>> {
   const ticket = getTicketRow(deps.db, ticketId);
   if (!ticket) return err("Unknown ticket");
@@ -145,7 +146,9 @@ export async function archiveAndClean(
   // Dirty ALWAYS refuses (force: false); a stale-clean confirmation is re-checked
   // inside `remove` right before deletion. A missing/absent worktree is a no-op
   // there, so a PR-less TTL ticket that never had one still archives cleanly.
-  const removed = await remove(deps, ticketId, { force: false });
+  // `remove` also ends the bindings rooted in the checkout — the same act on
+  // this path as on the manual one, because it is the same delete.
+  const removed = await remove(deps, ticketId, { ...opts, force: false });
   if (!removed.ok) return removed;
 
   archiveTicketCommand(deps.db, ticketId, { now: Date.now(), actor: USER_ACTOR });

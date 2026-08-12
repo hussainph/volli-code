@@ -70,6 +70,8 @@ import {
   broadcastSystemAppearance,
 } from "./broadcast";
 import { startOrphanSweep } from "./orphan-sweep";
+import { agentTurnOpenWithin, releaseAgentSites as releaseWorktreeAgentSites } from "./worktree";
+import type { AgentSiteReleaseReport } from "./worktree";
 import { worktreeDeps } from "./worktree-runtime";
 import { getRetentionWatcher } from "./retention-runtime";
 import {
@@ -597,55 +599,92 @@ app.whenReady().then(async () => {
     return sessionIds;
   };
   /**
-   * Where work is genuinely in flight right now, for the destructive worktree
-   * guards. The two surfaces answer differently ON PURPOSE.
+   * Where work is genuinely in flight in `target` right now, for the
+   * destructive worktree guards. The two surfaces answer differently ON PURPOSE.
    *
    * A live PTY holds its cwd whatever it is doing: a shell whose directory was
    * deleted underneath it is broken whether or not anything was running in it.
+   * Every live cwd is reported, unfiltered, and the guard does the containment.
    *
-   * An agent binding does not. It opens on attach and is dropped only by the
-   * executor closing itself or by app shutdown, so it survives an idle chat and
-   * outlives the tab that opened it — reading its mere existence as "busy" is
-   * what made a ticket with one empty chat in it permanently unarchivable, with
-   * nothing the user could close to clear it. So a binding counts only while its
-   * Session has a turn open, which is the same `turnActive` the Session listing
-   * reads to call a chat "working" (session-control/chat-attachment.ts). A turn
-   * that is open but blocked on a question still counts: the loop is suspended
-   * inside it and resumes writing into that directory the moment it is answered.
+   * An agent binding does not. It opens on attach and is dropped only by an
+   * explicit release, by the executor closing itself, or by app shutdown, so it
+   * survives an idle chat and outlives the tab that opened it — reading its mere
+   * existence as "busy" is what made a ticket with one empty chat in it
+   * permanently unarchivable, with nothing the user could close to clear it. So
+   * a binding counts only while its Session has a turn open, which is the same
+   * `turnActive` the Session listing reads to call a chat "working"
+   * (session-control/chat-attachment.ts). A turn that is open but blocked on a
+   * question still counts: the loop is suspended inside it and resumes writing
+   * into that directory the moment it is answered.
+   *
+   * That read is scoped to `target` before any projection is loaded, which is
+   * why the parameter exists (worktree/agent-sites.ts): asking it of every open
+   * binding costs one durable projection each, and past the runtime's own cache
+   * limit one gate check evicts and replays the ledger of the Session the live
+   * chat is reading.
    *
    * A Session whose history cannot be read leaves its binding OUT — the
-   * fail-open stance the renderer's busy probe already takes, and for the same
-   * reason: a ticket nothing can ever archive is the worse failure.
+   * fail-open stance the renderer's busy probe already takes (though not the
+   * same KIND of thing: `remove-project-dialog.tsx` only decorates a dialog with
+   * a warning and never blocks, so it is a precedent for the stance, not for the
+   * gate). The reason is the one that matters: a ticket nothing can ever archive
+   * is the worse failure.
    *
-   * Be precise about what that costs, because the obvious defence is wrong. The
-   * non-forced path re-checks cleanliness right before deleting, so an
-   * unreadable Session cannot lose uncommitted work there. `force: true` skips
-   * that check by design (worktree/remove.ts) — it means the user read a dialog
-   * naming the dirtiness and said yes. So the residual exposure is exactly:
-   * history unreadable AND a turn open AND the user forcing. That needs a
-   * corrupt ledger to reach at all, and the alternative — treating an
-   * unreadable Session as busy — hands the user a worktree they cannot remove
-   * by any route, which is the failure this whole change exists to end.
+   * Be precise about what that costs, because it is not uniform across the
+   * paths. A NON-FORCED remove re-checks cleanliness right before deleting, so
+   * an unreadable Session cannot lose uncommitted work there. The other two
+   * destroy paths do not re-check, and both are explicitly confirmed: `force:
+   * true` means the user read a dialog naming the dirtiness and said yes, and
+   * Settings → Worktrees → delete is the same act on an orphan — that list holds
+   * ONLY dirty orphans (the sweep already removed the clean ones), each row
+   * printing its own dirtiness reason behind a confirm, so a cleanliness gate
+   * there would refuse every row and leave no way to clear one. So the residual
+   * exposure is: history unreadable AND a turn open AND the user confirming a
+   * destructive action against a directory already described to them as dirty.
+   *
+   * The gate is also not the last line. Whatever it lets through, the destroy
+   * then RELEASES every binding rooted at the path before deleting it, so a turn
+   * that started inside the gap between this read and the delete is stopped and
+   * recorded rather than having its directory pulled out from under it.
    */
-  const busyWorktreeSites = async (): Promise<readonly BusyWorktreeSite[]> => {
+  const busyWorktreeSites = async (target: string): Promise<readonly BusyWorktreeSite[]> => {
     const sites: BusyWorktreeSite[] = (ptyManagerRef?.liveSessionCwds() ?? []).map((directory) => ({
       directory,
       surface: "terminal",
     }));
     if (sessionRuntime === null) return sites;
-    const runtime = sessionRuntime;
-    const agents = await Promise.all(
-      runtime.openNativeBindings().map(async ({ sessionId, directory }) => {
-        try {
-          const { projection } = await runtime.projection({ sessionId });
-          return projection.turnActive ? ({ directory, surface: "agent" } as const) : null;
-        } catch (error) {
-          console.warn(`[volli] could not read Session ${sessionId}:`, errorMessage(error));
-          return null;
-        }
-      }),
-    );
-    return [...sites, ...agents.filter((site) => site !== null)];
+    const turnOpen = await agentTurnOpenWithin(sessionRuntime, target, (sessionId, error) => {
+      console.warn(`[volli] could not read Session ${sessionId}:`, errorMessage(error));
+    });
+    return turnOpen ? [...sites, { directory: target, surface: "agent" }] : sites;
+  };
+  /**
+   * Ends every structured binding rooted at a directory that is about to stop
+   * existing (`worktree/agent-sites.ts` carries the reasoning).
+   *
+   * Best-effort by design: a binding that refuses to close must not make the
+   * worktree unremovable, which is the failure the busy gate above was rewritten
+   * to end. What survives is logged here rather than swallowed, and the Session
+   * it belongs to is the one surface that can still say so — its next dispatch
+   * fails against the missing path and reports it in the chat.
+   */
+  const releaseAgentSites = async (directory: string): Promise<AgentSiteReleaseReport> => {
+    if (sessionRuntime === null) return { released: [], stillOpen: [] };
+    const report = await releaseWorktreeAgentSites(sessionRuntime, directory, {
+      newCommandId: randomUUID,
+      onError: (sessionId, error) => {
+        console.error(
+          `[volli] could not release Session ${sessionId} from ${directory}:`,
+          errorMessage(error),
+        );
+      },
+    });
+    for (const sessionId of report.stillOpen) {
+      console.error(
+        `[volli] Session ${sessionId} is still bound to ${directory}, which is being deleted`,
+      );
+    }
+    return report;
   };
   // Standard macOS menu, but with the View-menu zoom roles replaced by
   // renderer-driven CSS zoom (see menu.ts for the rationale). Registered here
@@ -654,6 +693,7 @@ app.whenReady().then(async () => {
   registerDataIpcHandlers(dbHandle, {
     sessionEngine: sessionEngine ?? undefined,
     busyWorktreeSites,
+    releaseAgentSites,
     // Backward-move interrupt (issue #78): a user move that leaves the active
     // columns Esc's the ticket's live agent sessions, announced via toast.
     interruptTicketSessions: interruptTicketSessionsAnnounced,

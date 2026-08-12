@@ -23,7 +23,7 @@ import type {
   WorktreeOrphansResult,
   WorktreeRemoveResult,
 } from "@volli/shared";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -1210,6 +1210,62 @@ describe("volli:worktree-remove", () => {
     expect(result).toEqual({ ok: false, error: "Invalid worktree removal" });
     expect(vi.mocked(removeWorktree)).not.toHaveBeenCalled();
   });
+
+  // The busy read costs one durable projection per binding under the target, so
+  // it is asked about ONE directory: whole-list answers made every destructive
+  // action replay the ledger of every chat the launch had opened.
+  it("asks the busy supplier about the ticket's own worktree, not the whole app", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const worktreePath = `${worktreesHome()}/VC-9-scoped`;
+    invoke<TicketResult>("volli:ticket-update", { ticketId: ticket.id, worktreePath });
+    vi.mocked(removeWorktree).mockResolvedValue({ ok: true, value: undefined });
+    const asked: string[] = [];
+
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      {
+        busyWorktreeSites: async (target) => {
+          asked.push(target);
+          return [];
+        },
+      },
+    );
+
+    await invoke<Promise<WorktreeRemoveResult>>("volli:worktree-remove", {
+      ticketId: ticket.id,
+      force: false,
+    });
+
+    expect(asked).toEqual([worktreePath]);
+  });
+
+  // `remove` owns the ordering (after its dirty gate, before the delete); this
+  // handler's job is only to hand it the seam.
+  it("hands the release seam to remove so no Session is left pointed at the deleted path", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    invoke<TicketResult>("volli:ticket-update", {
+      ticketId: ticket.id,
+      worktreePath: `${worktreesHome()}/VC-9-release`,
+    });
+    vi.mocked(removeWorktree).mockResolvedValue({ ok: true, value: undefined });
+    const releaseAgentSites = vi.fn(async () => ({ released: [], stillOpen: [] }));
+
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { releaseAgentSites });
+
+    await invoke<Promise<WorktreeRemoveResult>>("volli:worktree-remove", {
+      ticketId: ticket.id,
+      force: false,
+    });
+
+    expect(vi.mocked(removeWorktree)).toHaveBeenCalledWith(expect.anything(), ticket.id, {
+      force: false,
+      releaseAgentSites,
+    });
+  });
 });
 
 describe("volli:worktree-branches", () => {
@@ -1364,6 +1420,68 @@ describe("volli:worktree-orphan-delete", () => {
       channel: "volli:data-changed",
       payload: { entity: "tickets", kind: "worktree" },
     });
+  });
+
+  // Deleting a ticket only nulls `sessions.ticket_id`, so a Session can still be
+  // bound to what became an orphan. Without this it kept dispatching into a path
+  // the rm had already taken away.
+  it("ends the bindings rooted in the orphan before the rm, and asks the busy read about it", async () => {
+    const target = join(worktreesHome(), "VC-4-bound");
+    mkdirSync(target, { recursive: true });
+    // Both seams see the canonicalized target — the same path the containment
+    // guard and the rm run on, `/private` aliasing already resolved.
+    const canonical = realpathSync.native(target);
+    const order: string[] = [];
+    const asked: string[] = [];
+
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      {
+        busyWorktreeSites: async (probed) => {
+          asked.push(probed);
+          return [];
+        },
+        releaseAgentSites: async (directory) => {
+          order.push(`release:${directory}`);
+          order.push(existsSync(target) ? "dir:present" : "dir:gone");
+          return { released: ["chat-1"], stillOpen: [] };
+        },
+      },
+    );
+
+    const result = await invoke<Promise<WorktreeOrphanDeleteResult>>(
+      "volli:worktree-orphan-delete",
+      { path: target },
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(asked).toEqual([canonical]);
+    // Released while the directory still exists, so the executor stops in a cwd
+    // that is still there.
+    expect(order).toEqual([`release:${canonical}`, "dir:present"]);
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it("still deletes the orphan when a binding refuses to close", async () => {
+    // The always-confirmed path: the Settings row printed the dirtiness reason
+    // and the user said yes, and this is the only way to clear a dirty orphan.
+    const target = join(worktreesHome(), "VC-5-stubborn");
+    mkdirSync(target, { recursive: true });
+
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { releaseAgentSites: async () => ({ released: [], stillOpen: ["chat-1"] }) },
+    );
+
+    const result = await invoke<Promise<WorktreeOrphanDeleteResult>>(
+      "volli:worktree-orphan-delete",
+      { path: target },
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(existsSync(target)).toBe(false);
   });
 });
 
