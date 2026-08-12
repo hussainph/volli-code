@@ -163,6 +163,10 @@ function DropdownMenuSeparator({
   );
 }
 
+// The shortcut column, shared verbatim with context-menu.tsx's
+// `ContextMenuShortcut` — same span, same classes, different `data-slot`. The
+// reason lives here so it is written once:
+//
 // No `tracking-widest` (stock shadcn's): letter spacing is applied AFTER the
 // last glyph as well as between them, so every chord sits a pixel short of the
 // right edge and the column reads inset from the menu's own padding — visible

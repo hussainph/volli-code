@@ -1,5 +1,16 @@
 "use client";
 
+/**
+ * The context-menu primitives, and one policy that binds every item in them:
+ * `icon` is REQUIRED — on {@link ContextMenuItem} and {@link ContextMenuSubTrigger}
+ * alike — and is drawn at Phosphor's default weight, with no way to override it.
+ *
+ * Every action in a menu is a peer of every other, so a filled glyph here marks
+ * nothing — and at 16px beside 14px text the mark is already the larger object.
+ * Fill is reserved for the one item that is the exception among its neighbours;
+ * a menu has none, which is why these primitives do not offer the choice. The
+ * radio item's dot is no counter-example: it is a filled shape, not an icon.
+ */
 import * as React from "react";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
@@ -37,14 +48,7 @@ function ContextMenuRadioGroup({
   return <ContextMenuPrimitive.RadioGroup data-slot="context-menu-radio-group" {...props} />;
 }
 
-/**
- * The `icon` prop is required, and it is drawn at Phosphor's default weight.
- *
- * Every action in a menu is a peer of every other, so a filled glyph here marks
- * nothing — and at 16px beside 14px text the mark is already the larger object.
- * Fill is reserved for the one item that is the exception among its neighbours;
- * a menu has none, which is why the primitive does not offer the choice.
- */
+/** Required `icon`, default weight, no override — see the module note. */
 function ContextMenuSubTrigger({
   className,
   inset,
@@ -106,6 +110,7 @@ function ContextMenuContent({
   );
 }
 
+/** Required `icon`, default weight, no override — see the module note. */
 function ContextMenuItem({
   className,
   inset,
@@ -217,10 +222,11 @@ function ContextMenuSeparator({
   );
 }
 
-// Same as {@link DropdownMenuShortcut}, and for the same reason: no
-// `tracking-widest`. Trailing letter spacing pushes a chord off the flush right
-// edge `ml-auto` promised, which the split terminal menu's ⌘D / ⇧⌘D pair shows
-// as clearly as the ⌥⌘T the session menus now carry.
+// The same span as dropdown-menu.tsx's `DropdownMenuShortcut`, down to the
+// classes, and dropped for the same reason: no `tracking-widest`, because
+// trailing letter spacing pushes a chord off the flush right edge `ml-auto`
+// promised. That file carries the measurement; the split terminal menu's
+// ⌘D / ⇧⌘D pair and the session menus' ⌥⌘T are where it shows here.
 function ContextMenuShortcut({ className, ...props }: React.ComponentProps<"span">) {
   return (
     <span
