@@ -1,24 +1,42 @@
-# Volli Code
+<p align="center">
+  <img src="apps/desktop/build/icon-source.svg" width="96" alt="Volli Code icon" />
+</p>
 
-Volli Code is a local-first macOS workspace for planning and running coding work. It keeps Tickets,
-durable agent Sessions, isolated Git worktrees, Change Sets, review, and terminal companions in one
-app. App state and Session history are stored on your machine; model requests go to the provider you
-select through Model Access.
+<h1 align="center">Volli Code</h1>
 
-![Volli Code board](docs/assets/volli-code-board.png)
+<p align="center">
+  A local-first macOS workspace for planning coding work and running it through durable, Pi-backed Sessions.
+</p>
 
-## What you can do
+<p align="center">
+  <a href="https://volli.app">Website</a>
+  ·
+  <a href="https://docs.volli.app">Documentation</a>
+  ·
+  <a href="https://docs.volli.app/start/install/">Build from source</a>
+</p>
 
-- Organize work as Tickets on a local board.
-- Start durable Ticket Sessions in the ticket's isolated worktree, or project Sessions in the main checkout. Volli's structured Sessions use its Pi-backed Agent Runtime.
-- Inspect the ticket's Change Set and prepare work for review without losing the context that produced it.
-- Open embedded terminals for manual work with Claude Code, Codex, OpenCode, or a custom TUI harness.
+<a href="https://volli.app">
+  <img src="docs/assets/volli-code-ticket-session.webp" alt="Volli Code Ticket workspace showing a Pi-backed Session, isolated worktree, branch, and review environment" />
+</a>
+
+## From Ticket to review
+
+`Ticket → Session → worktree → Change Set → review`
+
+- Plan scope, constraints, and the review target on a local Ticket board.
+- Run durable Pi-backed Ticket Sessions in isolated Git worktrees, or project Sessions from the main checkout.
+- Inspect the live Change Set beside the Session history that produced it.
+- Open Claude Code, Codex, OpenCode, or a custom TUI in an embedded terminal when you want a manual companion.
+
+App state, Tickets, and Session history stay on your machine. Model requests go to the provider you select through Model Access.
 
 ## Build from source
 
-There is no packaged release yet. To try Volli Code, build it from source on macOS.
+> [!NOTE]
+> Volli is in active development and does not have a packaged release yet.
 
-Requirements: Node.js `^24.13.0` and pnpm `11.10.0`.
+Requirements: macOS, Node.js `^24.13.0`, and pnpm `11.10.0`.
 
 ```bash
 git clone https://github.com/hussainph/volli-code.git
@@ -34,23 +52,14 @@ pnpm run build
 pnpm start
 ```
 
-Useful checks:
+See the [installation guide](https://docs.volli.app/start/install/) for native dependency setup and troubleshooting.
 
-```bash
-pnpm run typecheck
-pnpm test
-pnpm run check
-```
+## Automation is in development
 
-## In development
+Automations will save a Trigger, Instructions, and Outcome for recurring Ticket work. Each Run will start one Pi-backed Session and record its result with the Ticket. Automations are not available today.
 
-### Automation
+## Project
 
-Automation is actively in development and is not available today. An Automation will be a saved way to start work on a Ticket with a Trigger, Instructions, Runtime, and Outcome. Each invocation will create a Run that owns one Session; its declared Outcome will describe what happens to the Ticket when the Run ends.
-
-## Learn more
-
-- [Volli](https://volli.app)
 - [Documentation](https://docs.volli.app)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
