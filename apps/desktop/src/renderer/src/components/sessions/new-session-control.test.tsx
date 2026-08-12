@@ -37,17 +37,25 @@ describe("NewSessionControl", () => {
   });
 
   it("announces ⌘T only where the chord starts what the control starts", () => {
-    const scoped = renderToStaticMarkup(
+    const quiet = renderToStaticMarkup(
       <NewSessionControl disabled={false} onNewChat={noop} onNewTerminal={noop} />,
     );
-    const global = renderToStaticMarkup(
+    const onTheSurface = renderToStaticMarkup(
       <NewSessionControl disabled={false} shortcuts onNewChat={noop} onNewTerminal={noop} />,
     );
 
-    // ⌘T is global (lib/new-session-shortcut.ts), so a ticket-scoped mount
-    // claiming it would be teaching a Session into the wrong owner.
-    expect(scoped).not.toContain("aria-keyshortcuts");
-    expect(global).toContain('aria-keyshortcuts="Meta+T"');
+    // ⌘T is CONTEXT-SENSITIVE (lib/new-session-shortcut.ts): it resolves against
+    // the surface in front, so inside a ticket it mints a ticket Session and on
+    // the Sessions page a ticketless one. A control mounted ON one of those
+    // surfaces starts exactly what the chord starts, and says so — which is why
+    // both the ticket strip and the Sessions strip pass `shortcuts`. (The menus
+    // carry the glyphs too, but they are portalled and closed at rest, so the
+    // press half's `aria-keyshortcuts` is what static markup can be asked about.)
+    expect(onTheSurface).toContain('aria-keyshortcuts="Meta+T"');
+    // The flag still has an off position, and that is the whole rule: a menu may
+    // only advertise a key that does what the item does. A mount that ever
+    // appears where the chord resolves to some OTHER owner must stay quiet.
+    expect(quiet).not.toContain("aria-keyshortcuts");
   });
 
   it("says what it does where it is the only affordance on screen", () => {

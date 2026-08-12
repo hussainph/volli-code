@@ -9,12 +9,8 @@ import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
-import {
-  runOnLivePanes,
-  TAB_STATUS_CLASS,
-  terminalTabState,
-  type TicketTabStatus,
-} from "@renderer/components/ticket/ticket-tabs";
+import { runOnLivePanes, terminalTabState } from "@renderer/components/sessions/terminal-tab-state";
+import { TAB_STATUS_CLASS, type TicketTabStatus } from "@renderer/components/ticket/ticket-tabs";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -328,7 +324,7 @@ interface KindTabProps {
 /** One terminal tab: a live PTY tree, with the warm-park tier's vocabulary on it. */
 function TerminalTab({ tab, onSelect, ...shell }: KindTabProps & { tab: SessionTab }) {
   const parkState = useSessionsStore((state) => state.parkState);
-  // The derivation moved next to `TAB_STATUS_CLASS` so the ticket strip could
+  // The derivation moved to `terminal-tab-state.ts` so the ticket strip could
   // read it too — it was the reason a ticket's terminal tab used to say nothing
   // about being parked or dead. Nothing about the reading changed.
   const { exited, exitCode, parked, keptAwake, livePaneIds } = terminalTabState(tab, parkState);

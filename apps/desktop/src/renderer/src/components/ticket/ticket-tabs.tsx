@@ -24,6 +24,11 @@ import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
+import {
+  runOnLivePanes,
+  terminalTabState,
+  type TerminalTabState,
+} from "@renderer/components/sessions/terminal-tab-state";
 import { Button } from "@renderer/components/ui/button";
 import {
   ContextMenu,
@@ -32,10 +37,8 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
-import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
-import { sessionPanes, useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
-import { errorMessage, type TerminalIoResult } from "@volli/shared";
+import { useSessionsStore } from "@renderer/stores/sessions";
 
 /**
  * Roving-tabindex arrow navigation across a strip's `role="tab"` children.
@@ -106,54 +109,9 @@ export function isClosableTicketTab(kind: TicketTabKind): boolean {
 }
 
 /**
- * What a terminal tab knows about its own PTY tree — the only vocabulary either
- * strip needs to draw one.
- *
- * It lives here, beside {@link TAB_STATUS_CLASS}, because this module is already
- * where the two strips agree about what a Session tab looks like, and because
- * the dependency only runs one way (the Sessions strip imports this file; not
- * the reverse). It used to live inline in `session-tabs.tsx`, which is why a
- * ticket's terminal tab said nothing at all about being parked or dead while the
- * project's said both.
- */
-export interface TerminalTabState {
-  /** Every pane's PTY has ended. */
-  exited: boolean;
-  /** The first exit code found, for the hover line. */
-  exitCode: number | null;
-  /** Every LIVE pane is parked (issue #51 warm-park tier). */
-  parked: boolean;
-  /** At least one live pane is pinned out of the auto-park sweep. */
-  keptAwake: boolean;
-  /** The panes a park/wake/pin action runs over. Empty ⇒ no park controls. */
-  livePaneIds: readonly string[];
-}
-
-/**
- * Read a tab's park/exit facts off the store's own two maps.
- *
- * `parked` is vacuously true with no live panes, which is why every reader gates
- * on `!exited` as well: an exited tab must never wear the moon badge or offer
- * "Park Now".
- */
-export function terminalTabState(
-  tab: SessionTab,
-  parkState: Record<string, { parked: boolean; keepAwake: boolean }>,
-): TerminalTabState {
-  const panes = sessionPanes(tab.layout);
-  const livePanes = panes.filter((pane) => pane.exitCode === null);
-  return {
-    exited: panes.every((pane) => pane.exitCode !== null),
-    exitCode: panes.find((pane) => pane.exitCode !== null)?.exitCode ?? null,
-    parked: livePanes.every((pane) => parkState[pane.sessionId]?.parked ?? false),
-    keptAwake: livePanes.some((pane) => parkState[pane.sessionId]?.keepAwake ?? false),
-    livePaneIds: livePanes.map((pane) => pane.sessionId),
-  };
-}
-
-/**
- * The same facts for a tab named only by its session id — what the ticket strip
- * has, since `ticket-detail.tsx` hands it descriptors rather than store records.
+ * {@link terminalTabState}'s facts for a tab named only by its session id — what
+ * the ticket strip has, since `ticket-detail.tsx` hands it descriptors rather
+ * than store records.
  *
  * `sessionOwner` resolves any pane (root or split leaf) to its owner, so one
  * index lookup finds the container without the caller knowing whether a ticket
@@ -161,29 +119,6 @@ export function terminalTabState(
  * unconditionally with `null` so a component that renders all five kinds can
  * still ask.
  */
-/**
- * Runs a park/wake/pin mutation against every live pane of a tab (issue #51
- * warm-park tier) and surfaces any failure — CLAUDE.md's "never silently swallow
- * errors" applies to these fire-and-forget context-menu actions the same as any
- * other mutation. Shared by both strips, for the same reason the derivation
- * above is.
- */
-export function runOnLivePanes(
-  paneIds: readonly string[],
-  action: (paneId: string) => Promise<TerminalIoResult>,
-  failureLabel: string,
-): void {
-  for (const paneId of paneIds) {
-    action(paneId)
-      .then((result) => {
-        if (!result.ok) toastError(`${failureLabel} failed: ${result.error}`);
-      })
-      .catch((error: unknown) => {
-        toastError(`${failureLabel} failed: ${errorMessage(error)}`);
-      });
-  }
-}
-
 function useTerminalTabState(sessionId: string | null): TerminalTabState | null {
   // Returns a store-held object, never a fresh one — a selector that built its
   // own would hand React a snapshot that never compares equal.

@@ -3,9 +3,18 @@
 The controls trade lanes. The tab-strip corner takes the right-rail toggle; the
 chrome band's right lane takes terminal focus, as one button whose glyph flips.
 
-**Shipped.** The Calm Stack landed (`07fd594e`) and this was built on top of it.
-The line numbers below are the pre-Calm-Stack coordinates and are stale; the
-reasoning is not. §"What shipped" records where the plan was overruled.
+**Shipped, then half-reversed.** The Calm Stack landed (`07fd594e`) and this was
+built on top of it. The line numbers below are the pre-Calm-Stack coordinates and
+are stale; the reasoning is not. §"What shipped" records where the plan was
+overruled at the time.
+
+**Read §"The band kept the exit and gave back the entrance" before the plan
+body.** The corner half held — the tab-strip corner is the details-rail toggle,
+and that is what ships. The band half did not: terminal focus is no longer one
+persistent button whose glyph flips. *Enter* moved onto the terminal pane; only
+*exit* stayed in the band. Everything below that says otherwise — the second
+Verdict bullet, step 4 of §"The change, in order", and the `TerminalFocusToggle`
+line in §"Shipped" — describes a shape that existed for one round and is gone.
 
 ## First, the premise is wrong in a way that matters
 
@@ -26,10 +35,11 @@ PTY — so it cannot simply be deleted.
   *above both the main column and the rail* (`ticket-detail.tsx:891–893`), so its
   right corner sits directly on top of the pane it would collapse. That is the
   mapping argument, and it is geometric, not aesthetic.
-- **Terminal focus moves up 40px into the chrome band's right lane** — the slot
-  the rail toggle vacates, and the slot its own Exit button already occupies.
-  Enter and exit become one persistent button at one point on screen, glyph
-  `CornersOut ⇄ CornersIn`, `aria-pressed={focused}`.
+- ~~**Terminal focus moves up 40px into the chrome band's right lane**~~ — the
+  slot the rail toggle vacates, and the slot its own Exit button already
+  occupies. Enter and exit become one persistent button at one point on screen,
+  glyph `CornersOut ⇄ CornersIn`, `aria-pressed={focused}`. **Reversed in round
+  two** — see the closing section. Exit stayed; enter went to the pane.
 - **The cluster is not built.** The user was right that it was the closest, and
   right that it was chaotic — but the chaos was never the corner. It was that
   focus-enter is *conditional* (`disabled` on 3 of 4 tab kinds; the scratch
@@ -127,7 +137,9 @@ Read from `.../ui+right-sidebar-fixes/.../lab/scratches/ticket-right-sidebar.tsx
 - L25–26 and L47–48: swap the two props. Add one assertion that the corner
   renders `aria-label="Hide details rail"` when `railCollapsed={false}`.
 
-**4. `apps/desktop/src/renderer/src/components/chrome-bar.tsx`**
+**4. `apps/desktop/src/renderer/src/components/chrome-bar.tsx`** — *built as
+written, then reversed in round two. The deletions below stand; the new
+`TerminalFocusToggle` does not exist. See the closing section.*
 
 - L8: delete the `SidebarSimpleIcon` import (it moved). L5 keeps `CornersInIcon`;
   add `CornersOutIcon`.
@@ -241,11 +253,18 @@ Three places the plan was overruled, all in the same direction:
 - `lib/terminal-focus.ts` — the pure decision: `isTerminalFocusKeyEvent`
   (⌥⌘Return), `terminalFocusTargetForChrome` (the nav + `settingsOpen` gate) and
   `activeTerminalSessionId`. In the coverage gate at 100%.
-- `hooks/use-terminal-focus-shortcut.ts` — the chord, mounted from
-  `chrome-bar.tsx` because the button and the chord are one control.
-  Capture-phase and swallowed unconditionally, like ⌥⌘B: falling through would
-  hand ⌥⌘Return to the nearest composer, whose submit guard reads
-  `metaKey || ctrlKey` without excluding Option.
+- `hooks/use-terminal-focus-shortcut.ts` — the chord, still mounted from
+  `chrome-bar.tsx`: the band is the one component alive on every page, and after
+  the reversal below the *enter* control comes and goes with the pane it sits on.
+  A chord hosted by a component that unmounts is a chord that stops working
+  exactly where it is hardest to notice. Capture-phase and swallowed
+  unconditionally, like ⌥⌘B: falling through would hand ⌥⌘Return to the nearest
+  composer, whose submit guard reads `metaKey || ctrlKey` without excluding
+  Option.
+- `hooks/use-terminal-focus-target.ts` — the store reads behind both, derived
+  once: `useTerminalFocusTarget` (subscribed, for the pane control) and
+  `readTerminalFocusChrome` (imperative, for the chord). The two used to be
+  hand-written copies of the same six facts.
 - Smoke: `ticket-detail-smoke.mjs` step 6b now asserts the band control appears
   and disappears with tab kind, and round-trips the chord in both directions;
   step 8/8b/5 moved to the Calm Stack's `ticket-rail-tab-*` testids and
@@ -256,6 +275,46 @@ Still open, adjacent: `⌥⌘B` at `use-nav-history.ts` is now gated on an open
 ticket, so that ledger item is closed — but `docs-shots.mjs` has NOT been rerun,
 and the chrome band lost a control, so `apps/docs/src/assets/screenshots/`
 is stale by one button.
+
+## The band kept the exit and gave back the entrance
+
+Round two of the cleanup pass reversed the band half of this plan. The single
+`TerminalFocusToggle` shipped, was used, and is gone; what stands today is:
+
+- **Enter is `PaneFocusControl`** (`sessions/session-split-layout.tsx`), a
+  hover-revealed button in the terminal pane's own top-right corner, mounted only
+  for the visible tab.
+- **Exit is `TerminalFocusExit`** (`chrome-bar.tsx`), still the band's trailing
+  slot, still persistent, still `CornersInIcon`.
+- **⌥⌘Return still does both**, unchanged, and both controls resolve against the
+  same target the chord does.
+
+The reason, recorded verbatim: *in zen the user is driving a PTY from the
+keyboard, and a hover-revealed control is not a way out of a mode.* That is why
+the asymmetry is deliberate rather than an unfinished move — a mode's exit has to
+be persistent, visible and in one fixed place, while its entrance is a statement
+about one terminal and belongs on that terminal.
+
+Two things this plan argued for come out better under the reversal, not worse:
+
+- **The conditional-control complaint is answered structurally.** The plan's own
+  §Verdict identified the real chaos as focus-enter being *conditional*, and
+  moved it to a band that then had to derive whether a terminal was on screen at
+  all before it could decide to render. `PaneFocusControl` cannot appear where a
+  terminal isn't, because it only exists inside a visible pane tree — no gate to
+  keep in sync, and no `disabled` state to hide.
+- **The ticket-only accident dies with it.** The band could only offer entry by
+  reaching for an `openTicketId`, which is how terminal focus stayed accidentally
+  ticket-only. `terminalFocusTargetForChrome` now answers per page, so the
+  project's own Sessions surface enters focus too.
+
+The corner half of the plan is untouched and still ships: the tab strip's right
+corner is the details-rail toggle, with the `-mt-1.5 … self-stretch` geometry and
+the four pinned accessible names intact. The band's variant-B objection in §"Why
+not the alternatives" — that a control on the plane sits over a live PTY and a
+TUI running mouse reporting loses that corner — was priced and accepted: the
+control stops `pointerdown` before the pane sees it, and the chord is the
+pointer-free route for anyone the corner fails.
 
 ## Settled: the terminal-focus chord lands here, not in task 3
 

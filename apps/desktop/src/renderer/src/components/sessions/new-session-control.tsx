@@ -146,7 +146,11 @@ export function NewSessionControl({
             onClick={onNewChat}
             className="rounded-r-none pr-1.5 active:scale-100 disabled:opacity-100"
           >
-            <PlusIcon weight="bold" />
+            {/* Outline, the baseline. The Button's own size rule draws this at
+                14px in `strip`/`empty`, above CLAUDE.md's ≤12px small-size tier
+                — and a weight step that only half its rooms earn is not a step.
+                The caret below is `size-3` in every room, so it keeps bold. */}
+            <PlusIcon />
             {drawing.label}
           </Button>
           <span aria-hidden className="h-3 w-px bg-border" />

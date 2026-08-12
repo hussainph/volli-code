@@ -62,17 +62,14 @@ export function NewSessionMenu({
           </Button>
         )}
       </DropdownMenuTrigger>
-      {/* Chat first: it is the structured default, and the first item is what
-          the keyboard opens onto. Listing the manual companion above it made the
-          deliberate act the one a press lands on. */}
       <DropdownMenuContent align={align}>
-        <DropdownMenuItem onSelect={onNewChat}>
-          <ChatCircleIcon weight="fill" />
-          Chat
-        </DropdownMenuItem>
         <DropdownMenuItem onSelect={onNewSession}>
           <TerminalWindowIcon weight="fill" />
           Terminal
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={onNewChat}>
+          <ChatCircleIcon weight="fill" />
+          Chat
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

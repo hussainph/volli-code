@@ -7,6 +7,7 @@ import {
   startTicketTerminal,
 } from "@renderer/components/sessions/session-create";
 import {
+  isNewSessionGuardedTarget,
   newSessionKindForKeyEvent,
   newSessionLandingForChrome,
 } from "@renderer/lib/new-session-shortcut";
@@ -33,6 +34,13 @@ import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/worksp
  * shell and suppressing it would break the chord exactly where a second Session
  * is most often wanted. ⌘K guards because ⌘K clears a shell; ⌘T has no twin.
  *
+ * An EDITOR guard, though, for the opposite reason to plain-"c"'s: ⌘T inserts no
+ * character, so there is no typing to protect — what there is, is an uncommitted
+ * edit that a new tab would move the surface out from under. Double-click a tab
+ * to rename it and press ⌘T, and a chat Session boots behind a rename box still
+ * waiting on Enter. See {@link isNewSessionGuardedTarget} for what it covers and
+ * for the two surfaces it deliberately does not.
+ *
  * No in-flight guard either. Both boot paths already run under
  * `underOwnerGuard`, which allows one create per owner at a time, so a held key
  * is refused twice over — here by the predicate's `repeat` rejection, there by
@@ -44,6 +52,7 @@ export function useNewSessionShortcut(): void {
       if (event.defaultPrevented) return;
       const kind = newSessionKindForKeyEvent(event);
       if (kind === null) return;
+      if (isNewSessionGuardedTarget(event.target)) return;
 
       const selectedProjectId = useProjectsStore.getState().selectedProjectId;
       const workspace = useWorkspaceStore.getState();

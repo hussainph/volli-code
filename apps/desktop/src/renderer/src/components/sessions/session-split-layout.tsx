@@ -20,7 +20,7 @@ import {
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import { canResumeSession } from "@renderer/components/ticket/session-history";
-import { useTerminalFocusTarget } from "@renderer/hooks/use-terminal-focus-shortcut";
+import { useTerminalFocusTarget } from "@renderer/hooks/use-terminal-focus-target";
 import { cn } from "@renderer/lib/utils";
 import type { SessionLayout, SessionTab, TerminalSplitDirection } from "@renderer/stores/sessions";
 import { launchAdapter, sessionPanes } from "@renderer/stores/sessions";
@@ -166,9 +166,11 @@ function PaneFocusControl({ sessionId }: { sessionId: string }) {
           "opacity-0 transition-opacity duration-150 ease-out group-hover/focus:opacity-100 focus-visible:opacity-100",
         )}
       >
-        {/* bold, not regular: at size-3.5 the outline draws lighter than the
-            border it sits inside (CLAUDE.md's small-size tier). */}
-        <CornersOutIcon weight="bold" />
+        {/* Outline, the baseline: `icon-sm` draws this at 14px, and CLAUDE.md's
+            small-size tier — the one ground `bold` stands on — is ≤12px. What
+            keeps it legible over scrollback is the button's own material below,
+            not a heavier pen. */}
+        <CornersOutIcon />
         <span className="sr-only">Enter terminal focus</span>
       </Button>
     </div>

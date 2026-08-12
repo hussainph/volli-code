@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  isNewSessionGuardedTarget,
+  NEW_SESSION_GUARD_SELECTOR,
   newSessionKindForKeyEvent,
   newSessionLandingForChrome,
   type NewSessionChrome,
@@ -68,6 +70,54 @@ describe("newSessionKindForKeyEvent", () => {
   it("refuses a key-repeat, so a held ⌘T starts one Session and not a hundred", () => {
     expect(newSessionKindForKeyEvent(keyEvent({ repeat: true }))).toBeNull();
     expect(newSessionKindForKeyEvent(keyEvent({ altKey: true, repeat: true }))).toBeNull();
+  });
+});
+
+describe("isNewSessionGuardedTarget", () => {
+  it("treats a target with no DOM shape as safe", () => {
+    expect(isNewSessionGuardedTarget(null)).toBe(false);
+    expect(isNewSessionGuardedTarget("not-an-element")).toBe(false);
+    expect(isNewSessionGuardedTarget({})).toBe(false);
+  });
+
+  it("guards the inline rename box that reported this — an input", () => {
+    // Double-click a tab, press ⌘T, and without this a chat Session booted
+    // behind a rename box still waiting on Enter.
+    const target = { closest: (selector: string) => (selector.includes("input") ? {} : null) };
+    expect(isNewSessionGuardedTarget(target)).toBe(true);
+  });
+
+  it("guards an editable region exposed only by the property", () => {
+    expect(isNewSessionGuardedTarget({ closest: () => null, isContentEditable: true })).toBe(true);
+    expect(isNewSessionGuardedTarget({ closest: () => null, isContentEditable: false })).toBe(
+      false,
+    );
+    expect(isNewSessionGuardedTarget({ closest: () => null })).toBe(false);
+  });
+
+  it("keeps closest a method call, so a real DOM node cannot throw on it", () => {
+    // A detached `const closest = el.closest` loses `this` and real DOM methods
+    // throw "Illegal invocation".
+    const target = {
+      closest(this: unknown, _selector: string) {
+        expect(this).toBe(target);
+        return null;
+      },
+    };
+    isNewSessionGuardedTarget(target);
+  });
+
+  it("covers form controls, contenteditable and Monaco — and nothing else", () => {
+    for (const token of ["input", "textarea", "select", "[contenteditable]", ".monaco-editor"]) {
+      expect(NEW_SESSION_GUARD_SELECTOR).toContain(token);
+    }
+    // A live terminal is NOT guarded: a pty is sent Ctrl chords, not Cmd chords,
+    // so ⌘T means nothing to a shell and suppressing it there would break the
+    // chord exactly where a second Session is most often wanted. A modal is not
+    // guarded either — `newSessionLandingForChrome` already refuses the whole
+    // chord while one is up, and a second DOM-shaped copy could only drift.
+    expect(NEW_SESSION_GUARD_SELECTOR).not.toContain("data-terminal-renderer");
+    expect(NEW_SESSION_GUARD_SELECTOR).not.toContain("dialog");
   });
 });
 

@@ -15,8 +15,8 @@
  * Two callers answer the same question — the control drawn ON the pane
  * (`session-split-layout.tsx`, which must decide whether to render at all) and
  * the ⌥⌘Return chord (`hooks/use-terminal-focus-shortcut.ts`, which decides at
- * press time) — so the answer lives here once, and `useTerminalFocusTarget`
- * beside the chord is the one reactive read of it. Pure and structurally typed
+ * press time) — so the answer lives here once, and the store reads that feed it
+ * live once in `hooks/use-terminal-focus-target.ts`. Pure and structurally typed
  * like every other shortcut predicate in this renderer (`new-session-shortcut`,
  * `nav-history`, `project-shortcut`), so it unit-tests in the node environment
  * with no DOM and both callers are left holding nothing but their store reads.

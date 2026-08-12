@@ -8,6 +8,7 @@
  * hook beside it (`hooks/use-new-session-shortcut.ts`) is left holding nothing
  * but the listener and the store reads.
  */
+import { MONACO_SURFACE_SELECTOR } from "@renderer/lib/monaco-surface";
 import type { NavKey } from "@renderer/stores/workspace";
 
 /** The two kinds a press can start. Chat is the default act; a terminal is its companion. */
@@ -51,6 +52,52 @@ export function newSessionKindForKeyEvent(event: NewSessionKeyEvent): NewSession
   if (!event.metaKey || event.ctrlKey || event.shiftKey || event.repeat) return null;
   if (event.altKey) return event.code === "KeyT" ? "terminal" : null;
   return event.key.toLowerCase() === "t" || event.code === "KeyT" ? "chat" : null;
+}
+
+/**
+ * Selector for the editors a new-Session chord must not fire behind.
+ *
+ * The point is NOT the one the plain-"c" guard makes — ⌘T inserts no character,
+ * so there is no typing to hijack. It is that these surfaces hold an edit that
+ * is not yet committed, and a chord that opens a Session tab moves the surface
+ * out from under it: double-click a tab to rename it, press ⌘T, and a chat boots
+ * behind a rename box still waiting on Enter.
+ *
+ * Two deliberate exclusions, both of which the sibling guards do include:
+ *
+ *  • `[data-terminal-renderer]` — a live terminal is not left out by oversight.
+ *    A pty is sent Ctrl chords, not Cmd chords, so ⌘T means nothing to a shell,
+ *    and suppressing it there would break the chord exactly where a second
+ *    Session is most often wanted (see `hooks/use-new-session-shortcut.ts`).
+ *  • `[role="dialog"]` — `newSessionLandingForChrome` already refuses the whole
+ *    chord while Settings or the New-ticket dialog is up, and it refuses it on
+ *    the honest ground: nothing behind a modal is a surface a Session can land
+ *    on. A second, DOM-shaped copy of that gate could only drift from it.
+ *
+ * Monaco needs its own entries because it matches none of the generic tokens —
+ * its input surface is a `div.native-edit-context`. Spliced in through the
+ * shared `MONACO_SURFACE_SELECTOR`, so this guard, the Escape guard, the nav
+ * chords and plain-"c" all recognise a Monaco surface the same way.
+ */
+export const NEW_SESSION_GUARD_SELECTOR = `input, textarea, select, [contenteditable], ${MONACO_SURFACE_SELECTOR}`;
+
+/**
+ * True when a keydown originated inside an editor (see
+ * {@link NEW_SESSION_GUARD_SELECTOR}). Structural rather than DOM-typed
+ * (`target: unknown`) so it runs unmodified in the node-environment unit tests:
+ * a target that is null, not an object, or has no `closest` cannot match a guard
+ * and is treated as safe.
+ */
+export function isNewSessionGuardedTarget(target: unknown): boolean {
+  if (target === null || typeof target !== "object") return false;
+  const el = target as { closest?(selector: string): unknown; isContentEditable?: unknown };
+  if (typeof el.closest !== "function") return false;
+  // Must stay a method call — a detached `const closest = el.closest` loses
+  // `this`, and real DOM methods throw "Illegal invocation" when unbound.
+  if (el.closest(NEW_SESSION_GUARD_SELECTOR)) return true;
+  // Covers editable regions Electron exposes via the property rather than a
+  // matching `[contenteditable]` attribute.
+  return el.isContentEditable === true;
 }
 
 /** The chrome facts a chord resolves against, read at press time. */
