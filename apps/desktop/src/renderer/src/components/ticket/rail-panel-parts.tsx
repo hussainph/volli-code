@@ -1,12 +1,13 @@
 /**
- * The pieces the Calm Stack's two navigators share
+ * The pieces the Calm Stack's pages share
  * (lab/scratches/ticket-right-sidebar.tsx: `RowActions`, `PausedBanner`,
- * `ScenarioState`).
+ * `ScenarioState`, `DiffTotals`).
  *
- * They live here rather than in either panel because the scratch draws them
- * once and uses them from both Diffs and Files — a row's hover actions and a
- * "the watch died" banner are facts about a rail page, not about changes or
- * files in particular.
+ * They live here rather than in one panel because the scratch draws each of
+ * them once and uses it from several pages — a row's hover actions, a fault
+ * banner and the +/− pair are facts about a rail page, not about changes or
+ * files or the repository card in particular. A copy per caller is how one
+ * surface silently keeps an old minus glyph after the other is fixed.
  */
 import * as React from "react";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
@@ -15,7 +16,7 @@ import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
 import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 
-import { errorMessage } from "@volli/shared";
+import { errorMessage, type DiffStat } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
@@ -24,6 +25,24 @@ import { cn } from "@renderer/lib/utils";
 
 /** Every rail page insets to the column's edge, and tightens at the 240px floor. */
 export const RAIL_PANEL_INSET = "px-4 group-data-[narrow=true]/rail:px-3";
+
+/** The same inset expressed as a horizontal MARGIN, for blocks that float inside a page. */
+export const RAIL_PANEL_MARGIN = "mx-4 group-data-[narrow=true]/rail:mx-3";
+
+/**
+ * Insertions and deletions as one pair — the repository card's changes row, the
+ * Diffs header, and the commit gate all wear it. Raw palette colors rather than
+ * theme tokens, the same exception the session status dots already take: added
+ * and removed are a fixed, universally-read pair, not a canvas-derived surface.
+ */
+export function DiffTotals({ diff }: { diff: DiffStat }) {
+  return (
+    <span className="flex shrink-0 items-center gap-1.5 font-mono text-xs font-medium tabular-nums">
+      <span className="text-emerald-900 dark:text-emerald-400">+{diff.insertions}</span>
+      <span className="text-red-900 dark:text-red-400">−{diff.deletions}</span>
+    </span>
+  );
+}
 
 /**
  * A row's hover affordances: copy the path, open it as a persistent tab. Hidden
@@ -105,40 +124,54 @@ export function RailRowActions({
 }
 
 /**
- * The watch died, so the list below is a frozen snapshot. Inline rather than a
- * replacement: the rows on screen were accurate as of the last refresh, and
- * hiding them would throw away real information to report a transport fault.
+ * A read stopped landing, so what is on screen below is a frozen snapshot.
+ * Inline rather than a replacement: the rows already drawn were accurate as of
+ * the last refresh, and hiding them would throw away real information to report
+ * a transport fault.
  *
- * The banner says "Updates paused" and carries the fault in `title`. The
- * sentence a person needs is that the list stopped moving and there is a way to
- * restart it; the watcher's own error text is diagnostics, and at the rail's
- * width it pushed Retry off the row.
+ * ONE banner for every such fault in the rail — the Diffs watch, the repository
+ * card's watch, and a directory read the Files page could not complete. Three
+ * shapes for one sentence was how the rail ended up printing raw watcher text on
+ * one page and not another.
+ *
+ * `label` is the sentence a person needs; the underlying error text goes to
+ * `title` and never onto the row, because at the rail's width it pushes Retry
+ * off the end.
  */
-export function RailPausedBanner({
+export function RailFaultBanner({
+  label = "Updates paused",
   error,
   onRetry,
+  inset = true,
+  testId,
   className,
 }: {
+  /** What stopped, in the reader's terms. Defaults to the watch's own wording. */
+  label?: string;
   error: string;
   onRetry(): void;
+  /** OFF where the banner already sits inside a padded block (the repository card). */
+  inset?: boolean;
+  testId?: string;
   className?: string;
 }) {
   return (
     <div
       role="alert"
       title={error}
+      data-testid={testId}
       className={cn(
-        "mb-2 flex items-center gap-2 rounded-lg border border-destructive/25 bg-destructive/5 px-2.5 py-2 text-xs text-destructive",
-        "mx-4 group-data-[narrow=true]/rail:mx-3",
+        "flex items-center gap-2 rounded-lg border border-destructive/25 bg-destructive/5 px-2.5 py-2 text-xs text-destructive",
+        inset && cn("mb-2 shrink-0", RAIL_PANEL_MARGIN),
         className,
       )}
     >
       <WarningIcon weight="fill" className="size-3.5 shrink-0" />
-      <span className="min-w-0 flex-1">Updates paused</span>
+      <span className="min-w-0 flex-1">{label}</span>
       <button
         type="button"
         onClick={onRetry}
-        className="flex items-center gap-1 font-medium hover:underline"
+        className="flex shrink-0 items-center gap-1 font-medium hover:underline"
       >
         <ArrowClockwiseIcon />
         Retry

@@ -18,6 +18,31 @@
  * snapshot, so the two halves of the card cannot disagree (#108). The rail is
  * exclusive (one page at a time), so this never doubles up with the Diffs
  * page's own watch.
+ *
+ * ONE FAULT, ONE SENTENCE, ONE RECOVERY. The status read and the change watch
+ * fail for the same reasons and usually with the same string — a worktree
+ * directory that is gone answers both with "missing on disk". Drawn separately
+ * they stacked that sentence twice, under a changes row stating the same fault a
+ * third time in a different register, over a retention prompt that had nothing
+ * to do with it. So a fault REPLACES the action block rather than being bolted
+ * above it, its diagnostic text goes to `title` (rail-panel-parts.tsx: at this
+ * width the raw text pushes Retry off the row), and the changes row falls back
+ * to its noun. Retention returns the moment a read lands; a ticket can still be
+ * archived from the board while it does not.
+ *
+ * Two deliberate departures from the scratch, both recorded because every other
+ * one in this file is:
+ *
+ *  - The publish row shows whenever a worktree EXISTS; the scratch draws it only
+ *    on a dirty tree (`!clean && !noWorktree`). Decision #44 is button-never-
+ *    gate and #45 is one adaptive split button, so the control stays put and
+ *    re-labels itself — a row that vanishes the moment the tree goes clean takes
+ *    "Push", "View PR" and the whole archive-ready wrap-up down with it.
+ *  - The commit verbs are GATED by a confirmation dialog (`CommitGateDialog`),
+ *    which partially reverses #45's "no gate" for this one action. The scratch
+ *    drew that dialog, the owner ruled for it, and the reason is that a press
+ *    here writes a commit that cannot be taken back — every other verb the
+ *    button offers is repeatable or reversible.
  */
 import * as React from "react";
 import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
@@ -56,8 +81,16 @@ import {
   UNKEEP_LABEL,
   type RetentionNotice,
 } from "@renderer/components/ticket/worktree-retention-model";
+import { DiffTotals, RailFaultBanner } from "@renderer/components/ticket/rail-panel-parts";
 import { Button } from "@renderer/components/ui/button";
 import { ButtonGroup } from "@renderer/components/ui/button-group";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@renderer/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -86,16 +119,66 @@ function CardLabel({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * Insertions and deletions as one pair. Raw palette colors rather than theme
- * tokens, the same exception the session status dots already take: added and
- * removed are a fixed, universally-read pair, not a canvas-derived surface.
+ * The gate in front of the card's one irreversible verb
+ * (lab/scratches/ticket-right-sidebar.tsx `CommitDialog`). A press of "Commit &
+ * create draft PR" writes a commit; there is no undo in this app for that, and
+ * every other verb the split button offers is either repeatable (push) or a
+ * link (View PR). So the commit verbs — and only they — confirm first.
+ *
+ * It states what is about to land: the branch it lands on, and the Change Set
+ * the card is already showing. The scratch also drew an editable commit message
+ * and an "Include unstaged changes" checkbox; neither is here, because
+ * `volli:worktree-commit` accepts neither — the message is the fixed
+ * `chore(<DISPLAY-ID>)` line (main/worktree/commit.ts) and the stage is always
+ * `-A`. A field that discards what you type is worse than one sentence naming
+ * what the command actually does; restoring them is a main-process change, not
+ * a renderer one.
  */
-function DiffTotals({ diff }: { diff: DiffStat }) {
+function CommitGateDialog({
+  open,
+  onOpenChange,
+  branch,
+  changesLabel,
+  diff,
+  confirmLabel,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange(open: boolean): void;
+  branch: string;
+  changesLabel: string;
+  diff: DiffStat | null;
+  /** The primary's own verb, so the press that opened this reads as the press that finishes it. */
+  confirmLabel: string;
+  onConfirm(): void;
+}) {
   return (
-    <span className="flex shrink-0 items-center gap-1.5 font-mono text-xs font-medium tabular-nums">
-      <span className="text-emerald-900 dark:text-emerald-400">+{diff.insertions}</span>
-      <span className="text-red-900 dark:text-red-400">−{diff.deletions}</span>
-    </span>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md gap-5" data-testid="ticket-commit-gate">
+        <DialogHeader>
+          <DialogTitle className="flex min-w-0 items-center gap-2">
+            <GitBranchIcon className="shrink-0" />
+            <span className="truncate font-mono text-sm">{branch}</span>
+          </DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-2 rounded-lg border border-border p-3">
+          <div className="flex items-center gap-2">
+            <GitDiffIcon className="size-4 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate text-ui font-medium">{changesLabel}</span>
+            {diff === null ? null : <DiffTotals diff={diff} />}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Everything in the worktree is staged and committed with a generated message.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button onClick={onConfirm}>{confirmLabel}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -450,6 +533,8 @@ export function TicketRepositorySummary({
   const [ttlDays, setTtlDays] = React.useState<number | null>(null);
   // A retention mutation (archive/keep/dismiss) in flight — disables its controls.
   const [retentionBusy, setRetentionBusy] = React.useState(false);
+  // The commit verb awaiting confirmation; `isUpdate` picks the tail toast.
+  const [pendingCommit, setPendingCommit] = React.useState<{ isUpdate: boolean } | null>(null);
   const hasWorktree = ticket.worktreePath !== null;
   const { state: retention, reload: reloadRetention } = useTicketRetention(ticket.id, hasWorktree);
   const planningChange = useBoardStore((store) => store.lastPlanningChange);
@@ -511,7 +596,13 @@ export function TicketRepositorySummary({
     });
   }, [ticket.id, hasWorktree, refreshStatusAndDiff, watchAttempt]);
 
-  function retryWatch() {
+  /**
+   * The card's one recovery. It re-runs the status/Change Set read AND re-arms
+   * the watch the fault tore down — they are the same fault to a reader, so
+   * they are the same button. `refreshStatusAndDiff` clears `loadError` itself
+   * on success, so nothing here has to guess which half was broken.
+   */
+  function retryWorktreeRead() {
     setWatchError(null);
     setWatchAttempt((attempt) => attempt + 1);
     void refreshStatusAndDiff();
@@ -707,13 +798,32 @@ export function TicketRepositorySummary({
   const changeSetSummary = diff ? formatChangeSetSummary(diff) : null;
   const fileCount = diff?.files.length ?? 0;
 
+  // The status read is the cause and the watch dying is its consequence, so the
+  // direct read's message wins when both are set — they are almost always the
+  // same string anyway.
+  const fault = loadError ?? watchError;
+  // No worktree means no read to wait for: `refreshStatusAndDiff` returns early
+  // and `diff` stays null for good, so "No changes" would be a permanent lie.
+  const loadingChanges = hasWorktree && diff === null && fault === null;
+  const changesLabel = !hasWorktree
+    ? "No worktree yet"
+    : diff === null
+      ? // Never got a snapshot: the banner below carries the fault and its
+        // Retry, so the row states the noun rather than the failure again.
+        "Changes"
+      : fileCount === 0
+        ? "No changes"
+        : `${fileCount} ${fileCount === 1 ? "change" : "changes"}`;
+
   function runPrimary() {
     switch (view.primary.kind) {
+      // The two verbs that write a commit ask first; everything below this is
+      // repeatable or a link, and goes straight through.
       case "commit-pr":
-        void runCommitThenPush(false);
+        setPendingCommit({ isUpdate: false });
         break;
       case "commit-push-updates":
-        void runCommitThenPush(true);
+        setPendingCommit({ isUpdate: true });
         break;
       case "push-pr":
         void runPushOnly(false);
@@ -770,11 +880,14 @@ export function TicketRepositorySummary({
   );
 
   // The row's outward-facing half, balancing the split button: the PR on
-  // GitHub. The scratch balances with "Compare", which needs the repository's
-  // remote URL — the renderer only ever learns `prUrl`, so that stays out (see
-  // the module note). Suppressed when the primary is already "View PR" — one
-  // control per destination — and absent entirely until a PR exists, so the row
-  // is calm rather than carrying a permanently dead slot.
+  // GitHub. The scratch balances with "Compare", which this cannot honestly
+  // draw before a PR exists — twice over. The renderer only ever learns
+  // `prUrl`, never the repository's remote, so there is no compare URL to
+  // build; and a branch that has never been pushed has nothing on GitHub to
+  // compare against, so the control the scratch's mock always showed would 404
+  // in exactly the state the mock was showing it in. Suppressed when the
+  // primary is already "View PR" — one control per destination — and absent
+  // until a PR exists, so the row is calm rather than carrying a dead slot.
   const prLink =
     ticket.prUrl !== null && view.primary.kind !== "view-pr" ? (
       <Tooltip>
@@ -794,13 +907,6 @@ export function TicketRepositorySummary({
       </Tooltip>
     ) : null;
 
-  const changesLabel =
-    loadError !== null
-      ? "Couldn't read changes"
-      : fileCount === 0
-        ? "No changes"
-        : `${fileCount} ${fileCount === 1 ? "change" : "changes"}`;
-
   return (
     // No elevation: the scratch asks for one in light mode, but writes it as
     // `hsl(var(--foreground)/…)` against a `--foreground` that is a hex — an
@@ -819,11 +925,25 @@ export function TicketRepositorySummary({
         data-testid="ticket-repository-changes"
         onClick={onShowChanges}
         title={changeSetSummary ?? undefined}
-        aria-label={`${changesLabel}, show Diffs`}
+        aria-busy={loadingChanges || undefined}
+        aria-label={`${loadingChanges ? "Reading changes" : changesLabel}, show Diffs`}
         className={cn(ROW, "pt-3 pb-2.5 hover:bg-sidebar-accent/45")}
       >
         <GitDiffIcon className="size-4 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate text-ui font-medium">{changesLabel}</span>
+        {/* One flex child either way, so the label lands where the bar was
+            rather than the row reflowing when the first read returns. The bar
+            is the page skeletons' own drawing, at a text line's height. */}
+        <span className="min-w-0 flex-1">
+          {loadingChanges ? (
+            <span
+              aria-hidden
+              data-testid="ticket-repository-changes-loading"
+              className="my-[3px] block h-3.5 w-24 animate-pulse rounded bg-sidebar-accent/70 motion-reduce:animate-none"
+            />
+          ) : (
+            <span className="block truncate text-ui font-medium">{changesLabel}</span>
+          )}
+        </span>
         {diff === null ? null : fileCount === 0 ? (
           <CheckCircleIcon className="shrink-0 text-emerald-500" />
         ) : (
@@ -866,145 +986,162 @@ export function TicketRepositorySummary({
 
       {hasWorktree ? (
         <div className="flex flex-col gap-2 border-t border-sidebar-border/70 px-3.5 py-2.5">
-          {loadError ? (
-            <span className="text-xs text-muted-foreground">
-              Couldn't load worktree status: {loadError}
-            </span>
-          ) : null}
-          {/* The watch died, so the card above is frozen — say so, and offer the
-              way back rather than letting it quietly drift. */}
-          {watchError !== null ? (
-            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <WarningIcon />
-              Stopped updating: {watchError}
-              <button
-                type="button"
-                onClick={retryWatch}
-                className="text-primary-text hover:underline"
-              >
-                Retry
-              </button>
-            </span>
-          ) : null}
-          {/* The archive-reason context line — why the wrap-up is being offered. */}
-          {retentionView.archiveReady && retentionView.reasonLine ? (
-            <span className="flex items-center gap-1.5 text-xs text-foreground">
-              <ArchiveIcon className="text-primary" />
-              {retentionView.reasonLine}
-            </span>
-          ) : null}
-          {/* Non-gating surfacing: conflicts / failing checks (decision #44). */}
-          {retentionView.notices.map((notice) => (
-            <RetentionNoticeLine key={notice.text} notice={notice} />
-          ))}
-          <div className="flex w-full items-center justify-between gap-2">
-            <ButtonGroup aria-label="Publish repository changes" className="min-w-0">
-              {retentionView.archiveReady ? (
-                archivePrimaryButton
-              ) : view.primary.reason ? (
-                <Tooltip>
-                  {/* A disabled button emits no pointer events; the span keeps the
+          {fault !== null ? (
+            // The whole block, not a line above it: with no readable worktree
+            // there is no honest publish state to offer, and the retention
+            // prompt below is a different subject that was only ever stacked
+            // here because both happened to be true at once.
+            <RailFaultBanner
+              inset={false}
+              testId="ticket-repository-fault"
+              // A noun, and short enough to stay on one line inside the card's
+              // own padding at the rail's narrowest — a label that wraps puts
+              // Retry on a second line and the banner becomes a paragraph.
+              label="Worktree unreadable"
+              error={fault}
+              onRetry={retryWorktreeRead}
+            />
+          ) : (
+            <>
+              {/* The archive-reason context line — why the wrap-up is being offered. */}
+              {retentionView.archiveReady && retentionView.reasonLine ? (
+                <span className="flex items-center gap-1.5 text-xs text-foreground">
+                  <ArchiveIcon className="text-primary" />
+                  {retentionView.reasonLine}
+                </span>
+              ) : null}
+              {/* Non-gating surfacing: conflicts / failing checks (decision #44). */}
+              {retentionView.notices.map((notice) => (
+                <RetentionNoticeLine key={notice.text} notice={notice} />
+              ))}
+              <div className="flex w-full items-center justify-between gap-2">
+                <ButtonGroup aria-label="Publish repository changes" className="min-w-0">
+                  {retentionView.archiveReady ? (
+                    archivePrimaryButton
+                  ) : view.primary.reason ? (
+                    <Tooltip>
+                      {/* A disabled button emits no pointer events; the span keeps the
                       tooltip trigger hoverable so the reason still shows. */}
-                  <TooltipTrigger asChild>
-                    <span className="inline-flex min-w-0">{doneFlowPrimaryButton}</span>
-                  </TooltipTrigger>
-                  <TooltipContent>{view.primary.reason}</TooltipContent>
-                </Tooltip>
-              ) : (
-                doneFlowPrimaryButton
-              )}
-              <DropdownMenu>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="icon-sm"
-                        aria-label="More repository actions"
-                        className="border-sidebar-border bg-background/35 shadow-xs"
-                      >
-                        <DotsThreeIcon weight="bold" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">More repository actions</TooltipContent>
-                </Tooltip>
-                <DropdownMenuContent align="start">
-                  {/* Archive-ready: the demoted done-flow primary leads, then the
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex min-w-0">{doneFlowPrimaryButton}</span>
+                      </TooltipTrigger>
+                      <TooltipContent>{view.primary.reason}</TooltipContent>
+                    </Tooltip>
+                  ) : (
+                    doneFlowPrimaryButton
+                  )}
+                  <DropdownMenu>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="icon-sm"
+                            aria-label="More repository actions"
+                            className="border-sidebar-border bg-background/35 shadow-xs"
+                          >
+                            <DotsThreeIcon weight="bold" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">More repository actions</TooltipContent>
+                    </Tooltip>
+                    <DropdownMenuContent align="start">
+                      {/* Archive-ready: the demoted done-flow primary leads, then the
                       unbundled verbs, then the Keep/Dismiss retention escape hatches. */}
-                  {retentionView.archiveReady ? (
-                    <>
-                      <DropdownMenuItem
-                        disabled={view.primary.disabled}
-                        onSelect={runPrimary}
-                        className="justify-between gap-6"
-                      >
-                        <span className="flex items-center gap-2">
-                          <PrimaryActionIcon kind={view.primary.kind} filled />
-                          {view.primary.label}
-                        </span>
-                        {view.primary.disabled && view.primary.reason ? (
-                          <span className="text-xs text-muted-foreground">
-                            {view.primary.reason}
-                          </span>
-                        ) : null}
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                    </>
-                  ) : null}
-                  <DoneFlowMenuItem
-                    action={view.menu.commit}
-                    icon={<GitCommitIcon />}
-                    onRun={() => void runCommitOnly()}
-                  />
-                  <DoneFlowMenuItem
-                    action={view.menu.push}
-                    icon={<GitPullRequestIcon />}
-                    onRun={() => void runPushOnly(view.menu.push.kind === "push-updates")}
-                  />
-                  <DoneFlowMenuItem
-                    action={view.menu.openPr}
-                    icon={<ArrowSquareOutIcon />}
-                    onRun={openPr}
-                  />
-                  {retentionView.archiveReady ? (
-                    <>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        disabled={retentionBusy}
-                        onSelect={() => void runSetKeep(true)}
-                      >
-                        <PushPinIcon />
-                        {KEEP_WORKTREE_LABEL}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem disabled={retentionBusy} onSelect={() => void runDismiss()}>
-                        <BellSlashIcon />
-                        {DISMISS_LABEL}
-                      </DropdownMenuItem>
-                    </>
-                  ) : null}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </ButtonGroup>
-            {prLink}
-          </div>
-          {/* The quiet "kept" state (Keep exempts the ticket from both paths) with its un-keep path. */}
-          {retentionView.kept ? (
-            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <PushPinIcon />
-              Worktree kept
-              <button
-                type="button"
-                disabled={retentionBusy}
-                onClick={() => void runSetKeep(false)}
-                className="text-primary-text hover:underline disabled:opacity-50"
-              >
-                {UNKEEP_LABEL}
-              </button>
-            </span>
-          ) : null}
+                      {retentionView.archiveReady ? (
+                        <>
+                          <DropdownMenuItem
+                            disabled={view.primary.disabled}
+                            onSelect={runPrimary}
+                            className="justify-between gap-6"
+                          >
+                            <span className="flex items-center gap-2">
+                              <PrimaryActionIcon kind={view.primary.kind} filled />
+                              {view.primary.label}
+                            </span>
+                            {view.primary.disabled && view.primary.reason ? (
+                              <span className="text-xs text-muted-foreground">
+                                {view.primary.reason}
+                              </span>
+                            ) : null}
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                        </>
+                      ) : null}
+                      <DoneFlowMenuItem
+                        action={view.menu.commit}
+                        icon={<GitCommitIcon />}
+                        onRun={() => void runCommitOnly()}
+                      />
+                      <DoneFlowMenuItem
+                        action={view.menu.push}
+                        icon={<GitPullRequestIcon />}
+                        onRun={() => void runPushOnly(view.menu.push.kind === "push-updates")}
+                      />
+                      <DoneFlowMenuItem
+                        action={view.menu.openPr}
+                        icon={<ArrowSquareOutIcon />}
+                        onRun={openPr}
+                      />
+                      {retentionView.archiveReady ? (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            disabled={retentionBusy}
+                            onSelect={() => void runSetKeep(true)}
+                          >
+                            <PushPinIcon />
+                            {KEEP_WORKTREE_LABEL}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={retentionBusy}
+                            onSelect={() => void runDismiss()}
+                          >
+                            <BellSlashIcon />
+                            {DISMISS_LABEL}
+                          </DropdownMenuItem>
+                        </>
+                      ) : null}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </ButtonGroup>
+                {prLink}
+              </div>
+              {/* The quiet "kept" state (Keep exempts the ticket from both paths) with its un-keep path. */}
+              {retentionView.kept ? (
+                <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <PushPinIcon />
+                  Worktree kept
+                  <button
+                    type="button"
+                    disabled={retentionBusy}
+                    onClick={() => void runSetKeep(false)}
+                    className="text-primary-text hover:underline disabled:opacity-50"
+                  >
+                    {UNKEEP_LABEL}
+                  </button>
+                </span>
+              ) : null}
+            </>
+          )}
         </div>
       ) : null}
+      <CommitGateDialog
+        open={pendingCommit !== null}
+        onOpenChange={(next) => {
+          if (!next) setPendingCommit(null);
+        }}
+        branch={ticket.branch ?? ticket.baseBranch ?? "this branch"}
+        changesLabel={changesLabel}
+        diff={diff}
+        confirmLabel={view.primary.label}
+        onConfirm={() => {
+          const isUpdate = pendingCommit?.isUpdate ?? false;
+          setPendingCommit(null);
+          void runCommitThenPush(isUpdate);
+        }}
+      />
     </section>
   );
 }

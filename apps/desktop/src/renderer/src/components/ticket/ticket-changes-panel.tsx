@@ -32,9 +32,11 @@ import {
 } from "@volli/shared";
 
 import {
+  DiffTotals,
   RAIL_PANEL_INSET,
+  RAIL_PANEL_MARGIN,
+  RailFaultBanner,
   RailPanelSkeleton,
-  RailPausedBanner,
   RailRowActions,
 } from "@renderer/components/ticket/rail-panel-parts";
 import {
@@ -126,20 +128,6 @@ const CHANGE_STATUS: Record<
   },
 };
 
-/**
- * Insertions and deletions as one pair. Raw palette colors rather than theme
- * tokens, the same exception the session status dots take: added and removed
- * are a fixed, universally-read pair, not a canvas-derived surface.
- */
-function DiffTotals({ diff }: { diff: DiffStat }) {
-  return (
-    <span className="flex shrink-0 items-center gap-1.5 font-mono text-xs font-medium tabular-nums">
-      <span className="text-emerald-900 dark:text-emerald-400">+{diff.insertions}</span>
-      <span className="text-red-900 dark:text-red-400">−{diff.deletions}</span>
-    </span>
-  );
-}
-
 /** The page's name and its count — the one line both the empty and full list wear. */
 function ChangesTitle({ count }: { count: number }) {
   return (
@@ -217,7 +205,7 @@ export function TicketChangesList({
         data-testid="ticket-changes-empty"
         className={cn(
           "flex items-start gap-2.5 rounded-lg border border-sidebar-border/70 bg-background/35 p-3",
-          "mx-4 group-data-[narrow=true]/rail:mx-3",
+          RAIL_PANEL_MARGIN,
         )}
       >
         <CheckCircleIcon className="mt-0.5 size-4 shrink-0 text-emerald-500" weight="fill" />
@@ -540,7 +528,7 @@ export function TicketChangesPanel({
           />
         ) : null}
       </header>
-      {watchError !== null ? <RailPausedBanner error={watchError} onRetry={retryWatch} /> : null}
+      {watchError !== null ? <RailFaultBanner error={watchError} onRetry={retryWatch} /> : null}
       <TicketChangesList
         rows={rows}
         focusPath={nav.listFocusPath}

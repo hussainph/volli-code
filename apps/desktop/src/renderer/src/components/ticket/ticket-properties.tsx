@@ -11,6 +11,14 @@
  * Worktree identity (branch, base branch, path) and the done flow are NOT here:
  * they are repository facts, and they live in the card above this one
  * (`ticket-repository-summary.tsx`).
+ *
+ * RETIRED, deliberately: the old page closed with a `Created …` / `Updated …`
+ * pair under a rule (`formatTimestamp`, since deleted). The Calm Stack has no
+ * such line, and the two facts are not lost — the Activity feed carries a
+ * durable "created the ticket" event with its own stamp, and its most recent
+ * entry is a truer answer to "when did this last move" than a derived
+ * `updatedAt` that a label edit also bumps. `formatStamp` itself survives in
+ * `lib/relative-time` for the Archive.
  */
 import { CircleIcon } from "@phosphor-icons/react/dist/csr/Circle";
 import {

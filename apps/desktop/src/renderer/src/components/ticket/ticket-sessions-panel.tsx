@@ -17,7 +17,6 @@ import {
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import { Input } from "@renderer/components/ui/input";
-import { RailDrawer } from "@renderer/components/ticket/rail-drawer";
 import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import {
   buildTicketChatSessionRows,
@@ -71,6 +70,23 @@ const STATUS_TONE: Record<TicketSessionStatus, string> = {
 
 /** A row that has stopped: one tone for every past session, live or not. */
 const PAST_TONE = "bg-muted-foreground/35";
+
+/** Sessions and History are the same block twice — one shape, one inset, no seam. */
+const SECTION = cn("flex flex-col gap-1 pt-5", RAIL_PANEL_INSET);
+
+/**
+ * A section's title line: the uppercase label at the left, whatever the block
+ * offers at the right. Inset by the rows' own `px-2` rather than the section's
+ * edge, so the label sits over its list instead of hanging left of it.
+ */
+function SectionHeading({ label, children }: { label: string; children?: React.ReactNode }) {
+  return (
+    <div className="mb-1.5 flex items-center justify-between gap-2 px-2">
+      <h2 className="text-label font-medium text-muted-foreground uppercase">{label}</h2>
+      {children}
+    </div>
+  );
+}
 
 /**
  * Every row's right edge: one tone dot, one short phrase, at label size. A live
@@ -304,16 +320,25 @@ function SessionList({
 
 /**
  * The Now page's session content: a "Sessions" working set (one flat row per
- * live session from the unified store) and a History drawer holding
- * ended/closed durable records — searchable past 4 entries — so the working set
- * stays unlabeled and flat.
+ * live session from the unified store) and, under it, a "History" set of the
+ * ended/closed durable records — searchable past 4 entries.
+ *
+ * The two are SIBLING SECTIONS of one shape, not a list plus a drawer. History
+ * used to be a `RailDrawer`: a full-bleed `border-t` across the whole column, an
+ * uppercase trigger with a rotating caret, and a collapse animation. That
+ * primitive existed so History and a Details drawer could stack as siblings;
+ * Details folded into the repository card and the properties fold, and one
+ * caller was left dragging the old icon-mode rail's chrome — a seam the Calm
+ * Stack draws nowhere (lab/scratches/ticket-right-sidebar.tsx has no drawer, no
+ * collapsible and no full-bleed rule in the rail at all). Both sections now
+ * inset with the column (`RAIL_PANEL_INSET`) instead of a hardcoded `px-4`, so
+ * the rail's edge is one straight line at every width.
  *
  * Both sit IN FLOW: the Now page is one scrolling column (ticket-rail.tsx), so
- * this owns no scroller of its own and History is the last thing in the stack
- * rather than a drawer pinned to the rail's floor.
- * The durable list (`api.sessions.listForTicket`) is re-read whenever the live
- * set changes so new sessions appear and closed ones fold into History. Rows
- * rename inline (double-click) or via the right-click menu.
+ * this owns no scroller of its own and History is simply the last thing in the
+ * stack. The durable list (`api.sessions.listForTicket`) is re-read whenever the
+ * live set changes so new sessions appear and closed ones fold into History.
+ * Rows rename inline (double-click) or via the right-click menu.
  */
 export function TicketSessionsPanel({
   ticketId,
@@ -355,7 +380,6 @@ export function TicketSessionsPanel({
   const chatSessions = rows.flatMap((row) => (row.kind === "chat" ? [row.record] : []));
   const [now, setNow] = React.useState(() => Date.now());
   const [editingId, setEditingId] = React.useState<string | null>(null);
-  const [historyOpen, setHistoryOpen] = React.useState(false);
   const [historyQuery, setHistoryQuery] = React.useState("");
 
   const tabs = liveTabs ?? [];
@@ -471,80 +495,70 @@ export function TicketSessionsPanel({
 
   return (
     <>
-      <section className={cn("flex flex-col gap-1 pt-5", RAIL_PANEL_INSET)}>
+      <section className={SECTION}>
         {/* The heading is inset by the rows' own `px-2`, not by the section's
             edge: a label that hangs left of the list it names reads as a
-            divider between blocks rather than as that list's title. It keeps
-            the h-5 header ROW the scratch drew around it — that height came
-            from the control that used to sit at its right, and holding it means
-            the list below starts where the reviewed design put it, whatever
-            ends up in the row. */}
-        <div className="mb-1.5 flex h-5 items-center px-2">
-          <h2 className="text-label font-medium text-muted-foreground uppercase">Sessions</h2>
-        </div>
+            divider between blocks rather than as that list's title. The row is
+            `justify-between` and carries the reviewed design's always-present
+            "+" at its right (the scratch's `SessionRows` header) — the height
+            comes from the control, so there is no reserved dead space when the
+            roster is full. */}
+        <SectionHeading label="Sessions">
+          <NewSessionControl
+            disabled={effectiveCreating}
+            placement="rail"
+            align="end"
+            shortcuts
+            onNewChat={onNewChat}
+            onNewTerminal={onNewSession}
+          />
+        </SectionHeading>
         {current.length === 0 ? (
-          // The one place this panel offers to start a Session. Creation lives
-          // in the tab strip's action cluster now (ticket-tabs.tsx) — labelled,
-          // above this very column, and never scrolled away — so a second copy
-          // over a populated roster would be the same act twice in one glance.
-          // An empty roster is the exception: there is nothing to read, so the
-          // block is nothing but the invitation, and a dead end here would send
-          // a first-run user hunting for the strip.
-          <div className="flex flex-col items-center gap-2.5 rounded-lg border border-dashed border-sidebar-border py-5 text-center">
-            <p className="text-xs text-muted-foreground">No active sessions</p>
-            <NewSessionControl
-              disabled={effectiveCreating}
-              placement="rail"
-              align="end"
-              shortcuts
-              onNewChat={onNewChat}
-              onNewTerminal={onNewSession}
-            />
-          </div>
+          // Nothing to read, so the block is the sentence alone: the header's
+          // own control is 20px above it, and a second copy of the same act
+          // inside the empty frame would be the same offer twice in one glance.
+          <p className="rounded-lg border border-dashed border-sidebar-border py-5 text-center text-xs text-muted-foreground">
+            No active sessions
+          </p>
         ) : (
           <SessionList rows={current} variant="current" now={now} {...listProps} />
         )}
       </section>
       {history.length > 0 ? (
-        <RailDrawer
-          className="mt-5"
-          label="History"
-          count={history.length}
-          open={historyOpen}
-          onOpenChange={(open) => {
-            setHistoryOpen(open);
-            if (!open) setHistoryQuery("");
-          }}
-          data-testid="session-history"
-        >
-          <div className="flex flex-col gap-1.5 px-4 pb-4">
-            {history.length > 4 ? (
-              <div className="relative">
-                <MagnifyingGlassIcon
-                  aria-hidden
-                  className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
-                />
-                <Input
-                  type="search"
-                  value={historyQuery}
-                  onChange={(event) => setHistoryQuery(event.target.value)}
-                  aria-label="Search session history"
-                  placeholder="Search history…"
-                  className="h-8 pl-8 text-xs md:text-xs"
-                />
-              </div>
-            ) : null}
-            {filteredHistory.length > 0 ? (
-              <div className="max-h-64 overflow-y-auto">
-                <SessionList rows={filteredHistory} variant="history" now={now} {...listProps} />
-              </div>
-            ) : (
-              <p className="rounded-md border border-dashed border-border py-4 text-center text-xs text-muted-foreground">
-                No matching sessions
-              </p>
-            )}
-          </div>
-        </RailDrawer>
+        <section className={SECTION} data-testid="session-history">
+          <SectionHeading label="History">
+            {/* The Diffs page's own count pill, not the retired drawer's bare
+                number beside a caret — one shape for "how many are in here". */}
+            <span className="rounded-full bg-sidebar-accent px-1.5 font-mono text-label text-muted-foreground">
+              {history.length}
+            </span>
+          </SectionHeading>
+          {/* Past four rows the column stops being scannable, so the filter
+              appears — in flow, like everything else in the stack. */}
+          {history.length > 4 ? (
+            <div className="relative mb-1.5">
+              <MagnifyingGlassIcon
+                aria-hidden
+                className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
+              />
+              <Input
+                type="search"
+                value={historyQuery}
+                onChange={(event) => setHistoryQuery(event.target.value)}
+                aria-label="Search session history"
+                placeholder="Search history…"
+                className="h-8 pl-8 text-xs md:text-xs"
+              />
+            </div>
+          ) : null}
+          {filteredHistory.length > 0 ? (
+            <SessionList rows={filteredHistory} variant="history" now={now} {...listProps} />
+          ) : (
+            <p className="rounded-lg border border-dashed border-sidebar-border py-4 text-center text-xs text-muted-foreground">
+              No matching sessions
+            </p>
+          )}
+        </section>
       ) : null}
     </>
   );

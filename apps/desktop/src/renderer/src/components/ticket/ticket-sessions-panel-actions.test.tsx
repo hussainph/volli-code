@@ -25,9 +25,10 @@ function panel(creating: boolean): string {
 
 describe("TicketSessionsPanel", () => {
   // Nothing seeds the listing cache here, so every case below is the EMPTY
-  // roster — which is where this panel's one create control lives now that the
-  // tab strip owns session creation. A populated roster (and the fact that it
-  // draws no control at all) is `ticket-sessions-panel-rows.test.tsx`.
+  // roster. The create control lives in the Sessions HEADING and is present
+  // either way (the scratch draws it always) — these cases prove its shape and
+  // its disabled state; `ticket-sessions-panel-rows.test.tsx` proves it survives
+  // a populated roster.
   it("starts a chat in one press and keeps the terminal behind the caret", () => {
     const html = panel(false);
 
@@ -53,9 +54,13 @@ describe("TicketSessionsPanel", () => {
     expect(buttonTag(html, "Other session kinds")).toContain('disabled=""');
   });
 
-  it("says what is missing before it offers to fix it", () => {
-    // An empty roster is nothing but the invitation, so the block is the line
-    // and the control — no decorative glyph between them.
-    expect(panel(false)).toContain("No active sessions");
+  it("says what is missing, once, with the offer already above it", () => {
+    // An empty roster is one sentence in a dashed frame: the heading's own
+    // control sits 20px above it, so a second copy inside the frame would be
+    // the same offer twice in one glance.
+    const html = panel(false);
+
+    expect(html).toContain("No active sessions");
+    expect(html.match(/aria-label="New chat"/g)?.length).toBe(1);
   });
 });

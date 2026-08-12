@@ -33,6 +33,7 @@ import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
 import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
 import type { Ticket } from "@volli/shared";
 
+import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import { TicketProperties } from "@renderer/components/ticket/ticket-properties";
 import { TicketRepositorySummary } from "@renderer/components/ticket/ticket-repository-summary";
 import { TicketSessionsPanel } from "@renderer/components/ticket/ticket-sessions-panel";
@@ -82,13 +83,11 @@ function TicketRailTabs({
   mode,
   modes,
   onSelectMode,
-  narrow,
 }: {
   mode: TicketRailMode;
   /** Which pages this surface offers — see `availableRailModes`. */
   modes: readonly TicketRailMode[];
   onSelectMode(mode: TicketRailMode): void;
-  narrow: boolean;
 }) {
   const refs = React.useRef<Array<HTMLButtonElement | null>>([]);
   const [animateSelection, setAnimateSelection] = React.useState(true);
@@ -115,7 +114,7 @@ function TicketRailTabs({
     <div
       className={cn(
         "sticky top-0 z-20 shrink-0 bg-sidebar/80 pt-3 pb-3 backdrop-blur-xl",
-        narrow ? "px-3" : "px-4",
+        RAIL_PANEL_INSET,
       )}
     >
       <div
@@ -197,18 +196,6 @@ function TicketRailTabs({
   );
 }
 
-function RailPagePlaceholder({ label }: { label: string }) {
-  return (
-    <div
-      data-testid={`ticket-rail-placeholder-${label.toLowerCase()}`}
-      className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-4 py-8 text-center"
-    >
-      <p className="text-ui font-medium text-muted-foreground">{label}</p>
-      <p className="text-xs text-muted-foreground/80">Nothing here yet</p>
-    </div>
-  );
-}
-
 export function TicketRail({
   projectId,
   ticket,
@@ -237,11 +224,13 @@ export function TicketRail({
    */
   activeTabId: string;
   /**
-   * Optional Files navigator. When omitted, a quiet placeholder renders so the
-   * shell stays usable until the Files agent lands.
+   * The Files navigator. The app always passes it (`TicketDetail`); it stays
+   * optional only so a lab scratch studying the rail's CHROME can mount the
+   * column without booting a navigator, and an absent one draws nothing rather
+   * than a placeholder page that no longer stands in for anything.
    */
   filesContent?: React.ReactNode;
-  /** Optional Diffs navigator — same seam as `filesContent`. */
+  /** The Diffs navigator — same seam as `filesContent`. */
   changesContent?: React.ReactNode;
 }) {
   const storedMode = useUiStore((state) => state.railMode);
@@ -266,17 +255,18 @@ export function TicketRail({
   const showChanges = React.useCallback(() => onSelectMode("changes"), [onSelectMode]);
 
   return (
-    // The narrow flag rides the DOM as a group attribute rather than a prop on
-    // every block: the two navigators arrive as `changesContent`/`filesContent`
-    // from the host, so a prop would have to be threaded through
-    // `TicketDetail`, and the edge inset is a fact about the column, not about
-    // any one page. Blocks opt in with `group-data-[narrow=true]/rail:px-3`.
+    // The narrow flag travels ONE way: as a group attribute on the column, read
+    // by every block through `RAIL_PANEL_INSET`. Not also as a prop — the two
+    // navigators arrive as `changesContent`/`filesContent` from the host, so a
+    // prop would have to be threaded through `TicketDetail` to reach them, and
+    // a rail whose inset came from two sources is a rail with two answers for
+    // the blocks that only read one of them.
     <div
       className="group/rail flex min-h-0 min-w-0 flex-1 flex-col"
       data-narrow={narrow ? "true" : "false"}
       data-testid="ticket-rail"
     >
-      <TicketRailTabs mode={mode} modes={modes} onSelectMode={onSelectMode} narrow={narrow} />
+      <TicketRailTabs mode={mode} modes={modes} onSelectMode={onSelectMode} />
       <section
         id={`ticket-rail-page-${mode}`}
         role="tabpanel"
@@ -304,8 +294,8 @@ export function TicketRail({
             />
           </div>
         ) : null}
-        {mode === "changes" ? (changesContent ?? <RailPagePlaceholder label="Diffs" />) : null}
-        {mode === "files" ? (filesContent ?? <RailPagePlaceholder label="Files" />) : null}
+        {mode === "changes" ? changesContent : null}
+        {mode === "files" ? filesContent : null}
       </section>
     </div>
   );

@@ -25,6 +25,7 @@ import { errorMessage, type DirEntry, type Ticket, type TicketAttachment } from 
 
 import {
   RAIL_PANEL_INSET,
+  RailFaultBanner,
   RailPanelSkeleton,
   RailRowActions,
 } from "@renderer/components/ticket/rail-panel-parts";
@@ -52,11 +53,12 @@ function toWorktreeEntries(cwd: string, entries: readonly DirEntry[]): TicketWor
 }
 
 /**
- * The three kinds a row can be, and the glyph each wears. `fill`, unusually:
- * these are not one scannable list with an exception in it — the glyph is the
- * only thing separating a folder from a file from a body reference, so it is
- * the row's category mark rather than emphasis on one row among peers, and
- * outline at 16px reads as three near-identical outlines.
+ * The three kinds a row can be, and the glyph each wears — outline, the
+ * baseline, on every row (CLAUDE.md: a scannable list is outline throughout
+ * except for its own exceptions, and `fill` is never emphasis). Nothing here is
+ * an exception among its neighbours: the three glyphs are already three
+ * different DRAWINGS — a folder, a page with code marks, a tag — so filling all
+ * of them separates nothing and only makes the column heavier to read down.
  */
 const ROW_ICONS: Record<"file" | "directory" | "reference", PhosphorIcon> = {
   directory: FolderIcon,
@@ -92,7 +94,7 @@ function FileRow({
         onDoubleClick={onPin}
         className="flex min-w-0 flex-1 items-center gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/50"
       >
-        <Icon className="size-4 shrink-0 text-muted-foreground" weight="fill" />
+        <Icon className="size-4 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-ui font-medium">
             {primary}
@@ -177,33 +179,6 @@ export function TicketFilesList({
 }
 
 const NO_ATTACHMENTS: readonly TicketAttachment[] = [];
-
-/**
- * A failed directory read, shown ABOVE the navigator rather than instead of it.
- * A listing can fail for one folder (permissions, a directory the agent deleted
- * mid-browse) while the rest of the tree is fine — replacing the whole panel
- * threw away the breadcrumb and the Up control too, so the only way out of a
- * bad folder was to leave the ticket entirely. The last good listing stays on
- * screen and navigable; this just says the requested read didn't land.
- */
-function FilesErrorBanner({ error, onRetry }: { error: string; onRetry(): void }) {
-  return (
-    <div
-      data-testid="ticket-files-error"
-      role="alert"
-      className="flex shrink-0 items-baseline justify-between gap-2 border-b border-destructive/30 bg-destructive/5 px-3 py-2"
-    >
-      <span className="min-w-0 text-xs text-destructive">{error}</span>
-      <button
-        type="button"
-        onClick={onRetry}
-        className="shrink-0 text-xs text-primary-text hover:underline"
-      >
-        Retry
-      </button>
-    </div>
-  );
-}
 
 /**
  * Ticket Files panel: body refs + optional attachments + worktree directory
@@ -356,7 +331,19 @@ export function TicketFilesPanel({
           />
         ) : null}
       </header>
-      {error !== null ? <FilesErrorBanner error={error} onRetry={() => void loadDir(cwd)} /> : null}
+      {/* A listing can fail for ONE folder (permissions, a directory the agent
+          deleted mid-browse) while the rest of the tree is fine, so the fault
+          shows ABOVE the navigator rather than instead of it — the last good
+          listing stays on screen, and the header's Up control stays reachable.
+          Same banner the two watches use: one fault, one shape. */}
+      {error !== null ? (
+        <RailFaultBanner
+          testId="ticket-files-error"
+          label="Folder unreadable"
+          error={error}
+          onRetry={() => void loadDir(cwd)}
+        />
+      ) : null}
       <TicketFilesList
         referenced={referenced}
         worktree={worktree}

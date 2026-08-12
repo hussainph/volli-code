@@ -26,17 +26,24 @@ const ticket: Ticket = {
   updatedAt: 0,
 };
 
+/** The same ticket before anything has made it a worktree. */
+const ticketWithoutWorktree: Ticket = {
+  ...ticket,
+  worktreePath: null,
+  branch: null,
+};
+
 const noop = (): void => {};
 
 // The provider mirrors the real tree: `SidebarProvider` wraps the whole app in
 // one (ui/sidebar.tsx), which is what makes the card's disabled-reason tooltips
 // legal at runtime. Nothing new is introduced for the rail's sake.
-function render() {
+function render(subject: Ticket = ticket) {
   return renderToStaticMarkup(
     <TooltipProvider>
       <TicketRail
         projectId="project-1"
-        ticket={ticket}
+        ticket={subject}
         creating={false}
         onNewSession={noop}
         onNewChat={noop}
@@ -128,5 +135,35 @@ describe("TicketRail's Now page", () => {
 
     expect(properties).not.toContain("volli/VC-6-calm-stack");
     expect(properties).not.toContain("/worktrees/");
+  });
+});
+
+// `renderToStaticMarkup` runs no effects, so the card is frozen in the state it
+// holds on the very first frame — which is exactly the state that used to lie.
+describe("TicketRail's repository card before the first read lands", () => {
+  it("waits rather than claiming the worktree is clean", () => {
+    const html = render();
+
+    // The Change Set has not arrived, so there is no count to state — the row
+    // draws the wait. It used to compute `diff?.files.length ?? 0` and announce
+    // "No changes" for the whole first fetch, on a worktree with 40 edits in it.
+    expect(html).toContain('data-testid="ticket-repository-changes-loading"');
+    expect(html).toContain('aria-label="Reading changes, show Diffs"');
+    expect(html).not.toContain("No changes");
+  });
+
+  it("says a worktree-less ticket has no worktree, permanently and honestly", () => {
+    // Nothing is ever fetched here (`refreshStatusAndDiff` returns early), so
+    // "No changes" would not have been a slow frame — it would have been the
+    // ticket's whole answer, contradicting the Diffs page beside it.
+    const html = render(ticketWithoutWorktree);
+
+    expect(html).toContain('aria-label="No worktree yet, show Diffs"');
+    expect(html).not.toContain("No changes");
+    expect(html).not.toContain('data-testid="ticket-repository-changes-loading"');
+  });
+
+  it("offers no publish controls until the ticket has a worktree", () => {
+    expect(render(ticketWithoutWorktree)).not.toContain('aria-label="More repository actions"');
   });
 });
