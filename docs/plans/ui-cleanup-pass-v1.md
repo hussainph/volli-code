@@ -155,6 +155,22 @@ that drag now produces one commit and zero attributed renders.
 
 ### Still open
 
+- **The rail ignores `prefers-reduced-motion`, and it is not the harness.**
+  `ticket-rail-shots`' reduced-motion check fails, and the check now reports
+  why rather than only that: `pageSawReduceQuery=true` — the renderer does see
+  the query — and `neededRerender=false`, meaning the transition survives a
+  forced re-render too. So `useReducedMotion()` (`ticket-rail.tsx:94`) is
+  returning false while `matchMedia("(prefers-reduced-motion: reduce)").matches`
+  is true, and the `!reducedMotion &&` guard at `:156` never engages. The
+  Motion layout animation at `:173` reads the same value, so it is presumably
+  running too.
+  Pre-existing, not from the cleanup round: `git diff` over this file's commit
+  shows no change to any `transition`/`reducedMotion` line, so it arrived with
+  the Calm Stack in `07fd594e`/`7ec5d0c1`, when `motion/react` first entered app
+  code. Worth knowing before trusting any other `useReducedMotion()` call site.
+  The check is deliberately left RED — it is reporting a real defect, and a
+  green run bought by relaxing it is what this branch has already been bitten by
+  three times.
 - **The stored default model is still `azure-openai-responses`.** Code cannot
   repair it silently and no agent may write to the live DB. One visit to
   Settings fixes it; until then new Sessions record Azure, but now say so

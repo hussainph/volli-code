@@ -162,14 +162,52 @@ try {
     const normal = await readTransition();
     await page.emulateMedia({ reducedMotion: "reduce" });
     try {
-      const reduced = await readTransition();
-      await page.waitForTimeout(300);
+      // Poll, do not snapshot. The rail drops its transition through
+      // `useReducedMotion()`, which is a React hook over the media query — so
+      // the class only leaves after a re-render, and reading the computed style
+      // in the same tick as `emulateMedia` reads the OLD value every time. This
+      // check failed on exactly that, and the 300ms it did wait was spent after
+      // the read rather than before it, which is the same as not waiting.
+      let reduced = normal;
+      let flipped = await waitUntil("rail tab drops its transition", async () => {
+        reduced = await readTransition();
+        return reduced !== normal;
+      }).catch(() => false);
+      // If the query landed but nothing moved, force one re-render before
+      // concluding. `useReducedMotion()` is a hook, so a preference toggled
+      // AFTER mount only reaches the DOM when React renders again — and that
+      // distinguishes "the rail ignores the preference", which is a real
+      // accessibility defect, from "the hook does not re-subscribe live", which
+      // is a much smaller one that never touches a user who had the setting on
+      // before the app started.
+      let neededRerender = false;
+      if (flipped === false) {
+        await aside.getByTestId("ticket-rail-tab-files").click();
+        await aside.getByTestId("ticket-rail-tab-changes").click();
+        flipped = await waitUntil("rail tab drops its transition after a render", async () => {
+          reduced = await readTransition();
+          return reduced !== normal;
+        }).catch(() => false);
+        neededRerender = flipped !== false;
+      }
+      // Report WHY, not just that. The rail reads the preference through
+      // `useReducedMotion()`, so a stuck transition has two very different
+      // causes: the page never saw the media query flip (emulation did not
+      // reach this renderer, and the check is measuring the harness), or it saw
+      // it and the component ignored it (a real accessibility regression).
+      // Without this, the two are indistinguishable and the check is a puzzle.
+      const sawQuery = await page.evaluate(
+        () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+      );
       const path = join(SHOT_DIR, "rail-reduced-motion.png");
       await page.screenshot({ path, fullPage: false });
       const stat = await fs.stat(path);
       return {
-        ok: stat.size > 1000 && reduced !== normal,
-        detail: `${path} normal=[${normal}] reduced=[${reduced}]`,
+        ok: stat.size > 1000 && sawQuery && flipped !== false && reduced !== normal,
+        detail:
+          `${path} pageSawReduceQuery=${sawQuery} neededRerender=${neededRerender} ` +
+          `normal=[${normal}] reduced=[${reduced}]` +
+          (sawQuery ? "" : " — the renderer never saw the query; emulation did not reach it"),
       };
     } finally {
       await page.emulateMedia({ reducedMotion: null });
