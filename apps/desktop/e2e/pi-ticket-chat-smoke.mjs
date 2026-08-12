@@ -16,9 +16,10 @@
  * `$PI_CODING_AGENT_DIR` else `~/.pi/agent/auth.json` under that `HOME`
  * (`packages/agent-runtime/src/pi/models.ts`), so the real
  * `~/.pi/agent/auth.json` is copied into `<fakeHome>/.pi/agent/auth.json`
- * first. Fails fast with a clear message if the real file is missing, and the
- * copy is never read back or logged — this smoke does not print, log, or
- * commit auth contents.
+ * first — `smoke-kit.mjs`'s `ensurePiAuthInto`, which all three Pi smokes
+ * share. It fails fast with a clear message if the real file is missing, never
+ * reads the copy back or logs it, and shreds it on the way out however this
+ * process dies — so a killed run leaves no live token behind.
  *
  * Deliberately NOT set up: OpenCode. There is no fake OpenCode server and no
  * binary override — a Pi Session no longer asks OpenCode anything.
@@ -46,16 +47,16 @@
  */
 import { promises as fs } from "node:fs";
 import os from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 import {
   cardById,
   createRunner,
+  ensurePiAuthInto,
   goToBoard,
   launch,
   makeGitRepo,
   makeScratch,
-  pathExists,
   readSeededProjects,
   seedDefaultModel,
   seedProjects,
@@ -65,8 +66,6 @@ import {
 
 const PROJECT = { id: "pi-ticket-chat-project", name: "Pi Ticket Chat", prefix: "PT" };
 const PROMPT_TEXT = "Reply with one short sentence.";
-
-const REAL_PI_AUTH = join(os.homedir(), ".pi", "agent", "auth.json");
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("pi-ticket-chat-smoke-");
 // Isolates Pi's own credential/config lookups from the developer's real
@@ -99,24 +98,6 @@ async function captureFailureEvidence(page, mainOut, mainErr, label) {
   );
   console.log(`  evidence: ${join(EVIDENCE_DIR, `pi-ticket-chat-${slug}.png`)}`);
   console.log(`  evidence: ${join(EVIDENCE_DIR, `pi-ticket-chat-${slug}.log`)}`);
-}
-
-/**
- * Copies the real Pi credentials into the isolated `fakeHome`, never reading
- * or printing their contents — only `fs.copyFile`, byte for byte. Fails fast
- * with a clear message if the real file is missing, rather than letting the
- * app boot into a login-required dead end.
- */
-async function ensurePiAuthInto(homeDir) {
-  if (!(await pathExists(REAL_PI_AUTH))) {
-    throw new Error(
-      `Real Pi credentials not found at ${REAL_PI_AUTH}. This smoke drives a live Pi turn and ` +
-        "needs a working `pi` login (openai-codex / ChatGPT subscription) on this machine first.",
-    );
-  }
-  const dest = join(homeDir, ".pi", "agent", "auth.json");
-  await fs.mkdir(dirname(dest), { recursive: true });
-  await fs.copyFile(REAL_PI_AUTH, dest);
 }
 
 /** The tab strip's direct Chat control (the rail has its own copy). */
