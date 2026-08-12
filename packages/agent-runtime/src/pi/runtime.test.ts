@@ -1209,6 +1209,29 @@ describe("startSession", () => {
     expect(kinds(attachment.observations)).not.toContain("authority");
   });
 
+  it("counts the first refusal from the denials the Session arrived carrying", async () => {
+    const ask = vi.fn(async () => "allow" as const);
+    const { attachment, exec, containedEnv } = escalatingAttachment(ask);
+    // Consecutive is put out of reach, so a question raised by the very first
+    // refusal this attachment sees can only have come from the seed. Nineteen
+    // in, that refusal is the Session's twentieth.
+    attachment.spec.authority = {
+      ...attachment.spec.authority,
+      fallback: { consecutiveDenials: 99, sessionDenials: 20 },
+    };
+    attachment.spec.priorAuthorityDenials = 19;
+    const handle = await escalatingRuntime(attachment, containedEnv).startSession(attachment.spec);
+
+    await handle.submitUserMessage("Reset the tree.");
+    await handle.close();
+
+    expect(ask).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ trip: "session" }),
+      expect.any(AbortSignal),
+    );
+    expect(exec).toHaveBeenCalledOnce();
+  });
+
   it("records the denial and interrupts the turn without calling the Session broken", async () => {
     const { attachment, exec, containedEnv } = escalatingAttachment(async () => "stop");
     const handle = await escalatingRuntime(attachment, containedEnv).startSession(attachment.spec);

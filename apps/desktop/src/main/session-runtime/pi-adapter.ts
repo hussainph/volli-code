@@ -155,6 +155,22 @@ interface PiRuntimeContextFields {
    * uncommitted work as a disposable branch.
    */
   location: WorkLocationKind;
+  /**
+   * Refusals this Session has already accrued, projected from its own history.
+   *
+   * Crosses here for the reason every other field on this interface does: it is
+   * durable Session state, and neither the directory an attachment is handed
+   * nor the process about to start in it knows the first thing about it. The
+   * per-Session half of the fallback threshold counts the *Session*, not the
+   * attachment that happens to be live — so a count that began at zero on every
+   * attach would leave a Session refused nineteen times yesterday permanently
+   * one refusal short of ever being asked.
+   *
+   * Required, not optional, and that is the whole guard: a forgotten seed
+   * changes no behaviour anyone can see, it just quietly restores that. The
+   * compiler is the only thing that can notice.
+   */
+  authorityDenials: number;
 }
 
 /**
@@ -428,6 +444,9 @@ class PiBinding implements BindingHandle {
         classifierModel: null,
         fallback: { consecutiveDenials: 3, sessionDenials: 20 },
       },
+      // "Prior" is what the Session's own count becomes at this line — every
+      // refusal it accrued before this attachment existed to hold one.
+      priorAuthorityDenials: context.authorityDenials,
       brief: { text: this.#context.brief },
       tools: { tools: [...PI_TOOLS.tools] },
       ...(this.#recovery === undefined ? {} : { recovery: this.#recovery }),

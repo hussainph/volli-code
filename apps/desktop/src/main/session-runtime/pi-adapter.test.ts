@@ -45,6 +45,7 @@ const context: PiRuntimeContext = {
     modelId: "gpt-5.6-sol",
     reasoningLevel: "high",
   },
+  authorityDenials: 0,
 };
 
 function attachmentSpec(overrides: Partial<NativeAttachmentSpec> = {}): NativeAttachmentSpec {
@@ -362,6 +363,7 @@ describe("Pi native adapter attach", () => {
       classifierModel: null,
       fallback: { consecutiveDenials: 3, sessionDenials: 20 },
     });
+    expect(spec.priorAuthorityDenials).toBe(0);
     expect(spec.tools).toEqual({ tools: ["read", "edit", "write", "execute"] });
     expect(spec.brief).toEqual({ text: "VC-12: Host the Pi runtime" });
     expect(spec.signal?.aborted).toBe(false);
@@ -406,6 +408,7 @@ describe("Pi native adapter attach", () => {
           rootThreadId: sessionRootThreadId(SESSION_ID),
           brief: "A project-scoped chat Session.",
           model: context.model,
+          authorityDenials: 4,
         }),
       },
       attachmentSpec({ directory: "/work/volli" }),
@@ -423,7 +426,27 @@ describe("Pi native adapter attach", () => {
     expect(spec.workspacePath).toBe("/work/volli");
     expect(spec.brief).toEqual({ text: "A project-scoped chat Session." });
     expect(spec.model).toEqual(context.model);
+    expect(spec.priorAuthorityDenials).toBe(4);
     expect(spec.tools).toEqual({ tools: ["read", "edit", "write", "execute"] });
+  });
+
+  /**
+   * The escalation counter is per Session and the attachment is not, so this is
+   * the seam where that difference is either carried or lost. Lost, it costs
+   * nothing visible — every attach simply starts from zero and the per-Session
+   * threshold is never reached again — which is why it is asserted here rather
+   * than left to be noticed.
+   *
+   * What the seeded count then *does* is settled a layer down, in
+   * `runtime.test.ts`: nineteen carried in means the next refusal is the
+   * twentieth and raises a question.
+   */
+  it("seeds the runtime with the refusals the Session accrued before this attachment", async () => {
+    const { runtime } = await attached({
+      resolveRuntimeContext: async () => ({ ...context, authorityDenials: 19 }),
+    });
+
+    expect(runtime.spec.priorAuthorityDenials).toBe(19);
   });
 
   it("fails a Session that lacks its runtime context", async () => {

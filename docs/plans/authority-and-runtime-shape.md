@@ -266,7 +266,7 @@ into Pi — so the roughly 1400 renderer lines that sat at 100% coverage verifyi
 behaviour nothing produced now have a producer, which is what retires Part II
 candidate 4. What has *not* shipped is the second half of the original two-PR
 plan — the drawer above the composer, which is where the existing card moves —
-and five other items. Both are in the checklist below.
+and four other items. Both are in the checklist below.
 
 **The ask is a typed port, not an observation.**
 `SessionRuntimeSpec.ask?: (request: RuntimeAskRequest, signal: AbortSignal) =>
@@ -415,27 +415,20 @@ in `escalation.ts` so nobody rediscovers it as a bug.
 
 #### What remains
 
-1. **Seed the session counter.** `SessionRuntimeSpec.priorAuthorityDenials` is
-   declared and read — `runtime.ts` passes it to `AuthorityEscalation` as
-   `priorDenials` — but nothing supplies it. `PiBinding.runtimeSpec()` never sets
-   it and `PiRuntimeContext` has no field for it, so the per-Session half of the
-   threshold restarts at zero on every attach and a Session that accrued denials
-   across attaches is never asked on that count. It seeds from
-   `SessionProjection.authorityDenials` through `PiRuntimeContext`.
-2. **Put `pi-adapter.ts` under the coverage gate.**
+1. **Put `pi-adapter.ts` under the coverage gate.**
    `apps/desktop/src/main/session-runtime/pi-adapter.ts` is absent from the
    `include` list in `apps/desktop/vite.config.ts`, so the file this slice is
    mostly about is not measured by the 100% gate at all. Measured on 2026-08-11
    it sits at **78/88 branches** and 141/146 statements — ten uncovered branches
    and five uncovered statements (lines 233, 301, 484, 493, 518), most of them
    pre-existing. Adding the entry means closing all of them.
-3. **A live smoke.** `apps/desktop/e2e/authority-escalation-smoke.mjs` does not
+2. **A live smoke.** `apps/desktop/e2e/authority-escalation-smoke.mjs` does not
    exist. Three refusals in a row, a card, an answer, and the turn continuing or
    stopping is the one path no unit test covers end to end.
-4. **The drawer above the composer** — the second half of this slice's own
+3. **The drawer above the composer** — the second half of this slice's own
    two-PR plan, unbuilt. The card is drawn today at the foot of the transcript by
    `footInteraction` in `chat-plane.tsx`; the drawer is where it moves.
-5. **Pin the denial/answer interleave with a test.** The Engine writes
+4. **Pin the denial/answer interleave with a test.** The Engine writes
    `interaction.resolved` itself, from the receipt the adapter's dispatch
    returns, while the runtime emits `authority.denied` on its own ordered queue
    once the parked resolver settles. Two independent chains, so the order they
@@ -444,7 +437,7 @@ in `escalation.ts` so nobody rediscovers it as a bug.
    true and separately timestamped, so this is a known interleave to pin, not a
    reason to build ordering machinery — and neither `session-runtime.test.ts` nor
    `pi-adapter.test.ts` pins it today.
-6. **Prove a blocked call is *recorded*.** The three cases in
+5. **Prove a blocked call is *recorded*.** The three cases in
    `packages/agent-runtime/src/pi/scoped-execution-env.srt.integration.test.ts`
    assert filesystem refusal only. The `VOLLI_SRT_INTEGRATION`-gated suite should
    gain a case asserting that a blocked call is recorded, not merely refused —

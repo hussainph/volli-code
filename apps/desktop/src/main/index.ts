@@ -432,6 +432,11 @@ app.whenReady().then(async () => {
             projectId: project.id,
             rootThreadId: sessionRootThreadId(sessionId),
             model: projection.modelSelection,
+            // The fold this projection already did, rather than a second count
+            // of the same events: the per-Session escalation threshold is
+            // measured against the Session's whole life, so the attachment
+            // starts where the last one left off instead of back at zero.
+            authorityDenials: projection.authorityDenials,
           };
           // A ticketless Session is a Role, not a Ticket lookup that failed:
           // it briefs on the project root it already runs in.
