@@ -42,12 +42,19 @@ Volli set. Reverting removes the key from Volli's overlay file rather than
 touching your Ghostty config. Two buttons under **Config files** reveal the
 Ghostty config and Volli's overlay file in Finder.
 
+### Agent
+
+**Settings → Agent** holds Model Access. Choose the default model and reasoning
+level used when a structured Session starts. The Accounts section shows which
+providers are available and gives you a recovery action when sign-in is
+required. Volli never silently substitutes a different model or account.
+
 ### Harness Runtimes
 
-**Settings → Harness Runtimes** lists the three built-in harnesses, **Claude
-Code**, **Codex**, and **Opencode**, each marked **Built-in**. That's the whole
-pane today. Custom command templates and per-harness resume-flag overrides
-aren't built yet.
+**Settings → Harness Runtimes** lists the terminal companions Volli can launch:
+**Claude Code**, **Codex**, **Cursor**, and **OpenCode**, plus registered custom
+harnesses. These settings describe manual terminal integrations, not the
+Pi-backed structured runtime configured under Agent.
 
 ### Worktrees
 
@@ -73,13 +80,11 @@ ticket's worktree branches from. Leave it blank and Volli detects your repo's
 default itself, from `origin`'s HEAD, or your current branch if there's no
 remote.
 
-**Configure → General → Setup command** runs once, in the ticket's own
-terminal, right after its worktree is created and before the agent starts. It's
-the place for `pnpm install` or anything else the worktree needs before an
-agent can work in it. Output prints to the same session the agent then takes
-over, and a failing setup command leaves that terminal live rather than
-starting the agent, so you can fix it and continue by hand. It runs only the
-first time a worktree is created; reopening an existing session skips it.
+**Configure → General → Setup command** runs once in a fresh ticket terminal,
+after its worktree is created and before a terminal harness starts. Use it for
+`pnpm install` or another command the worktree needs. Output stays in that
+terminal. If setup fails, the harness does not start and the terminal remains
+open so you can fix it by hand.
 
 ### Appearance
 
@@ -126,11 +131,10 @@ The copy step follows three more rules:
 
 ## Back up your data
 
-Volli is local-only, so there's no cloud copy to fall back on. **File → Export
-Database as JSON…** writes your projects, tickets, labels, event history,
-sessions, and comments to a JSON file at a location you choose. There's no
-import path back in, so treat the export as a backup and inspection tool rather
-than a restore mechanism.
+Volli does not sync its local database. **File → Export Database as JSON…**
+writes your projects, tickets, labels, event history, Sessions, and comments to
+a JSON file at a location you choose. There's no import path back in, so treat
+the export as a backup and inspection tool rather than a restore mechanism.
 
 ## Next steps
 
@@ -141,13 +145,13 @@ than a restore mechanism.
     description="Build the app and terminal color palette this page doesn't cover."
   />
   <LinkCard
-    title="Agents and worktrees"
+    title="Sessions and worktrees"
     href="/guides/agents-and-worktrees/"
-    description="What a ticket's worktree gets, and how sessions behave inside it."
+    description="How structured Sessions, worktrees, and terminal companions differ."
   />
   <LinkCard
     title="Troubleshooting"
     href="/reference/troubleshooting/"
-    description="Fixes for worktrees, harness credentials, and where Volli keeps things."
+    description="Fixes for Model Access, worktrees, terminals, and local data."
   />
 </CardGrid>

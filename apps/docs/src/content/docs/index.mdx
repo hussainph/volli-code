@@ -1,19 +1,17 @@
 ---
 title: Volli Code
-description: Documentation for Volli Code, a macOS app that plans work on a kanban board and runs coding agents in isolated git worktrees.
+description: Documentation for Volli Code, a local-first macOS workspace for planning code work and running durable coding Sessions.
 template: splash
-# Without this the tab reads "Volli Code | Volli Code", since Starlight appends
-# the site title to every page title and this page's title is the site's.
 head:
   - tag: title
     content: Volli Code documentation
 hero:
-  tagline: A ticket is a terminal workspace. Move one to Doing and a coding agent starts in its own git worktree.
+  tagline: Plan work on a board, then run durable coding Sessions with the context that work needs.
   actions:
-    - text: Install
+    - text: Build from source
       link: /start/install/
       icon: right-arrow
-    - text: Source on GitHub
+    - text: View the source
       link: https://github.com/hussainph/volli-code
       icon: external
       variant: minimal
@@ -21,55 +19,62 @@ hero:
 
 import { CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-Volli Code runs on macOS and keeps everything on your machine. Projects, tickets,
-and history live in a local SQLite database. There's no account and no sync.
+Volli Code is a local-first macOS app. It stores projects, tickets, Session
+history, and worktrees on your machine. Volli itself requires no account;
+model requests go to the provider you select through Model Access.
 
 ## Start here
 
 <CardGrid>
   <LinkCard
-    title="Install"
+    title="Build from source"
     href="/start/install/"
-    description="Download the app or build it from source."
+    description="Install the development build on macOS and connect Model Access."
   />
   <LinkCard
     title="Quickstart"
     href="/start/quickstart/"
-    description="Add a project, write a ticket, and watch an agent pick it up."
+    description="Add a project, choose a model, and start a Ticket Session."
   />
   <LinkCard
     title="Concepts"
     href="/start/concepts/"
-    description="Tickets, sessions, worktrees, and the words Volli uses for them."
+    description="Learn the terms Volli uses for tickets, Sessions, and worktrees."
   />
   <LinkCard
     title="CLI reference"
     href="/reference/cli/"
-    description="Every volli command, for you and for the agents you run."
+    description="Use the local CLI to inspect projects and work from a supported terminal companion."
   />
 </CardGrid>
 
-## What you can do
+## Work in Volli
 
 <CardGrid>
   <LinkCard
-    title="Plan on a board"
+    title="Plan on the board"
     href="/guides/board/"
-    description="Five fixed columns track whose turn it is. Backlog and Todo are yours, Doing belongs to an agent, Needs Review comes back to you."
+    description="Keep work visible in five fixed columns and open the ticket that needs attention."
   />
   <LinkCard
-    title="Run agents in isolation"
+    title="Sessions and worktrees"
     href="/guides/agents-and-worktrees/"
-    description="Each ticket gets its own git worktree and branch, so two agents can work at once without touching each other's files or your main checkout."
+    description="Use Pi-backed Sessions for structured execution and worktrees for ticket isolation."
   />
   <LinkCard
-    title="Let agents drive the board"
-    href="/reference/cli/"
-    description="Agents report progress through the bundled volli CLI over a local socket, which moves tickets between columns."
+    title="Ticket workspace"
+    href="/guides/ticket-workspace/"
+    description="Read the ticket, inspect its files and changes, and return to its Sessions."
   />
   <LinkCard
     title="Make it yours"
     href="/guides/theming/"
-    description="Every color in the app derives from one canvas. Place one to three colors, choose light or dark, and override either for a single project."
+    description="Set the canvas for the app and, when needed, override it for a project."
   />
 </CardGrid>
+
+## In development
+
+**Automations** are being built as saved board triggers. They will open Sessions
+with defined instructions, a runtime, and recorded outcomes. They are not a
+setup option in the current app.

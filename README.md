@@ -1,50 +1,66 @@
-# Volli Code
+<p align="center">
+  <img src="apps/desktop/build/icon-source.svg" width="96" alt="Volli Code icon" />
+</p>
 
-**A local-first workspace for planning and running coding sessions.**
+<h1 align="center">Volli Code</h1>
 
-Volli Code brings tickets, isolated worktrees, coding harnesses, and local history into one macOS app.
+<p align="center">
+  A local-first macOS workspace for planning coding work and running it through durable, Pi-backed Sessions.
+</p>
+
+<p align="center">
+  <a href="https://volli.app">Website</a>
+  ·
+  <a href="https://docs.volli.app">Documentation</a>
+  ·
+  <a href="https://docs.volli.app/start/install/">Build from source</a>
+</p>
+
+<a href="https://volli.app">
+  <img src="docs/assets/volli-code-ticket-session.webp" alt="Volli Code Ticket workspace showing a Pi-backed Session, isolated worktree, branch, and review environment" />
+</a>
+
+## From Ticket to review
+
+`Ticket → Session → worktree → Change Set → review`
+
+- Plan scope, constraints, and the review target on a local Ticket board.
+- Run durable Pi-backed Ticket Sessions in isolated Git worktrees, or project Sessions from the main checkout.
+- Inspect the live Change Set beside the Session history that produced it.
+- Open Claude Code, Codex, OpenCode, or a custom TUI in an embedded terminal when you want a manual companion.
+
+App state, Tickets, and Session history stay on your machine. Model requests go to the provider you select through Model Access.
+
+## Build from source
 
 > [!NOTE]
-> Volli Code is under active development. The current app is terminal-first; the planned architecture is a chat-first Session UI backed by a Pi-backed `@volli/agent-runtime`, with external and bring-your-own TUI harnesses retained as manual terminal companions rather than a structured fallback.
+> Volli is in active development and does not have a packaged release yet.
 
-![Volli Code kanban board](docs/assets/volli-code-board.png)
-
-## What works today
-
-- A local SQLite-backed tracker with tickets, comments, activity, labels, and project settings.
-- Isolated ticket worktrees, Change Sets, publishing flows, and project file editing.
-- Embedded terminal sessions with tabs, splits, history, interruption, parking, and harness-specific resume support.
-- A capability-aware harness registry with exact-manifest trust, launch configuration, wrapper generation, hook evidence, and custom TUI adapters.
-- The bundled `volli` CLI for explicit ticket, session, notification, and diagnostic commands.
-
-## Where it is going
-
-The target Session model is durable independently of any live executor. A Session will own its local ordered event history before the Pi-backed `@volli/agent-runtime` attaches; external and bring-your-own TUI harnesses run only as manual terminal companions, never a structured fallback pretending to have feature parity.
-
-That redesign still needs an immutable Session event ledger, idempotent command delivery and receipts, retry reconciliation, and structured attention states. The existing terminal infrastructure remains useful compatibility machinery, but it is not the future source of Session truth.
-
-## Development
-
-Volli Code currently targets macOS and requires Node `^24.13` and pnpm 11.
+Requirements: macOS, Node.js `^24.13.0`, and pnpm `11.10.0`.
 
 ```bash
+git clone https://github.com/hussainph/volli-code.git
+cd volli-code
 pnpm install
 pnpm dev
 ```
 
-Build and run the production bundle locally:
+To build and run the production bundle locally:
 
 ```bash
 pnpm run build
 pnpm start
 ```
 
-Run the quality checks:
+See the [installation guide](https://docs.volli.app/start/install/) for native dependency setup and troubleshooting.
 
-```bash
-vp run -r typecheck
-vp run -r test
-vp check
-```
+## Automation is in development
 
-Canonical domain language lives in [`CONTEXT.md`](CONTEXT.md); the living visual language lives in [`docs/DESIGN.md`](docs/DESIGN.md).
+Automations will save a Trigger, Instructions, and Outcome for recurring Ticket work. Each Run will start one Pi-backed Session and record its result with the Ticket. Automations are not available today.
+
+## Project
+
+- [Documentation](https://docs.volli.app)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [Apache-2.0 license](LICENSE)
