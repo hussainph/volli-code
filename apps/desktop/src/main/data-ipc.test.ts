@@ -19,6 +19,7 @@ import type {
   TicketStatusEntriesResult,
   VolliIpcChannel,
   WorktreeBranchesResult,
+  WorktreeCommitResult,
   WorktreeOrphanDeleteResult,
   WorktreeOrphansResult,
   WorktreeRemoveResult,
@@ -1585,5 +1586,20 @@ describe("descriptor guard rejections reach the caller through the envelope, one
       ok: false,
       error: "Invalid request",
     });
+  });
+
+  it("object-with-optional-fields shape: a commit message carrying a control character never reaches git", () => {
+    expect(
+      invoke<WorktreeCommitResult>("volli:worktree-commit", {
+        ticketId: "t1",
+        message: "subject\u0000--amend",
+      }),
+    ).toEqual({ ok: false, error: "Invalid commit request" });
+    expect(
+      invoke<WorktreeCommitResult>("volli:worktree-commit", {
+        ticketId: "t1",
+        includeUnstaged: "yes",
+      }),
+    ).toEqual({ ok: false, error: "Invalid commit request" });
   });
 });

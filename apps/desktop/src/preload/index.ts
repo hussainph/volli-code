@@ -99,6 +99,7 @@ import type {
   WorktreeChangeSetResult,
   WorktreeChangedEvent,
   WorktreeWatchErrorEvent,
+  WorktreeCommitInput,
   WorktreeCommitResult,
   WorktreeDiffMode,
   WorktreeDiffResult,
@@ -561,9 +562,21 @@ const api = {
       return () =>
         ipcRenderer.removeListener("volli:worktree-watch-error" satisfies VolliIpcEvent, listener);
     },
-    /** Done flow: the one-click "commit remaining work" safety net (fixed chore message). */
-    commit: (ticketId: string): Promise<WorktreeCommitResult> =>
-      invoke("volli:worktree-commit", { ticketId }),
+    /**
+     * Done flow: the one-click "commit remaining work" safety net. `choices`
+     * carries the rail dialog's two fields; omit either (or the argument) for
+     * the command's own defaults — a generated `chore(<id>)` message and the
+     * whole worktree staged.
+     */
+    commit: (
+      ticketId: string,
+      choices: Omit<WorktreeCommitInput, "ticketId"> = {},
+    ): Promise<WorktreeCommitResult> =>
+      invoke("volli:worktree-commit", {
+        ticketId,
+        message: choices.message,
+        includeUnstaged: choices.includeUnstaged,
+      }),
     /** Done flow: push the branch and open (or re-discover) its draft PR; persists `pr_url`. */
     pushPr: (ticketId: string): Promise<WorktreePushPrResult> =>
       invoke("volli:worktree-push-pr", { ticketId }),

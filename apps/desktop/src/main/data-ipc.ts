@@ -68,6 +68,7 @@ import type {
   WorktreeChangeSetResult,
   WorktreeBaseReadInput,
   WorktreeBaseReadResult,
+  WorktreeCommitInput,
   WorktreeCommitResult,
   WorktreeDiffInput,
   WorktreeDiffResult,
@@ -821,12 +822,16 @@ export function registerDataIpcHandlers(
       return { ok: true };
     },
 
-    "volli:worktree-commit": async (input: TicketIdInput): Promise<WorktreeCommitResult> => {
+    "volli:worktree-commit": async (input: WorktreeCommitInput): Promise<WorktreeCommitResult> => {
       // The async runner matters here: `git commit` runs unbounded hook code,
       // which must never block the main process (net.ts's freeze rationale).
+      // The two choices are forwarded RAW: the descriptor guard has already
+      // shape-checked them at the door, and what "blank" and "absent" mean is
+      // commit.ts's to decide, in one place, for every caller.
       const result = await commitTicketRemaining(
         { ...worktreeDeps(db), net: runNet },
         input.ticketId,
+        { message: input.message, includeUnstaged: input.includeUnstaged },
       );
       if (!result.ok) return { ok: false, error: result.error };
       if (!result.value.committed) {

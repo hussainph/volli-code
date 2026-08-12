@@ -41,8 +41,11 @@
  *  - The commit verbs are GATED by a confirmation dialog (`CommitGateDialog`),
  *    which partially reverses #45's "no gate" for this one action. The scratch
  *    drew that dialog, the owner ruled for it, and the reason is that a press
- *    here writes a commit that cannot be taken back — every other verb the
- *    button offers is repeatable or reversible.
+ *    here writes a commit that cannot be taken back — every other verb the card
+ *    offers is repeatable or reversible. BOTH roads to a commit go through it,
+ *    the primary and the chevron menu's own Commit: a menu item is one press
+ *    too, and the two would otherwise disagree about whether the message and
+ *    the staging breadth are the user's to choose.
  */
 import * as React from "react";
 import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
@@ -61,7 +64,13 @@ import { GithubLogoIcon } from "@phosphor-icons/react/dist/csr/GithubLogo";
 import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { toast } from "sonner";
-import { changeSetToDiffStat, errorMessage, type DiffStat, type Ticket } from "@volli/shared";
+import {
+  changeSetToDiffStat,
+  errorMessage,
+  type DiffStat,
+  type Ticket,
+  type WorktreeCommitInput,
+} from "@volli/shared";
 
 import { createTerminalSession } from "@renderer/components/sessions/session-create";
 import {
@@ -119,20 +128,45 @@ function CardLabel({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * The gate in front of the card's one irreversible verb
- * (lab/scratches/ticket-right-sidebar.tsx `CommitDialog`). A press of "Commit &
- * create draft PR" writes a commit; there is no undo in this app for that, and
- * every other verb the split button offers is either repeatable (push) or a
- * link (View PR). So the commit verbs — and only they — confirm first.
+ * A commit press waiting on the gate. `flow` is which road it came from — the
+ * primary's commit→push or the chevron menu's plain Commit — because the
+ * confirm has to run the verb the user actually pressed.
  *
- * It states what is about to land: the branch it lands on, and the Change Set
- * the card is already showing. The scratch also drew an editable commit message
- * and an "Include unstaged changes" checkbox; neither is here, because
- * `volli:worktree-commit` accepts neither — the message is the fixed
- * `chore(<DISPLAY-ID>)` line (main/worktree/commit.ts) and the stage is always
- * `-A`. A field that discards what you type is worse than one sentence naming
- * what the command actually does; restoring them is a main-process change, not
- * a renderer one.
+ * `open` is separate from the press so a CLOSING dialog still has the press it
+ * was opened with: the label lives in here, and reading it off the live view
+ * instead would swap "Commit" for "Commit & create draft PR" halfway through
+ * the exit animation. Same reason `ticket-dialog-host.tsx` keeps its removal
+ * target around a closed dialog. Nothing clears the object afterwards — a
+ * closed Radix `Dialog` portals nothing, so the retained press costs exactly
+ * what the permanently-mounted dialog it replaced did.
+ */
+interface PendingCommit {
+  flow: { kind: "commit-only" } | { kind: "commit-push"; isUpdate: boolean };
+  label: string;
+  open: boolean;
+}
+
+/**
+ * The gate in front of the card's irreversible verbs
+ * (lab/scratches/ticket-right-sidebar.tsx `CommitDialog`). A press of "Commit &
+ * create draft PR" — or of the menu's "Commit" — writes a commit; there is no
+ * undo in this app for that, and every other verb the card offers is either
+ * repeatable (push) or a link (View PR). So the commit verbs — and only they —
+ * confirm first, BOTH of them: a gate one of two roads goes around is a speed
+ * bump, and the road that skipped it was the one a user takes when they mean to
+ * commit rather than to publish.
+ *
+ * It states what is about to land (the branch, and the Change Set the card is
+ * already showing) and lets the two choices the scratch drew be made: the
+ * message — blank generates the `chore(<DISPLAY-ID>)` line — and whether
+ * unstaged work is swept in. Both are real: `volli:worktree-commit` carries
+ * them, and unchecking the box commits the index as it stands rather than the
+ * whole worktree. It refuses rather than committing nothing when that leaves it
+ * empty, and the refusal arrives as this card's usual error toast.
+ *
+ * The state resets on every OPEN, not on close: the dialog outlives its own
+ * content (it is mounted whenever the card is), so a message typed and
+ * cancelled must not be waiting inside the next press.
  */
 function CommitGateDialog({
   open,
@@ -148,10 +182,19 @@ function CommitGateDialog({
   branch: string;
   changesLabel: string;
   diff: DiffStat | null;
-  /** The primary's own verb, so the press that opened this reads as the press that finishes it. */
+  /** The pressed verb's own label, so the press that opened this reads as the press that finishes it. */
   confirmLabel: string;
-  onConfirm(): void;
+  onConfirm(choices: Omit<WorktreeCommitInput, "ticketId">): void;
 }) {
+  const [message, setMessage] = React.useState("");
+  const [includeUnstaged, setIncludeUnstaged] = React.useState(true);
+
+  React.useEffect(() => {
+    if (!open) return;
+    setMessage("");
+    setIncludeUnstaged(true);
+  }, [open]);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md gap-5" data-testid="ticket-commit-gate">
@@ -161,21 +204,49 @@ function CommitGateDialog({
             <span className="truncate font-mono text-sm">{branch}</span>
           </DialogTitle>
         </DialogHeader>
-        <div className="flex flex-col gap-2 rounded-lg border border-border p-3">
-          <div className="flex items-center gap-2">
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-2 rounded-lg border border-border p-3">
             <GitDiffIcon className="size-4 shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1 truncate text-ui font-medium">{changesLabel}</span>
             {diff === null ? null : <DiffTotals diff={diff} />}
           </div>
-          <p className="text-xs text-muted-foreground">
-            Everything in the worktree is staged and committed with a generated message.
-          </p>
+          <Input
+            autoFocus
+            aria-label="Commit message"
+            value={message}
+            onChange={(event) => setMessage(event.target.value)}
+            placeholder="Commit message (blank generates one)"
+            className="h-10"
+          />
+          <label className="flex w-fit items-center gap-2 text-ui text-foreground">
+            <input
+              type="checkbox"
+              checked={includeUnstaged}
+              onChange={(event) => setIncludeUnstaged(event.target.checked)}
+              className="accent-primary"
+            />
+            Include unstaged changes
+          </label>
         </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button onClick={onConfirm}>{confirmLabel}</Button>
+        <DialogFooter className="items-center sm:justify-between">
+          {/* The one line this dialog is allowed (CLAUDE.md: irreversible
+              confirms). It names the boundary — git can undo this, Volli
+              cannot — which is the whole reason the gate exists. */}
+          <p className="text-xs text-muted-foreground">Volli can't undo a commit.</p>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            {/* Its label is the rail primary's own verb, so a name-based
+                selector matches BOTH buttons — the testid is what tells a
+                driver which of the two it is holding. */}
+            <Button
+              data-testid="ticket-commit-gate-confirm"
+              onClick={() => onConfirm({ message, includeUnstaged })}
+            >
+              {confirmLabel}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -533,8 +604,8 @@ export function TicketRepositorySummary({
   const [ttlDays, setTtlDays] = React.useState<number | null>(null);
   // A retention mutation (archive/keep/dismiss) in flight — disables its controls.
   const [retentionBusy, setRetentionBusy] = React.useState(false);
-  // The commit verb awaiting confirmation; `isUpdate` picks the tail toast.
-  const [pendingCommit, setPendingCommit] = React.useState<{ isUpdate: boolean } | null>(null);
+  // The commit press awaiting confirmation (both roads to one, see PendingCommit).
+  const [pendingCommit, setPendingCommit] = React.useState<PendingCommit | null>(null);
   const hasWorktree = ticket.worktreePath !== null;
   const { state: retention, reload: reloadRetention } = useTicketRetention(ticket.id, hasWorktree);
   const planningChange = useBoardStore((store) => store.lastPlanningChange);
@@ -638,11 +709,11 @@ export function TicketRepositorySummary({
     }
   }, [planningChange, ticket.id, refreshTtl, refreshStatusAndDiff, debouncedGitRefresh]);
 
-  /** Standalone Commit (chevron menu): keeps its own "Committed: <message>" toast. */
-  async function runCommitOnly() {
+  /** Standalone Commit (chevron menu, via the gate): keeps its own "Committed: <message>" toast. */
+  async function runCommitOnly(choices: Omit<WorktreeCommitInput, "ticketId">) {
     setStage("committing");
     try {
-      const result = await window.api.worktree.commit(ticket.id);
+      const result = await window.api.worktree.commit(ticket.id, choices);
       if (!result.ok) {
         toastError(`Couldn't commit: ${result.error}`);
         return;
@@ -688,10 +759,13 @@ export function TicketRepositorySummary({
    * offered "Commit & …" may be stale (the agent committed meanwhile), and the
    * push half is still exactly what the user asked for.
    */
-  async function runCommitThenPush(isUpdate: boolean) {
+  async function runCommitThenPush(
+    isUpdate: boolean,
+    choices: Omit<WorktreeCommitInput, "ticketId">,
+  ) {
     setStage("committing");
     try {
-      const commitResult = await window.api.worktree.commit(ticket.id);
+      const commitResult = await window.api.worktree.commit(ticket.id, choices);
       if (!commitResult.ok) {
         toastError(`Couldn't commit: ${commitResult.error}`);
         return;
@@ -815,15 +889,20 @@ export function TicketRepositorySummary({
         ? "No changes"
         : `${fileCount} ${fileCount === 1 ? "change" : "changes"}`;
 
+  /** Opens the gate on the pressed verb; the dialog is a SIBLING of the menu, never its child (see the render). */
+  function askToCommit(flow: PendingCommit["flow"], label: string) {
+    setPendingCommit({ flow, label, open: true });
+  }
+
   function runPrimary() {
     switch (view.primary.kind) {
       // The two verbs that write a commit ask first; everything below this is
       // repeatable or a link, and goes straight through.
       case "commit-pr":
-        setPendingCommit({ isUpdate: false });
+        askToCommit({ kind: "commit-push", isUpdate: false }, view.primary.label);
         break;
       case "commit-push-updates":
-        setPendingCommit({ isUpdate: true });
+        askToCommit({ kind: "commit-push", isUpdate: true }, view.primary.label);
         break;
       case "push-pr":
         void runPushOnly(false);
@@ -1069,10 +1148,15 @@ export function TicketRepositorySummary({
                           <DropdownMenuSeparator />
                         </>
                       ) : null}
+                      {/* Straight into the gate, exactly as the context menu's
+                          own "Remove worktree…" does (ticket-context-menu.tsx):
+                          a plain state set in `onSelect`, no deferral. The menu
+                          unmounts on select and the dialog it opened is not
+                          inside it, so there is no focus to hand back. */}
                       <DoneFlowMenuItem
                         action={view.menu.commit}
                         icon={<GitCommitIcon />}
-                        onRun={() => void runCommitOnly()}
+                        onRun={() => askToCommit({ kind: "commit-only" }, view.menu.commit.label)}
                       />
                       <DoneFlowMenuItem
                         action={view.menu.push}
@@ -1127,21 +1211,29 @@ export function TicketRepositorySummary({
           )}
         </div>
       ) : null}
-      <CommitGateDialog
-        open={pendingCommit !== null}
-        onOpenChange={(next) => {
-          if (!next) setPendingCommit(null);
-        }}
-        branch={ticket.branch ?? ticket.baseBranch ?? "this branch"}
-        changesLabel={changesLabel}
-        diff={diff}
-        confirmLabel={view.primary.label}
-        onConfirm={() => {
-          const isUpdate = pendingCommit?.isUpdate ?? false;
-          setPendingCommit(null);
-          void runCommitThenPush(isUpdate);
-        }}
-      />
+      {/* Rendered at the card's root — a sibling of the chevron menu, never
+          inside it. A Radix menu unmounts the instant an item is selected, so a
+          confirm it owned would die with it (ticket-dialog-host.tsx's rule,
+          learned on the board). Narrowing here is also what keeps the confirm
+          free of an unreachable null branch. */}
+      {pendingCommit === null ? null : (
+        <CommitGateDialog
+          open={pendingCommit.open}
+          onOpenChange={(next) => {
+            if (!next) setPendingCommit({ ...pendingCommit, open: false });
+          }}
+          branch={ticket.branch ?? ticket.baseBranch ?? "this branch"}
+          changesLabel={changesLabel}
+          diff={diff}
+          confirmLabel={pendingCommit.label}
+          onConfirm={(choices) => {
+            const { flow } = pendingCommit;
+            setPendingCommit({ ...pendingCommit, open: false });
+            if (flow.kind === "commit-only") void runCommitOnly(choices);
+            else void runCommitThenPush(flow.isUpdate, choices);
+          }}
+        />
+      )}
     </section>
   );
 }

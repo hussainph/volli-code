@@ -305,6 +305,34 @@ describe("commitTicketRemaining", () => {
     });
   });
 
+  it("threads the caller's choices through and records the message that actually landed", async () => {
+    const { db, ticketId } = seedTicket();
+    const { run, calls } = scriptedNet(() => ({}));
+    const deps: PublishDeps = {
+      db,
+      git: commitGit("M  src/a.ts\n"),
+      net: run,
+      attachmentsRoot: "unused",
+    };
+
+    const result = await commitTicketRemaining(deps, ticketId, {
+      message: "fix(VC-1): the thing",
+      includeUnstaged: false,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      value: { committed: true, message: "fix(VC-1): the thing" },
+    });
+    // includeUnstaged: false means no `add` at all — the index as it stands.
+    expect(calls.map((c) => c.args[0])).toEqual(["commit"]);
+    const committed = events(db, ticketId).find((e) => e.payload.kind === "worktree_committed");
+    expect(committed?.payload).toEqual({
+      kind: "worktree_committed",
+      message: "fix(VC-1): the thing",
+    });
+  });
+
   it("returns the committed:false no-op and records NO event on a clean tree", async () => {
     const { db, ticketId } = seedTicket();
     const { run, calls } = scriptedNet(() => ({}));
