@@ -52,9 +52,10 @@
  *  11. Restart      — relaunch against the SAME app-data dir: the ticket detail
  *      reopens (persisted openTicketId), the edited title/body + surviving
  *      comment are intact, the rail is STILL collapsed (persisted), and the
- *      renamed session is tucked into the collapsed History drawer, then remains
- *      findable when expanded with its ended-ago metadata. Back returns to
- *      the board even though the in-memory nav history starts fresh.
+ *      renamed session stands in History — a sibling SECTION of Sessions with
+ *      no disclosure, since the Calm Stack retired the drawer — carrying its
+ *      ended-ago metadata. Back returns to the board even though the in-memory
+ *      nav history starts fresh.
  *  12. File-tab save guard — a repository file opened as a ticket file tab is an
  *      explicit-⌘S Monaco document (CONCEPT #49), so an unsaved draft must be
  *      VISIBLE on its tab and DEFENDED on close: typing shows the dirty dot, the
@@ -1452,25 +1453,32 @@ async function main() {
           return kept && deletedGone;
         });
 
-        // The prior session no longer clutters the working set: History is
-        // collapsed by default. Expanding it restores the renamed row and when
-        // it ended. A history row is the SAME one-line row as the roster's
+        // The prior session folds out of the working set and into History,
+        // which is a SIBLING SECTION of Sessions — one shape, one inset, no
+        // seam. It used to be a `RailDrawer`, and this check used to prove the
+        // drawer was collapsed and then click it open; that primitive was the
+        // old rail's, it existed so History and a Details drawer could stack as
+        // siblings, and Details is gone. So the disclosure is gone with it and
+        // the row is simply THERE — which is a stronger claim than the one this
+        // check made before, not a weaker one: previously the row was allowed to
+        // be absent until something clicked.
+        //
+        // A history row is the SAME one-line row as the roster's
         // (`ticket-sessions-panel.tsx` renders both), so it prints no harness
         // name either — `session-history.ts` keeps the label only to match on
         // when you search. What is left is what a history row exists to carry:
         // identity and pastness. Source truthfulness is check 6's, at the
         // sidebar band that still prints it.
-        const historyButton = aside.getByRole("button", { name: /History/ });
-        const historyCollapsed =
-          (await historyButton.getAttribute("aria-expanded")) === "false" &&
-          (await aside.getByText(SESSION_RENAMED, { exact: true }).count()) === 0;
-        await historyButton.click();
+        const historyHeading = aside.getByRole("heading", { name: /History/ });
+        const historyIsSection =
+          (await historyHeading.count()) === 1 &&
+          (await aside.getByRole("button", { name: /^History/ }).count()) === 0;
         const sessionOk = await waitUntil(
-          "prior renamed session expands from history",
+          "prior renamed session stands in history without a disclosure",
           async () => {
             const row = (await aside.getByText(SESSION_RENAMED, { exact: true }).count()) >= 1;
             // History rows trail with when the session ended, not a redundant
-            // "Exited" chip — the drawer itself already says these are past.
+            // "Exited" chip — the section heading already says these are past.
             const endedAgo = (await aside.getByText(/^(just now|\d+[mhdw] ago)$/).count()) >= 1;
             return row && endedAgo;
           },
@@ -1492,12 +1500,12 @@ async function main() {
           railCollapsedPersisted &&
           !!railRestored &&
           !!commentOk &&
-          historyCollapsed &&
+          historyIsSection &&
           !!sessionOk &&
           !!boardViaRestartBack;
         return {
           ok,
-          detail: `docTab=${JSON.stringify(docTabId)} title=${titleOk} body=${!!bodyOk} railCollapsed=${railCollapsedPersisted} railRestored=${!!railRestored} comment=${!!commentOk} historyCollapsed=${historyCollapsed} session=${!!sessionOk} restartBack=${!!boardViaRestartBack}`,
+          detail: `docTab=${JSON.stringify(docTabId)} title=${titleOk} body=${!!bodyOk} railCollapsed=${railCollapsedPersisted} railRestored=${!!railRestored} comment=${!!commentOk} historyIsSection=${historyIsSection} session=${!!sessionOk} restartBack=${!!boardViaRestartBack}`,
         };
       },
     );

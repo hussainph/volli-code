@@ -85,15 +85,21 @@ export const api = {
   worktree: {
     changeSet: (): Promise<WorktreeChangeSetResult> =>
       Promise.resolve({ ok: true, changeSet: CHANGE_SET }),
+    // `WorktreeStatusResult` (packages/shared/src/ipc.ts). The names matter more
+    // than they look: this stub used to answer `dirty`/`ahead`/`behind`/`branch`/
+    // `hasUpstream`, none of which the type has — so `uncommitted` read back
+    // `undefined`, the done-flow concluded a clean tree, and the one control this
+    // scratch exists to compare was screenshotted as a disabled placeholder.
+    // A stub is a claim about a contract; a stub that misnames it proves nothing.
     status: () =>
       Promise.resolve({
         ok: true,
         status: {
-          dirty: true,
-          ahead: 2,
-          behind: 0,
-          branch: "ui/right-sidebar-fixes",
-          hasUpstream: true,
+          uncommitted: true,
+          sequencerActive: false,
+          aheadOfBase: 2,
+          behindBase: 0,
+          unpushed: 2,
         },
       }),
     watchChangeSet: () => Promise.resolve({ ok: true }),
