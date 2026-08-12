@@ -55,16 +55,20 @@ import os from "node:os";
 import { dirname, join } from "node:path";
 
 import {
+  activeTabLabel,
   createRunner,
   goToBoard,
   launch,
   makeGitRepo,
   makeScratch,
+  openNewChatTab,
   pathExists,
   readSeededProjects,
   seedDefaultModel,
   seedProjects,
+  SESSION_TAB_STRIP,
   sleep,
+  tabStrip,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 
@@ -123,40 +127,14 @@ async function ensurePiAuthInto(homeDir) {
   await fs.copyFile(REAL_PI_AUTH, dest);
 }
 
-/**
- * The nearest visible tablist's own session-start control — scopes past the
- * ticket rail's identical mount. Chat is the split button's PRESS, so this is
- * the whole gesture rather than a trigger to be followed by a menu pick.
- */
-function tabStripNewChatButton(page) {
-  return page
-    .locator('[role="tablist"]')
-    .locator("xpath=..")
-    .getByRole("button", { name: "New chat", exact: true });
-}
-
 /** Navigate to Sessions and wait for its (auto-opened scratch terminal) tab strip to mount. */
 async function goToSessions(page) {
   await page.getByRole("button", { name: "Sessions", exact: true }).click();
   await waitUntil(
     "the Sessions tab strip to mount",
-    async () => (await page.locator('[role="tab"]').count()) >= 1,
+    async () => (await tabStrip(page, SESSION_TAB_STRIP).getByRole("tab").count()) >= 1,
     { timeout: 20000 },
   );
-}
-
-async function openNewChatTab(page) {
-  const tabsBefore = await page.locator('[role="tab"]').count();
-  await tabStripNewChatButton(page).click();
-  await waitUntil(
-    "a new chat tab to appear",
-    async () => (await page.locator('[role="tab"]').count()) > tabsBefore,
-  );
-  const activeLabel = await page
-    .locator('[role="tab"][aria-selected="true"]')
-    .getAttribute("aria-label");
-  if (activeLabel === null) throw new Error("no tab became active after New Chat");
-  return activeLabel;
 }
 
 /** The Stop button, on screen for exactly as long as a turn is running. */
@@ -235,10 +213,10 @@ async function main() {
 
     await attempt(
       2,
-      "the Sessions page's + menu creates a ticketless (scratch) chat tab",
+      "the Sessions strip's own Chat control creates a ticketless (scratch) chat tab",
       async () => {
         await goToSessions(page);
-        chatTabLabel = await openNewChatTab(page);
+        chatTabLabel = await openNewChatTab(page, SESSION_TAB_STRIP);
         return { ok: chatTabLabel !== null, detail: chatTabLabel };
       },
     );
@@ -315,9 +293,7 @@ async function main() {
         // `#autoTitle`), so the "Chat 1" captured at creation is no longer
         // what the tab — or the sidebar row the relaunch below looks for —
         // is called.
-        chatTabLabel = await page
-          .locator('[role="tab"][aria-selected="true"]')
-          .getAttribute("aria-label");
+        chatTabLabel = await activeTabLabel(page, SESSION_TAB_STRIP);
         return {
           ok: texts.length > 0 && chatTabLabel !== null,
           detail: `assistantMessages=${texts.length} tab=${chatTabLabel}`,
