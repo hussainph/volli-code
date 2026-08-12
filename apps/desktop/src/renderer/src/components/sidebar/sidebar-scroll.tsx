@@ -30,6 +30,28 @@
  * Dragging it is wired up here rather than left to the wheel, because hiding the
  * native widget takes the drag away with it — the one part of an overlay
  * scrollbar that has to exist in app source rather than in a prototype.
+ *
+ * IT SHARED THOSE PIXELS WITH THE RESIZE GRIP, and lost them. The grip was 6px
+ * of the panel's right edge while this thumb's 4px start 4px in, so they
+ * overlapped on 2 — the grip's z-20 over this z-10 — and `elementFromPoint` at
+ * the thumb's own midpoint returned the grip. Aiming at the scrollbar where it
+ * is drawn resized the panel. The grip is 4px now and the two tile exactly
+ * (`sidebar-resize-handle.tsx` carries the reasoning and the stacking-context
+ * trap that makes z-index no use here).
+ *
+ * WHAT IS INTERACTIVE IS WHAT IS DRAWN, and that has to be said in the class
+ * list because opacity does not say it: this thumb is `opacity-0` at rest, and
+ * an `opacity-0` box still takes every hit inside it. So `pointer-events`
+ * follows the same condition the opacity does, on the same line, and the thumb
+ * refuses the pointer whenever there is no pill on screen to aim at. That is
+ * what keeps the fix above from being re-broken by a later 1px of drift: a
+ * scrollbar nobody can see can no longer capture anything, whatever the geometry
+ * does next.
+ *
+ * Turning it off cannot lock it off, because the wrapper below is what carries
+ * the hover and it is strictly larger than the thumb: a pointer landing on a
+ * hidden thumb falls through to the pane, the pane hovers, and the thumb is
+ * live by the next sample.
  */
 import * as React from "react";
 
@@ -318,6 +340,7 @@ export function SidebarScrollArea({
         <div
           ref={thumbRef}
           aria-hidden
+          data-slot="sidebar-scroll-thumb"
           onPointerDown={handleThumbDown}
           onPointerMove={handleThumbMove}
           onPointerUp={endThumbDrag}
@@ -329,8 +352,13 @@ export function SidebarScrollArea({
             right: (THUMB_CHANNEL - THUMB_WIDTH) / 2,
           }}
           className={cn(
+            // z-10 clears the rows, and that is all a z-index can do here — the
+            // grip is out of reach at any value (see the note at the top).
             "absolute z-10 cursor-default rounded-full bg-border-strong transition-opacity duration-200 ease-out motion-reduce:transition-none",
-            scrolling || dragging ? "opacity-100" : "opacity-0 group-hover/scroll:opacity-70",
+            // Pointer-events rides with the opacity, never apart from it.
+            scrolling || dragging
+              ? "opacity-100"
+              : "pointer-events-none opacity-0 group-hover/scroll:pointer-events-auto group-hover/scroll:opacity-70",
           )}
         />
       ) : null}

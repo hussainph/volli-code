@@ -112,6 +112,25 @@ export function SidebarResizeHandle({ onResizingChange }: SidebarResizeHandlePro
   return (
     // Absolute pulls it out of the sidebar's flex row; it anchors to the fixed
     // sidebar container, hugging the outer edge over the full height.
+    //
+    // 4px, not 6, and the two missing pixels are the whole point. The sidebar's
+    // scrollbar thumb (`sidebar-scroll.tsx`) is drawn in the channel just inside
+    // this edge, and its outer edge lands exactly 4px in from the panel's — in
+    // both shell modes, because both numbers are the same two tokens. At 6px
+    // this handle lay over the thumb's outer 2px and won every hit test there,
+    // so aiming at the scrollbar where it is drawn resized the panel instead:
+    // `elementFromPoint` at the thumb's own midpoint returned this element.
+    //
+    // Measured, and it did not respond to the obvious fix. Raising the thumb
+    // above z-20 works only while the panel floats; pinned, `globals.css` gives
+    // `[data-volli-sidebar]` the seam's `clip-path`, which forms a stacking
+    // context on a NON-positioned element and drops the whole pane below every
+    // positioned sibling. z-index 999 on the thumb still lost. Nothing inside
+    // that subtree can out-stack this grip, so the boxes have to stop
+    // overlapping instead — 4px + the thumb's 4px tile exactly, and the trade is
+    // the owner's: a scrollbar you cannot grab is worse than a resize edge that
+    // wants a little more aim. The visible hairline below is unmoved; 4px is
+    // also what VS Code's sash and macOS window edges give you.
     <div
       role="separator"
       aria-orientation="vertical"
@@ -122,7 +141,7 @@ export function SidebarResizeHandle({ onResizingChange }: SidebarResizeHandlePro
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
       onDoubleClick={() => setSidebarWidth(SIDEBAR_DEFAULT_WIDTH)}
-      className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-col-resize select-none after:absolute after:inset-y-0 after:right-0 after:w-[2px] after:bg-transparent after:transition-colors hover:after:bg-sidebar-border active:after:bg-sidebar-ring"
+      className="absolute inset-y-0 right-0 z-20 w-1 cursor-col-resize select-none after:absolute after:inset-y-0 after:right-0 after:w-[2px] after:bg-transparent after:transition-colors hover:after:bg-sidebar-border active:after:bg-sidebar-ring"
     />
   );
 }
