@@ -5,9 +5,11 @@
  * primary action. Its behaviour (per the ui/ticket-creation-fix spec):
  *   • accessible name starts with "Create & start" and carries the current
  *     harness label, e.g. "Create & start · Claude Code";
- *   • a neighboring "Terminal harness" picker (visible label = the active
- *     one) opens a menu of Claude Code / Codex / OpenCode that switches which
- *     TUI the booted terminal launches;
+ *   • the "Terminal harness" picker — a chip in the metadata row, no longer a
+ *     footer neighbour, since it describes the ticket rather than modifying
+ *     this button (visible label = the active one) — opens a menu of Claude
+ *     Code / Codex / OpenCode that switches which TUI the booted terminal
+ *     launches; the button's accessible name is what still pairs the two;
  *   • clicking it creates the ticket DIRECTLY in Doing (regardless of the Status
  *     chip), navigates into the ticket detail view, creates + focuses a terminal
  *     session tab, and AUTO-LAUNCHES the harness CLI inside that session's shell
@@ -48,6 +50,8 @@ import {
   readSeededProjects,
   seedProjects,
   sleep,
+  tabStrip,
+  TICKET_TAB_STRIP,
   typeIntoMonaco,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
@@ -84,9 +88,22 @@ async function closeAnyDialog(page) {
   await sleep(300);
 }
 
-/** Detail view is open when the chrome tab strip has rendered tabs (the board has none). */
+/**
+ * Detail view is open when the ticket tab strip has rendered tabs (the board
+ * has none).
+ *
+ * Scoped to the named strip: the details rail's page switcher is a tablist of
+ * its own on this screen and always has a page selected, so an unscoped
+ * `getByRole("tab")` counts the rail's pages and answers "yes" for a detail view
+ * whose tab strip never rendered.
+ */
 async function detailOpen(page) {
-  return (await page.getByRole("tab").count()) >= 1;
+  return (await ticketTabs(page).count()) >= 1;
+}
+
+/** Every tab in the ticket strip — never the details rail's page switcher. */
+function ticketTabs(page) {
+  return tabStrip(page, TICKET_TAB_STRIP).getByRole("tab");
 }
 
 /**
@@ -185,7 +202,9 @@ async function main() {
         const sessionFocused = await waitUntil(
           "session tab is the active tab",
           async () => {
-            const active = page.locator('[role="tab"][aria-selected="true"]');
+            const active = tabStrip(page, TICKET_TAB_STRIP).locator(
+              '[role="tab"][aria-selected="true"]',
+            );
             if ((await active.count()) !== 1) return null;
             const text = (await active.textContent()) ?? "";
             return text.includes("Session") ? true : null;
@@ -194,7 +213,7 @@ async function main() {
         )
           .then(() => true)
           .catch(() => false);
-        const sessionTab = (await page.getByRole("tab").count()) >= 2; // Doc + session
+        const sessionTab = (await ticketTabs(page).count()) >= 2; // Doc + session
 
         // Harness launched: poll the probe for the claude fake + title AND body.
         const probe = await waitUntil(
@@ -220,7 +239,7 @@ async function main() {
         const inDoingDb = seeded?.status === "doing";
         const displayId = seeded ? `${PROJECT.prefix}-${seeded.ticketNumber}` : "";
         const docTab = seeded
-          ? (await page.getByRole("tab").filter({ hasText: displayId }).count()) >= 1
+          ? (await ticketTabs(page).filter({ hasText: displayId }).count()) >= 1
           : false;
         await goToBoard(page);
         const inDoingBoard = seeded ? await columnHasCard(page, "Doing", displayId) : false;

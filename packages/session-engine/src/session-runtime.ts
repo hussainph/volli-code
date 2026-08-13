@@ -295,10 +295,41 @@ export interface SessionRuntime {
   close(): Promise<void>;
 }
 
+/** One native binding this process holds open: the Session it serves, and where it works. */
+export interface OpenNativeBinding {
+  sessionId: string;
+  directory: string;
+  /**
+   * The attachment this binding belongs to, so a host that has to END it can
+   * name it. `adapter.release` is routed by attachment id, and a caller holding
+   * only the Session would have to re-read the projection to find one — the
+   * exact replay this listing exists to let callers avoid.
+   */
+  attachmentId: string;
+}
+
 /** The host-owned runtime plus the live local bindings only its process can know about. */
 export interface HostedSessionRuntime extends SessionRuntime {
-  /** Read-only snapshot used to keep destructive worktree actions away from live native work. */
-  liveNativeBindingDirectories(): string[];
+  /**
+   * Every native binding this process currently holds open.
+   *
+   * Deliberately NOT an answer to "is an agent working here". A binding opens on
+   * attach and is removed only by an explicit release, by the executor closing
+   * itself, or by app shutdown — so an idle chat, and a chat whose tab was shut
+   * hours ago, both still have one. A caller that needs the stronger question
+   * asks the Session: `turnActive` on its projection is the one place an open
+   * turn is decided, and this names the Session so it can be asked.
+   *
+   * It used to return bare directories, which left every caller no choice but to
+   * read "attached" as "busy" — and that is how opening an empty chat made its
+   * ticket permanently unarchivable, with no reachable way to close anything.
+   *
+   * It is also the only way a host can find the bindings rooted in a directory
+   * it is about to delete. A binding survives its tab, so nothing else knows
+   * that a Session is still pointed at a checkout that is going away; naming the
+   * attachment here is what lets the host release it before the directory goes.
+   */
+  openNativeBindings(): readonly OpenNativeBinding[];
 }
 
 export class SessionRuntimeNotFoundError extends Error {
@@ -506,8 +537,12 @@ class DefaultSessionRuntime implements SessionRuntime {
 
   constructor(private readonly ports: SessionRuntimePorts) {}
 
-  liveNativeBindingDirectories(): string[] {
-    return [...new Set([...this.#bindings.values()].map((binding) => binding.spec.directory))];
+  openNativeBindings(): readonly OpenNativeBinding[] {
+    return [...this.#bindings.values()].map(({ spec }) => ({
+      sessionId: spec.sessionId,
+      directory: spec.directory,
+      attachmentId: spec.attachmentId,
+    }));
   }
 
   command(request: SessionRuntimeCommandRequest): Promise<SessionRuntimeCommandResult> {

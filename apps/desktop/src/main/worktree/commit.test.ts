@@ -30,7 +30,7 @@ function probeGit(gitDir: string, status: string) {
 }
 
 describe("commitRemaining", () => {
-  it("stages -A and commits (async runner) with the fixed chore(<id>) message when the tree is dirty", async () => {
+  it("stages -A and commits (async runner) with the generated chore(<id>) message when no choices are given", async () => {
     const git = probeGit(tempDir("gitdir"), " M src/a.ts\n");
     const { run, calls } = scriptedNet(() => ({}));
     const result = await commitRemaining(git, run, { worktreePath: "/wt", displayId: "VC-12" });
@@ -69,6 +69,82 @@ describe("commitRemaining", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value).toEqual({ committed: false });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("commits the caller's message verbatim, multi-line included", async () => {
+    const git = probeGit(tempDir("gitdir"), " M src/a.ts\n");
+    const { run, calls } = scriptedNet(() => ({}));
+    const result = await commitRemaining(git, run, {
+      worktreePath: "/wt",
+      displayId: "VC-12",
+      message: "  fix(VC-12): the thing\n\nwith a body  ",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Trimmed at the edges (git's own -m cleanup does the same), untouched inside.
+    expect(result.value).toEqual({
+      committed: true,
+      message: "fix(VC-12): the thing\n\nwith a body",
+    });
+    expect(calls[1]?.args).toEqual(["commit", "-m", "fix(VC-12): the thing\n\nwith a body"]);
+  });
+
+  it("falls back to the generated message when the caller's is blank", async () => {
+    const git = probeGit(tempDir("gitdir"), " M src/a.ts\n");
+    const { run } = scriptedNet(() => ({}));
+    const result = await commitRemaining(git, run, {
+      worktreePath: "/wt",
+      displayId: "VC-12",
+      message: "   \n  ",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toEqual({
+      committed: true,
+      message: "chore(VC-12): commit remaining work",
+    });
+  });
+
+  it("skips `add` entirely under includeUnstaged: false, committing the index as it stands", async () => {
+    // `M ` = staged modification, ` M` = unstaged, `??` = untracked: the commit
+    // must take the first and leave the other two where they are.
+    const git = probeGit(tempDir("gitdir"), "M  src/a.ts\n M src/b.ts\n?? src/c.ts\n");
+    const { run, calls } = scriptedNet(() => ({}));
+    const result = await commitRemaining(git, run, {
+      worktreePath: "/wt",
+      displayId: "VC-12",
+      includeUnstaged: false,
+    });
+    expect(result.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.args).toEqual(["commit", "-m", "chore(VC-12): commit remaining work"]);
+  });
+
+  it("errs rather than committing nothing when includeUnstaged: false leaves an empty index", async () => {
+    const git = probeGit(tempDir("gitdir"), " M src/a.ts\n?? src/c.ts\n");
+    const { run, calls } = scriptedNet(() => ({}));
+    const result = await commitRemaining(git, run, {
+      worktreePath: "/wt",
+      displayId: "VC-12",
+      includeUnstaged: false,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatch(/nothing is staged/i);
+    // Not the clean-tree no-op, and nothing ran: the tree is visibly dirty.
+    expect(calls).toHaveLength(0);
+  });
+
+  it("keeps the clean-tree no-op under includeUnstaged: false (an empty index is expected there)", async () => {
+    const git = probeGit(tempDir("gitdir"), "");
+    const { run, calls } = scriptedNet(() => ({}));
+    const result = await commitRemaining(git, run, {
+      worktreePath: "/wt",
+      displayId: "VC-12",
+      includeUnstaged: false,
+    });
+    expect(result).toEqual({ ok: true, value: { committed: false } });
     expect(calls).toHaveLength(0);
   });
 

@@ -4,7 +4,7 @@
  * the single adaptive action should become "Archive & clean", whether the quiet
  * "kept" state shows, the archive-reason context line, and the non-gating
  * conflict/failing-check notices. Kept side-effect-free and separate from
- * `ticket-properties.tsx` so the rules are unit-testable without mounting React
+ * `ticket-repository-summary.tsx` so the rules are unit-testable without mounting React
  * or faking `window.api` — the same split `worktree-done-flow-model.ts` uses.
  *
  * Two invariants it encodes, both settled:

@@ -12,18 +12,22 @@
  * deliberately does *not* judge command operands. The runtime resolves every
  * non-flag operand into `segment.paths`, the program included, so checking them
  * would refuse `ls /usr/bin`, `cat /etc/hosts` and `/opt/homebrew/bin/node
- * script.js`. The Seatbelt policy beneath us denies the home directory and
- * leaves `/usr`, `/etc` and `/opt/homebrew` readable precisely so that ordinary
- * build and test commands work. A rule stricter than the boundary it sits under
- * is not defence in depth; it is a second, worse boundary re-litigating a
- * decision the kernel already enforces.
+ * script.js`. The Seatbelt policy this pack was designed under denied the home
+ * directory and left `/usr`, `/etc` and `/opt/homebrew` readable precisely so
+ * that ordinary build and test commands work, and a rule stricter than the
+ * boundary it sits under is not defence in depth but a second, worse boundary
+ * re-litigating a decision the kernel already enforces. That boundary is no
+ * longer installed — see the header of `./authority.ts` — which widens the
+ * residual below rather than changing what this rule should judge.
  *
  * The residual is real and accepted: `cp <workspace>/secret /tmp/leak` is not
- * refused here. The network is denied outright, so a file written elsewhere on
- * the user's own machine is not exfiltration, and the sandbox's own `denyWrite`
- * covers the scratch paths the agent can reach. A known-writer list (`cp`, `mv`,
- * `tee`, `dd`) would need per-program positional parsing to tell a destination
- * from a source — exactly the cleverness that puts bugs in a security rule.
+ * refused here. That was accepted while the network was denied outright, which
+ * made a file written elsewhere on the user's own machine something other than
+ * exfiltration; with the network reachable the argument no longer holds and the
+ * residual is simply larger. What has not changed is why no rule closes it: a
+ * known-writer list (`cp`, `mv`, `tee`, `dd`) would need per-program positional
+ * parsing to tell a destination from a source — exactly the cleverness that puts
+ * bugs in a security rule.
  *
  * `command.destructive-removal` and `command.git-escapes-workspace` do read
  * operands, and should: `rm -rf /usr/local/lib` and a `-C` aimed at another tree
@@ -33,9 +37,9 @@
  *
  * `path.git-internals` reads operands too, for two names only, and the reason is
  * a seam between two layers rather than anything about policy. The sandbox
- * denies writes to `.git/hooks` and `.git/config` by subpath literal, and those
+ * denied writes to `.git/hooks` and `.git/config` by subpath literal, and those
  * literals are case-sensitive while APFS is not — so
- * `cp evil.sh .GIT/hooks/pre-commit` writes the real hook the kernel meant to
+ * `cp evil.sh .GIT/hooks/pre-commit` wrote the real hook the kernel meant to
  * protect, and enumerating case variants downstairs is 2^n hopeless. Folded
  * comparison up here collapses every spelling at once, and it reaches submodule
  * plumbing at `.git/modules/<name>/hooks`, which executes exactly like the

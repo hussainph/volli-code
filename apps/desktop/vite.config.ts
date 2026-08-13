@@ -96,10 +96,12 @@ export default defineConfig(({ mode }) => ({
         "src/chat/wire.ts",
         "src/components/board/board-dnd.ts",
         "src/components/chat/chat-plane-model.ts",
+        "src/components/board/new-ticket/branch-picker.ts",
         "src/components/board/new-ticket/draft.ts",
         "src/components/board/new-ticket/submit.ts",
         "src/components/harness/trust-prompt-model.ts",
         "src/components/pages/harness-catalog.ts",
+        "src/components/sessions/terminal-tab-state.ts",
         "src/components/sidebar/active-session-listing.ts",
         "src/components/sidebar/listing.ts",
         "src/components/theme/editor-settings-model.ts",
@@ -108,10 +110,11 @@ export default defineConfig(({ mode }) => ({
         "src/components/ticket/activity.ts",
         "src/components/ticket/session-history.ts",
         "src/components/ticket/ticket-chat-tab.ts",
-        "src/components/ticket/ticket-environment-inspector-model.ts",
         "src/lib/project-shortcut.ts",
+        "src/lib/new-session-shortcut.ts",
         "src/lib/new-ticket-shortcut.ts",
         "src/lib/relative-time.ts",
+        "src/lib/terminal-focus.ts",
         "src/lib/debounce.ts",
         "src/lib/escape-guard.ts",
         "src/lib/session-rpc-ipc-link.ts",
@@ -208,6 +211,12 @@ export default defineConfig(({ mode }) => ({
     clean: true,
     deps: {
       alwaysBundle: bundleWorkspacePackages,
+      // `electron` lives in devDependencies (electron-builder refuses to
+      // package otherwise), which tsdown would bundle by default — inlining
+      // the npm package's binary-path shim over the runtime-provided module.
+      // The real `electron` API only exists as a require() left for Electron
+      // itself to resolve.
+      neverBundle: ["electron"],
     },
     ...(shouldLaunchElectronAfterPack ? { onSuccess: "node scripts/dev-electron.mjs" } : {}),
   },

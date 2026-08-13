@@ -5,7 +5,6 @@ import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { CornersInIcon } from "@phosphor-icons/react/dist/csr/CornersIn";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { SidebarIcon } from "@phosphor-icons/react/dist/csr/Sidebar";
-import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 
 import { CommandPalette } from "@renderer/components/command-palette";
 import { Button } from "@renderer/components/ui/button";
@@ -13,7 +12,7 @@ import { SidebarTrigger } from "@renderer/components/ui/sidebar";
 import { useCommandPaletteShortcut } from "@renderer/hooks/use-command-palette-shortcut";
 import { useFullScreen } from "@renderer/hooks/use-fullscreen";
 import { navBack, navForward } from "@renderer/hooks/use-nav-history";
-import { useSelectedProject } from "@renderer/hooks/use-selected-project";
+import { useTerminalFocusShortcut } from "@renderer/hooks/use-terminal-focus-shortcut";
 import { cn } from "@renderer/lib/utils";
 import { canGoBack, canGoForward } from "@renderer/lib/nav-history";
 import { useBoardStore } from "@renderer/stores/board";
@@ -34,6 +33,8 @@ export function ChromeBar() {
   const fullScreen = useFullScreen();
   const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
   const [commandPaletteOpen, setCommandPaletteOpen] = useCommandPaletteShortcut();
+  // The band owns the terminal-focus control, so it owns its chord too.
+  useTerminalFocusShortcut();
   React.useEffect(() => {
     if (terminalFocusTarget !== null) setCommandPaletteOpen(false);
   }, [terminalFocusTarget, setCommandPaletteOpen]);
@@ -59,7 +60,7 @@ export function ChromeBar() {
           )}
         />
         {terminalFocusTarget !== null ? (
-          <TerminalFocusControls />
+          <TerminalFocusBreadcrumb />
         ) : (
           <>
             {/* translate-y-px: the lights' optical center lands at ~20.5px (y:14 +
@@ -75,10 +76,13 @@ export function ChromeBar() {
             <NavHistoryButtons />
             <CommandPaletteTrigger onClick={() => setCommandPaletteOpen(true)} />
             {/* The content-area tab strip (if any) lives below in MainContent, not here. */}
-            <div className="flex-1" />
-            <RightRailToggle />
           </>
         )}
+        {/* Outside the ternary so the spacer keeps its slot in this element's
+            children across the focus transition rather than being reconciled
+            against the breadcrumb. */}
+        <div className="flex-1" />
+        <TerminalFocusExit />
       </div>
       <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
     </>
@@ -86,11 +90,20 @@ export function ChromeBar() {
 }
 
 /**
- * Compact terminal-focus chrome. The existing band remains the only window
- * drag region and traffic-light owner; all ordinary navigation/search controls
- * step aside so the terminal gets every pixel below this single 40px row.
+ * Says WHICH Session owns the canvas while terminal focus is on. The band
+ * remains the only window drag region and traffic-light owner; all ordinary
+ * navigation/search controls step aside so the terminal gets every pixel below
+ * this single 40px row.
+ *
+ * It carries no exit control of its own — leaving is the band's persistent
+ * {@link TerminalFocusExit}, in the trailing slot.
+ *
+ * The owner half names the ticket when a ticket owns the Session and the project
+ * when none does. That is not a fallback string: a ticketless Session genuinely
+ * belongs to the project, and in zen mode the rail that would otherwise say
+ * which project you are in is gone.
  */
-function TerminalFocusControls() {
+function TerminalFocusBreadcrumb() {
   const target = useUiStore((state) => state.terminalFocusTarget);
   const project = useProjectsStore((state) =>
     target === null
@@ -98,52 +111,44 @@ function TerminalFocusControls() {
       : state.projects.find((candidate) => candidate.id === target.projectId),
   );
   const ticket = useBoardStore((state) =>
-    target === null
+    target === null || target.ticketId === null
       ? undefined
       : state.ticketsByProject[target.projectId]?.find(
           (candidate) => candidate.id === target.ticketId,
         ),
   );
+  // One lookup for both kinds: the sessions store is keyed by `ownerKey`, which
+  // is a ticketId for a ticket Session and a projectId for a ticketless one.
   const sessionTitle = useSessionsStore((state) =>
     target === null
       ? undefined
-      : state.byOwner[target.ticketId]?.tabs.find(
+      : state.byOwner[target.ticketId ?? target.projectId]?.tabs.find(
           (candidate) => candidate.sessionId === target.sessionId,
         )?.title,
   );
 
   if (target === null) return null;
 
-  const ticketLabel =
-    project !== undefined && ticket !== undefined
-      ? displayTicketId(project.ticketPrefix, ticket.ticketNumber)
-      : "Ticket";
+  const ownerLabel =
+    target.ticketId === null
+      ? (project?.name ?? "Sessions")
+      : project !== undefined && ticket !== undefined
+        ? displayTicketId(project.ticketPrefix, ticket.ticketNumber)
+        : "Ticket";
 
   return (
-    <>
-      <div
-        aria-live="polite"
-        // top-[21px], not top-1/2: same 1px correction as the ⌘K pill — the
-        // sibling Exit button carries translate-y-px to meet the traffic lights.
-        className="pointer-events-none absolute left-1/2 top-[21px] flex max-w-[45vw] -translate-x-1/2 -translate-y-1/2 items-center gap-2 text-xs text-muted-foreground"
-      >
-        <span className="shrink-0 font-medium text-foreground">{ticketLabel}</span>
-        <span aria-hidden="true">/</span>
-        <span className="truncate">{sessionTitle ?? "Terminal"}</span>
-      </div>
-      <div className="flex-1" />
-      <Button
-        variant="ghost"
-        size="icon"
-        className="app-region-no-drag mr-1 translate-y-px"
-        onClick={() => useUiStore.getState().setTerminalFocusTarget(null)}
-        aria-label="Exit terminal focus"
-        title="Exit terminal focus"
-      >
-        <CornersInIcon weight="bold" />
-        <span className="sr-only">Exit terminal focus</span>
-      </Button>
-    </>
+    <div
+      aria-live="polite"
+      // top-[21px], not top-1/2: same 1px correction as the ⌘K pill — the
+      // trailing focus toggle carries translate-y-px to meet the traffic lights.
+      className="pointer-events-none absolute left-1/2 top-[21px] flex max-w-[45vw] -translate-x-1/2 -translate-y-1/2 items-center gap-2 text-xs text-muted-foreground"
+    >
+      <span className="max-w-[40%] shrink-0 truncate font-medium text-foreground">
+        {ownerLabel}
+      </span>
+      <span aria-hidden="true">/</span>
+      <span className="truncate">{sessionTitle ?? "Terminal"}</span>
+    </div>
   );
 }
 
@@ -160,12 +165,15 @@ function WorkspaceRailToggle() {
     <Button
       variant="ghost"
       size="icon"
-      aria-pressed={workspaceRailHidden}
+      // No `aria-pressed`: the label below already carries the state, and the
+      // button has no pressed appearance for it to describe. Both together
+      // announce "Show workspace switcher, pressed" while the switcher is
+      // hidden, which reads as its own opposite.
       onClick={() => toggleWorkspaceRailHidden()}
       aria-label={workspaceRailHidden ? "Show workspace switcher" : "Hide workspace switcher"}
       title={`${workspaceRailHidden ? "Show" : "Hide"} workspace switcher`}
     >
-      <SidebarIcon weight="fill" />
+      <SidebarIcon />
       <span className="sr-only">Toggle workspace switcher</span>
     </Button>
   );
@@ -210,38 +218,48 @@ function NavHistoryButtons() {
 }
 
 /**
- * VS-Code secondary-sidebar toggle: a mirrored sidebar icon pinned at the
- * chrome band's RIGHT edge that collapses the ticket-detail right rail (⌥⌘B).
- * Shown only when the selected project has a ticket open in the detail view —
- * the rail only exists there. The layout agent consumes `railCollapsed` from
- * the ui store to actually hide/show the rail.
+ * The band's trailing slot: the way OUT of terminal focus, and nothing else.
+ *
+ * The way in moved onto the pane it acts on (`session-split-layout.tsx`'s
+ * `PaneFocusControl`). Entering is a statement about one terminal, so it belongs
+ * on that terminal; the band is window chrome and could only ever offer it by
+ * first deriving whether a terminal was on screen at all — a control conditional
+ * on facts it has no business holding, and the reason terminal focus stayed
+ * accidentally ticket-only for as long as it did.
+ *
+ * Exit stays here, and the asymmetry is the point rather than a leftover. In zen
+ * mode this 40px row is the only chrome left: the tab strips are gone, the
+ * sidebars are gone, and the pane fills everything below. A hover-revealed
+ * corner control on a terminal the user is driving from the keyboard is not a
+ * way out of a mode — it is a thing you have to remember exists and then go
+ * hunting for with a mouse. So the exit is persistent, visible, and always in
+ * the same place, with ⌥⌘Return doing the same job without a pointer.
+ *
+ * No crossfade on appearing: `app-shell.tsx` forces `data-motion="instant"`
+ * through the first frame of the transition to collapse the PTY resize cascade,
+ * and a glyph animating against that would be the one thing on screen fighting
+ * the freeze.
  */
-function RightRailToggle() {
-  const project = useSelectedProject();
-  const projectId = project?.id ?? null;
-  const hasOpenTicket = useWorkspaceStore((state) =>
-    projectId === null ? false : state.byProject[projectId]?.openTicketId != null,
-  );
-  const railCollapsed = useUiStore((state) => state.railCollapsed);
-  const toggleRailCollapsed = useUiStore((state) => state.toggleRailCollapsed);
-
-  if (!hasOpenTicket) return null;
+function TerminalFocusExit() {
+  const focused = useUiStore((state) => state.terminalFocusTarget !== null);
+  if (!focused) return null;
 
   return (
     <Button
       variant="ghost"
       size="icon"
-      // scale-x-[-1] mirrors the left-sidebar glyph so it reads as the RIGHT
-      // panel (VS Code's secondary-sidebar convention). mr-1 keeps it off the
-      // window's right edge.
+      // mr-1 keeps it off the window's right edge; translate-y-px meets the
+      // traffic lights, like every other icon button on this band.
       className="app-region-no-drag mr-1 translate-y-px"
-      aria-pressed={railCollapsed}
-      onClick={() => toggleRailCollapsed()}
-      aria-label={railCollapsed ? "Show details rail" : "Hide details rail"}
-      title={`${railCollapsed ? "Show" : "Hide"} details (⌥⌘B)`}
+      // No `aria-pressed`, for the same reason as WorkspaceRailToggle above:
+      // the label already carries the state, and "Exit terminal focus, pressed"
+      // reads as if exiting were the thing already done.
+      onClick={() => useUiStore.getState().setTerminalFocusTarget(null)}
+      aria-label="Exit terminal focus"
+      title="Exit terminal focus (⌥⌘⏎)"
     >
-      <SidebarSimpleIcon weight="fill" className="scale-x-[-1]" />
-      <span className="sr-only">Toggle details rail</span>
+      <CornersInIcon weight="bold" />
+      <span className="sr-only">Exit terminal focus</span>
     </Button>
   );
 }

@@ -5,7 +5,7 @@
  * one primary action (label + disabled reason) and the always-listed chevron
  * menu (each verb with its own disabled reason). Raw status is never surfaced as
  * standalone lines — it only drives labels and disabled reasons here. Kept
- * side-effect-free and separate from `ticket-properties.tsx` so the rules are
+ * side-effect-free and separate from `ticket-repository-summary.tsx` so the rules are
  * unit-testable without mounting React or faking `window.api`.
  */
 import type { DiffStat } from "@volli/shared";

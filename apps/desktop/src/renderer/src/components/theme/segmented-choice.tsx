@@ -52,7 +52,7 @@ export function SegmentedChoice<Key extends string>({
               if (option.key !== value) onChange(option.key);
             }}
           >
-            {Icon ? <Icon weight="fill" /> : null}
+            {Icon ? <Icon /> : null}
             {option.label}
           </Button>
         );

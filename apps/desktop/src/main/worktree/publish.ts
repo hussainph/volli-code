@@ -28,7 +28,7 @@ import { recordTicketEvent } from "../db/events-repo";
 import { getProjectById } from "../db/projects-repo";
 import { getTicketRow, updateTicketFields } from "../db/tickets-repo";
 import { resolveBaseBranch } from "./base";
-import { commitRemaining, type CommitOutcome } from "./commit";
+import { commitRemaining, type CommitChoices, type CommitOutcome } from "./commit";
 import {
   fetchBase,
   ghCreateDraftPr,
@@ -261,10 +261,16 @@ export async function publishTicketBranch(
  * (`committed: false`) records nothing — nothing happened. Takes
  * {@link PublishDeps} because `commitRemaining` runs `add`/`commit` through the
  * async runner (commit hooks are unbounded; sync would freeze main).
+ *
+ * `choices` (the rail dialog's message + staging breadth) passes straight
+ * through, and the recorded `worktree_committed` carries the message that
+ * actually landed — the user's or the generated one — so the History line means
+ * the same thing for a commit made before those fields existed and after.
  */
 export async function commitTicketRemaining(
   deps: PublishDeps,
   ticketId: string,
+  choices: CommitChoices = {},
 ): Promise<WorktreeResult<CommitOutcome>> {
   const ticket = getTicketRow(deps.db, ticketId);
   if (!ticket) return err("Unknown ticket");
@@ -277,6 +283,7 @@ export async function commitTicketRemaining(
   const result = await commitRemaining(deps.git, deps.net, {
     worktreePath: ticket.worktree_path,
     displayId,
+    ...choices,
   });
   const now = Date.now();
   if (!result.ok) {

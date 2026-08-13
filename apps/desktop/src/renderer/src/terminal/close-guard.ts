@@ -75,8 +75,15 @@ export interface CloseGuard {
 /**
  * Owns the local pending-confirm state for one close surface. Per the app's
  * convention (dialog open-state lives in its single opener), each opener
- * instantiates its own hook rather than sharing a global flag. A second close
- * request while a confirm is pending simply replaces the pending state.
+ * instantiates its own hook rather than sharing a global flag.
+ *
+ * A second request while one is pending simply REPLACES it, first `run` and all.
+ * That is tolerable while a hook stands behind a single target — the confirm on
+ * screen is about the thing you just clicked either way. It is not tolerable
+ * behind many: the board's ticket-dialog-host.tsx serves every card from one
+ * hook, and there a replacement would archive the second ticket and drop the
+ * first ticket's intent with nothing said. An opener that multiplexes targets
+ * has to refuse its own second request; this hook will not do it for you.
  */
 export function useCloseGuard(): CloseGuard {
   const [pending, setPending] = React.useState<PendingClose | null>(null);

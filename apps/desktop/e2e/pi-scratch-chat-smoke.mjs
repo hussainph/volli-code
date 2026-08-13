@@ -56,6 +56,7 @@ import os from "node:os";
 import { join } from "node:path";
 
 import {
+  activeTabLabel,
   assistantReplyTexts,
   createRunner,
   ensurePiAuthInto,
@@ -63,11 +64,14 @@ import {
   launch,
   makeGitRepo,
   makeScratch,
+  openNewChatTab,
   readSeededProjects,
   seedDefaultModel,
   seedProjects,
+  SESSION_TAB_STRIP,
   sleep,
   stopButton,
+  tabStrip,
   waitForSettledReply,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
@@ -112,37 +116,14 @@ async function captureFailureEvidence(page, mainOut, mainErr, label) {
   console.log(`  evidence: ${join(EVIDENCE_DIR, `pi-scratch-chat-${slug}.log`)}`);
 }
 
-/** The nearest visible tablist's own "+" — scopes past the ticket rail's identical mount. */
-function tabStripNewSessionButton(page) {
-  return page
-    .locator('[role="tablist"]')
-    .locator("xpath=..")
-    .getByRole("button", { name: "New session", exact: true });
-}
-
 /** Navigate to Sessions and wait for its (auto-opened scratch terminal) tab strip to mount. */
 async function goToSessions(page) {
   await page.getByRole("button", { name: "Sessions", exact: true }).click();
   await waitUntil(
     "the Sessions tab strip to mount",
-    async () => (await page.locator('[role="tab"]').count()) >= 1,
+    async () => (await tabStrip(page, SESSION_TAB_STRIP).getByRole("tab").count()) >= 1,
     { timeout: 20000 },
   );
-}
-
-async function openNewChatTab(page) {
-  const tabsBefore = await page.locator('[role="tab"]').count();
-  await tabStripNewSessionButton(page).click();
-  await page.getByRole("menuitem", { name: "Chat", exact: true }).click();
-  await waitUntil(
-    "a new chat tab to appear",
-    async () => (await page.locator('[role="tab"]').count()) > tabsBefore,
-  );
-  const activeLabel = await page
-    .locator('[role="tab"][aria-selected="true"]')
-    .getAttribute("aria-label");
-  if (activeLabel === null) throw new Error("no tab became active after New Chat");
-  return activeLabel;
 }
 
 /** Submits `text` and returns the moment it was sent — the turn clock's zero. */
@@ -209,10 +190,10 @@ async function main() {
 
     await attempt(
       2,
-      "the Sessions page's + menu creates a ticketless (scratch) chat tab",
+      "the Sessions strip's own Chat control creates a ticketless (scratch) chat tab",
       async () => {
         await goToSessions(page);
-        chatTabLabel = await openNewChatTab(page);
+        chatTabLabel = await openNewChatTab(page, SESSION_TAB_STRIP);
         return { ok: chatTabLabel !== null, detail: chatTabLabel };
       },
     );
@@ -280,9 +261,7 @@ async function main() {
         // `#autoTitle`), so the "Chat 1" captured at creation is no longer
         // what the tab — or the sidebar row the relaunch below looks for —
         // is called.
-        chatTabLabel = await page
-          .locator('[role="tab"][aria-selected="true"]')
-          .getAttribute("aria-label");
+        chatTabLabel = await activeTabLabel(page, SESSION_TAB_STRIP);
         return {
           ok: settled.texts.length > 0 && chatTabLabel !== null,
           detail:

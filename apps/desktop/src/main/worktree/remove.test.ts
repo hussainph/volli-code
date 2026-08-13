@@ -167,4 +167,97 @@ describe("remove", () => {
     expect(removeCall?.args).toEqual(["worktree", "remove", "--force", wt]);
     expect(getTicketRow(ctx.db, "ticket-1")!.worktree_path).toBeNull();
   });
+
+  // A binding outlives the tab that opened it, so nothing else ends one. Without
+  // this the checkout went and the Session kept dispatching into the vanished
+  // path — no release, no close, and nothing said.
+  it("ends the bindings rooted in the checkout, in the same beat as the delete", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    seed(wt);
+    const { git, calls } = statusGit(wt, gitDir, false);
+    const order: string[] = [];
+    const released: string[] = [];
+
+    const tracedGit = (args: readonly string[], cwd: string): string => {
+      order.push(`git:${args[1] ?? args[0]}`);
+      return git(args, cwd);
+    };
+
+    const result = await remove(
+      { db: ctx.db, git: tracedGit, attachmentsRoot: "unused" },
+      "ticket-1",
+      {
+        force: false,
+        releaseAgentSites: async (directory) => {
+          order.push("release");
+          released.push(directory);
+          return { released: ["chat-1"], stillOpen: [] };
+        },
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(released).toEqual([wt]);
+    // After the dirty gate (so a refusal costs no chat), before the delete (so
+    // the executor stops while its cwd still exists).
+    expect(order.slice(-2)).toEqual(["release", "git:remove"]);
+    expect(calls.some((c) => c.args[1] === "remove")).toBe(true);
+  });
+
+  it("never releases a binding for a remove it is about to refuse as dirty", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    seed(wt);
+    const { git } = statusGit(wt, gitDir, true);
+    let releases = 0;
+
+    const result = await remove({ db: ctx.db, git, attachmentsRoot: "unused" }, "ticket-1", {
+      force: false,
+      releaseAgentSites: async () => {
+        releases += 1;
+        return { released: [], stillOpen: [] };
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(releases).toBe(0);
+  });
+
+  it("releases the bindings pointed at a checkout that is already gone", async () => {
+    const gone = join(tempDir("wt"), "vanished");
+    seed(gone);
+    const { git } = scriptedGit(() => "");
+    const released: string[] = [];
+
+    const result = await remove({ db: ctx.db, git, attachmentsRoot: "unused" }, "ticket-1", {
+      force: false,
+      releaseAgentSites: async (directory) => {
+        released.push(directory);
+        return { released: ["chat-1"], stillOpen: [] };
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(released).toEqual([gone]);
+  });
+
+  it("still removes the worktree when a binding refuses to close", async () => {
+    // Best-effort by design: a release that cannot succeed must not leave a
+    // worktree no route can remove — the failure the busy gate was rewritten to
+    // end. The report names what survived; the caller logs it.
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    seed(wt);
+    const { git, calls } = statusGit(wt, gitDir, false);
+
+    const result = await remove({ db: ctx.db, git, attachmentsRoot: "unused" }, "ticket-1", {
+      force: false,
+      releaseAgentSites: async () => ({ released: [], stillOpen: ["chat-1"] }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(calls.some((c) => c.args[1] === "remove")).toBe(true);
+    expect(getTicketRow(ctx.db, "ticket-1")!.worktree_path).toBeNull();
+  });
 });

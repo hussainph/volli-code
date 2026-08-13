@@ -158,9 +158,10 @@ const TRANSPARENT_PREFIXES = new Map<string, Wrapper>([
   ["script", wrapper(1, "-F", "-t")],
   ["xcrun", wrapper(0, "--sdk", "--toolchain", "-sdk", "-toolchain")],
   ["sandbox-exec", wrapper(0, "-p", "-f", "-D")],
-  // Not stock macOS. Retained because the sandbox's PATH keeps `/opt/homebrew`
-  // and `/usr/local`, so either can be present; an entry for an absent program
-  // costs nothing, while a missing entry for a present one is a bypass.
+  // Not stock macOS. Retained because `/opt/homebrew` and `/usr/local` are on
+  // the PATH a command inherits, so either can be present; an entry for an
+  // absent program costs nothing, while a missing entry for a present one is a
+  // bypass.
   ["timeout", wrapper(1, "-s", "-k", "--signal", "--kill-after")],
   ["ionice", wrapper(0, "-c", "-n", "-p", "-P", "-u")],
 ]);

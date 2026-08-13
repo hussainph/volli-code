@@ -10,10 +10,12 @@
  * What this is worth, stated plainly: it handles quoting, escaping, operators,
  * and redirects, and it is defeated by `eval`, `base64`, command substitution,
  * `xargs`, and any other construct that produces a command line the lexer never
- * sees. It is sound as a layer beneath the Seatbelt sandbox — which denies the
- * network, strips credentials from the child environment, and scopes writes to
- * the workspace whatever the lexer concluded — and unsound as a standalone
- * boundary. It is only ever used as the former.
+ * sees. It is sound only as a layer beneath a boundary that holds whatever the
+ * lexer concluded, and unsound as a standalone one. It was written beneath the
+ * Seatbelt sandbox, which denied the network, stripped credentials from the
+ * child environment and scoped writes to the workspace; that sandbox is no
+ * longer installed, and neither is the rule pack this feeds, so nothing lexes a
+ * command today. Do not promote it to a boundary to fill the gap.
  *
  * See `./README.md` for the upstream revision and the divergences.
  */

@@ -6,24 +6,38 @@
  * disables, where words go when there is nowhere to send them, and what a
  * streamed token is allowed to re-render.
  */
-import type { SessionAttention, SessionInteractionResolution } from "@volli/shared";
+import type {
+  ModelAccessModel,
+  ModelAccessProvider,
+  SessionAttention,
+  SessionInteractionResolution,
+} from "@volli/shared";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
+
+import type { HeldMessage } from "@renderer/stores/chat-drafts";
 
 import {
   answerInteraction,
   composerModelSelection,
+  heldStrip,
   holdList,
   messageRoute,
   resolvingWith,
   sameInteractionId,
   sameMessages,
   sessionBlocker,
+  sessionModelStanding,
+  settledHeldIds,
   terminalCompanionTabId,
   withdrawInteraction,
   type SessionBlockerActs,
   type SessionBlockerInput,
 } from "./chat-plane-model";
+
+function heldMessage(id: string, text: string, state: HeldMessage["state"]): HeldMessage {
+  return { id, text, state };
+}
 
 describe("composer model selection", () => {
   it("accepts only product reasoning levels at the durable command boundary", () => {
@@ -55,6 +69,63 @@ describe("composer model selection", () => {
   });
 });
 
+describe("the Session's own model, against the catalog", () => {
+  const catalog: readonly ModelAccessModel[] = [
+    {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-luna",
+      label: "GPT-5.6 Luna",
+      state: "available",
+      reasoningLevels: ["medium"],
+    },
+    {
+      // The same model name, from a provider this profile never signed into.
+      providerId: "azure-openai-responses",
+      modelId: "gpt-5.6-luna",
+      label: "GPT-5.6 Luna",
+      state: "authentication-required",
+      reasoningLevels: ["medium"],
+    },
+  ];
+  const providers: readonly ModelAccessProvider[] = [
+    {
+      id: "azure-openai-responses",
+      label: "Azure OpenAI Responses",
+      state: "authentication-required",
+      accountLabel: null,
+      billingSource: "unknown",
+      recovery: { kind: "external-sign-in" },
+    },
+  ];
+
+  it("separates two identically named models by the provider each belongs to", () => {
+    expect(
+      sessionModelStanding(
+        { providerId: "azure-openai-responses", modelId: "gpt-5.6-luna" },
+        catalog,
+        providers,
+      ),
+    ).toEqual({ providerLabel: "Azure OpenAI Responses", state: "authentication-required" });
+    expect(
+      sessionModelStanding(
+        { providerId: "openai-codex", modelId: "gpt-5.6-luna" },
+        catalog,
+        providers,
+      ),
+    ).toEqual({ providerLabel: "openai-codex", state: "available" });
+  });
+
+  it("counts a model the catalog no longer lists as one that cannot be run", () => {
+    expect(
+      sessionModelStanding({ providerId: "openai", modelId: "gone" }, catalog, providers),
+    ).toEqual({ providerLabel: "openai", state: "unavailable" });
+  });
+
+  it("has nothing to say about a Session with no recorded model", () => {
+    expect(sessionModelStanding(null, catalog, providers)).toBeNull();
+  });
+});
+
 const NO_OP = () => undefined;
 const ACTS: SessionBlockerActs = {
   recover: NO_OP,
@@ -69,6 +140,7 @@ function blockerInput(overrides: Partial<SessionBlockerInput> = {}): SessionBloc
     attention: { active: [], primary: null },
     catalogState: "ready",
     catalogError: null,
+    sessionModel: { providerLabel: "OpenAI Codex", state: "available" },
     terminalAvailable: false,
     ...overrides,
   };
@@ -179,6 +251,96 @@ describe("sessionBlocker", () => {
       tone: "error",
       action: { label: "Settings", act: NO_OP },
     });
+  });
+
+  it("says the Session's own model needs sign-in before a message is spent on it", () => {
+    // The exact shape of the bug: a Session born with the app default still
+    // pointing at a provider nobody signed into. Today it looks ordinary until
+    // the first message dies at the provider's API.
+    const pinned = blockerInput({
+      sessionModel: { providerLabel: "Azure OpenAI Responses", state: "authentication-required" },
+    });
+
+    expect(sessionBlocker(pinned, ACTS, false)).toEqual({
+      message: "Sign-in required for Azure OpenAI Responses",
+      detail: null,
+      tone: "error",
+      action: { label: "Settings", act: NO_OP },
+    });
+  });
+
+  // One fact, one destination. The catalog reading a provider as signed out and
+  // the harness raising `auth_required` about it are the same fact arriving from
+  // two directions, and which one spoke first must not decide where the reader
+  // is sent.
+  it("routes a signed-out pinned model exactly where the harness's own report goes", () => {
+    const pinned = {
+      sessionModel: {
+        providerLabel: "Azure OpenAI Responses",
+        state: "authentication-required" as const,
+      },
+    };
+
+    expect(
+      sessionBlocker(blockerInput({ ...pinned, terminalAvailable: true }), ACTS, false)?.action
+        ?.label,
+    ).toBe("Open Terminal");
+    expect(
+      sessionBlocker(
+        { ...raised(attention("auth_required")), terminalAvailable: true },
+        ACTS,
+        false,
+      )?.action?.label,
+    ).toBe("Open Terminal");
+  });
+
+  // Settings writes the app DEFAULT, copied into a Session at birth and never
+  // re-read: it cannot repin a Session already born on a model that has gone.
+  // The pill under this row can, so the row offers no button rather than one
+  // that spends the reader's attempt and leaves them where they started.
+  it("offers no action for a model Settings would not repin", () => {
+    expect(
+      sessionBlocker(
+        blockerInput({ sessionModel: { providerLabel: "OpenAI", state: "unavailable" } }),
+        ACTS,
+        false,
+      ),
+    ).toEqual({
+      message: "Model unavailable for OpenAI",
+      detail: null,
+      tone: "error",
+      action: null,
+    });
+  });
+
+  it("outranks the harness's own report of the same fact, but never the transport's", () => {
+    const pinned = {
+      ...raised(attention("auth_required", "Provider is not configured: azure-openai-responses")),
+      sessionModel: {
+        providerLabel: "Azure OpenAI Responses",
+        state: "authentication-required" as const,
+      },
+    };
+
+    expect(sessionBlocker(pinned, ACTS, false)?.message).toBe(
+      "Sign-in required for Azure OpenAI Responses",
+    );
+    expect(
+      sessionBlocker({ ...pinned, sessionError: "Lost the Session stream" }, ACTS, false)?.message,
+    ).toBe("Lost the Session stream");
+  });
+
+  it("accuses no model until the catalog has answered", () => {
+    const unanswered = { sessionModel: { providerLabel: "OpenAI", state: "unavailable" as const } };
+
+    expect(
+      sessionBlocker(blockerInput({ ...unanswered, catalogState: "loading" }), ACTS, false),
+    ).toBeNull();
+    // A Session whose executor pins its own model has no catalog to weigh.
+    expect(
+      sessionBlocker(blockerInput({ ...unanswered, catalogState: "pinned" }), ACTS, false),
+    ).toBeNull();
+    expect(sessionBlocker(blockerInput({ sessionModel: null }), ACTS, false)).toBeNull();
   });
 
   it("stands down for the attention the card is itself the answer to", () => {
@@ -512,6 +674,62 @@ describe("sameMessages", () => {
       false,
     );
     expect(sameMessages([settled], [settled, streaming])).toBe(false);
+  });
+});
+
+describe("heldStrip", () => {
+  it("draws one row for a message both records name", () => {
+    expect(
+      heldStrip([heldMessage("m1", "ship it", "queued")], [{ id: "m1", text: "ship it" }]),
+    ).toEqual([{ id: "m1", text: "ship it" }]);
+  });
+
+  // The transcript is already showing it. A second copy under the composer
+  // reads as a message that failed to leave.
+  it("draws nothing for a message with a round trip still open on it", () => {
+    expect(heldStrip([heldMessage("m1", "ship it", "sending")], [])).toEqual([]);
+  });
+
+  // A crash between the box emptying and anything accepting the words. The
+  // whole point of persisting them is that they come back as their own message
+  // rather than welded onto whatever was typed next.
+  it("draws a message nothing took, in its own row", () => {
+    expect(heldStrip([heldMessage("m1", "ship it", "unsent")], [])).toEqual([
+      { id: "m1", text: "ship it" },
+    ]);
+  });
+
+  it("keeps a queued message no held copy names — a card's redirection", () => {
+    expect(
+      heldStrip(
+        [heldMessage("m1", "one", "queued")],
+        [
+          { id: "m1", text: "one" },
+          { id: "m2", text: "two" },
+        ],
+      ),
+    ).toEqual([
+      { id: "m1", text: "one" },
+      { id: "m2", text: "two" },
+    ]);
+  });
+});
+
+describe("settledHeldIds", () => {
+  it("retires the copy once the release queue has let go of it", () => {
+    expect(settledHeldIds([heldMessage("m1", "ship it", "queued")], [])).toEqual(["m1"]);
+  });
+
+  it("keeps the copy while the queue still names it", () => {
+    expect(
+      settledHeldIds([heldMessage("m1", "ship it", "queued")], [{ id: "m1", text: "ship it" }]),
+    ).toEqual([]);
+  });
+
+  it("leaves alone what the queue never had", () => {
+    expect(
+      settledHeldIds([heldMessage("m1", "one", "sending"), heldMessage("m2", "two", "unsent")], []),
+    ).toEqual([]);
   });
 });
 

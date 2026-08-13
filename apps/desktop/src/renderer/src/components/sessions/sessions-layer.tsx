@@ -1,31 +1,30 @@
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { renameChatSession } from "@renderer/chat/rename";
 import { ChatPlane } from "@renderer/components/chat/chat-plane";
 import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
-import { NewSessionMenu } from "@renderer/components/sessions/new-session-menu";
+import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
 import { SessionTabs, type SessionTabDescriptor } from "@renderer/components/sessions/session-tabs";
 import { SessionSplitLayout } from "@renderer/components/sessions/session-split-layout";
 import { TicketTerminalOverlay } from "@renderer/components/sessions/ticket-terminal-host";
 import {
-  bootChatSession,
-  createTerminalSession,
   createTerminalSplit,
+  startScratchChat,
+  startScratchTerminal,
 } from "@renderer/components/sessions/session-create";
 import {
   chatTabId,
   chatTabStatus,
-  nextChatOrdinal,
   parseChatTabId,
   CHAT_TAB_FALLBACK_LABEL,
 } from "@renderer/components/ticket/ticket-chat-tab";
+import { useNewSessionShortcut } from "@renderer/hooks/use-new-session-shortcut";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import {
   hydrateHarnessCatalog,
-  scratchScope,
   sessionPanes,
   subscribeHarnessEvents,
   subscribeSessionHarness,
@@ -34,6 +33,7 @@ import {
   type TerminalSplitDirection,
 } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
+import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { subscribeWorktreePhases } from "@renderer/stores/worktree";
 import { cn } from "@renderer/lib/utils";
@@ -45,7 +45,6 @@ import {
   closeTerminalSession,
   renameTerminalSession,
 } from "@renderer/terminal/session-lifecycle";
-import type { Project } from "@volli/shared";
 
 const NO_TERMINAL_TABS: readonly SessionTab[] = [];
 const NO_OPEN_CHATS: readonly string[] = [];
@@ -180,8 +179,17 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
     void hydrateHarnessCatalog();
   }, []);
 
-  const createScratch = React.useCallback((project: Project) => {
-    void createTerminalSession(scratchScope(project.id));
+  // ⌘T / ⌥⌘T. Bound here rather than beside the other accelerators in the app
+  // shell because this layer is already the app's one always-mounted component
+  // — it owns the terminal, harness and worktree fan-outs for the same reason —
+  // and because the two things a press has to reach, the scratch boot paths and
+  // this surface's active-tab ledger, are exactly what this module owns. One
+  // listener, mounted once: a hook per control would count one chord as four
+  // Sessions.
+  useNewSessionShortcut();
+
+  const createScratch = React.useCallback((projectId: string) => {
+    void startScratchTerminal(projectId);
   }, []);
 
   const selectedId = selected?.id ?? null;
@@ -233,6 +241,28 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
   // They stay mounted — only their visibility flips (see the keep-alive below).
   const activeChatSessionId = activeTabId === null ? null : parseChatTabId(activeTabId);
 
+  // Terminal focus can now land on THIS surface's terminals too, so this surface
+  // owes the same invariant a ticket's detail view owes for its own: the target
+  // must keep naming the terminal that is actually in front.
+  const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
+  const scratchFocused =
+    terminalFocusTarget !== null &&
+    terminalFocusTarget.ticketId === null &&
+    terminalFocusTarget.projectId === selectedId &&
+    terminalFocusTarget.sessionId === activeTabId;
+  // A ticket target is enforced at the store layer (`clearTerminalFocusUnlessTicket`)
+  // because no single ticket view outlives every ticket. A ticketless one needs no
+  // such twin: this layer IS the app's always-mounted owner of the surface, so it
+  // can simply watch. Selecting another tab, closing the focused one, switching
+  // project, or navigating off Sessions all land here as "no longer in front" —
+  // and app-shell, which hides every piece of chrome while a target is set, must
+  // never be left holding one around a terminal nobody can see.
+  React.useEffect(() => {
+    if (terminalFocusTarget === null || terminalFocusTarget.ticketId !== null) return;
+    if (visible && scratchFocused) return;
+    useUiStore.getState().setTerminalFocusTarget(null);
+  }, [terminalFocusTarget, scratchFocused, visible]);
+
   // The receipt for what was derived, and the only write of it: a tab that
   // closed under the recorded id is answered by re-deriving, never by repairing
   // what was stored.
@@ -255,34 +285,20 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
       !creating
     ) {
       autoOpenedRef.current.add(selected.id);
-      createScratch(selected);
+      createScratch(selected.id);
     }
   }, [visible, selected, emptySurface, creating, createScratch]);
 
   /**
-   * Mints one durable, ticketless chat Session on `project` and puts its tab in
-   * front, through the same boot guard the terminal path uses: one create per
-   * project at a time, none at all into a project the renderer has stopped
-   * tracking. No executor is passed — the plane resolves the project's own
-   * runtime preferences when it mounts.
-   *
-   * The ordinal counts only what is open, because that is all this surface has:
-   * a project's ticketless chats have no durable listing here the way a
-   * ticket's do.
+   * Mints one durable, ticketless chat Session on `projectId` and puts its tab
+   * in front. The whole boot lives in `session-create.ts` so this surface's
+   * control and the ⌘T chord cannot disagree about what a new chat is; no
+   * executor is passed — the plane resolves the project's own runtime
+   * preferences when it mounts.
    */
-  const createChat = React.useCallback(
-    (project: Project, openChats: number) => {
-      void bootChatSession(scratchScope(project.id), {
-        title: `Chat ${nextChatOrdinal(0, openChats)}`,
-        land: (sessionId) => {
-          useChatSessionsStore.getState().openChatTab(project.id, sessionId);
-          setSessionsActiveTab(project.id, chatTabId(sessionId));
-          return true;
-        },
-      });
-    },
-    [setSessionsActiveTab],
-  );
+  const createChat = React.useCallback((projectId: string) => {
+    void startScratchChat(projectId);
+  }, []);
 
   /**
    * Where a file a chat names opens. A ticketless chat has no worktree, so
@@ -369,7 +385,11 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
       {/* SCRATCH surface — flow layout, hidden (not unmounted) when Sessions
           isn't the active page. */}
       <div className={cn("flex min-h-0 flex-1 flex-col bg-background", !visible && "hidden")}>
-        {selected && (
+        {/* The strip steps aside in zen exactly as the ticket's does: the point
+            of terminal focus is that the terminal gets every pixel below the
+            band, and a strip that stayed would be this surface disagreeing with
+            the other one about what "focus" means. */}
+        {selected && !scratchFocused && (
           <ScratchTabs
             terminalTabs={terminalTabs}
             chatIds={openChatIds}
@@ -411,8 +431,8 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
               }
               renameTerminalSession(descriptor.tab.sessionId, title);
             }}
-            onNewSession={() => createScratch(selected)}
-            onNewChat={() => createChat(selected, openChatIds.length)}
+            onNewSession={() => createScratch(selected.id)}
+            onNewChat={() => createChat(selected.id)}
           />
         )}
 
@@ -470,16 +490,21 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
 
           {selected && emptySurface && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center">
-              <TerminalWindowIcon weight="fill" className="size-8 text-muted-foreground" />
+              {/* Chat, not a terminal: the control below starts a chat, and the
+                  glyph crowning an empty state has to name the thing the button
+                  does. */}
+              <ChatCircleIcon className="size-8 text-muted-foreground" />
               <p className="text-sm text-muted-foreground">No open sessions.</p>
-              {/* The same menu the strip carries — the only control on screen,
-                  so it is drawn as one rather than as a bare "+". */}
-              <NewSessionMenu
+              {/* The same control the strip carries, drawn solid: it is the only
+                  affordance on screen, so it takes the emphasis and says what it
+                  does rather than naming a kind among tabs that no longer exist. */}
+              <NewSessionControl
                 disabled={creating}
+                placement="empty"
                 align="start"
-                label={creating ? "Starting…" : "New session"}
-                onNewSession={() => createScratch(selected)}
-                onNewChat={() => createChat(selected, openChatIds.length)}
+                shortcuts
+                onNewChat={() => createChat(selected.id)}
+                onNewTerminal={() => createScratch(selected.id)}
               />
             </div>
           )}

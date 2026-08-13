@@ -29,11 +29,14 @@
  *      injection is proven with the file-probe pattern ($VOLLI_TICKET == display
  *      id, $VOLLI_ARTIFACTS_DIR == the project's `.volli/artifacts` path — the
  *      global-artifacts env contract; VOLLI_TICKET_DIR is gone); switching
- *      Doc ↔ session keeps the terminal alive; the rail shows a chip and the
- *      truthful Shell source label (never the default Claude harness).
+ *      Doc ↔ session keeps the terminal alive; the rail shows a status chip and
+ *      invents NO harness name (since the Calm Stack neither the roster nor
+ *      History prints one — check 6 carries the positive half).
  *   6. Resident keep-alive — navigating ticket → board → ticket keeps the SAME
  *      terminal canvas DOM node mounted (marked node survives) and the shell
- *      alive (the overlay hosts terminals, the detail is only a view over it).
+ *      alive (the overlay hosts terminals, the detail is only a view over it);
+ *      the ACTIVE band's meta line carries the truthful source ("Shell", never
+ *      the default Claude harness) — the one surface that still prints it.
  *   7. Session rename — double-click the session tab, type, Enter; the new title
  *      shows on both the tab and the rail row.
  *   8. Icon-mode rail — Sessions is the default mode; Properties renders
@@ -49,9 +52,10 @@
  *  11. Restart      — relaunch against the SAME app-data dir: the ticket detail
  *      reopens (persisted openTicketId), the edited title/body + surviving
  *      comment are intact, the rail is STILL collapsed (persisted), and the
- *      renamed session is tucked into the collapsed History drawer, then remains
- *      findable when expanded with its Shell + ended-ago metadata. Back returns to
- *      the board even though the in-memory nav history starts fresh.
+ *      renamed session stands in History — a sibling SECTION of Sessions with
+ *      no disclosure, since the Calm Stack retired the drawer — carrying its
+ *      ended-ago metadata. Back returns to the board even though the in-memory
+ *      nav history starts fresh.
  *  12. File-tab save guard — a repository file opened as a ticket file tab is an
  *      explicit-⌘S Monaco document (CONCEPT #49), so an unsaved draft must be
  *      VISIBLE on its tab and DEFENDED on close: typing shows the dirty dot, the
@@ -111,6 +115,7 @@ import {
   makeGitRepo,
   readDocumentLine,
   readMonacoState,
+  startTerminalSession,
   typeIntoMonaco,
 } from "./lib/smoke-kit.mjs";
 
@@ -296,6 +301,13 @@ function docTab(page) {
 
 async function detailOpen(page) {
   return (await docTab(page).count()) === 1;
+}
+
+/** The shell's own word for its arrangement: "focused" | "framed" | "ephemeral". */
+async function shellState(page) {
+  return page.evaluate(
+    () => document.querySelector("[data-volli-shell]")?.getAttribute("data-volli-shell") ?? null,
+  );
 }
 
 /** Board is showing when the ticket's board card is mounted and no detail tab strip is. */
@@ -825,13 +837,13 @@ async function main() {
     // ===================================================================
     await attempt(
       5,
-      "Ticket session: rail Terminal control boots a PTY, env injection ($VOLLI_TICKET/$VOLLI_ARTIFACTS_DIR), keep-alive across tabs, truthful Shell metadata",
+      "Ticket session: rail Terminal control boots a PTY, env injection ($VOLLI_TICKET/$VOLLI_ARTIFACTS_DIR), keep-alive across tabs, no invented harness name",
       async () => {
         await fs.rm(PROBE_ENV, { force: true });
         await fs.rm(PROBE_ALIVE, { force: true });
 
         const aside = page.locator("aside");
-        await aside.getByRole("button", { name: "New terminal", exact: true }).click();
+        await startTerminalSession(aside);
 
         const sessionTab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
         await waitUntil("session tab to appear", async () => (await sessionTab.count()) === 1);
@@ -874,28 +886,37 @@ async function main() {
 
         const railRow = (await aside.getByText(SESSION_INITIAL, { exact: true }).count()) >= 1;
         const railChip = (await aside.getByText(/^(Working|Idle|Exited)$/).count()) >= 1;
-        const shellSource = (await aside.getByText("Shell", { exact: true }).count()) === 1;
+        // The Calm Stack roster is one flat line per Session — glyph, title,
+        // status — so the harness name is no longer printed anywhere under this
+        // `aside`: not on a roster row, and not in History either, where
+        // `session-history.ts` keeps it only as a SEARCH key and never renders
+        // it. So both halves here are absence assertions, and absence alone
+        // cannot tell a rail that resolves the right harness from one that
+        // resolves none. The positive half — that the source resolved, and
+        // resolved truthfully — moves to check 6, at the ACTIVE band's second
+        // line (`session-band-row.tsx:147`), which is the one surface in the
+        // app that still prints it.
         const noFalseClaude = (await aside.getByText("Claude Code", { exact: true }).count()) === 0;
+        const noHarnessInRoster = (await aside.getByText("Shell", { exact: true }).count()) === 0;
 
         // Put this live shell ticket into Doing through the real property UI
-        // (Properties icon mode replaces the retired Details drawer). A live
-        // pane reaches the ACTIVE band from any column, so the next scenario's
-        // row does not depend on this move — it is here to exercise the
-        // property UI on the way past.
-        await aside.getByTestId("ticket-rail-mode-properties").click();
-        await aside.getByRole("button", { name: "Todo", exact: true }).click();
+        // (the Now page folds properties in — the Properties rail mode is
+        // retired). A live pane reaches the ACTIVE band from any column, so the
+        // next scenario's row does not depend on this move — it is here to
+        // exercise the property UI on the way past.
+        await aside.getByTestId("ticket-rail-tab-now").click();
+        await aside.getByRole("button", { name: "Status: Todo", exact: true }).click();
         await page.getByRole("menuitemradio", { name: "Doing", exact: true }).click();
         const doing = await waitUntil("ticket moves to Doing", async () => {
           const persisted = await readTicket(page, TICKET_ID);
           return persisted?.status === "doing";
         });
-        await aside.getByTestId("ticket-rail-mode-sessions").click();
 
         const ok =
-          envOk && aliveOk && railRow && railChip && shellSource && noFalseClaude && !!doing;
+          envOk && aliveOk && railRow && railChip && noHarnessInRoster && noFalseClaude && !!doing;
         return {
           ok,
-          detail: `env=${JSON.stringify(envLines)} envOk=${envOk} alive=${aliveOk} railRow=${railRow} railChip=${railChip} shell=${shellSource} noClaude=${noFalseClaude} doing=${!!doing}`,
+          detail: `env=${JSON.stringify(envLines)} envOk=${envOk} alive=${aliveOk} railRow=${railRow} railChip=${railChip} noHarnessInRoster=${noHarnessInRoster} noClaude=${noFalseClaude} doing=${!!doing}`,
         };
       },
     );
@@ -945,6 +966,18 @@ async function main() {
         // "before" sample honestly unpromoted instead of an intermittent hover.
         await page.mouse.move(0, 0);
         await sleep(200);
+
+        // THE TRUTHFUL SOURCE LABEL, at the surface that still prints it.
+        // Check 5 can only say the rail invents nothing; a rail that drew the
+        // row and the chip while resolving no harness at all would satisfy it.
+        // This is the positive half: a Session booted by the rail's Terminal
+        // control resolves to `Shell`, not to the default Claude harness, and
+        // the meta line is `VC-1 · Shell · <activity>` (`session-band-row.tsx`
+        // joins them with `·`, so this is a substring question, not an exact
+        // one).
+        const metaText = (await activeSessionRow.locator(SESSION_ROW_META).textContent()) ?? "";
+        const truthfulSource = metaText.includes("Shell") && !metaText.includes("Claude Code");
+
         const subtextBefore = await activeSessionRow
           .locator(SESSION_ROW_META)
           .evaluate((element) => getComputedStyle(element).color);
@@ -990,41 +1023,44 @@ async function main() {
         });
 
         const ok =
-          marked && !!exactTabSelected && !!nodeSurvived && !!shellAlive && subtextHighlighted;
+          marked &&
+          !!exactTabSelected &&
+          !!nodeSurvived &&
+          !!shellAlive &&
+          subtextHighlighted &&
+          truthfulSource;
         return {
           ok,
-          detail: `marked=${marked} exactTab=${!!exactTabSelected} nodeSurvived=${!!nodeSurvived} shellAlive=${!!shellAlive} subtextBefore=${subtextBefore} subtext=${JSON.stringify(subtextHighlight)}`,
+          detail: `marked=${marked} exactTab=${!!exactTabSelected} nodeSurvived=${!!nodeSurvived} shellAlive=${!!shellAlive} truthfulSource=${truthfulSource} meta=${JSON.stringify(metaText)} subtextBefore=${subtextBefore} subtext=${JSON.stringify(subtextHighlight)}`,
         };
       },
     );
 
     // ===================================================================
-    // 8. ICON-MODE RAIL — Sessions default + Properties + no harness
+    // 8. RAIL PAGES — Now default, properties folded in, no harness
     //     (runs before 6b so a pre-existing terminal-focus restore failure
     //     cannot hide a real rail regression)
     // ===================================================================
     await attempt(
       8,
-      "Rail: icon-mode Sessions default with Properties metadata in-rail; no Harness row anywhere; board filter bar has no Harness chip",
+      "Rail: Now is the default page and folds sessions + status/priority in; no Harness row anywhere; board filter bar has no Harness chip",
       async () => {
         if (!(await detailOpen(page))) await openTicketViaCard(page);
         const aside = page.locator("aside");
-        // Sessions is the default icon mode.
+        // Now is the default rail page, and it holds the session list.
         const sessionsHeading =
           (await aside.getByRole("heading", { name: "Sessions" }).count()) >= 1;
         const sessionsPressed =
-          (await aside.getByTestId("ticket-rail-mode-sessions").getAttribute("aria-pressed")) ===
-          "true";
+          (await aside.getByTestId("ticket-rail-tab-now").getAttribute("aria-selected")) === "true";
 
-        // Properties mode renders status/priority directly in the rail (decision #46).
-        await aside.getByTestId("ticket-rail-mode-properties").click();
-        const propertiesShown = await waitUntil("Properties mode content", async () => {
+        // Now folds status/priority in as pills, whose accessible names carry
+        // the value ("Status: Todo") — the standalone captions are gone.
+        const propertiesShown = await waitUntil("Now page properties", async () => {
           return (
-            (await aside.getByText("Status", { exact: false }).count()) >= 1 &&
-            (await aside.getByText("Priority", { exact: false }).count()) >= 1
+            (await aside.getByRole("button", { name: /^Status: / }).count()) >= 1 &&
+            (await aside.getByRole("button", { name: /^Priority: / }).count()) >= 1
           );
         });
-        await aside.getByTestId("ticket-rail-mode-sessions").click();
 
         const noHarnessInRail = (await aside.getByText(/harness/i).count()) === 0;
         await escapeToBoard(page);
@@ -1059,9 +1095,9 @@ async function main() {
           return (await docTab(page).getAttribute("aria-selected")) === "true";
         });
 
-        const modes = ["files", "changes", "properties", "sessions"];
+        const modes = ["changes", "files", "now"];
         for (const mode of modes) {
-          await aside.getByTestId(`ticket-rail-mode-${mode}`).click();
+          await aside.getByTestId(`ticket-rail-tab-${mode}`).click();
           const stillBody = await waitUntil(
             `Ticket Body still active after ${mode} mode`,
             async () => (await docTab(page).getAttribute("aria-selected")) === "true",
@@ -1071,7 +1107,10 @@ async function main() {
           }
         }
 
+        // Scoped to the ticket's own strip: the rail draws a second tablist for
+        // its pages, and those tabs are not candidates for "an auto-opened file".
         const fileTabs = await page
+          .getByRole("tablist", { name: "Ticket tabs" })
           .getByRole("tab")
           .evaluateAll((tabs) => tabs.map((t) => t.getAttribute("aria-label") ?? ""));
         // Only the body tab and any already-open session tabs — never an auto-opened file.
@@ -1096,8 +1135,44 @@ async function main() {
     // ===================================================================
     await attempt(
       "6b",
-      "Terminal focus reclaims sidebars/tab rail, keeps one thin chrome row, preserves the live canvas, and the Exit button restores the workspace",
+      "Terminal focus is offered on the terminal pane only, reclaims sidebars/tab rail, keeps one thin chrome row, preserves the live canvas, and exits from the band",
       async () => {
+        // The enter control lives ON the pane now (session-split-layout.tsx's
+        // PaneFocusControl), not on the chrome band — it acts on one terminal, so
+        // it is mounted inside that terminal's visible pane tree and cannot exist
+        // where a terminal isn't. That makes this check structural rather than a
+        // test of a derivation: switching to the Ticket Body unmounts the pane,
+        // and with it the control.
+        //
+        // It is hover-revealed (opacity-0 until the pointer is on the pane), which
+        // Playwright still counts as visible and still clicks — opacity does not
+        // affect hit-testing, and the button keeps its own box.
+        await docTab(page).click();
+        const hiddenOnDoc = await waitUntil("no focus control on the Ticket Body", async () => {
+          return (await page.getByRole("button", { name: "Enter terminal focus" }).count()) === 0;
+        }).catch(() => null);
+        const sessionTab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
+        await sessionTab.click();
+        const shownOnSession = await waitUntil("focus control on the session tab", async () => {
+          return (await page.getByRole("button", { name: "Enter terminal focus" }).count()) === 1;
+        }).catch(() => null);
+        // …and it is on the CANVAS, not the band. It sits at the top-right of the
+        // tab's whole pane group rather than inside one split leaf, because the
+        // focus target is the tab (`TerminalFocusTarget.sessionId` is the root
+        // tab id) — a button inside the top-right leaf would claim to focus that
+        // leaf. So the check is positional: outside the app-region drag row, and
+        // below it on screen.
+        const controlOffBand = await page.evaluate(() => {
+          const button = Array.from(document.querySelectorAll("button")).find(
+            (candidate) => candidate.getAttribute("aria-label") === "Enter terminal focus",
+          );
+          if (!button) return false;
+          if (button.closest(".app-region-drag") !== null) return false;
+          const band = document.querySelector(".app-region-drag");
+          const bandBottom = band?.getBoundingClientRect().bottom ?? 0;
+          return button.getBoundingClientRect().top >= bandBottom;
+        });
+
         const marked = await page.evaluate(() => {
           const canvas = Array.from(document.querySelectorAll("canvas")).find(
             (candidate) =>
@@ -1143,10 +1218,14 @@ async function main() {
           focused.asides === 0 &&
           focused.canvasVisible;
 
-        // Exit is the chrome-bar button only. Bare Escape stays with the PTY
-        // (Claude Code / vim), and the old ⌘Escape chord was dropped — it never
-        // reliably reached the renderer under Playwright/Electron and wasn't
-        // worth the fight.
+        // Exit is the BAND's persistent control, and it is deliberately not the
+        // same button as the one that entered: in zen mode the band is the only
+        // chrome left (the tab strips and sidebars are gone), so the way out has
+        // to be visible and in a fixed place rather than hover-revealed over a
+        // terminal the user is driving from the keyboard. ⌥⌘Return does the same
+        // job. Bare Escape stays with the PTY (Claude Code / vim), and the old
+        // ⌘Escape chord was dropped: it never reliably reached the renderer under
+        // Playwright/Electron and wasn't worth the fight.
         await page.getByRole("button", { name: "Exit terminal focus" }).click();
         const restored = await waitUntil("workspace geometry restored", async () =>
           page.evaluate(() => {
@@ -1169,15 +1248,38 @@ async function main() {
         );
         const restoredGeometry =
           restored.insetLeft > 0 &&
-          restored.tablists === 1 &&
+          // Two: the ticket's tab strip and the rail's own page tablist.
+          restored.tablists === 2 &&
           restored.asides === 1 &&
           restored.canvasVisible;
+
+        // ⌥⌘Return is the same toggle on the keyboard, and it has to work in
+        // both directions — the exit direction fires while a live PTY holds
+        // keyboard focus, which is why the listener is capture-phase.
+        await page.keyboard.press("Alt+Meta+Enter");
+        const focusedByChord = await waitUntil("⌥⌘Return enters terminal focus", async () => {
+          return (await shellState(page)) === "focused";
+        }).catch(() => null);
+        await page.keyboard.press("Alt+Meta+Enter");
+        const exitedByChord = await waitUntil("⌥⌘Return exits terminal focus", async () => {
+          return (await shellState(page)) !== "focused";
+        }).catch(() => null);
+
         const ticketStillOpen = await detailOpen(page);
 
-        const ok = marked && focusGeometry && restoredGeometry && ticketStillOpen;
+        const ok =
+          marked &&
+          !!hiddenOnDoc &&
+          !!shownOnSession &&
+          controlOffBand &&
+          focusGeometry &&
+          restoredGeometry &&
+          !!focusedByChord &&
+          !!exitedByChord &&
+          ticketStillOpen;
         return {
           ok,
-          detail: `marked=${marked} focused=${JSON.stringify(focused)} restored=${JSON.stringify(restored)} ticketOpen=${ticketStillOpen}`,
+          detail: `marked=${marked} hiddenOnDoc=${!!hiddenOnDoc} shownOnSession=${!!shownOnSession} onPaneNotBand=${controlOffBand} focused=${JSON.stringify(focused)} restored=${JSON.stringify(restored)} chordIn=${!!focusedByChord} chordOut=${!!exitedByChord} ticketOpen=${ticketStillOpen}`,
         };
       },
     );
@@ -1251,13 +1353,13 @@ async function main() {
     // ===================================================================
     await attempt(
       10,
-      "Rail toggle: the chrome rail button and ⌥⌘B hide/show the right rail; left collapsed for the restart-persistence check",
+      "Rail toggle: the tab strip's corner button and ⌥⌘B hide/show the right rail; left collapsed for the restart-persistence check",
       async () => {
         if (!(await detailOpen(page))) await openTicketViaCard(page);
         const aside = page.locator("aside");
         await waitUntil("rail visible initially", async () => (await aside.count()) === 1);
 
-        // Chrome-bar mirrored toggle hides the rail.
+        // The tab strip's corner sits directly above the pane it collapses.
         await page.getByRole("button", { name: "Hide details rail" }).click();
         const hiddenByButton = await waitUntil("rail hidden by button", async () => {
           return (await aside.count()) === 0;
@@ -1332,10 +1434,15 @@ async function main() {
 
         // Rail collapsed state persisted across restart (no rail rendered yet).
         const railCollapsedPersisted = (await page.locator("aside").count()) === 0;
-        // Bring it back to assert the session record survived.
+        // Bring it back to assert the session record survived. Reported rather
+        // than thrown: if the collapse did NOT persist, ⌥⌘B hides an already-
+        // visible rail and the wait below times out saying nothing about why.
         await page.keyboard.press("Alt+Meta+b");
         const aside = page.locator("aside");
-        await waitUntil("rail restored after restart", async () => (await aside.count()) === 1);
+        const railRestored = await waitUntil(
+          "rail restored after restart",
+          async () => (await aside.count()) === 1,
+        ).catch(() => null);
 
         // The surviving (edited) comment is present; the deleted one is not.
         const commentOk = await waitUntil("persisted comment", async () => {
@@ -1346,23 +1453,34 @@ async function main() {
           return kept && deletedGone;
         });
 
-        // The prior session no longer clutters the working set: History is
-        // collapsed by default. Expanding it restores the renamed row and its
-        // truthful source/status metadata.
-        const historyButton = aside.getByRole("button", { name: /History/ });
-        const historyCollapsed =
-          (await historyButton.getAttribute("aria-expanded")) === "false" &&
-          (await aside.getByText(SESSION_RENAMED, { exact: true }).count()) === 0;
-        await historyButton.click();
+        // The prior session folds out of the working set and into History,
+        // which is a SIBLING SECTION of Sessions — one shape, one inset, no
+        // seam. It used to be a `RailDrawer`, and this check used to prove the
+        // drawer was collapsed and then click it open; that primitive was the
+        // old rail's, it existed so History and a Details drawer could stack as
+        // siblings, and Details is gone. So the disclosure is gone with it and
+        // the row is simply THERE — which is a stronger claim than the one this
+        // check made before, not a weaker one: previously the row was allowed to
+        // be absent until something clicked.
+        //
+        // A history row is the SAME one-line row as the roster's
+        // (`ticket-sessions-panel.tsx` renders both), so it prints no harness
+        // name either — `session-history.ts` keeps the label only to match on
+        // when you search. What is left is what a history row exists to carry:
+        // identity and pastness. Source truthfulness is check 6's, at the
+        // sidebar band that still prints it.
+        const historyHeading = aside.getByRole("heading", { name: /History/ });
+        const historyIsSection =
+          (await historyHeading.count()) === 1 &&
+          (await aside.getByRole("button", { name: /^History/ }).count()) === 0;
         const sessionOk = await waitUntil(
-          "prior renamed session expands from history",
+          "prior renamed session stands in history without a disclosure",
           async () => {
             const row = (await aside.getByText(SESSION_RENAMED, { exact: true }).count()) >= 1;
-            const shell = (await aside.getByText("Shell", { exact: true }).count()) >= 1;
             // History rows trail with when the session ended, not a redundant
-            // "Exited" chip — the drawer itself already says these are past.
+            // "Exited" chip — the section heading already says these are past.
             const endedAgo = (await aside.getByText(/^(just now|\d+[mhdw] ago)$/).count()) >= 1;
-            return row && shell && endedAgo;
+            return row && endedAgo;
           },
         );
         // Navigation history is deliberately in-memory, so a relaunch has no
@@ -1380,13 +1498,14 @@ async function main() {
           titleOk &&
           !!bodyOk &&
           railCollapsedPersisted &&
+          !!railRestored &&
           !!commentOk &&
-          historyCollapsed &&
+          historyIsSection &&
           !!sessionOk &&
           !!boardViaRestartBack;
         return {
           ok,
-          detail: `docTab=${JSON.stringify(docTabId)} title=${titleOk} body=${!!bodyOk} railCollapsed=${railCollapsedPersisted} comment=${!!commentOk} historyCollapsed=${historyCollapsed} session=${!!sessionOk} restartBack=${!!boardViaRestartBack}`,
+          detail: `docTab=${JSON.stringify(docTabId)} title=${titleOk} body=${!!bodyOk} railCollapsed=${railCollapsedPersisted} railRestored=${!!railRestored} comment=${!!commentOk} historyIsSection=${historyIsSection} session=${!!sessionOk} restartBack=${!!boardViaRestartBack}`,
         };
       },
     );

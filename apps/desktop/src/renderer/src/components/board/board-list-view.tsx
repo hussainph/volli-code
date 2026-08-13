@@ -124,6 +124,10 @@ function ListSection({
   dragActive: boolean;
 }) {
   const { setNodeRef } = useDroppable({ id: columnDroppableId(status) });
+  // Memoized for the same reason as board-column.tsx's: a fresh array re-keys
+  // `SortableContext`'s value, and every `useSortable` row re-renders through
+  // `SortableTicketRow`'s `React.memo` because context is not props.
+  const sortableIds = React.useMemo(() => tickets.map((ticket) => ticket.id), [tickets]);
 
   return (
     <section data-list-section data-status={status}>
@@ -131,10 +135,7 @@ function ListSection({
         <span className="text-ui font-medium text-foreground">{TICKET_STATUS_LABELS[status]}</span>
         <span className="font-mono text-xs text-muted-foreground">{tickets.length}</span>
       </div>
-      <SortableContext
-        items={tickets.map((ticket) => ticket.id)}
-        strategy={verticalListSortingStrategy}
-      >
+      <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
         <div ref={setNodeRef} className={cn(dragActive && "min-h-9")}>
           {tickets.map((ticket) => (
             <SortableTicketRow

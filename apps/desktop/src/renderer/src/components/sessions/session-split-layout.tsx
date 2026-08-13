@@ -2,6 +2,7 @@ import * as React from "react";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
 import { ColumnsPlusRightIcon } from "@phosphor-icons/react/dist/csr/ColumnsPlusRight";
+import { CornersOutIcon } from "@phosphor-icons/react/dist/csr/CornersOut";
 import { MinusCircleIcon } from "@phosphor-icons/react/dist/csr/MinusCircle";
 import { PlusCircleIcon } from "@phosphor-icons/react/dist/csr/PlusCircle";
 import { RowsPlusBottomIcon } from "@phosphor-icons/react/dist/csr/RowsPlusBottom";
@@ -19,10 +20,12 @@ import {
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import { canResumeSession } from "@renderer/components/ticket/session-history";
+import { useTerminalFocusTarget } from "@renderer/hooks/use-terminal-focus-target";
 import { cn } from "@renderer/lib/utils";
 import type { SessionLayout, SessionTab, TerminalSplitDirection } from "@renderer/stores/sessions";
 import { launchAdapter, sessionPanes } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
+import { useUiStore } from "@renderer/stores/ui";
 import { getEngine } from "@renderer/terminal/registry";
 
 interface SessionSplitLayoutProps {
@@ -73,7 +76,7 @@ export function SessionSplitLayout({
   }, [rows]);
 
   return (
-    <div className={cn("absolute inset-0 min-h-0 min-w-0", !visible && "hidden")}>
+    <div className={cn("group/focus absolute inset-0 min-h-0 min-w-0", !visible && "hidden")}>
       <SplitNode
         ownerId={ownerId}
         tabId={tab.sessionId}
@@ -88,6 +91,88 @@ export function SessionSplitLayout({
         onResume={onResume}
         recordsById={recordsById}
       />
+      {/* Mounted only for the tab that is actually on screen: the control reads
+          six store selectors, and every hidden keep-alive tab in every project
+          paying for them would be a subscription bill for an answer none of them
+          can be the subject of. */}
+      {visible ? <PaneFocusControl sessionId={tab.sessionId} /> : null}
+    </div>
+  );
+}
+
+/**
+ * Enter terminal focus, drawn ON the terminal it acts on.
+ *
+ * It used to be a fixture of the chrome band, and that was the wrong address
+ * twice over. The band is window chrome — traffic lights, drag region, ⌘K — and
+ * a control that acts on one pane among several sitting up there says the whole
+ * window is about to do something. Worse, the band had to derive whether a
+ * terminal was even on screen before it could decide to render, which is how a
+ * control ends up conditional on facts it has no business holding. Here the
+ * condition is structural: this component only exists inside a visible pane
+ * tree, so it cannot appear where a terminal isn't.
+ *
+ * Hover-revealed, in the pane's own top-right corner — the corner a maximize
+ * control has lived in since window managers had corners — because a terminal is
+ * a reading surface and a button standing permanently over its scrollback would
+ * be chrome charged to the canvas forever. Keyboard users are not left behind:
+ * it takes focus in tab order and reveals itself on `focus-visible`, and
+ * ⌥⌘Return does the whole thing without pointing at anything.
+ *
+ * It does NOT render while focused. Exit is the band's persistent control, and
+ * that split is deliberate rather than an oversight: zen mode hands the canvas to
+ * a PTY that the user is by then driving from the keyboard, and the way out of a
+ * mode must not be a thing you have to go looking for with a mouse.
+ *
+ * The target comes from {@link useTerminalFocusTarget} rather than from this
+ * pane's own scope, so the button and the chord cannot disagree about what would
+ * be focused — the pane only adds "and I am the one it names".
+ */
+function PaneFocusControl({ sessionId }: { sessionId: string }) {
+  const target = useTerminalFocusTarget();
+  const focused = useUiStore((state) => state.terminalFocusTarget !== null);
+  if (focused || target === null || target.sessionId !== sessionId) return null;
+
+  return (
+    <div
+      className="absolute top-2 right-2 z-20"
+      // The pane below activates (and focuses its engine) on pointer-down; a
+      // press meant for this button must not also yank keyboard focus into the
+      // PTY the button is about to hand the whole canvas to.
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        onClick={() => useUiStore.getState().setTerminalFocusTarget(target)}
+        // No `aria-pressed`: the label carries the state, and this button has no
+        // pressed appearance for it to describe — the same call every other
+        // chrome toggle in this app makes.
+        aria-label="Enter terminal focus"
+        title="Enter terminal focus (⌥⌘⏎)"
+        aria-keyshortcuts="Alt+Meta+Enter"
+        className={cn(
+          // Its own material, not a ghost: a transparent rest state over
+          // arbitrary scrollback is a glyph competing with whatever character
+          // happens to be under it. The wash is of the ink (`--foreground` runs
+          // toward white in dark and black in light), so it stays a lift in both
+          // modes the way the ⌘K pill does, and the blur keeps the border legible
+          // against a moving canvas.
+          "border border-border/60 bg-background/80 text-muted-foreground shadow-sm backdrop-blur-sm",
+          "hover:bg-background hover:text-foreground",
+          // Chrome charged to the canvas only while the pointer is on it. Opacity
+          // alone, so there is nothing here for reduced motion to object to.
+          "opacity-0 transition-opacity duration-150 ease-out group-hover/focus:opacity-100 focus-visible:opacity-100",
+        )}
+      >
+        {/* Outline, the baseline: `icon-sm` draws this at 14px, and CLAUDE.md's
+            small-size tier — the one ground `bold` stands on — is ≤12px. What
+            keeps it legible over scrollback is the button's own material below,
+            not a heavier pen. */}
+        <CornersOutIcon />
+        <span className="sr-only">Enter terminal focus</span>
+      </Button>
     </div>
   );
 }
@@ -160,7 +245,7 @@ function SplitNode(props: SplitNodeProps) {
                     props.onResume?.(layout.sessionId);
                   }}
                 >
-                  <ArrowClockwiseIcon weight="fill" />
+                  <ArrowClockwiseIcon />
                   Resume session
                 </Button>
               </div>

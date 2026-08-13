@@ -2,9 +2,12 @@ import * as React from "react";
 import { errorMessage, type Project, type TicketPriority, type TicketStatus } from "@volli/shared";
 import { toast } from "sonner";
 
+import { resolveBaseBranch } from "@renderer/components/board/new-ticket/branch-picker";
+import { useBranchListing } from "@renderer/components/board/new-ticket/composer-branch";
 import { ComposerBreadcrumb } from "@renderer/components/board/new-ticket/composer-breadcrumb";
 import { ComposerChips } from "@renderer/components/board/new-ticket/composer-chips";
 import { ComposerFooter } from "@renderer/components/board/new-ticket/composer-footer";
+import { useActiveHarnessLabel } from "@renderer/components/board/new-ticket/composer-harness";
 import { clearDraft, loadDraft, saveDraft } from "@renderer/components/board/new-ticket/draft";
 import {
   type ComposerFields,
@@ -74,13 +77,55 @@ export function ComposerForm({
   const [usesWorktree, setUsesWorktree] = React.useState(restored?.usesWorktree ?? true);
   const [createMore, setCreateMore] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
+  // The chip's own choice, or null for "whatever the project's default is".
+  // Never read directly — `baseBranch` below is the resolved answer.
+  //
+  // Scoped to the project it was chosen FOR, both here and on retarget below. A
+  // ref name means nothing in another repo: a draft restored onto the fallback
+  // project (its own was removed) would otherwise arrive holding the removed
+  // project's base, and two repos that each have a `develop` would sail through
+  // every check `resolveBaseBranch` can make while branching the work off an
+  // unrelated commit.
+  const [chosenBase, setChosenBase] = React.useState<string | null>(() =>
+    restored?.projectId === target.id ? (restored.baseBranch ?? null) : null,
+  );
+
+  // The target project's refs, re-read per open and per retarget.
+  // `resolveBaseBranch` holds the chip's choice while the read is in flight and
+  // then drops one the project turns out not to have — the same revalidation
+  // the restored `target` gets above, for the same reason (a draft can outlive
+  // the branch it named).
+  //
+  // The target's own configured base goes in as the default, and it follows a
+  // retarget: the base a ticket starts from is the target project's business, so
+  // reading it off `target` rather than off the listing keeps the two chips from
+  // ever describing different projects.
+  const branchState = useBranchListing(target.id);
+  const baseBranch = resolveBaseBranch(chosenBase, branchState, target.baseBranch ?? null);
+
+  // Retarget: the new project's refs are a different repo's, so the base picked
+  // in the old one is dropped rather than carried across and re-checked. It is
+  // the project's configured base that stands in until the new listing lands.
+  const handleRetarget = React.useCallback((project: Project) => {
+    setTarget(project);
+    setChosenBase(null);
+  }, []);
 
   // Implicit save: every field change re-caches the draft (the storage layer
   // debounces the SQLite write), so closing the dialog ANY way keeps the work.
   // Content-empty state clears the slot instead (erasing = discarding).
   React.useEffect(() => {
-    saveDraft({ projectId: target.id, status, priority, title, body, labels, usesWorktree });
-  }, [target.id, status, priority, title, body, labels, usesWorktree]);
+    saveDraft({
+      projectId: target.id,
+      status,
+      priority,
+      title,
+      body,
+      labels,
+      usesWorktree,
+      baseBranch: chosenBase,
+    });
+  }, [target.id, status, priority, title, body, labels, usesWorktree, chosenBase]);
 
   const titleRef = React.useRef<HTMLInputElement>(null);
   const editorRef = React.useRef<MonacoDocumentEditorHandle>(null);
@@ -109,6 +154,9 @@ export function ComposerForm({
   );
 
   const canSubmit = title.trim() !== "" && !submitting;
+  // The harness lives in the chip row now; the kickoff button still names it,
+  // which is what keeps the two legible as a pair across the footer boundary.
+  const harnessLabel = useActiveHarnessLabel(lastHarnessId);
 
   const currentFields = React.useCallback(
     (): ComposerFields => ({
@@ -120,8 +168,9 @@ export function ComposerForm({
       body,
       labels,
       usesWorktree,
+      baseBranch,
     }),
-    [target, status, priority, title, body, labels, usesWorktree],
+    [target, status, priority, title, body, labels, usesWorktree, baseBranch],
   );
 
   const deps = React.useMemo<SubmitDeps>(
@@ -202,7 +251,7 @@ export function ComposerForm({
         <ComposerBreadcrumb
           projects={projects}
           target={target}
-          onRetarget={setTarget}
+          onRetarget={handleRetarget}
           expanded={expanded}
           onToggleExpand={onToggleExpand}
           onClose={onClose}
@@ -257,8 +306,15 @@ export function ComposerForm({
           onPriorityChange={setPriority}
           labels={labels}
           onLabelsChange={setLabels}
-          usesWorktree={usesWorktree}
-          onUsesWorktreeChange={setUsesWorktree}
+          harnessId={lastHarnessId}
+          onHarnessChange={(harnessId) => useUiStore.getState().setLastHarnessId(harnessId)}
+          branch={{
+            state: branchState,
+            baseBranch,
+            onBaseBranchChange: setChosenBase,
+            usesWorktree,
+            onUsesWorktreeChange: setUsesWorktree,
+          }}
         />
       </div>
 
@@ -268,8 +324,7 @@ export function ComposerForm({
           onInsertRef={(relPath) => editorRef.current?.insertAtCursor(`@${relPath}`)}
           createMore={createMore}
           onCreateMoreChange={setCreateMore}
-          harnessId={lastHarnessId}
-          onHarnessChange={(harnessId) => useUiStore.getState().setLastHarnessId(harnessId)}
+          harnessLabel={harnessLabel}
           onCreate={() => void handleCreate()}
           onKickoff={() => void handleKickoff()}
           disabled={!canSubmit}

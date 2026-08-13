@@ -1,8 +1,15 @@
 /**
- * App-wide (workspace-independent) UI state. `sidebarWidth` — the full
- * two-tier sidebar width (60px rail + resizable panel) — persists to
- * localStorage so the grip position survives relaunch. Same interim-storage
- * caveat as the projects store: dev and packaged origins don't share data.
+ * App-wide (workspace-independent) UI state.
+ *
+ * "Persists app-wide" below means one thing throughout: through
+ * {@link appStateStorage}, the `app_state` preload bridge onto main's SQLite —
+ * never `localStorage`, which this renderer does not use for anything (see
+ * CLAUDE.md). The distinction is not pedantry: a renderer-owned store would be
+ * per-origin, so dev and packaged builds would each keep their own copy of every
+ * chrome preference below, and none of it would survive as domain data.
+ *
+ * `sidebarWidth` — the full two-tier sidebar width (60px rail + resizable
+ * panel) — persists so the grip position survives relaunch.
  * `railWidth` — the ticket-detail right rail's width, resizable via its own
  * left-edge grip (see rail-resize-handle.tsx) — persists app-wide by the same
  * reasoning: it's a global chrome preference, not per-workspace state.
@@ -17,30 +24,50 @@
  * is visible — persists app-wide. Hiding it returns its full width to the
  * active workspace while project keyboard shortcuts remain available.
  *
+ * `sidebarPinned` — whether the summoned sidebar panel stands in the layout
+ * (⌘B / the chrome-band trigger) rather than being summoned by the pointer at
+ * the window's left edge. Persisted app-wide for the same reason as the two
+ * above: it is a chrome preference, not a per-workspace place. A panel that
+ * re-pinned itself on every launch would undo the choice the moment it mattered.
+ * Missing or corrupt persisted state pins it — the visible default, and today's
+ * behavior.
+ *
+ * It holds the user's OWN answer and only that. Fullscreen also unpins the
+ * panel, but that is an inference read off a window mode, and it is kept in
+ * app-shell's session-local state rather than written here: a quit taken while
+ * still in fullscreen would otherwise leave `false` on disk and open the next
+ * windowed launch with the panel gone and nothing to say the user never asked
+ * for it. Durable storage answers "what did they choose", not "what was on
+ * screen when the process died".
+ *
  * `railCollapsed` — the ticket-detail right rail's collapsed state (the
  * chrome-bar ⌥⌘B toggle, VS-Code secondary-sidebar style) — persists app-wide
  * like the sidebar width: it's a global chrome preference, not per-workspace,
  * so every ticket you open honors the same choice.
  *
- * `railMode` — which icon-mode navigator the ticket rail shows (Sessions /
- * Files / Changes / Properties). Persisted app-wide like `railCollapsed`.
- * Pre-icon-rail builds stored `detailsExpanded` for the old Details drawer;
- * rehydration maps an open drawer onto Properties via `resolvePersistedRailMode`
- * and stops writing `detailsExpanded`.
+ * `railMode` — which page the ticket rail shows (Now / Diffs / Files).
+ * Persisted app-wide like `railCollapsed`. Every value a shipped build could
+ * have written stays readable: `resolvePersistedRailMode` maps the retired
+ * Sessions/Properties/Session pages, and the pre-icon-rail `detailsExpanded`
+ * key, onto the page that absorbed them, and only the resolved page is written
+ * back.
  *
  * `diffPresentation` — Monaco diff layout (inline vs side-by-side, CONCEPT #51).
  * Persisted app-wide like `railCollapsed` / `railMode`: it is global chrome, not
  * a per-ticket choice, so every diff tab honors the same presentation.
  *
- * `terminalFocusTarget` — the ticket terminal tab temporarily owning the app
- * canvas. It is deliberately session-only: live PTYs do not survive relaunch,
- * and entering a new app lifetime with its chrome hidden around a missing
- * session would strand the user in an invalid view. The invariant "the target
- * names a tab of the currently open ticket" lives here at the store layer via
- * `clearTerminalFocusForTicket` / `clearTerminalFocusUnlessTicket`, so it doesn't
- * hinge on a particular ticket-detail view staying mounted: any surface that
- * changes the open ticket enforces it, and app-shell (which hides all chrome
- * while a target is set) can never be stranded around a ticket that's gone.
+ * `terminalFocusTarget` — the terminal tab temporarily owning the app canvas,
+ * whether a ticket owns it or the project does. It is deliberately session-only:
+ * live PTYs do not survive relaunch, and entering a new app lifetime with its
+ * chrome hidden around a missing session would strand the user in an invalid
+ * view. The invariant "the target names a tab of the surface that is actually in
+ * front" is enforced by whichever surface hosts it — for a ticket target, here
+ * at the store layer via `clearTerminalFocusForTicket` /
+ * `clearTerminalFocusUnlessTicket` so it doesn't hinge on a particular
+ * ticket-detail view staying mounted; for a ticketless one, by `sessions-layer`,
+ * which is the app's always-mounted owner of that surface and so needs no
+ * store-layer twin. Either way app-shell (which hides all chrome while a target
+ * is set) can never be stranded around a session that's gone.
  *
  * Per-workspace UI state (the active nav page) lives in stores/workspace.ts.
  */
@@ -71,10 +98,17 @@ export type DiffPresentation = "inline" | "side-by-side";
 
 const DEFAULT_DIFF_PRESENTATION: DiffPresentation = "inline";
 
-/** Identity of the ticket terminal tab temporarily owning the app canvas. */
+/** Identity of the terminal tab temporarily owning the app canvas. */
 export interface TerminalFocusTarget {
   projectId: string;
-  ticketId: string;
+  /**
+   * The ticket that owns the Session, or `null` for one of the project's
+   * ticketless Sessions — the Sessions page hosts terminals too, and a PTY there
+   * fills a canvas exactly as well as one under a ticket. Not "unknown": it is
+   * the same durable fact `scratchScope` carries, and it is what the two
+   * `clearTerminalFocus*` guards below discriminate on.
+   */
+  ticketId: string | null;
   /** Root session/tab id; split-pane focus remains owned by the session store. */
   sessionId: string;
 }
@@ -159,9 +193,11 @@ interface UiState {
   newTicketOpen: boolean;
   /** Project/workspace switcher rail hidden? Persisted app-wide (see module doc). */
   workspaceRailHidden: boolean;
+  /** Sidebar panel docked rather than summoned on hover? Persisted app-wide (see module doc). */
+  sidebarPinned: boolean;
   /** Ticket-detail right rail collapsed? Persisted app-wide (see module doc). */
   railCollapsed: boolean;
-  /** Active ticket-rail icon mode. Persisted app-wide (see module doc). */
+  /** Active ticket-rail page. Persisted app-wide (see module doc). */
   railMode: TicketRailMode;
   /** Monaco diff presentation. Persisted app-wide (see module doc). */
   diffPresentation: DiffPresentation;
@@ -182,6 +218,7 @@ interface UiState {
   setNewTicketOpen(open: boolean): void;
   toggleWorkspaceRailHidden(): void;
   setWorkspaceRailHidden(hidden: boolean): void;
+  setSidebarPinned(pinned: boolean): void;
   toggleRailCollapsed(): void;
   setRailCollapsed(collapsed: boolean): void;
   setRailMode(mode: TicketRailMode): void;
@@ -199,6 +236,11 @@ interface UiState {
    * open ticket changes, so a target left over from a previous ticket can't
    * strand app-shell with all chrome hidden — the guarantee no longer depends on
    * a specific ticket-detail instance staying mounted to notice the change.
+   *
+   * A ticketless target (`ticketId: null`) is cleared too, and that is right
+   * rather than incidental: a ticket has just come to the front, so a terminal
+   * on the project's Sessions page is by definition no longer the thing on
+   * screen.
    */
   clearTerminalFocusUnlessTicket(ticketId: string): void;
   setLastHarnessId(harnessId: HarnessId): void;
@@ -210,6 +252,7 @@ type PersistedUiState = Pick<
   | "railWidth"
   | "uiScale"
   | "workspaceRailHidden"
+  | "sidebarPinned"
   | "railCollapsed"
   | "railMode"
   | "diffPresentation"
@@ -238,6 +281,7 @@ export function createUiStore(storage?: StateStorage) {
         settingsOpen: false,
         newTicketOpen: false,
         workspaceRailHidden: false,
+        sidebarPinned: true,
         railCollapsed: false,
         railMode: DEFAULT_TICKET_RAIL_MODE,
         diffPresentation: DEFAULT_DIFF_PRESENTATION,
@@ -252,6 +296,7 @@ export function createUiStore(storage?: StateStorage) {
         toggleWorkspaceRailHidden: () =>
           set((state) => ({ workspaceRailHidden: !state.workspaceRailHidden })),
         setWorkspaceRailHidden: (hidden) => set({ workspaceRailHidden: hidden }),
+        setSidebarPinned: (pinned) => set({ sidebarPinned: pinned }),
         toggleRailCollapsed: () => set((state) => ({ railCollapsed: !state.railCollapsed })),
         setRailCollapsed: (collapsed) => set({ railCollapsed: collapsed }),
         setRailMode: (mode) => set({ railMode: mode }),
@@ -280,6 +325,7 @@ export function createUiStore(storage?: StateStorage) {
           railWidth: state.railWidth,
           uiScale: state.uiScale,
           workspaceRailHidden: state.workspaceRailHidden,
+          sidebarPinned: state.sidebarPinned,
           railCollapsed: state.railCollapsed,
           railMode: state.railMode,
           diffPresentation: state.diffPresentation,
@@ -300,10 +346,16 @@ export function createUiStore(storage?: StateStorage) {
             // Missing/corrupt state from an older build keeps the switcher
             // visible so projects never become unexpectedly undiscoverable.
             workspaceRailHidden: stored.workspaceRailHidden === true,
+            // The opposite default to the line above, for the same reason:
+            // anything other than an explicit `false` leaves the panel standing,
+            // so a missing key or corrupt JSON can never open the app on a
+            // sidebar the reader has to know to summon.
+            sidebarPinned: stored.sidebarPinned !== false,
             // Any non-`true` persisted value (missing key, corrupt JSON) means
             // the rail stays expanded — the safe, visible default.
             railCollapsed: stored.railCollapsed === true,
-            // Icon-mode rail: prefer railMode; migrate legacy detailsExpanded.
+            // Prefer a page this build still offers; otherwise land a retired
+            // page (or the legacy Details drawer) on the one that absorbed it.
             railMode: resolvePersistedRailMode({
               railMode: stored.railMode,
               detailsExpanded: stored.detailsExpanded,

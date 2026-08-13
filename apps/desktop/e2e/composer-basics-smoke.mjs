@@ -11,10 +11,13 @@
  *   • a title input (placeholder "Ticket title") + a Monaco Document Mode
  *     markdown description editor (placeholder "Add description…");
  *   • a metadata chip row: Status ("Backlog"), Priority ("Medium"),
- *     Labels ("Labels"), and a Worktree toggle (role switch, default on);
- *   • a footer with a "Create more" switch, a "Terminal harness" picker,
- *     a secondary "Create" button, and the primary kickoff button
- *     (data-testid="composer-kickoff").
+ *     Labels ("Labels"), the "Terminal harness" picker, and the branch
+ *     relationship — a "Base branch" chip and a "Working destination" chip
+ *     (defaulting to a new worktree, which is what the footer's old Worktree
+ *     switch bound; the destination chip is that same `usesWorktree` field
+ *     named by what it produces);
+ *   • a footer with a "Create more" switch, a secondary "Create" button, and
+ *     the primary kickoff button (data-testid="composer-kickoff").
  *   • the dialog root carries data-testid="new-ticket-composer".
  *
  * This file drives the REAL built app through Playwright against a scratch
@@ -121,7 +124,7 @@ async function main() {
     // === 2. The opened dialog is the COMPOSER with the full header + fields ===
     await attempt(
       2,
-      'Composer structure: data-testid root, project chip + static "New ticket" + Expand/Close, title/description, Status/Priority/Labels chips, Worktree switch, Create-more + Create + kickoff',
+      'Composer structure: data-testid root, project chip + static "New ticket" + Expand/Close, title/description, Status/Priority/Labels/harness chips, base → destination branch row, Create-more + Create + kickoff',
       async () => {
         const opened = await openComposerViaHeader(page);
         const root = await composer(page).count();
@@ -136,7 +139,16 @@ async function main() {
         const statusChip = await composer(page).getByRole("button", { name: "Backlog" }).count();
         const priorityChip = await composer(page).getByRole("button", { name: "Medium" }).count();
         const labelsChip = await composer(page).getByRole("button", { name: "Labels" }).count();
-        const worktree = await composer(page).getByRole("switch", { name: "Worktree" }).count();
+        const harnessChip = await composer(page)
+          .getByRole("button", { name: "Terminal harness" })
+          .count();
+        // The branch relationship replaced the footer's Worktree switch: the
+        // destination chip binds the same `usesWorktree` field, and the base
+        // chip is shown only while that destination is a worktree.
+        const baseChip = await composer(page).getByRole("button", { name: "Base branch" }).count();
+        const destinationChip = await composer(page)
+          .getByRole("button", { name: "Working destination" })
+          .count();
         const createMore = await composer(page)
           .getByRole("switch", { name: "Create more" })
           .count();
@@ -157,13 +169,15 @@ async function main() {
           statusChip === 1 &&
           priorityChip === 1 &&
           labelsChip === 1 &&
-          worktree === 1 &&
+          harnessChip === 1 &&
+          baseChip === 1 &&
+          destinationChip === 1 &&
           createMore === 1 &&
           createBtn === 1 &&
           kickoff === 1;
         return {
           ok,
-          detail: `root=${root} chip=${chip} newTicketText=${staticNewTicket} expand=${expandBtn} close=${closeBtn} title=${title} desc=${desc} status=${statusChip} priority=${priorityChip} labels=${labelsChip} worktree=${worktree} createMore=${createMore} create=${createBtn} kickoff=${kickoff}`,
+          detail: `root=${root} chip=${chip} newTicketText=${staticNewTicket} expand=${expandBtn} close=${closeBtn} title=${title} desc=${desc} status=${statusChip} priority=${priorityChip} labels=${labelsChip} harness=${harnessChip} base=${baseChip} destination=${destinationChip} createMore=${createMore} create=${createBtn} kickoff=${kickoff}`,
         };
       },
     );

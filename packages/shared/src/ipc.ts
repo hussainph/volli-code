@@ -75,6 +75,13 @@ export interface TicketCreateInput {
   usesWorktree?: boolean;
   /** The ticket's persisted default harness (set on kickoff); defaults to the DB default. */
   preferredHarnessId?: HarnessId;
+  /**
+   * The ref the ticket's worktree branches from, chosen in the composer.
+   * Omitted (or `null`) leaves it unset, and `resolveBaseBranch` detects the
+   * project's default at worktree time — the behavior every caller had before
+   * the composer could name one. The command layer re-validates the name.
+   */
+  baseBranch?: string | null;
 }
 
 /** `volli:ticket-move` — runs the shared board move + persists it. */
@@ -158,6 +165,24 @@ export interface WorktreeBaseReadInput {
    * Omit to read against whatever the base resolves to right now.
    */
   baseRevision?: string;
+}
+
+/**
+ * The one-click commit's payload. Both extra fields are OPTIONAL and both
+ * default to what the command did before they existed, so a caller written
+ * against the old `{ ticketId }` shape — and every commit already recorded by
+ * one — keeps its exact meaning.
+ *
+ * `message` blank or absent means "generate one" (the `chore(<DISPLAY-ID>)`
+ * line); anything else is used verbatim. `includeUnstaged` absent means `true`
+ * — stage everything, the historical `git add -A`. `false` commits only what is
+ * ALREADY in the index, which is the one combination that can find nothing to
+ * do on a dirty tree; main answers that with an error, never a silent no-op.
+ */
+export interface WorktreeCommitInput {
+  ticketId: string;
+  message?: string;
+  includeUnstaged?: boolean;
 }
 
 /** `{ rescan: true }` forces a fresh orphan sweep (Settings → Worktrees rescan); omitted/`false` returns the launch's cached report. */
@@ -337,8 +362,8 @@ export interface VolliDataIpcContract {
   /** Starts a debounced recursive watch on the ticket worktree for Change Set refresh. */
   "volli:worktree-change-watch": { args: [input: TicketIdInput]; result: Result };
   "volli:worktree-change-unwatch": { args: [input: TicketIdInput]; result: Result };
-  /** The one-click "commit remaining work" safety net (fixed chore message). */
-  "volli:worktree-commit": { args: [input: TicketIdInput]; result: WorktreeCommitResult };
+  /** The one-click "commit remaining work" safety net; the message and the staging breadth are the caller's, with the historical defaults. */
+  "volli:worktree-commit": { args: [input: WorktreeCommitInput]; result: WorktreeCommitResult };
   /** Push the branch and open (or re-discover) its draft PR; persists `pr_url`. */
   "volli:worktree-push-pr": { args: [input: TicketIdInput]; result: WorktreePushPrResult };
 
@@ -1194,8 +1219,30 @@ export type WorktreeDiskState = "present" | "missing" | "unregistered";
 /** Ack for a `volli:worktree-remove` (the "Remove worktree…" escape hatch). */
 export type WorktreeRemoveResult = Result;
 
-/** A project's local branch names — returned by `volli:worktree-branches` for the base-branch picker. */
-export type WorktreeBranchesResult = Result<{ branches: string[] }>;
+/**
+ * A project's branch refs, for the base-branch pickers (the Details rail's and
+ * the composer's).
+ *
+ * `remotes` is a SNAPSHOT, not a live reading: a remote-tracking ref only moves
+ * on a fetch, so the list is exactly as old as {@link
+ * WorktreeBranchListing.fetchedAt} and a picker has to say so. Nothing in the
+ * worktree pipeline fetches on the user's behalf before branching, so a base
+ * chosen from `remotes` inherits that same age — which is the whole reason this
+ * timestamp crosses the boundary instead of staying a main-process detail.
+ */
+export interface WorktreeBranchListing {
+  /** Local branch short names (`refs/heads`), most-recently-committed first. */
+  branches: string[];
+  /** The project checkout's own branch; `null` when detached or unreadable. */
+  current: string | null;
+  /** Remote-tracking short names in `origin/main` form, as of {@link WorktreeBranchListing.fetchedAt}. */
+  remotes: string[];
+  /** Epoch ms of the repo's last fetch (`FETCH_HEAD`'s mtime); `null` when it has never fetched. */
+  fetchedAt: number | null;
+}
+
+/** A project's branch refs — returned by `volli:worktree-branches` for the base-branch pickers. */
+export type WorktreeBranchesResult = Result<WorktreeBranchListing>;
 
 /** One orphan the sweep refused to remove, for the Settings → Worktrees list. */
 export interface DirtyWorktreeOrphan {
@@ -1268,10 +1315,13 @@ export type WorktreeBaseReadResult = Result<
 >;
 
 /**
- * Ack for `volli:worktree-commit`. `committed: true` carries the safety-net
- * commit's fixed message; `committed: false` is the clean-tree NO-OP — the
- * status snapshot that offered the commit was stale and there was nothing to
- * stage, which is not an error (a stacked commit→push flow proceeds to push).
+ * Ack for `volli:worktree-commit`. `committed: true` carries the message the
+ * commit actually landed with — the caller's, or the generated `chore(<id>)`
+ * line when they left it blank; `committed: false` is the clean-tree NO-OP —
+ * the status snapshot that offered the commit was stale and there was nothing
+ * to stage, which is not an error (a stacked commit→push flow proceeds to
+ * push). A dirty tree with an empty index under `includeUnstaged: false` is a
+ * different thing entirely and comes back `{ ok: false }`.
  */
 export type WorktreeCommitResult = Result<
   { committed: true; message: string } | { committed: false; message: null }

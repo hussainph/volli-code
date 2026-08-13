@@ -12,7 +12,6 @@
  * Active is where you look without being asked, and only one of them can win
  * that competition.
  */
-import { BroomIcon } from "@phosphor-icons/react/dist/csr/Broom";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
@@ -30,7 +29,7 @@ import type {
   SessionRowKind,
 } from "@renderer/components/sidebar/active-session-listing";
 import { SidebarMenuButton, SidebarMenuItem } from "@renderer/components/ui/sidebar";
-import { relativeTime } from "@renderer/lib/relative-time";
+import { compactAge } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
 
 const ACTIVITY_LABEL: Record<SessionActivityState, string> = {
@@ -52,35 +51,75 @@ const WAITING_COPY: Record<ChatWaitingReason, string> = {
   auth: "Sign in needed",
 };
 
-/** The app's relative-time vocabulary, trimmed for a one-line row: "12m ago" → "12m". */
-function compactAge(at: number, now: number): string {
-  return relativeTime(at, now).replace(/ ago$/, "");
-}
-
 /**
  * Identity, in the one slot both bands give it: the ticket, or a globe for a
  * Session that has none. The globe is not decoration: a ticketless row has no
  * board card or ticket rail, so this list is its only Session 4 listing surface.
+ *
+ * `bold` at 12px is the sidebar's small-glyph tier, and it is a statement about
+ * the PEN rather than the size: Phosphor draws regular at 16/256 em against
+ * bold's 24/256, which at 12px is 0.75px of ink against 1.13px next to a ~1.1px
+ * text stem. Coverage is scale-invariant, so growing the glyph could never have
+ * fixed the hairline that made it read as a smudge beside its own label.
+ *
+ * A FACE, NOT A LANE. The id has been `font-mono` from the start and it was not
+ * enough: it sits inside `text-label`, which bakes in +0.05em of tracking for
+ * the uppercase sans labels it was drawn for, and tracked-out monospace at 11px
+ * is a font that has given up the one property anybody wants from it. `VLT-14`
+ * measured the same rhythm as the Mona beside it and the whole line read as one
+ * grey phrase — which is exactly what "they all blend together" describes.
+ *
+ * Handing the tracking back is the whole fix, and it is what the scratch draws.
+ * A fixed-width column on top of it was tried and reverted: sized for the worst
+ * case — a four-character prefix and three digits — it spends that width on
+ * every row, so a two-character prefix leaves a visible hole before the `·`, a
+ * ticketless row centres a 12px glyph in it, and every Previous row pays the
+ * remainder out of its title's truncation point. A column only earns its keep
+ * when the things in it are the same length, and ticket ids are not.
  */
+const ID_LANE =
+  // `inline-flex items-center` so the globe variant centres on the text
+  // baseline's box rather than sitting on it.
+  //
+  // `text-label` here rather than on a wrapper, so the identity is one size in
+  // both bands instead of 11px under the Active row's meta line and 12px
+  // inheriting the Previous row's button.
+  //
+  // `tracking-normal` last, undoing `text-label`'s baked +0.05em — see above.
+  "inline-flex shrink-0 items-center font-mono text-label tracking-normal";
+
 function RowIdentity({ ticket, ticketPrefix }: { ticket: Ticket | null; ticketPrefix: string }) {
   if (ticket === null) {
     return (
-      <span className="flex shrink-0 items-center">
-        <GlobeIcon weight="fill" aria-label="No ticket" className="size-3" />
+      <span className={ID_LANE}>
+        {/* `bold` OVERRIDES the audit's `regular` verdict for this site
+            (lab/scratches/icon-weight-audit.tsx), under CLAUDE.md's fifth
+            clause: this glyph stands in the ID lane at 12px, where regular draws
+            lighter than the `text-label` ids it alternates with — so the one
+            row without a ticket would read as the faintest row in the band. */}
+        <GlobeIcon weight="bold" aria-label="No ticket" className="size-3" />
       </span>
     );
   }
-  return (
-    <span className="shrink-0 font-mono">{displayTicketId(ticketPrefix, ticket.ticketNumber)}</span>
-  );
+  return <span className={ID_LANE}>{displayTicketId(ticketPrefix, ticket.ticketNumber)}</span>;
 }
 
-/** Which execution surface a Previous row speaks for — the axis its filter sorts on. */
+/**
+ * Which execution surface a Previous row speaks for — the axis its filter sorts
+ * on. It LEADS the identity it qualifies rather than trailing the title, which
+ * is what clears the row's right edge for the age alone.
+ */
 function KindGlyph({ kind }: { kind: SessionRowKind }) {
   const Glyph = kind === "chat" ? ChatCircleIcon : TerminalWindowIcon;
   return (
     <span className="flex shrink-0 items-center">
-      <Glyph weight="fill" aria-label={kind === "chat" ? "Chat" : "Terminal"} className="size-3" />
+      {/* `bold` OVERRIDES the audit's `regular` verdict for both glyphs
+          (lab/scratches/icon-weight-audit.tsx), under CLAUDE.md's fifth clause:
+          at 12px regular draws lighter than the row's own title, and a kind that
+          leads the identity cannot be the faintest mark in the row it opens.
+          Emphatically not `fill` — at this size ChatCircle's is a solid disc
+          covering 54% of its box, which the audit is right to refuse. */}
+      <Glyph weight="bold" aria-label={kind === "chat" ? "Chat" : "Terminal"} className="size-3" />
     </span>
   );
 }
@@ -177,9 +216,21 @@ export function ActiveBandRow({
 /**
  * One line, and quieter than Active on every axis at once.
  *
+ * The order is the marks in the order they qualify each other: the kind glyph
+ * leads the identity, the identity leads the title, and the age is ALONE on the
+ * right. That last part is the whole of the row's geometry — one trailing mark
+ * means one right edge, so the age reserves `3ch` of tabular figures and a
+ * ticking row can no longer drag the title's truncation point back and forth as
+ * "59m" becomes "1h".
+ *
  * A cleaned row is one the rules decided was concluded business, showing only
- * because the filter asked for it back — ghosted, and marked with the broom
- * rather than a sentence explaining itself.
+ * because the filter asked for it back. It says so by ghosting and by nothing
+ * else: the broom that used to ride the row was a second signifier for a state
+ * the reader had just asked to see, and a second signifier on a row this small
+ * is clutter. The ghost is 0.80 — enough to read as withdrawn, not so little
+ * that the rows a reader turned the filter ON to find are the hardest to read.
+ * Its departure takes the state's only accessible name with it, so the row says
+ * it out of band.
  */
 export function PreviousBandRow({
   row,
@@ -200,28 +251,22 @@ export function PreviousBandRow({
         size="sm"
         isActive={selected}
         onClick={onSelect}
-        className={cn(
-          "h-6 gap-1.5 px-2 text-xs text-muted-foreground",
-          row.cleaned && "opacity-45",
-        )}
+        // `px-2` is gone rather than kept: the button's own `p-2` is already
+        // 8px, so the override was a no-op that read like a deliberate
+        // difference from the Active row above it.
+        className={cn("h-6 gap-1.5 text-xs text-muted-foreground", row.cleaned && "opacity-80")}
       >
         {/* No `session-row-dim` here: this band is uniformly muted, with no
             dim/promote pairing to join — and that class also names the Active
             row's meta line for the smokes' contrast checks. */}
-        <span className="text-label">
-          <RowIdentity ticket={row.ticket} ticketPrefix={ticketPrefix} />
-        </span>
-        <span className="min-w-0 flex-1 truncate">{row.title}</span>
-        {row.cleaned ? (
-          <span className="flex shrink-0 items-center">
-            <BroomIcon weight="fill" aria-label="Cleaned up" className="size-3" />
-          </span>
-        ) : null}
+        {row.cleaned ? <span className="sr-only">Cleaned up</span> : null}
         <KindGlyph kind={row.kind} />
+        <RowIdentity ticket={row.ticket} ticketPrefix={ticketPrefix} />
+        <span className="min-w-0 flex-1 truncate">{row.title}</span>
         {/* 0 is the model's "nothing durable can date this" sentinel — an age
             drawn from it would read as the epoch, so the row says nothing. */}
         {row.endedOrQuietAt > 0 ? (
-          <span className="shrink-0 text-label tabular-nums">
+          <span className="min-w-[3ch] shrink-0 text-right text-label tabular-nums">
             {compactAge(row.endedOrQuietAt, now)}
           </span>
         ) : null}

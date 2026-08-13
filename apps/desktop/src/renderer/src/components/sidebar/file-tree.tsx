@@ -354,7 +354,7 @@ function FileNode({ name, path, project }: { name: string; path: string; project
           if (relPath !== null) pinProjectFile(project.id, relPath);
         }}
       >
-        <FileIcon weight="fill" />
+        <FileIcon />
         <span>{name}</span>
       </SidebarMenuButton>
     </SidebarMenuItem>
@@ -416,7 +416,7 @@ function DirectoryNode({ name, path, project }: { name: string; path: string; pr
         <CollapsibleTrigger asChild>
           <SidebarMenuButton data-testid="file-tree-dir" data-rel-path={relPath ?? undefined}>
             <CaretRightIcon weight="bold" className="transition-transform" />
-            <FolderIcon weight="fill" />
+            <FolderIcon />
             <span>{name}</span>
           </SidebarMenuButton>
         </CollapsibleTrigger>
