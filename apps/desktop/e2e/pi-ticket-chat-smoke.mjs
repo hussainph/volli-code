@@ -52,6 +52,7 @@ import os from "node:os";
 import { join } from "node:path";
 
 import {
+  activeTabLabel,
   assistantReplyTexts,
   cardById,
   createRunner,
@@ -60,11 +61,13 @@ import {
   launch,
   makeGitRepo,
   makeScratch,
+  openNewChatTab,
   readSeededProjects,
   seedDefaultModel,
   seedProjects,
   sleep,
   stopButton,
+  TICKET_TAB_STRIP,
   waitForSettledReply,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
@@ -121,28 +124,6 @@ async function captureFailureEvidence(page, mainOut, mainErr, label) {
   );
   console.log(`  evidence: ${join(EVIDENCE_DIR, `pi-ticket-chat-${slug}.png`)}`);
   console.log(`  evidence: ${join(EVIDENCE_DIR, `pi-ticket-chat-${slug}.log`)}`);
-}
-
-/** The tab strip's direct Chat control (the rail has its own copy). */
-function tabStripNewChatButton(page) {
-  return page
-    .locator('[role="tablist"]')
-    .locator("xpath=..")
-    .getByRole("button", { name: "New chat", exact: true });
-}
-
-async function openNewChatTab(page) {
-  const tabsBefore = await page.locator('[role="tab"]').count();
-  await tabStripNewChatButton(page).click();
-  await waitUntil(
-    "a new chat tab to appear",
-    async () => (await page.locator('[role="tab"]').count()) > tabsBefore,
-  );
-  const activeLabel = await page
-    .locator('[role="tab"][aria-selected="true"]')
-    .getAttribute("aria-label");
-  if (activeLabel === null) throw new Error("no tab became active after New Chat");
-  return activeLabel;
 }
 
 /** Submits `text` and returns the moment it was sent — the turn clock's zero. */
@@ -246,10 +227,14 @@ async function main() {
       return { ok: true };
     });
 
-    await attempt(4, "the tab strip's + menu creates a chat tab (attaches Pi)", async () => {
-      chatTabLabel = await openNewChatTab(page);
-      return { ok: chatTabLabel !== null, detail: chatTabLabel };
-    });
+    await attempt(
+      4,
+      "the tab strip's own Chat control creates a chat tab (attaches Pi)",
+      async () => {
+        chatTabLabel = await openNewChatTab(page, TICKET_TAB_STRIP);
+        return { ok: chatTabLabel !== null, detail: chatTabLabel };
+      },
+    );
 
     // Carried over from the retired session-chat-smoke.mjs: a chat on
     // a worktree ticket must attach against the materialized worktree, not
@@ -345,9 +330,7 @@ async function main() {
         // `#autoTitle`), so the "Chat 1" captured at creation is no longer what
         // the tab is called. Re-read it, or the relaunch below looks for a tab
         // that stopped existing the moment the prompt landed.
-        chatTabLabel = await page
-          .locator('[role="tab"][aria-selected="true"]')
-          .getAttribute("aria-label");
+        chatTabLabel = await activeTabLabel(page, TICKET_TAB_STRIP);
         // The reply itself is in the detail on purpose: it is the one line that
         // shows the wait was ended by an ANSWER and not by a tool bundle.
         return {

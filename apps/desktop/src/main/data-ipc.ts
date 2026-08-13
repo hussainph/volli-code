@@ -68,6 +68,7 @@ import type {
   WorktreeChangeSetResult,
   WorktreeBaseReadInput,
   WorktreeBaseReadResult,
+  WorktreeCommitInput,
   WorktreeCommitResult,
   WorktreeDiffInput,
   WorktreeDiffResult,
@@ -123,6 +124,7 @@ import { detectProjectBaseBranch } from "./project-base-branch";
 import { broadcastDataChanged } from "./broadcast";
 import { orphanReport } from "./orphan-sweep";
 import {
+  type AgentSiteReleaseReport,
   archiveAndClean,
   commitTicketRemaining,
   getRetentionTtlDays,
@@ -174,12 +176,50 @@ function buildBootstrapPayload(db: Database.Database): BootstrapPayload {
 }
 
 /**
- * Whether any live session's cwd sits at or under `target`. `isInside`
- * canonicalizes both operands, so a terminal running inside a worktree blocks
- * a remove/orphan-delete that would pull the directory out from under it.
+ * A directory something is doing work in right now, and which surface is doing
+ * it. The surface travels with the directory because the refusal has to name an
+ * action the user can actually reach, and stopping an agent and closing a
+ * terminal are different doors.
  */
-function liveSessionWithin(target: string, cwds: string[]): boolean {
-  return cwds.some((cwd) => isInsideWorktreeHome(target, cwd));
+export interface BusyWorktreeSite {
+  directory: string;
+  surface: "terminal" | "agent";
+}
+
+/**
+ * The busy site sitting at or under `target`, or `null`. `isInside`
+ * canonicalizes both operands, so a terminal running inside a worktree — or an
+ * agent mid-turn in it — blocks a remove/orphan-delete that would pull the
+ * directory out from under it.
+ *
+ * The supplier is already asked about one target, so this is a second filter
+ * over an answer that should already be scoped: it is what makes the guard
+ * independent of how carefully the supplier reads `target`, and terminals in
+ * particular are reported unscoped because a live PTY holds its cwd whatever it
+ * is doing.
+ */
+function busySiteWithin(
+  target: string,
+  sites: readonly BusyWorktreeSite[],
+): BusyWorktreeSite | null {
+  return sites.find((site) => isInsideWorktreeHome(target, site.directory)) ?? null;
+}
+
+/**
+ * Why a destructive worktree action was refused: one line, and one recovery the
+ * user can reach from where they are. It never names the act it refused — every
+ * caller already frames that ("Couldn't remove worktree: …") — so this says only
+ * what is in the way and what clears it.
+ *
+ * It used to say "Close the live sessions running in this worktree", which named
+ * an action that does not exist for a chat: there is no close, and the Session
+ * it was talking about was routinely one nobody had ever sent a message to. A
+ * chat is stopped (the composer's Stop, or Esc); a terminal is closed.
+ */
+function busyRefusal(site: BusyWorktreeSite): string {
+  return site.surface === "agent"
+    ? "An agent is still running in this worktree. Stop it first."
+    : "A terminal is still running in this worktree. Close it first.";
 }
 
 /**
@@ -217,13 +257,31 @@ export function registerDataIpcHandlers(
   options: {
     detectBaseBranch?: (projectPath: string) => string | null;
     /**
-     * The resolved directories of every live local execution surface: PTY cwds
-     * plus native binding directories. The worktree remove/orphan-delete guards
-     * refuse to touch a directory that still has a Session running at or under
-     * it. Absent (tests, degraded boot) means "assume none" — the guard then
-     * relies on the git/dirtiness checks.
+     * Every directory a local execution surface is doing work in that could
+     * block destroying `target`: the cwd of each live PTY, plus the worktree of
+     * each agent binding under `target` with a turn open. The worktree
+     * remove/orphan-delete/archive guards refuse to touch a directory named
+     * here. Absent (tests, degraded boot) means "assume none" — the guards then
+     * rely on the git/dirtiness checks.
+     *
+     * Async because agent busyness is a fact about the Session's ledger, not
+     * about the binding holding the directory: a binding stays open across an
+     * idle chat and outlives its tab, so reading "attached" as "busy" is what
+     * made a ticket with one empty chat in it permanently unarchivable.
+     *
+     * It takes the target because that read is the expensive one — one durable
+     * projection per binding — and a launch with a dozen chats open would
+     * otherwise pay for all of them, plus the cache eviction that costs, on
+     * every destructive action. The guard filters the answer again anyway.
      */
-    liveSessionCwds?: () => string[];
+    busyWorktreeSites?: (target: string) => Promise<readonly BusyWorktreeSite[]>;
+    /**
+     * Ends every structured binding rooted at a directory that is about to stop
+     * existing, so no Session is left dispatching an agent into a deleted path.
+     * `remove` runs it inside the ticket paths; orphan-delete calls it here.
+     * Absent (tests, degraded boot) means there is nothing structured to end.
+     */
+    releaseAgentSites?: (directory: string) => Promise<AgentSiteReleaseReport>;
     /**
      * Interrupts every live agent attachment of a ticket after a committed
      * backward move. The manager records intent and confirmed Esc delivery in
@@ -359,6 +417,7 @@ export function registerDataIpcHandlers(
             labels: input.labels,
             usesWorktree: input.usesWorktree,
             preferredHarnessId: input.preferredHarnessId,
+            baseBranch: input.baseBranch,
           },
           { now, actor: { kind: "user" } },
         ),
@@ -552,23 +611,22 @@ export function registerDataIpcHandlers(
     },
 
     "volli:worktree-remove": async (input: WorktreeRemoveInput): Promise<WorktreeRemoveResult> => {
-      // Main-side liveness guard (the renderer context menu's disable is a
-      // stale client-side hint only): never yank a worktree out from under a
-      // Session still running in it. Canonicalized containment, same as the
-      // orphan-delete guard below.
+      // Main-side busy guard (the renderer context menu's disable is a stale
+      // client-side hint only): never yank a worktree out from under work in
+      // flight. Canonicalized containment, same as the orphan-delete guard below.
       const ticket = getTicketRow(db, input.ticketId);
       const worktreePath = ticket?.worktree_path ?? null;
-      if (
-        worktreePath !== null &&
-        liveSessionWithin(worktreePath, options.liveSessionCwds?.() ?? [])
-      ) {
-        return {
-          ok: false,
-          error: "Close the live sessions running in this worktree before removing it.",
-        };
-      }
+      const busy =
+        worktreePath === null
+          ? null
+          : busySiteWithin(worktreePath, (await options.busyWorktreeSites?.(worktreePath)) ?? []);
+      if (busy !== null) return { ok: false, error: busyRefusal(busy) };
+      // `remove` ends the bindings rooted in the checkout as its last act before
+      // deleting it — after its own dirty re-check, so a refusal costs the user
+      // no chat.
       const result = await removeWorktree(worktreeDeps(db), input.ticketId, {
         force: input.force,
+        releaseAgentSites: options.releaseAgentSites,
       });
       if (!result.ok) return { ok: false, error: result.error };
       // The directory is gone; every window's recursive watch on it must go
@@ -587,7 +645,7 @@ export function registerDataIpcHandlers(
 
     "volli:worktree-branches": (input: ProjectIdInput): WorktreeBranchesResult => {
       const result = listBranches(worktreeDeps(db), input.projectId);
-      return result.ok ? { ok: true, branches: result.value } : { ok: false, error: result.error };
+      return result.ok ? { ok: true, ...result.value } : { ok: false, error: result.error };
     },
 
     "volli:worktree-orphans": async (
@@ -640,13 +698,15 @@ export function registerDataIpcHandlers(
           error: "This worktree is still linked to a ticket and can't be deleted here.",
         };
       }
-      //   (c) never delete out from under a live Session still running in it.
-      if (liveSessionWithin(target, options.liveSessionCwds?.() ?? [])) {
-        return {
-          ok: false,
-          error: "Close the live sessions running in this worktree before deleting it.",
-        };
-      }
+      //   (c) never delete out from under work still in flight in it.
+      const busy = busySiteWithin(target, (await options.busyWorktreeSites?.(target)) ?? []);
+      if (busy !== null) return { ok: false, error: busyRefusal(busy) };
+      // A ticket delete only nulls `sessions.ticket_id`, so a Session can still
+      // be bound to an orphan — end it here, in the same beat as the delete, the
+      // way `remove` does on the ticket paths. Nothing gates on the result: the
+      // Settings row that reached this channel printed the orphan's own
+      // dirtiness reason behind a confirm, and this is the ONLY way to clear one.
+      await options.releaseAgentSites?.(target);
       await rm(target, { recursive: true, force: true });
       // A dirty orphan left the board's attention list. An orphan is by
       // definition unlinked from any live ticket, so there's no ticket to
@@ -762,12 +822,16 @@ export function registerDataIpcHandlers(
       return { ok: true };
     },
 
-    "volli:worktree-commit": async (input: TicketIdInput): Promise<WorktreeCommitResult> => {
+    "volli:worktree-commit": async (input: WorktreeCommitInput): Promise<WorktreeCommitResult> => {
       // The async runner matters here: `git commit` runs unbounded hook code,
       // which must never block the main process (net.ts's freeze rationale).
+      // The two choices are forwarded RAW: the descriptor guard has already
+      // shape-checked them at the door, and what "blank" and "absent" mean is
+      // commit.ts's to decide, in one place, for every caller.
       const result = await commitTicketRemaining(
         { ...worktreeDeps(db), net: runNet },
         input.ticketId,
+        { message: input.message, includeUnstaged: input.includeUnstaged },
       );
       if (!result.ok) return { ok: false, error: result.error };
       if (!result.value.committed) {
@@ -825,19 +889,17 @@ export function registerDataIpcHandlers(
     "volli:retention-archive-clean": async (
       input: TicketIdInput,
     ): Promise<RetentionArchiveCleanResult> => {
-      // Liveness guard, mirroring worktree-remove: never yank a worktree out
-      // from under a live Session still running in it.
+      // Busy guard, mirroring worktree-remove: never yank a worktree out from
+      // under work still in flight in it.
       const worktreePath = getTicketRow(db, input.ticketId)?.worktree_path ?? null;
-      if (
-        worktreePath !== null &&
-        liveSessionWithin(worktreePath, options.liveSessionCwds?.() ?? [])
-      ) {
-        return {
-          ok: false,
-          error: "Close the live sessions running in this worktree before archiving it.",
-        };
-      }
-      const result = await archiveAndClean(worktreeDeps(db), input.ticketId);
+      const busy =
+        worktreePath === null
+          ? null
+          : busySiteWithin(worktreePath, (await options.busyWorktreeSites?.(worktreePath)) ?? []);
+      if (busy !== null) return { ok: false, error: busyRefusal(busy) };
+      const result = await archiveAndClean(worktreeDeps(db), input.ticketId, {
+        releaseAgentSites: options.releaseAgentSites,
+      });
       if (!result.ok) return { ok: false, error: result.error };
       // Same as worktree-remove: the archived worktree's directory is gone, so
       // no window may keep a recursive watch pinned to it.

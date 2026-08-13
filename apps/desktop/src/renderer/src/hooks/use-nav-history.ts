@@ -74,6 +74,13 @@ function currentSnapshot(): NavSnapshot {
   };
 }
 
+/** Whether a ticket is open in the selected project — the details rail's own condition. */
+function hasOpenTicket(): boolean {
+  const projectId = useProjectsStore.getState().selectedProjectId;
+  if (projectId === null) return false;
+  return useWorkspaceStore.getState().byProject[projectId]?.openTicketId != null;
+}
+
 /** Record the live location as an organic navigation, unless mid-apply. */
 function recordCurrentLocation(): void {
   if (applying) return;
@@ -141,9 +148,10 @@ export function navForward(): void {
  * navigation via store subscriptions, and binds the nav shortcuts:
  *   - ⌘[ / ⌘] → back / forward, suppressed inside inputs / Monaco (where
  *     ⌘[ means outdent).
- *   - ⌥⌘B → toggle the ticket-detail right rail. Bound in the CAPTURE phase and
- *     stops propagation so it preempts the left-sidebar ⌘B handler in
- *     ui/sidebar.tsx (a plain window listener we don't own).
+ *   - ⌥⌘B → toggle the ticket-detail right rail, and only while a ticket is
+ *     open. Bound in the CAPTURE phase and stops propagation so it preempts the
+ *     left-sidebar ⌘B handler in ui/sidebar.tsx (a plain window listener we
+ *     don't own).
  */
 export function useNavHistory(): void {
   React.useEffect(() => {
@@ -175,11 +183,20 @@ export function useNavHistory(): void {
 
   React.useEffect(() => {
     // Capture phase: run before ui/sidebar.tsx's bubble-phase ⌘B listener and
-    // halt the event so ⌥⌘B never doubles as a left-sidebar toggle.
+    // halt the event so ⌥⌘B never doubles as a left-sidebar toggle. It is
+    // swallowed whether or not there is a rail to toggle, for exactly that
+    // reason — falling through would make the shortcut mean the OTHER sidebar
+    // on precisely the screens where it means nothing.
     const onKeyDownCapture = (event: KeyboardEvent) => {
       if (!isRailToggleKeyEvent(toNavKeyEvent(event))) return;
       event.preventDefault();
       event.stopImmediatePropagation();
+      // The details rail exists only around an open ticket, and `railCollapsed`
+      // is persisted — so an ungated shortcut let a keystroke on the board flip
+      // a preference with nothing on screen to show for it, and the next ticket
+      // you opened arrived with its rail already gone. Same condition the
+      // chrome-band toggle uses to decide whether to render at all.
+      if (!hasOpenTicket()) return;
       useUiStore.getState().toggleRailCollapsed();
     };
     window.addEventListener("keydown", onKeyDownCapture, true);

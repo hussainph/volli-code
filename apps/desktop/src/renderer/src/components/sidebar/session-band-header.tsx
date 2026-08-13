@@ -34,6 +34,27 @@ export const DEFAULT_SESSION_BAND_FILTER: SessionBandFilter = {
   showCleaned: false,
 };
 
+/** The sidebar's small-glyph tier, and the hit box this header draws around it. */
+const GLYPH_PX = 12;
+const TRIGGER_BOX_PX = 20;
+
+/**
+ * Half the difference between the trigger's box and its glyph — exactly how far
+ * the glyph sits inside the column the rows' age defines, and so exactly how far
+ * the box has to be pushed out for the two to share one right edge.
+ *
+ * Written as the subtraction rather than as `4` because it is a fact about the
+ * trigger and not about the pane's fold: it is the same number at every fold
+ * step, and the one number that moves if the glyph tier ever does.
+ *
+ * The box then ends 4px outside the ink column, which is correct rather than
+ * residue — a hit target should be bigger than its mark — and still stops short
+ * of the row pill beneath it, so the header's hover fill never reaches further
+ * out than the rows'. Icons align to their ink, boxes to their neighbours'
+ * boxes, and neither has to give.
+ */
+const FILTER_GLYPH_NUDGE = (TRIGGER_BOX_PX - GLYPH_PX) / 2;
+
 /**
  * The band label and its count. `label` is written in sentence case and
  * uppercased by the sidebar's heading rule in `globals.css`, which is also what
@@ -86,12 +107,23 @@ export function SessionBandFilterMenu({
         <button
           type="button"
           aria-label="Filter"
+          // Not `aria-pressed`: this opens a menu rather than toggling a state,
+          // and the menu's own checkbox items are where that state is spoken.
+          // The tint is the sighted half of the same fact.
+          style={{ marginRight: -FILTER_GLYPH_NUDGE }}
           className={cn(
             "flex size-5 items-center justify-center rounded-sm ring-sidebar-ring outline-hidden transition-colors hover:bg-sidebar-accent-veil hover:text-sidebar-accent-foreground focus-visible:ring-2",
             narrowed ? "text-sidebar-accent-foreground" : "text-muted-foreground",
           )}
         >
-          <FunnelSimpleIcon weight="fill" className="size-3.5" />
+          {/* `bold` OVERRIDES the audit, which records `regular` for this site
+              (lab/scratches/icon-weight-audit.tsx) — and it does so because the
+              audit drew it at 14px and it ships at 12. CLAUDE.md's fifth clause
+              is what wins here: bold is the small-size tier, because at ≤12px
+              regular draws lighter than the label beside it, and coverage is
+              scale-invariant so no `size-*` can fix that. Not `fill`, which is
+              4.6x here — the widest gap in the app, and a different mark. */}
+          <FunnelSimpleIcon weight="bold" className="size-3" />
         </button>
       </DropdownMenuTrigger>
       {/* `onSelect` is preventDefault'd on every item so the menu survives a
@@ -102,7 +134,7 @@ export function SessionBandFilterMenu({
           onSelect={(event) => event.preventDefault()}
           onCheckedChange={() => toggleKind("chat")}
         >
-          <ChatCircleIcon weight="fill" />
+          <ChatCircleIcon />
           Chats
         </DropdownMenuCheckboxItem>
         <DropdownMenuCheckboxItem
@@ -110,7 +142,7 @@ export function SessionBandFilterMenu({
           onSelect={(event) => event.preventDefault()}
           onCheckedChange={() => toggleKind("terminal")}
         >
-          <TerminalWindowIcon weight="fill" />
+          <TerminalWindowIcon />
           Terminals
         </DropdownMenuCheckboxItem>
         <DropdownMenuSeparator />
@@ -119,7 +151,7 @@ export function SessionBandFilterMenu({
           onSelect={(event) => event.preventDefault()}
           onCheckedChange={() => onChange({ ...filter, showCleaned: !filter.showCleaned })}
         >
-          <BroomIcon weight="fill" />
+          <BroomIcon />
           Cleaned up
         </DropdownMenuCheckboxItem>
       </DropdownMenuContent>

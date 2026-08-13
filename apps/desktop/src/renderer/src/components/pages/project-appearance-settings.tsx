@@ -466,7 +466,7 @@ function ProjectTerminalThemeSection({ projectId }: { projectId: string }) {
           disabled={(terminal?.overlayPaths.project ?? null) === null}
           onClick={() => void revealPath(terminal?.overlayPaths.project ?? null)}
         >
-          <FileTextIcon weight="fill" />
+          <FileTextIcon />
           This project&rsquo;s overlay
         </Button>
       </SettingsRow>

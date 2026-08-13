@@ -1,3 +1,4 @@
+import * as React from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
@@ -41,6 +42,12 @@ export function BoardColumn({
   // The body is the column's droppable so cards can be dropped onto the empty
   // space below the list (or into a column emptied mid-drag).
   const { setNodeRef } = useDroppable({ id: columnDroppableId(status) });
+  // `SortableContext` keys its context value on this array's identity, and every
+  // `useSortable` card below reads that context — so a fresh array here
+  // re-renders all of them THROUGH `TicketCard`'s `React.memo`, which only ever
+  // stops props, never context. `tickets` is the board's memoized sorted group,
+  // so this holds until the group itself actually changes.
+  const sortableIds = React.useMemo(() => tickets.map((ticket) => ticket.id), [tickets]);
   const composer = useTicketComposer({
     projectId,
     status,
@@ -66,10 +73,7 @@ export function BoardColumn({
         <span className="text-ui font-medium text-foreground">{TICKET_STATUS_LABELS[status]}</span>
         <span className="font-mono text-xs text-muted-foreground">{tickets.length}</span>
       </div>
-      <SortableContext
-        items={tickets.map((ticket) => ticket.id)}
-        strategy={verticalListSortingStrategy}
-      >
+      <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
         <div
           ref={setNodeRef}
           className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2"

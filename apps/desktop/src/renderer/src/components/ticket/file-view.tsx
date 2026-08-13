@@ -770,7 +770,7 @@ export function FileView({
   // binary
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 py-16 text-center">
-      <FolderOpenIcon weight="fill" className="size-6 text-muted-foreground" />
+      <FolderOpenIcon className="size-6 text-muted-foreground" />
       <p className="text-sm text-muted-foreground">{name} can&apos;t be previewed here.</p>
       <Button size="sm" variant="secondary" onClick={() => void handleReveal()}>
         <FolderOpenIcon />

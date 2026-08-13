@@ -43,6 +43,14 @@ export interface ComposerFields {
   body: string;
   labels: string[];
   usesWorktree: boolean;
+  /**
+   * The ref the ticket's worktree branches from (the chip row's base picker).
+   * `null` leaves it unset, and `resolveBaseBranch` detects the project default
+   * at worktree time. Sent only when the ticket actually gets a worktree — a
+   * base recorded against a ticket that works in the project checkout would be
+   * a durable field nothing ever reads.
+   */
+  baseBranch: string | null;
 }
 
 /** The effectful callbacks the orchestration drives; the React layer wires these to the stores. */
@@ -58,6 +66,8 @@ export interface SubmitDeps {
       usesWorktree: boolean;
       /** Persisted as the ticket's default harness (kickoff only); omitted keeps the DB default. */
       preferredHarnessId?: HarnessId;
+      /** The worktree's base ref; omitted leaves it to worktree-time detection. */
+      baseBranch?: string | null;
     },
   ): Promise<Ticket | null>;
   /** Boot a ticket session, auto-launching the harness with `prompt`; resolves the sessionId or null on failure. */
@@ -85,6 +95,16 @@ export interface SubmitResult {
   created: boolean;
 }
 
+/**
+ * The base ref to record for `fields`. A ticket that works in the project
+ * checkout never branches, so it records none — persisting one would leave a
+ * durable field nothing reads, which would then resurface as a stale suggestion
+ * if the ticket were later switched to a worktree.
+ */
+function baseBranchFor(fields: ComposerFields): string | null {
+  return fields.usesWorktree ? fields.baseBranch : null;
+}
+
 /** Create a ticket in the chip's status. Toasts the display id on success. */
 export async function runPlainCreate(
   fields: ComposerFields,
@@ -95,6 +115,7 @@ export async function runPlainCreate(
     body: fields.body,
     labels: fields.labels,
     usesWorktree: fields.usesWorktree,
+    baseBranch: baseBranchFor(fields),
   });
   if (ticket === null) return { created: false };
   deps.toastSuccess(`${displayTicketId(fields.ticketPrefix, ticket.ticketNumber)} created`);
@@ -124,6 +145,7 @@ export async function runKickoff(
     labels: fields.labels,
     usesWorktree: fields.usesWorktree,
     preferredHarnessId: opts.harnessId,
+    baseBranch: baseBranchFor(fields),
   });
   if (ticket === null) return { created: false };
 

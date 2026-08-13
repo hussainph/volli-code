@@ -301,11 +301,28 @@ async function main() {
         await fs.writeFile(join(worktreeDir, "done-flow-change.txt"), "work in progress\n");
         const dirtyBefore = (await gitOut(worktreeDir, ["status", "--porcelain"])).length > 0;
 
-        // Drive the single primary button (one click = commit → push → PR); fall
-        // back to the bridge (running the same two IPCs in sequence) if it never
-        // shows. Either way the DB/git/gh assertions below are identical.
+        // Drive the single primary button, then confirm. The press is no longer
+        // the commit: a commit is not undoable from inside the app, and it was
+        // happening on one unconfirmed click with a message nobody chose, so the
+        // rail now raises a gate carrying the change set and the message field.
+        // Leaving the field blank is what this check wants — it keeps the frozen
+        // `chore(<ID>)` subject asserted below, so the gate is proved without
+        // changing what the durable row says.
+        //
+        // The bridge fallback calls the IPCs directly and never draws UI, so it
+        // has no gate to press; the DB/git/gh assertions after this are identical
+        // either way.
+        //
+        // The gate press sits OUTSIDE the fallback on purpose. If the button
+        // renders and the gate does not, that is the gate being broken, and
+        // catching it here would drop to the bridge — which calls the IPCs
+        // directly, passes every assertion below, and reports the run green
+        // while the confirm this check exists to prove is gone. A fallback that
+        // can swallow the thing under test is not a fallback.
+        let pressedPrimary = false;
         try {
           flowVia = await clickRailButton(displayId, "Commit & create draft PR");
+          pressedPrimary = true;
         } catch (uiError) {
           flowVia = "bridge";
           console.log(`  (primary UI path unavailable: ${uiError.message}; using bridge fallback)`);
@@ -314,6 +331,24 @@ async function main() {
             return { ok: false, detail: `bridge commit failed: ${commitRes.error}` };
           const pushRes = await page.evaluate((tid) => window.api.worktree.pushPr(tid), ticketId);
           if (!pushRes.ok) return { ok: false, detail: `bridge pushPr failed: ${pushRes.error}` };
+        }
+
+        // Leaving the message blank is what this check wants: it keeps the
+        // frozen `chore(<ID>)` subject asserted below, so the gate is proved
+        // without changing what the durable row says.
+        if (pressedPrimary) {
+          const gate = page.getByTestId("ticket-commit-gate-confirm");
+          try {
+            await gate.waitFor({ state: "visible", timeout: 10000 });
+          } catch {
+            return {
+              ok: false,
+              detail:
+                "primary press did not raise the commit gate — an irreversible " +
+                "commit would run on one unconfirmed click",
+            };
+          }
+          await gate.click();
         }
 
         // Assert the commit landed with the fixed message and a clean tree.

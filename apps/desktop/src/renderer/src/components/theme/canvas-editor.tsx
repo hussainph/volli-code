@@ -907,6 +907,8 @@ function ContrastReport({
           data-testid="canvas-contrast-stranded"
           className="flex gap-2.5 rounded-md border border-border bg-secondary/60 p-3"
         >
+          {/* Filled: this is the one thing on the page that went wrong, and the
+              only glyph in the editor that is not a control's own noun. */}
           <WarningIcon weight="fill" className="mt-0.5 size-4 shrink-0 text-primary-text" />
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium">
@@ -924,7 +926,7 @@ function ContrastReport({
                 onClick={() => onEase(eased)}
                 data-testid="canvas-contrast-ease"
               >
-                <SlidersHorizontalIcon weight="fill" />
+                <SlidersHorizontalIcon />
                 Ease vibrancy to {percentLabel(eased)}
               </Button>
             )}

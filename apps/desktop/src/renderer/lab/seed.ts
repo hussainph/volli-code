@@ -25,6 +25,7 @@ import type {
   TicketIdInput,
   TicketLatestSignalsResult,
   TicketRetentionState,
+  TicketStatusEntriesResult,
 } from "@volli/shared";
 
 import { EMPTY_NAV_HISTORY } from "@renderer/lib/nav-history";
@@ -130,6 +131,13 @@ export const appApi: ApiOverrides = {
   },
   tickets: {
     latestSignals: (): Promise<TicketLatestSignalsResult> => Promise.resolve({ ok: true, signals }),
+    // Empty rather than fabricated: this is the board's column history, and the
+    // listing rules already treat "no history" as "keep the Sessions you have".
+    // So an empty answer is the honest one for a lab with no board behind it —
+    // and it is what stops `Couldn't load ticket history` toasting over every
+    // sidebar scratch on load.
+    statusEntries: (): Promise<TicketStatusEntriesResult> =>
+      Promise.resolve({ ok: true, entries: [] }),
   },
   retention: {
     state: (ticketId: string): Promise<RetentionStateResult> =>

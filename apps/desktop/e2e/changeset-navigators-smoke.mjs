@@ -201,7 +201,7 @@ async function main() {
       1,
       "Changes flat list renders status mix including space/non-ASCII path",
       async () => {
-        await aside.getByTestId("ticket-rail-mode-changes").click();
+        await aside.getByTestId("ticket-rail-tab-changes").click();
         await waitUntil(
           "changes panel",
           async () => (await aside.getByTestId("ticket-changes-list").count()) === 1,
@@ -338,7 +338,7 @@ async function main() {
 
     // ---- 4. Files navigator -------------------------------------------------
     await attempt(4, "Files navigator lists referenced context and worktree files", async () => {
-      await aside.getByTestId("ticket-rail-mode-files").click();
+      await aside.getByTestId("ticket-rail-tab-files").click();
       await waitUntil(
         "files list loaded",
         async () => {
@@ -357,13 +357,16 @@ async function main() {
       );
       const text = await aside.getByTestId("ticket-files-list").innerText();
       const hasRef = /keep\.ts/i.test(text) || /referenced/i.test(text);
-      const hasWorktree = /worktree/i.test(text) && (/src/i.test(text) || /readme/i.test(text));
+      // The Calm Stack's Files page is ONE list, so there is no "Worktree"
+      // caption to match on any more — a worktree entry showing up IS the
+      // evidence that half of the list rendered.
+      const hasWorktree = /src/i.test(text) || /readme/i.test(text);
       return { ok: hasRef && hasWorktree, detail: text.slice(0, 200) };
     });
 
     // ---- Screenshots --------------------------------------------------------
     await attempt("shot-changes", "screenshot nav-changes.png", async () => {
-      await aside.getByTestId("ticket-rail-mode-changes").click();
+      await aside.getByTestId("ticket-rail-tab-changes").click();
       await waitUntil(
         "changes list",
         async () => (await aside.getByTestId("ticket-changes-list").count()) === 1,
@@ -376,7 +379,7 @@ async function main() {
     });
 
     await attempt("shot-files", "screenshot nav-files.png", async () => {
-      await aside.getByTestId("ticket-rail-mode-files").click();
+      await aside.getByTestId("ticket-rail-tab-files").click();
       await waitUntil(
         "files list",
         async () => (await aside.getByTestId("ticket-files-list").count()) === 1,
@@ -389,7 +392,7 @@ async function main() {
     });
 
     await attempt("shot-mode", "screenshot nav-mode-strip-active.png", async () => {
-      await aside.getByTestId("ticket-rail-mode-changes").click();
+      await aside.getByTestId("ticket-rail-tab-changes").click();
       await sleep(200);
       const path = join(SHOT_DIR, "nav-mode-strip-active.png");
       // Crop to the aside so the mode strip is readable.

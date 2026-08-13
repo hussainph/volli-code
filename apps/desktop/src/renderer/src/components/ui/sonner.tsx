@@ -20,6 +20,11 @@ const Toaster = ({ ...props }: ToasterProps) => {
     <Sonner
       theme={appearance}
       className="toaster group"
+      // The one surface in the app where the glyph is MEANT to out-weigh its
+      // sentence: a toast is read as a colour first and a string second, and it
+      // is gone before a second read. Everywhere else outline is the baseline.
+      // The spinner is the exception to the exception — a filled spinner-gap is
+      // a disc with no gap to rotate — so it takes the weight step instead.
       icons={{
         success: <CheckCircleIcon weight="fill" className="size-4" />,
         info: <InfoIcon weight="fill" className="size-4" />,

@@ -34,7 +34,7 @@ export function ConfigurePage() {
       <div className="flex flex-1 items-center justify-center p-8">
         <div className="flex max-w-sm flex-col items-center text-center">
           <div className="mb-4 flex size-11 items-center justify-center rounded-xl border border-border bg-card/70">
-            <SlidersHorizontalIcon className="size-5 text-muted-foreground" weight="fill" />
+            <SlidersHorizontalIcon className="size-5 text-muted-foreground" />
           </div>
           <h1 className="text-heading font-semibold">Nothing to configure</h1>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">Select a project first.</p>

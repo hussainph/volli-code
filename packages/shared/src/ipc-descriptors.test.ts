@@ -208,9 +208,18 @@ describe("DATA_IPC descriptor table", () => {
             labels: ["a", "b"],
             usesWorktree: false,
             preferredHarnessId: "codex",
+            baseBranch: "origin/main",
           },
         ]),
       ).toBe(true);
+    });
+
+    it("accepts an explicitly null baseBranch (leave it to worktree-time detection)", () => {
+      expect(guard([{ ...valid, baseBranch: null }])).toBe(true);
+    });
+
+    it("rejects a non-string baseBranch when present", () => {
+      expect(guard([{ ...valid, baseBranch: 7 }])).toBe(false);
     });
 
     it("rejects a non-object payload", () => {
@@ -997,9 +1006,58 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
-  describe("the ticketId-input worktree/retention channels (commit/push-pr/retention-state/dismiss/archive-clean)", () => {
+  describe("volli:worktree-commit", () => {
+    const { guard, invalidError } = DATA_IPC["volli:worktree-commit"];
+
+    it("accepts the bare { ticketId } payload every pre-field caller sends", () => {
+      expect(guard([{ ticketId: "t1" }])).toBe(true);
+      expect(guard([{ ticketId: "t1", message: undefined, includeUnstaged: undefined }])).toBe(
+        true,
+      );
+    });
+
+    it("rejects a non-object payload, a non-string ticketId and a wrong arity", () => {
+      expect(guard([null])).toBe(false);
+      expect(guard([{ ticketId: 1 }])).toBe(false);
+      expect(guard([])).toBe(false);
+    });
+
+    it("accepts a message, blank or multi-line (blank means generate one)", () => {
+      expect(guard([{ ticketId: "t1", message: "fix(VC-1): the thing" }])).toBe(true);
+      expect(guard([{ ticketId: "t1", message: "" }])).toBe(true);
+      expect(guard([{ ticketId: "t1", message: "subject\n\nbody\r\n\twith a tab" }])).toBe(true);
+    });
+
+    it("rejects a non-string message", () => {
+      expect(guard([{ ticketId: "t1", message: 1 }])).toBe(false);
+      expect(guard([{ ticketId: "t1", message: null }])).toBe(false);
+    });
+
+    it("rejects control characters — a NUL cannot cross argv, the rest is invisible junk", () => {
+      expect(guard([{ ticketId: "t1", message: "subject\u0000rest" }])).toBe(false);
+      expect(guard([{ ticketId: "t1", message: "subject\u001brest" }])).toBe(false);
+      expect(guard([{ ticketId: "t1", message: "subject\u007f" }])).toBe(false);
+    });
+
+    it("rejects a message past the length cap, accepts one exactly at it", () => {
+      expect(guard([{ ticketId: "t1", message: "a".repeat(5000) }])).toBe(true);
+      expect(guard([{ ticketId: "t1", message: "a".repeat(5001) }])).toBe(false);
+    });
+
+    it("accepts a boolean includeUnstaged and rejects anything else", () => {
+      expect(guard([{ ticketId: "t1", includeUnstaged: true }])).toBe(true);
+      expect(guard([{ ticketId: "t1", includeUnstaged: false }])).toBe(true);
+      expect(guard([{ ticketId: "t1", includeUnstaged: "yes" }])).toBe(false);
+      expect(guard([{ ticketId: "t1", includeUnstaged: null }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid commit request");
+    });
+  });
+
+  describe("the ticketId-input worktree/retention channels (push-pr/retention-state/dismiss/archive-clean)", () => {
     const cases = [
-      ["volli:worktree-commit", "Invalid ticket"],
       ["volli:worktree-push-pr", "Invalid ticket"],
       ["volli:retention-state", "Invalid ticket"],
       ["volli:retention-dismiss", "Invalid ticket"],

@@ -112,7 +112,7 @@ export function AppearanceSettings() {
             size="sm"
             onClick={() => void revealPath(terminal?.ghosttyConfigPath ?? null)}
           >
-            <FileTextIcon weight="fill" />
+            <FileTextIcon />
             Ghostty config
           </Button>
           <Button
@@ -120,7 +120,7 @@ export function AppearanceSettings() {
             size="sm"
             onClick={() => void revealPath(terminal?.overlayPaths.global ?? null)}
           >
-            <FileTextIcon weight="fill" />
+            <FileTextIcon />
             Volli overlay
           </Button>
         </SettingsRow>

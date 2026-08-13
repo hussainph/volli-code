@@ -165,7 +165,16 @@ async function main() {
     if (key.startsWith("CLAUDECODE") || key.startsWith("CLAUDE_CODE")) delete env[key];
   }
 
-  const app = await _electron.launch({ executablePath: ELECTRON, args: [APP_DIR], env });
+  // An isolated Chromium profile. Sharing <userData> with a Volli the owner
+  // already has open loses the single-instance lock, so the launch quits at
+  // exit code 0 before its first window — surfacing only as "Target page,
+  // context or browser has been closed", which reads like a crash in the app.
+  const profileDir = await fs.mkdtemp(join(os.tmpdir(), "volli-park-smoke-profile-"));
+  const app = await _electron.launch({
+    executablePath: ELECTRON,
+    args: [APP_DIR, `--user-data-dir=${profileDir}`],
+    env,
+  });
 
   try {
     const page = await app.firstWindow();
@@ -192,10 +201,11 @@ async function main() {
     await page.keyboard.press("Enter");
     const pid1 = await shellPidFromMarker(marker1);
 
-    // The scratch strip's "+" is a menu since chat tabs landed beside terminals
-    // (Terminal / Chat); parking is a terminal-only tier, so this boots one.
-    await page.getByLabel("New session").click();
-    await page.getByRole("menuitem", { name: "Terminal", exact: true }).click();
+    // The scratch strip's control is a split button — its press starts a chat,
+    // its caret half opens the kinds. Parking is a terminal-only tier, so this
+    // goes through the caret. The item's name carries its chord, hence the regex.
+    await page.getByLabel("Other session kinds").click();
+    await page.getByRole("menuitem", { name: /^Terminal/ }).click();
     await page.waitForFunction(
       () => document.querySelectorAll('[aria-label^="Close Terminal"]').length === 2,
       undefined,

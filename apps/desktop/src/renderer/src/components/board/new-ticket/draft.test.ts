@@ -43,6 +43,21 @@ describe("saveDraft/loadDraft", () => {
     expect(loadDraft(storage)).toBeNull();
   });
 
+  it("round-trips a chosen base branch, and reads a pre-baseBranch draft as unset", () => {
+    const storage = fakeStorage();
+    saveDraft(draft({ baseBranch: "origin/main" }), storage);
+    expect(loadDraft(storage)?.baseBranch).toBe("origin/main");
+
+    // A draft written before the base chip existed must still restore rather
+    // than read as "no draft" — its base is simply unset.
+    const { baseBranch: _omitted, ...legacy } = draft({ baseBranch: "x" });
+    storage.setItem("volli:new-ticket-draft", JSON.stringify({ version: 1, draft: legacy }));
+    expect(loadDraft(storage)?.baseBranch).toBeUndefined();
+
+    saveDraft(draft({ baseBranch: null }), storage);
+    expect(loadDraft(storage)?.baseBranch).toBeNull();
+  });
+
   it("keeps a draft whose only content is labels or body", () => {
     const storage = fakeStorage();
     saveDraft(draft({ title: "", body: "", labels: ["keep"] }), storage);
@@ -77,6 +92,7 @@ describe("loadDraft validation", () => {
     ["bad priority", JSON.stringify({ version: 1, draft: { ...draft(), priority: 5 } })],
     ["non-string label", JSON.stringify({ version: 1, draft: { ...draft(), labels: [1] } })],
     ["missing field", JSON.stringify({ version: 1, draft: { title: "x" } })],
+    ["non-string baseBranch", JSON.stringify({ version: 1, draft: { ...draft(), baseBranch: 7 } })],
     [
       "valid but content-empty draft",
       JSON.stringify({ version: 1, draft: draft({ title: " ", body: "", labels: [] }) }),

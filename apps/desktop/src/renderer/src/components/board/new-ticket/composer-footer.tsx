@@ -1,51 +1,32 @@
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import * as React from "react";
-import {
-  FIRST_CLASS_HARNESS_IDS,
-  HARNESS_LABELS,
-  harnessLabel,
-  type HarnessId,
-} from "@volli/shared";
-
 import { ComposerFileAttach } from "@renderer/components/board/new-ticket/composer-file-attach";
 import { Button } from "@renderer/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@renderer/components/ui/dropdown-menu";
 import { Switch } from "@renderer/components/ui/switch";
 import type { FileIndexHandle } from "@renderer/hooks/use-file-index";
-import { hydrateHarnessCatalog, useHarnessCatalogStore } from "@renderer/stores/sessions";
 
 /**
  * The composer footer: the paperclip file-ref picker, a "Create more" toggle,
- * a quiet "Terminal harness" picker showing the active one, the secondary
- * "Create" button, and the primary "Create & start" action
- * (`data-testid="composer-kickoff"`, its harness carried in the accessible
- * name).
+ * and the two ways to commit — the secondary "Create" and the primary
+ * "Create & start" (`data-testid="composer-kickoff"`, its harness carried in
+ * the accessible name).
  *
- * The picker names a TERMINAL, and that is the whole of what it picks. Kickoff
- * boots a PTY and auto-launches the chosen TUI in it (`submit.ts`'s
- * `runKickoff`); it starts no structured chat, and no entry in this list is an
- * Agent Runtime. A user chooses Model Access, not an executor — a label saying
- * "agent" here would have offered a choice the product does not make.
+ * The two commits are welded into one pill rather than spaced apart, because
+ * they are one decision with two answers: both create this ticket, and only one
+ * of them also boots an agent. Butting them together says that; a gap would
+ * have made them look like unrelated actions that happen to sit side by side.
+ * They stay two separate buttons — each is one press, neither hides behind a
+ * caret.
  *
- * The picker offers the built-ins and every harness the user has registered and
- * trusted, in one list and under one kind of name — a manifest's own label,
- * exactly as a built-in's. Nothing marks which is which, because nothing about
- * choosing depends on it: the user wrote the manifest, and the launch door
- * refuses an untrusted id whatever this list says.
+ * The terminal-harness picker used to live here, beside the kickoff button. It
+ * is now a chip in the metadata row (`composer-harness.tsx`), where it belongs:
+ * it describes the ticket, it does not modify the button. The kickoff button
+ * still names the active harness so the pairing survives the move.
  */
 export function ComposerFooter({
   fileIndex,
   onInsertRef,
   createMore,
   onCreateMoreChange,
-  harnessId,
-  onHarnessChange,
+  harnessLabel,
   onCreate,
   onKickoff,
   disabled,
@@ -54,29 +35,12 @@ export function ComposerFooter({
   onInsertRef: (relPath: string) => void;
   createMore: boolean;
   onCreateMoreChange: (createMore: boolean) => void;
-  harnessId: HarnessId;
-  onHarnessChange: (harnessId: HarnessId) => void;
+  /** The active terminal harness's label, for the kickoff button's accessible name. */
+  harnessLabel: string;
   onCreate: () => void;
   onKickoff: () => void;
   disabled: boolean;
 }) {
-  const registered = useHarnessCatalogStore((state) => state.registered);
-  // Radix mounts this fresh on every composer open, so "on mount" is "per open"
-  // — which is when the answer can have gone stale: a verdict recorded since
-  // the last open regenerated the wrappers and moved the set.
-  React.useEffect(() => {
-    void hydrateHarnessCatalog();
-  }, []);
-
-  const harnesses: { id: HarnessId; label: string }[] = [
-    ...FIRST_CLASS_HARNESS_IDS.map((id) => ({ id, label: HARNESS_LABELS[id] })),
-    ...registered.map((adapter) => ({ id: adapter.id, label: adapter.label })),
-  ];
-  // The manifest's own label, since `harnessLabel` can only fall back to the raw
-  // slug for a harness @volli/shared does not ship.
-  const activeLabel =
-    harnesses.find((harness) => harness.id === harnessId)?.label ?? harnessLabel(harnessId);
-
   return (
     <div className="flex items-center gap-2">
       <ComposerFileAttach fileIndex={fileIndex} onInsert={onInsertRef} />
@@ -90,43 +54,26 @@ export function ComposerFooter({
         Create more
       </label>
 
-      <div className="ml-auto flex items-center gap-2">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            {/* Never disabled by an empty title — picking the terminal is
-                independent of whether the ticket is ready to submit. */}
-            <Button
-              aria-label="Terminal harness"
-              variant="ghost"
-              size="sm"
-              className="text-muted-foreground"
-            >
-              {activeLabel}
-              <CaretDownIcon weight="bold" className="size-3" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {harnesses.map((harness) => (
-              <DropdownMenuItem key={harness.id} onSelect={() => onHarnessChange(harness.id)}>
-                {harness.label}
-                {harness.id === harnessId ? (
-                  <CheckIcon weight="bold" className="ml-auto size-3.5" />
-                ) : null}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        <Button variant="secondary" size="sm" onClick={onCreate} disabled={disabled}>
+      {/* No `overflow-hidden` on the group: each half keeps its own outer pill
+          corners, so the press scale reads as that half depressing inside the
+          control rather than as the seam tearing open. */}
+      <div className="ml-auto flex items-center">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={onCreate}
+          disabled={disabled}
+          className="rounded-r-none"
+        >
           Create
         </Button>
-
         <Button
           data-testid="composer-kickoff"
-          aria-label={`Create & start · ${activeLabel}`}
+          aria-label={`Create & start · ${harnessLabel}`}
           onClick={onKickoff}
           disabled={disabled}
           size="sm"
+          className="rounded-l-none"
         >
           Create &amp; start
         </Button>

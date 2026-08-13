@@ -16,7 +16,15 @@ import { AddProjectTile } from "@renderer/components/rail/add-project-tile";
 import { ProjectTile } from "@renderer/components/rail/project-tile";
 import { useProjectsStore } from "@renderer/stores/projects";
 
-export function ProjectRail() {
+/**
+ * Memoized for the same reason as `Board`, and it takes no props at all, so the
+ * boundary is free: it hangs directly under `AppShell`, which re-renders on
+ * every pointermove of the sidebar resize grip. Profiling a drag showed the rail
+ * dropping out of the rendered set entirely once this was in place. Its
+ * `useProjectsStore` subscription still updates it normally — memo blocks
+ * parent-driven renders, never a hook's own update.
+ */
+export const ProjectRail = React.memo(function ProjectRail() {
   const projects = useProjectsStore((state) => state.projects);
   const reorder = useProjectsStore((state) => state.reorder);
   const [activeDragId, setActiveDragId] = React.useState<string | null>(null);
@@ -25,6 +33,10 @@ export function ProjectRail() {
   // local state via `reorder` (see its handler below); the store writes to
   // SQLite exactly once, when the drag settles.
   const dragStartOrder = React.useRef<Project[] | null>(null);
+  // `SortableContext` keys its context value on this array's identity, and the
+  // rail sits high enough in the shell that it re-renders on unrelated chrome
+  // changes — a fresh array there re-renders every `useSortable` tile with it.
+  const sortableIds = React.useMemo(() => projects.map((project) => project.id), [projects]);
 
   // distance: 4 keeps plain clicks (select) and the press-scale animation
   // working — the drag only activates after real pointer travel.
@@ -62,10 +74,7 @@ export function ProjectRail() {
         onDragEnd={handleDragEnd}
         onDragCancel={handleDragEnd}
       >
-        <SortableContext
-          items={projects.map((project) => project.id)}
-          strategy={verticalListSortingStrategy}
-        >
+        <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
           <div className="flex min-h-0 flex-1 flex-col items-center gap-3 overflow-y-auto px-2 pt-4 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {projects.map((project, index) => (
               <ProjectTile
@@ -83,4 +92,4 @@ export function ProjectRail() {
       </div>
     </div>
   );
-}
+});

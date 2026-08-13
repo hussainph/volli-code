@@ -1,5 +1,6 @@
 import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
 
+import { composerChipClass } from "@renderer/components/board/new-ticket/composer-chip";
 import { TagChip } from "@renderer/components/board/tag-chip";
 import { LabelEditorCore } from "@renderer/components/ticket/label-editor-core";
 import { Button } from "@renderer/components/ui/button";
@@ -31,11 +32,8 @@ export function ComposerLabels({
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button
-          variant="ghost"
-          className="gap-1.5 border border-border px-2.5 text-xs text-muted-foreground"
-        >
-          <TagIcon className="size-3.5" />
+        <Button variant="ghost" size="sm" className={composerChipClass()}>
+          <TagIcon />
           {value.length === 0 ? (
             "Labels"
           ) : (

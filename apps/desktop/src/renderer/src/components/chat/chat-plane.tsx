@@ -44,7 +44,7 @@ import {
   segmentTurn,
   type ChatSegment,
 } from "@renderer/chat/activity";
-import { isDeliverable } from "@renderer/chat/client";
+import { isDeliverable, type MessageDelivery } from "@renderer/chat/client";
 import {
   footInteraction,
   interactionForApproval,
@@ -60,12 +60,15 @@ import { ActivityBundle, ToolRow } from "@renderer/components/chat/activity-ui";
 import {
   answerInteraction,
   composerModelSelection,
+  heldStrip,
   holdList,
   messageRoute,
   resolvingWith,
   sameInteractionId,
   sameMessages,
   sessionBlocker,
+  sessionModelStanding,
+  settledHeldIds,
   withdrawInteraction,
   type CatalogState,
   type SessionBlockerActs,
@@ -83,12 +86,13 @@ import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Button } from "@renderer/components/ui/button";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { cn } from "@renderer/lib/utils";
-import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
+import { useChatDraftsStore, type HeldMessage } from "@renderer/stores/chat-drafts";
 import { useUiStore } from "@renderer/stores/ui";
 
 const NO_MESSAGES: readonly UIMessage[] = [];
 const NO_INTERACTIONS: readonly SessionInteraction[] = [];
 const NO_QUEUE: readonly QueuedMessage[] = [];
+const NO_HELD: readonly HeldMessage[] = [];
 const NO_MODELS: readonly ModelAccessModel[] = [];
 const EMPTY_MODEL_SELECTION: ComposerModelSelection = {
   providerId: "",
@@ -128,8 +132,11 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   // survive both a tab switch (this component unmounts) and a relaunch, so it
   // lives in the chat-drafts store rather than local state (see stores/chat-drafts.ts).
   const input = useChatDraftsStore((state) => state.drafts[sessionId]?.text ?? "");
+  const held = useChatDraftsStore((state) => state.drafts[sessionId]?.held ?? NO_HELD);
   const setDraft = useChatDraftsStore((state) => state.setDraft);
-  const clearSentDraft = useChatDraftsStore((state) => state.clearSentDraft);
+  const holdMessage = useChatDraftsStore((state) => state.holdMessage);
+  const markHeld = useChatDraftsStore((state) => state.markHeld);
+  const dropHeld = useChatDraftsStore((state) => state.dropHeld);
   const onInputChange = React.useCallback(
     (text: string) => setDraft(sessionId, text),
     [sessionId, setDraft],
@@ -149,13 +156,29 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   const working = slice?.lifecycle === "working";
   const liveExecutorId = slice?.projection?.liveExecutor?.id ?? null;
   const deliverable = slice !== undefined && isDeliverable(slice);
-  const composable = modelSelection !== null;
   const { models, providers, catalogState, catalogError } = useModelAccess(
     slice?.projection != null,
   );
+  // A durable model is not enough to type: the row that says this Session is
+  // pinned to something nobody can run waits on the catalog, and until the
+  // catalog answers there is nothing to say it with. A box that takes a message
+  // in that window spends it before the warning it was owed — which is the one
+  // thing knowing the model early was for.
+  const composable = modelSelection !== null && catalogState !== "loading";
+  // Signed-in models only. Pi's catalog is every provider it knows — around a
+  // thousand models against the handful this profile has credentials for — and
+  // a picker that lists the rest is a picker whose first "GPT-5.6 Luna" is
+  // whichever provider sorted first. What you cannot send to is not an option.
   const composerModels = React.useMemo(
-    () => models.map((model) => composerModel(model, providers)),
+    () =>
+      models
+        .filter((model) => model.state === "available")
+        .map((model) => composerModel(model, providers)),
     [models, providers],
+  );
+  const sessionModel = React.useMemo(
+    () => sessionModelStanding(modelSelection, models, providers),
+    [modelSelection, models, providers],
   );
   const changeModel = React.useCallback(
     (next: ComposerModelSelection) => {
@@ -177,45 +200,80 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   /**
    * The one road out of this surface for anything a person typed.
    *
-   * Resolves true when the words are safe — delivered, or held in the queue
-   * because there was nowhere to send them yet. A redirection typed on a card
-   * takes the same road, so it is never dropped while the executor is coming up.
+   * Says what became of the words, which is not the same question as whether
+   * they arrived: `held` means the Session's queue has them and nothing durable
+   * does. A redirection typed on a card takes the same road, so it is never
+   * dropped while the executor is coming up.
    */
   const deliver = React.useCallback(
-    async (text: string, intent: ComposerIntent): Promise<boolean> => {
+    async (id: string, text: string, intent: ComposerIntent): Promise<MessageDelivery | "held"> => {
       if (messageRoute(intent, deliverable) === "hold") {
-        enqueue({ id: nextId(), text });
-        return true;
+        enqueue({ id, text });
+        return "held";
       }
       return submit(text, intent === "steer" ? "steer" : "queue");
     },
     [deliverable, enqueue, submit],
   );
 
+  /**
+   * The box empties on dispatch — but it is never the last thing holding the
+   * message.
+   *
+   * Pi answers a `message.submit` when the whole TURN has ended — the runtime
+   * awaits `agent.prompt` — so "clear once it lands" means the words you sent
+   * sit in the composer for the length of the reply, then vanish. Sending is
+   * the moment the message stopped being a draft. What it is not is the moment
+   * anything accepted it: until then the only copy would be a closure variable
+   * in a pending `.then`, and a reload — HMR, ⌘R, a renderer crash — would take
+   * it with no trace. So the words move from the box to the persisted held list
+   * in one write, and leave it only for something that outlives this window: a
+   * delivered turn, or a ledger that already records the intent.
+   */
   const send = React.useCallback(
     (text: string, intent: ComposerIntent) => {
-      // Capture the draft revision at submit. Text alone is not enough: if the
-      // user clears and retypes the same words while delivery is in flight,
-      // that is a new draft with a new monotonic token and must survive — even
-      // if both edits land inside the same `Date.now()` millisecond.
-      const revision = useChatDraftsStore.getState().draftRevisions[sessionId];
-      void deliver(text, intent).then((kept) => {
-        if (kept && revision !== undefined) clearSentDraft(sessionId, text, revision);
+      const id = nextId();
+      holdMessage(sessionId, { id, text });
+      void deliver(id, text, intent).then((outcome) => {
+        if (outcome === "held") markHeld(sessionId, id, "queued");
+        // `recorded` is the message the runtime committed before the executor
+        // refused it: it is in the ledger and on screen in the transcript, so
+        // handing it back would be inviting a second copy of it. The blocker
+        // row owns that recovery.
+        else if (outcome === "refused") markHeld(sessionId, id, "unsent");
+        else dropHeld(sessionId, id);
       });
     },
-    [clearSentDraft, deliver, sessionId],
+    [deliver, dropHeld, holdMessage, markHeld, sessionId],
   );
 
-  // The composer only ever takes messages OUT of the queue — editing one puts
+  // What the Session is holding for you, from the two records that say it — see
+  // `heldStrip`. One row per message, whichever of them names it.
+  const strip = React.useMemo(() => heldStrip(held, queue), [held, queue]);
+
+  // The composer only ever takes messages OUT of the strip — editing one puts
   // its words back in the box, removing one drops it — so the whole of this is
-  // which ids it stopped naming.
+  // which ids it stopped naming. Both records are told; neither minds an id it
+  // never had.
   const onQueuedChange = React.useCallback(
     (next: readonly QueuedMessage[]) => {
       const kept = new Set(next.map((entry) => entry.id));
-      for (const entry of queue) if (!kept.has(entry.id)) dequeue(entry.id);
+      for (const entry of strip) {
+        if (kept.has(entry.id)) continue;
+        dequeue(entry.id);
+        dropHeld(sessionId, entry.id);
+      }
     },
-    [dequeue, queue],
+    [dequeue, dropHeld, sessionId, strip],
   );
+
+  // The release queue is renderer memory and the held copy is what outlives it,
+  // so the copy is retired by the queue letting go: a released message is one
+  // the runtime now owns. Nothing else can say it — the drain runs in the
+  // resident client, which has no view and no drafts.
+  React.useEffect(() => {
+    for (const id of settledHeldIds(held, queue)) dropHeld(sessionId, id);
+  }, [dropHeld, held, queue, sessionId]);
 
   /**
    * Which decisions the transcript is already showing, and which one is left for
@@ -244,7 +302,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
         resolve: resolveInteraction,
         // Sent, never steered: the redirection is the next thing said, not an
         // interruption of a turn that is already stopping to be told.
-        deliver: (message) => void deliver(message, "send"),
+        deliver: (message) => void deliver(nextId(), message, "send"),
         resolving: (id, active) => setResolving((current) => resolvingWith(current, id, active)),
       }),
     [deliver, resolveInteraction],
@@ -312,6 +370,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
       attention: slice?.projection?.attention ?? EMPTY_ATTENTION,
       catalogState,
       catalogError,
+      sessionModel,
       terminalAvailable: ticketId !== null,
     },
     blockerActs,
@@ -408,11 +467,12 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
                 textareaRef={textareaRef}
                 models={composerModels}
                 selection={selection}
+                selectionProviderLabel={sessionModel?.providerLabel}
                 onSelectionChange={changeModel}
                 modelChoiceDisabled={working}
                 working={working}
                 ready={composable}
-                queued={queue}
+                queued={strip}
                 onQueuedChange={onQueuedChange}
                 onSubmit={send}
                 onStop={() => void interrupt()}
@@ -489,7 +549,6 @@ function composerModel(
       providers.find((provider) => provider.id === model.providerId)?.label ?? model.providerId,
     modelId: model.modelId,
     label: model.label,
-    state: model.state,
     reasoningLevels: model.reasoningLevels,
   };
 }
@@ -510,7 +569,7 @@ function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
         <WarningIcon aria-hidden className="size-3.5 shrink-0 text-destructive" weight="fill" />
       ) : null}
       {blocker.tone === "waiting" ? (
-        <ClockIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" weight="fill" />
+        <ClockIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
       ) : null}
       <div className="min-w-0 flex-1">
         {/* Both lines are clipped by CSS, so both keep the hover that is the

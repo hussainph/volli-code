@@ -8,6 +8,15 @@
  * git, so `ticket.branch`/`base_branch` stay stamped — a later re-ensure reuses
  * the same branch (never a silently-new one after a title edit) at a fresh
  * checkout. The dir is cache; the branch is identity.
+ *
+ * It also ends what is bound to the checkout before removing it. That is a
+ * separate act from the busy gate the IPC layer runs first: the gate asks
+ * whether an agent is WORKING here and refuses if so, while this ends the
+ * bindings that are merely still pointed here — which is every chat ever opened
+ * on the ticket, because a binding outlives its tab. Doing it in the same beat
+ * as the delete is also what narrows the gate's own check-to-destroy window:
+ * anything that started a turn since the gate ran is stopped here rather than
+ * having its directory pulled out from under it.
  */
 import { existsSync } from "node:fs";
 
@@ -16,6 +25,7 @@ import { WORKTREE_DIRTY_REFUSAL_PREFIX, type TicketEventActor } from "@volli/sha
 import { getProjectById } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
 import { updateTicketFieldsCommand } from "../ticket-commands";
+import type { AgentSiteReleaseReport } from "./agent-sites";
 import { isWorktreeDirty } from "./dirty";
 import { GitError } from "./git";
 import { clearPhase } from "./phase";
@@ -23,6 +33,22 @@ import { err, ok, type WorktreeDeps, type WorktreeResult } from "./types";
 
 // System-driven, no session: these mutations are attributed to automation.
 const SYSTEM_ACTOR: TicketEventActor = { kind: "automation" };
+
+export interface WorktreeRemoveOptions {
+  force: boolean;
+  /**
+   * Ends every structured binding rooted at the checkout, immediately before it
+   * is deleted (see {@link import("./agent-sites").releaseAgentSites}).
+   *
+   * BEST-EFFORT, and that is a decision rather than an oversight: a release
+   * that cannot be made to succeed would otherwise leave a worktree no route
+   * can remove, which is the failure the busy gate was rewritten to end. The
+   * report names what survived so the caller can say so; the delete proceeds.
+   * Absent (tests, a degraded boot with no runtime) means there is nothing
+   * structured attached to end.
+   */
+  releaseAgentSites?: (directory: string) => Promise<AgentSiteReleaseReport>;
+}
 
 /**
  * Removes a ticket's worktree. With `force: false`, refuses when the worktree
@@ -32,7 +58,7 @@ const SYSTEM_ACTOR: TicketEventActor = { kind: "automation" };
 export async function remove(
   deps: WorktreeDeps,
   ticketId: string,
-  opts: { force: boolean },
+  opts: WorktreeRemoveOptions,
 ): Promise<WorktreeResult<void>> {
   const ticket = getTicketRow(deps.db, ticketId);
   if (!ticket) return err("Unknown ticket");
@@ -50,7 +76,10 @@ export async function remove(
   // Dir already gone (deleted manually, or a stale row): there is no work left
   // to protect and `git worktree remove` would fail on the missing path — prune
   // the stale registration and clear identity so the ticket isn't dead-ended.
+  // A binding may still be pointed at it, which is the very state this path
+  // exists to clean up, so it is released here too.
   if (!existsSync(worktreePath)) {
+    await opts.releaseAgentSites?.(worktreePath);
     try {
       deps.git(["worktree", "prune"], project.path);
     } catch {
@@ -75,6 +104,14 @@ export async function remove(
       );
     }
   }
+
+  // Last thing before the checkout stops existing, and after the dirty gate on
+  // purpose: a non-forced remove that is about to refuse must not have closed
+  // the user's chat on the way to refusing. The order does put the executor's
+  // own shutdown after the cleanliness read, so anything it writes on the way
+  // out lands unseen — the same pre-existing window as any write between that
+  // read and the delete, and narrower than leaving the executor running.
+  await opts.releaseAgentSites?.(worktreePath);
 
   try {
     const args = ["worktree", "remove", ...(opts.force ? ["--force"] : []), worktreePath];

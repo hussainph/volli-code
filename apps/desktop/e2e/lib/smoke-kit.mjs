@@ -55,6 +55,9 @@
  *                      STYLE. textContent still returns `display:none` text, so
  *                      it cannot answer "is this delimiter visible?".
  *   • cardById()/columnCount() — the board DOM readers both composer probes need.
+ *   • startTerminalSession() — the ONE encoding of "start a terminal from this
+ *                      surface's session-start control", which is a split
+ *                      button: chat on the press, terminal behind the caret.
  *
  * These smokes are NOT wired into `vp test`; they need a display + the built app.
  */
@@ -936,4 +939,89 @@ export async function goToBoard(page) {
   }
 
   throw new Error("board view did not become stable");
+}
+
+/**
+ * Start a terminal Session from a surface's session-start control.
+ *
+ * The ONE encoding of that gesture. The control is a split button: its press
+ * starts a CHAT (so a probe that wants a chat just clicks `New chat`), and a
+ * terminal lives behind the caret half. The menu item's accessible name is
+ * computed from its whole subtree, so on the Sessions strip — the one mount
+ * that announces the chords — it reads "Terminal ⌥⌘T"; matching a prefix is
+ * what works on every mount.
+ *
+ * `scope` is a Locator (a rail, a strip's container) or the Page itself.
+ */
+export async function startTerminalSession(scope) {
+  await scope.getByRole("button", { name: "Other session kinds", exact: true }).first().click();
+  const page = scope.page?.() ?? scope;
+  await page.getByRole("menuitem", { name: /^Terminal/ }).click();
+}
+
+// ---- tab strips ------------------------------------------------------------
+
+/** The accessible name each tab strip announces (`ticket-tabs.tsx`, `session-tabs.tsx`). */
+export const TICKET_TAB_STRIP = "Ticket tabs";
+export const SESSION_TAB_STRIP = "Session tabs";
+
+/**
+ * One named tab strip's tablist.
+ *
+ * Naming it is not decoration. A ticket screen draws TWO tablists — this strip
+ * and the details rail's page switcher — so an unnamed `[role="tablist"]` is
+ * ambiguous, and every unscoped `[role="tab"]` question on that screen counts
+ * the rail's pages as if they were tabs you could open a chat into.
+ */
+export function tabStrip(page, name) {
+  return page.getByRole("tablist", { name, exact: true });
+}
+
+/**
+ * A named tab strip's own session-start control — the press half, which starts
+ * a chat.
+ *
+ * Scoped by walking UP from the tablist to the nearest ancestor that also holds
+ * such a control, rather than by hopping a fixed number of parents. The strip is
+ * one row carrying both populations — tabs on the left, the things that act on
+ * them past a divider on the right — but how many wrappers sit between them is a
+ * layout decision, and it has already moved once: the ticket strip's control
+ * left the tabs' overflow scroller to sit past a divider, which stranded a `..`
+ * hop inside that scroller with nothing to click.
+ *
+ * The walk still has teeth, which a page-wide `getByRole` would not: a ticket
+ * screen carries a SECOND copy of this control in the rail's Sessions panel, so
+ * an unscoped query either matches two or quietly presses the wrong one, and a
+ * probe that means "the strip's control created this tab" would go on passing
+ * with the strip's control gone.
+ */
+export function tabStripNewChatButton(page, name) {
+  return tabStrip(page, name)
+    .locator('xpath=ancestor::*[.//button[@aria-label="New chat"]][1]')
+    .getByRole("button", { name: "New chat", exact: true });
+}
+
+/** The `aria-label` of the tab currently front in one named strip, or null. */
+export async function activeTabLabel(page, name) {
+  return tabStrip(page, name)
+    .locator('[role="tab"][aria-selected="true"]')
+    .getAttribute("aria-label");
+}
+
+/**
+ * Press a named strip's session-start control and wait for the chat tab it
+ * mints, returning that tab's label.
+ *
+ * Counted inside the strip, so the rail's pages cannot make the delta look
+ * satisfied — or, on the ticket screen, satisfied before the click even lands.
+ */
+export async function openNewChatTab(page, name) {
+  const strip = tabStrip(page, name);
+  const tabs = strip.getByRole("tab");
+  const tabsBefore = await tabs.count();
+  await tabStripNewChatButton(page, name).click();
+  await waitUntil("a new chat tab to appear", async () => (await tabs.count()) > tabsBefore);
+  const label = await activeTabLabel(page, name);
+  if (label === null) throw new Error("no tab became active after New chat");
+  return label;
 }

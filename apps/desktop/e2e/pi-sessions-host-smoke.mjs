@@ -66,12 +66,14 @@ import {
   launch,
   makeGitRepo,
   makeScratch,
+  openNewChatTab,
   pathExists,
   readSeededProjects,
   seedDefaultModel,
   seedProjects,
   sleep,
   stopButton,
+  TICKET_TAB_STRIP,
   waitForSettledReply,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
@@ -104,28 +106,6 @@ async function shot(page, name) {
 async function captureFailureEvidence(page, label) {
   const path = await shot(page, `${label.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`);
   console.log(`  evidence: ${path}`);
-}
-
-/** The tab strip's direct Chat control (the ticket rail's own copy — see pi-ticket-chat-smoke.mjs). */
-function tabStripNewChatButton(page) {
-  return page
-    .locator('[role="tablist"]')
-    .locator("xpath=..")
-    .getByRole("button", { name: "New chat", exact: true });
-}
-
-async function openNewChatTab(page) {
-  const tabsBefore = await page.locator('[role="tab"]:visible').count();
-  await tabStripNewChatButton(page).click();
-  await waitUntil(
-    "a new chat tab to appear",
-    async () => (await page.locator('[role="tab"]:visible').count()) > tabsBefore,
-  );
-  const activeLabel = await page
-    .locator('[role="tab"][aria-selected="true"]')
-    .getAttribute("aria-label");
-  if (activeLabel === null) throw new Error("no tab became active after New Chat");
-  return activeLabel;
 }
 
 /** Submits `text` and returns the moment it was sent — the turn clock's zero. */
@@ -281,7 +261,7 @@ async function main() {
           async () =>
             (await page.getByRole("tab", { name: orphanDisplayId, exact: true }).count()) === 1,
         );
-        await openNewChatTab(page);
+        await openNewChatTab(page, TICKET_TAB_STRIP);
         const settled = await runTurnToSettle(page, ORPHAN_PROMPT).catch(async (error) => {
           await captureFailureEvidence(page, "orphan-chat-turn-failed");
           throw error;
@@ -382,7 +362,7 @@ async function main() {
           async () =>
             (await page.getByRole("tab", { name: concludeDisplayId, exact: true }).count()) === 1,
         );
-        await openNewChatTab(page);
+        await openNewChatTab(page, TICKET_TAB_STRIP);
         // No message is ever sent — the point is that the tab lands even
         // though the attach behind it is about to fail (`bootChatSession`:
         // landing is gated on the create, never the attach).
@@ -454,9 +434,16 @@ async function main() {
         )
           .then(() => true)
           .catch(() => false);
-        const badge = revealed
-          ? (await row.first().locator('[aria-label="Cleaned up"]').count()) === 1
-          : false;
+        // The rule is that a revealed row SAYS it is concluded, not which
+        // element says it: the marker used to be a broom icon carrying that
+        // name and is now sr-only text beside a dimmed row
+        // (`session-band-row.tsx`). Either drawing satisfies the rule, so match
+        // the name wherever it sits rather than one of the two carriers.
+        const marker = row
+          .first()
+          .getByText("Cleaned up", { exact: true })
+          .or(row.first().locator('[aria-label="Cleaned up"]'));
+        const badge = revealed ? (await marker.count()) === 1 : false;
         await shot(page, "03-cleaned-up-revealed.png");
 
         await page.keyboard.press("Escape"); // close the filter menu before it intercepts the click

@@ -4,6 +4,7 @@ import { TICKET_BODY_TAB_ID } from "./ticket-body-tab";
 import {
   DEFAULT_TICKET_RAIL_MODE,
   TICKET_RAIL_MODES,
+  TICKET_RAIL_MODE_LABELS,
   type TicketRailChrome,
   availableRailModes,
   isTicketRailMode,
@@ -14,9 +15,9 @@ import {
 } from "./ticket-rail-model";
 
 describe("selectRailMode (decision #46)", () => {
-  it("changes the rail mode without opening, closing, or replacing the active main-view tab", () => {
+  it("changes the rail page without opening, closing, or replacing the active main-view tab", () => {
     const before: TicketRailChrome = {
-      mode: "sessions",
+      mode: "now",
       activeTabId: TICKET_BODY_TAB_ID,
     };
 
@@ -28,21 +29,25 @@ describe("selectRailMode (decision #46)", () => {
 
     // Starting from a non-body tab must also leave that tab alone.
     const onSession: TicketRailChrome = {
-      mode: "properties",
+      mode: "now",
       activeTabId: "session-abc",
     };
     expect(selectRailMode(onSession, "files").activeTabId).toBe("session-abc");
     expect(selectRailMode(onSession, "changes").activeTabId).toBe("session-abc");
   });
 
-  it("offers every mode in strip order", () => {
-    expect(availableRailModes()).toEqual([...TICKET_RAIL_MODES]);
+  it("offers exactly the three Calm Stack pages, in tab order", () => {
+    expect(availableRailModes()).toEqual(["now", "changes", "files"]);
     expect(resolveRailMode({ mode: "changes", activeTabId: TICKET_BODY_TAB_ID })).toBe("changes");
+  });
+
+  it("labels the pages the way the tab pill reads them", () => {
+    expect(TICKET_RAIL_MODE_LABELS).toEqual({ now: "Now", changes: "Diffs", files: "Files" });
   });
 });
 
 describe("selectRailDestination", () => {
-  it("retargets the tab and leaves the mode alone", () => {
+  it("retargets the tab and leaves the page alone", () => {
     const chrome: TicketRailChrome = {
       mode: "changes",
       activeTabId: TICKET_BODY_TAB_ID,
@@ -54,27 +59,56 @@ describe("selectRailDestination", () => {
 });
 
 describe("isTicketRailMode", () => {
-  it("accepts every declared mode and nothing else", () => {
+  it("accepts every declared page and nothing else", () => {
     for (const mode of TICKET_RAIL_MODES) expect(isTicketRailMode(mode)).toBe(true);
     expect(isTicketRailMode("bogus")).toBe(false);
     expect(isTicketRailMode(null)).toBe(false);
+    // The retired pages are readable but are not pages any more.
+    expect(isTicketRailMode("sessions")).toBe(false);
+    expect(isTicketRailMode("properties")).toBe(false);
+    expect(isTicketRailMode("session")).toBe(false);
   });
 });
 
 describe("resolvePersistedRailMode", () => {
-  it("prefers an explicit railMode, else migrates detailsExpanded:true to properties", () => {
+  it("prefers a page this build still offers", () => {
+    expect(resolvePersistedRailMode({ railMode: "now" })).toBe("now");
+    expect(resolvePersistedRailMode({ railMode: "changes" })).toBe("changes");
     expect(resolvePersistedRailMode({ railMode: "files" })).toBe("files");
-    // The removed Session navigator must not strand existing installs on an
-    // unavailable surface, even if a legacy drawer value is also present.
-    expect(resolvePersistedRailMode({ railMode: "session" })).toBe(DEFAULT_TICKET_RAIL_MODE);
-    expect(resolvePersistedRailMode({ railMode: "session", detailsExpanded: true })).toBe(
-      DEFAULT_TICKET_RAIL_MODE,
-    );
-    expect(resolvePersistedRailMode({ railMode: "bogus", detailsExpanded: true })).toBe(
-      "properties",
-    );
-    expect(resolvePersistedRailMode({ detailsExpanded: true })).toBe("properties");
+    // A live page wins over a legacy key that would say otherwise.
+    expect(resolvePersistedRailMode({ railMode: "files", detailsExpanded: true })).toBe("files");
+  });
+
+  // Every string a shipped build could have written, and where its user lands.
+  // A retired page that stops resolving does not error — it strands whoever
+  // persisted it, silently, on the next launch.
+  it.each([
+    // The session list is the tail of the Now page.
+    ["sessions", "now"],
+    // The Details drawer's successor folded inline into Now.
+    ["properties", "now"],
+    // A contextual rail surface, removed rather than repurposed.
+    ["session", "now"],
+  ] as const)("lands the retired %s page on %s", (stored, expected) => {
+    expect(resolvePersistedRailMode({ railMode: stored })).toBe(expected);
+    // A retired page still wins over the legacy drawer key beside it.
+    expect(resolvePersistedRailMode({ railMode: stored, detailsExpanded: true })).toBe(expected);
+  });
+
+  it("migrates the pre-icon-rail Details drawer onto the page that absorbed it", () => {
+    expect(resolvePersistedRailMode({ detailsExpanded: true })).toBe("now");
+    expect(resolvePersistedRailMode({ railMode: "bogus", detailsExpanded: true })).toBe("now");
     expect(resolvePersistedRailMode({ detailsExpanded: false })).toBe(DEFAULT_TICKET_RAIL_MODE);
+  });
+
+  it("defaults when nothing usable is persisted", () => {
+    expect(DEFAULT_TICKET_RAIL_MODE).toBe("now");
     expect(resolvePersistedRailMode({})).toBe(DEFAULT_TICKET_RAIL_MODE);
+    expect(resolvePersistedRailMode({ railMode: "bogus" })).toBe(DEFAULT_TICKET_RAIL_MODE);
+    expect(resolvePersistedRailMode({ railMode: 7 })).toBe(DEFAULT_TICKET_RAIL_MODE);
+    expect(resolvePersistedRailMode({ railMode: null })).toBe(DEFAULT_TICKET_RAIL_MODE);
+    // `toString` resolves on a bare object literal — a prototype-chain hit must
+    // not be mistaken for a retired page.
+    expect(resolvePersistedRailMode({ railMode: "toString" })).toBe(DEFAULT_TICKET_RAIL_MODE);
   });
 });

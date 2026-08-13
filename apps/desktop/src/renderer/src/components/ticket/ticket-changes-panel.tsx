@@ -1,13 +1,44 @@
 /**
- * Changes navigator — compact flat Change Set list (decision #53).
+ * Diffs navigator — the Calm Stack's changes page
+ * (lab/scratches/ticket-right-sidebar.tsx `ChangesPanel`).
+ *
+ * A titled header over a flat list (decision #53 — never a tree). The header
+ * carries the page's name, the file count, refresh, a filter toggle and the
+ * branch's running total; each row carries a coloured status glyph, the
+ * filename over its muted parent, and the two line counts in a fixed column so
+ * the numbers line up down the list.
  *
  * Selecting a row asks the host to open/focus a Monaco diff tab via
  * `onOpenDiff` (`openTicketDiff`, CONCEPT #48/#51). Refresh handlers never
  * open, close, or focus a tab. Files navigator uses preview/pin (decision #56).
  */
 import * as React from "react";
-import { errorMessage, type ChangeSetFile, type Ticket } from "@volli/shared";
+import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
+import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
+import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
+import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
+import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
+import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
+import { MinusIcon } from "@phosphor-icons/react/dist/csr/Minus";
+import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import {
+  changeSetToDiffStat,
+  errorMessage,
+  type ChangeSetFile,
+  type ChangeSetFileStatus,
+  type DiffStat,
+  type Ticket,
+} from "@volli/shared";
 
+import {
+  DiffTotals,
+  RAIL_PANEL_INSET,
+  RAIL_PANEL_MARGIN,
+  RailFaultBanner,
+  RailPanelSkeleton,
+  RailRowActions,
+} from "@renderer/components/ticket/rail-panel-parts";
 import {
   applyChangeSetRefresh,
   presentChangeRowWithRecency,
@@ -17,8 +48,126 @@ import {
 } from "@renderer/components/ticket/ticket-changes-model";
 import type { ChangeRecencyState } from "@renderer/components/ticket/ticket-change-recency";
 import { subscribeWorktreeChanges } from "@renderer/components/ticket/worktree-change-watch";
+import { Button } from "@renderer/components/ui/button";
+import { Input } from "@renderer/components/ui/input";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
 import { toastError } from "@renderer/lib/toast";
+
+/**
+ * A row plus the two count halves the design colours separately. The shared
+ * presentation model pre-joins them into one `countsLabel` string, which is the
+ * right shape for a single muted trailing span but the wrong one here: green
+ * insertions and red deletions are two marks, and a string cannot be two
+ * colours.
+ */
+export interface ChangeListRow extends ChangeRowPresentation {
+  /** The raw status, which picks the row's glyph — `statusLabel` is its word. */
+  statusKind: ChangeSetFileStatus;
+  insertions: number | null;
+  deletions: number | null;
+  binary: boolean;
+}
+
+/** Compose a list row from a Change Set file and the ticket's recency state. */
+export function toChangeListRow(file: ChangeSetFile, recency: ChangeRecencyState): ChangeListRow {
+  return {
+    ...presentChangeRowWithRecency(file, recency),
+    statusKind: file.status,
+    insertions: file.insertions,
+    deletions: file.deletions,
+    binary: file.binary,
+  };
+}
+
+/**
+ * The glyph and ink each status wears. The scratch names three — modified,
+ * added, renamed — and the Change Set has three more it never had to draw:
+ * `deleted` takes the removal mark in the deletions' own red, `untracked`
+ * shares `added`'s green because both are "this file is new" (the status word
+ * beside it is what separates staged from not), and `conflicted` is the one
+ * failure among them, so it takes the warning glyph and the destructive ink.
+ *
+ * `bold`, not `fill`: at 16px a status mark sits beside an 11px label, which is
+ * the size tier where regular draws lighter than its own text (CLAUDE.md).
+ * Filling them would make five different drawings rather than one heavier set.
+ */
+const CHANGE_STATUS: Record<
+  ChangeSetFileStatus,
+  { icon: PhosphorIcon; iconClass: string; labelClass: string }
+> = {
+  modified: {
+    icon: GitDiffIcon,
+    iconClass: "text-amber-600 dark:text-amber-400",
+    labelClass: "text-amber-900 dark:text-amber-400",
+  },
+  added: {
+    icon: PlusIcon,
+    iconClass: "text-emerald-600 dark:text-emerald-400",
+    labelClass: "text-emerald-900 dark:text-emerald-400",
+  },
+  untracked: {
+    icon: PlusIcon,
+    iconClass: "text-emerald-600 dark:text-emerald-400",
+    labelClass: "text-emerald-900 dark:text-emerald-400",
+  },
+  renamed: {
+    icon: ArrowRightIcon,
+    iconClass: "text-sky-600 dark:text-sky-400",
+    labelClass: "text-sky-900 dark:text-sky-400",
+  },
+  deleted: {
+    icon: MinusIcon,
+    iconClass: "text-red-600 dark:text-red-400",
+    labelClass: "text-red-900 dark:text-red-400",
+  },
+  conflicted: {
+    icon: WarningIcon,
+    iconClass: "text-destructive",
+    labelClass: "text-destructive",
+  },
+};
+
+/** The page's name and its count — the one line both the empty and full list wear. */
+function ChangesTitle({ count }: { count: number }) {
+  return (
+    <>
+      <p className="text-ui font-medium">Diffs</p>
+      <span className="rounded-full bg-sidebar-accent px-1.5 font-mono text-label text-muted-foreground">
+        {count}
+      </span>
+    </>
+  );
+}
+
+function HeaderAction({
+  label,
+  icon: Icon,
+  pressed,
+  onClick,
+}: {
+  label: string;
+  icon: PhosphorIcon;
+  pressed?: boolean;
+  onClick(): void;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          aria-label={label}
+          aria-pressed={pressed}
+          onClick={onClick}
+        >
+          <Icon />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">{label}</TooltipContent>
+    </Tooltip>
+  );
+}
 
 /** Presentational flat list — unit-tested via renderToStaticMarkup. */
 export function TicketChangesList({
@@ -28,7 +177,7 @@ export function TicketChangesList({
   error,
   hiddenCount = 0,
 }: {
-  rows: readonly ChangeRowPresentation[];
+  rows: readonly ChangeListRow[];
   focusPath: string | null;
   onSelectRow(path: string): void;
   error?: string | null;
@@ -39,7 +188,7 @@ export function TicketChangesList({
     return (
       <div
         data-testid="ticket-changes-error"
-        className="flex min-h-0 flex-1 flex-col px-4 py-5"
+        className={cn("flex min-h-0 flex-1 flex-col py-5", RAIL_PANEL_INSET)}
         role="alert"
       >
         <p className="text-ui text-destructive">{error}</p>
@@ -48,12 +197,22 @@ export function TicketChangesList({
   }
 
   if (rows.length === 0) {
+    // A framed note rather than a centred sentence in an empty column: "nothing
+    // changed" is a state the branch is IN, and a card says that the way the
+    // repository card above says everything else about the worktree.
     return (
       <div
         data-testid="ticket-changes-empty"
-        className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-4 py-8 text-center"
+        className={cn(
+          "flex items-start gap-2.5 rounded-lg border border-sidebar-border/70 bg-background/35 p-3",
+          RAIL_PANEL_MARGIN,
+        )}
       >
-        <p className="text-ui font-medium text-muted-foreground">No changes vs base</p>
+        <CheckCircleIcon className="mt-0.5 size-4 shrink-0 text-emerald-500" weight="fill" />
+        <div>
+          <p className="text-ui font-medium">No changes vs base</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">The branch is up to date.</p>
+        </div>
       </div>
     );
   }
@@ -61,53 +220,85 @@ export function TicketChangesList({
   return (
     <ul
       data-testid="ticket-changes-list"
-      className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-2"
+      className="min-h-0 flex-1 overflow-y-auto px-2 pb-8 [scroll-padding-bottom:2rem]"
       role="listbox"
       aria-label="Change Set"
     >
       {rows.map((row) => {
         const focused = focusPath === row.path;
+        const status = CHANGE_STATUS[row.statusKind];
+        const StatusIcon = status.icon;
         return (
           <li key={row.path} role="option" aria-selected={focused}>
-            <button
-              type="button"
-              data-testid={`ticket-changes-row`}
-              data-path={row.path}
-              data-focused={focused ? "true" : undefined}
-              onClick={() => onSelectRow(row.path)}
+            <div
               className={cn(
-                "flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors",
-                "hover:bg-accent",
-                focused && "bg-accent",
+                "group relative w-full rounded-lg text-left",
+                focused ? "bg-sidebar-accent/80" : "hover:bg-sidebar-accent/55",
               )}
             >
-              <span className="flex min-w-0 items-baseline justify-between gap-2">
-                <span className="truncate text-ui font-medium text-foreground">{row.filename}</span>
-                <span className="flex shrink-0 items-baseline gap-1.5 text-xs text-muted-foreground">
-                  {row.updatedLabel !== undefined && row.updatedDescription !== undefined ? (
+              <button
+                type="button"
+                data-testid="ticket-changes-row"
+                data-path={row.path}
+                data-focused={focused ? "true" : undefined}
+                aria-label={`${row.statusLabel}: ${row.path}`}
+                onClick={() => onSelectRow(row.path)}
+                className="grid min-h-[52px] w-full grid-cols-[16px_minmax(0,1fr)_72px] items-center gap-x-2 px-2.5 py-[7px] text-left outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/50"
+              >
+                <StatusIcon className={cn("size-4 shrink-0", status.iconClass)} weight="bold" />
+                <span className="min-w-0">
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="truncate text-ui font-medium">{row.filename}</span>
+                    {row.updatedLabel !== undefined && row.updatedDescription !== undefined ? (
+                      <span
+                        data-testid="ticket-changes-updated"
+                        aria-label={row.updatedDescription}
+                        className="shrink-0 text-label font-medium text-primary-text"
+                      >
+                        {row.updatedLabel}
+                      </span>
+                    ) : null}
+                    {/* The status word yields to the row's hover actions —
+                        they occupy the same strip, and the glyph on the left
+                        has already said which kind of change this is. */}
                     <span
-                      data-testid="ticket-changes-updated"
-                      aria-label={row.updatedDescription}
-                      className="font-medium text-primary-text"
+                      className={cn(
+                        "shrink-0 text-label font-medium transition-opacity duration-100 group-focus-within:opacity-0 group-hover:opacity-0 motion-reduce:transition-none",
+                        "group-data-[narrow=true]/rail:sr-only",
+                        status.labelClass,
+                      )}
                     >
-                      {row.updatedLabel}
+                      {row.statusLabel}
                     </span>
-                  ) : null}
-                  <span>{row.statusLabel}</span>
-                  {row.countsLabel !== null ? (
-                    <span className="font-mono tabular-nums">{row.countsLabel}</span>
-                  ) : null}
+                  </span>
+                  <span className="block truncate text-xs text-muted-foreground/75">
+                    {row.renameFrom !== null ? `← ${row.renameFrom}` : row.parentPath}
+                  </span>
                 </span>
-              </span>
-              {row.parentPath !== "" ? (
-                <span className="truncate text-xs text-muted-foreground/80">{row.parentPath}</span>
-              ) : null}
-              {row.renameFrom !== null ? (
-                <span className="truncate text-xs text-muted-foreground/70">
-                  ← {row.renameFrom}
+                <span className="flex w-[72px] shrink-0 justify-end gap-1 font-mono text-xs tabular-nums">
+                  {row.binary ? (
+                    <span className="text-muted-foreground">Binary</span>
+                  ) : row.insertions === null || row.deletions === null ? null : (
+                    <>
+                      <span className="font-medium text-emerald-900 dark:text-emerald-400">
+                        +{row.insertions}
+                      </span>
+                      <span className="font-medium text-red-900 dark:text-red-400">
+                        −{row.deletions}
+                      </span>
+                    </>
+                  )}
                 </span>
-              ) : null}
-            </button>
+              </button>
+              {/* Overlaid rather than a fourth grid column: the actions only
+                  exist on hover, and a column reserved for them would indent
+                  every row's counts for the one row a pointer is over. */}
+              <RailRowActions
+                path={row.path}
+                onOpen={onSelectRow}
+                className="absolute top-[5px] right-20 z-10 rounded-md bg-sidebar-accent/95 px-0.5 shadow-xs"
+              />
+            </div>
           </li>
         );
       })}
@@ -115,38 +306,13 @@ export function TicketChangesList({
         <li
           data-testid="ticket-changes-truncated"
           data-hidden-count={hiddenCount}
-          className="px-2 py-1.5 text-xs text-muted-foreground/80"
+          className="px-2.5 py-1.5 text-xs text-muted-foreground/80"
           role="presentation"
         >
           {hiddenCount.toLocaleString()} more {hiddenCount === 1 ? "file" : "files"} not shown
         </li>
       ) : null}
     </ul>
-  );
-}
-
-/**
- * The watch is dead — the list below is a frozen snapshot, not a live one. An
- * inline banner rather than a replacement: the rows shown are still accurate as
- * of the last refresh, so hiding them would lose real information. Retry
- * re-subscribes and re-reads.
- */
-function ChangesWatchErrorBanner({ error, onRetry }: { error: string; onRetry(): void }) {
-  return (
-    <div
-      data-testid="ticket-changes-watch-error"
-      role="alert"
-      className="flex shrink-0 items-baseline justify-between gap-2 border-b border-destructive/30 bg-destructive/5 px-3 py-2"
-    >
-      <span className="min-w-0 text-xs text-destructive">Changes stopped updating: {error}</span>
-      <button
-        type="button"
-        onClick={onRetry}
-        className="shrink-0 text-xs text-primary-text hover:underline"
-      >
-        Retry
-      </button>
-    </div>
   );
 }
 
@@ -182,11 +348,14 @@ export function TicketChangesPanel({
     listFocusPath: null,
     hiddenCount: 0,
   }));
+  const [diff, setDiff] = React.useState<DiffStat | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [loaded, setLoaded] = React.useState(false);
   const [watchError, setWatchError] = React.useState<string | null>(null);
   // Bumped by Retry to re-run the watch effect after a fault tore it down.
   const [watchAttempt, setWatchAttempt] = React.useState(0);
+  const [filtering, setFiltering] = React.useState(false);
+  const [query, setQuery] = React.useState("");
 
   // Mirror the host's active tab into navigator state for the refresh contract
   // without ever letting a refresh write it back.
@@ -215,6 +384,7 @@ export function TicketChangesPanel({
       if (ticket.worktreePath === null) {
         setError(null);
         setNav((prev) => ({ ...prev, revision: null, files: [] }));
+        setDiff(null);
         setLoaded(true);
         return;
       }
@@ -232,6 +402,7 @@ export function TicketChangesPanel({
         }
         setError(null);
         setNav((prev) => applyChangeSetRefresh(prev, result.changeSet));
+        setDiff(changeSetToDiffStat(result.changeSet));
       } catch (err) {
         const message = errorMessage(err);
         setError(message);
@@ -290,14 +461,7 @@ export function TicketChangesPanel({
   );
 
   if (!loaded && ticket.worktreePath !== null) {
-    return (
-      <div
-        data-testid="ticket-changes-loading"
-        className="flex min-h-0 flex-1 items-center justify-center px-4 py-8"
-      >
-        <p className="text-ui text-muted-foreground">Loading changes…</p>
-      </div>
-    );
+    return <RailPanelSkeleton label="changes" testId="ticket-changes-loading" />;
   }
 
   if (ticket.worktreePath === null) {
@@ -312,12 +476,59 @@ export function TicketChangesPanel({
     );
   }
 
-  const rows = nav.files.map((file) => presentChangeRowWithRecency(file, recency));
+  const needle = query.trim().toLowerCase();
+  const visible =
+    needle === ""
+      ? nav.files
+      : nav.files.filter((file) => file.path.toLowerCase().includes(needle));
+  const rows = visible.map((file) => toChangeListRow(file, recency));
+  const total = nav.files.length + nav.hiddenCount;
+
   return (
     <div data-testid="ticket-changes-panel" className="flex min-h-0 flex-1 flex-col">
-      {watchError !== null ? (
-        <ChangesWatchErrorBanner error={watchError} onRetry={retryWatch} />
-      ) : null}
+      <header className={cn("flex shrink-0 flex-col gap-2 pt-1 pb-3", RAIL_PANEL_INSET)}>
+        {/* Nothing to refine or total up on a clean branch, so the header
+            keeps only its name and its zero — the controls would be three
+            no-ops over an empty list. */}
+        <div className="flex min-h-7 items-center gap-1">
+          <ChangesTitle count={total} />
+          {total === 0 ? null : (
+            <>
+              <HeaderAction
+                label="Refresh changes"
+                icon={ArrowClockwiseIcon}
+                onClick={() => void loadChangeSet(true)}
+              />
+              <HeaderAction
+                label="Filter changed files"
+                icon={MagnifyingGlassIcon}
+                pressed={filtering}
+                onClick={() =>
+                  setFiltering((open) => {
+                    // Closing the field must also clear it, or the list stays
+                    // filtered by a query with nothing on screen explaining it.
+                    if (open) setQuery("");
+                    return !open;
+                  })
+                }
+              />
+              <span className="min-w-1 flex-1" />
+              {diff === null ? null : <DiffTotals diff={diff} />}
+            </>
+          )}
+        </div>
+        {filtering ? (
+          <Input
+            autoFocus
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            aria-label="Filter changed files"
+            placeholder="Filter changed files…"
+            className="h-7 text-ui"
+          />
+        ) : null}
+      </header>
+      {watchError !== null ? <RailFaultBanner error={watchError} onRetry={retryWatch} /> : null}
       <TicketChangesList
         rows={rows}
         focusPath={nav.listFocusPath}
