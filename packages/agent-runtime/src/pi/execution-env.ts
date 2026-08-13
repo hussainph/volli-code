@@ -107,11 +107,11 @@ function unsandboxedEnvironment(source: NodeJS.ProcessEnv): Record<string, strin
  * commands find it first, not that they find it at all.
  */
 function prefixedPath(path: string, pathPrefixes: readonly string[]): string {
-  const entries = path.length === 0 ? [] : path.split(":");
-  let result = entries;
-  for (const prefix of [...pathPrefixes].reverse()) {
-    if (prefix.length === 0 || result[0] === prefix) continue;
-    result = [prefix, ...result];
+  const result = path.length === 0 ? [] : path.split(":");
+  for (let i = pathPrefixes.length - 1; i >= 0; i -= 1) {
+    const prefix = pathPrefixes[i];
+    if (prefix === undefined || prefix.length === 0 || result[0] === prefix) continue;
+    result.unshift(prefix);
   }
   return result.join(":");
 }
