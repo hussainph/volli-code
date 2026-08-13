@@ -387,6 +387,38 @@ describe("Pi native adapter attach", () => {
     expect(seen).toEqual([{ sessionDataDir: "/data/pi-sessions", models }]);
   });
 
+  it("passes the injected execution environment factory to the runtime factory", async () => {
+    const seen: unknown[] = [];
+    const executionEnvFactory: NonNullable<PiAdapterOptions["executionEnvFactory"]> = async () => {
+      throw new Error("never called by this test");
+    };
+    createPiNativeAdapter({
+      sessionDataDir: "/data/pi-sessions",
+      resolveRuntimeContext: async () => context,
+      executionEnvFactory,
+      createRuntime: (options) => {
+        seen.push(options.executionEnvFactory);
+        return new FakeRuntime();
+      },
+    });
+
+    expect(seen).toEqual([executionEnvFactory]);
+  });
+
+  it("leaves the runtime factory's own default execution environment untouched when none is injected", async () => {
+    const seen: unknown[] = [];
+    createPiNativeAdapter({
+      sessionDataDir: "/data/pi-sessions",
+      resolveRuntimeContext: async () => context,
+      createRuntime: (options) => {
+        seen.push(options.executionEnvFactory);
+        return new FakeRuntime();
+      },
+    });
+
+    expect(seen).toEqual([undefined]);
+  });
+
   it("starts a ticketless project Session in the project root under the project Role", async () => {
     const { runtime } = await attached(
       {
