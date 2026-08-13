@@ -288,6 +288,7 @@ export interface SessionRuntime {
   subscribe(
     input: { sessionId: string; afterSequence: number },
     listener: (emission: SessionStreamEmission) => void | Promise<void>,
+    onFailure?: (error: unknown) => void,
   ): Promise<() => void>;
   cancelInteraction(request: CancelInteractionRequest): Promise<void>;
   reconcile(input: { sessionId: string; attachmentId: string }): Promise<void>;
@@ -356,6 +357,15 @@ interface Subscriber {
   cursor: number;
   events: Map<number, SessionEvent>;
   listener: (emission: SessionStreamEmission) => void | Promise<void>;
+  /**
+   * Told when this subscription dies mid-stream, so the transport above it can
+   * end loudly. Without it a drain failure removed the subscriber and nothing
+   * else: the rpc queue it fed stayed open, the renderer kept a healthy-looking
+   * stream that would never speak again, and the Session held its Stop button
+   * forever. The failure must reach the consumer, whose reconnect then heals
+   * from the ledger.
+   */
+  onFailure?: (error: unknown) => void;
   draining: Promise<void>;
   active: boolean;
 }
@@ -1518,6 +1528,7 @@ class DefaultSessionRuntime implements SessionRuntime {
   async subscribe(
     input: { sessionId: string; afterSequence: number },
     listener: (emission: SessionStreamEmission) => void | Promise<void>,
+    onFailure?: (error: unknown) => void,
   ): Promise<() => void> {
     this.#assertOpen();
     if (!Number.isInteger(input.afterSequence) || input.afterSequence < 0) {
@@ -1528,6 +1539,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       cursor: input.afterSequence,
       events: new Map(),
       listener,
+      ...(onFailure ? { onFailure } : {}),
       draining: Promise.resolve(),
       active: true,
     };
@@ -2249,7 +2261,18 @@ class DefaultSessionRuntime implements SessionRuntime {
         while (subscriber.active) {
           const event =
             subscriber.events.get(subscriber.cursor + 1) ?? (await this.#nextAfterGap(subscriber));
-          if (!event) break;
+          if (!event) {
+            /* v8 ignore next 7 -- per-Session MAX(sequence)+1 contiguity says the
+               ledger always closes a hole; if that bet is ever lost, fail the
+               subscription loudly so the consumer's reconnect heals from the
+               ledger instead of holding a Stop button forever. */
+            if (subscriber.events.size > 0) {
+              throw new Error(
+                `Session stream hole at sequence ${subscriber.cursor + 1} the ledger could not close`,
+              );
+            }
+            break;
+          }
           subscriber.events.delete(event.sequence);
           const frame = await this.#frame(event);
           if (!subscriber.active) break;
@@ -2385,7 +2408,14 @@ class DefaultSessionRuntime implements SessionRuntime {
     try {
       await this.ports.onSubscriberFailure?.(error);
     } finally {
-      this.#removeSubscriber(subscriber);
+      try {
+        // The subscription itself is told, not just the host: removal alone
+        // left the transport's queue open and silent, which downstream read as
+        // a healthy stream that simply had nothing to say.
+        subscriber.onFailure?.(error);
+      } finally {
+        this.#removeSubscriber(subscriber);
+      }
     }
   }
 
