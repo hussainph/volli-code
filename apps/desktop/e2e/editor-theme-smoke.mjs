@@ -11,6 +11,10 @@
  *      `window.api.theme` and survives returning to Files.
  *   4. After committing Nord, Monaco's background matches Nord's
  *      editor.background — proof setTheme applied a catalog id.
+ *   5. Source Mode and Document Mode part ways under that same committed
+ *      catalog theme: a ticket body paints NO catalog background and takes its
+ *      ink from `--foreground` (document-mode.css), which is the split nothing
+ *      but a real window can see.
  *
  * MANUALLY RUN (needs a display + the built app); not wired into CI:
  *
@@ -24,7 +28,9 @@ import { promisify } from "node:util";
 
 import {
   assertProfileIsolated,
+  cardById,
   createRunner,
+  goToBoard,
   launch,
   makeGitRepo,
   makeScratch,
@@ -52,6 +58,15 @@ const PROJECT_NAME = "Editor Theme Project";
 const TICKET_PREFIX = "ET";
 const APP_TS = "src/app.ts";
 const APP_TS_CONTENT = 'export const app = "theme probe";\n';
+/**
+ * The Document Mode surface is reached through a ticket body, not through a
+ * markdown file in the workbench: repository markdown takes the explicit-⌘S
+ * Source Mode contract, and only a Markdown Artifact autosaves (`fileSavePolicy`).
+ * The ticket body is also the surface the theming bug was reported against.
+ */
+const TICKET_TITLE = "Document surface probe";
+const TICKET_BODY = "Prose on the page.";
+const DISPLAY_ID = `${TICKET_PREFIX}-1`;
 
 const { userDataDir, dbPath, scratch, cleanup } = await makeScratch("volli-editor-theme-smoke-");
 const { check, attempt, summarize } = createRunner();
@@ -173,6 +188,38 @@ async function waitForMonacoBackground(page, expectedHex) {
   return css === null ? null : cssColorToHex(css);
 }
 
+/** Does a computed `background-color` actually fill anything? */
+function isFilled(css) {
+  return css !== null && css !== "rgba(0, 0, 0, 0)" && css !== "transparent";
+}
+
+/**
+ * What the Document Mode surface actually paints.
+ *
+ * The editor's own background is expected to fill NOTHING — Document Mode
+ * aliases `--vscode-editor-background` to `transparent` so the hosting column
+ * shows through — so the raw strings come back and the caller judges them: a
+ * bare truthiness read cannot tell "correctly transparent" from "no editor".
+ * Both layers Monaco could fill are reported, plus the rendered ink and the app
+ * token it must equal.
+ */
+async function readDocumentSurface(page) {
+  return page.evaluate(() => {
+    const editor = document.querySelector(".volli-document-mode .monaco-editor");
+    if (editor === null) return null;
+    const lines = editor.querySelector(".monaco-editor-background");
+    const glyph = editor.querySelector(".view-line span") ?? editor.querySelector(".view-line");
+    return {
+      editorBackground: getComputedStyle(editor).backgroundColor,
+      linesBackground: lines === null ? null : getComputedStyle(lines).backgroundColor,
+      ink: glyph === null ? null : getComputedStyle(glyph).color,
+      foregroundToken: getComputedStyle(document.documentElement)
+        .getPropertyValue("--foreground")
+        .trim(),
+    };
+  });
+}
+
 async function openSeededFile(page) {
   await goToNav(page, "Files", filesSettled(page));
   await waitUntil(
@@ -184,6 +231,23 @@ async function openSeededFile(page) {
   await expandDir(page, "src", APP_TS);
   await treeFile(page, APP_TS).click();
   return waitForMonacoReady(page, "theme probe");
+}
+
+/** Open the seeded ticket's detail; its Doc tab body is an always-mounted Document Mode editor. */
+async function openTicketDocument(page) {
+  await goToBoard(page);
+  for (let attemptN = 0; attemptN < 3; attemptN += 1) {
+    await cardById(page, DISPLAY_ID).dblclick();
+    const opened = await waitUntil(
+      "ticket body editor to mount",
+      async () => (await readDocumentSurface(page))?.ink ?? null,
+      { timeout: 8000 },
+    )
+      .then(() => true)
+      .catch(() => false);
+    if (opened) return;
+  }
+  throw new Error("ticket detail never mounted a Document Mode editor");
 }
 
 console.log("scratch:", scratch, "\n");
@@ -205,6 +269,36 @@ try {
   await seedProjects(page, [
     { id: PROJECT_SEED_ID, name: PROJECT_NAME, path: projectDir, prefix: TICKET_PREFIX },
   ]);
+
+  // One ticket, seeded up front so the Document Mode surface (check 6) is a
+  // board double-click away. Reload afterwards: the board store hydrates from
+  // SQLite at boot and would not otherwise know about a ticket created here.
+  const seeded = await page.evaluate(
+    async ({ title, body }) => {
+      const boot = await window.api.data.bootstrap();
+      if (!boot.ok) return { ok: false, error: `bootstrap: ${boot.error}` };
+      const project = boot.data.projects[0];
+      if (!project) return { ok: false, error: "no project after seeding" };
+      const created = await window.api.tickets.create({
+        projectId: project.id,
+        status: "todo",
+        title,
+        body,
+        priority: "medium",
+      });
+      return created.ok
+        ? { ok: true, ticketId: created.ticket.id }
+        : { ok: false, error: `create: ${created.error}` };
+    },
+    { title: TICKET_TITLE, body: TICKET_BODY },
+  );
+  if (!seeded.ok) throw new Error(`ticket seed failed: ${seeded.error}`);
+  await page.reload();
+  await page.waitForLoadState("domcontentloaded");
+  await waitUntil(
+    "seeded card to render",
+    async () => (await cardById(page, DISPLAY_ID).count()) === 1,
+  );
 
   await attempt(1, "project file opens a real Monaco editor (ready, no fallback)", async () => {
     const monaco = await openSeededFile(page);
@@ -274,6 +368,22 @@ try {
     return {
       ok: probe.editorThemeId === "nord" && probe.mentionsVolliDark === false,
       detail: JSON.stringify(probe),
+    };
+  });
+
+  await attempt(6, "a ticket body ignores the catalog theme and wears app tokens", async () => {
+    // Still on the committed Nord, deliberately: passing here under the SHIPPED
+    // default would only prove that the two happened to agree.
+    await openTicketDocument(page);
+    const surface = await readDocumentSurface(page);
+    if (surface === null) return { ok: false, detail: "no Document Mode editor mounted" };
+    const ink = cssColorToHex(surface.ink ?? "");
+    return {
+      ok:
+        !isFilled(surface.editorBackground) &&
+        !isFilled(surface.linesBackground) &&
+        ink === cssColorToHex(surface.foregroundToken),
+      detail: `${JSON.stringify(surface)} ink=${ink}`,
     };
   });
 } catch (error) {
