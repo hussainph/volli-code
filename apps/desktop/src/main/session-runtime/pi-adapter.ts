@@ -67,8 +67,6 @@ import { NativeAttachmentError } from "@volli/session-engine";
 import {
   askChoice,
   askOffer,
-  BUILTIN_RULE_PACK_HASH,
-  BUILTIN_RULE_PACK_ID,
   errorMessage,
   type AgentRuntime,
   type DeliveryOutcome,
@@ -128,7 +126,7 @@ const PI_RUNTIME_IDENTITY: NativeRuntimeIdentity = {
   fingerprint: `npm:${PI_RUNTIME_PACKAGE}@${PI_RUNTIME_VERSION}`,
 };
 
-/** The explicitly contained coding tools this slice loads. */
+/** The coding tools this slice loads — with no gate and no sandbox, the only bound. */
 const PI_TOOLS = { tools: ["read", "edit", "write", "execute"] } as const;
 
 /** Everything about a Session that a directory cannot tell the runtime. */
@@ -153,6 +151,10 @@ interface PiRuntimeContextFields {
    * that never took a worktree is bound to the project's Main checkout by
    * `location.ts`, and policy that assumed otherwise would treat a person's
    * uncommitted work as a disposable branch.
+   *
+   * Resolved but unread while Pi runs ungated — it exists only to key policy,
+   * and no Authority Snapshot is built. Kept resolved because the resolver is
+   * the correct answer to a question the re-architecture still asks.
    */
   location: WorkLocationKind;
 }
@@ -416,18 +418,11 @@ class PiBinding implements BindingHandle {
       workspacePath: this.#spec.directory,
       venue: "local",
       model: this.#context.model,
-      // The pack is pinned by identity, not by value: a Settings edit must not
-      // change what a running Session may do, while the facts its rules read
-      // stay live.
-      authority: {
-        mode: "auto",
-        location: context.location,
-        tools: [...PI_TOOLS.tools],
-        rulePackId: BUILTIN_RULE_PACK_ID,
-        rulePackHash: BUILTIN_RULE_PACK_HASH,
-        classifierModel: null,
-        fallback: { consecutiveDenials: 3, sessionDenials: 20 },
-      },
+      // No `authority`: Volli runs Pi ungated, so the runtime installs no gate
+      // and the rule pack never runs. The Snapshot is omitted rather than
+      // neutered — see docs/plans/authority-two-axis-rearchitecture.md, which
+      // replaces the policy this adapter used to pin and keeps the mechanism,
+      // including the `ask` port still wired below.
       brief: { text: this.#context.brief },
       tools: { tools: [...PI_TOOLS.tools] },
       ...(this.#recovery === undefined ? {} : { recovery: this.#recovery }),

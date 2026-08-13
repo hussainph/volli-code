@@ -1,9 +1,13 @@
 /**
  * Product tool names to Pi core's context-injected file tools.
  *
- * Volli names the contained file tools this slice is willing to load; Pi's
- * spellings stay behind this map so nothing above the runtime dispatches on
- * them.
+ * Volli names the file tools this slice is willing to load; Pi's spellings stay
+ * behind this map so nothing above the runtime dispatches on them.
+ *
+ * The bundle is the only limit here. Every tool is bound to the same
+ * environment the runtime resolved, which today is Pi's own and reaches the
+ * whole machine — so what a Session cannot do is what it was never handed, not
+ * what something downstream would refuse.
  */
 
 import {
@@ -13,15 +17,15 @@ import {
   createWriteTool,
   type AgentHarnessTool,
   type AgentTool,
+  type ExecutionEnv,
   type ExecutionToolContext,
 } from "@earendil-works/pi-agent-core/node";
 import type { TSchema } from "@earendil-works/pi-ai";
 import type { CodingToolId, RuntimeToolBundle } from "@volli/shared";
-import type { SessionExecutionEnv } from "./scoped-execution-env";
 
 function bindContext<TParameters extends TSchema, TDetails>(
   tool: AgentHarnessTool<ExecutionToolContext, TParameters, TDetails>,
-  env: SessionExecutionEnv,
+  env: ExecutionEnv,
 ): AgentTool<TParameters, TDetails> {
   return {
     ...tool,
@@ -30,7 +34,7 @@ function bindContext<TParameters extends TSchema, TDetails>(
   };
 }
 
-function createTool(tool: CodingToolId, env: SessionExecutionEnv): AgentTool {
+function createTool(tool: CodingToolId, env: ExecutionEnv): AgentTool {
   switch (tool) {
     case "read":
       return bindContext(createReadTool(), env);
@@ -43,7 +47,7 @@ function createTool(tool: CodingToolId, env: SessionExecutionEnv): AgentTool {
   }
 }
 
-/** Explicit contained Pi tool allowlist, in the order the product declared it. */
-export function createPiTools(bundle: RuntimeToolBundle, env: SessionExecutionEnv): AgentTool[] {
+/** Explicit Pi tool allowlist, in the order the product declared it. */
+export function createPiTools(bundle: RuntimeToolBundle, env: ExecutionEnv): AgentTool[] {
   return bundle.tools.map((tool) => createTool(tool, env));
 }

@@ -28,6 +28,13 @@ below.
 
 ## Part I — Agent authority
 
+> **Superseded.** The account below of what shipped is accurate and worth
+> reading; the conclusion it draws — that a tight sandbox makes a classifier
+> unnecessary — does not survive contact with what the sandbox actually
+> enforces. `docs/plans/authority-two-axis-rearchitecture.md` replaces the
+> product decision, the "Why no classifier yet" section, the Role policy, and
+> the "Deliberately not in the first pass" list.
+
 ### Product decision
 
 Auto is the default authority mode for every Session. The user is not asked to

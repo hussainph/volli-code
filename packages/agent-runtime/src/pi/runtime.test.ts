@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { ExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
   createAssistantMessageEventStream,
   createModels,
@@ -26,11 +27,12 @@ import {
 import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
+  type AuthoritySnapshot,
   type RuntimeObservation,
   type SessionRuntimeSpec,
 } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { ScopedExecutionEnv, type SessionExecutionEnv } from "./scoped-execution-env";
+import { ScopedExecutionEnv } from "./scoped-execution-env";
 import { createPiTools } from "./tools";
 import { createPiAgentRuntime } from "./runtime";
 
@@ -180,7 +182,13 @@ function haltOnAbort(delta: string, onStreaming: () => void): ScriptStep {
 // --- fixtures --------------------------------------------------------------
 
 interface Attachment {
-  spec: SessionRuntimeSpec;
+  /**
+   * Gated on purpose. The product supplies no Snapshot, so a fixture that
+   * matched it could not exercise the gate at all; this one hands the runtime
+   * the policy an ungated Session simply does not have, and the intersection is
+   * what lets a test reach in and retune it.
+   */
+  spec: SessionRuntimeSpec & { authority: AuthoritySnapshot };
   observations: RuntimeObservation[];
   worktreePath: string;
   sessionDataDir: string;
@@ -195,6 +203,15 @@ function fixture(overrides: Partial<SessionRuntimeSpec> = {}): Attachment {
   writeFileSync(join(worktreePath, "MARKER.txt"), "volli-marker-42\n");
 
   const observations: RuntimeObservation[] = [];
+  const authority: AuthoritySnapshot = {
+    mode: "auto",
+    location: "worktree",
+    tools: [],
+    rulePackId: BUILTIN_RULE_PACK_ID,
+    rulePackHash: BUILTIN_RULE_PACK_HASH,
+    classifierModel: null,
+    fallback: { consecutiveDenials: 3, sessionDenials: 20 },
+  };
   const spec: SessionRuntimeSpec = {
     identity: {
       role: "ticket",
@@ -207,15 +224,7 @@ function fixture(overrides: Partial<SessionRuntimeSpec> = {}): Attachment {
     workspacePath: worktreePath,
     venue: "local",
     model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
-    authority: {
-      mode: "auto",
-      location: "worktree",
-      tools: [],
-      rulePackId: BUILTIN_RULE_PACK_ID,
-      rulePackHash: BUILTIN_RULE_PACK_HASH,
-      classifierModel: null,
-      fallback: { consecutiveDenials: 3, sessionDenials: 20 },
-    },
+    authority,
     brief: { text: "VC-12 — read the marker." },
     tools: { tools: ["read"] },
     observer: async (observation) => {
@@ -229,7 +238,7 @@ function fixture(overrides: Partial<SessionRuntimeSpec> = {}): Attachment {
     sessionDataDir,
     // The Snapshot names the bundle the attachment actually loads. A fixture
     // that let the two drift would describe a Session that cannot exist.
-    spec: { ...spec, authority: { ...spec.authority, tools: spec.tools.tools } },
+    spec: { ...spec, authority: { ...authority, tools: spec.tools.tools } },
   };
 }
 
@@ -633,7 +642,7 @@ describe("model access", () => {
 });
 
 describe("tool mapping", () => {
-  it("binds only the declared contained coding tools from the product bundle", async () => {
+  it("binds only the declared coding tools from the product bundle", async () => {
     const { worktreePath } = fixture();
     const env = await ScopedExecutionEnv.create(worktreePath);
 
@@ -646,154 +655,64 @@ describe("tool mapping", () => {
 });
 
 describe("startSession", () => {
-  it("fails attachment before advertising bash when contained execution cannot prepare", async () => {
+  it("attaches a shell Session without proving any process boundary", async () => {
     const attachment = fixture({ tools: { tools: ["execute"] } });
     const cleanup = vi.fn(async () => undefined);
-    const unavailableEnv = {
+    // The shape the old preflight refused: an environment that cannot contain a
+    // process. Nothing asks it any more, so it attaches like any other.
+    const uncontainedEnv = {
       cwd: attachment.worktreePath,
       prepareProcessExecution: async () => ({
         ok: false as const,
         error: new Error("host-specific sandbox failure"),
       }),
       cleanup,
-    } as unknown as SessionExecutionEnv;
+    } as unknown as ExecutionEnv;
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(scriptedStream([])),
-      executionEnvFactory: async () => unavailableEnv,
+      executionEnvFactory: async () => uncontainedEnv,
     });
 
-    await expect(runtime.startSession(attachment.spec)).rejects.toThrow(
-      "Contained process execution is unavailable.",
-    );
+    const handle = await runtime.startSession(attachment.spec);
+
     expect(attachment.observations).toEqual([
-      {
-        kind: "attachment",
-        state: "failed",
-        failure: {
-          reason: "configuration",
-          message: "Contained process execution is unavailable.",
-        },
-      },
+      expect.objectContaining({ kind: "attachment", state: "started" }),
     ]);
+    await handle.close();
     expect(cleanup).toHaveBeenCalledOnce();
-    expect(jsonlFiles(attachment.sessionDataDir)).toEqual([]);
   });
 
-  it("sanitizes a contained-environment factory rejection before Pi starts", async () => {
+  it("propagates an execution-environment factory rejection without observing it", async () => {
     const attachment = fixture({ tools: { tools: ["execute"] } });
     const stream = vi.fn(scriptedStream([]));
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(stream),
       executionEnvFactory: async () => {
-        throw new Error("host secret must not reach the attachment observer");
+        throw new Error("host detail must not reach the attachment observer");
       },
     });
 
     await expect(runtime.startSession(attachment.spec)).rejects.toThrow(
-      "Contained process execution is unavailable.",
+      "host detail must not reach the attachment observer",
     );
-    expect(attachment.observations).toEqual([
-      {
-        kind: "attachment",
-        state: "failed",
-        failure: {
-          reason: "configuration",
-          message: "Contained process execution is unavailable.",
-        },
-      },
-    ]);
+    // Raised to the caller and never written as an observation, so nothing a
+    // host environment says about itself lands in durable Session history.
+    expect(attachment.observations).toEqual([]);
     expect(jsonlFiles(attachment.sessionDataDir)).toEqual([]);
     expect(stream).not.toHaveBeenCalled();
   });
 
-  it("sanitizes a thrown containment preflight and still cleans the partial attachment", async () => {
-    const attachment = fixture({ tools: { tools: ["execute"] } });
-    const cleanup = vi.fn(async () => undefined);
-    const prepareProcessExecution = vi.fn(async () => {
-      throw new Error("host sandbox implementation detail");
-    });
-    const containedEnv = {
-      cwd: attachment.worktreePath,
-      prepareProcessExecution,
-      cleanup,
-    } as unknown as SessionExecutionEnv;
-    const stream = vi.fn(scriptedStream([]));
-    const runtime = createPiAgentRuntime({
-      sessionDataDir: attachment.sessionDataDir,
-      models: modelsWithStream(stream),
-      executionEnvFactory: async () => containedEnv,
-    });
-
-    await expect(runtime.startSession(attachment.spec)).rejects.toThrow(
-      "Contained process execution is unavailable.",
-    );
-    expect(prepareProcessExecution).toHaveBeenCalledOnce();
-    expect(cleanup).toHaveBeenCalledOnce();
-    expect(attachment.observations).toEqual([
-      {
-        kind: "attachment",
-        state: "failed",
-        failure: {
-          reason: "configuration",
-          message: "Contained process execution is unavailable.",
-        },
-      },
-    ]);
-    expect(jsonlFiles(attachment.sessionDataDir)).toEqual([]);
-    expect(stream).not.toHaveBeenCalled();
-  });
-
-  it("cleans a partial contained attachment when its failure observation rejects", async () => {
-    const attachment = fixture({ tools: { tools: ["execute"] } });
-    const cleanup = vi.fn(async () => undefined);
-    const containedEnv = {
-      cwd: attachment.worktreePath,
-      prepareProcessExecution: async () => {
-        throw new Error("host sandbox implementation detail");
-      },
-      cleanup,
-    } as unknown as SessionExecutionEnv;
-    const stream = vi.fn(scriptedStream([]));
-    attachment.spec.observer = async (observation) => {
-      attachment.observations.push(observation);
-      throw new Error("attachment failure persistence rejected");
-    };
-    const runtime = createPiAgentRuntime({
-      sessionDataDir: attachment.sessionDataDir,
-      models: modelsWithStream(stream),
-      executionEnvFactory: async () => containedEnv,
-    });
-
-    await expect(runtime.startSession(attachment.spec)).rejects.toThrow(
-      "attachment failure persistence rejected",
-    );
-    expect(cleanup).toHaveBeenCalledOnce();
-    expect(attachment.observations).toEqual([
-      {
-        kind: "attachment",
-        state: "failed",
-        failure: {
-          reason: "configuration",
-          message: "Contained process execution is unavailable.",
-        },
-      },
-    ]);
-    expect(jsonlFiles(attachment.sessionDataDir)).toEqual([]);
-    expect(stream).not.toHaveBeenCalled();
-  });
-
-  it("does not replace an attachment-start failure with contained cleanup failure", async () => {
+  it("does not replace an attachment-start failure with an environment cleanup failure", async () => {
     const attachment = fixture();
     const cleanup = vi.fn(async () => {
-      throw new Error("contained cleanup failed");
+      throw new Error("environment cleanup failed");
     });
     const containedEnv = {
       cwd: attachment.worktreePath,
-      prepareProcessExecution: vi.fn(async () => ({ ok: true as const, value: undefined })),
       cleanup,
-    } as unknown as SessionExecutionEnv;
+    } as unknown as ExecutionEnv;
     attachment.spec.observer = async (observation) => {
       attachment.observations.push(observation);
       if (observation.kind === "attachment" && observation.state === "started") {
@@ -813,7 +732,7 @@ describe("startSession", () => {
     expect(jsonlFiles(attachment.sessionDataDir)).toEqual([]);
   });
 
-  it("runs Pi bash through the prepared contained environment and maps its lifecycle", async () => {
+  it("runs Pi bash through the resolved execution environment and maps its lifecycle", async () => {
     const attachment = fixture({ tools: { tools: ["execute"] } });
     const cleanup = vi.fn(async () => undefined);
     const exec = vi.fn(
@@ -827,10 +746,9 @@ describe("startSession", () => {
     );
     const containedEnv = {
       cwd: attachment.worktreePath,
-      prepareProcessExecution: vi.fn(async () => ({ ok: true as const, value: undefined })),
       exec,
       cleanup,
-    } as unknown as SessionExecutionEnv;
+    } as unknown as ExecutionEnv;
     let secondCallContext: Context | undefined;
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
@@ -856,7 +774,6 @@ describe("startSession", () => {
       delivery: "prompt",
     });
 
-    expect(containedEnv.prepareProcessExecution).toHaveBeenCalledOnce();
     expect(exec).toHaveBeenCalledWith(
       "printf execution-marker",
       expect.objectContaining({ cwd: attachment.worktreePath, inheritEnv: true }),
@@ -925,10 +842,9 @@ describe("startSession", () => {
     }));
     const containedEnv = {
       cwd: attachment.worktreePath,
-      prepareProcessExecution: async () => ({ ok: true as const, value: undefined }),
       exec,
       cleanup: async () => undefined,
-    } as unknown as SessionExecutionEnv;
+    } as unknown as ExecutionEnv;
     let toolResultContext: Context | undefined;
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
@@ -954,6 +870,103 @@ describe("startSession", () => {
 
     expect(exec).not.toHaveBeenCalled();
     expect(JSON.stringify(toolResultContext?.messages)).toContain(expected);
+  });
+
+  it("runs the same command when the Session was given no authority to check it against", async () => {
+    const attachment = fixture({ tools: { tools: ["execute"] } });
+    const ask = vi.fn(async () => "refuse" as const);
+    const exec = vi.fn(async () => ({
+      ok: true as const,
+      value: { stdout: "", stderr: "", exitCode: 0 },
+    }));
+    const containedEnv = {
+      cwd: attachment.worktreePath,
+      exec,
+      cleanup: async () => undefined,
+    } as unknown as ExecutionEnv;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      executionEnvFactory: async () => containedEnv,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("bash", { command: "git reset --hard" });
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("Understood.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+
+    // The same command the case above refuses, minus the Snapshot. There is no
+    // location to key a rule off and no rule to key, because nothing is
+    // installed to look.
+    const handle = await runtime.startSession({
+      ...attachment.spec,
+      authority: undefined,
+      ask,
+    });
+    await handle.submitUserMessage("Reset the tree.");
+    await handle.close();
+
+    expect(exec).toHaveBeenCalledOnce();
+    // Not merely silent: with no gate there is nothing to accrue denials, so the
+    // fallback thresholds never trip and the ask port is unreachable.
+    expect(ask).not.toHaveBeenCalled();
+    expect(kinds(attachment.observations)).not.toContain("authority");
+  });
+
+  it("gives the default environment Pi's own unscoped file verbs", async () => {
+    // The default `executionEnvFactory` is Pi's `NodeExecutionEnv`, not the
+    // scoped one, so nothing narrows a path and nothing answers `not_supported`.
+    // A write outside the workspace is the difference made visible: it lands.
+    const { spec, worktreePath, sessionDataDir } = fixture({ tools: { tools: ["write"] } });
+    const outsidePath = join(worktreePath, "..", "OUTSIDE.txt");
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("write", { path: outsidePath, content: "written-outside\n" });
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("Written.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+
+    const handle = await runtime.startSession({ ...spec, authority: undefined });
+    await handle.submitUserMessage("Write the file next to this worktree.");
+    await handle.close();
+
+    expect(readFileSync(outsidePath, "utf8")).toBe("written-outside\n");
+  });
+
+  it("attaches against a workspace directory that does not exist", async () => {
+    // `ScopedExecutionEnv.create` used to `realpath` its root, so a missing
+    // worktree failed the attach as a side effect of containment. Pi's own
+    // environment does not stat its cwd and nothing has replaced that check —
+    // the workspace is where tools are pointed, not a fact the runtime proves.
+    // A tool call is what surfaces the missing directory now.
+    const attachment = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+
+    const handle = await runtime.startSession({
+      ...attachment.spec,
+      workspacePath: join(attachment.worktreePath, "missing"),
+    });
+
+    expect(kinds(attachment.observations)).toEqual(["attachment:started"]);
+    await handle.close();
   });
 
   it("commits exactly one authority observation, ahead of the turn's own completion, naming what refused the call", async () => {
@@ -1029,10 +1042,9 @@ describe("startSession", () => {
     }));
     const containedEnv = {
       cwd: attachment.worktreePath,
-      prepareProcessExecution: async () => ({ ok: true as const, value: undefined }),
       exec,
       cleanup: async () => undefined,
-    } as unknown as SessionExecutionEnv;
+    } as unknown as ExecutionEnv;
     attachment.spec.observer = async (observation) => {
       attachment.observations.push(observation);
       if (observation.kind === "authority") {
@@ -1083,10 +1095,9 @@ describe("startSession", () => {
     }));
     const containedEnv = {
       cwd: attachment.worktreePath,
-      prepareProcessExecution: async () => ({ ok: true as const, value: undefined }),
       exec,
       cleanup: async () => undefined,
-    } as unknown as SessionExecutionEnv;
+    } as unknown as ExecutionEnv;
     let toolResultContext: Context | undefined;
     attachment.spec.observer = async (observation) => {
       attachment.observations.push(observation);
@@ -1135,7 +1146,7 @@ describe("startSession", () => {
   function escalatingAttachment(ask: NonNullable<SessionRuntimeSpec["ask"]>): {
     attachment: Attachment;
     exec: ReturnType<typeof vi.fn>;
-    containedEnv: SessionExecutionEnv;
+    containedEnv: ExecutionEnv;
   } {
     const attachment = fixture({ tools: { tools: ["execute"] } });
     attachment.spec.authority = {
@@ -1150,16 +1161,15 @@ describe("startSession", () => {
     }));
     const containedEnv = {
       cwd: attachment.worktreePath,
-      prepareProcessExecution: async () => ({ ok: true as const, value: undefined }),
       exec,
       cleanup: async () => undefined,
-    } as unknown as SessionExecutionEnv;
+    } as unknown as ExecutionEnv;
     return { attachment, exec, containedEnv };
   }
 
   function escalatingRuntime(
     attachment: Attachment,
-    containedEnv: SessionExecutionEnv,
+    containedEnv: ExecutionEnv,
     onSecondCall?: (context: Context) => void,
   ): ReturnType<typeof createPiAgentRuntime> {
     return createPiAgentRuntime({
@@ -1593,16 +1603,6 @@ describe("startSession", () => {
     });
 
     await expect(unusableRuntime.startSession(unusableHost.spec)).rejects.toThrow();
-
-    const missingWorktree = fixture();
-    missingWorktree.spec.workspacePath = join(missingWorktree.worktreePath, "missing");
-    const missingRuntime = createPiAgentRuntime({
-      sessionDataDir: missingWorktree.sessionDataDir,
-      models: modelsWithStream(scriptedStream([])),
-    });
-
-    await expect(missingRuntime.startSession(missingWorktree.spec)).rejects.toThrow();
-    expect(jsonlFiles(missingWorktree.sessionDataDir)).toEqual([]);
 
     const rejectedObserver = fixture();
     rejectedObserver.spec.observer = async (observation) => {
@@ -2446,7 +2446,7 @@ describe("startSession", () => {
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(scriptedStream([])),
       executionEnvFactory: async () => {
-        throw new Error("sandbox unavailable");
+        throw new Error("execution environment unavailable");
       },
     });
     await expect(
@@ -2455,7 +2455,7 @@ describe("startSession", () => {
         tools: { tools: ["execute"] },
         recovery,
       }),
-    ).rejects.toThrow("Contained process execution is unavailable.");
+    ).rejects.toThrow("execution environment unavailable");
     expect(existsSync(recovery.sessionFilePath)).toBe(true);
     expect(jsonlFiles(attachment.sessionDataDir)).toHaveLength(1);
   });
@@ -2632,14 +2632,13 @@ describe("startSession", () => {
     const released = Promise.withResolvers<void>();
     const containedEnv = {
       cwd: attachment.worktreePath,
-      prepareProcessExecution: async () => ({ ok: true as const, value: undefined }),
       exec: async () => {
         running.resolve();
         await released.promise;
         return { ok: true as const, value: { stdout: "", stderr: "", exitCode: 0 } };
       },
       cleanup: async () => undefined,
-    } as unknown as SessionExecutionEnv;
+    } as unknown as ExecutionEnv;
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       executionEnvFactory: async () => containedEnv,
