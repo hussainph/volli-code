@@ -17,9 +17,17 @@ reached.
 **Containment is off.** `executionEnvFactory` now defaults to Pi's own
 `NodeExecutionEnv`, so nothing wraps process execution in Seatbelt and nothing
 scopes the file tools to the workspace. A Session's commands run as the user
-running Volli, with the network reachable and the environment's credentials
-intact, and reads and writes outside the workspace succeed. Attachment no longer
-fails when `sandbox-exec` is unavailable, because it no longer asks.
+running Volli, with the network reachable, and reads and writes outside the
+workspace succeed. Attachment no longer fails when `sandbox-exec` is
+unavailable, because it no longer asks.
+
+The one thing that did not come off with the sandbox is the child's environment.
+The default env spawns through `sanitizedEnvironment`: a `PATH` filtered to
+system roots, the locale and terminal variables, no `HOME`, and none of the
+host's credentials. That is hygiene, not a boundary — a command still resolves
+binaries under `/usr/local`, and bash re-derives `~` from the password database
+with no `HOME` set, so `~/.pi/agent/auth.json` is still an ordinary readable
+file. Only Seatbelt's `denyRead` ever refused that read.
 
 `ScopedExecutionEnv`, its tests and the `@anthropic-ai/sandbox-runtime`
 dependency are kept, and `executionEnvFactory` still accepts an injected

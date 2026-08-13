@@ -14,6 +14,7 @@ import {
   type Result,
   type ShellExecOptions,
 } from "@earendil-works/pi-agent-core/node";
+import { sanitizedEnvironment } from "./execution-env";
 
 const MAX_CAPTURED_OUTPUT_BYTES = 1_000_000;
 const KILL_GRACE_MS = 250;
@@ -114,23 +115,6 @@ function boundedAppend(current: Buffer, chunk: Buffer): Buffer {
 /** Keep the per-stream byte cap without emitting a replacement character for a cut UTF-8 sequence. */
 function decodeBounded(bytes: Buffer): string {
   return new StringDecoder("utf8").write(bytes);
-}
-
-function sanitizedPath(pathValue: string | undefined): string {
-  const safeRoots = ["/opt/homebrew", "/usr/local", "/System", "/usr", "/bin", "/sbin"];
-  const safe = (pathValue ?? "")
-    .split(":")
-    .filter((entry) => safeRoots.some((root) => entry === root || entry.startsWith(`${root}/`)));
-  return [...new Set(safe)].join(":") || "/usr/bin:/bin:/usr/sbin:/sbin";
-}
-
-function sanitizedEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = { PATH: sanitizedPath(source.PATH) };
-  for (const name of ["LANG", "LC_ALL", "LC_CTYPE", "TERM", "COLORTERM", "TZ", "CI", "NO_COLOR"]) {
-    const value = source[name];
-    if (value) environment[name] = value;
-  }
-  return environment;
 }
 
 function isSafeTempFragment(value: string): boolean {

@@ -39,6 +39,7 @@ import { authorityVerdict } from "../authority/gate";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
 import { mapPiActivity } from "./activity";
 import { AuthorityEscalation } from "./escalation";
+import { piExecutionEnv } from "./execution-env";
 import { inspectPiModelAccess } from "./model-access";
 import { piOwnedModels } from "./models";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
@@ -72,23 +73,6 @@ interface PiRuntimeHost {
   models: Models;
   now: () => number;
   executionEnvFactory: (workspacePath: string) => Promise<ExecutionEnv>;
-}
-
-/**
- * Pi's own environment, rooted at the Session workspace.
- *
- * Uncontained, and that is the current product decision rather than an
- * oversight: Volli runs Pi at its defaults, so a Session's file and process
- * tools carry whatever authority the user running Volli has. The workspace is
- * where those tools are *pointed* — by `cwd`, and by the system prompt that
- * tells the model to stay inside it — not a limit they are held to.
- *
- * `ScopedExecutionEnv` is the boundary that used to be installed here and the
- * one `docs/plans/authority-two-axis-rearchitecture.md` rebuilds on. It is kept
- * whole; nothing wires it up.
- */
-async function piExecutionEnv(workspacePath: string): Promise<ExecutionEnv> {
-  return new NodeExecutionEnv({ cwd: workspacePath });
 }
 
 /**
