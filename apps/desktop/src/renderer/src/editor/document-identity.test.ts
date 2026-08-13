@@ -168,6 +168,12 @@ describe("detectDocumentLanguage", () => {
     ["Dockerfile", "dockerfile"],
     ["Makefile", "makefile"],
     ["CMakeLists.txt", "cmake"],
+    // Every Python extension someone might hand-write in, not just `.py` —
+    // a stub file that came up plaintext would lose highlighting AND the
+    // colon/indent rules Monaco's python configuration brings with the id.
+    ["models/train.py", "python"],
+    ["typings/train.pyi", "python"],
+    ["scripts/launch.PYW", "python"],
   ])("selects %s as %s", (relPath, expected) => {
     expect(detectDocumentLanguage({ ...mainFile, relPath })).toBe(expected);
   });

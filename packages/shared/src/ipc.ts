@@ -394,6 +394,20 @@ export interface VolliFileIpcContract {
 
 export type FileIpcChannel = keyof VolliFileIpcContract;
 
+/**
+ * Every open document currently holding an unsaved draft, as the renderer last
+ * saw it — the input to main's quit gate.
+ *
+ * Names, not paths: the only thing main does with this is decide whether to stop
+ * a quit and tell the user what is about to be destroyed, and a basename is what
+ * belongs in that sentence. Sending the whole path would leak more of the user's
+ * filesystem into a process that has no use for it.
+ */
+export interface UnsavedDocumentsReport {
+  /** Display names of the documents with unsaved work, in tab order. */
+  names: readonly string[];
+}
+
 // ---- bring-your-own harness trust (docs/plans/harness-events.md §Trust) ----
 
 /**
@@ -731,6 +745,14 @@ export interface VolliSessionRpcIpcContract {
  * await.
  */
 export interface VolliSendContract {
+  // Send-based (ipcRenderer.send, not invoke): main cannot ASK the renderer
+  // whether quitting is safe — `before-quit` needs a synchronous verdict to
+  // preventDefault against, and by then the renderer may already be tearing
+  // down. So the renderer pushes what it knows and main answers from the last
+  // report, exactly as the terminal gate answers from `busySessions()`. There is
+  // no reply to await, and the report rides a dirty transition in an editor the
+  // user is typing in, so an invoke round-trip would tax the keystroke.
+  "volli:unsaved-documents": { args: [report: UnsavedDocumentsReport] };
   // Send-based (ipcRenderer.send, not invoke): a fire-and-forget flow-control
   // ack needs no reply, and awaiting one per data event would defeat it.
   "volli:terminal-ack": { args: [sessionId: string, chars: number] };

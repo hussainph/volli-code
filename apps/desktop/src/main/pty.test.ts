@@ -95,6 +95,7 @@ vi.mock("./worktree-runtime", () => ({
 }));
 
 import { confirmDestructiveClose, PtyManager, registerTerminalIpcHandlers } from "./pty";
+import { refuseQuit } from "./quit-gate";
 import { createAgentCommandService } from "./agent-commands";
 import type { ParkConfig, ProcessInspector } from "./park";
 import { attachmentsRoot, importAttachmentFile } from "./attachment-store";
@@ -1065,6 +1066,25 @@ describe("before-quit gate", () => {
     expect(showMessageBoxSync).toHaveBeenCalledTimes(1);
     expect(pty.kill).not.toHaveBeenCalled();
     expect(appQuit).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Electron runs every before-quit listener after a preventDefault, so this
+   * gate has to check whether the quit it is about to act on is still happening.
+   * Killing a running agent over a quit the user cancelled at the unsaved-work
+   * gate would be the exact destruction both gates exist to prevent.
+   */
+  it("stands down silently when an earlier gate already refused the quit", async () => {
+    vi.stubEnv("SHELL", "/bin/zsh");
+    const { pty } = await createSession();
+    pty.process = "claude";
+
+    const event = makeQuitEvent();
+    refuseQuit(event); // the unsaved-editor gate got a Cancel
+    appHandlers.get("before-quit")?.(event);
+
+    expect(showMessageBoxSync).not.toHaveBeenCalled();
+    expect(pty.kill).not.toHaveBeenCalled();
   });
 
   it("confirms and kills everything in the same pass — the original quit stays in flight", async () => {

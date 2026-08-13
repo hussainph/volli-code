@@ -108,6 +108,10 @@ const EXTENSION_LANGUAGES: Readonly<Record<string, string>> = {
   php: "php",
   properties: "properties",
   py: "python",
+  // Type stubs and the Windows launcher's extension are Python source to every
+  // tool that reads them, and to anyone typing in one.
+  pyi: "python",
+  pyw: "python",
   rb: "ruby",
   rs: "rust",
   scss: "scss",
