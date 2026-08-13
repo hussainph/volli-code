@@ -21,13 +21,18 @@ running Volli, with the network reachable, and reads and writes outside the
 workspace succeed. Attachment no longer fails when `sandbox-exec` is
 unavailable, because it no longer asks.
 
-The one thing that did not come off with the sandbox is the child's environment.
-The default env spawns through `sanitizedEnvironment`: a `PATH` filtered to
-system roots, the locale and terminal variables, no `HOME`, and none of the
-host's credentials. That is hygiene, not a boundary — a command still resolves
-binaries under `/usr/local`, and bash re-derives `~` from the password database
-with no `HOME` set, so `~/.pi/agent/auth.json` is still an ordinary readable
-file. Only Seatbelt's `denyRead` ever refused that read.
+The one thing that did not come off with the sandbox is the child's environment,
+though it did loosen. The default env spawns through `unsandboxedEnvironment`:
+the host's own `PATH`, `HOME` and `SSH_AUTH_SOCK`, the locale and terminal
+variables, and none of the host's credentials. `ScopedExecutionEnv` keeps the
+stricter `scopedEnvironment` — `PATH` filtered to system roots, no `HOME` —
+because behind Seatbelt that filter is one clause of a boundary. On the default
+path it was buying no containment and costing real function: it deleted the
+Session's nvm, pyenv and cargo toolchains, and dropping `SSH_AUTH_SOCK` failed
+`git push` over an agent. Either way this is hygiene, not a boundary — bash
+re-derives `~` from the password database whether or not `HOME` is set, so
+`~/.pi/agent/auth.json` was always an ordinary readable file. Only Seatbelt's
+`denyRead` ever refused that read.
 
 `ScopedExecutionEnv`, its tests and the `@anthropic-ai/sandbox-runtime`
 dependency are kept, and `executionEnvFactory` still accepts an injected

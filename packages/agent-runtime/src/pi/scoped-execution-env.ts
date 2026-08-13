@@ -14,7 +14,7 @@ import {
   type Result,
   type ShellExecOptions,
 } from "@earendil-works/pi-agent-core/node";
-import { sanitizedEnvironment } from "./execution-env";
+import { scopedEnvironment } from "./execution-env";
 
 const MAX_CAPTURED_OUTPUT_BYTES = 1_000_000;
 const KILL_GRACE_MS = 250;
@@ -607,7 +607,7 @@ export class ScopedExecutionEnv implements ExecutionEnv {
       try {
         child = this.#spawn(descriptor.argv[0]!, descriptor.argv.slice(1), {
           cwd: commandCwd.value,
-          env: sanitizedEnvironment(descriptor.env),
+          env: scopedEnvironment(descriptor.env),
           shell: false,
           detached: process.platform !== "win32",
           stdio: ["ignore", "pipe", "pipe"],
