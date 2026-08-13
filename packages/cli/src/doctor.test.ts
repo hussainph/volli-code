@@ -126,6 +126,30 @@ describe("observeEnvironment", () => {
     expect(Object.keys(observed["resolved"] as Record<string, string | null>)).not.toContain(
       "my-harness",
     );
+    // Unresolvable falls back to the PATH-walked value rather than becoming
+    // null outright — a stale entry is still worth reporting as-is.
+    expect(observed["volliPath"]).toBe("/ud/bin/volli");
+  });
+
+  // The defect this closes: a `volli` reached through the one-time
+  // `/usr/local/bin` symlink resolves here to the SYMLINK's own path, which
+  // reads as a different install from main's shim path even though they name
+  // the same file. `volli doctor` compares this value byte-for-byte against
+  // main's own (`volliCheck`, packages/shared/src/doctor.ts), so it has to be
+  // the REAL path or a correct install reports "another Volli install owns
+  // the link".
+  it("reports volli's real path when PATH found it through a symlink", async () => {
+    const base = environment({ PATH: "/usr/local/bin" }, ["/usr/local/bin/volli"]);
+    const observed = await observeEnvironment({
+      ...base,
+      realPathOf: async (path) =>
+        path === "/usr/local/bin/volli"
+          ? "/Users/me/Library/Application Support/Volli Code/bin/volli"
+          : null,
+    });
+    expect(observed["volliPath"]).toBe(
+      "/Users/me/Library/Application Support/Volli Code/bin/volli",
+    );
   });
 
   it("survives a bin dir that cannot be read", async () => {

@@ -11,6 +11,7 @@ import {
 } from "electron";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -1167,7 +1168,13 @@ app.whenReady().then(async () => {
             })),
             shellInitDir: agentRuntime.shellEnv?.["ZDOTDIR"] ?? null,
             shellInitPresent: existsSync(join(runtimePaths.zdotDir, ".zlogin")),
-            shimPath,
+            // Resolved through the real filesystem: `volli doctor` compares this
+            // byte-for-byte against what a CLI process's own PATH walk found,
+            // which follows the `/usr/local/bin/volli` symlink main installs (or
+            // a scratch profile's `/tmp` vs `/private/tmp` on macOS) to whatever
+            // it actually points at. An unresolved comparison would call a
+            // correct install "another Volli install owns the link".
+            shimPath: await realpath(shimPath).catch(() => shimPath),
             liveSessionIds: ptyManager.liveSessionIds(),
             reporting: dbHandle.ok
               ? listRegisteredHarnesses(dbHandle.db).map((record) => ({
