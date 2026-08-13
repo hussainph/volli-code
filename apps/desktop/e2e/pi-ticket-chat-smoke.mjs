@@ -1,11 +1,12 @@
 /**
  * E2e proof of the Pi-backed native adapter attaching a real TICKET chat,
- * against the BUILT app. New ticket chats on this branch attach the `pi`
- * manifest (`apps/desktop/src/main/session-runtime/pi-adapter.ts`, pinned
- * model `openai-codex`/`gpt-5.6-luna`) instead of OpenCode — see that file's
- * module doc comment. There is no fake server anywhere in this probe (the
- * retired `session-chat-smoke.mjs` had one): Pi runs in-process in Electron
- * main and this smoke drives ONE real
+ * against the BUILT app. New ticket chats attach the `pi` manifest
+ * (`apps/desktop/src/main/session-runtime/pi-adapter.ts`) instead of OpenCode —
+ * see that file's module doc comment. Nothing about the MODEL is pinned there:
+ * the adapter runs whatever the Session recorded, so the model under test is
+ * this file's own {@link MODEL_PIN} and nothing else. There is no fake server
+ * anywhere in this probe (the retired `session-chat-smoke.mjs` had one): Pi
+ * runs in-process in Electron main and this smoke drives ONE real
  * turn against a real provider, billed to a ChatGPT subscription ($0
  * marginal — keep it to one short prompt, never loop turns speculatively).
  *
@@ -30,7 +31,8 @@
  * bootstraps this on a fresh profile, so check 1 records one over the same
  * `modelAccess.setDefault` tRPC mutation Settings' "Default model" section
  * uses (`smoke-kit.mjs`'s `seedDefaultModel`) before the ticket chat is ever
- * created. The composer's Model pill (`composer-ui.tsx`) is offered to every
+ * created — and it records {@link MODEL_PIN}, not the catalog's first
+ * available. The composer's Model pill (`composer-ui.tsx`) is offered to every
  * Session now regardless of Role — Ticket or Project — since
  * `chat-plane.tsx` dropped its old ticket/project "pinned" carve-out, and the
  * model it names is the one Pi actually runs: `attach` carries the Session's
@@ -50,6 +52,7 @@ import os from "node:os";
 import { join } from "node:path";
 
 import {
+  assistantReplyTexts,
   cardById,
   createRunner,
   ensurePiAuthInto,
@@ -61,11 +64,31 @@ import {
   seedDefaultModel,
   seedProjects,
   sleep,
+  stopButton,
+  waitForSettledReply,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 
 const PROJECT = { id: "pi-ticket-chat-project", name: "Pi Ticket Chat", prefix: "PT" };
 const PROMPT_TEXT = "Reply with one short sentence.";
+/**
+ * The model this smoke actually tests, named rather than inherited.
+ *
+ * Unpinned, `seedDefaultModel` takes the first AVAILABLE model at its HIGHEST
+ * reasoning level, which upstream's catalog ordering silently moved to
+ * `openai-codex/gpt-5.3-codex-spark` at `xhigh` while this header still said
+ * Luna — a smoke reporting on a model nobody chose. `low` because the subject
+ * here is the adapter, the transcript and the durable Session, none of which
+ * care how hard the model thought; a fixed low level also keeps one turn short
+ * and its duration comparable between runs, which is what makes
+ * `PI_TURN_BUDGET_MS` a ceiling instead of a lottery. An unavailable pin fails
+ * check 1 loudly with what the live catalog does offer.
+ */
+const MODEL_PIN = {
+  providerId: "openai-codex",
+  modelId: "gpt-5.6-luna",
+  reasoningLevel: "low",
+};
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("pi-ticket-chat-smoke-");
 // Isolates Pi's own credential/config lookups from the developer's real
@@ -122,25 +145,13 @@ async function openNewChatTab(page) {
   return activeLabel;
 }
 
-/** The Stop button, on screen for exactly as long as a turn is running. */
-function stopButton(page) {
-  return page.getByRole("button", { name: "Stop", exact: true });
-}
-
+/** Submits `text` and returns the moment it was sent — the turn clock's zero. */
 async function submitPrompt(page, text) {
   const textarea = page.getByPlaceholder("Ask, plan, or implement…").first();
   await textarea.click();
   await textarea.fill(text);
   await page.keyboard.press("Enter");
-}
-
-/** Rendered assistant-role messages (`Message`'s `is-assistant` class), non-empty text only. */
-async function assistantMessageTexts(page) {
-  return page.evaluate(() =>
-    Array.from(document.querySelectorAll(".is-assistant"))
-      .map((el) => el.textContent?.trim() ?? "")
-      .filter((text) => text.length > 0),
-  );
+  return Date.now();
 }
 
 /** User-role messages (`Message`'s `is-user` class), non-empty text only. */
@@ -203,7 +214,7 @@ async function main() {
       1,
       "seed the app default model — every Session, Ticket or Project, now requires one before it can start",
       async () => {
-        defaultModel = await seedDefaultModel(page);
+        defaultModel = await seedDefaultModel(page, MODEL_PIN);
         return { ok: defaultModel !== null, detail: JSON.stringify(defaultModel) };
       },
     );
@@ -301,11 +312,12 @@ async function main() {
       },
     );
 
+    let submittedAt = null;
     await attempt(
       7,
       "submitting the one real prompt starts a turn (streaming/working state appears)",
       async () => {
-        await submitPrompt(page, PROMPT_TEXT);
+        submittedAt = await submitPrompt(page, PROMPT_TEXT);
         await waitUntil("the turn to start", async () => (await stopButton(page).count()) > 0, {
           timeout: 15000,
         }).catch(async (error) => {
@@ -316,31 +328,19 @@ async function main() {
       },
     );
 
-    // Real network round trip — generous timeout (30-90s is normal for one
-    // turn against a real hosted model).
+    // One real network round trip, on ONE clock started at the keystroke above
+    // — see `waitForSettledReply` and `PI_TURN_BUDGET_MS` for why both of those
+    // are the kit's to own, and what the budget was measured against.
     await attempt(
       8,
       "the turn settles with a non-empty assistant reply in the transcript",
       async () => {
-        await waitUntil(
-          "a non-empty assistant message to render",
-          async () => (await assistantMessageTexts(page)).length > 0,
-          { timeout: 90000 },
-        ).catch(async (error) => {
-          await captureFailureEvidence(page, mainStdout, mainStderr, "assistant-reply-missing");
-          throw error;
-        });
-        await waitUntil(
-          "the turn to settle (Stop clears)",
-          async () => (await stopButton(page).count()) === 0,
-          {
-            timeout: 30000,
+        const settled = await waitForSettledReply(page, { since: submittedAt }).catch(
+          async (error) => {
+            await captureFailureEvidence(page, mainStdout, mainStderr, "turn-never-settled");
+            throw error;
           },
-        ).catch(async (error) => {
-          await captureFailureEvidence(page, mainStdout, mainStderr, "turn-never-settled");
-          throw error;
-        });
-        const texts = await assistantMessageTexts(page);
+        );
         // The first delivered message names the Session (`chat/client.ts`'s
         // `#autoTitle`), so the "Chat 1" captured at creation is no longer what
         // the tab is called. Re-read it, or the relaunch below looks for a tab
@@ -348,9 +348,13 @@ async function main() {
         chatTabLabel = await page
           .locator('[role="tab"][aria-selected="true"]')
           .getAttribute("aria-label");
+        // The reply itself is in the detail on purpose: it is the one line that
+        // shows the wait was ended by an ANSWER and not by a tool bundle.
         return {
-          ok: texts.length > 0 && chatTabLabel !== null,
-          detail: `assistantMessages=${texts.length} tab=${chatTabLabel}`,
+          ok: settled.texts.length > 0 && chatTabLabel !== null,
+          detail:
+            `turn=${(settled.elapsedMs / 1000).toFixed(1)}s replies=${settled.texts.length} ` +
+            `tab=${chatTabLabel} reply=${JSON.stringify(settled.texts[0]?.slice(0, 80) ?? "")}`,
         };
       },
     );
@@ -404,7 +408,7 @@ async function main() {
             "both durable messages to render without a live adapter",
             async () => {
               const userTexts = await userMessageTexts(page2);
-              const assistantTexts = await assistantMessageTexts(page2);
+              const assistantTexts = await assistantReplyTexts(page2);
               return userTexts.some((t) => t.includes(PROMPT_TEXT)) && assistantTexts.length > 0
                 ? { userTexts, assistantTexts }
                 : false;

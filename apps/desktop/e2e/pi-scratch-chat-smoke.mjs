@@ -56,6 +56,7 @@ import os from "node:os";
 import { join } from "node:path";
 
 import {
+  assistantReplyTexts,
   createRunner,
   ensurePiAuthInto,
   goToBoard,
@@ -66,6 +67,8 @@ import {
   seedDefaultModel,
   seedProjects,
   sleep,
+  stopButton,
+  waitForSettledReply,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 
@@ -142,25 +145,13 @@ async function openNewChatTab(page) {
   return activeLabel;
 }
 
-/** The Stop button, on screen for exactly as long as a turn is running. */
-function stopButton(page) {
-  return page.getByRole("button", { name: "Stop", exact: true });
-}
-
+/** Submits `text` and returns the moment it was sent — the turn clock's zero. */
 async function submitPrompt(page, text) {
   const textarea = page.getByPlaceholder("Ask, plan, or implement…").first();
   await textarea.click();
   await textarea.fill(text);
   await page.keyboard.press("Enter");
-}
-
-/** Rendered assistant-role messages (`Message`'s `is-assistant` class), non-empty text only. */
-async function assistantMessageTexts(page) {
-  return page.evaluate(() =>
-    Array.from(document.querySelectorAll(".is-assistant"))
-      .map((el) => el.textContent?.trim() ?? "")
-      .filter((text) => text.length > 0),
-  );
+  return Date.now();
 }
 
 /** User-role messages (`Message`'s `is-user` class), non-empty text only. */
@@ -256,11 +247,12 @@ async function main() {
       },
     );
 
+    let submittedAt = null;
     await attempt(
       4,
       "submitting the one real prompt starts a turn (streaming/working state appears)",
       async () => {
-        await submitPrompt(page, PROMPT_TEXT);
+        submittedAt = await submitPrompt(page, PROMPT_TEXT);
         await waitUntil("the turn to start", async () => (await stopButton(page).count()) > 0, {
           timeout: 15000,
         }).catch(async (error) => {
@@ -271,29 +263,19 @@ async function main() {
       },
     );
 
-    // Real network round trip — generous timeout (30-90s is normal for one
-    // turn against a real hosted model).
+    // One real network round trip, on ONE clock started at the keystroke above
+    // — see `waitForSettledReply` and `PI_TURN_BUDGET_MS` in the kit for what
+    // that budget was measured against and why prose is what ends the wait.
     await attempt(
       5,
       "the turn settles with a non-empty assistant reply in the transcript",
       async () => {
-        await waitUntil(
-          "a non-empty assistant message to render",
-          async () => (await assistantMessageTexts(page)).length > 0,
-          { timeout: 90000 },
-        ).catch(async (error) => {
-          await captureFailureEvidence(page, mainStdout, mainStderr, "assistant-reply-missing");
-          throw error;
-        });
-        await waitUntil(
-          "the turn to settle (Stop clears)",
-          async () => (await stopButton(page).count()) === 0,
-          { timeout: 30000 },
-        ).catch(async (error) => {
-          await captureFailureEvidence(page, mainStdout, mainStderr, "turn-never-settled");
-          throw error;
-        });
-        const texts = await assistantMessageTexts(page);
+        const settled = await waitForSettledReply(page, { since: submittedAt }).catch(
+          async (error) => {
+            await captureFailureEvidence(page, mainStdout, mainStderr, "turn-never-settled");
+            throw error;
+          },
+        );
         // The first delivered message names the Session (`chat/client.ts`'s
         // `#autoTitle`), so the "Chat 1" captured at creation is no longer
         // what the tab — or the sidebar row the relaunch below looks for —
@@ -302,8 +284,10 @@ async function main() {
           .locator('[role="tab"][aria-selected="true"]')
           .getAttribute("aria-label");
         return {
-          ok: texts.length > 0 && chatTabLabel !== null,
-          detail: `assistantMessages=${texts.length} tab=${chatTabLabel}`,
+          ok: settled.texts.length > 0 && chatTabLabel !== null,
+          detail:
+            `turn=${(settled.elapsedMs / 1000).toFixed(1)}s replies=${settled.texts.length} ` +
+            `tab=${chatTabLabel} reply=${JSON.stringify(settled.texts[0]?.slice(0, 80) ?? "")}`,
         };
       },
     );
@@ -362,7 +346,7 @@ async function main() {
             "both durable messages to render without a live adapter",
             async () => {
               const userTexts = await userMessageTexts(page2);
-              const assistantTexts = await assistantMessageTexts(page2);
+              const assistantTexts = await assistantReplyTexts(page2);
               return userTexts.some((t) => t.includes(PROMPT_TEXT)) && assistantTexts.length > 0
                 ? { userTexts, assistantTexts }
                 : false;

@@ -71,6 +71,8 @@ import {
   seedDefaultModel,
   seedProjects,
   sleep,
+  stopButton,
+  waitForSettledReply,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 
@@ -126,16 +128,13 @@ async function openNewChatTab(page) {
   return activeLabel;
 }
 
-/** The Stop button, on screen for exactly as long as a turn is running. */
-function stopButton(page) {
-  return page.getByRole("button", { name: "Stop", exact: true });
-}
-
+/** Submits `text` and returns the moment it was sent — the turn clock's zero. */
 async function submitPrompt(page, text) {
   const textarea = page.getByPlaceholder("Ask, plan, or implement…").first();
   await textarea.click();
   await textarea.fill(text);
   await page.keyboard.press("Enter");
+  return Date.now();
 }
 
 async function waitComposerReady(page) {
@@ -148,25 +147,23 @@ async function waitComposerReady(page) {
   );
 }
 
-/** Submit `text`, wait for the turn to start, stream, and settle — one real Pi round trip. */
+/**
+ * Submit `text`, wait for the turn to start, stream, and settle — one real Pi
+ * round trip, on ONE clock started at the submitting keystroke.
+ *
+ * The settle is `waitForSettledReply`'s, so what ends the wait here is assistant
+ * PROSE and not the first `.is-assistant` node: a turn that reaches for a tool
+ * draws the ActivityBundle inside the same assistant message, and this smoke's
+ * own prompts are given to a Session whose Brief invites it to run the `volli`
+ * CLI. See `PI_TURN_BUDGET_MS` for what the budget was measured against.
+ */
 async function runTurnToSettle(page, text) {
   await waitComposerReady(page);
-  await submitPrompt(page, text);
+  const submittedAt = await submitPrompt(page, text);
   await waitUntil("the turn to start", async () => (await stopButton(page).count()) > 0, {
     timeout: 15000,
   });
-  await waitUntil(
-    "a non-empty assistant message to render",
-    async () => page.evaluate(() => document.querySelectorAll(".is-assistant").length > 0),
-    { timeout: 90000 },
-  );
-  await waitUntil(
-    "the turn to settle (Stop clears)",
-    async () => (await stopButton(page).count()) === 0,
-    {
-      timeout: 30000,
-    },
-  );
+  return waitForSettledReply(page, { since: submittedAt });
 }
 
 /** Returns to the board's card list from an open ticket detail (Escape moves focus off the composer first). */
@@ -285,11 +282,14 @@ async function main() {
             (await page.getByRole("tab", { name: orphanDisplayId, exact: true }).count()) === 1,
         );
         await openNewChatTab(page);
-        await runTurnToSettle(page, ORPHAN_PROMPT).catch(async (error) => {
+        const settled = await runTurnToSettle(page, ORPHAN_PROMPT).catch(async (error) => {
           await captureFailureEvidence(page, "orphan-chat-turn-failed");
           throw error;
         });
-        return { ok: true, detail: orphanDisplayId };
+        return {
+          ok: settled.texts.length > 0,
+          detail: `${orphanDisplayId} turn=${(settled.elapsedMs / 1000).toFixed(1)}s`,
+        };
       },
     );
 

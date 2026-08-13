@@ -34,6 +34,12 @@
  *                      start, over the same `modelAccess.setDefault` tRPC
  *                      mutation Settings uses. Needs real Pi credentials
  *                      already readable, so callers run it after seeding those.
+ *                      Takes an optional pin so a probe can name the model it
+ *                      claims to test instead of inheriting the catalog's first.
+ *   • assistantReplyTexts()/waitForSettledReply()/PI_TURN_BUDGET_MS — the ONE
+ *                      encoding of "this turn produced an answer": what counts
+ *                      as assistant PROSE (not a tool bundle), and how long a
+ *                      real turn gets. Every Pi smoke waits through these.
  *   • readMonacoState()/isMonacoEditable() — the ONE encoding of how to
  *                      interrogate this Monaco build (input surface, read-only
  *                      contract, rendered aria-label), shared by every probe
@@ -415,26 +421,65 @@ function forgetOnExit(dir) {
  * (`model-access-settings.tsx`), just over the same tRPC edge directly rather
  * than through the Select+Save UI.
  *
- * Picks the first "available" model the LIVE catalog reports (real Pi
- * credentials must already be readable — see `ensurePiAuthInto` callers) and
- * that model's last-listed reasoning level, mirroring the Settings pane's own
- * `preferredReasoning` heuristic, rather than hardcoding a provider/model/
- * reasoning triple upstream's own catalog is free to stop supporting.
+ * Unpinned, this picks the first "available" model the LIVE catalog reports
+ * (real Pi credentials must already be readable — see `ensurePiAuthInto`
+ * callers) and that model's last-listed reasoning level, mirroring the Settings
+ * pane's own `preferredReasoning` heuristic. That is the right default for a
+ * probe whose subject is the Model Access plumbing itself: it survives upstream
+ * retiring any particular model.
+ *
+ * It is the WRONG default for a probe that drives a real turn and then reports
+ * how long one takes, because "first available at its highest reasoning level"
+ * is a moving target — it silently became `openai-codex/gpt-5.3-codex-spark`
+ * at `xhigh` while pi-ticket-chat-smoke's own header still claimed
+ * `gpt-5.6-luna`, so the smoke had been misreporting what it tests. Those
+ * probes pass `pin` and say so in their header. A pin is checked against the
+ * live catalog and fails LOUDLY (with what IS available) rather than falling
+ * back to the first-available pick, which would put the misreporting straight
+ * back.
  *
  * @param {import("playwright-core").Page} page
+ * @param {{providerId:string, modelId:string, reasoningLevel?:string}|null} [pin]
  * @returns {Promise<{providerId:string, modelId:string, reasoningLevel:string, label:string}>}
  */
-export async function seedDefaultModel(page) {
-  const result = await page.evaluate(async () => {
+export async function seedDefaultModel(page, pin = null) {
+  const result = await page.evaluate(async (pinned) => {
     const inspected = await window.api.sessionRpc.request({
       procedure: "modelAccess.inspect",
       input: {},
     });
     if (!inspected.ok) return { ok: false, error: inspected };
     const models = inspected.data.models ?? [];
-    const model = models.find((candidate) => candidate.state === "available");
-    if (!model) return { ok: false, error: { message: "no available model in the live catalog" } };
-    const reasoningLevel = model.reasoningLevels.at(-1) ?? "off";
+    const available = models
+      .filter((candidate) => candidate.state === "available")
+      .map((candidate) => `${candidate.providerId}/${candidate.modelId}`);
+    const model = pinned
+      ? models.find(
+          (candidate) =>
+            candidate.providerId === pinned.providerId && candidate.modelId === pinned.modelId,
+        )
+      : models.find((candidate) => candidate.state === "available");
+    if (!model || (pinned && model.state !== "available")) {
+      return {
+        ok: false,
+        error: {
+          message: pinned
+            ? `pinned model ${pinned.providerId}/${pinned.modelId} is ${model?.state ?? "absent from the live catalog"}`
+            : "no available model in the live catalog",
+          available,
+        },
+      };
+    }
+    const reasoningLevel = pinned?.reasoningLevel ?? model.reasoningLevels.at(-1) ?? "off";
+    if (!model.reasoningLevels.includes(reasoningLevel)) {
+      return {
+        ok: false,
+        error: {
+          message: `${model.providerId}/${model.modelId} does not support reasoning level ${reasoningLevel}`,
+          supported: model.reasoningLevels,
+        },
+      };
+    }
     const selection = {
       providerId: model.providerId,
       modelId: model.modelId,
@@ -446,11 +491,118 @@ export async function seedDefaultModel(page) {
     });
     if (!saved.ok) return { ok: false, error: saved };
     return { ok: true, selection: { ...selection, label: model.label } };
-  });
+  }, pin);
   if (!result.ok) {
     throw new Error(`seedDefaultModel failed: ${JSON.stringify(result.error)}`);
   }
   return result.selection;
+}
+
+// ---- one real chat turn ----------------------------------------------------
+
+/**
+ * How long ONE real Pi turn gets, measured from the keystroke that submits the
+ * prompt to the moment the turn settles.
+ *
+ * This number is the whole reason a green build used to fail as a coin flip, so
+ * it is written down rather than guessed. Timed submit → settle on one
+ * one-sentence prompt against the UNPINNED default pick — first available at
+ * its highest reasoning level, `openai-codex/gpt-5.3-codex-spark` at `xhigh`,
+ * which is still what the smokes that pass no pin get — thirteen samples off a
+ * fifteen-run series:
+ *
+ *   3.5s · 11.0s · 25.4s · 35.2s · 41.1s · 41.4s · 46.7s
+ *   57.5s · 58.5s · 62.2s · 64.0s · 64.5s · 107.0s
+ *
+ * The ceiling it replaces was 30s, which sits MID-DISTRIBUTION — about half of
+ * those runs exceed it. A ceiling near the median does not test anything; it
+ * samples a distribution. 180s is past the longest observed turn with room for
+ * a machine under load, and a turn that reaches it is a real hang worth reading
+ * rather than a slow answer. Do not tidy it back down toward the measurements:
+ * the measurements are exactly where a ceiling must not sit. A pinned model at
+ * a low reasoning level answers far quicker than any of this (2-6s across five
+ * runs of pi-ticket-chat-smoke on `gpt-5.6-luna`/`low`), and that is headroom,
+ * not evidence for a smaller number — one budget covers every Pi smoke here,
+ * pinned or not.
+ */
+export const PI_TURN_BUDGET_MS = 180_000;
+
+/** The Stop control, on screen for exactly as long as a turn is running. */
+export function stopButton(page) {
+  return page.getByRole("button", { name: "Stop", exact: true });
+}
+
+/**
+ * The assistant's PROSE replies — what a person would call the answer — one
+ * entry per assistant turn that produced text, empty ones dropped.
+ *
+ * `.is-assistant` alone cannot answer this, and quietly said "yes" far too
+ * early. `Message` (`ai-elements/message.tsx`) stamps that class on the WHOLE
+ * assistant turn, and `chat-plane.tsx`'s `renderSegment` draws the tool
+ * ActivityBundle inside it — so the first `.is-assistant` text of a turn that
+ * runs anything at all is the bundle's own summary, literally "Ran 1 command".
+ * A wait gated on that starts its clock when the model reaches for a tool, not
+ * when it answers.
+ *
+ * The partition is the transcript's own: every non-prose row carries
+ * `not-prose` (`activity-ui.tsx`'s bundle roots, tool rows and status lines;
+ * `interaction-ui.tsx`'s status line), and a pending question is an
+ * InteractionCard `<form>` — a question, never a reply. Strip both from a clone
+ * and what is left inside an assistant turn can only have come from a `text`
+ * segment, which is the only thing `renderSegment` renders as prose.
+ */
+export async function assistantReplyTexts(page) {
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll(".is-assistant"))
+      .map((message) => {
+        const prose = message.cloneNode(true);
+        for (const activity of prose.querySelectorAll(".not-prose, form")) activity.remove();
+        return prose.textContent?.trim() ?? "";
+      })
+      .filter((text) => text.length > 0),
+  );
+}
+
+/**
+ * Wait out one real turn: Stop gone AND a non-empty assistant prose reply on
+ * screen, both inside ONE budget measured from `since` — the moment the prompt
+ * was submitted.
+ *
+ * One clock, one deadline, on purpose. The two-wait version this replaces gave
+ * the settle its own fresh 30s starting from whenever the first `.is-assistant`
+ * node appeared, which made the real budget "30s for the remainder of the turn
+ * after the first tool call" — a sentence nobody wrote down and nobody could
+ * have measured against.
+ *
+ * @param {import("playwright-core").Page} page
+ * @param {{since:number, budget?:number}} opts
+ * @returns {Promise<{texts:string[], elapsedMs:number}>}
+ */
+export async function waitForSettledReply(page, { since, budget = PI_TURN_BUDGET_MS }) {
+  const texts = await waitUntil(
+    "the turn to settle with a non-empty assistant text reply",
+    async () => {
+      const [running, replies] = await Promise.all([
+        stopButton(page).count(),
+        assistantReplyTexts(page),
+      ]);
+      return running === 0 && replies.length > 0 ? replies : false;
+    },
+    { timeout: Math.max(1000, budget - (Date.now() - since)), interval: 250 },
+  ).catch(async (error) => {
+    // Which half was missing is the whole diagnosis: still streaming is a slow
+    // turn, settled-with-no-prose is a turn that answered in tool calls only.
+    const [running, replies, turns] = await Promise.all([
+      stopButton(page).count(),
+      assistantReplyTexts(page),
+      page.evaluate(() => document.querySelectorAll(".is-assistant").length),
+    ]);
+    throw new Error(
+      `${error.message} — after ${Date.now() - since}ms: stopVisible=${running > 0} ` +
+        `proseReplies=${replies.length} assistantTurns=${turns}`,
+    );
+  });
+  return { texts, elapsedMs: Date.now() - since };
 }
 
 // ---- Monaco DOM readers ----------------------------------------------------
