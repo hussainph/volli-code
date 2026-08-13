@@ -337,8 +337,13 @@ async function main() {
         // than the model inventing prose, or the shell reporting it missing.
         const hasDoctorEvidence = /checks?\b/i.test(reply) && /[✓✗!]/.test(reply);
         const notFound = /command not found|not recognized|no such file or directory/i.test(reply);
+        const ok =
+          settled.texts.length > 0 && chatTabLabel !== null && hasDoctorEvidence && !notFound;
+        if (!ok) {
+          await captureFailureEvidence(page, mainStdout, mainStderr, "doctor-reply-unusable");
+        }
         return {
-          ok: settled.texts.length > 0 && chatTabLabel !== null && hasDoctorEvidence && !notFound,
+          ok,
           detail:
             `turn=${(settled.elapsedMs / 1000).toFixed(1)}s replies=${settled.texts.length} ` +
             `tab=${chatTabLabel} hasDoctorEvidence=${hasDoctorEvidence} notFound=${notFound}\n` +

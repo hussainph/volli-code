@@ -503,6 +503,12 @@ app.whenReady().then(async () => {
   const loginPathOutcome = decideLoginPathAdoption(process.env.PATH, await loginShellPathAttempt);
   if (loginPathOutcome.kind === "adopted") process.env.PATH = loginPathOutcome.path;
   console.info(loginPathLogLine(loginPathOutcome));
+  // Same prepend a spawned PTY already gets from agentSessionEnv/ticketSessionEnv.
+  // Structured sessions also get this via `pathPrefixes` on the execution env;
+  // putting it on the host PATH as well means anything that inherits main's
+  // PATH (a Pi bash `inheritEnv: true` that slipped past the override, a
+  // helper spawn) still finds this profile's shim before `/usr/local/bin`.
+  process.env.PATH = [runtimePaths.binDir, process.env.PATH ?? ""].filter(Boolean).join(":");
   // The Pi-backed Agent Runtime is the structured product's one target
   // executor, for Ticket Sessions and ticketless project chats alike. Model
   // access and selection come from this Pi host.

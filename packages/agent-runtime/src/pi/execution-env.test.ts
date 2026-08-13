@@ -128,14 +128,16 @@ describe("piExecutionEnv", () => {
     }
   });
 
-  it("still lets a caller-supplied PATH override the prefixed one", async () => {
+  it("still prepends onto a caller-supplied PATH rather than letting it wipe the prefixes", async () => {
     const env = await piExecutionEnv(workspace(), { pathPrefixes: ["/volli/bin"] });
     try {
-      // A real, minimal PATH — proving the override REPLACES the prefixed
-      // default rather than merging with it, while still resolving `printenv`.
+      // A real, minimal PATH — proving the override REPLACES the sanitized
+      // default, while the session's prefixes still land in front. Without
+      // that, a caller-supplied PATH would hide `<userData>/bin` and `volli`
+      // would resolve to another install's shim.
       await expect(env.exec("printenv PATH", { env: { PATH: "/usr/bin:/bin" } })).resolves.toEqual({
         ok: true,
-        value: { stdout: "/usr/bin:/bin\n", stderr: "", exitCode: 0 },
+        value: { stdout: "/volli/bin:/usr/bin:/bin\n", stderr: "", exitCode: 0 },
       });
     } finally {
       await env.cleanup();

@@ -127,12 +127,12 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
   /** Pi's bash tool asks for the host environment; here is the only place that can decline. */
   override async exec(command: string, options?: ShellExecOptions) {
     const sanitized = unsandboxedEnvironment(process.env);
+    const merged = { ...sanitized, ...options?.env };
     return super.exec(command, {
       ...options,
       env: {
-        ...sanitized,
-        PATH: prefixedPath(sanitized.PATH ?? "", this.#pathPrefixes),
-        ...options?.env,
+        ...merged,
+        PATH: prefixedPath(merged.PATH ?? "", this.#pathPrefixes),
       },
       inheritEnv: false,
     });
@@ -170,9 +170,12 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
  * directory the CLI shim and every harness wrapper live in, so `volli` and a
  * detected toolchain resolve inside a structured Session exactly as they do
  * inside a Volli-started PTY (`agentSessionEnv`/`ticketSessionEnv` prepend the
- * same directory there). Without it a Session launched from a Finder/Dock
- * boot — launchd's bare `PATH`, proven by `bare-path-env-smoke.mjs` — never
- * sees the shim at all.
+ * same directory there). Prefixes are applied onto whatever PATH the merged
+ * environment ended up with — including a caller-supplied one — because a
+ * PATH that wipes them is how a Finder/Dock boot's `/usr/local/bin/volli`
+ * (another profile's shim) wins. Without this a Session launched from a
+ * Finder/Dock boot — launchd's bare `PATH`, proven by
+ * `bare-path-env-smoke.mjs` — never sees the shim at all.
  */
 export async function piExecutionEnv(
   workspacePath: string,
