@@ -91,7 +91,9 @@ import type {
   TicketsResult,
   TicketUpdateInput,
   UiZoomCommand,
+  UnsavedDocumentsReport,
   VolliInvokeContract,
+  VolliIpcChannel,
   VolliIpcEvent,
   VolliSendContract,
   WorktreeBranchesResult,
@@ -488,6 +490,15 @@ const api = {
       ipcRenderer.on("volli:dir-changed" satisfies VolliIpcEvent, listener);
       return () =>
         ipcRenderer.removeListener("volli:dir-changed" satisfies VolliIpcEvent, listener);
+    },
+    /**
+     * Tells main which open documents hold unsaved drafts, so ⌘Q can stop and
+     * ask instead of discarding them. Fire-and-forget: main needs a synchronous
+     * answer at quit time and cannot ask for one then, so it reads the last
+     * report — see `main/quit-gate.ts`.
+     */
+    reportUnsaved: (report: UnsavedDocumentsReport): void => {
+      ipcRenderer.send("volli:unsaved-documents" satisfies VolliIpcChannel, report);
     },
   },
   appState: {

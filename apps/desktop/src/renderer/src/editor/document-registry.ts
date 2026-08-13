@@ -10,6 +10,12 @@ export type DocumentSavePolicy = "read-only" | "explicit" | "autosave";
 
 export interface RegistryModel {
   getValue(): string;
+  /**
+   * The current value's length, when the model can answer that without building
+   * the value. Optional so a fake (or a future non-Monaco model) need not have
+   * one; {@link DocumentRegistry} falls back to a full comparison.
+   */
+  getValueLength?(): number;
   setValue(value: string): void;
   onDidChangeContent(listener: () => void): { dispose(): void };
   dispose(): void;
@@ -84,30 +90,52 @@ export interface DocumentLease<Model extends RegistryModel, ViewState> {
 
 /**
  * How many COLD documents the registry keeps before evicting the least recently
- * used (issue #133). A cold entry has no live view and no unsaved draft — its
- * model is already disposed and the only thing left is the remembered
- * cursor/scroll of a view that has gone, plus the baseline text held to compare
- * against. That is a bounded convenience, not state anyone can lose work to:
- * every editor falls back to the host-persisted view state (issue #109) when the
- * registry has nothing, and the baseline is re-seeded from a fresh read on the
- * next `acquire`. Without a cap the baseline of every file opened in a session
- * is retained for the life of the process.
+ * used (issue #133). A cold entry has no live view and no unsaved draft — what
+ * is left is the remembered cursor/scroll of a view that has gone, plus the
+ * baseline text held to compare against. That is a bounded convenience, not
+ * state anyone can lose work to: every editor falls back to the host-persisted
+ * view state (issue #109) when the registry has nothing, and the baseline is
+ * re-seeded from a fresh read on the next `acquire`. Without a cap the baseline
+ * of every file opened in a session is retained for the life of the process.
  */
 const DEFAULT_COLD_DOCUMENT_LIMIT = 24;
+
+/**
+ * How many of those cold documents keep their MODEL — and with it the user's
+ * undo/redo history, which in Monaco lives on the model and nowhere else.
+ *
+ * This cap exists separately from the cold one because the two things cost
+ * wildly different amounts. A remembered cursor is a few numbers; a model is the
+ * file's text in a piece tree plus its tokenization state, so keeping every cold
+ * document's model would tie the process's memory to how many files a session
+ * has ever visited. Smaller than the cold cap, and deliberately larger than the
+ * handful of files someone alternates between while writing code: dropping a
+ * model is not data loss, but it does silently empty ⌘Z for that file, which is
+ * exactly what parking used to do to EVERY file on every tab switch.
+ */
+const DEFAULT_WARM_DOCUMENT_LIMIT = 8;
 
 export class DocumentRegistry<Model extends RegistryModel, ViewState> {
   private readonly entries = new Map<string, DocumentEntry<Model, ViewState>>();
   /**
-   * Keys of the evictable entries, least-recently-used first (insertion order).
-   * Membership is exactly the cold set: `acquire` removes a key the moment a
-   * view takes it back, and only `cleanupReleasedEntry` — which has just proven
-   * the entry viewless and clean — puts one in.
+   * The parked entries, least-recently-used first (insertion order). Membership
+   * is exactly the parked set: `acquire` removes a key the moment a view takes
+   * it back, and only `cleanupReleasedEntry` — which has just proven the entry
+   * viewless and clean — puts one in.
+   *
+   * A map rather than a set of keys so ageing never has to look an entry back up
+   * and handle a miss it cannot actually have: the two collections would then be
+   * able to disagree, and the code to survive that would be untestable because
+   * nothing can produce it.
    */
-  private readonly cold = new Set<string>();
+  private readonly cold = new Map<string, DocumentEntry<Model, ViewState>>();
+  /** Hosts watching the unsaved set, so a quit can be stopped before it lands. */
+  private readonly unsavedListeners = new Set<() => void>();
 
   constructor(
     private readonly factory: RegistryModelFactory<Model>,
     private readonly coldLimit: number = DEFAULT_COLD_DOCUMENT_LIMIT,
+    private readonly warmLimit: number = DEFAULT_WARM_DOCUMENT_LIMIT,
   ) {}
 
   acquire(input: {
@@ -152,13 +180,14 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
         if (entry.references.size > 0) {
           throw new Error(`Document ${key} was acquired with a different seed`);
         }
-        if (entry.dirty) {
-          entry.externalRevision = input.seed.revision;
-        } else {
-          entry.baseline = input.seed.value;
-          entry.baselineRevision = input.seed.revision;
-          entry.externalRevision = input.seed.revision;
-        }
+        // A parked entry keeps its MODEL, so a fresh disk seed has to reach the
+        // model and not just the bookkeeping: leaving the two disagreeing would
+        // hand the next view a buffer full of the file's old text under a
+        // baseline that says otherwise, and the mount reconcile would then read
+        // that stale text as the user's own unsaved draft. `adoptCleanBaseline`
+        // lands it as an undoable edit and leaves a dirty draft alone, recording
+        // only the newer external revision.
+        this.adoptCleanBaseline(entry, input.seed);
       }
     }
 
@@ -215,6 +244,58 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
     };
   }
 
+  /**
+   * Every open document currently holding an unsaved draft. The authority a
+   * host reports to main's quit gate from — the same flag the editors show, so
+   * the dot on a tab and the question ⌘Q asks can never disagree.
+   */
+  unsavedDocuments(): DocumentIdentity[] {
+    const unsaved: DocumentIdentity[] = [];
+    for (const entry of this.entries.values()) {
+      if (entry.dirty) unsaved.push(entry.identity);
+    }
+    return unsaved;
+  }
+
+  /** Fires whenever {@link unsavedDocuments} would answer differently. */
+  observeUnsaved(listener: () => void): { dispose(): void } {
+    this.unsavedListeners.add(listener);
+    return { dispose: () => this.unsavedListeners.delete(listener) };
+  }
+
+  /**
+   * The ONE place `dirty` moves, so the unsaved set cannot change without the
+   * hosts watching it hearing about it. Silent on a no-op transition: typing
+   * fires a content change per keystroke and all but the first say the same
+   * thing.
+   */
+  private setDirty(entry: DocumentEntry<Model, ViewState>, dirty: boolean): void {
+    if (entry.dirty === dirty) return;
+    entry.dirty = dirty;
+    for (const listener of this.unsavedListeners) listener();
+  }
+
+  /**
+   * Recomputes `dirty` from the live model against the baseline.
+   *
+   * The length probe first is not a micro-optimization: this runs on EVERY
+   * keystroke, and `getValue()` rebuilds the file's whole text out of Monaco's
+   * piece tree each time it is called, so the naive comparison charges typing a
+   * cost proportional to the file. A differing length is already proof the
+   * content differs — and typing changes the length nearly every time — so the
+   * common case never materializes the buffer at all. Equal lengths still fall
+   * through to the exact comparison, which is what keeps "undo back to the
+   * saved text" clearing the dirty flag.
+   */
+  private recomputeDirty(entry: DocumentEntry<Model, ViewState>, model: Model): void {
+    const length = model.getValueLength?.();
+    if (length !== undefined && length !== entry.baseline.length) {
+      this.setDirty(entry, true);
+      return;
+    }
+    this.setDirty(entry, model.getValue() !== entry.baseline);
+  }
+
   private markEntrySaved(
     key: string,
     entry: DocumentEntry<Model, ViewState>,
@@ -223,7 +304,7 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
     entry.baseline = entry.model?.getValue() ?? entry.baseline;
     entry.baselineRevision = revision;
     entry.externalRevision = revision;
-    entry.dirty = false;
+    this.setDirty(entry, false);
     this.cleanupReleasedEntry(key, entry);
   }
 
@@ -231,9 +312,14 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
     entry.applyingBaseline = true;
     try {
       if (entry.model !== null && entry.model.getValue() !== entry.baseline) {
-        entry.model.setValue(entry.baseline);
+        // Through the edit stack, not `setValue`: Discard is the one action in
+        // the app whose whole purpose is to destroy the user's work, so it is
+        // the last one that should also destroy their ability to take it back.
+        // A parked model keeps its history, which makes reopening the file and
+        // pressing ⌘Z a real recovery from a misclicked Discard.
+        this.factory.applyExternalEdit(entry.model, entry.baseline);
       }
-      entry.dirty = false;
+      this.setDirty(entry, false);
     } finally {
       entry.applyingBaseline = false;
     }
@@ -251,9 +337,13 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
     try {
       entry.baseline = seed.value;
       entry.baselineRevision = seed.revision;
-      entry.dirty = false;
+      this.setDirty(entry, false);
       if (entry.model !== null && entry.model.getValue() !== seed.value) {
-        entry.model.setValue(seed.value);
+        // An undoable edit rather than `setValue`, for the same reason an
+        // external update is one: the model may be parked with a history the
+        // user can still reach, and Monaco maps carets through edit ranges but
+        // resets them on a whole-buffer replace.
+        this.factory.applyExternalEdit(entry.model, seed.value);
       }
     } finally {
       entry.applyingBaseline = false;
@@ -273,7 +363,7 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
       if (entry.model !== null && entry.model.getValue() !== update.value) {
         this.factory.applyExternalEdit(entry.model, update.value);
       }
-      entry.dirty = update.value !== update.baseline;
+      this.setDirty(entry, update.value !== update.baseline);
     } finally {
       entry.applyingBaseline = false;
     }
@@ -288,9 +378,7 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
     });
     entry.model = model;
     entry.changeSubscription = model.onDidChangeContent(() => {
-      if (!entry.applyingBaseline) {
-        entry.dirty = model.getValue() !== entry.baseline;
-      }
+      if (!entry.applyingBaseline) this.recomputeDirty(entry, model);
     });
     return model;
   }
@@ -303,31 +391,48 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
   }
 
   /**
-   * A viewless, clean entry has nothing live left to hold: the model goes, and
-   * the entry itself goes with it UNLESS some view left state behind. Those
-   * survivors are the cold set — retained for the cursor they remember, and
-   * bounded by {@link DEFAULT_COLD_DOCUMENT_LIMIT} so a long session cannot
-   * accumulate the text of every file it ever opened.
+   * A viewless, clean entry is PARKED, not torn down.
+   *
+   * It used to be torn down: the model was disposed the moment its last view
+   * released, which is every tab switch and every walk out of Project Files and
+   * back. Monaco keeps undo/redo on the model, so coming back to a file the user
+   * had been editing handed them a buffer with an empty ⌘Z stack — their own
+   * edits from a minute earlier were unreachable, and a ⌘S made that permanent.
+   * Parking keeps the model (and its history) reachable for the next `acquire`,
+   * under the caps enforced below.
    */
   private cleanupReleasedEntry(key: string, entry: DocumentEntry<Model, ViewState>): void {
     if (entry.references.size > 0 || entry.dirty) return;
-    this.disposeModel(entry);
-    if (this.entries.get(key) !== entry) return; // superseded; already unreachable
-    this.cold.delete(key);
-    if (entry.viewStates.size === 0) {
-      this.entries.delete(key);
+    if (this.entries.get(key) !== entry) {
+      // Superseded and already unreachable — nothing will ever acquire this
+      // again, so its model has no history worth keeping.
+      this.disposeModel(entry);
       return;
     }
-    this.cold.add(key); // most recently used, at the back of the queue
-    this.evictColdEntries();
+    this.cold.delete(key);
+    this.cold.set(key, entry); // most recently used, at the back of the queue
+    this.enforceRetentionLimits();
   }
 
-  /** Drops the oldest cold entries until the retention cap holds. */
-  private evictColdEntries(): void {
-    for (const key of this.cold) {
-      if (this.cold.size <= this.coldLimit) return;
-      this.cold.delete(key);
-      this.entries.delete(key);
+  /**
+   * Ages the parked set out, oldest first: past {@link DEFAULT_WARM_DOCUMENT_LIMIT}
+   * an entry gives up its model (undo history goes, the remembered cursor and
+   * baseline stay), and past {@link DEFAULT_COLD_DOCUMENT_LIMIT} the entry goes
+   * entirely. Disposal is unconditional on the way out — a parked model is live
+   * in Monaco's own registry until someone disposes it, so dropping the entry
+   * without disposing would leak one per file the session ever opened.
+   */
+  private enforceRetentionLimits(): void {
+    const parked = [...this.cold];
+    for (const [index, [key, entry]] of parked.entries()) {
+      const remaining = parked.length - index;
+      if (remaining > this.coldLimit) {
+        this.disposeModel(entry);
+        this.cold.delete(key);
+        this.entries.delete(key);
+        continue;
+      }
+      if (remaining > this.warmLimit) this.disposeModel(entry);
     }
   }
 

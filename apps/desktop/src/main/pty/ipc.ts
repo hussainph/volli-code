@@ -18,6 +18,7 @@ import type {
 } from "@volli/shared";
 import { attachmentsRoot } from "../attachment-store";
 import type { DbHandle } from "../data-ipc";
+import { quitAlreadyRefused, refuseQuit } from "../quit-gate";
 import { createDesktopSessionEngine } from "../session-control";
 import type { AgentRuntimeEnvironment } from "./manager";
 import { PtyManager } from "./manager";
@@ -300,12 +301,20 @@ export function registerTerminalIpcHandlers(
   // Electron swallows a quit re-issued from inside before-quit, leaving a
   // confirmed quit doing nothing.)
   app.on("before-quit", (event) => {
+    // The unsaved-editor gate ahead of this one already got a Cancel. Don't
+    // stack a second modal on an answer the user has given, and don't killAll
+    // over a quit that is not happening.
+    if (quitAlreadyRefused(event)) return;
     const busy = manager.busySessions();
     if (
       busy.length > 0 &&
       !confirmDestructiveClose(busy, { message: "Quit Volli?", confirmLabel: "Quit" })
     ) {
-      event.preventDefault();
+      // `refuseQuit`, not a bare preventDefault: Electron runs every remaining
+      // before-quit listener anyway, and the native-Session shutdown behind this
+      // one ends in app.exit(0). Cancel used to delay the quit by one teardown
+      // and then kill the process regardless.
+      refuseQuit(event);
       return;
     }
     manager.killAll();

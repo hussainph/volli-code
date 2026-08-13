@@ -19,6 +19,7 @@ import {
   ensureMonacoEditorTheme,
 } from "./monaco-theme";
 import { findTextEdits } from "./text-reconciliation";
+import { startUnsavedDocumentReporting } from "./unsaved-report";
 
 export function createLazyInitializer<Value>(
   initialize: () => Promise<Value>,
@@ -252,6 +253,12 @@ export async function initializeMonacoRuntime(): Promise<MonacoRuntime> {
     Monaco.editor.ITextModel,
     Monaco.editor.ICodeEditorViewState
   >(createShikiBackedModelFactory(monaco, shiki));
+  // Wired here rather than from a hook because this is the moment a registry
+  // starts existing, and a hook would have to call `loadMonacoRuntime()` at boot
+  // — dragging the whole editor bundle into startup to ask a question whose
+  // answer is "nothing" until an editor opens. Never disposed: the reporting
+  // lives exactly as long as the runtime, which lives as long as the renderer.
+  startUnsavedDocumentReporting(registry);
   return { monaco, registry, shiki };
 }
 
