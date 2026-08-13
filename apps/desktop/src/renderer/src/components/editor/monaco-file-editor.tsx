@@ -157,6 +157,35 @@ export function planExplicitSave(input: {
   return "save";
 }
 
+/**
+ * Whether a window-level keydown is a ⌘S this editor should answer.
+ *
+ * Monaco binds ⌘S itself, but only inside its own DOM — so the moment focus sits
+ * anywhere else (a tab the user just clicked, the conflict banner's buttons, the
+ * file tree) ⌘S did nothing at all, silently, while the draft sat unsaved. The
+ * window listener closes that gap and defers in the two cases where answering
+ * would be wrong:
+ *
+ *  - `defaultPrevented` — Monaco's own keybinding already ran (it preventDefaults
+ *    and stops propagation), so answering again would be a second write of the
+ *    same bytes racing the first one's mtime.
+ *  - the keystroke came from ANOTHER editor's DOM — that editor owns it.
+ *
+ * Never `repeat`: holding ⌘S is one save, not a stream of them.
+ */
+export function isGlobalSaveShortcut(
+  event: Pick<
+    KeyboardEvent,
+    "key" | "metaKey" | "ctrlKey" | "altKey" | "repeat" | "defaultPrevented"
+  >,
+  isForeignEditorTarget: boolean,
+): boolean {
+  if (event.defaultPrevented || event.repeat || event.altKey) return false;
+  if (event.key !== "s" && event.key !== "S") return false;
+  if (!event.metaKey && !event.ctrlKey) return false;
+  return !isForeignEditorTarget;
+}
+
 /** A failed write is never swallowed — this is what the user is told (CLAUDE.md). */
 export function saveFailureMessage(label: string, error: string): string {
   const detail = error.trim();
@@ -493,6 +522,29 @@ export function MonacoFileEditor({
     emittedDirtyRef.current = dirty;
     onDirtyChange?.(dirty);
   }, [dirty, onDirtyChange]);
+
+  // ⌘S outside the editor's own DOM. Routed through the SAME `runSave` as
+  // Monaco's editor-local action, so the two can never become two writes: a
+  // second call while the first is in flight is coalesced by `planExplicitSave`,
+  // and a clean document is skipped entirely.
+  React.useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const host = hostRef.current;
+      const target = event.target;
+      // `[data-monaco-status]` is the marker every file-editor host carries, so
+      // this is "some OTHER editor is where this keystroke came from".
+      const foreign =
+        host !== null &&
+        target instanceof Element &&
+        !host.contains(target) &&
+        target.closest("[data-monaco-status]") !== null;
+      if (!isGlobalSaveShortcut(event, foreign)) return;
+      event.preventDefault();
+      void runSaveRef.current();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   // Status attributes mirror the read-only view's idiom so a packaged smoke can
   // assert the editor's real state rather than infer it from the DOM.

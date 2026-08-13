@@ -2,6 +2,7 @@ import {
   app,
   BrowserWindow,
   dialog,
+  ipcMain,
   nativeTheme,
   net,
   Notification,
@@ -28,9 +29,18 @@ import type {
   HarnessAdapter,
   HarnessId,
   ResolvedAppearance,
+  VolliIpcChannel,
   VolliIpcEvent,
 } from "@volli/shared";
 import type { ManagedConflict } from "./harness-install";
+import {
+  planUnsavedQuit,
+  quitAlreadyRefused,
+  quitConfirmDetail,
+  recordUnsavedDocuments,
+  refuseQuit,
+  unsavedDocumentNames,
+} from "./quit-gate";
 import { isInternalNavigationTarget } from "./navigation";
 import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
@@ -202,6 +212,32 @@ function openExternal(target: string): void {
   }
 }
 
+/**
+ * The native "this will destroy unsaved work" confirm, shared by ⌘Q and window
+ * close. Native and synchronous for the same reason the terminal one is: both
+ * callers need their verdict inside the event they are about to preventDefault.
+ * Returns true when the user chose to go ahead and lose the drafts.
+ */
+function confirmDiscardUnsaved(
+  names: readonly string[],
+  verb: "Quit" | "Close",
+  window?: BrowserWindow,
+): boolean {
+  const options = {
+    type: "warning" as const,
+    buttons: [`Discard and ${verb}`, "Cancel"],
+    defaultId: 1,
+    cancelId: 1,
+    message: verb === "Quit" ? "Quit Volli?" : "Close this window?",
+    detail: quitConfirmDetail(names),
+  };
+  const choice =
+    window === undefined
+      ? dialog.showMessageBoxSync(options)
+      : dialog.showMessageBoxSync(window, options);
+  return choice === 0;
+}
+
 function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): BrowserWindow {
   const mainWindow = new BrowserWindow({
     width: 1400,
@@ -260,18 +296,37 @@ function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): Brows
   let closeConfirmed = false;
   mainWindow.on("close", (event) => {
     if (closeConfirmed) return;
-    const busy = ptyManager.busySessions(mainWindow.webContents);
-    if (busy.length === 0) return;
-    event.preventDefault();
-    const proceed = confirmDestructiveClose(busy, {
-      message: "Close this window?",
-      confirmLabel: "Close Window",
-      window: mainWindow,
+    // Unsaved editor drafts are asked about FIRST and separately from the busy
+    // terminals: closing the window destroys the renderer holding those drafts
+    // exactly as finally as quitting does, and unlike a killed shell there is
+    // nothing left afterwards to recover them from.
+    // Same plan as the quit gate, skip-confirm seam included: the smokes close
+    // windows with editors deliberately left dirty, and a native modal here
+    // would hang their teardown exactly as one on the quit path would.
+    const unsaved = unsavedDocumentNames();
+    const unsavedStep = planUnsavedQuit({
+      names: unsaved,
+      skipConfirm: process.env["VOLLI_SKIP_CLOSE_CONFIRM"] === "1",
     });
-    if (proceed) {
-      closeConfirmed = true;
-      mainWindow.close();
+    const busy = ptyManager.busySessions(mainWindow.webContents);
+    if (unsavedStep === "quit" && busy.length === 0) return;
+
+    // Something is at stake, so hold the close while the questions are asked;
+    // a confirmed close is re-issued below rather than resumed.
+    event.preventDefault();
+    if (unsavedStep === "confirm" && !confirmDiscardUnsaved(unsaved, "Close", mainWindow)) return;
+    if (
+      busy.length > 0 &&
+      !confirmDestructiveClose(busy, {
+        message: "Close this window?",
+        confirmLabel: "Close Window",
+        window: mainWindow,
+      })
+    ) {
+      return;
     }
+    closeConfirmed = true;
+    mainWindow.close();
   });
 
   // Neutralize any per-origin zoom Electron persisted before UI zoom moved to
@@ -916,6 +971,25 @@ app.whenReady().then(async () => {
     });
   };
 
+  ipcMain.on(
+    "volli:unsaved-documents" satisfies VolliIpcChannel,
+    (_event, ...args: unknown[]): void => {
+      recordUnsavedDocuments(args[0]);
+    },
+  );
+  // Registered FIRST, ahead of the terminal gate and the Session shutdown: a
+  // discarded draft is the only thing on the quit path that cannot be recovered
+  // afterwards, so it is the question worth asking before any other.
+  app.on("before-quit", (event) => {
+    if (quitAlreadyRefused(event)) return;
+    const names = unsavedDocumentNames();
+    const step = planUnsavedQuit({
+      names,
+      skipConfirm: process.env["VOLLI_SKIP_CLOSE_CONFIRM"] === "1",
+    });
+    if (step === "confirm" && !confirmDiscardUnsaved(names, "Quit")) refuseQuit(event);
+  });
+
   const ptyManager = registerTerminalIpcHandlers(dbHandle, agentRuntime, sessionEngine);
   ptyManagerRef = ptyManager;
   const mainWindow = createWindow(ptyManager, currentFirstPaint());
@@ -1306,6 +1380,11 @@ app.whenReady().then(async () => {
   let nativeSessionShutdownInFlight = false;
   app.on("before-quit", (event) => {
     if (nativeSessionShutdownInFlight) return;
+    // A gate ahead of this one refused the quit. Electron still runs every
+    // before-quit listener after a preventDefault, so without this the teardown
+    // below would run and app.exit(0) the process the user just chose to keep —
+    // taking the unsaved draft or the running terminal they cancelled to save.
+    if (quitAlreadyRefused(event)) return;
     // Electron does not await async before-quit handlers. Hold this quit until
     // the local Session control plane has released its streams and child.
     event.preventDefault();

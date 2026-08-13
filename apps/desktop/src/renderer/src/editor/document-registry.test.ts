@@ -6,6 +6,7 @@ import {
   type RegistryModel,
   type RegistryModelFactory,
 } from "./document-registry";
+import { applyLiveDocumentReconciliation } from "./live-document-reconciliation";
 
 /**
  * Mirrors the one Monaco distinction this registry depends on: `setValue`
@@ -31,6 +32,11 @@ class FakeModel implements RegistryModel {
     return this.value;
   }
 
+  /** Monaco can answer this without materializing the buffer; so can this fake. */
+  getValueLength(): number {
+    return this.value.length;
+  }
+
   setValue(value: string): void {
     this.undoStack.length = 0;
     this.value = value;
@@ -54,7 +60,7 @@ class FakeModel implements RegistryModel {
   }
 }
 
-function makeRegistry(coldLimit?: number) {
+function makeRegistry(coldLimit?: number, warmLimit?: number) {
   const models: FakeModel[] = [];
   const factory: RegistryModelFactory<FakeModel> = {
     createModel({ value, language, uri }) {
@@ -67,7 +73,7 @@ function makeRegistry(coldLimit?: number) {
     },
   };
   return {
-    registry: new DocumentRegistry<FakeModel, { cursor: number }>(factory, coldLimit),
+    registry: new DocumentRegistry<FakeModel, { cursor: number }>(factory, coldLimit, warmLimit),
     models,
   };
 }
@@ -114,7 +120,7 @@ describe("DocumentRegistry", () => {
     expect(models).toHaveLength(2);
   });
 
-  it("disposes a clean model only after its final view release, exactly once", () => {
+  it("parks a clean model on its final view release instead of disposing it", () => {
     const { registry } = makeRegistry();
     const first = registry.acquire({
       identity: mainIdentity,
@@ -134,9 +140,11 @@ describe("DocumentRegistry", () => {
     expect(model.dispose).not.toHaveBeenCalled();
     expect(second.snapshot().viewReferences).toBe(1);
 
+    // The last view goes and the model stays: it carries the undo history the
+    // user comes back to. Only the retention caps ever dispose it.
     second.release();
     second.release();
-    expect(model.dispose).toHaveBeenCalledTimes(1);
+    expect(model.dispose).not.toHaveBeenCalled();
     expect(second.snapshot().viewReferences).toBe(0);
   });
 
@@ -271,7 +279,35 @@ describe("DocumentRegistry", () => {
     });
   });
 
-  it("accepts the latest seed after the last clean view released", () => {
+  /**
+   * The tab-switch round trip: leave a file, come back, and keep every ⌘Z. The
+   * parked model is reused rather than rebuilt, so the history is still there.
+   */
+  it("hands a reopened document its parked model, undo history intact", () => {
+    const { registry, models } = makeRegistry();
+    const file = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "print('hi')\n", revision: "r1" },
+      savePolicy: "explicit",
+    });
+    file.model.applyEdit("print('hello')\n");
+    file.markSaved("r2");
+    file.release({ cursor: 7 });
+
+    const reopened = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "print('hello')\n", revision: "r2" },
+      savePolicy: "explicit",
+    });
+
+    expect(models).toHaveLength(1);
+    expect(reopened.model).toBe(file.model);
+    expect(reopened.model.canUndo()).toBe(true);
+  });
+
+  it("lands a newer seed on the parked model as an undoable edit", () => {
     const { registry, models } = makeRegistry();
     const file = registry.acquire({
       identity: mainIdentity,
@@ -288,16 +324,20 @@ describe("DocumentRegistry", () => {
       seed: { value: "new baseline", revision: "r2" },
       savePolicy: "read-only",
     });
+
+    // The model the view gets back must hold what disk holds, or the mount
+    // reconcile would read the stale text as a draft the user never wrote.
     expect(reopened.model.getValue()).toBe("new baseline");
     expect(reopened.snapshot()).toMatchObject({
       baseline: "new baseline",
       baselineRevision: "r2",
       externalRevision: "r2",
+      dirty: false,
     });
-    expect(models).toHaveLength(2);
+    expect(models).toHaveLength(1);
   });
 
-  it("evicts a clean entry after its final view and view state are released", () => {
+  it("parks a clean entry even when its view kept no state to remember", () => {
     const { registry } = makeRegistry();
     const file = registry.acquire({
       identity: mainIdentity,
@@ -305,18 +345,10 @@ describe("DocumentRegistry", () => {
       seed: { value: "baseline", revision: "r1" },
       savePolicy: "read-only",
     });
-    file.release({ cursor: 7 });
+    file.release(null);
+
+    // No cursor worth remembering is not the same as no history worth keeping.
     expect(entryCount(registry)).toBe(1);
-
-    const reopened = registry.acquire({
-      identity: mainIdentity,
-      viewId: "file",
-      seed: { value: "baseline", revision: "r1" },
-      savePolicy: "read-only",
-    });
-    reopened.release(null);
-
-    expect(entryCount(registry)).toBe(0);
 
     const reseeded = registry.acquire({
       identity: mainIdentity,
@@ -473,7 +505,7 @@ describe("DocumentRegistry", () => {
     });
   });
 
-  it("marks a zero-view dirty model saved and disposes it once clean", () => {
+  it("marks a zero-view dirty model saved and parks it once clean", () => {
     const { registry } = makeRegistry();
     const file = registry.acquire({
       identity: mainIdentity,
@@ -494,10 +526,10 @@ describe("DocumentRegistry", () => {
       dirty: false,
       viewReferences: 0,
     });
-    expect(model.dispose).toHaveBeenCalledTimes(1);
+    expect(model.dispose).not.toHaveBeenCalled();
 
-    // A late duplicate completion sees the already-disposed model and retains
-    // the saved baseline rather than replacing it with an absent model value.
+    // A late duplicate completion re-reads the parked model, which still holds
+    // exactly the saved bytes, so the baseline is unchanged either way.
     file.markSaved("r3");
     expect(file.snapshot().baseline).toBe("saved draft");
   });
@@ -518,7 +550,7 @@ describe("DocumentRegistry", () => {
     expect(model.dispose).not.toHaveBeenCalled();
   });
 
-  it("discards a zero-view dirty draft back to its baseline before disposal", () => {
+  it("discards a zero-view dirty draft back to its baseline, undoably", () => {
     const { registry } = makeRegistry();
     const file = registry.acquire({
       identity: mainIdentity,
@@ -527,14 +559,17 @@ describe("DocumentRegistry", () => {
       savePolicy: "explicit",
     });
     const model = file.model as FakeModel;
-    model.setValue("throw this away");
+    model.applyEdit("throw this away");
     file.release();
 
     file.discard();
 
     expect(model.getValue()).toBe("baseline");
     expect(file.snapshot().dirty).toBe(false);
-    expect(model.dispose).toHaveBeenCalledTimes(1);
+    // Discard exists to destroy work, which is exactly why it must not also
+    // destroy the ⌘Z that takes a misclick back.
+    expect(model.canUndo()).toBe(true);
+    expect(model.dispose).not.toHaveBeenCalled();
   });
 
   it("can explicitly forget saved state for one view", () => {
@@ -575,9 +610,33 @@ describe("DocumentRegistry", () => {
     });
     const model = file.model as FakeModel;
     const setValue = vi.spyOn(model, "setValue");
+    const applyEdit = vi.spyOn(model, "applyEdit");
 
     expect(file.adoptCleanBaseline({ value: "baseline", revision: "r2" })).toBe("adopted");
     expect(setValue).not.toHaveBeenCalled();
+    expect(applyEdit).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Adoption is the agent-wrote-while-you-watched path. It must reach the model
+   * without emptying the history the user still has a right to.
+   */
+  it("adopts a fresh baseline into a clean model as an undoable edit", () => {
+    const { registry } = makeRegistry();
+    const file = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "def main():\n", revision: "r1" },
+      savePolicy: "explicit",
+    });
+    const model = file.model as FakeModel;
+    const setValue = vi.spyOn(model, "setValue");
+
+    file.adoptCleanBaseline({ value: "def main() -> None:\n", revision: "r2" });
+
+    expect(model.getValue()).toBe("def main() -> None:\n");
+    expect(setValue).not.toHaveBeenCalled();
+    expect(model.canUndo()).toBe(true);
   });
 
   it("peeks a document that is already open, exposing its live model and dirty flag", () => {
@@ -620,7 +679,7 @@ describe("DocumentRegistry", () => {
     expect(handle?.snapshot().dirty).toBe(true);
   });
 
-  it("discards a viewless dirty draft through the peeked handle, dropping the entry", () => {
+  it("discards a viewless dirty draft through the peeked handle, releasing the hold", () => {
     const { registry } = makeRegistry();
     const view = registry.acquire({
       identity: mainIdentity,
@@ -633,7 +692,10 @@ describe("DocumentRegistry", () => {
 
     registry.peek(mainIdentity)?.discard();
 
-    expect(entryCount(registry)).toBe(0);
+    // The draft no longer pins the entry against the retention caps, and no
+    // longer counts as work a quit would destroy.
+    expect(registry.peek(mainIdentity)?.snapshot().dirty).toBe(false);
+    expect(registry.unsavedDocuments()).toEqual([]);
   });
 
   it("marks a viewless draft saved through the peeked handle", () => {
@@ -649,7 +711,12 @@ describe("DocumentRegistry", () => {
 
     registry.peek(mainIdentity)?.markSaved("r2");
 
-    expect(entryCount(registry)).toBe(0);
+    expect(registry.peek(mainIdentity)?.snapshot()).toMatchObject({
+      dirty: false,
+      baseline: "draft",
+      baselineRevision: "r2",
+    });
+    expect(registry.unsavedDocuments()).toEqual([]);
   });
 
   it("clears autosave dirty and records the disk mtime after markSaved", () => {
@@ -723,8 +790,13 @@ describe("DocumentRegistry", () => {
 
     handle?.markSaved(11);
 
-    expect(entryCount(registry)).toBe(0);
-    expect(registry.peek(identity)).toBeNull();
+    expect(registry.peek(identity)?.snapshot()).toMatchObject({
+      dirty: false,
+      baseline: "hello world",
+      baselineRevision: 11,
+      externalRevision: 11,
+    });
+    expect(registry.unsavedDocuments()).toEqual([]);
   });
 });
 
@@ -824,5 +896,280 @@ describe("DocumentRegistry cold retention", () => {
 
     expect(registry.peek(fileIdentity("draft.ts"))).toBeNull();
     live.release(null);
+  });
+
+  it("keeps the warm models' undo history and lets the older parked ones go", () => {
+    const { registry } = makeRegistry(4, 2);
+
+    openAndPark(registry, "a.py");
+    openAndPark(registry, "b.py");
+    openAndPark(registry, "c.py");
+
+    // Past the warm cap: `a.py` is still known (cursor, baseline) but its model
+    // — and therefore its undo stack — has been let go.
+    expect(registry.peek(fileIdentity("a.py"))?.model).toBeNull();
+    expect(registry.peek(fileIdentity("b.py"))?.model).not.toBeNull();
+    expect(registry.peek(fileIdentity("c.py"))?.model).not.toBeNull();
+    expect(entryCount(registry)).toBe(3);
+  });
+
+  /**
+   * A lease outlives its entry: it closes over the entry it was handed, so a
+   * save that completes after that document was evicted and reopened is holding
+   * a stale one. It must not resurrect it over the live document, and must still
+   * let go of the model it is the last reference to.
+   */
+  it("lets a stale lease clean up its own superseded entry, not the live one", () => {
+    const { registry, models } = makeRegistry(1, 1);
+
+    const stale = registry.acquire({
+      identity: fileIdentity("a.py"),
+      viewId: "file",
+      seed: { value: "first\n", revision: 1 },
+      savePolicy: "explicit",
+    });
+    stale.release({ cursor: 1 });
+    openAndPark(registry, "b.py"); // evicts a.py past both caps
+
+    const reopened = registry.acquire({
+      identity: fileIdentity("a.py"),
+      viewId: "file",
+      seed: { value: "second\n", revision: 2 },
+      savePolicy: "explicit",
+    });
+    stale.markSaved(99);
+
+    expect(reopened.snapshot()).toMatchObject({ baseline: "second\n", baselineRevision: 2 });
+    expect(registry.peek(fileIdentity("a.py"))?.model).toBe(reopened.model);
+    expect(models[0]?.dispose).toHaveBeenCalled();
+  });
+
+  it("disposes a parked model on the way out rather than leaking it", () => {
+    const { registry, models } = makeRegistry(1, 1);
+
+    openAndPark(registry, "a.py");
+    openAndPark(registry, "b.py");
+
+    // `a.py` left both caps in one step: the entry is gone AND its model was
+    // disposed, or Monaco would hold a live model nothing can ever reach.
+    expect(registry.peek(fileIdentity("a.py"))).toBeNull();
+    expect(models[0]?.dispose).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * The case the whole conflict guard exists for, walked end to end against a real
+ * registry rather than a fake lease: someone is hand-writing Python, leaves the
+ * tab, an agent rewrites the file underneath, and they come back. Neither side
+ * may be dropped on the way through.
+ */
+describe("DocumentRegistry — an agent rewrites a parked draft", () => {
+  const identity: DocumentIdentity = { ...mainIdentity, relPath: "train.py" };
+  const onDisk = "import torch\n\nEPOCHS = 1\nLR = 0.01\n";
+
+  function parkADraft(registry: DocumentRegistry<FakeModel, { cursor: number }>) {
+    const view = registry.acquire({
+      identity,
+      viewId: "file",
+      seed: { value: onDisk, revision: 100 },
+      savePolicy: "explicit",
+    });
+    // The human's edit, on the LR line.
+    view.model.applyEdit("import torch\n\nEPOCHS = 1\nLR = 0.001\n");
+    view.release({ cursor: 3 });
+    return view;
+  }
+
+  it("merges the agent's disjoint line into the returning draft, still dirty", () => {
+    const { registry } = makeRegistry();
+    const parked = parkADraft(registry);
+
+    // The agent rewrote a DIFFERENT line while the tab was away.
+    const agentBytes = "import torch\n\nEPOCHS = 50\nLR = 0.01\n";
+    const reopened = registry.acquire({
+      identity,
+      viewId: "file",
+      seed: { value: agentBytes, revision: 200 },
+      savePolicy: "explicit",
+    });
+
+    // Reacquiring must not touch the draft: only the mount reconcile decides.
+    expect(reopened.model).toBe(parked.model);
+    expect(reopened.model.getValue()).toBe("import torch\n\nEPOCHS = 1\nLR = 0.001\n");
+
+    const plan = applyLiveDocumentReconciliation({
+      lease: reopened,
+      lastWrite: null,
+      disk: { ok: true, text: agentBytes, revision: 200, truncated: false },
+    });
+
+    expect(plan.kind).toBe("apply");
+    // Both edits survive, and the result is still unsaved work — a merge is not
+    // a save, and the dot has to keep saying so.
+    expect(reopened.model.getValue()).toBe("import torch\n\nEPOCHS = 50\nLR = 0.001\n");
+    expect(reopened.snapshot()).toMatchObject({ baseline: agentBytes, dirty: true });
+    expect(registry.unsavedDocuments()).toEqual([identity]);
+  });
+
+  it("preserves both versions when the agent rewrote the same line", () => {
+    const { registry } = makeRegistry();
+    parkADraft(registry);
+
+    // Same line as the human's edit — nothing here can be merged honestly.
+    const agentBytes = "import torch\n\nEPOCHS = 1\nLR = 0.05\n";
+    const reopened = registry.acquire({
+      identity,
+      viewId: "file",
+      seed: { value: agentBytes, revision: 200 },
+      savePolicy: "explicit",
+    });
+    const plan = applyLiveDocumentReconciliation({
+      lease: reopened,
+      lastWrite: null,
+      disk: { ok: true, text: agentBytes, revision: 200, truncated: false },
+    });
+
+    expect(plan).toMatchObject({
+      kind: "conflict",
+      local: "import torch\n\nEPOCHS = 1\nLR = 0.001\n",
+      disk: agentBytes,
+    });
+    // The draft is untouched and the baseline still describes it, so nothing
+    // has silently adopted disk — but the newer revision IS recorded, or the
+    // explicit overwrite that follows would be rejected on a stale mtime.
+    expect(reopened.model.getValue()).toBe("import torch\n\nEPOCHS = 1\nLR = 0.001\n");
+    expect(reopened.snapshot()).toMatchObject({
+      baseline: onDisk,
+      baselineRevision: 100,
+      externalRevision: 200,
+      dirty: true,
+    });
+  });
+
+  /** The same walk with nothing unsaved: adopt in full, quietly, and stay clean. */
+  it("adopts the agent's rewrite into a parked CLEAN document", () => {
+    const { registry } = makeRegistry();
+    const view = registry.acquire({
+      identity,
+      viewId: "file",
+      seed: { value: onDisk, revision: 100 },
+      savePolicy: "explicit",
+    });
+    view.release({ cursor: 3 });
+
+    const agentBytes = "import torch\n\nEPOCHS = 50\nLR = 0.01\n";
+    const reopened = registry.acquire({
+      identity,
+      viewId: "file",
+      seed: { value: agentBytes, revision: 200 },
+      savePolicy: "explicit",
+    });
+
+    expect(reopened.model.getValue()).toBe(agentBytes);
+    expect(reopened.snapshot()).toMatchObject({ dirty: false, baselineRevision: 200 });
+    expect(registry.unsavedDocuments()).toEqual([]);
+  });
+});
+
+describe("DocumentRegistry unsaved reporting", () => {
+  const fileIdentity = (relPath: string): DocumentIdentity => ({ ...mainIdentity, relPath });
+
+  it("reports every dirty document and drops each one as it is saved", () => {
+    const { registry } = makeRegistry();
+    const first = registry.acquire({
+      identity: fileIdentity("train.py"),
+      viewId: "file",
+      seed: { value: "epochs = 1\n", revision: 1 },
+      savePolicy: "explicit",
+    });
+    const second = registry.acquire({
+      identity: fileIdentity("model.py"),
+      viewId: "file",
+      seed: { value: "layers = 2\n", revision: 1 },
+      savePolicy: "explicit",
+    });
+
+    expect(registry.unsavedDocuments()).toEqual([]);
+
+    first.model.applyEdit("epochs = 30\n");
+    second.model.applyEdit("layers = 24\n");
+    expect(registry.unsavedDocuments()).toEqual([
+      fileIdentity("train.py"),
+      fileIdentity("model.py"),
+    ]);
+
+    first.markSaved(2);
+    expect(registry.unsavedDocuments()).toEqual([fileIdentity("model.py")]);
+  });
+
+  /** A parked draft is exactly the one a quit would silently destroy. */
+  it("still reports a dirty document whose view has been released", () => {
+    const { registry } = makeRegistry();
+    const file = registry.acquire({
+      identity: fileIdentity("train.py"),
+      viewId: "file",
+      seed: { value: "epochs = 1\n", revision: 1 },
+      savePolicy: "explicit",
+    });
+    file.model.applyEdit("epochs = 30\n");
+    file.release({ cursor: 1 });
+
+    expect(registry.unsavedDocuments()).toEqual([fileIdentity("train.py")]);
+  });
+
+  it("notifies observers on each dirty transition and never in between", () => {
+    const { registry } = makeRegistry();
+    const observed = vi.fn();
+    const subscription = registry.observeUnsaved(observed);
+    const file = registry.acquire({
+      identity: fileIdentity("train.py"),
+      viewId: "file",
+      seed: { value: "epochs = 1\n", revision: 1 },
+      savePolicy: "explicit",
+    });
+
+    file.model.applyEdit("epochs = 3\n");
+    expect(observed).toHaveBeenCalledTimes(1);
+
+    // Still dirty, just differently — nothing a quit gate needs to hear about.
+    file.model.applyEdit("epochs = 30\n");
+    file.model.applyEdit("epochs = 300\n");
+    expect(observed).toHaveBeenCalledTimes(1);
+
+    file.markSaved(2);
+    expect(observed).toHaveBeenCalledTimes(2);
+
+    subscription.dispose();
+    file.model.applyEdit("epochs = 3000\n");
+    expect(observed).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * Typing runs this per keystroke, and `getValue()` rebuilds the whole file
+   * each call, so a differing length has to settle it without one.
+   */
+  it("decides dirtiness from the model's length before building its value", () => {
+    const { registry, models } = makeRegistry();
+    const file = registry.acquire({
+      identity: fileIdentity("train.py"),
+      viewId: "file",
+      seed: { value: "epochs = 1\n", revision: 1 },
+      savePolicy: "explicit",
+    });
+    const model = models[0]!;
+    const getValue = vi.spyOn(model, "getValue");
+
+    file.model.applyEdit("epochs = 12\n"); // one character longer than the baseline
+    expect(getValue).not.toHaveBeenCalled();
+    expect(file.snapshot().dirty).toBe(true);
+
+    // Baseline length, different content: only the exact comparison can tell.
+    file.model.applyEdit("epochs = 2\n");
+    expect(getValue).toHaveBeenCalled();
+    expect(file.snapshot().dirty).toBe(true);
+
+    // And only it can bring an edit undone back to the saved text home to clean.
+    file.model.applyEdit("epochs = 1\n");
+    expect(file.snapshot().dirty).toBe(false);
   });
 });

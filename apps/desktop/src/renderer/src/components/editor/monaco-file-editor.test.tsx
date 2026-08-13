@@ -11,6 +11,7 @@ import {
   attachEditorContribution,
   fileEditorAriaLabel,
   fileEditorConstructionOptions,
+  isGlobalSaveShortcut,
   MonacoFileEditor,
   type MonacoDocumentOptions,
   type MonacoEditorContext,
@@ -181,6 +182,49 @@ describe("planExplicitSave", () => {
 
   it("ranks read-only above the in-flight and clean skips", () => {
     expect(planExplicitSave({ readOnly: true, saving: true, dirty: false })).toBe("skip-read-only");
+  });
+});
+
+describe("isGlobalSaveShortcut", () => {
+  const chord = {
+    key: "s",
+    metaKey: true,
+    ctrlKey: false,
+    altKey: false,
+    repeat: false,
+    defaultPrevented: false,
+  };
+
+  /** The gap this closes: focus on a tab, the file tree, or a banner button. */
+  it("answers ⌘S raised outside any editor", () => {
+    expect(isGlobalSaveShortcut(chord, false)).toBe(true);
+  });
+
+  it("answers ⌃S too, for a keyboard that has no ⌘", () => {
+    expect(isGlobalSaveShortcut({ ...chord, metaKey: false, ctrlKey: true }, false)).toBe(true);
+  });
+
+  it("answers a shifted ⇧⌘S rather than dropping the keystroke", () => {
+    expect(isGlobalSaveShortcut({ ...chord, key: "S" }, false)).toBe(true);
+  });
+
+  /** Monaco's own binding already ran; a second write would race the first. */
+  it("defers to a keystroke Monaco has already handled", () => {
+    expect(isGlobalSaveShortcut({ ...chord, defaultPrevented: true }, false)).toBe(false);
+  });
+
+  it("defers to whichever editor the keystroke came from", () => {
+    expect(isGlobalSaveShortcut(chord, true)).toBe(false);
+  });
+
+  it("treats a held ⌘S as one save, not a stream", () => {
+    expect(isGlobalSaveShortcut({ ...chord, repeat: true }, false)).toBe(false);
+  });
+
+  it("ignores plain s, and ⌥⌘S — a chord someone else may own", () => {
+    expect(isGlobalSaveShortcut({ ...chord, metaKey: false }, false)).toBe(false);
+    expect(isGlobalSaveShortcut({ ...chord, altKey: true }, false)).toBe(false);
+    expect(isGlobalSaveShortcut({ ...chord, key: "a" }, false)).toBe(false);
   });
 });
 
