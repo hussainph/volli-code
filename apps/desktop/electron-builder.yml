@@ -1,0 +1,59 @@
+# Packaging config for the local macOS build: `pnpm -C apps/desktop run dist`
+# (vp build/pack first, then electron-builder). Output lands in release/
+# (gitignored). Unsigned beyond macOS's mandatory ad-hoc signature — this is a
+# personal-machine build, not a notarized distribution artifact.
+appId: app.volli.desktop
+# productName comes from package.json ("Volli Code"); the .app icon comes from
+# buildResources (build/icon.icns — canonical baked asset, never regenerated).
+directories:
+  output: release
+  buildResources: build
+
+# The app payload is exactly what `pnpm start` runs: the packed main/preload
+# (dist-electron/, including the volli-cli.cjs bundle copy-cli.mjs drops there)
+# and the built renderer (dist/, served from volli-app://bundle/). Production
+# node_modules are collected separately by electron-builder from package.json
+# dependencies — but vp pack bundles almost everything into the dist-electron
+# chunks (all @volli/* source and, with it, their third-party deps), and vite
+# compiles every renderer dep into dist/. What the packaged main process
+# require()s from node_modules at runtime is therefore a tiny closed set:
+#   @trpc/server, better-sqlite3 (-> bindings -> file-uri-to-path), node-pty
+# (node-pty via a lazy `import("node-pty")`). The extglob negation below drops
+# the other ~500 collected packages (~400 MB: monaco, mermaid, icon packs, AI
+# SDK providers — all renderer-only or already bundled). KEEP IN SYNC with the
+# bare `require(`/`import(` specifiers in dist-electron/*.cjs: a new external
+# main-process dep must be added here or the packaged app fails at launch
+# while `pnpm start` keeps working.
+files:
+  - dist/**
+  - dist-electron/**
+  - "!dist-electron/*.map"
+  - "!node_modules/!(@trpc|better-sqlite3|bindings|file-uri-to-path|node-pty)/**"
+  - "!node_modules/@trpc/!(server)/**"
+  # Dev-only artifacts inside kept modules: deps/ is better-sqlite3's vendored
+  # SQLite source, prebuilds/ is the Node-ABI cache that cache-node-sqlite.mjs
+  # maintains for plain-Node tests. The packaged app loads only the
+  # Electron-ABI build/Release binary.
+  - "!node_modules/better-sqlite3/deps/**"
+  - "!node_modules/better-sqlite3/prebuilds/**"
+
+# Native modules ship exactly as rebuild:native left them (Electron ABI in
+# build/Release). electron-builder must not run its own rebuild pass — that
+# would fight the repo's Node-ABI/Electron-ABI coexistence scheme.
+npmRebuild: false
+
+# Native modules cannot load from inside an asar; node-pty also exec()s its
+# sibling spawn-helper binary, so both packages stay unpacked wholesale.
+asarUnpack:
+  - "**/node_modules/better-sqlite3/**"
+  - "**/node_modules/node-pty/**"
+
+electronLanguages:
+  - en
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch:
+        - arm64
