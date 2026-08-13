@@ -292,14 +292,21 @@ function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): Brows
     // terminals: closing the window destroys the renderer holding those drafts
     // exactly as finally as quitting does, and unlike a killed shell there is
     // nothing left afterwards to recover them from.
+    // Same plan as the quit gate, skip-confirm seam included: the smokes close
+    // windows with editors deliberately left dirty, and a native modal here
+    // would hang their teardown exactly as one on the quit path would.
     const unsaved = unsavedDocumentNames();
+    const unsavedStep = planUnsavedQuit({
+      names: unsaved,
+      skipConfirm: process.env["VOLLI_SKIP_CLOSE_CONFIRM"] === "1",
+    });
     const busy = ptyManager.busySessions(mainWindow.webContents);
-    if (unsaved.length === 0 && busy.length === 0) return;
+    if (unsavedStep === "quit" && busy.length === 0) return;
 
     // Something is at stake, so hold the close while the questions are asked;
     // a confirmed close is re-issued below rather than resumed.
     event.preventDefault();
-    if (unsaved.length > 0 && !confirmDiscardUnsaved(unsaved, "Close", mainWindow)) return;
+    if (unsavedStep === "confirm" && !confirmDiscardUnsaved(unsaved, "Close", mainWindow)) return;
     if (
       busy.length > 0 &&
       !confirmDestructiveClose(busy, {
