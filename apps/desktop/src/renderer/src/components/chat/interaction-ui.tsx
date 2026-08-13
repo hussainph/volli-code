@@ -243,6 +243,9 @@ export function InteractionCard({
       )}
     >
       <div className="flex items-start gap-2 px-3 pt-2.5">
+        {/* The card's palm, the footer's Warning and the Stop square are the
+            only filled glyphs the chat surface has left: an interaction is the
+            exception in a transcript that is otherwise outline throughout. */}
         <HandPalmIcon aria-hidden className="mt-0.5 size-3.5 shrink-0 text-primary" weight="fill" />
         <div className="min-w-0 flex-1">
           <p className="text-sm leading-5 text-foreground">{interaction.title}</p>
@@ -577,13 +580,15 @@ export function InteractionReceiptLine({
   const receipt = describeInteractionResolution(interaction, resolution);
   return (
     <div className="not-prose flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+      {/* Outline: the card that asked wore the filled palm, and this is the
+          line it leaves behind once the decision is made. Ink still separates
+          the two verdicts; weight is not asked to say it a second time. */}
       <HandPalmIcon
         aria-hidden
         className={cn(
           "size-3.5 shrink-0",
           receipt.verdict === "rejected" ? "text-muted-foreground" : "text-primary",
         )}
-        weight="fill"
       />
       <span className="shrink-0">{receipt.lead}</span>
       <code className="min-w-0 truncate font-mono text-xs text-foreground">{receipt.subject}</code>

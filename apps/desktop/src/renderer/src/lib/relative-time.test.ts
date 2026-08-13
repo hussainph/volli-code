@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { formatStamp, relativeTime } from "./relative-time";
+import { compactAge, formatStamp, relativeTime } from "./relative-time";
 
 const NOW = Date.UTC(2026, 6, 14, 12, 0, 0); // 2026-07-14T12:00:00Z
 const SECOND = 1000;
@@ -34,6 +34,40 @@ describe("relativeTime", () => {
 
   it("defaults `now` to the wall clock", () => {
     expect(relativeTime(Date.now())).toBe("just now");
+  });
+});
+
+describe("compactAge", () => {
+  it("says 'now' where relativeTime says 'just now'", () => {
+    expect(compactAge(NOW, NOW)).toBe("now");
+    expect(compactAge(NOW - 30 * SECOND, NOW)).toBe("now");
+    expect(compactAge(NOW + 5 * MINUTE, NOW)).toBe("now");
+  });
+
+  it("drops the trailing ' ago' from every relative answer", () => {
+    expect(compactAge(NOW - 5 * MINUTE, NOW)).toBe("5m");
+    expect(compactAge(NOW - 3 * HOUR, NOW)).toBe("3h");
+    expect(compactAge(NOW - 2 * DAY, NOW)).toBe("2d");
+    expect(compactAge(NOW - 3 * WEEK, NOW)).toBe("3w");
+  });
+
+  it("keeps month + day for a same-year rollup", () => {
+    const older = compactAge(NOW - 6 * WEEK, NOW);
+    expect(older).not.toContain("ago");
+    expect(older).not.toContain("2026");
+    expect(older).not.toContain("'");
+  });
+
+  it("trades the day for a two-digit year across the calendar boundary", () => {
+    const crossYear = compactAge(Date.UTC(2025, 11, 6, 12, 0, 0), NOW);
+    expect(crossYear).toBe("Dec '25");
+    // The string the age column could not hold; the whole point of the form.
+    expect(crossYear).not.toContain("2025");
+    expect(crossYear).not.toContain(",");
+  });
+
+  it("defaults `now` to the wall clock", () => {
+    expect(compactAge(Date.now())).toBe("now");
   });
 });
 

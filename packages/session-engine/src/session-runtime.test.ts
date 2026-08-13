@@ -3279,6 +3279,43 @@ describe("SessionRuntime transient transcript overlay", () => {
    * never handed over, leaving the Session working forever with a Stop button
    * nothing could clear.
    */
+  /**
+   * The other way a subscriber went deaf: its own drain failing. A listener
+   * that throws — or a frame the artifact store cannot read back yet — used to
+   * remove the subscriber and tell no one. The transport's queue stayed open,
+   * downstream read a healthy stream with nothing to say, and the Session held
+   * its Stop button forever. The subscription must be told it died, so the
+   * consumer's reconnect can heal from the ledger.
+   */
+  it("reports a drain failure to the subscription instead of going silently deaf", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const failures: unknown[] = [];
+    const delivered: string[] = [];
+    let exploded = false;
+    await runtime.subscribe(
+      { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
+      (emission) => {
+        if (isSessionStreamOverlay(emission)) return;
+        if (!exploded) {
+          exploded = true;
+          throw new Error("listener exploded");
+        }
+        delivered.push(emission.event.payload.kind);
+      },
+      (error) => failures.push(error),
+    );
+
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-1", occurredAt: 800 });
+    await adapter.emit({ kind: "turn", state: "completed", turnId: "turn-1", occurredAt: 801 });
+
+    expect(failures).toHaveLength(1);
+    expect(String(failures[0])).toContain("listener exploded");
+    // Dead means dead: nothing is delivered past the failure, because the
+    // consumer was told to resubscribe rather than left half-fed.
+    expect(delivered).toEqual([]);
+  });
+
   it("delivers past a gap left by a writer that bypassed the publish path", async () => {
     const { runtime, engine, adapter } = composition();
     const sessionId = await createAndAttach(runtime);

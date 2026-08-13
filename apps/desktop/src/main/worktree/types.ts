@@ -19,6 +19,12 @@ export type { RunGit } from "../project-base-branch";
  * filesystem event.
  */
 export type RunGitAsync = (args: readonly string[], cwd: string) => Promise<string>;
+
+/**
+ * Reads a path's mtime in epoch ms, or `null` when it does not exist. A seam for
+ * the same reason {@link RunGit} is: the suite drives it, never the disk.
+ */
+export type StatMtimeMs = (path: string) => number | null;
 // The phase vocabulary is DEFINED in @volli/shared (ipc.ts) because the
 // renderer consumes it over `volli:worktree-phase`; the module re-exports it
 // so internal callers keep one import site.
@@ -41,6 +47,12 @@ export interface WorktreeDeps {
    * put those reads back on the main thread.
    */
   gitAsync?: RunGitAsync;
+  /**
+   * The mtime reader behind `listBranches`' fetch-age answer. Omitted callers
+   * fall back to the real `statMtimeMs`; it lives here rather than as a trailing
+   * positional argument so one bundle carries every seam the module has.
+   */
+  statMtimeMs?: StatMtimeMs;
   home?: string;
   onPhase?: (ticketId: string, phase: WorktreePhase) => void;
   attachmentsRoot: string;

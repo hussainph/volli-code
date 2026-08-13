@@ -30,7 +30,7 @@ export function useTicketRetention(
   // reload — the synchronous `setState(null)` when `enabled` flips false, or a
   // superseding fetch — retires the earlier token, so its late/out-of-order
   // resolve drops itself. `reload` is called from the effects here AND externally
-  // (WorktreeDoneFlowSection's post-mutation refetch), so the guard is shared.
+  // (the rail's repository card, after a retention mutation), so the guard is shared.
   const fetchToken = useLatestAsync();
 
   const reload = React.useCallback(() => {

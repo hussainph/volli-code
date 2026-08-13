@@ -26,11 +26,20 @@
  *                      SQLite. (Driving the native folder picker isn't feasible
  *                      under Playwright; this is the established seeding path — see
  *                      board-smoke.mjs / global-artifacts-smoke.mjs.)
+ *   • ensurePiAuthInto() — copies the real `~/.pi/agent/auth.json` into a smoke's
+ *                      isolated HOME, so a live Pi turn is possible without
+ *                      touching the developer's own profile.
  *   • seedDefaultModel() — records the app-wide default model every structured
  *                      Session (Ticket or Project) now requires before it can
  *                      start, over the same `modelAccess.setDefault` tRPC
  *                      mutation Settings uses. Needs real Pi credentials
  *                      already readable, so callers run it after seeding those.
+ *                      Takes an optional pin so a probe can name the model it
+ *                      claims to test instead of inheriting the catalog's first.
+ *   • assistantReplyTexts()/waitForSettledReply()/PI_TURN_BUDGET_MS — the ONE
+ *                      encoding of "this turn produced an answer": what counts
+ *                      as assistant PROSE (not a tool bundle), and how long a
+ *                      real turn gets. Every Pi smoke waits through these.
  *   • readMonacoState()/isMonacoEditable() — the ONE encoding of how to
  *                      interrogate this Monaco build (input surface, read-only
  *                      contract, rendered aria-label), shared by every probe
@@ -46,11 +55,14 @@
  *                      STYLE. textContent still returns `display:none` text, so
  *                      it cannot answer "is this delimiter visible?".
  *   • cardById()/columnCount() — the board DOM readers both composer probes need.
+ *   • startTerminalSession() — the ONE encoding of "start a terminal from this
+ *                      surface's session-start control", which is a split
+ *                      button: chat on the press, terminal behind the caret.
  *
  * These smokes are NOT wired into `vp test`; they need a display + the built app.
  */
 import { execFile } from "node:child_process";
-import { promises as fs } from "node:fs";
+import { promises as fs, rmSync } from "node:fs";
 import os from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -331,6 +343,74 @@ export async function readSeededProjects(page) {
   });
 }
 
+// ---- Pi credentials ----------------------------------------------------------
+
+/**
+ * Where a real `pi` login puts its credentials on this machine.
+ *
+ * Module-private: it was exported while each smoke staged its own copy, and
+ * nothing outside this file needs a path to the developer's live token now that
+ * one helper does the staging. Narrowing it is the point rather than tidiness —
+ * the fewer callers that can name this file, the fewer that can copy it.
+ */
+const REAL_PI_AUTH = join(os.homedir(), ".pi", "agent", "auth.json");
+
+/**
+ * Copy the real Pi credentials into an isolated `HOME`, so a smoke can drive a
+ * live turn without ever touching the developer's own profile.
+ *
+ * Pi's credential store reads `$PI_CODING_AGENT_DIR` else `~/.pi/agent/auth.json`
+ * under whatever `HOME` the process was launched with
+ * (`packages/agent-runtime/src/pi/models.ts`), so a smoke that overrides `HOME`
+ * — the same posture `VOLLI_WORKTREE_HOME_DIR` takes for worktrees — has to put
+ * a copy there first or the app boots into a login-required dead end.
+ *
+ * Never reads or prints the contents: `fs.copyFile`, byte for byte. Fails fast
+ * with a message naming the missing file rather than letting the app start.
+ *
+ * @param {string} homeDir  The isolated HOME the app will be launched with.
+ */
+export async function ensurePiAuthInto(homeDir) {
+  if (!(await pathExists(REAL_PI_AUTH))) {
+    throw new Error(
+      `Real Pi credentials not found at ${REAL_PI_AUTH}. This smoke drives a live Pi turn and ` +
+        "needs a working `pi` login (openai-codex / ChatGPT subscription) on this machine first.",
+    );
+  }
+  const dest = join(homeDir, ".pi", "agent", "auth.json");
+  await fs.mkdir(dirname(dest), { recursive: true, mode: 0o700 });
+  await fs.copyFile(REAL_PI_AUTH, dest);
+  // `copyFile` happens to carry the source's 0600 over on macOS, which is the
+  // only platform these run on — said explicitly anyway, because "the mode came
+  // out right" is a property of the copy, not a promise the call makes.
+  await fs.chmod(dest, 0o600);
+  forgetOnExit(dirname(dest));
+}
+
+/**
+ * Shred a staged credential when this process dies, however it dies.
+ *
+ * A smoke already removes its whole scratch in a `finally`, and that covers the
+ * run that merely fails. It does not cover the run that is KILLED — and that is
+ * the one that matters here, because what it leaves behind is a byte-identical
+ * copy of a live bearer token sitting in `/var/folders` with nothing scheduled
+ * to ever remove it. One was found there hours after the run that made it.
+ *
+ * Synchronous on purpose: `exit` cannot await, so a promise here would be
+ * abandoned mid-unlink. `SIGKILL` is still unanswerable and always will be —
+ * which is why the directory is 0700 above rather than trusting this alone.
+ */
+function forgetOnExit(dir) {
+  const shred = () => rmSync(dir, { recursive: true, force: true });
+  process.once("exit", shred);
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+    process.once(signal, () => {
+      shred();
+      process.exit(1);
+    });
+  }
+}
+
 // ---- model access ------------------------------------------------------------
 
 /**
@@ -344,26 +424,65 @@ export async function readSeededProjects(page) {
  * (`model-access-settings.tsx`), just over the same tRPC edge directly rather
  * than through the Select+Save UI.
  *
- * Picks the first "available" model the LIVE catalog reports (real Pi
- * credentials must already be readable — see `ensurePiAuthInto` callers) and
- * that model's last-listed reasoning level, mirroring the Settings pane's own
- * `preferredReasoning` heuristic, rather than hardcoding a provider/model/
- * reasoning triple upstream's own catalog is free to stop supporting.
+ * Unpinned, this picks the first "available" model the LIVE catalog reports
+ * (real Pi credentials must already be readable — see `ensurePiAuthInto`
+ * callers) and that model's last-listed reasoning level, mirroring the Settings
+ * pane's own `preferredReasoning` heuristic. That is the right default for a
+ * probe whose subject is the Model Access plumbing itself: it survives upstream
+ * retiring any particular model.
+ *
+ * It is the WRONG default for a probe that drives a real turn and then reports
+ * how long one takes, because "first available at its highest reasoning level"
+ * is a moving target — it silently became `openai-codex/gpt-5.3-codex-spark`
+ * at `xhigh` while pi-ticket-chat-smoke's own header still claimed
+ * `gpt-5.6-luna`, so the smoke had been misreporting what it tests. Those
+ * probes pass `pin` and say so in their header. A pin is checked against the
+ * live catalog and fails LOUDLY (with what IS available) rather than falling
+ * back to the first-available pick, which would put the misreporting straight
+ * back.
  *
  * @param {import("playwright-core").Page} page
+ * @param {{providerId:string, modelId:string, reasoningLevel?:string}|null} [pin]
  * @returns {Promise<{providerId:string, modelId:string, reasoningLevel:string, label:string}>}
  */
-export async function seedDefaultModel(page) {
-  const result = await page.evaluate(async () => {
+export async function seedDefaultModel(page, pin = null) {
+  const result = await page.evaluate(async (pinned) => {
     const inspected = await window.api.sessionRpc.request({
       procedure: "modelAccess.inspect",
       input: {},
     });
     if (!inspected.ok) return { ok: false, error: inspected };
     const models = inspected.data.models ?? [];
-    const model = models.find((candidate) => candidate.state === "available");
-    if (!model) return { ok: false, error: { message: "no available model in the live catalog" } };
-    const reasoningLevel = model.reasoningLevels.at(-1) ?? "off";
+    const available = models
+      .filter((candidate) => candidate.state === "available")
+      .map((candidate) => `${candidate.providerId}/${candidate.modelId}`);
+    const model = pinned
+      ? models.find(
+          (candidate) =>
+            candidate.providerId === pinned.providerId && candidate.modelId === pinned.modelId,
+        )
+      : models.find((candidate) => candidate.state === "available");
+    if (!model || (pinned && model.state !== "available")) {
+      return {
+        ok: false,
+        error: {
+          message: pinned
+            ? `pinned model ${pinned.providerId}/${pinned.modelId} is ${model?.state ?? "absent from the live catalog"}`
+            : "no available model in the live catalog",
+          available,
+        },
+      };
+    }
+    const reasoningLevel = pinned?.reasoningLevel ?? model.reasoningLevels.at(-1) ?? "off";
+    if (!model.reasoningLevels.includes(reasoningLevel)) {
+      return {
+        ok: false,
+        error: {
+          message: `${model.providerId}/${model.modelId} does not support reasoning level ${reasoningLevel}`,
+          supported: model.reasoningLevels,
+        },
+      };
+    }
     const selection = {
       providerId: model.providerId,
       modelId: model.modelId,
@@ -375,11 +494,118 @@ export async function seedDefaultModel(page) {
     });
     if (!saved.ok) return { ok: false, error: saved };
     return { ok: true, selection: { ...selection, label: model.label } };
-  });
+  }, pin);
   if (!result.ok) {
     throw new Error(`seedDefaultModel failed: ${JSON.stringify(result.error)}`);
   }
   return result.selection;
+}
+
+// ---- one real chat turn ----------------------------------------------------
+
+/**
+ * How long ONE real Pi turn gets, measured from the keystroke that submits the
+ * prompt to the moment the turn settles.
+ *
+ * This number is the whole reason a green build used to fail as a coin flip, so
+ * it is written down rather than guessed. Timed submit → settle on one
+ * one-sentence prompt against the UNPINNED default pick — first available at
+ * its highest reasoning level, `openai-codex/gpt-5.3-codex-spark` at `xhigh`,
+ * which is still what the smokes that pass no pin get — thirteen samples off a
+ * fifteen-run series:
+ *
+ *   3.5s · 11.0s · 25.4s · 35.2s · 41.1s · 41.4s · 46.7s
+ *   57.5s · 58.5s · 62.2s · 64.0s · 64.5s · 107.0s
+ *
+ * The ceiling it replaces was 30s, which sits MID-DISTRIBUTION — about half of
+ * those runs exceed it. A ceiling near the median does not test anything; it
+ * samples a distribution. 180s is past the longest observed turn with room for
+ * a machine under load, and a turn that reaches it is a real hang worth reading
+ * rather than a slow answer. Do not tidy it back down toward the measurements:
+ * the measurements are exactly where a ceiling must not sit. A pinned model at
+ * a low reasoning level answers far quicker than any of this (2-6s across five
+ * runs of pi-ticket-chat-smoke on `gpt-5.6-luna`/`low`), and that is headroom,
+ * not evidence for a smaller number — one budget covers every Pi smoke here,
+ * pinned or not.
+ */
+export const PI_TURN_BUDGET_MS = 180_000;
+
+/** The Stop control, on screen for exactly as long as a turn is running. */
+export function stopButton(page) {
+  return page.getByRole("button", { name: "Stop", exact: true });
+}
+
+/**
+ * The assistant's PROSE replies — what a person would call the answer — one
+ * entry per assistant turn that produced text, empty ones dropped.
+ *
+ * `.is-assistant` alone cannot answer this, and quietly said "yes" far too
+ * early. `Message` (`ai-elements/message.tsx`) stamps that class on the WHOLE
+ * assistant turn, and `chat-plane.tsx`'s `renderSegment` draws the tool
+ * ActivityBundle inside it — so the first `.is-assistant` text of a turn that
+ * runs anything at all is the bundle's own summary, literally "Ran 1 command".
+ * A wait gated on that starts its clock when the model reaches for a tool, not
+ * when it answers.
+ *
+ * The partition is the transcript's own: every non-prose row carries
+ * `not-prose` (`activity-ui.tsx`'s bundle roots, tool rows and status lines;
+ * `interaction-ui.tsx`'s status line), and a pending question is an
+ * InteractionCard `<form>` — a question, never a reply. Strip both from a clone
+ * and what is left inside an assistant turn can only have come from a `text`
+ * segment, which is the only thing `renderSegment` renders as prose.
+ */
+export async function assistantReplyTexts(page) {
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll(".is-assistant"))
+      .map((message) => {
+        const prose = message.cloneNode(true);
+        for (const activity of prose.querySelectorAll(".not-prose, form")) activity.remove();
+        return prose.textContent?.trim() ?? "";
+      })
+      .filter((text) => text.length > 0),
+  );
+}
+
+/**
+ * Wait out one real turn: Stop gone AND a non-empty assistant prose reply on
+ * screen, both inside ONE budget measured from `since` — the moment the prompt
+ * was submitted.
+ *
+ * One clock, one deadline, on purpose. The two-wait version this replaces gave
+ * the settle its own fresh 30s starting from whenever the first `.is-assistant`
+ * node appeared, which made the real budget "30s for the remainder of the turn
+ * after the first tool call" — a sentence nobody wrote down and nobody could
+ * have measured against.
+ *
+ * @param {import("playwright-core").Page} page
+ * @param {{since:number, budget?:number}} opts
+ * @returns {Promise<{texts:string[], elapsedMs:number}>}
+ */
+export async function waitForSettledReply(page, { since, budget = PI_TURN_BUDGET_MS }) {
+  const texts = await waitUntil(
+    "the turn to settle with a non-empty assistant text reply",
+    async () => {
+      const [running, replies] = await Promise.all([
+        stopButton(page).count(),
+        assistantReplyTexts(page),
+      ]);
+      return running === 0 && replies.length > 0 ? replies : false;
+    },
+    { timeout: Math.max(1000, budget - (Date.now() - since)), interval: 250 },
+  ).catch(async (error) => {
+    // Which half was missing is the whole diagnosis: still streaming is a slow
+    // turn, settled-with-no-prose is a turn that answered in tool calls only.
+    const [running, replies, turns] = await Promise.all([
+      stopButton(page).count(),
+      assistantReplyTexts(page),
+      page.evaluate(() => document.querySelectorAll(".is-assistant").length),
+    ]);
+    throw new Error(
+      `${error.message} — after ${Date.now() - since}ms: stopVisible=${running > 0} ` +
+        `proseReplies=${replies.length} assistantTurns=${turns}`,
+    );
+  });
+  return { texts, elapsedMs: Date.now() - since };
 }
 
 // ---- Monaco DOM readers ----------------------------------------------------
@@ -713,4 +939,89 @@ export async function goToBoard(page) {
   }
 
   throw new Error("board view did not become stable");
+}
+
+/**
+ * Start a terminal Session from a surface's session-start control.
+ *
+ * The ONE encoding of that gesture. The control is a split button: its press
+ * starts a CHAT (so a probe that wants a chat just clicks `New chat`), and a
+ * terminal lives behind the caret half. The menu item's accessible name is
+ * computed from its whole subtree, so on the Sessions strip — the one mount
+ * that announces the chords — it reads "Terminal ⌥⌘T"; matching a prefix is
+ * what works on every mount.
+ *
+ * `scope` is a Locator (a rail, a strip's container) or the Page itself.
+ */
+export async function startTerminalSession(scope) {
+  await scope.getByRole("button", { name: "Other session kinds", exact: true }).first().click();
+  const page = scope.page?.() ?? scope;
+  await page.getByRole("menuitem", { name: /^Terminal/ }).click();
+}
+
+// ---- tab strips ------------------------------------------------------------
+
+/** The accessible name each tab strip announces (`ticket-tabs.tsx`, `session-tabs.tsx`). */
+export const TICKET_TAB_STRIP = "Ticket tabs";
+export const SESSION_TAB_STRIP = "Session tabs";
+
+/**
+ * One named tab strip's tablist.
+ *
+ * Naming it is not decoration. A ticket screen draws TWO tablists — this strip
+ * and the details rail's page switcher — so an unnamed `[role="tablist"]` is
+ * ambiguous, and every unscoped `[role="tab"]` question on that screen counts
+ * the rail's pages as if they were tabs you could open a chat into.
+ */
+export function tabStrip(page, name) {
+  return page.getByRole("tablist", { name, exact: true });
+}
+
+/**
+ * A named tab strip's own session-start control — the press half, which starts
+ * a chat.
+ *
+ * Scoped by walking UP from the tablist to the nearest ancestor that also holds
+ * such a control, rather than by hopping a fixed number of parents. The strip is
+ * one row carrying both populations — tabs on the left, the things that act on
+ * them past a divider on the right — but how many wrappers sit between them is a
+ * layout decision, and it has already moved once: the ticket strip's control
+ * left the tabs' overflow scroller to sit past a divider, which stranded a `..`
+ * hop inside that scroller with nothing to click.
+ *
+ * The walk still has teeth, which a page-wide `getByRole` would not: a ticket
+ * screen carries a SECOND copy of this control in the rail's Sessions panel, so
+ * an unscoped query either matches two or quietly presses the wrong one, and a
+ * probe that means "the strip's control created this tab" would go on passing
+ * with the strip's control gone.
+ */
+export function tabStripNewChatButton(page, name) {
+  return tabStrip(page, name)
+    .locator('xpath=ancestor::*[.//button[@aria-label="New chat"]][1]')
+    .getByRole("button", { name: "New chat", exact: true });
+}
+
+/** The `aria-label` of the tab currently front in one named strip, or null. */
+export async function activeTabLabel(page, name) {
+  return tabStrip(page, name)
+    .locator('[role="tab"][aria-selected="true"]')
+    .getAttribute("aria-label");
+}
+
+/**
+ * Press a named strip's session-start control and wait for the chat tab it
+ * mints, returning that tab's label.
+ *
+ * Counted inside the strip, so the rail's pages cannot make the delta look
+ * satisfied — or, on the ticket screen, satisfied before the click even lands.
+ */
+export async function openNewChatTab(page, name) {
+  const strip = tabStrip(page, name);
+  const tabs = strip.getByRole("tab");
+  const tabsBefore = await tabs.count();
+  await tabStripNewChatButton(page, name).click();
+  await waitUntil("a new chat tab to appear", async () => (await tabs.count()) > tabsBefore);
+  const label = await activeTabLabel(page, name);
+  if (label === null) throw new Error("no tab became active after New chat");
+  return label;
 }

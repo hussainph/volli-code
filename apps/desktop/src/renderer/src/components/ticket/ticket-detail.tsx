@@ -119,7 +119,7 @@ function documentFileSource(identity: DocumentIdentity): FileSource {
  * higher up the tree, in main-content.tsx/app-shell.tsx). Layout follows the
  * browser-window metaphor: ONE full-width Chrome-style tab row at the very top,
  * spanning above both the main column (title → content plane) and the right
- * rail (icon-mode Sessions/Files/Changes/Properties navigator). Navigation is
+ * rail (the Calm Stack's Now/Diffs/Files pages). Navigation is
  * the chrome bar's ←/→ history plus Escape; there's no breadcrumb. The tab
  * plane hosts the ticket's live terminals; those stay resident (engines outlive
  * the view via the module registry, decision #8) and are positioned by the
@@ -195,6 +195,7 @@ export function TicketDetail({
    */
   const durableChatIds = useChatSessionRecordIds(ticket.id);
   const railCollapsed = useUiStore((state) => state.railCollapsed);
+  const toggleRailCollapsed = useUiStore((state) => state.toggleRailCollapsed);
   const railWidth = useUiStore((state) => state.railWidth);
   const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
   const setTerminalFocusTarget = useUiStore((state) => state.setTerminalFocusTarget);
@@ -852,15 +853,6 @@ export function TicketDetail({
     [setActiveTab, ticket.id],
   );
 
-  const enterTerminalFocus = React.useCallback(() => {
-    if (activeSessionTab === undefined) return;
-    setTerminalFocusTarget({
-      projectId,
-      ticketId: ticket.id,
-      sessionId: activeSessionTab.sessionId,
-    });
-  }, [activeSessionTab, projectId, ticket.id, setTerminalFocusTarget]);
-
   // Escape closes the detail view and returns to the board — but only when
   // focus isn't inside an input/textarea/contenteditable or an open menu/
   // dialog, the same guard board.tsx's own Escape-deselect uses, so a
@@ -872,8 +864,8 @@ export function TicketDetail({
   //
   // While terminal-focused, Escape is left entirely alone so it reaches the
   // PTY (Claude Code interrupts on it; vim and friends lean on it). Exit from
-  // terminal focus is the chrome-bar button only — no Escape chord — so the
-  // PTY never fights the app for the key.
+  // terminal focus is the chrome band's toggle and its ⌥⌘Return chord — never a
+  // bare key — so the PTY never fights the app for one.
   React.useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape" || event.defaultPrevented) return;
@@ -946,8 +938,8 @@ export function TicketDetail({
             }}
             onNewSession={() => void createSession()}
             onNewChat={() => void createChat()}
-            canFocusTerminal={activeSessionTab !== undefined}
-            onEnterTerminalFocus={enterTerminalFocus}
+            railCollapsed={railCollapsed}
+            onToggleRail={toggleRailCollapsed}
           />
         )}
         <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -1032,7 +1024,8 @@ export function TicketDetail({
             // Resizable details rail: a grip on its inner (left) edge widens it
             // leftward, mirroring the left sidebar's outer-edge handle. `relative`
             // makes the aside the grip's positioning context; the width persists
-            // app-wide via the ui store. Icon-mode content lives in TicketRail.
+            // app-wide via the ui store. The rail draws its own header and pages
+            // (TicketRail) — this only sizes and frames the column.
             <aside
               className="relative flex shrink-0 flex-col border-l border-sidebar-border bg-sidebar"
               style={{ width: railWidth }}
@@ -1062,7 +1055,6 @@ export function TicketDetail({
                     onPinFile={pinFileFromRail}
                   />
                 }
-                onOpenSource={previewFileFromRail}
               />
             </aside>
           )}

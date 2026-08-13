@@ -21,44 +21,28 @@ const NAV_ITEMS: ReadonlyArray<{ key: NavKey; label: string; icon: PhosphorIcon 
   { key: "configure", label: "Configure", icon: SlidersHorizontalIcon },
 ];
 
-interface NavListProps {
-  /** The collapsed presentation is a separate fixed-width layer so its icons
-   * never respond to the outer sidebar's in-between animation widths. */
-  collapsed?: boolean;
-}
-
 /** Primary feature navigation: Board / Sessions / Files / Configure. App-wide Settings lives in the sidebar footer. */
-export function NavList({ collapsed = false }: NavListProps) {
+export function NavList() {
   const [activeNav, setActiveNav] = useActiveNav();
   const settingsOpen = useUiStore((state) => state.settingsOpen);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
 
   return (
-    <SidebarGroup className={collapsed ? "p-2" : undefined}>
-      {/* Centering on the cross axis is what actually moves the icons: the
-          button is a hardcoded `size-8!` (32px) and `SidebarGroup` a hardcoded
-          `p-2`, so neither dimension is aware of the strip's width and widening
-          the strip alone just dumps the extra space on the right. Centering
-          puts that fixed 32px in the middle of whatever the content box really
-          is, so the flanks come out equal by construction — no literal here to
-          keep in step with the button's size or the group's padding. */}
-      <SidebarMenu className={collapsed ? "items-center" : undefined}>
+    <SidebarGroup>
+      <SidebarMenu>
         {NAV_ITEMS.map(({ key, label, icon: Icon }) => (
           <SidebarMenuItem key={key}>
-            {/* tooltip only shows in the collapsed icon strip (stock behavior).
-                The Settings overlay dims the nav highlight and any click closes
+            {/* The Settings overlay dims the nav highlight and any click closes
                 it — picking a page always lands you on that page. */}
             <SidebarMenuButton
-              aria-label={collapsed ? label : undefined}
-              tooltip={collapsed ? label : undefined}
               isActive={!settingsOpen && activeNav === key}
               onClick={() => {
                 setSettingsOpen(false);
                 setActiveNav(key);
               }}
             >
-              <Icon weight="fill" />
-              {!collapsed && <span>{label}</span>}
+              <Icon />
+              <span>{label}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         ))}

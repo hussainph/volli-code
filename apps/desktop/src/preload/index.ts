@@ -99,6 +99,7 @@ import type {
   WorktreeChangeSetResult,
   WorktreeChangedEvent,
   WorktreeWatchErrorEvent,
+  WorktreeCommitInput,
   WorktreeCommitResult,
   WorktreeDiffMode,
   WorktreeDiffResult,
@@ -498,7 +499,12 @@ const api = {
     /** The "Remove worktree…" escape hatch; `force` discards uncommitted work when the caller has confirmed. */
     remove: (ticketId: string, force: boolean): Promise<WorktreeRemoveResult> =>
       invoke("volli:worktree-remove", { ticketId, force }),
-    /** A project's local branch names, for the base-branch picker. */
+    /**
+     * A project's branch refs for the base-branch pickers: local heads, the
+     * checkout's own branch, remote-tracking refs, and when those last moved
+     * (see `WorktreeBranchListing` — the remote half is a snapshot, not a live
+     * reading, and the pickers label it as one).
+     */
     branches: (projectId: string): Promise<WorktreeBranchesResult> =>
       invoke("volli:worktree-branches", { projectId }),
     /**
@@ -556,9 +562,21 @@ const api = {
       return () =>
         ipcRenderer.removeListener("volli:worktree-watch-error" satisfies VolliIpcEvent, listener);
     },
-    /** Done flow: the one-click "commit remaining work" safety net (fixed chore message). */
-    commit: (ticketId: string): Promise<WorktreeCommitResult> =>
-      invoke("volli:worktree-commit", { ticketId }),
+    /**
+     * Done flow: the one-click "commit remaining work" safety net. `choices`
+     * carries the rail dialog's two fields; omit either (or the argument) for
+     * the command's own defaults — a generated `chore(<id>)` message and the
+     * whole worktree staged.
+     */
+    commit: (
+      ticketId: string,
+      choices: Omit<WorktreeCommitInput, "ticketId"> = {},
+    ): Promise<WorktreeCommitResult> =>
+      invoke("volli:worktree-commit", {
+        ticketId,
+        message: choices.message,
+        includeUnstaged: choices.includeUnstaged,
+      }),
     /** Done flow: push the branch and open (or re-discover) its draft PR; persists `pr_url`. */
     pushPr: (ticketId: string): Promise<WorktreePushPrResult> =>
       invoke("volli:worktree-push-pr", { ticketId }),

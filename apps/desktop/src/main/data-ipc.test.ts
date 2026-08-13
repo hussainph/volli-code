@@ -19,11 +19,12 @@ import type {
   TicketStatusEntriesResult,
   VolliIpcChannel,
   WorktreeBranchesResult,
+  WorktreeCommitResult,
   WorktreeOrphanDeleteResult,
   WorktreeOrphansResult,
   WorktreeRemoveResult,
 } from "@volli/shared";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -299,6 +300,28 @@ describe("volli:ticket-create — body, labels, usesWorktree", () => {
     expect(hydrated?.body).toBe("# Heading\n\nDo the thing.");
     expect(hydrated?.labels).toEqual(["bug", "ui"]);
     expect(hydrated?.usesWorktree).toBe(false);
+  });
+
+  it("persists the composer's chosen baseBranch, and rejects a name git could not take", () => {
+    const projectId = createProject();
+    const result = invoke<TicketResult>("volli:ticket-create", {
+      projectId,
+      status: "todo",
+      title: "Based on a release branch",
+      baseBranch: "release/1.4",
+    });
+    if (!result.ok) throw new Error(result.error);
+    expect(result.ticket.baseBranch).toBe("release/1.4");
+
+    // The command layer's branch-name validation is the shared gate; a throw
+    // there reaches the renderer as a failed Result, never as a silent create.
+    const bad = invoke<TicketResult>("volli:ticket-create", {
+      projectId,
+      status: "todo",
+      title: "Based on nonsense",
+      baseBranch: "..",
+    });
+    expect(bad).toEqual({ ok: false, error: "Invalid base branch name" });
   });
 
   it("defaults body/labels/usesWorktree when omitted (backward-compatible)", () => {
@@ -1086,7 +1109,7 @@ describe("volli:worktree-remove", () => {
     });
   });
 
-  it("refuses (main-side) when a live session runs in the ticket's worktree, never calling remove", async () => {
+  it("refuses (main-side) when a terminal runs in the ticket's worktree, never calling remove", async () => {
     const projectId = createProject();
     const ticket = createTicket(projectId);
     const worktreePath = `${worktreesHome()}/VC-9-live`;
@@ -1096,7 +1119,11 @@ describe("volli:worktree-remove", () => {
     // A session whose cwd is INSIDE the worktree must block the removal.
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
-      { liveSessionCwds: () => [`${worktreePath}/packages`] },
+      {
+        busyWorktreeSites: async () => [
+          { directory: `${worktreePath}/packages`, surface: "terminal" },
+        ],
+      },
     );
 
     const result = await invoke<Promise<WorktreeRemoveResult>>("volli:worktree-remove", {
@@ -1106,7 +1133,56 @@ describe("volli:worktree-remove", () => {
 
     expect(result).toEqual({
       ok: false,
-      error: "Close the live sessions running in this worktree before removing it.",
+      error: "A terminal is still running in this worktree. Close it first.",
+    });
+    expect(vi.mocked(removeWorktree)).not.toHaveBeenCalled();
+  });
+
+  // The defect this guard used to have: an attached chat reported its worktree
+  // busy for as long as the app ran, whether or not anything was in flight and
+  // long after its tab was closed, and nothing the user could do cleared it.
+  // A worktree nothing is working in is removed without a fight.
+  it("removes a worktree no busy site names", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const worktreePath = `${worktreesHome()}/VC-9-quiet`;
+    invoke<TicketResult>("volli:ticket-update", { ticketId: ticket.id, worktreePath });
+    vi.mocked(removeWorktree).mockResolvedValue({ ok: true, value: undefined });
+
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { busyWorktreeSites: async () => [] });
+
+    const result = await invoke<Promise<WorktreeRemoveResult>>("volli:worktree-remove", {
+      ticketId: ticket.id,
+      force: false,
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(vi.mocked(removeWorktree)).toHaveBeenCalledWith(expect.anything(), ticket.id, {
+      force: false,
+    });
+  });
+
+  it("names stopping the agent when the busy surface is one, not closing a terminal", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const worktreePath = `${worktreesHome()}/VC-9-agent`;
+    invoke<TicketResult>("volli:ticket-update", { ticketId: ticket.id, worktreePath });
+
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { busyWorktreeSites: async () => [{ directory: worktreePath, surface: "agent" }] },
+    );
+
+    const result = await invoke<Promise<WorktreeRemoveResult>>("volli:worktree-remove", {
+      ticketId: ticket.id,
+      force: false,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "An agent is still running in this worktree. Stop it first.",
     });
     expect(vi.mocked(removeWorktree)).not.toHaveBeenCalled();
   });
@@ -1135,17 +1211,87 @@ describe("volli:worktree-remove", () => {
     expect(result).toEqual({ ok: false, error: "Invalid worktree removal" });
     expect(vi.mocked(removeWorktree)).not.toHaveBeenCalled();
   });
+
+  // The busy read costs one durable projection per binding under the target, so
+  // it is asked about ONE directory: whole-list answers made every destructive
+  // action replay the ledger of every chat the launch had opened.
+  it("asks the busy supplier about the ticket's own worktree, not the whole app", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const worktreePath = `${worktreesHome()}/VC-9-scoped`;
+    invoke<TicketResult>("volli:ticket-update", { ticketId: ticket.id, worktreePath });
+    vi.mocked(removeWorktree).mockResolvedValue({ ok: true, value: undefined });
+    const asked: string[] = [];
+
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      {
+        busyWorktreeSites: async (target) => {
+          asked.push(target);
+          return [];
+        },
+      },
+    );
+
+    await invoke<Promise<WorktreeRemoveResult>>("volli:worktree-remove", {
+      ticketId: ticket.id,
+      force: false,
+    });
+
+    expect(asked).toEqual([worktreePath]);
+  });
+
+  // `remove` owns the ordering (after its dirty gate, before the delete); this
+  // handler's job is only to hand it the seam.
+  it("hands the release seam to remove so no Session is left pointed at the deleted path", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    invoke<TicketResult>("volli:ticket-update", {
+      ticketId: ticket.id,
+      worktreePath: `${worktreesHome()}/VC-9-release`,
+    });
+    vi.mocked(removeWorktree).mockResolvedValue({ ok: true, value: undefined });
+    const releaseAgentSites = vi.fn(async () => ({ released: [], stillOpen: [] }));
+
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { releaseAgentSites });
+
+    await invoke<Promise<WorktreeRemoveResult>>("volli:worktree-remove", {
+      ticketId: ticket.id,
+      force: false,
+    });
+
+    expect(vi.mocked(removeWorktree)).toHaveBeenCalledWith(expect.anything(), ticket.id, {
+      force: false,
+      releaseAgentSites,
+    });
+  });
 });
 
 describe("volli:worktree-branches", () => {
-  it("returns the project's local branch names", () => {
-    vi.mocked(listBranches).mockReturnValue({ ok: true, value: ["main", "dev"] });
+  it("flattens the listing onto the result envelope", () => {
+    vi.mocked(listBranches).mockReturnValue({
+      ok: true,
+      value: {
+        branches: ["main", "dev"],
+        current: "dev",
+        remotes: ["origin/main"],
+        fetchedAt: 1_700_000_000_000,
+      },
+    });
 
     const result = invoke<WorktreeBranchesResult>("volli:worktree-branches", {
       projectId: "project-1",
     });
 
-    expect(result).toEqual({ ok: true, branches: ["main", "dev"] });
+    expect(result).toEqual({
+      ok: true,
+      branches: ["main", "dev"],
+      current: "dev",
+      remotes: ["origin/main"],
+      fetchedAt: 1_700_000_000_000,
+    });
   });
 
   it("rejects a non-string projectId", () => {
@@ -1235,14 +1381,16 @@ describe("volli:worktree-orphan-delete", () => {
     expect(existsSync(target)).toBe(true);
   });
 
-  it("refuses when a live session runs at or under the target", async () => {
+  it("refuses when something is still working at or under the target", async () => {
     const target = join(worktreesHome(), "VC-2-live");
     mkdirSync(target, { recursive: true });
 
     handlers.clear();
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
-      { liveSessionCwds: () => [join(target, "src")] },
+      {
+        busyWorktreeSites: async () => [{ directory: join(target, "src"), surface: "terminal" }],
+      },
     );
 
     const result = await invoke<Promise<WorktreeOrphanDeleteResult>>(
@@ -1252,7 +1400,7 @@ describe("volli:worktree-orphan-delete", () => {
 
     expect(result).toEqual({
       ok: false,
-      error: "Close the live sessions running in this worktree before deleting it.",
+      error: "A terminal is still running in this worktree. Close it first.",
     });
     expect(existsSync(target)).toBe(true);
   });
@@ -1273,6 +1421,68 @@ describe("volli:worktree-orphan-delete", () => {
       channel: "volli:data-changed",
       payload: { entity: "tickets", kind: "worktree" },
     });
+  });
+
+  // Deleting a ticket only nulls `sessions.ticket_id`, so a Session can still be
+  // bound to what became an orphan. Without this it kept dispatching into a path
+  // the rm had already taken away.
+  it("ends the bindings rooted in the orphan before the rm, and asks the busy read about it", async () => {
+    const target = join(worktreesHome(), "VC-4-bound");
+    mkdirSync(target, { recursive: true });
+    // Both seams see the canonicalized target — the same path the containment
+    // guard and the rm run on, `/private` aliasing already resolved.
+    const canonical = realpathSync.native(target);
+    const order: string[] = [];
+    const asked: string[] = [];
+
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      {
+        busyWorktreeSites: async (probed) => {
+          asked.push(probed);
+          return [];
+        },
+        releaseAgentSites: async (directory) => {
+          order.push(`release:${directory}`);
+          order.push(existsSync(target) ? "dir:present" : "dir:gone");
+          return { released: ["chat-1"], stillOpen: [] };
+        },
+      },
+    );
+
+    const result = await invoke<Promise<WorktreeOrphanDeleteResult>>(
+      "volli:worktree-orphan-delete",
+      { path: target },
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(asked).toEqual([canonical]);
+    // Released while the directory still exists, so the executor stops in a cwd
+    // that is still there.
+    expect(order).toEqual([`release:${canonical}`, "dir:present"]);
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it("still deletes the orphan when a binding refuses to close", async () => {
+    // The always-confirmed path: the Settings row printed the dirtiness reason
+    // and the user said yes, and this is the only way to clear a dirty orphan.
+    const target = join(worktreesHome(), "VC-5-stubborn");
+    mkdirSync(target, { recursive: true });
+
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { releaseAgentSites: async () => ({ released: [], stillOpen: ["chat-1"] }) },
+    );
+
+    const result = await invoke<Promise<WorktreeOrphanDeleteResult>>(
+      "volli:worktree-orphan-delete",
+      { path: target },
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(existsSync(target)).toBe(false);
   });
 });
 
@@ -1376,5 +1586,20 @@ describe("descriptor guard rejections reach the caller through the envelope, one
       ok: false,
       error: "Invalid request",
     });
+  });
+
+  it("object-with-optional-fields shape: a commit message carrying a control character never reaches git", () => {
+    expect(
+      invoke<WorktreeCommitResult>("volli:worktree-commit", {
+        ticketId: "t1",
+        message: "subject\u0000--amend",
+      }),
+    ).toEqual({ ok: false, error: "Invalid commit request" });
+    expect(
+      invoke<WorktreeCommitResult>("volli:worktree-commit", {
+        ticketId: "t1",
+        includeUnstaged: "yes",
+      }),
+    ).toEqual({ ok: false, error: "Invalid commit request" });
   });
 });

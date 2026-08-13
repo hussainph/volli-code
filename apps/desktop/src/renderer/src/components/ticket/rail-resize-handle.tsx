@@ -48,10 +48,12 @@ export function RailResizeHandle() {
 
   return (
     // Absolute over the aside's left edge (its positioning context), hugging the
-    // full height. Like the sidebar's grip, the 6px strip sits ON TOP of the
-    // rail's full-width controls (the RailDrawer headers), so their leftmost 6px
-    // resizes instead of toggling — the same accepted trade as the sidebar, and
-    // the col-resize cursor makes the zone legible before the click lands.
+    // full height. Like the sidebar's grip, the 6px strip sits ON TOP of whatever
+    // the rail draws there, so a row's leftmost 6px resizes instead of activating
+    // — the same accepted trade as the sidebar, and the col-resize cursor makes
+    // the zone legible before the click lands. Every rail block insets by at
+    // least 12px (`RAIL_PANEL_INSET`), so nothing but a row's hover background
+    // actually reaches under it.
     <div
       role="separator"
       aria-orientation="vertical"

@@ -1,6 +1,6 @@
 ---
 title: The board
-description: What each of Volli's five columns means, what moves tickets between them, and how manual moves interact with agent activity.
+description: What each of Volli's five columns means, how tickets move, and how deliberate moves interact with Session activity.
 sidebar:
   label: The board
 ---
@@ -8,7 +8,8 @@ sidebar:
 import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
 Volli's board has five fixed columns, and you can't add, rename, or remove
-them. They track whose turn it is with a ticket, not a workflow you configure.
+them. They record the state of a ticket. Starting a Session is a separate
+action inside the ticket workspace.
 ![Volli's kanban board for a project named voltaic. Five columns (Backlog,
 Todo, Doing, Needs Review, and Done) hold twenty-four tickets. The Doing
 column contains ticket VLT-14, "Cache composer drafts per project", tagged
@@ -22,18 +23,16 @@ runs here.
 
 **Todo.** Work you intend to do next. Nothing runs here either.
 
-**Doing.** An agent's column. Moving a ticket here creates its worktree and
-starts its session. A ticket in Doing has, or recently had, an agent working
-on it.
+**Doing.** Work is active. Move a ticket here when implementation starts, then
+open its workspace to start or return to a Session.
 
-**Needs Review.** The agent has stopped and handed back to you. Read the
-change set here and decide.
+**Needs Review.** The ticket is ready for you to inspect its Change Set and
+decide what happens next.
 
 **Done.** Finished. Volli keeps the worktree and branch around.
 
-Backlog and Todo are yours, Doing belongs to an agent, and Needs Review is the
-handoff back. Most of the movement you'll see happens across that Doing and
-Needs Review boundary.
+The board records work state; it does not own Session lifetime. A Ticket
+Session stays openable after the ticket moves.
 
 ## List view
 
@@ -68,16 +67,16 @@ Three things move tickets, and they don't have equal authority.
 **You.** Drag a card, or run
 [`volli ticket move`](/reference/cli/#volli-ticket-move) yourself.
 
-**An agent.** Calling `volli session done` or `volli session blocked` from
-inside its session is how a finished agent lands its ticket in Needs Review.
+**A terminal companion.** Calling `volli session done` or
+`volli session blocked` from a linked ticket terminal reports its outcome to
+the board.
 
-**Automation.** Volli's own lifecycle handling, reacting to a session that
+**System lifecycle handling.** Volli can react to a terminal session that
 exited, stalled, or was interrupted.
 
 <Aside type="note">
-  Automation only de-escalates: it can interrupt a session, park a ticket, or
-  archive one that has gone stale. It never advances your work and never
-  deletes anything. Worktrees are kept even when dirty.
+  Lifecycle handling only de-escalates. It never advances work or deletes a
+  dirty worktree.
 </Aside>
 
 ## Manual moves win
@@ -129,10 +128,9 @@ one from the box at the bottom (`⌘Enter` submits) and it renders as Markdown.
 You can edit or delete your own comments; an edited comment is marked
 "edited" next to its timestamp.
 
-Each comment is attributed to whoever posted it: you, or a specific harness
-(Claude Code, Codex, and so on) when a session posts one. Only your own
-comments carry edit and delete controls. Volli doesn't let you alter what an
-agent posted on its own behalf.
+Each comment is attributed to whoever posted it: you or a Session. Only your
+own comments carry edit and delete controls. Volli doesn't let you alter what
+a Session posted.
 
 ## History
 
@@ -161,9 +159,8 @@ flow, and the only one that asks you to confirm it can't be undone.
 Volli watches every worktree ticket's pull request in the background (it
 needs `gh`, the GitHub CLI, on your PATH) and prompts you to wrap one up in
 two cases: its PR merged, in any column, or it's sat in Done for 14 days with
-no open PR. Neither case archives anything by itself. Automation only ever
-prompts here, the same de-escalate-only rule as the rest of the board; you
-still click through it.
+no open PR. Neither case archives anything by itself. The retention check only
+prompts; you still click through it.
 
 That prompt shows up in the ticket's workspace, on the **Properties** tab,
 under Pull request: the button that normally reads "Push updates" or "View
@@ -187,9 +184,9 @@ automatically without surfacing an error toast.
 
 <CardGrid>
   <LinkCard
-    title="Agents and worktrees"
+    title="Sessions and worktrees"
     href="/guides/agents-and-worktrees/"
-    description="What happens to a ticket the moment it reaches Doing."
+    description="How Sessions, worktrees, and terminal companions fit together."
   />
   <LinkCard
     title="CLI reference"

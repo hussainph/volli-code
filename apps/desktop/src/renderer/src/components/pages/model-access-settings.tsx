@@ -57,6 +57,7 @@ export function ModelAccessSettings() {
   }, [load]);
 
   if (!client) return null;
+  const offerable = offerableModels(models);
   const selectedModel = modelFor(models, selection);
   const valid = canSaveDefaultModel(selectedModel, selection);
 
@@ -111,10 +112,13 @@ export function ModelAccessSettings() {
       >
         <SettingsRow label="Model">
           <Select
-            value={selection === null ? "" : modelKey(selection)}
+            // A stored default whose provider is signed out reads as unset,
+            // because that is what it is: it names no model this profile can
+            // run, and Save stays inert until one is picked.
+            value={selectedModel?.state === "available" ? modelKey(selectedModel) : ""}
             disabled={loading || saving}
             onValueChange={(key) => {
-              const model = models.find((candidate) => modelKey(candidate) === key);
+              const model = offerable.find((candidate) => modelKey(candidate) === key);
               if (!model) return;
               setSelection({
                 providerId: model.providerId,
@@ -127,13 +131,9 @@ export function ModelAccessSettings() {
               <SelectValue placeholder="Choose a model" />
             </SelectTrigger>
             <SelectContent>
-              {models.map((model) => (
-                <SelectItem
-                  key={modelKey(model)}
-                  value={modelKey(model)}
-                  disabled={model.state === "unavailable"}
-                >
-                  {modelOptionLabel(model)}
+              {offerable.map((model) => (
+                <SelectItem key={modelKey(model)} value={modelKey(model)}>
+                  {modelOptionLabel(model, providers)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -227,23 +227,44 @@ export function preferredReasoning(
   return model.reasoningLevels.at(-1) ?? "off";
 }
 
+/**
+ * The models this profile can actually run, and the only ones ever offered.
+ *
+ * Pi's catalog is every provider it knows, signed in or not — around a thousand
+ * models against the handful anyone has credentials for. Listing the rest as
+ * disabled rows is not information: it buries the two that work, and eight
+ * providers ship a model called exactly "GPT-5.6 Luna", so the row a person
+ * lands on is decided by scroll position rather than by access.
+ */
+export function offerableModels(models: readonly ModelAccessModel[]): readonly ModelAccessModel[] {
+  return models.filter((model) => model.state === "available");
+}
+
 export function canSaveDefaultModel(
   model: ModelAccessModel | null,
   selection: ModelSelection | null,
 ): boolean {
   return (
     model !== null &&
-    model.state !== "unavailable" &&
+    model.state === "available" &&
     selection !== null &&
     (model.reasoningLevels.includes(selection.reasoningLevel) ||
       (model.reasoningLevels.length === 0 && selection.reasoningLevel === "off"))
   );
 }
 
-export function modelOptionLabel(model: ModelAccessModel): string {
-  if (model.state === "authentication-required") return `${model.label} — Sign in required`;
-  if (model.state === "unavailable") return `${model.label} — Unavailable`;
-  return model.label;
+/**
+ * `GPT-5.6 Luna · OpenAI Codex` — the provider is half the identity here.
+ *
+ * A model name is not unique across providers, and the difference between two
+ * rows reading the same is a Session that cannot send its first message.
+ */
+export function modelOptionLabel(
+  model: ModelAccessModel,
+  providers: readonly ModelAccessProvider[],
+): string {
+  const provider = providers.find((candidate) => candidate.id === model.providerId);
+  return `${model.label} · ${provider?.label ?? model.providerId}`;
 }
 
 export function providerAccessLabel(provider: ModelAccessProvider): string {

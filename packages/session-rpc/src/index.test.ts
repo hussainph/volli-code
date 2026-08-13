@@ -260,6 +260,7 @@ function runtimeFixture(): {
     cancelled: CancelInteractionRequest[];
   };
   emit: (next: SessionStreamEmission) => void;
+  fail: (error: unknown) => void;
 } {
   const calls: {
     command: SessionRuntimeCommandRequest[];
@@ -271,6 +272,7 @@ function runtimeFixture(): {
     cancelled: [],
   };
   let listener: ((next: SessionStreamEmission) => void) | null = null;
+  let failListener: ((error: unknown) => void) | null = null;
   const runtime: SessionRuntime = {
     command: async (request) => {
       calls.command.push(request);
@@ -293,11 +295,13 @@ function runtimeFixture(): {
       const { projection, throughSequence } = snapshot();
       return { projection, throughSequence };
     },
-    subscribe: async (input, next) => {
+    subscribe: async (input, next, onFailure) => {
       calls.subscribeAfter.push(input.afterSequence);
       listener = (value) => void next(value);
+      failListener = onFailure ?? null;
       return () => {
         listener = null;
+        failListener = null;
       };
     },
     cancelInteraction: async (request) => {
@@ -312,6 +316,10 @@ function runtimeFixture(): {
     emit: (next) => {
       if (!listener) throw new Error("Subscription is not listening");
       listener(next);
+    },
+    fail: (error) => {
+      if (!failListener) throw new Error("Subscription is not listening for failures");
+      failListener(error);
     },
   };
 }
@@ -1369,6 +1377,41 @@ describe("Session tRPC router", () => {
       1,
     );
     expect(fixture.calls.subscribeAfter).toEqual([0]);
+  });
+
+  /**
+   * The runtime's own drain dying behind a subscription must end the stream
+   * with an error, never a clean `done`: a clean end reads downstream as a
+   * stream with nothing left to say, while the ledger already holds a
+   * `turn.completed` this stream will never deliver. The error is what makes
+   * the client resubscribe and heal from the ledger.
+   */
+  it("ends a subscription whose runtime source failed with an error its subscriber can catch", async () => {
+    const fixture = runtimeFixture();
+    const diagnostics = new RpcDiagnosticLog({ capacity: 10_000 });
+    const caller = createSessionRouter().createCaller({ runtime: fixture.runtime, diagnostics });
+
+    const stream = await caller.session.subscribe({ sessionId: "session-1" });
+    const iterator = stream[Symbol.asyncIterator]();
+    const firstFrame = iterator.next();
+    await Promise.resolve();
+    fixture.emit(frame(1));
+    await firstFrame;
+    fixture.fail(new Error("subscriber drain died"));
+
+    const drain = async () => {
+      for (;;) {
+        const next = await iterator.next();
+        if (next.done) return;
+      }
+    };
+    await expect(drain()).rejects.toMatchObject({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Session stream source failed; resubscribe to resume from the ledger",
+    });
+    expect(
+      diagnostics.list().filter(({ code }) => code === "SUBSCRIPTION_SOURCE_FAILURE"),
+    ).toHaveLength(1);
   });
 
   it("ends an overflowing diagnostics subscription with an error its subscriber can catch", async () => {

@@ -6,10 +6,10 @@ import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
 import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
 import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
-import { errorMessage, type TerminalIoResult } from "@volli/shared";
 
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
-import { NewSessionMenu } from "@renderer/components/sessions/new-session-menu";
+import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
+import { runOnLivePanes, terminalTabState } from "@renderer/components/sessions/terminal-tab-state";
 import { TAB_STATUS_CLASS, type TicketTabStatus } from "@renderer/components/ticket/ticket-tabs";
 import {
   ContextMenu,
@@ -18,9 +18,8 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
-import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
-import { sessionPanes, useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
+import { useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
 
 /**
  * What the scratch strip draws, per kind.
@@ -77,29 +76,6 @@ function focusNeighborTab(from: HTMLElement): void {
   (tabs[i + 1] ?? tabs[i - 1])?.focus();
 }
 
-/**
- * Runs a park/wake/pin mutation against every LIVE pane of a tab (issue #51
- * warm-park tier) and surfaces any failure — CLAUDE.md's "never silently
- * swallow errors" applies to these fire-and-forget context-menu actions the
- * same as any other mutation.
- */
-function runOnLivePanes(
-  tab: SessionTab,
-  action: (paneId: string) => Promise<TerminalIoResult>,
-  failureLabel: string,
-): void {
-  for (const pane of sessionPanes(tab.layout)) {
-    if (pane.exitCode !== null) continue;
-    action(pane.sessionId)
-      .then((result) => {
-        if (!result.ok) toastError(`${failureLabel} failed: ${result.error}`);
-      })
-      .catch((error: unknown) => {
-        toastError(`${failureLabel} failed: ${errorMessage(error)}`);
-      });
-  }
-}
-
 interface SessionTabsProps {
   tabs: readonly SessionTabDescriptor[];
   activeTabId: string | null;
@@ -116,8 +92,9 @@ interface SessionTabsProps {
  * The scratch tab strip: small, dark, ember-orange active accent — matching the
  * chrome band the sessions surface sits under. It holds both kinds of Session a
  * project can run without a ticket, terminals first and chats after, each in
- * the order it was opened. A trailing "+" starts either; each tab carries a
- * hover-revealed close, a right-click menu, and double-click inline rename.
+ * the order it was opened. A trailing split control starts either; each tab
+ * carries a hover-revealed close, a right-click menu, and double-click inline
+ * rename.
  *
  * Only the terminal kind talks about parking: the moon badge, the wake-on-click
  * and the Park/Wake/Keep Awake items are all about a PTY holding memory (issue
@@ -140,8 +117,12 @@ export function SessionTabs({
 
   return (
     <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border bg-rail px-2">
+      {/* Named, the way the ticket strip's is: a query by role has to be able to
+          say which strip it means, and AT reading "tab list" twice in one app
+          learns nothing from either. */}
       <div
         role="tablist"
+        aria-label="Session tabs"
         aria-orientation="horizontal"
         className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
       >
@@ -179,15 +160,27 @@ export function SessionTabs({
           );
         })}
       </div>
-      <NewSessionMenu
-        disabled={creating}
-        // The trigger sits at the strip's right edge, so the menu hangs back
-        // into the window rather than off it.
-        align="end"
-        className="shrink-0"
-        onNewSession={onNewSession}
-        onNewChat={onNewChat}
-      />
+      {/* Actions, past a divider. The control already sat at the right edge, but
+          the tabs here are rounded pills too — an active one is a filled pill and
+          this is a ghost one, which in dark mode is close enough that the button
+          read as one more tab until you pressed it and found you had made a chat.
+          The rule is what separates the two populations: tabs are places, the
+          things on the right of it act on them.
+
+          The chord hint stays: ⌘T / ⌥⌘T resolve against the surface in front
+          (`lib/new-session-shortcut.ts`), and on this page that is this project's
+          ticketless Sessions — exactly what this control mints. `align="end"` so
+          the menu hangs back into the window rather than off its edge. */}
+      <div className="flex shrink-0 items-center border-l border-border/70 pl-2">
+        <NewSessionControl
+          disabled={creating}
+          placement="strip"
+          align="end"
+          shortcuts
+          onNewChat={onNewChat}
+          onNewTerminal={onNewSession}
+        />
+      </div>
     </div>
   );
 }
@@ -331,16 +324,11 @@ interface KindTabProps {
 /** One terminal tab: a live PTY tree, with the warm-park tier's vocabulary on it. */
 function TerminalTab({ tab, onSelect, ...shell }: KindTabProps & { tab: SessionTab }) {
   const parkState = useSessionsStore((state) => state.parkState);
-  const panes = sessionPanes(tab.layout);
-  const exited = panes.every((pane) => pane.exitCode !== null);
-  const exitCode = panes.find((pane) => pane.exitCode !== null)?.exitCode ?? null;
-  const livePanes = panes.filter((pane) => pane.exitCode === null);
-  // Fully parked: every LIVE pane is parked (vacuously true with no live panes,
-  // but the badge/menu below always gate on `!exited` too, so an exited tab
-  // never shows the moon badge or "Park Now").
-  const parked = livePanes.every((pane) => parkState[pane.sessionId]?.parked ?? false);
-  const keptAwake = livePanes.some((pane) => parkState[pane.sessionId]?.keepAwake ?? false);
-  const showParkControls = livePanes.length > 0;
+  // The derivation moved to `terminal-tab-state.ts` so the ticket strip could
+  // read it too — it was the reason a ticket's terminal tab used to say nothing
+  // about being parked or dead. Nothing about the reading changed.
+  const { exited, exitCode, parked, keptAwake, livePaneIds } = terminalTabState(tab, parkState);
+  const showParkControls = livePaneIds.length > 0;
   // Select the tab and, if it was fully parked, wake it — the explicit wake the
   // visibility effect can't cover (see below). Shared by click and keyboard
   // (Enter/Space) so both paths behave identically.
@@ -351,7 +339,7 @@ function TerminalTab({ tab, onSelect, ...shell }: KindTabProps & { tab: SessionT
     // be explicit. Idempotent for the select-a-different-tab case (visibility
     // wiring wakes it too; the second wake is a no-op).
     if (parked && !exited) {
-      runOnLivePanes(tab, (paneId) => window.api.terminal.wake(paneId), "Wake");
+      runOnLivePanes(livePaneIds, (paneId) => window.api.terminal.wake(paneId), "Wake");
     }
   };
 
@@ -373,12 +361,22 @@ function TerminalTab({ tab, onSelect, ...shell }: KindTabProps & { tab: SessionT
           labelClassName={exited ? "line-through" : undefined}
           leading={
             parked && !exited ? (
-              <MoonIcon weight="fill" className="size-2.5 shrink-0 text-muted-foreground" />
+              <MoonIcon weight="bold" className="size-2.5 shrink-0 text-muted-foreground" />
             ) : (
+              // Never transparent. A chat tab beside this one ALWAYS draws its
+              // dot — `idle` is a muted one — so a live terminal drawing nothing
+              // made the two kinds disagree about what an empty dot slot means
+              // on the same strip. Liveness is said by colour, not by absence:
+              // ember while this tab is the one in front, muted while it is
+              // simply running, faint once its PTY is gone.
               <span
                 className={cn(
                   "size-1.5 shrink-0 rounded-full",
-                  exited ? "bg-muted-foreground" : shell.active ? "bg-primary" : "bg-transparent",
+                  exited
+                    ? "bg-muted-foreground/40"
+                    : shell.active
+                      ? "bg-primary"
+                      : "bg-muted-foreground",
                 )}
               />
             )
@@ -397,7 +395,7 @@ function TerminalTab({ tab, onSelect, ...shell }: KindTabProps & { tab: SessionT
               <ContextMenuItem
                 icon={MoonIcon}
                 onSelect={() =>
-                  runOnLivePanes(tab, (paneId) => window.api.terminal.park(paneId), "Park")
+                  runOnLivePanes(livePaneIds, (paneId) => window.api.terminal.park(paneId), "Park")
                 }
               >
                 Park Now
@@ -407,7 +405,7 @@ function TerminalTab({ tab, onSelect, ...shell }: KindTabProps & { tab: SessionT
               <ContextMenuItem
                 icon={SunIcon}
                 onSelect={() =>
-                  runOnLivePanes(tab, (paneId) => window.api.terminal.wake(paneId), "Wake")
+                  runOnLivePanes(livePaneIds, (paneId) => window.api.terminal.wake(paneId), "Wake")
                 }
               >
                 Wake
@@ -417,7 +415,7 @@ function TerminalTab({ tab, onSelect, ...shell }: KindTabProps & { tab: SessionT
               icon={keptAwake ? PushPinSlashIcon : PushPinIcon}
               onSelect={() =>
                 runOnLivePanes(
-                  tab,
+                  livePaneIds,
                   (paneId) => window.api.terminal.setKeepAwake(paneId, !keptAwake),
                   keptAwake ? "Allow Parking" : "Keep Awake",
                 )
@@ -466,7 +464,11 @@ function ChatTab({
                 aria-hidden
                 className={cn("size-1.5 shrink-0 rounded-full", TAB_STATUS_CLASS[status])}
               />
-              <ChatCircleIcon weight="fill" className="size-3 shrink-0 text-muted-foreground" />
+              {/* Bold, not filled: the dot beside it is already a solid object,
+                  and two in a 12px row is one too many. Same treatment as the
+                  sidebar's kind glyph — at this size regular draws lighter than
+                  its own label and bold puts the pen back on the text stem. */}
+              <ChatCircleIcon weight="bold" className="size-3 shrink-0 text-muted-foreground" />
             </>
           }
         />

@@ -240,10 +240,20 @@ async function main() {
   // false — skipping the one-time localStorage import this smoke's project
   // seeding relies on (and polluting the owner's real data).
   const dbDir = await fs.mkdtemp(join(os.tmpdir(), "volli-terminal-smoke-db-"));
+  // An isolated Chromium profile, for the db's reason and one more: sharing
+  // <userData> with a Volli the owner already has open loses the
+  // single-instance lock, so this launch quits at exit code 0 before its first
+  // window. That surfaces only as "Target page, context or browser has been
+  // closed" from launch() — which reads like a crash in the app under test.
+  const profileDir = await fs.mkdtemp(join(os.tmpdir(), "volli-terminal-smoke-profile-"));
+  // Agent shells export ELECTRON_RUN_AS_NODE=1, which makes Electron run as
+  // plain Node. Same strip as scripts/start-electron.mjs.
+  const env = { ...process.env, VOLLI_DB_PATH: join(dbDir, "volli.db") };
+  delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({
     executablePath: ELECTRON,
-    args: [APP_DIR],
-    env: { ...process.env, VOLLI_DB_PATH: join(dbDir, "volli.db") },
+    args: [APP_DIR, `--user-data-dir=${profileDir}`],
+    env,
   });
   let backendReport = { webgpu: false, webgl2: false, navigatorGpu: false };
 
@@ -418,11 +428,12 @@ async function main() {
       JSON.stringify(dprReport),
     );
 
-    // === 6. Second tab in A: "+" → two tabs, each its own live shell ========
-    // The scratch strip's "+" is a menu since chat tabs landed beside terminals
-    // (Terminal / Chat); this flow boots the terminal kind.
-    await page.getByLabel("New session").click();
-    await page.getByRole("menuitem", { name: "Terminal", exact: true }).click();
+    // === 6. Second tab in A: caret → two tabs, each its own live shell ======
+    // The scratch strip's control is a split button (press = chat, caret = the
+    // kinds); this flow boots the terminal kind, so it takes the caret. The
+    // item's name carries its chord, hence the regex.
+    await page.getByLabel("Other session kinds").click();
+    await page.getByRole("menuitem", { name: /^Terminal/ }).click();
     await page.waitForFunction(
       () => document.querySelectorAll('[aria-label^="Close Terminal"]').length === 2,
       { timeout: 10000 },

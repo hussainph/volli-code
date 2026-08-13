@@ -527,11 +527,12 @@ const QUESTION: SessionInteraction = {
   native: { id: "q-1", detail: null },
 };
 
+// Signed-in models only, because that is the whole of what the pill is ever
+// handed — the plane filters the catalog before it gets here.
 const MODELS: ComposerModel[] = [
   {
     id: "anthropic/claude-sonnet-4-5",
     label: "sonnet-4.5",
-    state: "available",
     providerId: "anthropic",
     providerLabel: "Anthropic",
     modelId: "claude-sonnet-4-5",
@@ -540,7 +541,6 @@ const MODELS: ComposerModel[] = [
   {
     id: "anthropic/claude-opus-4-1",
     label: "opus-4.1",
-    state: "available",
     providerId: "anthropic",
     providerLabel: "Anthropic",
     modelId: "claude-opus-4-1",
@@ -549,19 +549,9 @@ const MODELS: ComposerModel[] = [
   {
     id: "openai/gpt-5-codex",
     label: "gpt-5-codex",
-    state: "available",
     providerId: "openai",
     providerLabel: "OpenAI",
     modelId: "gpt-5-codex",
-    reasoningLevels: [],
-  },
-  {
-    id: "openai/o4-mini",
-    label: "o4-mini",
-    state: "unavailable",
-    providerId: "openai",
-    providerLabel: "OpenAI",
-    modelId: "o4-mini",
     reasoningLevels: [],
   },
 ];

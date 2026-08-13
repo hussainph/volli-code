@@ -305,7 +305,7 @@ async function main() {
 
     // ---- 1. Changes list ----------------------------------------------------
     await attempt(1, "Changes flat list renders status mix", async () => {
-      await aside.getByTestId("ticket-rail-mode-changes").click();
+      await aside.getByTestId("ticket-rail-tab-changes").click();
       await waitUntil(
         "changes panel",
         async () => (await aside.getByTestId("ticket-changes-list").count()) === 1,
@@ -424,7 +424,7 @@ async function main() {
 
     // ---- 5. File tab shares model + dirty -----------------------------------
     await attempt(5, "Files open of same path shares model content and dirty", async () => {
-      await aside.getByTestId("ticket-rail-mode-files").click();
+      await aside.getByTestId("ticket-rail-tab-files").click();
       await waitUntil(
         "files list",
         async () => (await aside.getByTestId("ticket-files-list").count()) === 1,
@@ -481,7 +481,7 @@ async function main() {
       // editor action (focus may still be on the Files list after the row click).
       const tabsNow = await readTicketTabs(page, ticketId);
       if (tabsNow?.active !== `file:${TARGET}`) {
-        await aside.getByTestId("ticket-rail-mode-files").click();
+        await aside.getByTestId("ticket-rail-tab-files").click();
         const fileRow = aside.locator(`[data-testid="ticket-files-row"][data-path="${TARGET}"]`);
         await waitUntil("reopen file row", async () => (await fileRow.count()) === 1);
         await fileRow.click();
@@ -516,7 +516,7 @@ async function main() {
       const diskOk = onDisk.includes(EDIT_MARKER);
 
       // Switch back to Diff tab — should also be clean with same content.
-      await aside.getByTestId("ticket-rail-mode-changes").click();
+      await aside.getByTestId("ticket-rail-tab-changes").click();
       await waitUntil(
         "changes list after save",
         async () => (await aside.getByTestId("ticket-changes-list").count()) === 1,
@@ -552,7 +552,7 @@ async function main() {
 
     // ---- 7. Refresh never auto-opens tabs -----------------------------------
     await attempt(7, "filesystem Change Set refresh does not auto-open tabs", async () => {
-      await aside.getByTestId("ticket-rail-mode-changes").click();
+      await aside.getByTestId("ticket-rail-tab-changes").click();
       await waitUntil(
         "changes list for refresh check",
         async () => (await aside.getByTestId("ticket-changes-list").count()) === 1,
@@ -605,7 +605,7 @@ async function main() {
 
     // ---- 8. Side-by-side toggle (optional / cheap) --------------------------
     await attempt(8, "Side by side toggle updates DiffEditor layout in place", async () => {
-      await aside.getByTestId("ticket-rail-mode-changes").click();
+      await aside.getByTestId("ticket-rail-tab-changes").click();
       const rowBtn = aside.locator(`[data-testid="ticket-changes-row"][data-path="${TARGET}"]`);
       await waitUntil("edit-me row for presentation", async () => (await rowBtn.count()) === 1);
       await rowBtn.click();

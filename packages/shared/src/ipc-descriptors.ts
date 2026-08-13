@@ -88,6 +88,38 @@ function isProjectIdInput(value: unknown): value is { projectId: string } {
   return isRecord(value) && typeof value["projectId"] === "string";
 }
 
+/**
+ * A commit message's cap. Generous enough that no message a person writes in
+ * the rail's field can hit it, small enough that the string stays far below the
+ * argv budget `execFile` spends it against (~256 KiB on macOS, shared with the
+ * rest of the command line).
+ */
+const MAX_COMMIT_MESSAGE_LENGTH = 5000;
+
+/**
+ * Whether `value` is a commit message main will hand to `git commit -m`.
+ *
+ * The same rigour `isValidBranchName` applies to a branch, for the same reason:
+ * this is user text going to git. It is NOT the same rule set, though, because
+ * a commit message is prose, not a ref — blank is legal here (it means "generate
+ * one", resolved in main), and so are newlines and tabs, which a multi-line
+ * message needs. What is rejected is the rest of C0 and DEL: a NUL cannot cross
+ * an argv boundary at all, and the others are invisible junk that would be
+ * entombed verbatim in a commit nobody can rewrite. Leading `-` needs no guard —
+ * the string is the value of `-m`, never a word git could read as a flag, and
+ * the runner is args-array with no shell.
+ */
+function isCommitMessage(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  if (value.length > MAX_COMMIT_MESSAGE_LENGTH) return false;
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code === 0x09 || code === 0x0a || code === 0x0d) continue;
+    if (code <= 0x1f || code === 0x7f) return false;
+  }
+  return true;
+}
+
 // ---- data-IPC descriptor table ------------------------------------------
 // Exactly one entry per VolliDataIpcContract channel (exhaustiveness is
 // compile-checked in both directions). `DATA_CHANNELS` derives from its keys,
@@ -162,7 +194,13 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
         (input["body"] === undefined || typeof input["body"] === "string") &&
         (input["labels"] === undefined || isStringArray(input["labels"])) &&
         (input["usesWorktree"] === undefined || typeof input["usesWorktree"] === "boolean") &&
-        (input["preferredHarnessId"] === undefined || isHarnessIdShape(input["preferredHarnessId"]))
+        (input["preferredHarnessId"] === undefined ||
+          isHarnessIdShape(input["preferredHarnessId"])) &&
+        // Shape only — the NAME is validated by `createTicketCommand`, which is
+        // the one gate both doors (socket and IPC) share.
+        (input["baseBranch"] === undefined ||
+          input["baseBranch"] === null ||
+          typeof input["baseBranch"] === "string")
       );
     },
     invalidError: "Invalid ticket",
@@ -423,9 +461,18 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     invalidError: "Invalid ticket",
   },
   "volli:worktree-commit": {
-    guard: (args): args is IpcArgs<"volli:worktree-commit"> =>
-      args.length === 1 && isTicketIdInput(args[0]),
-    invalidError: "Invalid ticket",
+    guard: (args): args is IpcArgs<"volli:worktree-commit"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input) || typeof input["ticketId"] !== "string") return false;
+      // Both optional, both defaulted in main to the pre-field behaviour, so an
+      // old `{ ticketId }` payload still passes here unchanged.
+      return (
+        (input["message"] === undefined || isCommitMessage(input["message"])) &&
+        (input["includeUnstaged"] === undefined || typeof input["includeUnstaged"] === "boolean")
+      );
+    },
+    invalidError: "Invalid commit request",
   },
   "volli:worktree-push-pr": {
     guard: (args): args is IpcArgs<"volli:worktree-push-pr"> =>

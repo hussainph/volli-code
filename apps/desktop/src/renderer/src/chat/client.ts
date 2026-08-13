@@ -49,6 +49,26 @@ export type ChatSessionLifecycle = "starting" | "ready" | "working" | "error";
 export type ChatMessageDelivery = "queue" | "steer" | "replace";
 
 /**
+ * What became of one message — and specifically, whether a copy of it is still
+ * this surface's responsibility.
+ *
+ * `recorded` is the arm that is easy to miss and expensive to get wrong. The
+ * runtime commits the durable intent and the transcript artifact BEFORE it
+ * hands the message to an executor, so a rejected receipt describes a message
+ * that is already in the ledger and already painted in the transcript. Handing
+ * those words back to the composer would invite the reader to send them a
+ * second time — "retry transient transport failures without duplicating
+ * accepted work" (CLAUDE.md). The recovery for a recorded message is a retry of
+ * the turn it started, which the blocker row already offers; the recovery for a
+ * `refused` one is the words themselves, because nothing else has them.
+ *
+ * A throw lands on `refused`. It is the ambiguous case — a transport that never
+ * reached main and a failure past the durable write both arrive as exceptions —
+ * and keeping the words is the arm that cannot lose anything.
+ */
+export type MessageDelivery = "delivered" | "recorded" | "refused";
+
+/**
  * One Session's resident state.
  *
  * The runtime catalog is deliberately absent. Which models exist is a question
@@ -139,8 +159,18 @@ export interface ChatSessionWrites {
   setProjection(sessionId: string, projection: SessionPresentationProjection): void;
   /** An attachment attempt is in flight; nothing derives lifecycle until it lands. */
   attaching(sessionId: string): void;
-  /** The harness took a message; the turn is live until the stream says otherwise. */
-  delivered(sessionId: string): void;
+  /**
+   * The harness took a message — optimistically, and only while the stream has
+   * said nothing since it left.
+   *
+   * `turnEpoch` is the transcript's count at submit. Pi answers a
+   * `message.submit` when the turn it started has ALREADY ENDED (the runtime
+   * awaits `agent.prompt`), so an unconditional latch here re-opens a turn the
+   * stream has closed — and the queue's release rule reads this same field,
+   * which strands every message behind it. An unchanged epoch is the one case
+   * where nothing has been heard and optimism is all there is.
+   */
+  delivered(sessionId: string, turnEpoch: number): void;
   /** A failure, or `null` to clear one and hand the Session back to its stream. */
   settle(sessionId: string, error: string | null): void;
   dequeue(sessionId: string, id: string): void;
@@ -169,6 +199,14 @@ interface ChatStreamHandlers {
   onStarted(): void;
   onData(event: ChatStreamEvent): void;
   onError(error: unknown): void;
+  /**
+   * A clean end is not a state a Session stream may rest in. The producer only
+   * completes without error on teardown races, and a client that shrugged here
+   * kept a dead stream it believed healthy — `turn.completed` never arrived
+   * and the composer held Stop forever. Completion is treated exactly like a
+   * drop: one resume from the cursor, then surface.
+   */
+  onComplete(): void;
 }
 
 type ChatCommand =
@@ -477,15 +515,16 @@ export class ChatSessionClient {
   /**
    * Sends one message.
    *
-   * The boolean is the point: a caller chaining a second act onto the first — a
-   * redirection after the refusal it belongs to — cannot read that off the error
-   * state, which is state and not a result. The words stay in the composer until
-   * this returns true.
+   * The result is the point: a caller chaining a second act onto the first — a
+   * redirection after the refusal it belongs to, a composer deciding whether it
+   * is still holding the only copy — cannot read that off the error state,
+   * which is state and not a result. See {@link MessageDelivery} for why two
+   * kinds of failure are not one.
    */
-  async submit(text: string, delivery: ChatMessageDelivery): Promise<boolean> {
+  async submit(text: string, delivery: ChatMessageDelivery): Promise<MessageDelivery> {
     const slice = this.#slice();
     const body = text.trim();
-    if (slice === undefined || !isDeliverable(slice) || body.length === 0) return false;
+    if (slice === undefined || !isDeliverable(slice) || body.length === 0) return "refused";
     try {
       const message = {
         id: this.#newCommandId(),
@@ -499,22 +538,25 @@ export class ChatSessionClient {
         command,
       });
       // A harness that cannot take a message says so in its receipt rather than
-      // by throwing, and that receipt is the failure.
+      // by throwing, and that receipt is the failure. It is also proof the
+      // round trip completed, which means the runtime committed the intent and
+      // the transcript artifact before it ever asked the executor — so the
+      // words are recorded, not lost.
       const refusal = rejectedReceipt(delivered);
       if (refusal !== null) {
         this.#writes().settle(this.sessionId, `Message not delivered: ${refusal}`);
-        return false;
+        return "recorded";
       }
-      this.#writes().delivered(this.sessionId);
+      this.#writes().delivered(this.sessionId, slice.transcript.turnEpoch);
       // The first accepted message — direct or released off the queue, this is
       // the one choke point both go through — is the moment a Session gains a
       // subject. Fire-and-forget: a failed rename costs a toast (renameChatSession
       // already surfaces one), never the message that just landed.
       this.#autoTitle(body);
-      return true;
+      return "delivered";
     } catch (failure) {
       this.#writes().settle(this.sessionId, `Message not delivered: ${errorMessage(failure)}`);
-      return false;
+      return "refused";
     }
   }
 
@@ -622,6 +664,9 @@ export class ChatSessionClient {
           },
           onError: (failure) => {
             this.#dropped(failure);
+          },
+          onComplete: () => {
+            this.#dropped(new Error("the Session stream ended"));
           },
         },
       );

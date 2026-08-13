@@ -60,7 +60,15 @@ export function writeDefaultModelSelection(
   );
 }
 
-/** Refuses silent repair while allowing an explicit choice that still needs sign-in. */
+/**
+ * Only a model this profile can actually run may become the app default.
+ *
+ * This value is copied into every new Session's durable model policy at birth
+ * and nothing between here and the first prompt re-checks it — so a default
+ * that merely *exists* in the catalog is a first message that dies at the
+ * provider, once per Session, with a raw API error and no obvious cause.
+ * Signed-out is a state to recover from before saving, not a choice to honour.
+ */
 export function assertDefaultModelAvailable(
   access: ModelAccessSnapshot,
   selection: ModelSelection,
@@ -69,8 +77,12 @@ export function assertDefaultModelAvailable(
     (candidate) =>
       candidate.providerId === selection.providerId && candidate.modelId === selection.modelId,
   );
-  if (model === undefined || model.state === "unavailable") {
-    throw new Error("This model is not currently available.");
+  if (model === undefined || model.state !== "available") {
+    throw new Error(
+      model?.state === "authentication-required"
+        ? "Sign in to this provider before making it the default model."
+        : "This model is not currently available.",
+    );
   }
   if (!model.reasoningLevels.includes(selection.reasoningLevel)) {
     throw new Error("This reasoning level is not supported by the selected model.");

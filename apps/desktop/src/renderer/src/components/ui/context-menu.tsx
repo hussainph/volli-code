@@ -1,5 +1,16 @@
 "use client";
 
+/**
+ * The context-menu primitives, and one policy that binds every item in them:
+ * `icon` is REQUIRED — on {@link ContextMenuItem} and {@link ContextMenuSubTrigger}
+ * alike — and is drawn at Phosphor's default weight, with no way to override it.
+ *
+ * Every action in a menu is a peer of every other, so a filled glyph here marks
+ * nothing — and at 16px beside 14px text the mark is already the larger object.
+ * Fill is reserved for the one item that is the exception among its neighbours;
+ * a menu has none, which is why these primitives do not offer the choice. The
+ * radio item's dot is no counter-example: it is a filled shape, not an icon.
+ */
 import * as React from "react";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
@@ -37,6 +48,7 @@ function ContextMenuRadioGroup({
   return <ContextMenuPrimitive.RadioGroup data-slot="context-menu-radio-group" {...props} />;
 }
 
+/** Required `icon`, default weight, no override — see the module note. */
 function ContextMenuSubTrigger({
   className,
   inset,
@@ -57,7 +69,7 @@ function ContextMenuSubTrigger({
       )}
       {...props}
     >
-      <ItemIcon aria-hidden weight="fill" />
+      <ItemIcon aria-hidden />
       {children}
       <CaretRightIcon weight="bold" className="ml-auto" />
     </ContextMenuPrimitive.SubTrigger>
@@ -98,6 +110,7 @@ function ContextMenuContent({
   );
 }
 
+/** Required `icon`, default weight, no override — see the module note. */
 function ContextMenuItem({
   className,
   inset,
@@ -121,7 +134,7 @@ function ContextMenuItem({
       )}
       {...props}
     >
-      <ItemIcon aria-hidden weight="fill" />
+      <ItemIcon aria-hidden />
       {children}
     </ContextMenuPrimitive.Item>
   );
@@ -169,6 +182,8 @@ function ContextMenuRadioItem({
     >
       <span className="pointer-events-none absolute left-2 flex size-3.5 items-center justify-center">
         <ContextMenuPrimitive.ItemIndicator>
+          {/* Solid IS the meaning here, and the off state is absence rather
+              than an outline. At 8px nothing else resolves anyway. */}
           <CircleIcon weight="fill" className="size-2" />
         </ContextMenuPrimitive.ItemIndicator>
       </span>
@@ -207,11 +222,16 @@ function ContextMenuSeparator({
   );
 }
 
+// The same span as dropdown-menu.tsx's `DropdownMenuShortcut`, down to the
+// classes, and dropped for the same reason: no `tracking-widest`, because
+// trailing letter spacing pushes a chord off the flush right edge `ml-auto`
+// promised. That file carries the measurement; the split terminal menu's
+// ⌘D / ⇧⌘D pair and the session menus' ⌥⌘T are where it shows here.
 function ContextMenuShortcut({ className, ...props }: React.ComponentProps<"span">) {
   return (
     <span
       data-slot="context-menu-shortcut"
-      className={cn("ml-auto text-xs tracking-widest text-muted-foreground", className)}
+      className={cn("ml-auto text-xs text-muted-foreground", className)}
       {...props}
     />
   );
