@@ -402,6 +402,9 @@ const diagnosticsSubscriptionSchema = z.object({
 
 /** The domain reason recorded in diagnostics when a bounded queue drops frames. */
 const SUBSCRIPTION_OVERFLOW_CODE = "SUBSCRIPTION_OVERFLOW";
+const SUBSCRIPTION_SOURCE_FAILURE_CODE = "SUBSCRIPTION_SOURCE_FAILURE";
+const SESSION_SOURCE_FAILURE_MESSAGE =
+  "Session stream source failed; resubscribe to resume from the ledger";
 /**
  * One message per subscription arm, shared by the diagnostic and the terminal
  * error so the two cannot drift. Both name the recovery rather than the fault,
@@ -557,6 +560,7 @@ export function createSessionRouter() {
           if (signal?.aborted) return;
           const afterSequence = maxCursor(input.afterSequence, input.lastEventId);
           const queue = new AsyncQueue<SessionStreamEmission>();
+          const sourceFailure: { current: { error: unknown } | null } = { current: null };
           const unsubscribe = await ctx.runtime.subscribe(
             { sessionId: input.sessionId, afterSequence },
             // An overlay passes through untouched: `rendererFrame` exists to
@@ -564,6 +568,16 @@ export function createSessionRouter() {
             // boundary, and a transient message part carries neither.
             (emission) =>
               queue.push(isSessionStreamOverlay(emission) ? emission : rendererFrame(emission)),
+            // The runtime's drain died behind this subscription. Ended like an
+            // overflow — buffered contiguous frames still drain, then the
+            // stream closes with an error instead of a clean `done`, because a
+            // clean end here is the one thing the client must never see: it
+            // reads as a stream with nothing left to say, not one that lost
+            // `turn.completed` mid-turn.
+            (error) => {
+              sourceFailure.current = { error };
+              queue.close(false);
+            },
           );
           if (signal?.aborted) {
             unsubscribe();
@@ -591,6 +605,17 @@ export function createSessionRouter() {
             // `yield` with a return completion and never reaches this line —
             // an overflow the client already walked away from stays a diagnostic.
             if (queue.overflowed) throw subscriptionOverflowError(SESSION_OVERFLOW_MESSAGE);
+            // A source failure ends the same way an overflow does, and for the
+            // same reason: whatever this stream still owed its consumer is now
+            // only in the ledger, and only an error makes the client go back
+            // for it.
+            if (sourceFailure.current !== null) {
+              throw new TRPCError({
+                code: "INTERNAL_SERVER_ERROR",
+                message: SESSION_SOURCE_FAILURE_MESSAGE,
+                cause: sourceFailure.current.error,
+              });
+            }
           } finally {
             signal?.removeEventListener("abort", abort);
             unsubscribe();
@@ -601,6 +626,15 @@ export function createSessionRouter() {
                 transport: ctx.transport ?? "unknown",
                 code: SUBSCRIPTION_OVERFLOW_CODE,
                 message: SESSION_OVERFLOW_MESSAGE,
+              });
+            }
+            if (sourceFailure.current !== null) {
+              ctx.diagnostics.record({
+                procedure: "session.subscribe",
+                phase: "error",
+                transport: ctx.transport ?? "unknown",
+                code: SUBSCRIPTION_SOURCE_FAILURE_CODE,
+                message: SESSION_SOURCE_FAILURE_MESSAGE,
               });
             }
           }
