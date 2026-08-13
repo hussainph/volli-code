@@ -288,6 +288,7 @@ export interface SessionRuntime {
   subscribe(
     input: { sessionId: string; afterSequence: number },
     listener: (emission: SessionStreamEmission) => void | Promise<void>,
+    onFailure?: (error: unknown) => void,
   ): Promise<() => void>;
   cancelInteraction(request: CancelInteractionRequest): Promise<void>;
   reconcile(input: { sessionId: string; attachmentId: string }): Promise<void>;
@@ -387,6 +388,15 @@ interface Subscriber {
   cursor: number;
   events: Map<number, SessionEvent>;
   listener: (emission: SessionStreamEmission) => void | Promise<void>;
+  /**
+   * Told when this subscription dies mid-stream, so the transport above it can
+   * end loudly. Without it a drain failure removed the subscriber and nothing
+   * else: the rpc queue it fed stayed open, the renderer kept a healthy-looking
+   * stream that would never speak again, and the Session held its Stop button
+   * forever. The failure must reach the consumer, whose reconnect then heals
+   * from the ledger.
+   */
+  onFailure?: (error: unknown) => void;
   draining: Promise<void>;
   active: boolean;
 }
@@ -1363,19 +1373,22 @@ class DefaultSessionRuntime implements SessionRuntime {
 
   /**
    * The third interaction verb, beside `#resolveInteraction` and the answer it
-   * delivers. Cancelling records one durable fact and dispatches nothing: the
-   * harness was never told an answer, so Volli must not claim it heard one.
+   * delivers. Cancelling records one durable fact and dispatches no command:
+   * the harness was never told an answer, so Volli must not claim it heard one.
    * That is also why this is not a Session command — a command earns a delivery
    * receipt, and there is no delivery here to receipt.
    *
-   * Dispatching nothing is a finding, not a shortcut. Withdrawing an ask is not
-   * a verb every harness has — the one Volli speaks to natively offers only
-   * ways to answer, each of which carries a disposition, so the sole means of
-   * making it stop waiting is to tell it a decision. Reaching for one to clear
-   * the gate would print a choice nobody made, which is the exact failure
-   * `interaction.cancelled` exists to avoid. Whether a harness can be told to
-   * withdraw is therefore the adapter's question to answer; a negative answer
-   * is a real one, and does not belong here.
+   * Whether a harness can be told to withdraw an ask was always the adapter's
+   * question, and the structured executor now answers yes: it parks a promise
+   * per open question, so writing the fact and saying nothing would leave a
+   * model's tool call waiting on a gate nobody is left to open. The ask is
+   * therefore withdrawn too — best-effort, after the fact is durable, because
+   * an executor that cannot hear it still stops waiting when its attachment
+   * ends, and the person's cancel must not hang on the harness answering. The
+   * withdrawal carries no resolution, for the reason this verb exists at all:
+   * every way to answer carries a disposition, and reaching for one to clear
+   * the gate would print a choice nobody made. It is a courtesy paid to a live
+   * executor, not a delivery — still no command, still no receipt.
    *
    * The attachment may be closed by now, and this is the one Session fact that
    * still lands when it is. Nothing can be delivered to a closed binding — but
@@ -1408,6 +1421,19 @@ class DefaultSessionRuntime implements SessionRuntime {
       reason: request.reason,
     });
     await this.#publish([event]);
+    // Only an executor that is already speaking can be told to stop waiting:
+    // `#bindingForAttachment` would attach one to say it, and cancelling a
+    // question is the last intent that should ever start a harness. A closed
+    // attachment therefore finds nothing here, which is the ordinary case and
+    // not a fault. Whatever the withdrawal does is swallowed — including a
+    // throw that lands before a promise exists to reject — because the fact
+    // above is durable and the person's cancel already holds.
+    const binding = this.#bindings.get(interaction.attachmentId);
+    try {
+      await binding?.handle.withdrawInteraction?.(interaction.id);
+    } catch {
+      // Nothing to record: an unheard withdrawal changes no Session fact.
+    }
   }
 
   async #release(
@@ -1537,6 +1563,7 @@ class DefaultSessionRuntime implements SessionRuntime {
   async subscribe(
     input: { sessionId: string; afterSequence: number },
     listener: (emission: SessionStreamEmission) => void | Promise<void>,
+    onFailure?: (error: unknown) => void,
   ): Promise<() => void> {
     this.#assertOpen();
     if (!Number.isInteger(input.afterSequence) || input.afterSequence < 0) {
@@ -1547,6 +1574,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       cursor: input.afterSequence,
       events: new Map(),
       listener,
+      ...(onFailure ? { onFailure } : {}),
       draining: Promise.resolve(),
       active: true,
     };
@@ -1811,6 +1839,19 @@ class DefaultSessionRuntime implements SessionRuntime {
           kind: observation.kind,
           interactionId: observation.interactionId,
           resolution: observation.resolution,
+        });
+        break;
+      // The executor's own withdrawal, which is a different fact from the one
+      // `#cancelInteraction` writes even though both land as the same kind. That
+      // one carries user provenance because a person closed the question; this
+      // one carries the executor's, because the question stopped being asked
+      // without anybody deciding anything. Neither may carry a resolution.
+      case "interaction.cancelled":
+        event = await this.ports.engine.observe({
+          ...base,
+          kind: observation.kind,
+          interactionId: observation.interactionId,
+          reason: observation.reason,
         });
         break;
       case "attention.cleared":
@@ -2255,7 +2296,18 @@ class DefaultSessionRuntime implements SessionRuntime {
         while (subscriber.active) {
           const event =
             subscriber.events.get(subscriber.cursor + 1) ?? (await this.#nextAfterGap(subscriber));
-          if (!event) break;
+          if (!event) {
+            /* v8 ignore next 7 -- per-Session MAX(sequence)+1 contiguity says the
+               ledger always closes a hole; if that bet is ever lost, fail the
+               subscription loudly so the consumer's reconnect heals from the
+               ledger instead of holding a Stop button forever. */
+            if (subscriber.events.size > 0) {
+              throw new Error(
+                `Session stream hole at sequence ${subscriber.cursor + 1} the ledger could not close`,
+              );
+            }
+            break;
+          }
           subscriber.events.delete(event.sequence);
           const frame = await this.#frame(event);
           if (!subscriber.active) break;
@@ -2391,7 +2443,14 @@ class DefaultSessionRuntime implements SessionRuntime {
     try {
       await this.ports.onSubscriberFailure?.(error);
     } finally {
-      this.#removeSubscriber(subscriber);
+      try {
+        // The subscription itself is told, not just the host: removal alone
+        // left the transport's queue open and silent, which downstream read as
+        // a healthy stream that simply had nothing to say.
+        subscriber.onFailure?.(error);
+      } finally {
+        this.#removeSubscriber(subscriber);
+      }
     }
   }
 

@@ -68,6 +68,11 @@ jobs:
       - name: Build desktop pipeline
         run: vp run --filter @volli/desktop build
 
+      - name: Build public sites
+        run: |
+          vp run --filter @volli/website build
+          vp run --filter @volli/docs build
+
       - name: Verify build artifacts
         run: |
           test -f apps/desktop/dist-electron/main.cjs

@@ -16,12 +16,13 @@
  * Two things make a real Pi turn against a TICKETLESS Session possible at
  * all, both set up before the first prompt is typed:
  *
- *   1. **Credentials.** Same posture as `pi-ticket-chat-smoke.mjs`: `HOME` is
- *      isolated into a scratch dir (never the developer's real profile), and
- *      the real `~/.pi/agent/auth.json` is copied into
- *      `<fakeHome>/.pi/agent/auth.json` — see `ensurePiAuthInto`. Fails fast
- *      with a clear message if the real file is missing; the copy is never
- *      read back or logged.
+ *   1. **Credentials.** Same posture as `pi-ticket-chat-smoke.mjs`, over the
+ *      same shared helper: `HOME` is isolated into a scratch dir (never the
+ *      developer's real profile), and the real `~/.pi/agent/auth.json` is
+ *      copied into `<fakeHome>/.pi/agent/auth.json` by `smoke-kit.mjs`'s
+ *      `ensurePiAuthInto`. Fails fast with a clear message if the real file is
+ *      missing; the copy is never read back or logged, and is shredded on the
+ *      way out however this process dies.
  *   2. **An app-wide default model.** `project-sessions.ts`'s `start()` calls
  *      `requireDefaultModel` exactly like a Ticket Session does — nothing
  *      bootstraps this on a fresh profile, so check 1 records one over the
@@ -52,23 +53,26 @@
  */
 import { promises as fs } from "node:fs";
 import os from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 import {
   activeTabLabel,
+  assistantReplyTexts,
   createRunner,
+  ensurePiAuthInto,
   goToBoard,
   launch,
   makeGitRepo,
   makeScratch,
   openNewChatTab,
-  pathExists,
   readSeededProjects,
   seedDefaultModel,
   seedProjects,
   SESSION_TAB_STRIP,
   sleep,
+  stopButton,
   tabStrip,
+  waitForSettledReply,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 
@@ -79,8 +83,6 @@ const PROJECT = { id: "pi-scratch-chat-project", name: "Pi Scratch Chat", prefix
 // transformation to restate here, and a change to either end surfaces as
 // this smoke failing to find its own tab after the first message lands.
 const PROMPT_TEXT = "Reply with one short sentence, please.";
-
-const REAL_PI_AUTH = join(os.homedir(), ".pi", "agent", "auth.json");
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("pi-scratch-chat-smoke-");
 // Isolates Pi's own credential/config lookups from the developer's real
@@ -114,19 +116,6 @@ async function captureFailureEvidence(page, mainOut, mainErr, label) {
   console.log(`  evidence: ${join(EVIDENCE_DIR, `pi-scratch-chat-${slug}.log`)}`);
 }
 
-/** Verbatim from pi-ticket-chat-smoke.mjs — see that file for why order/isolation matter. */
-async function ensurePiAuthInto(homeDir) {
-  if (!(await pathExists(REAL_PI_AUTH))) {
-    throw new Error(
-      `Real Pi credentials not found at ${REAL_PI_AUTH}. This smoke drives a live Pi turn and ` +
-        "needs a working `pi` login (openai-codex / ChatGPT subscription) on this machine first.",
-    );
-  }
-  const dest = join(homeDir, ".pi", "agent", "auth.json");
-  await fs.mkdir(dirname(dest), { recursive: true });
-  await fs.copyFile(REAL_PI_AUTH, dest);
-}
-
 /** Navigate to Sessions and wait for its (auto-opened scratch terminal) tab strip to mount. */
 async function goToSessions(page) {
   await page.getByRole("button", { name: "Sessions", exact: true }).click();
@@ -137,25 +126,13 @@ async function goToSessions(page) {
   );
 }
 
-/** The Stop button, on screen for exactly as long as a turn is running. */
-function stopButton(page) {
-  return page.getByRole("button", { name: "Stop", exact: true });
-}
-
+/** Submits `text` and returns the moment it was sent — the turn clock's zero. */
 async function submitPrompt(page, text) {
   const textarea = page.getByPlaceholder("Ask, plan, or implement…").first();
   await textarea.click();
   await textarea.fill(text);
   await page.keyboard.press("Enter");
-}
-
-/** Rendered assistant-role messages (`Message`'s `is-assistant` class), non-empty text only. */
-async function assistantMessageTexts(page) {
-  return page.evaluate(() =>
-    Array.from(document.querySelectorAll(".is-assistant"))
-      .map((el) => el.textContent?.trim() ?? "")
-      .filter((text) => text.length > 0),
-  );
+  return Date.now();
 }
 
 /** User-role messages (`Message`'s `is-user` class), non-empty text only. */
@@ -251,11 +228,12 @@ async function main() {
       },
     );
 
+    let submittedAt = null;
     await attempt(
       4,
       "submitting the one real prompt starts a turn (streaming/working state appears)",
       async () => {
-        await submitPrompt(page, PROMPT_TEXT);
+        submittedAt = await submitPrompt(page, PROMPT_TEXT);
         await waitUntil("the turn to start", async () => (await stopButton(page).count()) > 0, {
           timeout: 15000,
         }).catch(async (error) => {
@@ -266,37 +244,29 @@ async function main() {
       },
     );
 
-    // Real network round trip — generous timeout (30-90s is normal for one
-    // turn against a real hosted model).
+    // One real network round trip, on ONE clock started at the keystroke above
+    // — see `waitForSettledReply` and `PI_TURN_BUDGET_MS` in the kit for what
+    // that budget was measured against and why prose is what ends the wait.
     await attempt(
       5,
       "the turn settles with a non-empty assistant reply in the transcript",
       async () => {
-        await waitUntil(
-          "a non-empty assistant message to render",
-          async () => (await assistantMessageTexts(page)).length > 0,
-          { timeout: 90000 },
-        ).catch(async (error) => {
-          await captureFailureEvidence(page, mainStdout, mainStderr, "assistant-reply-missing");
-          throw error;
-        });
-        await waitUntil(
-          "the turn to settle (Stop clears)",
-          async () => (await stopButton(page).count()) === 0,
-          { timeout: 30000 },
-        ).catch(async (error) => {
-          await captureFailureEvidence(page, mainStdout, mainStderr, "turn-never-settled");
-          throw error;
-        });
-        const texts = await assistantMessageTexts(page);
+        const settled = await waitForSettledReply(page, { since: submittedAt }).catch(
+          async (error) => {
+            await captureFailureEvidence(page, mainStdout, mainStderr, "turn-never-settled");
+            throw error;
+          },
+        );
         // The first delivered message names the Session (`chat/client.ts`'s
         // `#autoTitle`), so the "Chat 1" captured at creation is no longer
         // what the tab — or the sidebar row the relaunch below looks for —
         // is called.
         chatTabLabel = await activeTabLabel(page, SESSION_TAB_STRIP);
         return {
-          ok: texts.length > 0 && chatTabLabel !== null,
-          detail: `assistantMessages=${texts.length} tab=${chatTabLabel}`,
+          ok: settled.texts.length > 0 && chatTabLabel !== null,
+          detail:
+            `turn=${(settled.elapsedMs / 1000).toFixed(1)}s replies=${settled.texts.length} ` +
+            `tab=${chatTabLabel} reply=${JSON.stringify(settled.texts[0]?.slice(0, 80) ?? "")}`,
         };
       },
     );
@@ -355,7 +325,7 @@ async function main() {
             "both durable messages to render without a live adapter",
             async () => {
               const userTexts = await userMessageTexts(page2);
-              const assistantTexts = await assistantMessageTexts(page2);
+              const assistantTexts = await assistantReplyTexts(page2);
               return userTexts.some((t) => t.includes(PROMPT_TEXT)) && assistantTexts.length > 0
                 ? { userTexts, assistantTexts }
                 : false;

@@ -8,7 +8,7 @@ export default defineConfig({
     starlight({
       title: "Volli Code",
       description:
-        "Documentation for Volli Code — kanban planning and terminal coding agents in one macOS app.",
+        "Documentation for Volli Code, a local-first macOS workspace for planning code work and running durable coding Sessions.",
       logo: {
         src: "./src/assets/volli-icon-dark.png",
         alt: "Volli Code",
@@ -53,12 +53,12 @@ export default defineConfig({
         },
         {
           // Ordered by the path through the product: plan on the board, open a
-          // ticket, understand what runs inside it, then configure and theme.
+          // ticket, understand Sessions and worktrees, then configure and theme.
           label: "Using Volli",
           items: [
             { label: "The board", slug: "guides/board" },
             { label: "Ticket workspace", slug: "guides/ticket-workspace" },
-            { label: "Agents and worktrees", slug: "guides/agents-and-worktrees" },
+            { label: "Sessions and worktrees", slug: "guides/agents-and-worktrees" },
             { label: "Settings", slug: "guides/settings" },
             { label: "Theming", slug: "guides/theming" },
           ],

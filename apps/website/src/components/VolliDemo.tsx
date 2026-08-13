@@ -18,7 +18,7 @@ import "./VolliDemo.css";
 if (typeof window !== "undefined") gsap.registerPlugin(Flip);
 
 type Phase = "backlog" | "todo" | "doing" | "review" | "done";
-type Agent = "Claude Code" | "Codex";
+type Agent = "Pi Session";
 
 interface DemoTicket {
   id: string;
@@ -49,9 +49,9 @@ const PHASES: ReadonlyArray<{ key: Phase; label: string; mobileLabel: string }> 
 
 const INITIAL_TICKETS: DemoTicket[] = [
   {
-    id: "cloud-handoff",
+    id: "session-recovery",
     code: "VC-18",
-    title: "Model cloud session handoff",
+    title: "Plan Session recovery",
     phase: "backlog",
     priority: 2,
   },
@@ -65,7 +65,7 @@ const INITIAL_TICKETS: DemoTicket[] = [
   {
     id: "worktree-setup",
     code: "VC-24",
-    title: "Automate worktree setup",
+    title: "Set up isolated worktrees",
     phase: "todo",
     priority: 3,
   },
@@ -77,21 +77,21 @@ const INITIAL_TICKETS: DemoTicket[] = [
     priority: 2,
   },
   {
-    id: "hook-runner",
+    id: "session-receipts",
     code: "VC-31",
-    title: "Build lifecycle hook runner",
+    title: "Persist Session receipts",
     phase: "doing",
     priority: 3,
-    agent: "Claude Code",
+    agent: "Pi Session",
     sessions: 2,
   },
   {
-    id: "codex-resume",
+    id: "session-history",
     code: "VC-33",
-    title: "Add Codex session resume",
+    title: "Preserve Session history",
     phase: "doing",
     priority: 2,
-    agent: "Codex",
+    agent: "Pi Session",
     sessions: 3,
   },
   {
@@ -100,7 +100,7 @@ const INITIAL_TICKETS: DemoTicket[] = [
     title: "Surface agent questions",
     phase: "review",
     priority: 2,
-    agent: "Claude Code",
+    agent: "Pi Session",
     sessions: 2,
   },
   {
@@ -109,7 +109,7 @@ const INITIAL_TICKETS: DemoTicket[] = [
     title: "Persist execution history",
     phase: "done",
     priority: 1,
-    agent: "Codex",
+    agent: "Pi Session",
     sessions: 2,
   },
 ];
@@ -130,7 +130,7 @@ const useMediaQuery = (query: string) => {
 
 const agentForTicket = (ticket: DemoTicket): Agent => {
   if (ticket.agent) return ticket.agent;
-  return Number.parseInt(ticket.code.replace("VC-", ""), 10) % 2 === 0 ? "Codex" : "Claude Code";
+  return "Pi Session";
 };
 
 const phaseLabel = (phase: Phase) => PHASES.find((item) => item.key === phase)?.label ?? phase;
@@ -681,15 +681,14 @@ export default function VolliDemo() {
 
 function PreviewTabs({ ticket }: { ticket: DemoTicket }) {
   const active = ticket.phase === "doing" || ticket.phase === "review";
-  const agent = agentForTicket(ticket);
 
   return (
     <div className="demo-preview-tabs">
       <span className={!active ? "is-active" : undefined}>{ticket.code}</span>
       {active && (
         <>
-          <span className="is-active">{agent === "Claude Code" ? "Claude 1" : "Codex 1"}</span>
-          <span>{agent === "Claude Code" ? "Codex 2" : "Claude 2"}</span>
+          <span className="is-active">Session 1</span>
+          <span>Session 2</span>
           <span className="demo-tab-add" aria-hidden="true">
             <PlusIcon />
           </span>
@@ -714,18 +713,18 @@ function ScratchpadPreview({ ticket }: { ticket: DemoTicket }) {
         <span className="demo-doc-id">{ticket.code}</span>
         <h2 id="demo-preview-title">{ticket.title}</h2>
         <p>
-          Make this phase repeatable without coupling it to a single agent. The automation should
-          read the ticket brief, prepare the workspace, and leave every decision in the history.
+          Define the outcome, constraints, and acceptance criteria before implementation begins. The
+          Ticket becomes the Session’s starting context; the worktree remains a separate checkout.
         </p>
         <div className="demo-doc-section">
           <strong>Acceptance criteria</strong>
           <ul>
-            <li>Runs when the ticket enters its configured phase</li>
-            <li>Can create follow-up work through the Volli CLI</li>
-            <li>Never hides a failed mutation</li>
+            <li>Scope and constraints are clear</li>
+            <li>Relevant project context is linked</li>
+            <li>Review expectations are explicit</li>
           </ul>
         </div>
-        <span className="demo-file-ref">@docs/lifecycle-automation.md</span>
+        <span className="demo-file-ref">@CONTEXT.md</span>
       </div>
       <aside className="demo-doc-activity">
         <strong>Activity</strong>
@@ -733,10 +732,10 @@ function ScratchpadPreview({ ticket }: { ticket: DemoTicket }) {
           <PlusIcon /> created the ticket
         </span>
         <span>
-          <ArrowIcon /> moved Backlog to Todo
+          <ArrowIcon /> added project context
         </span>
         <span>
-          <EditIcon /> refined the brief
+          <EditIcon /> refined acceptance criteria
         </span>
       </aside>
     </div>
@@ -744,15 +743,11 @@ function ScratchpadPreview({ ticket }: { ticket: DemoTicket }) {
 }
 
 function TerminalPreview({ ticket, review }: { ticket: DemoTicket; review: boolean }) {
-  const agent = agentForTicket(ticket);
-
   return (
     <div className="demo-terminal-layout">
       <div className="demo-terminal-main">
         <div className="demo-terminal-heading">
-          <span className={`demo-agent-mark ${agent === "Codex" ? "is-codex" : "is-claude"}`}>
-            {agent === "Codex" ? ">_" : "✳"}
-          </span>
+          <span className="demo-agent-mark is-claude">✳</span>
           <div>
             <h2 id="demo-preview-title">{ticket.title}</h2>
             <span>
@@ -760,11 +755,7 @@ function TerminalPreview({ ticket, review }: { ticket: DemoTicket; review: boole
             </span>
           </div>
         </div>
-        {agent === "Claude Code" ? (
-          <ClaudeCodeScreen ticket={ticket} review={review} />
-        ) : (
-          <CodexScreen ticket={ticket} review={review} />
-        )}
+        <SessionScreen ticket={ticket} review={review} />
       </div>
       <aside className="demo-session-rail">
         <div className="demo-session-heading">
@@ -774,14 +765,14 @@ function TerminalPreview({ ticket, review }: { ticket: DemoTicket; review: boole
         <div className="demo-session-row is-current">
           <span className="demo-live-dot" />
           <span>
-            <strong>{agent}</strong>
+            <strong>Pi Session</strong>
             <small>{review ? "Waiting for review" : "Working"}</small>
           </span>
         </div>
         <div className="demo-session-row">
           <span className="demo-idle-dot" />
           <span>
-            <strong>{agent === "Codex" ? "Claude Code" : "Codex"}</strong>
+            <strong>Earlier Session</strong>
             <small>Earlier exploration</small>
           </span>
         </div>
@@ -796,16 +787,16 @@ function TerminalPreview({ ticket, review }: { ticket: DemoTicket; review: boole
   );
 }
 
-function ClaudeCodeScreen({ ticket, review }: { ticket: DemoTicket; review: boolean }) {
+function SessionScreen({ ticket, review }: { ticket: DemoTicket; review: boolean }) {
   return (
     <div className="demo-terminal-screen demo-cli-screen is-claude">
       <div className="demo-cli-banner">
         <span className="demo-cli-logo">✳</span>
         <span>
-          <strong>Claude Code</strong>
-          <small>v2.1.212</small>
+          <strong>Agent runtime</strong>
+          <small>Pi-backed structured Session</small>
         </span>
-        <span className="demo-cli-context">Sonnet 4.6 · volli/{ticket.code.toLowerCase()}</span>
+        <span className="demo-cli-context">Ticket context · isolated worktree</span>
       </div>
 
       <div className="demo-cli-prompt">
@@ -818,20 +809,20 @@ function ClaudeCodeScreen({ ticket, review }: { ticket: DemoTicket; review: bool
       <div className="demo-cli-turn">
         <div className="demo-cli-line">
           <span className="demo-claude-bullet">⏺</span>
-          <span>I’ll trace the lifecycle path, make the change, then run the focused checks.</span>
+          <span>I’ll trace the Ticket context, make the change, then run the focused checks.</span>
         </div>
         <div className="demo-cli-line demo-cli-tool">
           <span className="demo-claude-bullet">⏺</span>
           <span>
-            <strong>Read</strong>(src/lifecycle/hook-runner.ts)
-            <small>⎿ Read 184 lines</small>
+            <strong>Read</strong>(Ticket brief and repository instructions)
+            <small>⎿ Context attached to this Session</small>
           </span>
         </div>
         <div className="demo-cli-line demo-cli-tool">
           <span className="demo-claude-bullet">⏺</span>
           <span>
-            <strong>Edit</strong>(src/lifecycle/hook-runner.ts)
-            <small>⎿ Added phase-safe retry handling</small>
+            <strong>Edit</strong>(implementation)
+            <small>⎿ Change Set updated</small>
           </span>
         </div>
       </div>
@@ -840,7 +831,8 @@ function ClaudeCodeScreen({ ticket, review }: { ticket: DemoTicket; review: bool
         <div className="demo-cli-response">
           <span className="demo-claude-bullet">⏺</span>
           <span>
-            The implementation is ready. The focused tests pass and the worktree is clean.
+            The Change Set is ready to inspect. The focused checks pass and the Session history is
+            preserved.
             <small>Waiting for your review</small>
           </span>
         </div>
@@ -856,69 +848,8 @@ function ClaudeCodeScreen({ ticket, review }: { ticket: DemoTicket; review: bool
         <span className="demo-cli-cursor" />
       </div>
       <div className="demo-cli-footer">
-        <span>shift+tab to cycle mode</span>
-        <span>? for shortcuts</span>
-      </div>
-    </div>
-  );
-}
-
-function CodexScreen({ ticket, review }: { ticket: DemoTicket; review: boolean }) {
-  return (
-    <div className="demo-terminal-screen demo-cli-screen is-codex">
-      <div className="demo-cli-banner demo-codex-banner">
-        <span className="demo-cli-logo">&gt;_</span>
-        <span>
-          <strong>OpenAI Codex</strong>
-          <small>v0.144.5</small>
-        </span>
-        <span className="demo-cli-context">gpt-5.3-codex · xhigh</span>
-      </div>
-
-      <div className="demo-cli-prompt demo-codex-prompt">
-        <span>›</span>
-        <strong>{review ? "Review the completed implementation" : ticket.title}</strong>
-      </div>
-
-      <div className="demo-codex-turn">
-        <div className="demo-cli-line">
-          <span className="demo-codex-bullet">•</span>
-          <span>
-            <strong>Explored</strong>
-            <small>└ Read ticket brief and repository instructions</small>
-          </span>
-        </div>
-        <div className="demo-cli-line">
-          <span className="demo-codex-bullet">•</span>
-          <span>I’m updating the resume path and keeping the existing adapter seam intact.</span>
-        </div>
-        <div className="demo-cli-line demo-codex-edit">
-          <span className="demo-codex-bullet">•</span>
-          <span>
-            <strong>Edited</strong> src/sessions/resume.ts
-            <small>+46&nbsp;&nbsp; -8</small>
-          </span>
-        </div>
-      </div>
-
-      <div className="demo-codex-divider">
-        <span>{review ? "Worked for 2m 18s" : "Working · 1m 42s"}</span>
-      </div>
-
-      {review && (
-        <div className="demo-cli-response demo-codex-response">
-          <span className="demo-codex-bullet">•</span>
-          <span>Ready for review. Resume behavior is covered by the targeted regression test.</span>
-        </div>
-      )}
-
-      <div className="demo-cli-composer demo-codex-composer" aria-hidden="true">
-        <span>›</span>
-        <span className="demo-cli-cursor" />
-      </div>
-      <div className="demo-cli-footer">
-        <span>/model to change</span>
-        <span>82% context left</span>
+        <span>Ticket context attached</span>
+        <span>Local history preserved</span>
       </div>
     </div>
   );
@@ -932,7 +863,7 @@ function DonePreview({ ticket }: { ticket: DemoTicket }) {
       </span>
       <span className="demo-doc-id">{ticket.code}</span>
       <h2 id="demo-preview-title">{ticket.title}</h2>
-      <p>The work, sessions, branch, and review trail remain attached to the ticket.</p>
+      <p>The Ticket keeps its Sessions, Change Set, branch, and review trail together.</p>
       <div className="demo-delivery-summary">
         <span>
           <CheckIcon /> Tests passed
@@ -941,7 +872,7 @@ function DonePreview({ ticket }: { ticket: DemoTicket }) {
           <BranchIcon /> volli/{ticket.code.toLowerCase()}-{ticket.id}
         </span>
         <span>
-          <PullRequestIcon /> Pull request ready
+          <PullRequestIcon /> Change Set inspected
         </span>
       </div>
     </div>

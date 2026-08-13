@@ -173,6 +173,7 @@ class FakeStream {
       onStarted(): void;
       onData(event: { id: string; data: unknown }): void;
       onError(error: unknown): void;
+      onComplete(): void;
     },
   ) {}
   start(): void {
@@ -183,6 +184,9 @@ class FakeStream {
   }
   fail(error: unknown): void {
     this.handlers.onError(error);
+  }
+  complete(): void {
+    this.handlers.onComplete();
   }
 }
 
@@ -773,6 +777,33 @@ describe("reconnect", () => {
 
     expect(rpc.streams).toHaveLength(2);
     expect(rpc.streams[1]!.input).toEqual({ sessionId, afterSequence: 4 });
+  });
+
+  it("treats a clean completion like a drop and resumes from the cursor", async () => {
+    // A Session stream has no legitimate clean end while the Session lives:
+    // the producer only completes on teardown races, and shrugging here is
+    // exactly the silent dead stream that held a Stop button forever.
+    const { rpc, stream } = await adopted();
+    const completed = stream();
+    completed.start();
+    completed.send("7", frameOf(7, "turn.started"));
+
+    completed.complete();
+    await settle();
+
+    expect(completed.unsubscribed).toBe(true);
+    expect(rpc.streams).toHaveLength(2);
+    expect(rpc.streams[1]!.input.lastEventId).toBe("7");
+  });
+
+  it("surfaces a completion that arrived before the stream ever started", async () => {
+    const { rpc, stream, slice } = await adopted();
+
+    stream().complete();
+    await settle();
+
+    expect(rpc.streams).toHaveLength(1);
+    expect(slice()!.sessionError).toBe("Lost the Session stream: the Session stream ended");
   });
 
   it("surfaces a stream that failed before it ever started rather than retrying", async () => {

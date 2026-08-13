@@ -822,6 +822,27 @@ describe("live observation translation", () => {
       },
     ]);
   });
+
+  it("ends an ask that stopped being asked with a reason and no resolution", async () => {
+    const { translate, sink } = composition();
+
+    await translate({
+      kind: "interaction",
+      state: "cancelled",
+      interactionId: "permission-1",
+      reason: "superseded",
+    });
+
+    expect(sink.observations).toEqual([
+      {
+        id: `pi:interaction:${ATTACHMENT_ID}:permission-1:cancelled`,
+        kind: "interaction.cancelled",
+        occurredAt: 1000,
+        interactionId: "permission-1",
+        reason: "superseded",
+      },
+    ]);
+  });
 });
 
 describe("cold replay translation", () => {
@@ -963,6 +984,26 @@ describe("cold replay translation", () => {
         kind: "interaction.opened",
         occurredAt: 1_000,
         interaction: permission,
+      },
+    ]);
+  });
+
+  it("replays a cancellation at the moment the ask ended, not the moment it was read", () => {
+    expect(
+      fixedTranslator().replay({
+        kind: "interaction",
+        state: "cancelled",
+        interactionId: "permission-1",
+        reason: "withdrawn",
+        occurredAt: 205,
+      }),
+    ).toEqual([
+      {
+        id: `pi:interaction:${ATTACHMENT_ID}:permission-1:cancelled`,
+        kind: "interaction.cancelled",
+        occurredAt: 205,
+        interactionId: "permission-1",
+        reason: "withdrawn",
       },
     ]);
   });

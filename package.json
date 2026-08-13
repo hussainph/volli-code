@@ -2,7 +2,8 @@
   "name": "volli-code",
   "version": "0.0.1",
   "private": true,
-  "description": "Volli Code — kanban planning + terminal-agent execution (Electron rewrite)",
+  "description": "A local-first macOS workspace for tickets, coding sessions, worktrees, and review.",
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "prepare": "vp config --no-agent",

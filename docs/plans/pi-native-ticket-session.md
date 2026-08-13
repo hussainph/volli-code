@@ -826,10 +826,6 @@ strategy itself is explicitly reconsidered.
 
 ## Research record
 
-- `docs/research/volli-harness-strategy.md` — external market, policy, risk, and
-  alternative analysis made before the single-runtime decision.
-- `docs/research/volli-harness-product-fit.md` — repository contact test and
-  reusable-asset inventory made before the strategic pivot.
 - [Pi SDK](https://pi.dev/docs/latest/sdk) and
   [Pi sessions](https://pi.dev/docs/latest/sessions) — direct Node integration
   and runtime recovery primitives.

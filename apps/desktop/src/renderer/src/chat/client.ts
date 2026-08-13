@@ -199,6 +199,14 @@ interface ChatStreamHandlers {
   onStarted(): void;
   onData(event: ChatStreamEvent): void;
   onError(error: unknown): void;
+  /**
+   * A clean end is not a state a Session stream may rest in. The producer only
+   * completes without error on teardown races, and a client that shrugged here
+   * kept a dead stream it believed healthy — `turn.completed` never arrived
+   * and the composer held Stop forever. Completion is treated exactly like a
+   * drop: one resume from the cursor, then surface.
+   */
+  onComplete(): void;
 }
 
 type ChatCommand =
@@ -656,6 +664,9 @@ export class ChatSessionClient {
           },
           onError: (failure) => {
             this.#dropped(failure);
+          },
+          onComplete: () => {
+            this.#dropped(new Error("the Session stream ended"));
           },
         },
       );
