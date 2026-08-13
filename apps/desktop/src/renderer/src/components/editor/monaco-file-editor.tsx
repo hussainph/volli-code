@@ -531,11 +531,13 @@ export function MonacoFileEditor({
     const onKeyDown = (event: KeyboardEvent) => {
       const host = hostRef.current;
       const target = event.target;
+      // `[data-monaco-status]` is the marker every file-editor host carries, so
+      // this is "some OTHER editor is where this keystroke came from".
       const foreign =
         host !== null &&
-        target instanceof Node &&
+        target instanceof Element &&
         !host.contains(target) &&
-        (target instanceof Element ? target.closest("[data-monaco-status]") !== null : false);
+        target.closest("[data-monaco-status]") !== null;
       if (!isGlobalSaveShortcut(event, foreign)) return;
       event.preventDefault();
       void runSaveRef.current();

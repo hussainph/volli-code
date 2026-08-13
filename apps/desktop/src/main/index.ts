@@ -28,7 +28,6 @@ import type {
   HarnessAdapter,
   HarnessId,
   ResolvedAppearance,
-  UnsavedDocumentsReport,
   VolliIpcChannel,
   VolliIpcEvent,
 } from "@volli/shared";
@@ -838,15 +837,15 @@ app.whenReady().then(async () => {
     });
   };
 
-  // The unsaved-editor gate goes in FIRST, ahead of the terminal gate and the
-  // Session shutdown: a discarded draft is the only thing on the quit path that
-  // cannot be recovered afterwards, so it is the question worth asking first.
   ipcMain.on(
     "volli:unsaved-documents" satisfies VolliIpcChannel,
     (_event, ...args: unknown[]): void => {
-      recordUnsavedDocuments(args[0] as UnsavedDocumentsReport);
+      recordUnsavedDocuments(args[0]);
     },
   );
+  // Registered FIRST, ahead of the terminal gate and the Session shutdown: a
+  // discarded draft is the only thing on the quit path that cannot be recovered
+  // afterwards, so it is the question worth asking before any other.
   app.on("before-quit", (event) => {
     if (quitAlreadyRefused(event)) return;
     const names = unsavedDocumentNames();

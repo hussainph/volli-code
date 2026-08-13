@@ -740,7 +740,7 @@ export interface VolliSessionRpcIpcContract {
 }
 
 /**
- * The 3 send-based channels (`ipcRenderer.send`, not `invoke`) — declared
+ * The 4 send-based channels (`ipcRenderer.send`, not `invoke`) — declared
  * separately from {@link VolliInvokeContract} because they have no result to
  * await.
  */

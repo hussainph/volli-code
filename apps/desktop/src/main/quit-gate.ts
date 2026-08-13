@@ -17,10 +17,9 @@
  * Before {@link refuseQuit} existed, answering "Cancel" to the busy-terminal
  * confirm delayed the quit by one teardown and then killed the process anyway,
  * taking the work the user had just chosen to keep. Every gate records its
- * refusal here; the shutdown listener consumes it and stands down.
+ * refusal here, and every listener behind one checks {@link quitAlreadyRefused}
+ * before acting.
  */
-
-import type { UnsavedDocumentsReport } from "@volli/shared";
 
 /** How many names the confirm spells out before it starts counting instead. */
 const MAX_NAMED_FILES = 4;
@@ -46,13 +45,14 @@ const refusedQuits = new WeakSet<object>();
 /**
  * Accepts one renderer report.
  *
- * Validated rather than trusted: this arrives over a `send` channel and a
- * malformed payload must not be able to read as "nothing is unsaved" and let a
- * quit through. A report that does not typecheck at runtime leaves the previous
- * one standing, which fails toward asking the user.
+ * Takes `unknown` and validates, rather than taking the declared
+ * `UnsavedDocumentsReport` and trusting it: this arrives over a `send` channel,
+ * and a malformed payload must not be able to read as "nothing is unsaved" and
+ * let a quit through. A report that does not hold up at runtime leaves the
+ * previous one standing, which fails toward asking the user.
  */
-export function recordUnsavedDocuments(report: UnsavedDocumentsReport): void {
-  const names: unknown = (report as { names?: unknown } | undefined)?.names;
+export function recordUnsavedDocuments(report: unknown): void {
+  const names: unknown = (report as { names?: unknown } | null | undefined)?.names;
   if (!Array.isArray(names) || names.some((name) => typeof name !== "string")) return;
   unsavedNames = names as readonly string[];
 }

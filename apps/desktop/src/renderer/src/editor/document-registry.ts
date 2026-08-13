@@ -118,12 +118,17 @@ const DEFAULT_WARM_DOCUMENT_LIMIT = 8;
 export class DocumentRegistry<Model extends RegistryModel, ViewState> {
   private readonly entries = new Map<string, DocumentEntry<Model, ViewState>>();
   /**
-   * Keys of the parked entries, least-recently-used first (insertion order).
-   * Membership is exactly the cold set: `acquire` removes a key the moment a
-   * view takes it back, and only `cleanupReleasedEntry` — which has just proven
-   * the entry viewless and clean — puts one in.
+   * The parked entries, least-recently-used first (insertion order). Membership
+   * is exactly the parked set: `acquire` removes a key the moment a view takes
+   * it back, and only `cleanupReleasedEntry` — which has just proven the entry
+   * viewless and clean — puts one in.
+   *
+   * A map rather than a set of keys so ageing never has to look an entry back up
+   * and handle a miss it cannot actually have: the two collections would then be
+   * able to disagree, and the code to survive that would be untestable because
+   * nothing can produce it.
    */
-  private readonly cold = new Set<string>();
+  private readonly cold = new Map<string, DocumentEntry<Model, ViewState>>();
   /** Hosts watching the unsaved set, so a quit can be stopped before it lands. */
   private readonly unsavedListeners = new Set<() => void>();
 
@@ -405,7 +410,7 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
       return;
     }
     this.cold.delete(key);
-    this.cold.add(key); // most recently used, at the back of the queue
+    this.cold.set(key, entry); // most recently used, at the back of the queue
     this.enforceRetentionLimits();
   }
 
@@ -419,13 +424,8 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
    */
   private enforceRetentionLimits(): void {
     const parked = [...this.cold];
-    for (const [index, key] of parked.entries()) {
+    for (const [index, [key, entry]] of parked.entries()) {
       const remaining = parked.length - index;
-      const entry = this.entries.get(key);
-      if (entry === undefined) {
-        this.cold.delete(key);
-        continue;
-      }
       if (remaining > this.coldLimit) {
         this.disposeModel(entry);
         this.cold.delete(key);

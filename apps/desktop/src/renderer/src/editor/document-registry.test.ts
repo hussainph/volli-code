@@ -6,6 +6,7 @@ import {
   type RegistryModel,
   type RegistryModelFactory,
 } from "./document-registry";
+import { applyLiveDocumentReconciliation } from "./live-document-reconciliation";
 
 /**
  * Mirrors the one Monaco distinction this registry depends on: `setValue`
@@ -912,6 +913,37 @@ describe("DocumentRegistry cold retention", () => {
     expect(entryCount(registry)).toBe(3);
   });
 
+  /**
+   * A lease outlives its entry: it closes over the entry it was handed, so a
+   * save that completes after that document was evicted and reopened is holding
+   * a stale one. It must not resurrect it over the live document, and must still
+   * let go of the model it is the last reference to.
+   */
+  it("lets a stale lease clean up its own superseded entry, not the live one", () => {
+    const { registry, models } = makeRegistry(1, 1);
+
+    const stale = registry.acquire({
+      identity: fileIdentity("a.py"),
+      viewId: "file",
+      seed: { value: "first\n", revision: 1 },
+      savePolicy: "explicit",
+    });
+    stale.release({ cursor: 1 });
+    openAndPark(registry, "b.py"); // evicts a.py past both caps
+
+    const reopened = registry.acquire({
+      identity: fileIdentity("a.py"),
+      viewId: "file",
+      seed: { value: "second\n", revision: 2 },
+      savePolicy: "explicit",
+    });
+    stale.markSaved(99);
+
+    expect(reopened.snapshot()).toMatchObject({ baseline: "second\n", baselineRevision: 2 });
+    expect(registry.peek(fileIdentity("a.py"))?.model).toBe(reopened.model);
+    expect(models[0]?.dispose).toHaveBeenCalled();
+  });
+
   it("disposes a parked model on the way out rather than leaking it", () => {
     const { registry, models } = makeRegistry(1, 1);
 
@@ -922,6 +954,120 @@ describe("DocumentRegistry cold retention", () => {
     // disposed, or Monaco would hold a live model nothing can ever reach.
     expect(registry.peek(fileIdentity("a.py"))).toBeNull();
     expect(models[0]?.dispose).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * The case the whole conflict guard exists for, walked end to end against a real
+ * registry rather than a fake lease: someone is hand-writing Python, leaves the
+ * tab, an agent rewrites the file underneath, and they come back. Neither side
+ * may be dropped on the way through.
+ */
+describe("DocumentRegistry — an agent rewrites a parked draft", () => {
+  const identity: DocumentIdentity = { ...mainIdentity, relPath: "train.py" };
+  const onDisk = "import torch\n\nEPOCHS = 1\nLR = 0.01\n";
+
+  function parkADraft(registry: DocumentRegistry<FakeModel, { cursor: number }>) {
+    const view = registry.acquire({
+      identity,
+      viewId: "file",
+      seed: { value: onDisk, revision: 100 },
+      savePolicy: "explicit",
+    });
+    // The human's edit, on the LR line.
+    view.model.applyEdit("import torch\n\nEPOCHS = 1\nLR = 0.001\n");
+    view.release({ cursor: 3 });
+    return view;
+  }
+
+  it("merges the agent's disjoint line into the returning draft, still dirty", () => {
+    const { registry } = makeRegistry();
+    const parked = parkADraft(registry);
+
+    // The agent rewrote a DIFFERENT line while the tab was away.
+    const agentBytes = "import torch\n\nEPOCHS = 50\nLR = 0.01\n";
+    const reopened = registry.acquire({
+      identity,
+      viewId: "file",
+      seed: { value: agentBytes, revision: 200 },
+      savePolicy: "explicit",
+    });
+
+    // Reacquiring must not touch the draft: only the mount reconcile decides.
+    expect(reopened.model).toBe(parked.model);
+    expect(reopened.model.getValue()).toBe("import torch\n\nEPOCHS = 1\nLR = 0.001\n");
+
+    const plan = applyLiveDocumentReconciliation({
+      lease: reopened,
+      lastWrite: null,
+      disk: { ok: true, text: agentBytes, revision: 200, truncated: false },
+    });
+
+    expect(plan.kind).toBe("apply");
+    // Both edits survive, and the result is still unsaved work — a merge is not
+    // a save, and the dot has to keep saying so.
+    expect(reopened.model.getValue()).toBe("import torch\n\nEPOCHS = 50\nLR = 0.001\n");
+    expect(reopened.snapshot()).toMatchObject({ baseline: agentBytes, dirty: true });
+    expect(registry.unsavedDocuments()).toEqual([identity]);
+  });
+
+  it("preserves both versions when the agent rewrote the same line", () => {
+    const { registry } = makeRegistry();
+    parkADraft(registry);
+
+    // Same line as the human's edit — nothing here can be merged honestly.
+    const agentBytes = "import torch\n\nEPOCHS = 1\nLR = 0.05\n";
+    const reopened = registry.acquire({
+      identity,
+      viewId: "file",
+      seed: { value: agentBytes, revision: 200 },
+      savePolicy: "explicit",
+    });
+    const plan = applyLiveDocumentReconciliation({
+      lease: reopened,
+      lastWrite: null,
+      disk: { ok: true, text: agentBytes, revision: 200, truncated: false },
+    });
+
+    expect(plan).toMatchObject({
+      kind: "conflict",
+      local: "import torch\n\nEPOCHS = 1\nLR = 0.001\n",
+      disk: agentBytes,
+    });
+    // The draft is untouched and the baseline still describes it, so nothing
+    // has silently adopted disk — but the newer revision IS recorded, or the
+    // explicit overwrite that follows would be rejected on a stale mtime.
+    expect(reopened.model.getValue()).toBe("import torch\n\nEPOCHS = 1\nLR = 0.001\n");
+    expect(reopened.snapshot()).toMatchObject({
+      baseline: onDisk,
+      baselineRevision: 100,
+      externalRevision: 200,
+      dirty: true,
+    });
+  });
+
+  /** The same walk with nothing unsaved: adopt in full, quietly, and stay clean. */
+  it("adopts the agent's rewrite into a parked CLEAN document", () => {
+    const { registry } = makeRegistry();
+    const view = registry.acquire({
+      identity,
+      viewId: "file",
+      seed: { value: onDisk, revision: 100 },
+      savePolicy: "explicit",
+    });
+    view.release({ cursor: 3 });
+
+    const agentBytes = "import torch\n\nEPOCHS = 50\nLR = 0.01\n";
+    const reopened = registry.acquire({
+      identity,
+      viewId: "file",
+      seed: { value: agentBytes, revision: 200 },
+      savePolicy: "explicit",
+    });
+
+    expect(reopened.model.getValue()).toBe(agentBytes);
+    expect(reopened.snapshot()).toMatchObject({ dirty: false, baselineRevision: 200 });
+    expect(registry.unsavedDocuments()).toEqual([]);
   });
 });
 
