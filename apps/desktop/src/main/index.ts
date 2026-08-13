@@ -273,7 +273,11 @@ function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): Brows
   // chrome band away from the native traffic lights. Pin the page to native
   // scale and disable pinch-to-zoom (visual zoom) so only the renderer's CSS
   // zoom — applied below the chrome band — ever changes UI scale.
+  // A load that completes while the window is tearing down (close/quit during
+  // boot) still emits `did-finish-load`; touching the destroyed window then is
+  // an uncaught main-process exception and a modal error dialog.
   mainWindow.webContents.on("did-finish-load", () => {
+    if (mainWindow.isDestroyed()) return;
     mainWindow.webContents.setZoomLevel(0);
     mainWindow.webContents.setVisualZoomLevelLimits(1, 1);
   });
@@ -285,11 +289,13 @@ function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): Brows
   // traffic-light strip (the lights are hidden in fullscreen).
   let preFullScreenTitle = "";
   mainWindow.on("enter-full-screen", () => {
+    if (mainWindow.isDestroyed()) return;
     preFullScreenTitle = mainWindow.getTitle();
     mainWindow.setTitle("");
     mainWindow.webContents.send("volli:fullscreen-changed" satisfies VolliIpcEvent, true);
   });
   mainWindow.on("leave-full-screen", () => {
+    if (mainWindow.isDestroyed()) return;
     mainWindow.setTitle(preFullScreenTitle);
     mainWindow.webContents.send("volli:fullscreen-changed" satisfies VolliIpcEvent, false);
   });
