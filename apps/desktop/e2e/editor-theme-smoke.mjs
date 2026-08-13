@@ -11,6 +11,10 @@
  *      `window.api.theme` and survives returning to Files.
  *   4. After committing Nord, Monaco's background matches Nord's
  *      editor.background — proof setTheme applied a catalog id.
+ *   5. Source Mode and Document Mode part ways under that same committed
+ *      catalog theme: a markdown file paints NO catalog background and takes
+ *      its ink from `--foreground` (document-mode.css), which is the split
+ *      nothing but a real window can see.
  *
  * MANUALLY RUN (needs a display + the built app); not wired into CI:
  *
@@ -52,6 +56,9 @@ const PROJECT_NAME = "Editor Theme Project";
 const TICKET_PREFIX = "ET";
 const APP_TS = "src/app.ts";
 const APP_TS_CONTENT = 'export const app = "theme probe";\n';
+/** A markdown file in the workbench IS Document Mode (FileView's markdown branch). */
+const NOTES_MD = "notes.md";
+const NOTES_MD_CONTENT = "# Document probe\n\nProse on the page.\n";
 
 const { userDataDir, dbPath, scratch, cleanup } = await makeScratch("volli-editor-theme-smoke-");
 const { check, attempt, summarize } = createRunner();
@@ -173,6 +180,38 @@ async function waitForMonacoBackground(page, expectedHex) {
   return css === null ? null : cssColorToHex(css);
 }
 
+/** Does a computed `background-color` actually fill anything? */
+function isFilled(css) {
+  return css !== null && css !== "rgba(0, 0, 0, 0)" && css !== "transparent";
+}
+
+/**
+ * What the Document Mode surface actually paints.
+ *
+ * The editor's own background is expected to fill NOTHING — Document Mode
+ * aliases `--vscode-editor-background` to `transparent` so the hosting column
+ * shows through — so the raw strings come back and the caller judges them: a
+ * bare truthiness read cannot tell "correctly transparent" from "no editor".
+ * Both layers Monaco could fill are reported, plus the rendered ink and the app
+ * token it must equal.
+ */
+async function readDocumentSurface(page) {
+  return page.evaluate(() => {
+    const editor = document.querySelector(".volli-document-mode .monaco-editor");
+    if (editor === null) return null;
+    const lines = editor.querySelector(".monaco-editor-background");
+    const glyph = editor.querySelector(".view-line span") ?? editor.querySelector(".view-line");
+    return {
+      editorBackground: getComputedStyle(editor).backgroundColor,
+      linesBackground: lines === null ? null : getComputedStyle(lines).backgroundColor,
+      ink: glyph === null ? null : getComputedStyle(glyph).color,
+      foregroundToken: getComputedStyle(document.documentElement)
+        .getPropertyValue("--foreground")
+        .trim(),
+    };
+  });
+}
+
 async function openSeededFile(page) {
   await goToNav(page, "Files", filesSettled(page));
   await waitUntil(
@@ -186,11 +225,22 @@ async function openSeededFile(page) {
   return waitForMonacoReady(page, "theme probe");
 }
 
+async function openSeededDocument(page) {
+  await goToNav(page, "Files", filesSettled(page));
+  await waitUntil(
+    `tree row for ${NOTES_MD}`,
+    async () => (await treeFile(page, NOTES_MD).count()) === 1,
+  );
+  await treeFile(page, NOTES_MD).click();
+  return waitForMonacoReady(page, "Document probe");
+}
+
 console.log("scratch:", scratch, "\n");
 
 const projectDir = await makeGitRepo(scratch, "project-");
 await fs.mkdir(join(projectDir, "src"), { recursive: true });
 await fs.writeFile(join(projectDir, APP_TS), APP_TS_CONTENT, "utf8");
+await fs.writeFile(join(projectDir, NOTES_MD), NOTES_MD_CONTENT, "utf8");
 await execFileAsync("git", ["add", "-A"], { cwd: projectDir });
 await execFileAsync("git", ["commit", "-q", "-m", "seed"], { cwd: projectDir });
 
@@ -276,6 +326,27 @@ try {
       detail: JSON.stringify(probe),
     };
   });
+
+  await attempt(
+    6,
+    "a markdown document ignores the catalog theme and wears app tokens",
+    async () => {
+      // Still on the committed Nord, deliberately: passing here under the SHIPPED
+      // default would only prove the two happened to agree.
+      const monaco = await openSeededDocument(page);
+      const surface = await readDocumentSurface(page);
+      if (surface === null) return { ok: false, detail: "no Document Mode editor mounted" };
+      const ink = cssColorToHex(surface.ink ?? "");
+      return {
+        ok:
+          monaco.status === "ready" &&
+          !isFilled(surface.editorBackground) &&
+          !isFilled(surface.linesBackground) &&
+          ink === cssColorToHex(surface.foregroundToken),
+        detail: `status=${monaco.status} ${JSON.stringify(surface)} ink=${ink}`,
+      };
+    },
+  );
 } catch (error) {
   check("!", "smoke crashed", false, String(error?.stack ?? error));
 } finally {

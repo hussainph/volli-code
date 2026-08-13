@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vite-plus/test";
 
 import { targetAt } from "./document-decorations";
@@ -37,6 +38,40 @@ describe("documentModeOptions", () => {
       "Add description…",
     );
     expect("placeholder" in documentModeOptions({})).toBe(false);
+  });
+});
+
+/**
+ * The document surface is CSS, so the two things that would silently undo it
+ * are asserted against the stylesheet itself rather than against a copy of it.
+ * Both failure modes are invisible in review and invisible in every other test:
+ * a colour written as a literal stops following the canvas, and a token reset
+ * that drifts BELOW the decoration rules starts winning ties against them.
+ */
+describe("document-mode.css surface", () => {
+  const css = readFileSync(new URL("./document-mode.css", import.meta.url), "utf8");
+  const surface = css.slice(css.indexOf("/* --- the surface"), css.indexOf("/* --- collapsed"));
+
+  it("paints Monaco's own colour variables from app tokens, never literals", () => {
+    // Aliases, not derivations: the app rewrites these onto the root element on
+    // every canvas/appearance change, so the editor follows without a rebuild.
+    expect(surface).toContain("--vscode-editor-background: transparent;");
+    expect(surface).toContain("--vscode-editor-foreground: var(--foreground);");
+    expect(surface).toContain("--vscode-editor-placeholder-foreground: var(--muted-foreground);");
+    expect(surface).toMatch(/--vscode-editor-selectionBackground:[^;]*var\(--foreground\)/);
+    expect(surface).toMatch(/--vscode-scrollbarSlider-background:\s*var\(--border\);/);
+    // The catalog theme's `#282c34` and friends enter as hex; nothing on this
+    // surface may be one (`#` also catches a stray id selector in the block).
+    expect(surface).not.toContain("#");
+  });
+
+  it("resets catalog token colours above the decoration rules that tie with it", () => {
+    // Monaco renders a decorated token as `class="mtk1 volli-md-h1"`, so both
+    // rules match the same span at the same specificity and source order is the
+    // only tie-break: the reset must come first for the decoration to win.
+    const reset = css.indexOf('.volli-document-mode [class*="mtk"]');
+    expect(reset).toBeGreaterThan(-1);
+    expect(reset).toBeLessThan(css.indexOf(".volli-document-mode .volli-md-h1"));
   });
 });
 
