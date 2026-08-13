@@ -26,6 +26,9 @@
  *                      SQLite. (Driving the native folder picker isn't feasible
  *                      under Playwright; this is the established seeding path — see
  *                      board-smoke.mjs / global-artifacts-smoke.mjs.)
+ *   • ensurePiAuthInto() — copies the real `~/.pi/agent/auth.json` into a smoke's
+ *                      isolated HOME, so a live Pi turn is possible without
+ *                      touching the developer's own profile.
  *   • seedDefaultModel() — records the app-wide default model every structured
  *                      Session (Ticket or Project) now requires before it can
  *                      start, over the same `modelAccess.setDefault` tRPC
@@ -50,7 +53,7 @@
  * These smokes are NOT wired into `vp test`; they need a display + the built app.
  */
 import { execFile } from "node:child_process";
-import { promises as fs } from "node:fs";
+import { promises as fs, rmSync } from "node:fs";
 import os from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -329,6 +332,74 @@ export async function readSeededProjects(page) {
     for (const p of boot.data.projects) byName[p.name] = p;
     return { projects: boot.data.projects, byName };
   });
+}
+
+// ---- Pi credentials ----------------------------------------------------------
+
+/**
+ * Where a real `pi` login puts its credentials on this machine.
+ *
+ * Module-private: it was exported while each smoke staged its own copy, and
+ * nothing outside this file needs a path to the developer's live token now that
+ * one helper does the staging. Narrowing it is the point rather than tidiness —
+ * the fewer callers that can name this file, the fewer that can copy it.
+ */
+const REAL_PI_AUTH = join(os.homedir(), ".pi", "agent", "auth.json");
+
+/**
+ * Copy the real Pi credentials into an isolated `HOME`, so a smoke can drive a
+ * live turn without ever touching the developer's own profile.
+ *
+ * Pi's credential store reads `$PI_CODING_AGENT_DIR` else `~/.pi/agent/auth.json`
+ * under whatever `HOME` the process was launched with
+ * (`packages/agent-runtime/src/pi/models.ts`), so a smoke that overrides `HOME`
+ * — the same posture `VOLLI_WORKTREE_HOME_DIR` takes for worktrees — has to put
+ * a copy there first or the app boots into a login-required dead end.
+ *
+ * Never reads or prints the contents: `fs.copyFile`, byte for byte. Fails fast
+ * with a message naming the missing file rather than letting the app start.
+ *
+ * @param {string} homeDir  The isolated HOME the app will be launched with.
+ */
+export async function ensurePiAuthInto(homeDir) {
+  if (!(await pathExists(REAL_PI_AUTH))) {
+    throw new Error(
+      `Real Pi credentials not found at ${REAL_PI_AUTH}. This smoke drives a live Pi turn and ` +
+        "needs a working `pi` login (openai-codex / ChatGPT subscription) on this machine first.",
+    );
+  }
+  const dest = join(homeDir, ".pi", "agent", "auth.json");
+  await fs.mkdir(dirname(dest), { recursive: true, mode: 0o700 });
+  await fs.copyFile(REAL_PI_AUTH, dest);
+  // `copyFile` happens to carry the source's 0600 over on macOS, which is the
+  // only platform these run on — said explicitly anyway, because "the mode came
+  // out right" is a property of the copy, not a promise the call makes.
+  await fs.chmod(dest, 0o600);
+  forgetOnExit(dirname(dest));
+}
+
+/**
+ * Shred a staged credential when this process dies, however it dies.
+ *
+ * A smoke already removes its whole scratch in a `finally`, and that covers the
+ * run that merely fails. It does not cover the run that is KILLED — and that is
+ * the one that matters here, because what it leaves behind is a byte-identical
+ * copy of a live bearer token sitting in `/var/folders` with nothing scheduled
+ * to ever remove it. One was found there hours after the run that made it.
+ *
+ * Synchronous on purpose: `exit` cannot await, so a promise here would be
+ * abandoned mid-unlink. `SIGKILL` is still unanswerable and always will be —
+ * which is why the directory is 0700 above rather than trusting this alone.
+ */
+function forgetOnExit(dir) {
+  const shred = () => rmSync(dir, { recursive: true, force: true });
+  process.once("exit", shred);
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+    process.once(signal, () => {
+      shred();
+      process.exit(1);
+    });
+  }
 }
 
 // ---- model access ------------------------------------------------------------

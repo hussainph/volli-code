@@ -16,12 +16,13 @@
  * Two things make a real Pi turn against a TICKETLESS Session possible at
  * all, both set up before the first prompt is typed:
  *
- *   1. **Credentials.** Same posture as `pi-ticket-chat-smoke.mjs`: `HOME` is
- *      isolated into a scratch dir (never the developer's real profile), and
- *      the real `~/.pi/agent/auth.json` is copied into
- *      `<fakeHome>/.pi/agent/auth.json` — see `ensurePiAuthInto`. Fails fast
- *      with a clear message if the real file is missing; the copy is never
- *      read back or logged.
+ *   1. **Credentials.** Same posture as `pi-ticket-chat-smoke.mjs`, over the
+ *      same shared helper: `HOME` is isolated into a scratch dir (never the
+ *      developer's real profile), and the real `~/.pi/agent/auth.json` is
+ *      copied into `<fakeHome>/.pi/agent/auth.json` by `smoke-kit.mjs`'s
+ *      `ensurePiAuthInto`. Fails fast with a clear message if the real file is
+ *      missing; the copy is never read back or logged, and is shredded on the
+ *      way out however this process dies.
  *   2. **An app-wide default model.** `project-sessions.ts`'s `start()` calls
  *      `requireDefaultModel` exactly like a Ticket Session does — nothing
  *      bootstraps this on a fresh profile, so check 1 records one over the
@@ -52,15 +53,15 @@
  */
 import { promises as fs } from "node:fs";
 import os from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 import {
   createRunner,
+  ensurePiAuthInto,
   goToBoard,
   launch,
   makeGitRepo,
   makeScratch,
-  pathExists,
   readSeededProjects,
   seedDefaultModel,
   seedProjects,
@@ -75,8 +76,6 @@ const PROJECT = { id: "pi-scratch-chat-project", name: "Pi Scratch Chat", prefix
 // transformation to restate here, and a change to either end surfaces as
 // this smoke failing to find its own tab after the first message lands.
 const PROMPT_TEXT = "Reply with one short sentence, please.";
-
-const REAL_PI_AUTH = join(os.homedir(), ".pi", "agent", "auth.json");
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("pi-scratch-chat-smoke-");
 // Isolates Pi's own credential/config lookups from the developer's real
@@ -108,19 +107,6 @@ async function captureFailureEvidence(page, mainOut, mainErr, label) {
   );
   console.log(`  evidence: ${join(EVIDENCE_DIR, `pi-scratch-chat-${slug}.png`)}`);
   console.log(`  evidence: ${join(EVIDENCE_DIR, `pi-scratch-chat-${slug}.log`)}`);
-}
-
-/** Verbatim from pi-ticket-chat-smoke.mjs — see that file for why order/isolation matter. */
-async function ensurePiAuthInto(homeDir) {
-  if (!(await pathExists(REAL_PI_AUTH))) {
-    throw new Error(
-      `Real Pi credentials not found at ${REAL_PI_AUTH}. This smoke drives a live Pi turn and ` +
-        "needs a working `pi` login (openai-codex / ChatGPT subscription) on this machine first.",
-    );
-  }
-  const dest = join(homeDir, ".pi", "agent", "auth.json");
-  await fs.mkdir(dirname(dest), { recursive: true });
-  await fs.copyFile(REAL_PI_AUTH, dest);
 }
 
 /** The nearest visible tablist's own "+" — scopes past the ticket rail's identical mount. */

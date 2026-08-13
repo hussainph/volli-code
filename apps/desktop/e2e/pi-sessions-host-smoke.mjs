@@ -56,11 +56,12 @@
  */
 import { promises as fs } from "node:fs";
 import os from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 import {
   cardById,
   createRunner,
+  ensurePiAuthInto,
   goToBoard,
   launch,
   makeGitRepo,
@@ -84,8 +85,6 @@ const ORPHAN_PROMPT = "Say hi before this ticket is deleted.";
 // `nextChatOrdinal` (ticket-chat-tab.ts) starts each ticket's own chats at 1.
 const DEFAULT_CHAT_TITLE = "Chat 1";
 
-const REAL_PI_AUTH = join(os.homedir(), ".pi", "agent", "auth.json");
-
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("pi-sessions-host-smoke-");
 const fakeHome = join(scratch, "home");
 const worktreesRoot = join(scratch, "worktree-home");
@@ -103,19 +102,6 @@ async function shot(page, name) {
 async function captureFailureEvidence(page, label) {
   const path = await shot(page, `${label.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`);
   console.log(`  evidence: ${path}`);
-}
-
-/** Verbatim from pi-ticket-chat-smoke.mjs — see that file for why order/isolation matter. */
-async function ensurePiAuthInto(homeDir) {
-  if (!(await pathExists(REAL_PI_AUTH))) {
-    throw new Error(
-      `Real Pi credentials not found at ${REAL_PI_AUTH}. This smoke drives a live Pi turn and ` +
-        "needs a working `pi` login (openai-codex / ChatGPT subscription) on this machine first.",
-    );
-  }
-  const dest = join(homeDir, ".pi", "agent", "auth.json");
-  await fs.mkdir(dirname(dest), { recursive: true });
-  await fs.copyFile(REAL_PI_AUTH, dest);
 }
 
 /** The tab strip's direct Chat control (the ticket rail's own copy — see pi-ticket-chat-smoke.mjs). */
