@@ -10,6 +10,14 @@ import {
   type ShellExecOptions,
 } from "@earendil-works/pi-agent-core/node";
 
+export interface PiExecutionEnvOptions {
+  /**
+   * Directories prepended onto the sanitized environment's `PATH`, in order,
+   * before every `exec`. See {@link piExecutionEnv} for why this exists.
+   */
+  pathPrefixes?: readonly string[];
+}
+
 /**
  * What a CLI needs to render text, and nothing that says who is running it.
  * Both environments below are this list plus what their own path can afford;
@@ -92,12 +100,40 @@ function unsandboxedEnvironment(source: NodeJS.ProcessEnv): Record<string, strin
   return carriedOver(source, UNSANDBOXED_VARIABLES);
 }
 
+/**
+ * `pathPrefixes` joined onto `path`, in order — skipping empty entries, and
+ * never repeating one already sitting at the front. A prefix that only
+ * appears LATER in `path` is still prepended: the point is that a session's
+ * commands find it first, not that they find it at all.
+ */
+function prefixedPath(path: string, pathPrefixes: readonly string[]): string {
+  const entries = path.length === 0 ? [] : path.split(":");
+  let result = entries;
+  for (const prefix of [...pathPrefixes].reverse()) {
+    if (prefix.length === 0 || result[0] === prefix) continue;
+    result = [prefix, ...result];
+  }
+  return result.join(":");
+}
+
 class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
+  readonly #pathPrefixes: readonly string[];
+
+  constructor(options: { cwd: string; pathPrefixes?: readonly string[] }) {
+    super({ cwd: options.cwd });
+    this.#pathPrefixes = options.pathPrefixes ?? [];
+  }
+
   /** Pi's bash tool asks for the host environment; here is the only place that can decline. */
   override async exec(command: string, options?: ShellExecOptions) {
+    const sanitized = unsandboxedEnvironment(process.env);
     return super.exec(command, {
       ...options,
-      env: { ...unsandboxedEnvironment(process.env), ...options?.env },
+      env: {
+        ...sanitized,
+        PATH: prefixedPath(sanitized.PATH ?? "", this.#pathPrefixes),
+        ...options?.env,
+      },
       inheritEnv: false,
     });
   }
@@ -129,7 +165,18 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
  * one `docs/plans/authority-two-axis-rearchitecture.md` rebuilds on. It is kept
  * whole, with the stricter {@link scopedEnvironment} it was written against;
  * nothing wires it up.
+ *
+ * `pathPrefixes` exists for one caller: main hands in `<userData>/bin`, the
+ * directory the CLI shim and every harness wrapper live in, so `volli` and a
+ * detected toolchain resolve inside a structured Session exactly as they do
+ * inside a Volli-started PTY (`agentSessionEnv`/`ticketSessionEnv` prepend the
+ * same directory there). Without it a Session launched from a Finder/Dock
+ * boot — launchd's bare `PATH`, proven by `bare-path-env-smoke.mjs` — never
+ * sees the shim at all.
  */
-export async function piExecutionEnv(workspacePath: string): Promise<ExecutionEnv> {
-  return new SanitizedEnvExecutionEnv({ cwd: workspacePath });
+export async function piExecutionEnv(
+  workspacePath: string,
+  options?: PiExecutionEnvOptions,
+): Promise<ExecutionEnv> {
+  return new SanitizedEnvExecutionEnv({ cwd: workspacePath, pathPrefixes: options?.pathPrefixes });
 }

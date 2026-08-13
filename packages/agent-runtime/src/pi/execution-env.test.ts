@@ -77,6 +77,70 @@ describe("piExecutionEnv", () => {
       await env.cleanup();
     }
   });
+
+  // A Finder/Dock launch of main inherits launchd's bare PATH
+  // (/usr/bin:/bin:/usr/sbin:/sbin), which has never had `volli`'s own shim
+  // dir on it. `pathPrefixes` is how a caller — main, handing in the CLI's
+  // bin dir — puts something in front of that PATH before a command ever
+  // sees it.
+  it("prepends the given path prefixes onto the sanitized PATH", async () => {
+    const env = await piExecutionEnv(workspace(), { pathPrefixes: ["/volli/bin"] });
+    try {
+      await expect(env.exec("printenv PATH")).resolves.toEqual({
+        ok: true,
+        value: { stdout: `/volli/bin:${process.env.PATH}\n`, stderr: "", exitCode: 0 },
+      });
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("prepends multiple prefixes in order, skipping empty entries", async () => {
+    const env = await piExecutionEnv(workspace(), {
+      pathPrefixes: ["/volli/bin", "", "/another/bin"],
+    });
+    try {
+      await expect(env.exec("printenv PATH")).resolves.toEqual({
+        ok: true,
+        value: {
+          stdout: `/volli/bin:/another/bin:${process.env.PATH}\n`,
+          stderr: "",
+          exitCode: 0,
+        },
+      });
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("does not duplicate a prefix already at the front of PATH", async () => {
+    const originalPath = process.env.PATH;
+    const restore = hostVariables({ PATH: `/volli/bin:${originalPath}` });
+    const env = await piExecutionEnv(workspace(), { pathPrefixes: ["/volli/bin"] });
+    try {
+      await expect(env.exec("printenv PATH")).resolves.toEqual({
+        ok: true,
+        value: { stdout: `/volli/bin:${originalPath}\n`, stderr: "", exitCode: 0 },
+      });
+    } finally {
+      restore();
+      await env.cleanup();
+    }
+  });
+
+  it("still lets a caller-supplied PATH override the prefixed one", async () => {
+    const env = await piExecutionEnv(workspace(), { pathPrefixes: ["/volli/bin"] });
+    try {
+      // A real, minimal PATH — proving the override REPLACES the prefixed
+      // default rather than merging with it, while still resolving `printenv`.
+      await expect(env.exec("printenv PATH", { env: { PATH: "/usr/bin:/bin" } })).resolves.toEqual({
+        ok: true,
+        value: { stdout: "/usr/bin:/bin\n", stderr: "", exitCode: 0 },
+      });
+    } finally {
+      await env.cleanup();
+    }
+  });
 });
 
 describe("scopedEnvironment", () => {
