@@ -207,6 +207,12 @@ export default defineConfig(({ mode }) => ({
     clean: true,
     deps: {
       alwaysBundle: bundleWorkspacePackages,
+      // `electron` lives in devDependencies (electron-builder refuses to
+      // package otherwise), which tsdown would bundle by default — inlining
+      // the npm package's binary-path shim over the runtime-provided module.
+      // The real `electron` API only exists as a require() left for Electron
+      // itself to resolve.
+      neverBundle: ["electron"],
     },
     ...(shouldLaunchElectronAfterPack ? { onSuccess: "node scripts/dev-electron.mjs" } : {}),
   },
