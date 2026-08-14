@@ -372,11 +372,15 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
       entry.baselineRevision = seed.revision;
       this.setDirty(entry, false);
       if (modelNeedsUpdate) {
-        // This seed is the clean disk baseline, not a user edit. Putting it on
-        // Monaco's undo stack lets ⌘Z turn stale bytes into a dirty draft, and a
-        // following save can then overwrite the external write. A clean
-        // re-seed deliberately resets the old history with the model value.
-        model.setValue(seed.value);
+        if (entry.references.size > 0) {
+          // A mounted editor owns live view and undo state. Reconcile through
+          // Monaco's edit path so adopting disk does not silently reset either.
+          this.factory.applyExternalEdit(model, seed.value);
+        } else {
+          // A parked clean model has no mounted view to preserve. Its old bytes
+          // and undo history are both stale, so a fresh seed replaces them.
+          model.setValue(seed.value);
+        }
       }
       this.commitMappedViewStates(entry, mappedViewStates);
     } finally {

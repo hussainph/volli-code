@@ -62,19 +62,21 @@ class FakeModel implements RegistryModel {
 
 function makeRegistry(coldLimit?: number, warmLimit?: number) {
   const models: FakeModel[] = [];
+  const applyExternalEdit = vi.fn((model: FakeModel, value: string) => {
+    model.applyEdit(value);
+  });
   const factory: RegistryModelFactory<FakeModel, { cursor: number }> = {
     createModel({ value, language, uri }) {
       const model = new FakeModel(value, language, uri);
       models.push(model);
       return model;
     },
-    applyExternalEdit(model, value) {
-      model.applyEdit(value);
-    },
+    applyExternalEdit,
   };
   return {
     registry: new DocumentRegistry<FakeModel, { cursor: number }>(factory, coldLimit, warmLimit),
     models,
+    applyExternalEdit,
   };
 }
 
@@ -307,16 +309,21 @@ describe("DocumentRegistry", () => {
     expect(reopened.model.canUndo()).toBe(true);
   });
 
-  it("refreshes a parked clean model without making the new disk baseline undoable", () => {
-    const { registry, models } = makeRegistry();
+  it("replaces a parked clean model and clears its stale undo history", () => {
+    const { registry, models, applyExternalEdit } = makeRegistry();
     const file = registry.acquire({
       identity: mainIdentity,
       viewId: "file",
-      seed: { value: "old baseline", revision: "r1" },
+      seed: { value: "older baseline", revision: "r1" },
       savePolicy: "explicit",
     });
+    const model = file.model as FakeModel;
+    model.applyEdit("old baseline");
+    file.markSaved("r1-saved");
+    expect(model.canUndo()).toBe(true);
     expect(file.restoreViewState()).toBeNull();
     file.release({ cursor: 7 });
+    const setValue = vi.spyOn(model, "setValue");
 
     const reopened = registry.acquire({
       identity: mainIdentity,
@@ -335,8 +342,11 @@ describe("DocumentRegistry", () => {
       dirty: false,
     });
     expect(models).toHaveLength(1);
-    // There was nothing to undo before the tab switch. The agent's newer disk
-    // bytes are now the clean baseline, not a user edit that ⌘Z may resurrect.
+    expect(setValue).toHaveBeenCalledOnce();
+    expect(setValue).toHaveBeenCalledWith("new baseline");
+    expect(applyExternalEdit).not.toHaveBeenCalled();
+    // The agent's newer disk bytes are now the clean baseline, not a user edit
+    // that ⌘Z may resurrect together with the parked model's stale history.
     expect(reopened.model.canUndo()).toBe(false);
   });
 
@@ -467,8 +477,8 @@ describe("DocumentRegistry", () => {
     expect(editable.snapshot().savePolicy).toBe("explicit");
   });
 
-  it("adopts a new baseline into every clean shared view without becoming dirty", () => {
-    const { registry } = makeRegistry();
+  it("adopts a new baseline through the live shared model's undo stack", () => {
+    const { registry, applyExternalEdit } = makeRegistry();
     const file = registry.acquire({
       identity: mainIdentity,
       viewId: "file",
@@ -481,6 +491,8 @@ describe("DocumentRegistry", () => {
       seed: { value: "baseline", revision: "r1" },
       savePolicy: "read-only",
     });
+    const model = file.model as FakeModel;
+    const setValue = vi.spyOn(model, "setValue");
 
     expect(file.adoptCleanBaseline({ value: "agent update", revision: "r2" })).toBe("adopted");
     expect(second.model.getValue()).toBe("agent update");
@@ -490,6 +502,10 @@ describe("DocumentRegistry", () => {
       externalRevision: "r2",
       dirty: false,
     });
+    expect(applyExternalEdit).toHaveBeenCalledOnce();
+    expect(applyExternalEdit).toHaveBeenCalledWith(model, "agent update");
+    expect(setValue).not.toHaveBeenCalled();
+    expect(model.canUndo()).toBe(true);
   });
 
   it("applies one clean external update transaction to baseline, revision, and live model", () => {
@@ -832,7 +848,7 @@ describe("DocumentRegistry", () => {
   });
 
   it("does not rewrite a model when adopting its existing clean baseline", () => {
-    const { registry } = makeRegistry();
+    const { registry, applyExternalEdit } = makeRegistry();
     const file = registry.acquire({
       identity: mainIdentity,
       viewId: "file",
@@ -841,29 +857,10 @@ describe("DocumentRegistry", () => {
     });
     const model = file.model as FakeModel;
     const setValue = vi.spyOn(model, "setValue");
-    const applyEdit = vi.spyOn(model, "applyEdit");
 
     expect(file.adoptCleanBaseline({ value: "baseline", revision: "r2" })).toBe("adopted");
     expect(setValue).not.toHaveBeenCalled();
-    expect(applyEdit).not.toHaveBeenCalled();
-  });
-
-  it("adopts a fresh baseline into a clean model without adding an undo step", () => {
-    const { registry } = makeRegistry();
-    const file = registry.acquire({
-      identity: mainIdentity,
-      viewId: "file",
-      seed: { value: "def main():\n", revision: "r1" },
-      savePolicy: "explicit",
-    });
-    const model = file.model as FakeModel;
-    const setValue = vi.spyOn(model, "setValue");
-
-    file.adoptCleanBaseline({ value: "def main() -> None:\n", revision: "r2" });
-
-    expect(model.getValue()).toBe("def main() -> None:\n");
-    expect(setValue).toHaveBeenCalledWith("def main() -> None:\n");
-    expect(model.canUndo()).toBe(false);
+    expect(applyExternalEdit).not.toHaveBeenCalled();
   });
 
   it("peeks a document that is already open, exposing its live model and dirty flag", () => {
