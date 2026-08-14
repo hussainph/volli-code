@@ -177,10 +177,19 @@ describe("readPromptTemplateDir", () => {
     }
   });
 
-  it("skips one unreadable file rather than failing the batch", async () => {
+  it("follows a symlinked template — a shared command set is a real thing", async () => {
+    const source = makeCommandsDir({ "shared.md": "Shared body" });
+    const dir = makeCommandsDir({ "own.md": "Own body" });
+    symlinkSync(join(source, "shared.md"), join(dir, "linked.md"));
+
+    const result = await readPromptTemplateDir(dir);
+
+    expect(result.ok && result.templates.map((entry) => entry.name)).toEqual(["linked", "own"]);
+    expect(result.ok && result.templates[0]?.content).toBe("Shared body");
+  });
+
+  it("loses one broken link rather than failing the batch", async () => {
     const dir = makeCommandsDir({ "good.md": "fine" });
-    // A symlink to nowhere is a dirent that claims to be a file and then
-    // ENOENTs on read — the cheapest honest stand-in for an unreadable entry.
     symlinkSync(join(dir, "does-not-exist.md"), join(dir, "broken.md"));
 
     const result = await readPromptTemplateDir(dir);

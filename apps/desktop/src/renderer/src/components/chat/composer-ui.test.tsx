@@ -1,10 +1,14 @@
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
+import type { PromptTemplate } from "@volli/shared";
 
+import { PromptInput } from "@ai-elements/prompt-input";
+import type { ComposerPickerState } from "@renderer/chat/composer-picker";
 import { Button } from "@renderer/components/ui/button";
 import { DropdownMenuContent, DropdownMenuItem } from "@renderer/components/ui/dropdown-menu";
 
+import { ComposerPicker } from "./composer-picker-ui";
 import { SessionComposer, type SessionComposerProps } from "./composer-ui";
 
 interface InspectableProps {
@@ -15,6 +19,7 @@ interface InspectableProps {
   onClick?(): void;
   onCloseAutoFocus?(event: { preventDefault(): void }): void;
   onSelect?(): void;
+  onSubmit?(): void;
 }
 
 function findElements(
@@ -194,5 +199,138 @@ describe("the queued message row", () => {
     expect(html).toContain('aria-label="Stop turn"');
     expect(html).not.toContain('aria-label="Stop"');
     expect(html).toContain("has-[[data-slot=input-group-control]:focus-visible]:ring-[3px]");
+  });
+});
+
+/* ------------------------------------------------------------------ picker */
+
+const TEMPLATES: readonly PromptTemplate[] = [
+  { name: "review", description: "Review a file", content: "Review $1 closely." },
+  { name: "ship", description: "Open a pull request", content: "Ship it." },
+];
+
+/** Submit the composer's form the way ⏎ and the send button both do. */
+function submitComposer(props: Partial<SessionComposerProps>): string | undefined {
+  let sent: string | undefined;
+  const tree = SessionComposer(
+    composerProps({ working: false, queued: [], onSubmit: (text) => (sent = text), ...props }),
+  );
+  findElements(tree, PromptInput)[0]?.props.onSubmit?.();
+  return sent;
+}
+
+describe("what a composed message actually sends", () => {
+  it("expands a staged command with its arguments before the submit path sees it", () => {
+    expect(submitComposer({ value: "/review src/app.ts", promptTemplates: TEMPLATES })).toBe(
+      "Review src/app.ts closely.",
+    );
+  });
+
+  it("expands a command that takes nothing", () => {
+    expect(submitComposer({ value: "/ship", promptTemplates: TEMPLATES })).toBe("Ship it.");
+  });
+
+  it("sends an unknown command as written rather than losing the message", () => {
+    expect(submitComposer({ value: "/nope please", promptTemplates: TEMPLATES })).toBe(
+      "/nope please",
+    );
+  });
+
+  it("leaves ordinary prose — and its surrounding space — exactly as before", () => {
+    expect(submitComposer({ value: "  just a message  ", promptTemplates: TEMPLATES })).toBe(
+      "just a message",
+    );
+  });
+
+  it("sends nothing at all from an empty box", () => {
+    expect(submitComposer({ value: "   ", promptTemplates: TEMPLATES })).toBeUndefined();
+  });
+
+  it("cannot expand what it was never given", () => {
+    expect(submitComposer({ value: "/ship" })).toBe("/ship");
+  });
+});
+
+function pickerState(overrides: Partial<ComposerPickerState> = {}): ComposerPickerState {
+  return {
+    mode: "command",
+    from: 0,
+    to: 4,
+    query: "rev",
+    rows: [
+      {
+        kind: "command",
+        value: "review",
+        label: "/review",
+        detail: "Review a file",
+        template: TEMPLATES[0]!,
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function renderPicker(value: ComposerPickerState | null): string {
+  return renderToStaticMarkup(
+    <ComposerPicker
+      state={value}
+      active="review"
+      onActiveChange={() => undefined}
+      onSelect={() => undefined}
+    />,
+  );
+}
+
+describe("the picker card", () => {
+  it("renders nothing at all when the picker is closed", () => {
+    expect(renderPicker(null)).toBe("");
+  });
+
+  it("stands on the shared composer-stack shell rather than a popover", () => {
+    const html = renderPicker(pickerState());
+
+    expect(html).toContain('data-slot="composer-picker"');
+    expect(html).toContain("rounded-2xl");
+    expect(html).not.toContain('data-slot="popover-content"');
+  });
+
+  it("names a command row with its slash and its description", () => {
+    const html = renderPicker(pickerState());
+
+    expect(html).toContain("/review");
+    expect(html).toContain("Review a file");
+    expect(html).toContain("Commands");
+  });
+
+  it("shows a file row's directory beside its name, and heads the group Files", () => {
+    const html = renderPicker(
+      pickerState({
+        mode: "file",
+        rows: [
+          {
+            kind: "file",
+            value: "src/app.ts",
+            label: "app.ts",
+            detail: "src",
+            relPath: "src/app.ts",
+            artifact: false,
+          },
+        ],
+      }),
+    );
+
+    expect(html).toContain("app.ts");
+    expect(html).toContain(">src<");
+    expect(html).toContain("Files");
+  });
+
+  it("takes no focus of its own — there is no input inside it", () => {
+    expect(renderPicker(pickerState())).not.toContain('data-slot="command-input"');
+  });
+
+  it("says so when nothing matched, without a sentence about it", () => {
+    const html = renderPicker(pickerState({ rows: [] }));
+
+    expect(html).toContain("No match");
   });
 });

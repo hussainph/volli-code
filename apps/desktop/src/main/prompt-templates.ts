@@ -99,8 +99,16 @@ export async function readPromptTemplateDir(
     return { ok: false, error: errorMessage(error) };
   }
 
+  // Symlinks count, which is Pi's rule too: a shared set of commands linked
+  // into a project is a real thing people do, and a `readdir` dirent for a
+  // symlink says `isSymbolicLink`, never `isFile`, however ordinary its target
+  // is. `readFile` follows it; one that points at nothing fails the read below
+  // and loses that row alone.
   const files = entries
-    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".md"))
+    .filter(
+      (entry) =>
+        (entry.isFile() || entry.isSymbolicLink()) && entry.name.toLowerCase().endsWith(".md"),
+    )
     .map((entry) => entry.name)
     .toSorted((a, b) => a.localeCompare(b))
     .slice(0, MAX_TEMPLATES_PER_DIR);

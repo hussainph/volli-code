@@ -94,6 +94,8 @@ import {
 import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Button } from "@renderer/components/ui/button";
+import { useFileIndex } from "@renderer/hooks/use-file-index";
+import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { flushPendingAppStateKey } from "@renderer/lib/app-state-storage";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { cn } from "@renderer/lib/utils";
@@ -402,6 +404,13 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   const pending =
     interactions.length > 0 ? footInteraction(interactions, gatedApprovalIds(messages)) : null;
 
+  // What the composer's two caret-driven pickers rank over. Both are
+  // project-scoped: the file index is the one the editor's `@` already uses,
+  // and the templates are `.volli/commands/` over the global tier.
+  const fileIndex = useFileIndex(projectId);
+  const files = fileIndex.getIndex();
+  const promptTemplates = usePromptTemplates(projectId);
+
   // The landing travels back to the card. A decision the harness never heard has
   // to say so where it was taken — the card is the only thing on screen at that
   // moment, and it is the thing that looks answerable until it is told.
@@ -566,6 +575,15 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               onValueChange={onInputChange}
               textareaRef={textareaRef}
               onComposerFocusRequest={() => textareaRef.current?.focus()}
+              // The two caret-driven pickers' supply. Both are project-scoped
+              // reads, handed in as plain arrays so the composer stays a
+              // controlled view the Lab can mount without a bridge.
+              promptTemplates={promptTemplates}
+              files={files}
+              onFilePickerOpen={fileIndex.refresh}
+              // One thing parks above the composer at a time; a pending
+              // question outranks a list you can reopen by typing.
+              interactionOpen={pending !== null}
               models={composerModels}
               selection={selection}
               selectionProviderLabel={sessionModel?.providerLabel}
