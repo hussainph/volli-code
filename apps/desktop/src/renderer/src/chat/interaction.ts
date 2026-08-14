@@ -773,8 +773,14 @@ export function interactionStep(
         interactionSubmitLabel(interaction, draft)
       : // A single choice with nothing typed beside it is answered by the click
         // that chooses it; anything else — several answers, or words that need
-        // a deliberate commit — waits for a control of its own.
-        !prompt.multiple && prompt.options.length > 0 && !written
+        // a deliberate commit — waits for a control of its own. Once it HAS
+        // been answered the click already happened: a reader who stepped back
+        // is keeping an answer, not making one, and "Skip" mis-names the move
+        // past it — so an answered question always offers its own way forward.
+        !prompt.multiple &&
+          prompt.options.length > 0 &&
+          !written &&
+          !isPromptAnswered(prompt, draft)
         ? null
         : "Next",
     layout: promptRowLayout(prompt),

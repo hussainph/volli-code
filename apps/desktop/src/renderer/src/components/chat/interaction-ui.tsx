@@ -264,12 +264,16 @@ function withdrawOnEscape(
   return (event) => {
     if (event.key !== "Escape") return;
     if (!onWithdraw) return;
+    // Mid-resolve the card cannot withdraw, and a key it cannot act on is a
+    // key it must not claim — the rule this function opens with. Left to
+    // bubble, the composer's own interrupt still owns the exit.
+    if (resolving) return;
     // Never mid-word: Escape closes an IME's candidate window, and taking that
     // keystroke would end the turn under someone who was typing.
     if (event.nativeEvent.isComposing) return;
     event.preventDefault();
     event.stopPropagation();
-    if (!resolving) onWithdraw();
+    onWithdraw();
   };
 }
 
@@ -409,7 +413,7 @@ function DecisionCard({
             the foot mount a session blocker says it too; on a row there is
             nothing else on screen that would. */}
         {failed ? (
-          <span className="flex min-w-0 items-center gap-1.5 text-xs text-destructive">
+          <span role="alert" className="flex min-w-0 items-center gap-1.5 text-xs text-destructive">
             <WarningIcon aria-hidden className="size-3.5 shrink-0" weight="fill" />
             <span className="min-w-0 truncate">Not delivered</span>
           </span>
@@ -659,9 +663,12 @@ function QuestionCard({
         {/* One notice slot, left-aligned, for the two things that stop a press
             landing: the decision that never reached the harness, and the
             question that has nothing to send yet. Delivery wins — it is about
-            the card as a whole, and it outlives the edit that clears the other. */}
+            the card as a whole, and it outlives the edit that clears the other.
+            An alert, because focus stays on the pressed control when the block
+            is at the current step — without a live region the press is
+            rejected silently to anyone not looking at the footer. */}
         {failed || blocked ? (
-          <span className="flex min-w-0 items-center gap-1.5 text-xs text-destructive">
+          <span role="alert" className="flex min-w-0 items-center gap-1.5 text-xs text-destructive">
             <WarningIcon aria-hidden className="size-3.5 shrink-0" weight="fill" />
             <span className="min-w-0 truncate">{failed ? "Not delivered" : blocked}</span>
           </span>
@@ -827,6 +834,16 @@ function QuestionStep({
             }
             if (event.key === "Enter") {
               event.preventDefault();
+              // On a focused row, Enter is that row's own activation — which
+              // the preventDefault above just cancelled, so it is re-issued
+              // here. Space already activates the row natively; the two commit
+              // keys must agree, and "Choose an option" while an option is
+              // focused is the disagreement this closes.
+              const focused = rows.current.find((row) => row === document.activeElement);
+              if (focused) {
+                focused.click();
+                return;
+              }
               onAdvance();
               return;
             }
