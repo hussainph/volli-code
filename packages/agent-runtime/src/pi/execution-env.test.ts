@@ -9,9 +9,12 @@ function workspace(): string {
 }
 
 /** Restores exactly what the host had, including a name it did not set at all. */
-function hostVariables(values: Record<string, string>): () => void {
+function hostVariables(values: Record<string, string | undefined>): () => void {
   const previous = new Map(Object.keys(values).map((name) => [name, process.env[name]]));
-  Object.assign(process.env, values);
+  for (const [name, value] of Object.entries(values)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
   return () => {
     for (const [name, value] of previous) {
       if (value === undefined) delete process.env[name];
@@ -143,6 +146,32 @@ describe("piExecutionEnv", () => {
       await env.cleanup();
     }
   });
+
+  it("puts prefixes into a caller-supplied empty PATH", async () => {
+    const env = await piExecutionEnv(workspace(), { pathPrefixes: ["/volli/bin"] });
+    try {
+      await expect(env.exec("/usr/bin/printenv PATH", { env: { PATH: "" } })).resolves.toEqual({
+        ok: true,
+        value: { stdout: "/volli/bin\n", stderr: "", exitCode: 0 },
+      });
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("gives a command an empty PATH when neither host nor caller supplies one", async () => {
+    const restore = hostVariables({ PATH: undefined });
+    const env = await piExecutionEnv(workspace());
+    try {
+      await expect(env.exec("/usr/bin/printenv PATH")).resolves.toEqual({
+        ok: true,
+        value: { stdout: "\n", stderr: "", exitCode: 0 },
+      });
+    } finally {
+      restore();
+      await env.cleanup();
+    }
+  });
 });
 
 describe("scopedEnvironment", () => {
@@ -158,5 +187,9 @@ describe("scopedEnvironment", () => {
         GITHUB_TOKEN: "host-secret",
       }),
     ).toEqual({ PATH: "/usr/local/bin:/bin", LANG: "C.UTF-8" });
+  });
+
+  it("uses the system PATH fallback when the host supplies no PATH", () => {
+    expect(scopedEnvironment({})).toEqual({ PATH: "/usr/bin:/bin:/usr/sbin:/sbin" });
   });
 });
