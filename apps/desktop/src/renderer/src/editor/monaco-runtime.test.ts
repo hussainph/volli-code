@@ -90,6 +90,8 @@ import {
   createShikiBackedModelFactory,
   externalEditOperations,
   initializeMonacoRuntime,
+  mapCodeEditorViewState,
+  MAX_VIEW_STATE_LOGICAL_LINES,
   prepareMonacoEditorThemes,
   startModelLanguageWorker,
   waitForLanguageWorkerRegistration,
@@ -578,6 +580,379 @@ describe("createShikiBackedModelFactory", () => {
     });
   });
 
+  it("keeps a parked view state stable when the clean baseline is unchanged", () => {
+    const value = "first\nanchor\nlast\n";
+    const stored = {
+      cursorState: [
+        {
+          inSelectionMode: false,
+          selectionStart: { lineNumber: 2, column: 2 },
+          position: { lineNumber: 2, column: 2 },
+        },
+      ],
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 1, column: 1 },
+        firstPositionDeltaTop: 0,
+      },
+      contributionsState: {},
+    };
+
+    const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.(value, stored, value);
+
+    expect(mapped).toEqual(stored);
+  });
+
+  it("maps a first-line viewport anchor through a prepend plus a separate replacement", () => {
+    const oldLines = Array.from({ length: 20 }, (_, index) => {
+      if (index === 0) return 'export const overlap = "baseline";';
+      if (index === 5) return "export const changeSet = 1;";
+      return `export const line${index + 1} = ${index + 1};`;
+    });
+    const oldValue = `${oldLines.join("\n")}\n`;
+    const changedLines = [...oldLines];
+    changedLines[5] = "export const changeSet = 2;";
+    const prependedLines = Array.from(
+      { length: 6 },
+      (_, index) => `// prepended banner line ${index + 1}`,
+    );
+    const changedValue = `${prependedLines.join("\n")}\n${changedLines.join("\n")}\n`;
+    const stored = {
+      cursorState: [
+        {
+          inSelectionMode: false,
+          selectionStart: { lineNumber: 12, column: 1 },
+          position: { lineNumber: 12, column: 1 },
+        },
+      ],
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 1, column: 1 },
+        firstPositionDeltaTop: 0,
+      },
+      contributionsState: {},
+    };
+
+    const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.(
+      oldValue,
+      stored,
+      changedValue,
+    );
+
+    expect(mapped?.viewState.firstPosition).toEqual({ lineNumber: 7, column: 1 });
+    expect(mapped?.cursorState[0]?.position).toEqual({ lineNumber: 18, column: 1 });
+  });
+
+  it("maps a repeated-line anchor after a duplicate inserted before its context", () => {
+    const oldValue = ["repeated", "first context", "repeated", "second context", ""].join("\n");
+    const changedValue = [
+      "repeated",
+      "repeated",
+      "first context",
+      "repeated",
+      "second context",
+      "",
+    ].join("\n");
+    const stored = {
+      cursorState: [
+        {
+          inSelectionMode: true,
+          selectionStart: { lineNumber: 1, column: 1 },
+          position: { lineNumber: 1, column: 1 },
+        },
+      ],
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 1, column: 1 },
+        firstPositionDeltaTop: -3,
+      },
+      contributionsState: {},
+    };
+
+    const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.(
+      oldValue,
+      stored,
+      changedValue,
+    );
+
+    expect(mapped?.viewState.firstPosition).toEqual({ lineNumber: 2, column: 1 });
+    expect(mapped?.cursorState[0]).toMatchObject({
+      selectionStart: { lineNumber: 2, column: 1 },
+      position: { lineNumber: 2, column: 1 },
+    });
+  });
+
+  it("keeps a repeated suffix anchored to its first occurrence when a duplicate is appended", () => {
+    const stored = {
+      cursorState: [
+        {
+          inSelectionMode: false,
+          selectionStart: { lineNumber: 2, column: 1 },
+          position: { lineNumber: 2, column: 1 },
+        },
+      ],
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 2, column: 1 },
+        firstPositionDeltaTop: 0,
+      },
+      contributionsState: {},
+    };
+
+    const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.(
+      "A\nrepeated",
+      stored,
+      "A\nrepeated\nrepeated",
+    );
+
+    expect(mapped?.viewState.firstPosition).toEqual({ lineNumber: 2, column: 1 });
+    expect(mapped?.cursorState[0]?.position).toEqual({ lineNumber: 2, column: 1 });
+  });
+
+  it("uses the forward occurrence when duplicate ambiguity has no stable context", () => {
+    const stored = {
+      cursorState: [
+        {
+          inSelectionMode: false,
+          selectionStart: { lineNumber: 1, column: 1 },
+          position: { lineNumber: 1, column: 1 },
+        },
+      ],
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 1, column: 1 },
+        firstPositionDeltaTop: 0,
+      },
+      contributionsState: {},
+    };
+
+    const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.(
+      "repeated",
+      stored,
+      "repeated\nrepeated",
+    );
+
+    expect(mapped?.cursorState[0]?.position).toEqual({ lineNumber: 1, column: 1 });
+  });
+
+  it("keeps a logical line position stable when disk normalizes CRLF to LF", () => {
+    const stored = {
+      cursorState: [
+        {
+          inSelectionMode: false,
+          selectionStart: { lineNumber: 2, column: 1 },
+          position: { lineNumber: 2, column: 1 },
+        },
+      ],
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 2, column: 1 },
+        firstPositionDeltaTop: 0,
+      },
+      contributionsState: {},
+    };
+
+    const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.(
+      "a\r\nanchor\r\n",
+      stored,
+      "a\nanchor\n",
+    );
+
+    expect(mapped?.viewState.firstPosition).toEqual({ lineNumber: 2, column: 1 });
+    expect(mapped?.cursorState[0]?.position).toEqual({ lineNumber: 2, column: 1 });
+  });
+
+  it("keeps a changed logical line stable while disk also normalizes CRLF to LF", () => {
+    const stored = {
+      cursorState: [
+        {
+          inSelectionMode: false,
+          selectionStart: { lineNumber: 2, column: 1 },
+          position: { lineNumber: 2, column: 1 },
+        },
+      ],
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 2, column: 1 },
+        firstPositionDeltaTop: 0,
+      },
+      contributionsState: {},
+    };
+
+    const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.(
+      "a\r\nOLD\r\n",
+      stored,
+      "a\nNEW\n",
+    );
+
+    expect(mapped?.viewState.firstPosition).toEqual({ lineNumber: 2, column: 1 });
+    expect(mapped?.cursorState[0]?.position).toEqual({ lineNumber: 2, column: 1 });
+  });
+
+  it("carries a unique line position with that line when it moves", () => {
+    const stored = {
+      cursorState: [
+        {
+          inSelectionMode: false,
+          selectionStart: { lineNumber: 2, column: 1 },
+          position: { lineNumber: 2, column: 1 },
+        },
+      ],
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 2, column: 1 },
+        firstPositionDeltaTop: 0,
+      },
+      contributionsState: {},
+    };
+
+    const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.(
+      "A\nB\nC\n",
+      stored,
+      "A\nC\nB\n",
+    );
+
+    expect(mapped?.viewState.firstPosition).toEqual({ lineNumber: 3, column: 1 });
+    expect(mapped?.cursorState[0]?.position).toEqual({ lineNumber: 3, column: 1 });
+  });
+
+  it("maps equal-cardinality repeated lines by occurrence when their context moves", () => {
+    const stored = {
+      cursorState: [
+        {
+          inSelectionMode: false,
+          selectionStart: { lineNumber: 4, column: 1 },
+          position: { lineNumber: 4, column: 1 },
+        },
+      ],
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 4, column: 1 },
+        firstPositionDeltaTop: 0,
+      },
+      contributionsState: {},
+    };
+
+    const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.(
+      "A\ndup\nB\ndup\nC\n",
+      stored,
+      "A\ndup\nC\ndup\nB\n",
+    );
+
+    expect(mapped?.viewState.firstPosition).toEqual({ lineNumber: 4, column: 1 });
+    expect(mapped?.cursorState[0]?.position).toEqual({ lineNumber: 4, column: 1 });
+  });
+
+  it.each([
+    ["forward", { lineNumber: 2, column: 1 }, { lineNumber: 3, column: 2 }],
+    ["reverse", { lineNumber: 3, column: 2 }, { lineNumber: 2, column: 1 }],
+  ] as const)(
+    "conservatively preserves a %s selection when its unique lines move past each other",
+    (_direction, selectionStart, position) => {
+      const stored = {
+        cursorState: [
+          {
+            inSelectionMode: true,
+            selectionStart,
+            position,
+          },
+        ],
+        viewState: {
+          scrollLeft: 0,
+          firstPosition: { lineNumber: 1, column: 1 },
+          firstPositionDeltaTop: 0,
+        },
+        contributionsState: {},
+      };
+
+      const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.(
+        "A\nB\nC\n",
+        stored,
+        "A\nC\nB\n",
+      );
+
+      expect(mapped).toBe(stored);
+    },
+  );
+
+  it("conservatively preserves a selection when duplicate reordering stretches its span", () => {
+    const stored = {
+      cursorState: [
+        {
+          inSelectionMode: true,
+          selectionStart: { lineNumber: 1, column: 1 },
+          position: { lineNumber: 2, column: 1 },
+        },
+      ],
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 1, column: 1 },
+        firstPositionDeltaTop: 0,
+      },
+      contributionsState: {},
+    };
+
+    const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.(
+      "dup\nA\ndup\nB",
+      stored,
+      "dup\nB\ndup\nA",
+    );
+
+    expect(mapped).toBe(stored);
+  });
+
+  it("conservatively preserves an internally ambiguous repeated-line anchor", () => {
+    const stored = {
+      cursorState: [
+        {
+          inSelectionMode: false,
+          selectionStart: { lineNumber: 2, column: 1 },
+          position: { lineNumber: 2, column: 1 },
+        },
+      ],
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 1, column: 1 },
+        firstPositionDeltaTop: 0,
+      },
+      contributionsState: {},
+    };
+
+    const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.(
+      "start\nrepeated\nfirst context\nrepeated\nsecond context\nend",
+      stored,
+      "start\nrepeated\nrepeated\nfirst context\nrepeated\nsecond context\nend",
+    );
+
+    expect(mapped).toBe(stored);
+  });
+
+  it("conservatively preserves a selection whose active end is internally ambiguous", () => {
+    const stored = {
+      cursorState: [
+        {
+          inSelectionMode: true,
+          selectionStart: { lineNumber: 1, column: 1 },
+          position: { lineNumber: 2, column: 1 },
+        },
+      ],
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 1, column: 1 },
+        firstPositionDeltaTop: 0,
+      },
+      contributionsState: {},
+    };
+
+    const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.(
+      "start\nrepeated\nfirst context\nrepeated\nsecond context\nend",
+      stored,
+      "start\nrepeated\nrepeated\nfirst context\nrepeated\nsecond context\nend",
+    );
+
+    expect(mapped).toBe(stored);
+  });
+
   it.each([
     ["replacement start", "abc", "XYZ123", 1, 1],
     ["equal-length replacement interior", "abc", "XYZ", 2, 2],
@@ -672,6 +1047,94 @@ describe("createShikiBackedModelFactory", () => {
     expect(mapped?.cursorState[0]?.position).toEqual({ lineNumber: 1, column: 6 });
   });
 
+  it("maps through a long changed line without copying each shared-prefix suffix", () => {
+    const prefix = "x".repeat(50_000);
+    const suffix = "y".repeat(50_000);
+    const stored = {
+      cursorState: [
+        {
+          inSelectionMode: false,
+          selectionStart: { lineNumber: 1, column: prefix.length + 4 },
+          position: { lineNumber: 1, column: prefix.length + 4 },
+        },
+      ],
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 1, column: 1 },
+        firstPositionDeltaTop: 0,
+      },
+      contributionsState: {},
+    };
+
+    const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.(
+      `${prefix}OLD${suffix}`,
+      stored,
+      `${prefix}NEW${suffix}`,
+    );
+
+    expect(mapped?.cursorState[0]?.position).toEqual({
+      lineNumber: 1,
+      column: prefix.length + 4,
+    });
+  });
+
+  it("maps positions at and after a same-line insertion with right affinity", () => {
+    const stored = {
+      cursorState: [
+        {
+          inSelectionMode: true,
+          selectionStart: { lineNumber: 1, column: 2 },
+          position: { lineNumber: 1, column: 3 },
+        },
+      ],
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 1, column: 1 },
+        firstPositionDeltaTop: 0,
+      },
+      contributionsState: {},
+    };
+
+    const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.("abc", stored, "aXbc");
+
+    expect(mapped?.cursorState[0]).toMatchObject({
+      selectionStart: { lineNumber: 1, column: 3 },
+      position: { lineNumber: 1, column: 4 },
+    });
+  });
+
+  it.each([
+    ["prefix", "removed\nanchor", 1],
+    ["suffix", "anchor\nremoved", 2],
+  ] as const)(
+    "maps a position on a deleted %s line to the retained boundary",
+    (_case, oldValue, lineNumber) => {
+      const stored = {
+        cursorState: [
+          {
+            inSelectionMode: false,
+            selectionStart: { lineNumber, column: 1 },
+            position: { lineNumber, column: 1 },
+          },
+        ],
+        viewState: {
+          scrollLeft: 0,
+          firstPosition: { lineNumber, column: 1 },
+          firstPositionDeltaTop: 0,
+        },
+        contributionsState: {},
+      };
+
+      const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.(
+        oldValue,
+        stored,
+        "anchor",
+      );
+
+      expect(mapped?.cursorState[0]?.position).toEqual({ lineNumber: 1, column: 1 });
+    },
+  );
+
   it("maps an anchor at a zero-length prepend after the inserted text", () => {
     const stored = {
       cursorState: [
@@ -727,6 +1190,89 @@ describe("createShikiBackedModelFactory", () => {
 
     expect(mapped).toBe(stored);
   });
+
+  it("leaves a parked view unchanged when line-token alignment exceeds its budget", () => {
+    const oldValue = Array.from({ length: 342 }, (_, index) => `a${index}b`).join("\n");
+    const changedValue = Array.from({ length: 342 }, (_, index) => `a${index}\nb`).join("\n");
+    const stored = {
+      cursorState: [
+        {
+          inSelectionMode: false,
+          selectionStart: { lineNumber: 1, column: 1 },
+          position: { lineNumber: 1, column: 1 },
+        },
+      ],
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 1, column: 1 },
+        firstPositionDeltaTop: 0,
+      },
+      contributionsState: {},
+    };
+
+    const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.(
+      oldValue,
+      stored,
+      changedValue,
+    );
+
+    expect(mapped).toBe(stored);
+  });
+
+  it("preserves the whole view when reverse alignment exceeds the shared line budget", () => {
+    const stored = {
+      cursorState: [
+        {
+          inSelectionMode: false,
+          selectionStart: { lineNumber: 1, column: 1 },
+          position: { lineNumber: 1, column: 1 },
+        },
+      ],
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 1, column: 1 },
+        firstPositionDeltaTop: 0,
+      },
+      contributionsState: {},
+    };
+
+    const mapped = mapCodeEditorViewState("A", stored, "A\nB", {
+      lineDiffBudget: { maxDistance: 1, maxComparisons: 3 },
+    });
+
+    expect(mapped).toBe(stored);
+  });
+
+  it.each(["baseline", "changed"] as const)(
+    "leaves a parked view untouched when the %s exceeds the logical-line cap",
+    (oversizedSide) => {
+      const oversized = "\n".repeat(MAX_VIEW_STATE_LOGICAL_LINES);
+      const stored = new Proxy(
+        {
+          cursorState: [],
+          viewState: {
+            scrollLeft: 0,
+            firstPosition: { lineNumber: 1, column: 1 },
+            firstPositionDeltaTop: 0,
+          },
+          contributionsState: {},
+        },
+        {
+          get() {
+            throw new Error("view-state mapping must not start above the logical-line cap");
+          },
+        },
+      );
+
+      const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.(
+        oversizedSide === "baseline" ? oversized : "one line",
+        stored,
+        oversizedSide === "changed" ? oversized : "one changed line",
+      );
+
+      expect(mapped).toBe(stored);
+    },
+  );
 
   it("edits only the changed span rather than replacing the whole model", () => {
     const model = new FakeTextModel("one\ntwo\nthree\n");
