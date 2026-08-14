@@ -19,7 +19,7 @@
  * the menu that opened it.
  */
 export const MENU_SURFACE =
-  "z-50 min-w-[8rem] rounded-md border bg-popover text-popover-foreground shadow-md";
+  "z-50 min-w-[8rem] rounded-container border bg-popover text-popover-foreground shadow-md";
 
 /**
  * The 4px the rows sit inside. Separate from {@link MENU_SURFACE} because the
@@ -37,9 +37,15 @@ export const MENU_SURFACE_MOTION =
  * 14px glyph 8px off the label. A leading glyph is muted unless it carries its
  * own `text-*` — which is also the door a selection mark uses to opt back into
  * the row's ink, see {@link MENU_INDICATOR_MARK}.
+ *
+ * `rounded-row` is the container rung minus {@link MENU_SURFACE_PAD} — the row
+ * and the surface around it are concentric, not two independent decisions. At
+ * 28px tall the browser clamps that 16 to 14 and the row renders as a stadium,
+ * which is the intended reading: a menu row is a control, and this app's
+ * controls are pills.
  */
 export const MENU_ROW =
-  "relative flex cursor-default items-center gap-2 rounded-sm px-2 py-1 text-ui outline-hidden select-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&_svg:not([class*='text-'])]:text-muted-foreground";
+  "relative flex cursor-default items-center gap-2 rounded-row px-2 py-1 text-ui outline-hidden select-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&_svg:not([class*='text-'])]:text-muted-foreground";
 
 /** Radix row states: `focus` is the roving highlight, `data-disabled` a bare attribute. */
 export const MENU_ROW_STATE =

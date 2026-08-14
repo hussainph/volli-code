@@ -5,4 +5,4 @@
  * they read as one family.
  */
 export const COMPOSER_STACK_SHELL =
-  "rounded-2xl border border-border bg-card shadow-[var(--shadow-raised)]";
+  "rounded-container border border-border bg-card shadow-[var(--shadow-raised)]";

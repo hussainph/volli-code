@@ -190,7 +190,7 @@ export function SessionComposer({
     >
       <PromptInput
         className={cn(
-          "pointer-events-auto overflow-hidden transition-[color,box-shadow] has-[[data-slot=input-group-control]:focus-visible]:border-ring has-[[data-slot=input-group-control]:focus-visible]:ring-[3px] has-[[data-slot=input-group-control]:focus-visible]:ring-ring/50",
+          "pointer-events-auto overflow-hidden transition-[color,border-color,box-shadow]",
           COMPOSER_STACK_SHELL,
           className,
         )}
@@ -316,9 +316,9 @@ export function SessionComposer({
               aria-label={working ? "Queue" : "Send"}
             >
               {working ? (
-                <QueueIcon className="size-4" />
+                <QueueIcon className="size-3.5" />
               ) : (
-                <ArrowUpIcon className="size-4" weight="bold" />
+                <ArrowUpIcon className="size-3.5" weight="bold" />
               )}
             </PromptInputSubmit>
           </div>

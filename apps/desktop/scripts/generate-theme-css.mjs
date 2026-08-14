@@ -188,7 +188,7 @@ function tokensFor(resolved) {
   // Not a generated token, and not themeable — but it lives in this block
   // because every other value around it does, and a radius stranded outside the
   // markers would be the one line a regeneration silently dropped.
-  css += declaration("--radius", "0.625rem");
+  css += declaration("--radius", "0.75rem");
   for (const name of THEME_VEIL_TOKEN_NAMES) css += declaration(name, veils[name]);
   for (const name of CANVAS_TOKEN_NAMES) css += declaration(name, canvasTokens[name]);
   return css;
