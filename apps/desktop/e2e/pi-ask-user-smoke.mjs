@@ -95,15 +95,25 @@ async function goToSessions(page) {
 }
 
 /**
- * The red option's row on the mounted question card: a `<label>` inside the
- * card `<form>` holding a radio/checkbox input, matched on the row's visible
- * text rather than the model's exact wording.
+ * The red option's row on the mounted question card, matched through the role
+ * engine on the row's visible text rather than the model's exact wording or
+ * the card's markup era — a native `input[type=radio]` inside a label and the
+ * restyled `<button role="radio">` row both answer to the same role+name.
  */
 function redOptionRow(page) {
   return page
-    .locator("form label", { has: page.locator('input[type="radio"], input[type="checkbox"]') })
-    .filter({ hasText: /red/i })
+    .getByRole("radio", { name: /red/i })
+    .or(page.getByRole("checkbox", { name: /red/i }))
     .first();
+}
+
+/** The mounted question card: the one `<form>` holding option controls. */
+function questionCardForm(page) {
+  return page.locator("form").filter({
+    has: page.locator(
+      '[role="radio"], [role="checkbox"], input[type="radio"], input[type="checkbox"]',
+    ),
+  });
 }
 
 async function main() {
@@ -179,9 +189,7 @@ async function main() {
       await redOptionRow(page).click();
       // Single-select submits on click; if this card's vocabulary said
       // otherwise, the explicit submit control is the same resolution.
-      const form = page
-        .locator("form")
-        .filter({ has: page.locator('input[type="radio"], input[type="checkbox"]') });
+      const form = questionCardForm(page);
       await sleep(400);
       if ((await form.count()) > 0) {
         const submit = form.first().locator('button[type="submit"]');

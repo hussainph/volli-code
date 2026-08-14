@@ -8,19 +8,24 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  askFieldOpen,
   canSubmitInteraction,
   indexOpenedInteractions,
   readInteractionResolutionMessage,
   describeInteractionResolution,
   emptyInteractionDraft,
+  firstUnansweredPrompt,
   footInteraction,
+  interactionAdvance,
   interactionAnswers,
   interactionCarousel,
   interactionForApproval,
   interactionQuestions,
   interactionRedirected,
   interactionResolution,
+  interactionStep,
   interactionSubmitLabel,
+  isAskUserInteraction,
   isPromptAnswered,
   needsOwnRefusal,
   optionPolarity,
@@ -28,7 +33,9 @@ import {
   promptDraft,
   promptFieldOpen,
   promptFieldRole,
+  promptRequirement,
   promptResponseSuperseded,
+  promptRowLayout,
   promptTextCarrier,
   redirectMessage,
   refusalResolution,
@@ -576,17 +583,18 @@ describe("an escalation the sandbox raised", () => {
     );
   });
 
-  it("sends the continuation on the click that chose it", () => {
-    // One question, one choice, nothing typed: the click is the whole decision.
-    // Stopping the turn still asks twice, like every refusal — it is the
-    // verdict whose words matter.
+  it("sends either side of the offer on the click that chose it", () => {
+    // One question, one choice, nothing typed: the click is the whole decision,
+    // on the refusing side as much as the permitting one. What guards the two
+    // is their ink and the box that stands open beside them, never a second
+    // press asked for one of them and not the other.
     const interaction = escalation();
     const [only] = interaction.prompts ?? [];
     if (!only) throw new Error("fixture has no prompt");
     const { keepWorking, stopTurn } = escalationOptions();
     const draft = emptyInteractionDraft(interaction);
     expect(optionSubmitsOnSelect(interaction, only, keepWorking, draft)).toBe(true);
-    expect(optionSubmitsOnSelect(interaction, only, stopTurn, draft)).toBe(false);
+    expect(optionSubmitsOnSelect(interaction, only, stopTurn, draft)).toBe(true);
   });
 
   it("submits the choice the reader made, not an empty refusal beside their words", () => {
@@ -711,34 +719,45 @@ describe("submit", () => {
     ).toBe(false);
   });
 
-  it("sends a one-time yes on the click that chose it", () => {
-    // The commonest gesture in the app used to cost one click; a radio plus a
-    // generic confirm doubles it on every turn and the confirm adds nothing.
+  it("sends every declared verdict on the click that chose it", () => {
+    // The commonest gesture in the app; a radio plus a generic confirm doubles
+    // it on every turn and the confirm adds nothing. One click for `once` and
+    // two for the option beside it taught the gesture and then withheld it.
     const interaction = permission();
     const [only] = interactionQuestions(interaction);
     if (!only) throw new Error("no prompt projected");
-    const once = { id: "once", label: "Allow once", description: null };
     const draft = emptyInteractionDraft(interaction);
-    expect(optionSubmitsOnSelect(interaction, only.prompt, once, draft)).toBe(true);
+    for (const option of PERMISSION_OPTIONS) {
+      expect(optionSubmitsOnSelect(interaction, only.prompt, option, draft)).toBe(true);
+    }
   });
 
-  it("still asks twice for a standing grant, a refusal, and an opaque answer", () => {
-    // A standing grant outlives the turn and must never be the cheapest thing
-    // on the card; a refusal is the verdict whose words matter; a question's
-    // option ids are the harness's own values and state no verdict at all.
-    const interaction = permission();
-    const [only] = interactionQuestions(interaction);
-    if (!only) throw new Error("no prompt projected");
-    const draft = emptyInteractionDraft(interaction);
-    for (const option of PERMISSION_OPTIONS.filter((entry) => entry.id !== "once")) {
-      expect(optionSubmitsOnSelect(interaction, only.prompt, option, draft)).toBe(false);
-    }
+  it("never sends an opaque answer on the click", () => {
+    // A question's option ids are the harness's own encoded values and state no
+    // verdict at all: they are answers to assemble, not decisions to give.
     const asked = question([prompt()]);
     const [opaque] = prompt().options;
     if (!opaque) throw new Error("no option declared");
     expect(optionSubmitsOnSelect(asked, prompt(), opaque, emptyInteractionDraft(asked))).toBe(
       false,
     );
+  });
+
+  it("puts a verdict back on the card's own control once words are typed", () => {
+    // The one thing that kept a refusal waiting: sending on the click must
+    // never take the box away from under someone who had already used it.
+    const interaction = permission();
+    const [only] = interactionQuestions(interaction);
+    if (!only) throw new Error("no prompt projected");
+    const reject = { id: "reject", label: "Reject", description: null };
+    expect(
+      optionSubmitsOnSelect(
+        interaction,
+        only.prompt,
+        reject,
+        setPromptResponse({}, "prompt:0", "read the lockfile instead"),
+      ),
+    ).toBe(false);
   });
 
   it("waits for Submit once the click is not the whole answer", () => {
@@ -1100,6 +1119,241 @@ describe("one question at a time", () => {
     const draft = selectOption({}, second, "question:0:bWFpbg");
     expect(interactionCarousel(interaction, draft, 0)?.answered).toEqual([false, true]);
     expect(canSubmitInteraction(interaction, draft)).toBe(false);
+  });
+});
+
+describe("which card a request wants", () => {
+  it("sends a permission to the verdict card", () => {
+    expect(isAskUserInteraction(permission())).toBe(false);
+  });
+
+  it("keeps a sandbox escalation on the verdict card, question though it is", () => {
+    // The one case `kind` gets wrong: stored as a question, but what it offers
+    // is a declared yes and no, which is the permission's shape.
+    const raised = escalation();
+    expect(raised.kind).toBe("question");
+    expect(isAskUserInteraction(raised)).toBe(false);
+  });
+
+  it("takes a question whose ids are the harness's own", () => {
+    expect(isAskUserInteraction(question([prompt()]))).toBe(true);
+  });
+});
+
+describe("the box beside an ask-user question's options", () => {
+  it("opens where the harness declared it takes free text", () => {
+    expect(askFieldOpen(prompt({ custom: true }))).toBe(true);
+  });
+
+  it("stays shut where the model asked for one of the listed answers", () => {
+    // The reply has no slot for words a prompt without `custom` was not
+    // declared to take, so an "Other" row would collect and then drop them.
+    expect(askFieldOpen(prompt({ custom: false }))).toBe(false);
+  });
+
+  it("opens anyway where there is nothing else to answer with", () => {
+    expect(askFieldOpen(prompt({ options: [], custom: false }))).toBe(true);
+  });
+});
+
+describe("how an option row is set", () => {
+  it("trails a short description after the title", () => {
+    expect(promptRowLayout(prompt())).toBe("inline");
+    expect(
+      promptRowLayout(
+        prompt({
+          options: [{ id: "question:0:bWFpbg", label: "main", description: "ships on the tag" }],
+        }),
+      ),
+    ).toBe("inline");
+  });
+
+  it("stacks the list as soon as one description would wrap", () => {
+    // The whole list, not the row: one stacked row beside three inline ones
+    // reads as the important one rather than as the long one.
+    expect(
+      promptRowLayout(
+        prompt({
+          options: [
+            { id: "question:0:bWFpbg", label: "main", description: "ships on the tag" },
+            {
+              id: "question:0:cmVsZWFzZQ",
+              label: "release",
+              description:
+                "Cuts a patch today, which means the migration has to be reversible before it lands rather than after.",
+            },
+          ],
+        }),
+      ),
+    ).toBe("stacked");
+  });
+});
+
+describe("what a question is waiting for", () => {
+  it("names the act the control beside it names", () => {
+    expect(promptRequirement(prompt())).toBe("Choose an option");
+    expect(promptRequirement(prompt({ options: [] }))).toBe("Write an answer");
+  });
+
+  it("finds the question that owes an answer, and says so when none does", () => {
+    const first = prompt({ id: "prompt:0" });
+    const second = prompt({ id: "prompt:1" });
+    const interaction = question([first, second]);
+    expect(firstUnansweredPrompt(interaction, {})).toBe(0);
+    const half = selectOption({}, first, "question:0:bWFpbg");
+    expect(firstUnansweredPrompt(interaction, half)).toBe(1);
+    const whole = selectOption(half, second, "question:0:bWFpbg");
+    expect(firstUnansweredPrompt(interaction, whole)).toBe(-1);
+  });
+});
+
+describe("the stepped question flow", () => {
+  const walk = () =>
+    question([
+      prompt({ id: "prompt:0" }),
+      prompt({ id: "prompt:1", label: "Which remote?" }),
+      prompt({ id: "prompt:2", label: "What else?", multiple: true }),
+    ]);
+
+  it("has no step on a request that declares no questions", () => {
+    expect(interactionStep(question([]), {}, 0)).toBeNull();
+  });
+
+  it("clamps a stale index rather than stepping off the end", () => {
+    expect(interactionStep(walk(), {}, 9)?.index).toBe(2);
+    expect(interactionStep(walk(), {}, -4)?.index).toBe(0);
+  });
+
+  it("reports the position, the ends of the walk, and what is answered", () => {
+    const draft = selectOption({}, prompt({ id: "prompt:1" }), "question:0:bWFpbg");
+    expect(interactionStep(walk(), draft, 1)).toMatchObject({
+      index: 1,
+      count: 3,
+      heading: "Which remote?",
+      first: false,
+      last: false,
+      answered: [false, true, false],
+    });
+  });
+
+  it("takes the request's own title where the question has no separate one", () => {
+    expect(interactionStep(permission(), {}, 0)?.heading).toBe("rm -rf node_modules");
+  });
+
+  it("offers a skip while there is somewhere to skip to", () => {
+    // Movement, not an answer: nothing durable records a skip, so the last
+    // question has nothing to step to and Submit still waits for it.
+    expect(interactionStep(walk(), {}, 0)?.skippable).toBe(true);
+    expect(interactionStep(walk(), {}, 2)?.skippable).toBe(false);
+    expect(interactionStep(question([prompt()]), {}, 0)?.skippable).toBe(false);
+  });
+
+  it("leaves a single choice to the click that makes it", () => {
+    expect(interactionStep(walk(), {}, 0)?.advanceLabel).toBeNull();
+  });
+
+  it("gives several answers a control to move on with", () => {
+    expect(interactionStep(walk(), {}, 2)?.advanceLabel).not.toBeNull();
+    const middle = question([
+      prompt({ id: "prompt:0", multiple: true }),
+      prompt({ id: "prompt:1" }),
+    ]);
+    expect(interactionStep(middle, {}, 0)?.advanceLabel).toBe("Next");
+  });
+
+  it("gives written words a deliberate commit even beside a single choice", () => {
+    const draft = setPromptResponse({}, "prompt:0", "the release branch, actually");
+    expect(interactionStep(walk(), draft, 0)?.advanceLabel).toBe("Send");
+    const written = question([
+      prompt({ id: "prompt:0", custom: true }),
+      prompt({ id: "prompt:1" }),
+    ]);
+    expect(
+      interactionStep(written, setPromptResponse({}, "prompt:0", "neither"), 0)?.advanceLabel,
+    ).toBe("Next");
+  });
+
+  it("names the act rather than the step at the end of the walk", () => {
+    // The card's own submit vocabulary, not a second one: several questions
+    // have a counter to say what is left, so the control stays neutral; one
+    // question has nothing else that could, so it names what it waits for.
+    expect(interactionStep(walk(), {}, 2)?.advanceLabel).toBe("Submit");
+    expect(interactionStep(question([prompt()]), {}, 0)?.advanceLabel).toBe("Choose");
+    expect(
+      interactionStep(question([prompt({ options: [], custom: true })]), {}, 0)?.advanceLabel,
+    ).toBe("Answer");
+  });
+});
+
+describe("one press of the control that moves the flow on", () => {
+  const walk = () =>
+    question([
+      prompt({ id: "prompt:0" }),
+      prompt({ id: "prompt:1", label: "Which remote?" }),
+      prompt({ id: "prompt:2", label: "What else?", multiple: true }),
+    ]);
+  const answerAll = () => {
+    let draft: Record<string, { optionIds: readonly string[]; response: string }> = {};
+    for (const id of ["prompt:0", "prompt:1", "prompt:2"])
+      draft = selectOption(draft, prompt({ id }), "question:0:bWFpbg");
+    return draft;
+  };
+
+  it("has nothing to press on a request that declares no questions", () => {
+    expect(interactionAdvance(question([]), {}, 0)).toBeNull();
+  });
+
+  it("blocks on the question in view and names what it owes", () => {
+    expect(interactionAdvance(walk(), {}, 1)).toEqual({
+      kind: "blocked",
+      at: 1,
+      requirement: "Choose an option",
+    });
+  });
+
+  it("steps forward once the question in view has something", () => {
+    const draft = selectOption({}, prompt({ id: "prompt:0" }), "question:0:bWFpbg");
+    expect(interactionAdvance(walk(), draft, 0)).toEqual({ kind: "step", at: 1 });
+  });
+
+  it("sends the whole walk from its last question", () => {
+    const sent = interactionAdvance(walk(), answerAll(), 2);
+    expect(sent?.kind).toBe("send");
+    // Every question's answer in one resolution: the walk is a way of asking,
+    // never a way of sending three of them.
+    expect(sent?.kind === "send" ? sent.submission : null).toEqual({
+      message: null,
+      resolution: interactionResolution(walk(), answerAll()),
+    });
+    expect(
+      sent?.kind === "send" ? sent.submission.resolution.answers?.map((a) => a.promptId) : null,
+    ).toEqual(["prompt:0", "prompt:1", "prompt:2"]);
+  });
+
+  it("sends words no reply can carry from wherever they were typed", () => {
+    // The redirection refuses the request, so it outranks both the question in
+    // view and the two questions the walk had left.
+    const draft = setPromptResponse({}, "prompt:1", "neither — cut a branch off the tag");
+    expect(interactionAdvance(walk(), draft, 1)).toEqual({
+      kind: "send",
+      submission: {
+        resolution: refusalResolution(walk()),
+        message: "neither — cut a branch off the tag",
+      },
+    });
+  });
+
+  it("walks back to the question that was stepped past", () => {
+    // Submit is atomic, so the press at the end of a walk with a hole in it
+    // cannot fire — and saying nothing would leave the reader pressing a dead
+    // control on a question that is perfectly answered.
+    let draft = selectOption({}, prompt({ id: "prompt:1" }), "question:0:bWFpbg");
+    draft = selectOption(draft, prompt({ id: "prompt:2" }), "question:0:bWFpbg");
+    expect(interactionAdvance(walk(), draft, 2)).toEqual({
+      kind: "blocked",
+      at: 0,
+      requirement: "Choose an option",
+    });
   });
 });
 
