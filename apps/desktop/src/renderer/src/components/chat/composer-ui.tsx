@@ -426,7 +426,14 @@ function ComposerTextarea({
       // and this is the surface's primary input.
       aria-label="Message"
       placeholder="Ask, plan, or implement…"
-      className="min-h-16 text-sm"
+      // One control tall, and the padding sized for the old floor goes with
+      // it. `field-sizing-content` grows the box from the first keystroke, so
+      // a four-line floor was reserving three lines nobody had typed. The
+      // vendored `py-4` was what filled that 64px box out; left alone it would
+      // hold the box at 52px whatever the floor said, so `py-2` — 8px, one
+      // line, 8px — is the pair of the 36px floor rather than a second opinion
+      // about it.
+      className="min-h-9 py-2 text-sm"
       onChange={(event) => {
         caret.trackCaret(event.currentTarget);
         onValueChange(event.currentTarget.value);
