@@ -1033,6 +1033,17 @@ function OptionChip({
  * Presence lives here rather than at each mount so the real plane and the Lab
  * exercise one motion contract. The composer remains mounted throughout: its
  * focused textarea keeps focus while the request enters, exits or is replaced.
+ *
+ * **The origin is deliberately a plain `div`, and nothing above it carries
+ * `layout`.** The composer is the last child of a bottom-anchored mount, so a
+ * card mounting above it grows that box upward and the composer's own viewport
+ * rect cannot change — the staticness is geometry, and it is free. A `layout`
+ * prop anywhere in this ancestry throws that away: it enrols the composer in
+ * Framer's projection tree, and every change to the height of the box above it
+ * then measures the composer's new position and FLIPs it there from the old one
+ * — a `/` keystroke used to slide the whole composer 206px. Cards animate
+ * themselves; the surface they land on is never redrawn. A computed transform
+ * other than `none` on the origin is the bug, not the effect.
  */
 export function ComposerInteractionStack({
   interaction,
@@ -1083,12 +1094,19 @@ export function ComposerInteractionStack({
   return (
     <div className={cn("flex flex-col gap-2", className)}>
       <PendingInteractionAnnouncement interaction={interaction} />
-      <AnimatePresence initial={false} mode="popLayout">
+      {/* Sync, not `popLayout`. Popping a leaving card out of flow needs a
+          projection parent to anchor it to, and the only thing that was ever
+          providing one here was the `layout` prop above — without it the popped
+          card lands at its static offset inside a column that has already
+          collapsed, a quarter of the pane below where it was. Kept in flow it
+          simply fades and rises out of its own slot. The cost is that a
+          replacement briefly stacks both cards; that grows the box upward,
+          which is the one direction this surface has to spare. */}
+      <AnimatePresence initial={false}>
         {interaction ? (
           <motion.div
             key={interaction.id}
             data-slot="composer-interaction-drawer"
-            layout={reducedMotion ? false : "position"}
             initial={hidden}
             animate={{ opacity: 1, transform: "translateY(0)" }}
             exit={hidden}
@@ -1104,14 +1122,9 @@ export function ComposerInteractionStack({
           </motion.div>
         ) : null}
       </AnimatePresence>
-      <motion.div
-        ref={originRef}
-        data-slot="composer-interaction-origin"
-        layout={reducedMotion ? false : "position"}
-        transition={transition}
-      >
+      <div ref={originRef} data-slot="composer-interaction-origin">
         {children}
-      </motion.div>
+      </div>
     </div>
   );
 }

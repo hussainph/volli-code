@@ -196,6 +196,12 @@ describe("the card's controls", () => {
 
     expect(freeForm).toContain('aria-label="Message"');
     expect(freeForm).toContain('data-slot="composer-interaction-drawer"');
+    // Both slots, because e2e selects on them — not because their presence
+    // proves the origin is still the plain div it has to be. A `layout` prop
+    // renders the same markup as none, so the one invariant this stack turns
+    // on (the composer never moves while a card enters) is invisible from
+    // here and is measured frame-by-frame in the Lab instead. Green does not
+    // mean the composer held still.
     expect(freeForm).toContain('data-slot="composer-interaction-origin"');
     expect(freeForm).not.toContain('autofocus=""');
   });

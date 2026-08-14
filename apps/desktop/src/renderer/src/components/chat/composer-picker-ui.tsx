@@ -59,7 +59,12 @@ export function ComposerPicker({
 }) {
   const reducedMotion = useReducedMotion() ?? false;
   // The exact recipe ComposerInteractionStack enters on — one contract for
-  // everything that parks on the composer.
+  // everything that parks on the composer. Opacity and an 8px rise, and nothing
+  // else: no `layout`, here or on any ancestor. This card mounts *inside* the
+  // composer, so a layout prop would take the composer into Framer's projection
+  // tree and FLIP it on every keystroke that opens or closes this list — see
+  // `ComposerInteractionStack`. The card never needs measuring anyway; it enters
+  // from nothing and leaves to nothing, in a slot the stack already owns.
   const transition = {
     duration: reducedMotion ? 0.125 : 0.25,
     ease: [0.32, 0.72, 0, 1] as const,
@@ -70,7 +75,12 @@ export function ComposerPicker({
   };
 
   return (
-    <AnimatePresence initial={false} mode="popLayout">
+    // Sync, for the reason `ComposerInteractionStack` spells out: a popped card
+    // has no projection parent left to hold it in place, so it would drop out of
+    // frame instead of fading where it stood. In flow, the list leaves from its
+    // own slot — and on a `/`→`@` switch the two lists overlap for one
+    // transition, growing the stack upward and never touching the input.
+    <AnimatePresence initial={false}>
       {state ? (
         <motion.div
           // Keyed on the mode, not on the query: re-ranking rows as you type is
@@ -79,7 +89,6 @@ export function ComposerPicker({
           // list, and that one should animate.
           key={state.mode}
           data-slot="composer-picker"
-          layout={reducedMotion ? false : "position"}
           initial={hidden}
           animate={{ opacity: 1, transform: "translateY(0)" }}
           exit={hidden}
