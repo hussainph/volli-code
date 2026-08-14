@@ -334,3 +334,47 @@ describe("the picker card", () => {
     expect(html).toContain("No match");
   });
 });
+
+/**
+ * The layout contract, not decoration: `chat-plane.tsx` measures the whole
+ * bottom mount and publishes it as `--composer-height`, which is what the
+ * transcript pads its bottom by. The picker only pushes the feed up — instead
+ * of covering its last message — because it occupies real height inside that
+ * measured box, above the input. Both halves are asserted here because both are
+ * one careless `absolute` away from silently breaking on a full transcript and
+ * looking perfect on an empty one.
+ */
+describe("the picker's place in the composer stack", () => {
+  it("costs no height at all while it is closed", () => {
+    expect(renderPicker(null)).toBe("");
+  });
+
+  it("takes layout space rather than floating over the transcript", () => {
+    const html = renderPicker(pickerState());
+    const card = /<div data-slot="composer-picker" class="([^"]*)"/.exec(html)?.[1];
+
+    // The card's OWN classes — cmdk's sr-only label carries an inline
+    // `position:absolute` of its own, and that 1px box is not the question.
+    // Either utility here would make the card contribute no height, so the
+    // feed's clearance would not grow and the card would land on top of the
+    // last message.
+    expect(card).toBeDefined();
+    expect(card).not.toMatch(/\babsolute\b/);
+    expect(card).not.toMatch(/\bfixed\b/);
+  });
+
+  it("stacks the picker above the input in one normal-flow column", () => {
+    const html = renderComposer();
+
+    // The stack is the composer's OUTERMOST element, so whatever wraps
+    // SessionComposer — in the app, chat-plane's ResizeObserver'd bottom
+    // mount — necessarily contains the picker's slot too, and the measured
+    // height grows when the picker opens.
+    expect(
+      html.startsWith('<div data-slot="composer-picker-stack" class="flex flex-col gap-2">'),
+    ).toBe(true);
+    // The composer's own shell comes after the picker's slot: growth happens
+    // above the input, and the input itself does not move.
+    expect(html.indexOf('data-slot="composer-picker-stack"')).toBeLessThan(html.indexOf("<form"));
+  });
+});

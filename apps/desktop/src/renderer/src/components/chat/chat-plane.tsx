@@ -95,6 +95,7 @@ import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Button } from "@renderer/components/ui/button";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
+import { useMeasuredHeight } from "@renderer/hooks/use-measured-height";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { flushPendingAppStateKey } from "@renderer/lib/app-state-storage";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
@@ -881,35 +882,6 @@ function GatedCall({ part, context }: { part: DynamicToolUIPart; context: TurnCo
       ) : null}
     </div>
   );
-}
-
-/* --------------------------------------------------------------- measured */
-
-/** Live height of a node, so a layout can be keyed to it instead of a constant. */
-function useMeasuredHeight<T extends HTMLElement>(): {
-  ref: React.RefObject<T | null>;
-  height: number;
-} {
-  const ref = React.useRef<T>(null);
-  const [height, setHeight] = React.useState(0);
-
-  React.useLayoutEffect(() => {
-    const node = ref.current;
-    if (!node) return;
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (!entry) return;
-      // Border box, not `contentRect`: the content box drops the observed node's
-      // own padding, and every consumer of this height would sit that far too
-      // low — including the fade, whose opaque end would land below the
-      // composer's hard top edge and slice a partly-visible line.
-      setHeight(entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height);
-    });
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, []);
-
-  return { ref, height };
 }
 
 /**

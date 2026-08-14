@@ -374,7 +374,19 @@ function ComposerPickerStack({
 }>) {
   const picker = useComposerPicker(input);
   return (
-    <div className="flex flex-col gap-2">
+    // NORMAL FLOW, and it has to stay that way. `chat-plane.tsx` measures the
+    // whole bottom mount with a ResizeObserver and publishes it as
+    // `--composer-height`; the transcript pads its bottom by that plus the
+    // fade, and the scroll button hangs off it. Because the picker is a
+    // *sibling above the input inside that measured box*, opening it grows the
+    // box, the feed's clearance grows with it, and the last message rides up —
+    // while the composer, being the last child of a bottom-anchored container,
+    // does not move at all.
+    //
+    // An absolutely-positioned or portalled picker would look identical on an
+    // empty transcript and then quietly cover the reader's last message on a
+    // full one, because it would contribute no height for anything to clear.
+    <div data-slot="composer-picker-stack" className="flex flex-col gap-2">
       <ComposerPicker
         state={picker.state}
         active={picker.active}
