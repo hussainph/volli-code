@@ -198,7 +198,7 @@ export function RailPanelSkeleton({ label, testId }: { label: string; testId: st
         <div
           key={width}
           className={cn(
-            "h-8 animate-pulse rounded-md bg-sidebar-accent/70 motion-reduce:animate-none",
+            "h-8 animate-pulse rounded-md bg-accent/70 motion-reduce:animate-none",
             width,
           )}
         />

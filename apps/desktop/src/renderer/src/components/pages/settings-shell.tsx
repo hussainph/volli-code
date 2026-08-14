@@ -62,8 +62,8 @@ export function SettingsShell({
               className={cn(
                 "flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui transition-colors",
                 isActive
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground",
+                  ? "bg-accent text-foreground"
+                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
               )}
             >
               <Icon className="size-4 shrink-0" />

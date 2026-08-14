@@ -1442,7 +1442,7 @@ function FilterHeaderFragment() {
               <span
                 className={cn(
                   "flex size-5 items-center justify-center rounded-sm",
-                  state === "narrowed" ? "text-sidebar-accent-foreground" : "text-muted-foreground",
+                  state === "narrowed" ? "text-foreground" : "text-muted-foreground",
                 )}
               >
                 <FunnelSimpleIcon weight={weight} className="size-3.5" />

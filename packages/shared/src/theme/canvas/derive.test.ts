@@ -197,7 +197,7 @@ describe("deriveCanvasTokens", () => {
     // rung pair outside the window silently emits an out-of-range rgb().
     const pairs: [ThemeTokenName, ThemeTokenName][] = [
       ["--sidebar", "--rail"],
-      ["--sidebar-accent", "--sidebar"],
+      ["--accent", "--sidebar"],
       ["--sidebar-border", "--sidebar"],
     ];
     for (const { hex, vibrancy } of everyCase().filter((one) => one.resolved === "light")) {
@@ -307,7 +307,7 @@ describe("deriveCanvasTokens", () => {
     expect(chromaAt(1)).toBeGreaterThan(chromaAt(0.6));
   });
 
-  it("holds the light ladder's order down to `--border-hover`", () => {
+  it("holds the light ladder's order down to `--border-strong`", () => {
     // The tint moves every rung by the same fraction toward the same target, so
     // gaps scale by (1 − tint) and the order among them is preserved by
     // construction. The SPREAD is what can break it, and the assertion stops one
@@ -325,7 +325,7 @@ describe("deriveCanvasTokens", () => {
       "--sidebar-border",
       "--accent",
       "--border",
-      "--border-hover",
+      "--border-strong",
     ];
     for (const { hex, vibrancy } of everyCase().filter((one) => one.resolved === "light")) {
       const tokens = deriveCanvasTokens(canvasOf(hex, vibrancy), "light");
@@ -334,32 +334,6 @@ describe("deriveCanvasTokens", () => {
         const at = `${hex} @ v${vibrancy} — ${rungs[i - 1]} → ${rungs[i]}`;
         expect({ at, descending: Ls[i] <= Ls[i - 1] }).toEqual({ at, descending: true });
       }
-    }
-  });
-
-  it("bounds the last rung's inversion, which the settled spread introduces", () => {
-    // A characterization, not an endorsement. `spreadCurve` applies its FADED
-    // multiplier to a rung's whole distance from paper rather than integrating it
-    // along the way, which makes the map non-monotone once the gain passes 2.0 —
-    // and light's settled gain is 2.509. So `--border-strong`, which sits at the
-    // fade's far end and by design does not move at all, ends up a little LIGHTER
-    // than `--border-hover`, which is still being pushed.
-    //
-    // Measured at ΔL 0.0063 on ember and never more across the sweep: two
-    // hairline borders a hundredth of a lightness unit out of order, under a
-    // ladder whose visible surfaces all sit above them and whose veil pairs do not
-    // involve either. Left rather than fixed because the fix is a change to the
-    // curve, and the curve is what the settled spread was chosen against.
-    //
-    // Bounded here so it cannot grow: if a later edit widens it into something
-    // visible, or pushes the inversion up into a rung that carries a surface, this
-    // fails.
-    for (const { hex, vibrancy } of everyCase().filter((one) => one.resolved === "light")) {
-      const tokens = deriveCanvasTokens(canvasOf(hex, vibrancy), "light");
-      const hover = hexToOklch(tokens["--border-hover"]).L;
-      const strong = hexToOklch(tokens["--border-strong"]).L;
-      const at = `${hex} @ v${vibrancy} — hover ${hover.toFixed(4)} strong ${strong.toFixed(4)}`;
-      expect({ at, hairline: strong - hover < 0.01 }).toEqual({ at, hairline: true });
     }
   });
 
@@ -441,9 +415,6 @@ describe("the accent", () => {
     "--primary-foreground",
     "--primary-text",
     "--ring",
-    "--sidebar-primary",
-    "--sidebar-primary-foreground",
-    "--sidebar-ring",
   ];
 
   it("walks from a near-neutral chrome to the brand color exactly, as vibrancy travels", () => {
@@ -522,16 +493,12 @@ describe("the accent", () => {
         "--accent": "#2d2220",
         "--sidebar": "#211815",
         "--foreground": "#e8e4e2",
-        "--card-foreground": "#e8e4e2",
         "--popover-foreground": "#e8e4e2",
         "--secondary-foreground": "#e8e4e2",
         "--muted-foreground": "#bdbab8",
         "--accent-foreground": "#e8e4e2",
         "--sidebar-foreground": "#d0cdcb",
-        "--sidebar-accent": "#2d2220",
-        "--sidebar-accent-foreground": "#e8e4e2",
         "--border": "#312623",
-        "--border-hover": "#3c312c",
         "--border-strong": "#423632",
         "--input": "#312623",
         "--sidebar-border": "#2d241f",
@@ -554,16 +521,12 @@ describe("the accent", () => {
         "--accent": "#dab9ad",
         "--sidebar": "#e2c3b7",
         "--foreground": "#120906",
-        "--card-foreground": "#120906",
         "--popover-foreground": "#120906",
         "--secondary-foreground": "#120906",
         "--muted-foreground": "#514541",
         "--accent-foreground": "#120906",
         "--sidebar-foreground": "#080302",
-        "--sidebar-accent": "#dab9ad",
-        "--sidebar-accent-foreground": "#120906",
         "--border": "#d8b6a9",
-        "--border-hover": "#d3b0a3",
         "--border-strong": "#d5b2a5",
         "--input": "#d8b6a9",
         "--sidebar-border": "#ddbbad",

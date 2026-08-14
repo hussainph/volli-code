@@ -32,17 +32,18 @@ export const THEME_TOKEN_NAMES = [
   "--sidebar",
   // Foregrounds solved against their surface for an APCA target.
   "--foreground",
-  "--card-foreground",
   "--popover-foreground",
   "--secondary-foreground",
   "--muted-foreground",
   "--accent-foreground",
   "--sidebar-foreground",
-  "--sidebar-accent",
-  "--sidebar-accent-foreground",
-  // Edges.
+  // Edges: the hairline, and ONE step above it. There were two — `--border-hover`
+  // and `--border-strong` — separated by six 8-bit steps in dark and two in
+  // light, which is to say by nothing anyone could see, and they did not even
+  // agree on their own order: dark ran border → hover → strong away from the
+  // background, light ran border → strong → hover. Two names for one rung whose
+  // ranking inverted with appearance. One name cannot invert against itself.
   "--border",
-  "--border-hover",
   "--border-strong",
   "--input",
   "--sidebar-border",
@@ -54,9 +55,6 @@ export const THEME_TOKEN_NAMES = [
   // the same hue and chroma solved to Lc 60 on --background.
   "--primary-text",
   "--ring",
-  "--sidebar-primary",
-  "--sidebar-primary-foreground",
-  "--sidebar-ring",
   // Hue-locked semantics (never follow the seed).
   "--destructive",
   "--destructive-foreground",

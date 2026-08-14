@@ -7,7 +7,7 @@
  * picked. Going plainly transparent breaks the ladder — the sidebar is a
  * *lighter* rung than the rail, so transparency would visibly darken it. And a
  * fixed translucent tint drifts: measured over the band, a constant
- * `--sidebar-accent` fill reads as a bright patch at the dark end (ΔL 0.147)
+ * `--accent` fill reads as a bright patch at the dark end (ΔL 0.147)
  * and nearly vanishes at the light end (ΔL 0.074).
  *
  * A veil is the fourth answer. For a token `T` painted over a base `B`, the
@@ -48,7 +48,11 @@ export const VEIL_ALPHA = 0.1;
  */
 const VEILS = [
   { name: "--sidebar-veil", target: "--sidebar", base: "--rail" },
-  { name: "--sidebar-accent-veil", target: "--sidebar-accent", base: "--sidebar" },
+  // Targets `--accent` rather than a sidebar-specific rung: `--sidebar-accent`
+  // was an exact alias of it in both appearances and has been deleted. The veil
+  // keeps its own name because the BASE is what makes it a sidebar thing — this
+  // is the accent rung seen through the sidebar, and no other surface wants it.
+  { name: "--sidebar-accent-veil", target: "--accent", base: "--sidebar" },
   { name: "--sidebar-border-veil", target: "--sidebar-border", base: "--sidebar" },
 ] as const satisfies readonly { name: string; target: ThemeTokenName; base: ThemeTokenName }[];
 

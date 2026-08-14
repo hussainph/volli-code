@@ -52,16 +52,12 @@
   --accent: #2d2220;
   --sidebar: #211815;
   --foreground: #e8e4e2;
-  --card-foreground: #e8e4e2;
   --popover-foreground: #e8e4e2;
   --secondary-foreground: #e8e4e2;
   --muted-foreground: #bdbab8;
   --accent-foreground: #e8e4e2;
   --sidebar-foreground: #d0cdcb;
-  --sidebar-accent: #2d2220;
-  --sidebar-accent-foreground: #e8e4e2;
   --border: #312623;
-  --border-hover: #3c312c;
   --border-strong: #423632;
   --input: #312623;
   --sidebar-border: #2d241f;
@@ -82,9 +78,6 @@
    `--primary`; anything you read takes this. */
   --primary-text: #fc9a74;
   --ring: #d37550;
-  --sidebar-primary: #d37550;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-ring: #d37550;
   /* Hue-locked: the semantic escape list never follows the canvas, or a red
    canvas would make “delete” indistinguishable from “primary”. */
   --destructive: #e5484d;
@@ -147,16 +140,12 @@
   --accent: #dab9ad;
   --sidebar: #e2c3b7;
   --foreground: #120906;
-  --card-foreground: #120906;
   --popover-foreground: #120906;
   --secondary-foreground: #120906;
   --muted-foreground: #514541;
   --accent-foreground: #120906;
   --sidebar-foreground: #080302;
-  --sidebar-accent: #dab9ad;
-  --sidebar-accent-foreground: #120906;
   --border: #d8b6a9;
-  --border-hover: #d3b0a3;
   --border-strong: #d5b2a5;
   --input: #d8b6a9;
   --sidebar-border: #ddbbad;
@@ -177,9 +166,6 @@
    `--primary`; anything you read takes this. */
   --primary-text: #9c441e;
   --ring: #d37550;
-  --sidebar-primary: #d37550;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-ring: #d37550;
   /* Hue-locked: the semantic escape list never follows the canvas, or a red
    canvas would make “delete” indistinguishable from “primary”. */
   --destructive: #e5484d;
@@ -232,7 +218,6 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
   --color-popover: var(--popover);
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
@@ -253,19 +238,13 @@
   --color-info: var(--info);
   --color-info-foreground: var(--info-foreground);
   --color-border: var(--border);
-  --color-border-hover: var(--border-hover);
   --color-border-strong: var(--border-strong);
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-rail: var(--rail);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-veil: var(--sidebar-veil);
   --color-sidebar-accent-veil: var(--sidebar-accent-veil);
   --color-sidebar-border-veil: var(--sidebar-border-veil);
@@ -381,9 +360,13 @@
  * gradient the sidebar actually sits on and clears it comfortably, so the
  * shortfall never reaches the screen.
  *
- * `--sidebar-accent-foreground` (the hover/selected promotion) rides along, and
- * ONLY here — the lab overrode it at the root, which also repainted Settings'
- * own nav rail inside the card, where the canvas ink is the wrong answer.
+ * The hover/selected promotion needs no line of its own any more. It used to
+ * ride along as `--sidebar-accent-foreground`, set here and ONLY here — the lab
+ * overrode it at the root, which also repainted Settings' own nav rail inside
+ * the card, where the canvas ink is the wrong answer. That token was an exact
+ * alias of `--foreground` and has been deleted, so the promotion now spells
+ * itself `text-foreground` and reads the line above — which is scoped to this
+ * selector for the same reason, and so keeps the same protection.
  *
  * Selectors mirror, and must be kept in step with:
  *   • `components/ui/sidebar.tsx` — `data-slot="sidebar"` is the `Sidebar`
@@ -400,7 +383,6 @@
      because it is the DEFAULT everything on the canvas inherits; those rules
      are the exceptions to it. */
   --sidebar-foreground: var(--canvas-ink-label);
-  --sidebar-accent-foreground: var(--canvas-ink);
 }
 
 /* THE ON-CANVAS COPY LADDER — which of the sidebar's tiers reads at which rung.
@@ -474,8 +456,8 @@
  *
  * Overriding the two TOKENS rather than `color` is what keeps the row's hover
  * and selected promotion working: that promotion is a third class
- * (`text-sidebar-accent-foreground`), so it reads a token this rule never
- * touches; a `color` declaration here would have silently killed it.
+ * (`text-foreground`), so it reads a token this rule never touches; a `color`
+ * declaration here would have silently killed it.
  *
  * The class pair names "the row's first line" — the meta line beneath it wears
  * `session-row-dim` too, and `text-ui` against its `text-label` is what tells

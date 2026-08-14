@@ -44,7 +44,7 @@ import { useBoardStore } from "@renderer/stores/board";
 
 /** The fold's one control shape: a 24px chip carrying its glyph and its value. */
 const PILL =
-  "flex h-6 shrink-0 items-center gap-2 rounded-full border border-sidebar-border bg-background/40 px-2 text-xs text-foreground transition-colors duration-150 ease-out hover:bg-sidebar-accent/60 focus-visible:ring-2 focus-visible:ring-sidebar-ring/50 focus-visible:outline-none motion-reduce:transition-none";
+  "flex h-6 shrink-0 items-center gap-2 rounded-full border border-sidebar-border bg-background/40 px-2 text-xs text-foreground transition-colors duration-150 ease-out hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none motion-reduce:transition-none";
 
 /**
  * Status picker: the fold's pill wired to the board store's `moveTicket`.

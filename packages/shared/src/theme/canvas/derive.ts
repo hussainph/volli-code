@@ -55,11 +55,9 @@ const ACCENT_TEXT_LC = 60;
 type CopyTokens = Pick<
   ThemeTokens,
   | "--foreground"
-  | "--card-foreground"
   | "--popover-foreground"
   | "--secondary-foreground"
   | "--accent-foreground"
-  | "--sidebar-accent-foreground"
   | "--muted-foreground"
   | "--sidebar-foreground"
   | "--primary-text"
@@ -99,11 +97,9 @@ function solveCopy(
   const foreground = at(floors.body, ladder["--background"]);
   return {
     "--foreground": foreground,
-    "--card-foreground": foreground,
     "--popover-foreground": foreground,
     "--secondary-foreground": foreground,
     "--accent-foreground": foreground,
-    "--sidebar-accent-foreground": foreground,
     "--muted-foreground": at(floors.secondary, ladder["--card"]),
     "--sidebar-foreground": at(floors.sidebar, ladder["--sidebar"]),
     "--primary-text": oklchToHex(
