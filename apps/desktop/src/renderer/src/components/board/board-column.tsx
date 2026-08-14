@@ -63,13 +63,12 @@ export function BoardColumn({
         // cursor-default overrides the canvas's cursor-grab so only empty
         // background reads as a pan surface.
         "flex min-h-0 max-h-[85%] w-72 flex-none cursor-default flex-col rounded-lg bg-muted/30",
-        // Layout snaps (no width tween — transform/opacity only); the newly
-        // expanded column plays a short ease-out enter instead. `scale` is
-        // named alongside `transform` because v4 compiles `scale-*` to the
-        // standalone property, and without it the column faded in at full size
-        // while the 0.98 it starts from snapped away. See `ui/button.tsx`.
-        animateEnter &&
-          "transition-[opacity,transform,scale] duration-200 ease-out starting:scale-[0.98] starting:opacity-0 motion-reduce:starting:scale-100",
+        // Enter is an opacity fade ONLY. This column hosts droppables that
+        // dnd-kit measures in synchronous layout effects; a scale mid-flight
+        // returns a different rect on every commit and measureRects loops to
+        // React's max update depth (the DndContext crash). Scale must never
+        // animate on a measured element — the 0.98 entrance died for that.
+        animateEnter && "transition-[opacity] duration-200 ease-out starting:opacity-0",
       )}
     >
       <div className="flex items-center gap-2 px-4 pt-2 pb-2">
