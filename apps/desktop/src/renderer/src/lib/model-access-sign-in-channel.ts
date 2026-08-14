@@ -11,10 +11,13 @@
  * catch it.
  *
  * So updates for an unclaimed id are held rather than dropped, and replayed in
- * arrival order the moment a caller claims it. The buffer is bounded by the
- * fact that ids are minted one per `beginSignIn` call; an id nothing ever
- * claims is one whose `invoke` rejected, and {@link forget} is what the failed
- * caller uses to drop it.
+ * arrival order the moment a caller claims it. The buffer needs no eviction of
+ * its own: main mints an attempt id only once it has accepted the request, so a
+ * refused `beginSignIn` — an unknown provider, an unoffered method, a provider
+ * already signing in — never starts a flow and never publishes anything under
+ * an id. What can accumulate here is therefore only the pre-claim updates of
+ * attempts this window actually began, each entry cleared by the claim that
+ * follows it a microtask later.
  */
 
 import type { ModelAccessSignInUpdate } from "@volli/shared";

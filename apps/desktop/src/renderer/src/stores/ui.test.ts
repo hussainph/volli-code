@@ -162,6 +162,28 @@ describe("setSettingsOpen", () => {
     store.getState().setSettingsOpen(false);
     expect(store.getState().settingsOpen).toBe(false);
   });
+
+  it("opens on a named category when the opener already knows where it is sending you", () => {
+    const store = createUiStore(createMemoryStorage());
+    expect(store.getState().settingsCategory).toBeNull();
+
+    store.getState().setSettingsOpen(true, "agent");
+    expect(store.getState().settingsCategory).toBe("agent");
+  });
+
+  it("forgets the category on the next opening that names none", () => {
+    // Read once per opening and never written back by the shell, so a stale one
+    // would send the NEXT visitor somewhere the surface that opened it never
+    // asked for.
+    const store = createUiStore(createMemoryStorage());
+    store.getState().setSettingsOpen(true, "agent");
+
+    store.getState().setSettingsOpen(false);
+    expect(store.getState().settingsCategory).toBeNull();
+
+    store.getState().setSettingsOpen(true);
+    expect(store.getState().settingsCategory).toBeNull();
+  });
 });
 
 describe("setNewTicketOpen", () => {
