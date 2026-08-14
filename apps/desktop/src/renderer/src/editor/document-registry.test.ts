@@ -516,6 +516,149 @@ describe("DocumentRegistry", () => {
     });
   });
 
+  it("maps an inactive file view through an external update while a diff view stays live", () => {
+    const mapViewStateThroughExternalEdit = vi.fn(
+      (oldValue: string, viewState: { cursor: number }, value: string) => {
+        const insertedLines = value.split("\n").length - oldValue.split("\n").length;
+        return { cursor: viewState.cursor + insertedLines };
+      },
+    );
+    const factory: RegistryModelFactory<FakeModel, { cursor: number }> = {
+      createModel({ value, language, uri }) {
+        return new FakeModel(value, language, uri);
+      },
+      applyExternalEdit(model, value) {
+        model.applyEdit(value);
+      },
+      mapViewStateThroughExternalEdit,
+    };
+    const registry = new DocumentRegistry<FakeModel, { cursor: number }>(factory);
+    const file = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "first\nanchor\n", revision: "r1" },
+      savePolicy: "explicit",
+    });
+    const diff = registry.acquire({
+      identity: mainIdentity,
+      viewId: "diff-modified",
+      seed: { value: "first\nanchor\n", revision: "r1" },
+      savePolicy: "explicit",
+    });
+    file.release({ cursor: 2 });
+    diff.model.applyEdit("// human\nfirst\nanchor\n");
+
+    diff.applyExternalUpdate({
+      baseline: "// agent\nfirst\nanchor\n",
+      value: "// agent\n// human\nfirst\nanchor\n",
+      revision: "r2",
+    });
+    diff.applyExternalUpdate({
+      baseline: "// agent\nfirst\nanchor\n",
+      value: "// agent\n// human\nfirst\nanchor\n",
+      revision: "r3",
+    });
+
+    const reopenedFile = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "// agent\nfirst\nanchor\n", revision: "r3" },
+      savePolicy: "explicit",
+    });
+    expect(reopenedFile.restoreViewState()).toEqual({ cursor: 4 });
+    expect(mapViewStateThroughExternalEdit).toHaveBeenCalledWith(
+      "first\nanchor\n",
+      { cursor: 2 },
+      "// agent\n// human\nfirst\nanchor\n",
+    );
+    expect(mapViewStateThroughExternalEdit).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps an inactive file view through a local edit in another shared view only once", () => {
+    const mapViewStateThroughExternalEdit = vi.fn(
+      (oldValue: string, viewState: { cursor: number }, value: string) => {
+        const insertedLines = value.split("\n").length - oldValue.split("\n").length;
+        return { cursor: viewState.cursor + insertedLines };
+      },
+    );
+    const factory: RegistryModelFactory<FakeModel, { cursor: number }> = {
+      createModel({ value, language, uri }) {
+        return new FakeModel(value, language, uri);
+      },
+      applyExternalEdit(model, value) {
+        model.applyEdit(value);
+      },
+      mapViewStateThroughExternalEdit,
+    };
+    const registry = new DocumentRegistry<FakeModel, { cursor: number }>(factory);
+    const file = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "first\nanchor\n", revision: "r1" },
+      savePolicy: "explicit",
+    });
+    const diff = registry.acquire({
+      identity: mainIdentity,
+      viewId: "diff-modified",
+      seed: { value: "first\nanchor\n", revision: "r1" },
+      savePolicy: "explicit",
+    });
+    file.release({ cursor: 2 });
+    diff.model.applyEdit("// human\nfirst\nanchor\n");
+
+    const reopenedFile = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "first\nanchor\n", revision: "r1" },
+      savePolicy: "explicit",
+    });
+
+    expect(reopenedFile.restoreViewState()).toEqual({ cursor: 3 });
+    expect(reopenedFile.restoreViewState()).toEqual({ cursor: 3 });
+    expect(mapViewStateThroughExternalEdit).toHaveBeenCalledTimes(1);
+    expect(mapViewStateThroughExternalEdit).toHaveBeenCalledWith(
+      "first\nanchor\n",
+      { cursor: 2 },
+      "// human\nfirst\nanchor\n",
+    );
+  });
+
+  it("applies a late external update to the registry's recreated current model", () => {
+    const { registry, models } = makeRegistry(2, 0);
+    const releasedFile = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "baseline", revision: "r1" },
+      savePolicy: "explicit",
+    });
+    const evictedModel = releasedFile.model;
+    releasedFile.release({ cursor: 1 });
+    expect(evictedModel.dispose).toHaveBeenCalledTimes(1);
+    expect(releasedFile.restoreViewState()).toEqual({ cursor: 1 });
+
+    const liveDiff = registry.acquire({
+      identity: mainIdentity,
+      viewId: "diff-modified",
+      seed: { value: "baseline", revision: "r1" },
+      savePolicy: "explicit",
+    });
+    expect(liveDiff.model).not.toBe(evictedModel);
+
+    releasedFile.applyExternalUpdate({
+      baseline: "agent update",
+      value: "agent update",
+      revision: "r2",
+    });
+
+    expect(liveDiff.model.getValue()).toBe("agent update");
+    expect(liveDiff.snapshot()).toMatchObject({
+      baseline: "agent update",
+      baselineRevision: "r2",
+      dirty: false,
+    });
+    expect(models).toHaveLength(2);
+  });
+
   it("records a clean external revision without rewriting an already-current model", () => {
     const { registry } = makeRegistry();
     const file = registry.acquire({

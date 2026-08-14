@@ -68,7 +68,13 @@ interface DocumentEntry<Model extends RegistryModel, ViewState> extends Document
   changeSubscription: { dispose(): void } | null;
   applyingBaseline: boolean;
   readonly references: Set<symbol>;
-  readonly viewStates: Map<string, ViewState>;
+  readonly viewStates: Map<string, RetainedViewState<ViewState>>;
+}
+
+interface RetainedViewState<ViewState> {
+  /** Serialized positions are only meaningful against the text they were captured from. */
+  readonly state: ViewState;
+  readonly basisValue: string;
 }
 
 /**
@@ -215,8 +221,18 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
       model,
       snapshot: () => this.snapshot(entry),
       restoreViewState: () => {
-        const state = entry.viewStates.get(input.viewId);
-        return state === undefined ? null : structuredClone(state);
+        const retained = entry.viewStates.get(input.viewId);
+        if (retained === undefined) return null;
+        const currentValue = entry.model?.getValue() ?? entry.baseline;
+        const mapper = this.factory.mapViewStateThroughExternalEdit;
+        if (retained.basisValue === currentValue || mapper === undefined) {
+          return structuredClone(retained.state);
+        }
+        // Shared-model edits need no registry transaction, so catch any state
+        // they made stale when its view eventually returns.
+        const mapped = mapper(retained.basisValue, structuredClone(retained.state), currentValue);
+        entry.viewStates.set(input.viewId, { state: mapped, basisValue: currentValue });
+        return structuredClone(mapped);
       },
       applyExternalUpdate: (update) => this.applyExternalUpdate(entry, update),
       adoptCleanBaseline: (seed) => this.adoptCleanBaseline(entry, seed),
@@ -228,7 +244,10 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
         if (viewState === null) {
           entry.viewStates.delete(input.viewId);
         } else if (viewState !== undefined) {
-          entry.viewStates.set(input.viewId, structuredClone(viewState));
+          entry.viewStates.set(input.viewId, {
+            state: structuredClone(viewState),
+            basisValue: model.getValue(),
+          });
         }
         entry.references.delete(reference);
         entry.viewReferences = entry.references.size;
@@ -346,26 +365,9 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
 
     entry.applyingBaseline = true;
     try {
-      const oldBaseline = entry.baseline;
       const model = entry.model;
       const modelNeedsUpdate = model !== null && model.getValue() !== seed.value;
-      let mappedViewStates: Map<string, ViewState> | null = null;
-      if (
-        oldBaseline !== seed.value &&
-        this.factory.mapViewStateThroughExternalEdit !== undefined
-      ) {
-        mappedViewStates = new Map();
-        for (const [viewId, viewState] of entry.viewStates) {
-          mappedViewStates.set(
-            viewId,
-            this.factory.mapViewStateThroughExternalEdit(
-              oldBaseline,
-              structuredClone(viewState),
-              seed.value,
-            ),
-          );
-        }
-      }
+      const mappedViewStates = this.mapRetainedViewStates(entry, seed.value);
       entry.baseline = seed.value;
       entry.baselineRevision = seed.revision;
       this.setDirty(entry, false);
@@ -376,12 +378,7 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
         // re-seed deliberately resets the old history with the model value.
         model.setValue(seed.value);
       }
-      if (mappedViewStates !== null) {
-        entry.viewStates.clear();
-        for (const [viewId, viewState] of mappedViewStates) {
-          entry.viewStates.set(viewId, viewState);
-        }
-      }
+      this.commitMappedViewStates(entry, mappedViewStates);
     } finally {
       entry.applyingBaseline = false;
     }
@@ -394,16 +391,47 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
   ): void {
     entry.applyingBaseline = true;
     try {
+      const mappedViewStates = this.mapRetainedViewStates(entry, update.value);
       entry.baseline = update.baseline;
       entry.baselineRevision = update.revision;
       entry.externalRevision = update.revision;
       if (entry.model !== null && entry.model.getValue() !== update.value) {
         this.factory.applyExternalEdit(entry.model, update.value);
       }
+      this.commitMappedViewStates(entry, mappedViewStates);
       this.setDirty(entry, update.value !== update.baseline);
     } finally {
       entry.applyingBaseline = false;
     }
+  }
+
+  private mapRetainedViewStates(
+    entry: DocumentEntry<Model, ViewState>,
+    value: string,
+  ): Map<string, RetainedViewState<ViewState>> | null {
+    const mapper = this.factory.mapViewStateThroughExternalEdit;
+    if (mapper === undefined) return null;
+    // Prepare every mapping before the model transaction. A mapper failure then
+    // leaves all retained states in their original, truthful coordinate space.
+    let mapped: Map<string, RetainedViewState<ViewState>> | null = null;
+    for (const [viewId, retained] of entry.viewStates) {
+      if (retained.basisValue === value) continue;
+      mapped ??= new Map(entry.viewStates);
+      mapped.set(viewId, {
+        state: mapper(retained.basisValue, structuredClone(retained.state), value),
+        basisValue: value,
+      });
+    }
+    return mapped;
+  }
+
+  private commitMappedViewStates(
+    entry: DocumentEntry<Model, ViewState>,
+    mapped: Map<string, RetainedViewState<ViewState>> | null,
+  ): void {
+    if (mapped === null) return;
+    entry.viewStates.clear();
+    for (const [viewId, retained] of mapped) entry.viewStates.set(viewId, retained);
   }
 
   private ensureModel(entry: DocumentEntry<Model, ViewState>): Model {
