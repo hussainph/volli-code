@@ -420,12 +420,29 @@ export function interactionSubmission(
  * Scoped to the case where the click really is the whole answer — one question,
  * one choice, no free text riding along, nothing already typed — and to an
  * option whose polarity we recognize. A harness question's option ids are its
- * own encoded values and mean nothing to us, so those still wait for Submit.
+ * own encoded values and mean nothing to us, so those still wait for the card's
+ * own control: they are answers to be assembled, not verdicts to be given.
  *
- * `standing` and `reject` are excluded deliberately. A standing grant consents
- * to every future call of its kind and must never be the cheapest thing on the
- * card; a refusal is the verdict whose words matter, and sending it on the
- * click takes the box away before it can be typed in.
+ * **Every declared verdict, not only the one-time yes.** A gate that cost one
+ * click for `once` and two for the option beside it taught the fastest gesture
+ * on the commonest card in the app and then withheld it — which reads as the
+ * card resisting the reader rather than as the caution it was meant to be.
+ *
+ * The two reasons the other verdicts used to wait both survive, in the places
+ * they belong:
+ *
+ *  - A standing grant still must never be the *cheapest* thing on the card.
+ *    That is ink, and it is the row's: it is drawn at the weight of what it
+ *    consents to, beside a one-time yes at full strength. Costing an extra
+ *    click was never what said so — a reader who has clicked it twice has read
+ *    it no more carefully.
+ *  - A refusal is still the verdict whose words matter, and sending it on the
+ *    click must not take the box away before it can be typed in. It does not:
+ *    a permission's box is one press away rather than behind the refusal — the
+ *    card draws that control whenever {@link promptFieldOpen} is false — and the
+ *    last clause here is what makes it sufficient. Anything typed puts the
+ *    decision back on the card's own control, so words written first are never
+ *    sent out from under the reader who wrote them.
  */
 export function optionSubmitsOnSelect(
   interaction: SessionInteraction,
@@ -436,7 +453,7 @@ export function optionSubmitsOnSelect(
   if (readInteractionPrompts(interaction).length !== 1) return false;
   if (prompt.multiple || prompt.custom) return false;
   if (promptDraft(draft, prompt.id).response.trim().length > 0) return false;
-  return optionPolarity(option) === "allow";
+  return optionPolarity(option) !== "answer";
 }
 
 /**

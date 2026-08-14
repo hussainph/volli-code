@@ -335,6 +335,71 @@ describe("the ask-user card", () => {
   });
 });
 
+/** The markup of the one row carrying this label, out of the list it sits in. */
+function optionRow(html: string, label: string): string {
+  const row = html.split("<label").find((fragment) => fragment.includes(`>${label}</span>`));
+  if (row === undefined) throw new Error(`no option row labelled ${label}`);
+  return row;
+}
+
+describe("the two cards as one family", () => {
+  it("draws both lists of answers with the same row", () => {
+    // The guarantee this test exists for: the shared row is a string in one
+    // place, and the two cards are different elements around it. Nothing stops
+    // a class being added to one of them and not the other except this.
+    const verdict = optionRow(
+      renderToStaticMarkup(
+        <InteractionCard interaction={permission()} onResolve={() => undefined} />,
+      ),
+      "Allow once",
+    );
+    const answer = optionRow(drawn(ask([askPrompt()])), "main");
+    for (const shared of ["gap-2.5", "rounded-lg", "px-2", "py-2", "transition-colors"])
+      expect([shared, verdict.includes(shared), answer.includes(shared)]).toEqual([
+        shared,
+        true,
+        true,
+      ]);
+  });
+
+  it("keeps the standing grant's down-weighting ink rather than size", () => {
+    // A smaller row is a smaller hit target for a live control. What says a
+    // standing grant is not a louder yes is its ink, and the two rows are the
+    // same height and the same weight so that the ink is all that differs.
+    const html = renderToStaticMarkup(
+      <InteractionCard interaction={permission()} onResolve={() => undefined} />,
+    );
+    const once = optionRow(html, "Allow once");
+    const always = optionRow(html, "Allow always");
+    expect(once).toContain("text-foreground");
+    expect(always).toContain("text-muted-foreground");
+    expect(always).not.toContain("text-foreground");
+    expect(always).toContain("opacity-70");
+    // Same row, same type step: only the colour moved.
+    expect(once.includes("py-2")).toBe(always.includes("py-2"));
+    expect(once.includes("text-ui font-medium")).toBe(always.includes("text-ui font-medium"));
+  });
+
+  it("marks every verdict as one press, and an opaque answer as not", () => {
+    // The arrow is the gesture telling the truth about itself: it stands on the
+    // rows `optionSubmitsOnSelect` sends from, which is now every declared
+    // verdict — a gate that cost one click for `once` and two for the option
+    // beside it taught the fastest gesture in the app and then withheld it.
+    const gate = renderToStaticMarkup(
+      <InteractionCard interaction={permission()} onResolve={() => undefined} />,
+    );
+    for (const label of ["Allow once", "Allow always", "Reject"])
+      expect(optionRow(gate, label)).toContain("bg-foreground");
+
+    // A question's ids are the harness's own encoded values and state no
+    // verdict, so a click there answers rather than decides — and the several
+    // answers of a multiple prompt are never one press either.
+    expect(optionRow(drawn(ask([askPrompt({ multiple: true })])), "main")).not.toContain(
+      "bg-foreground",
+    );
+  });
+});
+
 describe("the co-mounted request announcement", () => {
   it("politely announces a pending title without a focusable control", () => {
     const html = renderToStaticMarkup(<PendingInteractionAnnouncement interaction={asked()} />);

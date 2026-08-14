@@ -55,6 +55,7 @@ import * as React from "react";
 import {
   ArrowRightIcon,
   CaretLeftIcon,
+  CheckIcon,
   CaretRightIcon,
   HandPalmIcon,
   WarningIcon,
@@ -121,6 +122,49 @@ const FIELD_LABEL: Record<InteractionFieldRole, string> = {
   note: "Note",
   redirection: "Instructions",
 };
+
+/**
+ * One answer row, on either card.
+ *
+ * Shared as a string rather than as a component, because the two rows are not
+ * the same element and must not be: a question's row is a button this card
+ * drives itself, a verdict's is a label over a native input whose group
+ * semantics the browser owns. What they *are* differs; how they read must not,
+ * so the target, the wash and the rhythm live in one place where they cannot
+ * drift apart a class at a time.
+ */
+const OPTION_ROW =
+  "group flex min-w-0 cursor-pointer items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors outline-none";
+
+/** The disc at the head of a row: a numeral on one card, a tick on the other. */
+const OPTION_MARK =
+  "flex size-5 shrink-0 items-center justify-center rounded-full text-xs tabular-nums transition-colors";
+
+/**
+ * The row's own verb, on the row that is one press from a decision.
+ *
+ * Only where the click really is the whole act — `optionSubmitsOnSelect` on a
+ * verdict, a single choice on a question — so it is the affordance telling the
+ * truth about the gesture rather than decoration that appears on every row.
+ *
+ * `focus` is the caller's because the two cards focus differently: a question's
+ * row is itself the focusable control, a verdict's row focuses the input beside
+ * this glyph. Ink is `foreground`, never the accent — the accent on this card
+ * means *chosen*, and this is the act, not the answer.
+ */
+function AnswerArrow({ focus }: { focus: string }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "ml-auto flex size-5 shrink-0 items-center justify-center rounded-full bg-foreground text-background opacity-0 transition-opacity duration-150 group-hover:opacity-100 motion-reduce:transition-none",
+        focus,
+      )}
+    >
+      <ArrowRightIcon className="size-3" weight="bold" />
+    </span>
+  );
+}
 
 /**
  * A stable, non-focusable announcement point for the request above a composer.
@@ -251,6 +295,7 @@ function DecisionCard({
   );
   const [step, setStep] = React.useState(0);
   const { failed, send } = useDelivery(onResolve);
+  const reducedMotion = useReducedMotion() ?? false;
   const questions = interactionQuestions(interaction);
   const carousel = interactionCarousel(interaction, draft, step);
   const asked = questions[carousel?.index ?? 0];
@@ -282,13 +327,16 @@ function DecisionCard({
         className,
       )}
     >
-      <div className="flex items-start gap-2 px-3 pt-2.5">
+      <div className="flex items-start gap-2 px-3 pt-3">
         {/* The card's palm and the footer's Warning are the
             only filled glyphs the chat surface has left: an interaction is the
             exception in a transcript that is otherwise outline throughout. */}
-        <HandPalmIcon aria-hidden className="mt-0.5 size-3.5 shrink-0 text-primary" weight="fill" />
+        <HandPalmIcon aria-hidden className="mt-1 size-4 shrink-0 text-primary" weight="fill" />
         <div className="min-w-0 flex-1">
-          <p className="text-sm leading-5 text-foreground">{interaction.title}</p>
+          {/* The ask, at the size the ask-user card asks at. What is being
+              authorized is the largest thing on the card in both places — the
+              two are one family and the reader is doing the same kind of work. */}
+          <p className="text-heading text-balance text-foreground">{interaction.title}</p>
           {/* The object of the decision, not a caption on it. This is the
               command or the path being authorized, and at the foot mount it is
               the only place the subject appears at all — truncated to one
@@ -297,7 +345,7 @@ function DecisionCard({
               changes is the ink and that it is readable in full, the way the
               scrollable `pre` this card replaced showed it. */}
           {interaction.detail ? (
-            <pre className="mt-0.5 max-h-32 overflow-y-auto font-mono text-xs whitespace-pre-wrap break-words text-foreground">
+            <pre className="mt-1 max-h-32 overflow-y-auto font-mono text-xs whitespace-pre-wrap break-words text-foreground">
               {interaction.detail}
             </pre>
           ) : null}
@@ -307,21 +355,33 @@ function DecisionCard({
         ) : null}
       </div>
 
-      <div className="px-3 pt-2.5">
-        {asked ? (
-          <InteractionQuestionFields
-            key={asked.prompt.id}
-            interaction={interaction}
-            question={asked}
-            draft={draft}
-            disabled={resolving}
-            onDraftChange={setDraft}
-            onSubmit={submit}
-          />
-        ) : null}
+      {/* The same cross-fade the ask-user card steps with. A permission that
+          asked one thing never sees it; one that asked several is walked
+          through the same way, by the carousel it already had. */}
+      <div className="px-3 pt-2">
+        <AnimatePresence initial={false} mode="popLayout">
+          {asked ? (
+            <motion.div
+              key={asked.prompt.id}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: reducedMotion ? 0.1 : 0.18, ease: [0.32, 0.72, 0, 1] }}
+            >
+              <InteractionQuestionFields
+                interaction={interaction}
+                question={asked}
+                draft={draft}
+                disabled={resolving}
+                onDraftChange={setDraft}
+                onSubmit={submit}
+              />
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
       </div>
 
-      <div className="mt-2.5 flex items-center gap-1 border-t border-border/70 px-3 py-2">
+      <div className="mt-1.5 flex items-center gap-1 border-t border-border/70 px-3 py-2">
         {/* Worded, not a bare glyph. Cancel request is not the composer's Stop
             turn: it withdraws the durable interaction as well as interrupting
             the turn that asked it.
@@ -803,7 +863,7 @@ function QuestionStep({
                 disabled={superseded}
                 onClick={() => onChoose(option)}
                 className={cn(
-                  "group flex min-w-0 cursor-pointer items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors outline-none",
+                  OPTION_ROW,
                   "hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:ring-1 focus-visible:ring-ring",
                   checked && "bg-muted/70",
                   superseded && "cursor-default opacity-50",
@@ -849,14 +909,7 @@ function QuestionStep({
                 {/* The row's own verb, and only on the row that is one press
                     from an answer: a single choice sends on the click, so the
                     numeral it replaces is standing where the act is. */}
-                {prompt.multiple ? null : (
-                  <span
-                    aria-hidden
-                    className="flex size-5 shrink-0 items-center justify-center rounded-full bg-foreground text-background opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100 motion-reduce:transition-none"
-                  >
-                    <ArrowRightIcon className="size-3" weight="bold" />
-                  </span>
-                )}
+                {prompt.multiple ? null : <AnswerArrow focus="group-focus-visible:opacity-100" />}
               </button>
             );
           })}
@@ -946,7 +999,7 @@ function OptionChip({
     <span
       aria-hidden
       className={cn(
-        "flex size-5 shrink-0 items-center justify-center rounded-full text-xs tabular-nums transition-colors",
+        OPTION_MARK,
         outlined && !checked && "border border-muted-foreground/40",
         checked ? "bg-primary font-medium text-primary-foreground" : "text-muted-foreground",
         className,
@@ -1095,8 +1148,10 @@ function InteractionQuestionFields({
   const fieldOpen = promptFieldOpen(prompt, draft) || revealed || written.length > 0;
   return (
     <fieldset className="min-w-0">
-      {label ? <legend className="mb-1 text-sm leading-5 text-foreground">{label}</legend> : null}
-      <div className="flex flex-col">
+      {label ? <legend className="mb-1 text-ui font-medium text-foreground">{label}</legend> : null}
+      {/* Bled into the card's padding so the marks line up under the ask above
+          them, the way the ask-user card's numerals do. */}
+      <div className="-mx-2 flex flex-col">
         {prompt.options.map((option) => {
           const polarity = optionPolarity(option);
           const checked = promptDraft(draft, prompt.id).optionIds.includes(option.id);
@@ -1106,14 +1161,23 @@ function InteractionQuestionFields({
             // one-time one beside it. The down-weighting is ink, not size —
             // a smaller row is a smaller *hit target* for a live control, it
             // sits below the control floor of the pill scale, and it left the
-            // options in one list at two different heights.
+            // options in one list at two different heights. It is also not a
+            // second click: costing one taught nobody anything the ink had not
+            // already said (`optionSubmitsOnSelect`).
             <label
               key={option.id}
               className={cn(
-                "flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-sm transition-colors hover:bg-muted/40 has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-ring",
-                superseded && "opacity-50",
+                OPTION_ROW,
+                "hover:bg-muted/40 has-[:focus-visible]:bg-muted/40 has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-ring",
+                checked && "bg-muted/70",
+                superseded && "cursor-default opacity-50",
               )}
             >
+              {/* The native input still owns the group: its `name`, its arrow
+                  keys, its label association. Only the drawing moves out here,
+                  onto a disc the size of the ask-user card's numeral — a 14px
+                  system radio beside an 18px ask read as a different component
+                  rather than as the same one asking a different question. */}
               <input
                 type={prompt.multiple ? "checkbox" : "radio"}
                 name={`${interaction.id}:${prompt.id}`}
@@ -1127,14 +1191,25 @@ function InteractionQuestionFields({
                   // owns which clicks those are.
                   if (optionSubmitsOnSelect(interaction, prompt, option, draft)) onSubmit(next);
                 }}
-                className={cn(
-                  "size-3.5 shrink-0 accent-primary outline-none",
-                  polarity === "standing" && "opacity-70",
-                )}
+                className="peer sr-only"
               />
               <span
+                aria-hidden
                 className={cn(
-                  "min-w-0 truncate",
+                  OPTION_MARK,
+                  checked
+                    ? "bg-primary text-primary-foreground"
+                    : "border border-muted-foreground/40",
+                  // The same 70% the native input wore, on the mark that
+                  // replaced it: ink, and only ink.
+                  polarity === "standing" && "opacity-70",
+                )}
+              >
+                {checked ? <CheckIcon className="size-3" weight="bold" /> : null}
+              </span>
+              <span
+                className={cn(
+                  "min-w-0 truncate text-ui font-medium",
                   polarity === "standing" ? "text-muted-foreground" : "text-foreground",
                 )}
               >
@@ -1146,9 +1221,12 @@ function InteractionQuestionFields({
                   the label takes the width it needs and the description fills
                   whatever is left. */}
               {option.description ? (
-                <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                <span className="min-w-0 flex-1 truncate text-ui text-muted-foreground">
                   {option.description}
                 </span>
+              ) : null}
+              {optionSubmitsOnSelect(interaction, prompt, option, draft) ? (
+                <AnswerArrow focus="peer-focus-visible:opacity-100" />
               ) : null}
             </label>
           );
@@ -1180,7 +1258,7 @@ function InteractionQuestionFields({
             }
           }}
           className={cn(
-            "mt-1.5 min-h-9 resize-none rounded-md text-sm shadow-none",
+            "mt-2 min-h-9 resize-none rounded-md text-ui shadow-none md:text-ui",
             wordsDropped && "opacity-50",
           )}
         />
@@ -1189,7 +1267,7 @@ function InteractionQuestionFields({
           type="button"
           variant="ghost"
           size="xs"
-          className="mt-1 ml-0.5 text-muted-foreground"
+          className="-ml-2 mt-1 text-muted-foreground"
           disabled={disabled}
           onClick={() => setRevealed(true)}
         >

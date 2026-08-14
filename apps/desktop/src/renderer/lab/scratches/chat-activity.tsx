@@ -23,6 +23,7 @@ import * as React from "react";
 import {
   ACTIVITY_KINDS,
   ACTIVITY_METADATA_KEY,
+  SESSION_ESCALATION_OPTIONS,
   type ActivityDescriptor,
   type ActivityKind,
   type ActivityOutcome,
@@ -488,6 +489,34 @@ const PERMISSION: SessionInteraction = {
 };
 
 /**
+ * What the sandbox raises when the block stands whatever the answer.
+ *
+ * Stored as a question, and it is not one: the pair it offers is a declared yes
+ * and no, so it keeps the verdict card. It is here because it is the case that
+ * reads wrong the moment a card forks on `kind` alone.
+ */
+const ESCALATION: SessionInteraction = {
+  id: "question:esc-1",
+  attachmentId: "attach-1",
+  kind: "question",
+  title: "Write outside the worktree",
+  detail: "~/.zshrc",
+  options: [...SESSION_ESCALATION_OPTIONS],
+  multiple: false,
+  prompts: [
+    {
+      id: "prompt:0",
+      label: "Write outside the worktree",
+      detail: "~/.zshrc",
+      options: [...SESSION_ESCALATION_OPTIONS],
+      multiple: false,
+      custom: false,
+    },
+  ],
+  native: { id: "esc-1", detail: null },
+};
+
+/**
  * A question: two prompts with their own answer rules, and no tool call to hang
  * either on. The second declares `multiple` and `custom`, so it takes
  * checkboxes and a free-text answer of its own.
@@ -763,6 +792,23 @@ export default function ChatActivityScratch() {
       <Section label="Interaction · on the row, where the call was gated">
         <ToolRow part={GATED_CARD_ROW} />
         <InteractionCard interaction={PERMISSION} onResolve={() => undefined} />
+      </Section>
+
+      {/* The two verdict cards, at the foot where a harness raised them with no
+          call to hang them on. Same chrome as the ask-user card beside them;
+          what stays different is what they *are* — every option in view at
+          once, weighted, because choosing between them is the whole act. */}
+      <Section label="Interaction · a verdict, at the foot">
+        <InteractionCard
+          interaction={PERMISSION}
+          onResolve={() => undefined}
+          onWithdraw={() => undefined}
+        />
+        <InteractionCard
+          interaction={ESCALATION}
+          onResolve={() => undefined}
+          onWithdraw={() => undefined}
+        />
       </Section>
 
       <Section label="Interaction · stacked on the composer">

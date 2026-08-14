@@ -583,17 +583,18 @@ describe("an escalation the sandbox raised", () => {
     );
   });
 
-  it("sends the continuation on the click that chose it", () => {
-    // One question, one choice, nothing typed: the click is the whole decision.
-    // Stopping the turn still asks twice, like every refusal — it is the
-    // verdict whose words matter.
+  it("sends either side of the offer on the click that chose it", () => {
+    // One question, one choice, nothing typed: the click is the whole decision,
+    // on the refusing side as much as the permitting one. What guards the two
+    // is their ink and the box that stands open beside them, never a second
+    // press asked for one of them and not the other.
     const interaction = escalation();
     const [only] = interaction.prompts ?? [];
     if (!only) throw new Error("fixture has no prompt");
     const { keepWorking, stopTurn } = escalationOptions();
     const draft = emptyInteractionDraft(interaction);
     expect(optionSubmitsOnSelect(interaction, only, keepWorking, draft)).toBe(true);
-    expect(optionSubmitsOnSelect(interaction, only, stopTurn, draft)).toBe(false);
+    expect(optionSubmitsOnSelect(interaction, only, stopTurn, draft)).toBe(true);
   });
 
   it("submits the choice the reader made, not an empty refusal beside their words", () => {
@@ -718,34 +719,45 @@ describe("submit", () => {
     ).toBe(false);
   });
 
-  it("sends a one-time yes on the click that chose it", () => {
-    // The commonest gesture in the app used to cost one click; a radio plus a
-    // generic confirm doubles it on every turn and the confirm adds nothing.
+  it("sends every declared verdict on the click that chose it", () => {
+    // The commonest gesture in the app; a radio plus a generic confirm doubles
+    // it on every turn and the confirm adds nothing. One click for `once` and
+    // two for the option beside it taught the gesture and then withheld it.
     const interaction = permission();
     const [only] = interactionQuestions(interaction);
     if (!only) throw new Error("no prompt projected");
-    const once = { id: "once", label: "Allow once", description: null };
     const draft = emptyInteractionDraft(interaction);
-    expect(optionSubmitsOnSelect(interaction, only.prompt, once, draft)).toBe(true);
+    for (const option of PERMISSION_OPTIONS) {
+      expect(optionSubmitsOnSelect(interaction, only.prompt, option, draft)).toBe(true);
+    }
   });
 
-  it("still asks twice for a standing grant, a refusal, and an opaque answer", () => {
-    // A standing grant outlives the turn and must never be the cheapest thing
-    // on the card; a refusal is the verdict whose words matter; a question's
-    // option ids are the harness's own values and state no verdict at all.
-    const interaction = permission();
-    const [only] = interactionQuestions(interaction);
-    if (!only) throw new Error("no prompt projected");
-    const draft = emptyInteractionDraft(interaction);
-    for (const option of PERMISSION_OPTIONS.filter((entry) => entry.id !== "once")) {
-      expect(optionSubmitsOnSelect(interaction, only.prompt, option, draft)).toBe(false);
-    }
+  it("never sends an opaque answer on the click", () => {
+    // A question's option ids are the harness's own encoded values and state no
+    // verdict at all: they are answers to assemble, not decisions to give.
     const asked = question([prompt()]);
     const [opaque] = prompt().options;
     if (!opaque) throw new Error("no option declared");
     expect(optionSubmitsOnSelect(asked, prompt(), opaque, emptyInteractionDraft(asked))).toBe(
       false,
     );
+  });
+
+  it("puts a verdict back on the card's own control once words are typed", () => {
+    // The one thing that kept a refusal waiting: sending on the click must
+    // never take the box away from under someone who had already used it.
+    const interaction = permission();
+    const [only] = interactionQuestions(interaction);
+    if (!only) throw new Error("no prompt projected");
+    const reject = { id: "reject", label: "Reject", description: null };
+    expect(
+      optionSubmitsOnSelect(
+        interaction,
+        only.prompt,
+        reject,
+        setPromptResponse({}, "prompt:0", "read the lockfile instead"),
+      ),
+    ).toBe(false);
   });
 
   it("waits for Submit once the click is not the whole answer", () => {
