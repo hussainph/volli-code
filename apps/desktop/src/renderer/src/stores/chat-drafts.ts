@@ -37,6 +37,8 @@ import { appStateStorage } from "@renderer/lib/app-state-storage";
 
 /** A draft never survives past this many most-recently-touched sessions. */
 export const MAX_DRAFTS = 50;
+/** The single app_state row that owns every Session draft and held message. */
+export const CHAT_DRAFTS_APP_STATE_KEY = "volli:chat-drafts";
 
 /**
  * Where a message that left the box currently stands.
@@ -287,7 +289,7 @@ export function createChatDraftsStore(storage?: StateStorage) {
         };
       },
       {
-        name: "volli:chat-drafts",
+        name: CHAT_DRAFTS_APP_STATE_KEY,
         version: 1,
         storage: createJSONStorage(() => storage ?? appStateStorage),
         skipHydration: storage === undefined,

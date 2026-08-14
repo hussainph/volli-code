@@ -11,6 +11,7 @@ interface InspectableProps {
   "aria-label"?: string;
   children?: React.ReactNode;
   className?: string;
+  density?: "default" | "compact";
   onClick?(): void;
   onCloseAutoFocus?(event: { preventDefault(): void }): void;
   onSelect?(): void;
@@ -56,11 +57,31 @@ describe("the queued message row", () => {
     const html = renderComposer();
 
     expect(html).toContain("Steer");
-    expect(html).toContain('aria-label="Steer queued message"');
-    expect(html).toContain('aria-label="Remove queued message"');
+    expect(html).toContain('aria-label="Steer queued message: also cover the empty-name branch"');
+    expect(html).toContain('aria-label="Remove queued message: also cover the empty-name branch"');
     expect(html).toContain('data-slot="dropdown-menu-trigger"');
-    expect(html).toContain('aria-label="Queued message actions"');
+    expect(html).toContain('aria-label="Queued message actions: also cover the empty-name branch"');
     expect(html).not.toContain('aria-label="Edit queued message"');
+  });
+
+  it("names every repeated queue control with the message it acts on", () => {
+    const html = renderToStaticMarkup(
+      <SessionComposer
+        {...composerProps({
+          queued: [
+            { id: "m1", text: "first follow-up" },
+            { id: "m2", text: "second follow-up" },
+          ],
+        })}
+      />,
+    );
+
+    for (const text of ["first follow-up", "second follow-up"]) {
+      expect(html).toContain(`aria-label="Queued message: ${text}"`);
+      expect(html).toContain(`aria-label="Steer queued message: ${text}"`);
+      expect(html).toContain(`aria-label="Remove queued message: ${text}"`);
+      expect(html).toContain(`aria-label="Queued message actions: ${text}"`);
+    }
   });
 
   it("wires Edit message to return that row to the current draft", () => {
@@ -88,7 +109,7 @@ describe("the queued message row", () => {
 
     expect(edits).toHaveLength(1);
     expect(renderToStaticMarkup(<>{edit?.props.children}</>)).toContain("Edit message");
-    expect(edit?.props.className).toBe("py-1 text-ui [&_svg:not([class*='size-'])]:size-3.5");
+    expect(edit?.props.density).toBe("compact");
     // Dismissing a menu with its trigger intact keeps Radix's normal restore.
     menu?.props.onCloseAutoFocus?.({ preventDefault: () => (restorePrevented = true) });
     expect(restorePrevented).toBe(false);
@@ -102,6 +123,32 @@ describe("the queued message row", () => {
     expect(nextDraft).toBe("also cover the empty-name branch\nnew thought");
     expect(acts).toEqual(["queue", "draft", "focus"]);
     expect(restorePrevented).toBe(true);
+  });
+
+  it("does not edit or remove a row whose resident delivery claim rejects mutation", () => {
+    let draft: string | undefined;
+    let focusRequests = 0;
+    const tree = SessionComposer(
+      composerProps({
+        onQueuedChange: () => false,
+        onValueChange: (value) => {
+          draft = value;
+        },
+        onComposerFocusRequest: () => {
+          focusRequests += 1;
+        },
+      }),
+    );
+
+    findElements(tree, DropdownMenuItem)[0]?.props.onSelect?.();
+    const remove = findElements(tree, Button).find(
+      (button) =>
+        button.props["aria-label"] === "Remove queued message: also cover the empty-name branch",
+    );
+    remove?.props.onClick?.();
+
+    expect(draft).toBeUndefined();
+    expect(focusRequests).toBe(0);
   });
 
   it("wires direct Steer and removal before handing focus to the composer", () => {
@@ -124,10 +171,10 @@ describe("the queued message row", () => {
     const buttons = findElements(tree, Button);
     const named = (label: string) => buttons.find((button) => button.props["aria-label"] === label);
 
-    named("Steer queued message")?.props.onClick?.();
+    named("Steer queued message: also cover the empty-name branch")?.props.onClick?.();
     expect(acts).toEqual(["steer:m1", "focus"]);
     acts.length = 0;
-    named("Remove queued message")?.props.onClick?.();
+    named("Remove queued message: also cover the empty-name branch")?.props.onClick?.();
     expect(steered).toBe("m1");
     expect(nextQueue).toEqual([]);
     expect(acts).toEqual(["queue:0", "focus"]);
@@ -136,9 +183,9 @@ describe("the queued message row", () => {
   it("offers Steer only while there is an active turn", () => {
     const html = renderComposer(false);
 
-    expect(html).not.toContain('aria-label="Steer queued message"');
-    expect(html).toContain('aria-label="Remove queued message"');
-    expect(html).toContain('aria-label="Queued message actions"');
+    expect(html).not.toContain('aria-label="Steer queued message:');
+    expect(html).toContain('aria-label="Remove queued message:');
+    expect(html).toContain('aria-label="Queued message actions:');
   });
 
   it("names turn interruption and draws keyboard focus on the outer rounded shell", () => {

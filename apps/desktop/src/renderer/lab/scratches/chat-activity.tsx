@@ -38,7 +38,11 @@ import {
   type ComposerModel,
   type ComposerModelSelection,
 } from "@renderer/components/chat/composer-ui";
-import { InteractionCard, InteractionReceiptLine } from "@renderer/components/chat/interaction-ui";
+import {
+  ComposerInteractionStack,
+  InteractionCard,
+  InteractionReceiptLine,
+} from "@renderer/components/chat/interaction-ui";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Button } from "@renderer/components/ui/button";
 
@@ -614,12 +618,11 @@ export default function ChatActivityScratch() {
       </Section>
 
       <Section label="Interaction · stacked on the composer">
-        <div className="flex flex-col gap-2">
-          <InteractionCard
-            interaction={QUESTION}
-            onResolve={() => undefined}
-            onWithdraw={() => undefined}
-          />
+        <ComposerInteractionStack
+          interaction={QUESTION}
+          onResolve={() => undefined}
+          onWithdraw={() => undefined}
+        >
           <SessionComposer
             value=""
             onValueChange={() => undefined}
@@ -638,7 +641,7 @@ export default function ChatActivityScratch() {
             onSubmit={() => undefined}
             onStop={() => undefined}
           />
-        </div>
+        </ComposerInteractionStack>
       </Section>
 
       <Section label="Interaction · receipts">
@@ -762,11 +765,11 @@ function ComposerStates() {
         ))}
       </div>
 
-      <div className="flex flex-col gap-2">
-        {state === "approval" ? (
-          <InteractionCard interaction={PERMISSION} onResolve={() => undefined} />
-        ) : null}
-
+      <ComposerInteractionStack
+        interaction={state === "approval" ? PERMISSION : null}
+        onResolve={() => setState("idle")}
+        onWithdraw={() => setState("idle")}
+      >
         <SessionComposer
           value={value}
           onValueChange={setValue}
@@ -793,7 +796,7 @@ function ComposerStates() {
           }}
           onStop={() => setState("idle")}
         />
-      </div>
+      </ComposerInteractionStack>
     </section>
   );
 }

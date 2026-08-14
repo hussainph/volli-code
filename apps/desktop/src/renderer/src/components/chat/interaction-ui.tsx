@@ -52,6 +52,7 @@ import {
   XCircleIcon,
 } from "@phosphor-icons/react";
 import type { SessionInteraction, SessionInteractionResolution } from "@volli/shared";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
 import {
   describeInteractionResolution,
@@ -139,8 +140,6 @@ export interface InteractionCardProps {
   onWithdraw?(): void;
   /** A decision is in flight; the harness's own verdict is what clears the card. */
   resolving?: boolean;
-  /** Only an optionless custom prompt may take initial focus at the composer mount. */
-  focusFreeTextOnMount?: boolean;
   ref?: React.Ref<HTMLFormElement>;
   className?: string;
 }
@@ -150,7 +149,6 @@ export function InteractionCard({
   onResolve,
   onWithdraw,
   resolving,
-  focusFreeTextOnMount,
   ref,
   className,
 }: InteractionCardProps) {
@@ -260,7 +258,6 @@ export function InteractionCard({
             question={asked}
             draft={draft}
             disabled={resolving}
-            focusFreeTextOnMount={focusFreeTextOnMount}
             onDraftChange={setDraft}
             onSubmit={submit}
           />
@@ -342,6 +339,95 @@ export function InteractionCard({
   );
 }
 
+/**
+ * The occasional request drawer and the composer it comes from.
+ *
+ * Presence lives here rather than at each mount so the real plane and the Lab
+ * exercise one motion contract. The composer remains mounted throughout: its
+ * focused textarea keeps focus while the request enters, exits or is replaced.
+ */
+export function ComposerInteractionStack({
+  interaction,
+  resolving,
+  onResolve,
+  onWithdraw,
+  children,
+  className,
+}: React.PropsWithChildren<{
+  interaction: SessionInteraction | null;
+  resolving?: boolean;
+  onResolve(
+    interactionId: string,
+    submission: InteractionSubmission,
+  ): void | Promise<boolean | void>;
+  onWithdraw?(interactionId: string): void;
+  className?: string;
+}>) {
+  const reducedMotion = useReducedMotion() ?? false;
+  const drawerRef = React.useRef<HTMLFormElement>(null);
+  const originRef = React.useRef<HTMLDivElement>(null);
+  const restoreComposerFocus = React.useRef(false);
+  const transition = {
+    duration: reducedMotion ? 0.125 : 0.25,
+    ease: [0.32, 0.72, 0, 1] as const,
+  };
+  const hidden = {
+    opacity: 0,
+    transform: reducedMotion ? "translateY(0)" : "translateY(8px)",
+  };
+
+  React.useLayoutEffect(() => {
+    if (restoreComposerFocus.current) {
+      restoreComposerFocus.current = false;
+      originRef.current?.querySelector<HTMLElement>("textarea:not([disabled])")?.focus();
+    }
+
+    // Layout-effect cleanup runs before React removes or replaces the form, so
+    // it can still tell whether the departing request owned focus. Only that
+    // case restores the persistent composer; an externally resolved request
+    // must not pull focus away from somewhere else.
+    const drawer = drawerRef.current;
+    return () => {
+      restoreComposerFocus.current = drawer !== null && drawer.contains(document.activeElement);
+    };
+  }, [interaction?.id]);
+
+  return (
+    <div className={cn("flex flex-col gap-2", className)}>
+      <PendingInteractionAnnouncement interaction={interaction} />
+      <AnimatePresence initial={false} mode="popLayout">
+        {interaction ? (
+          <motion.div
+            key={interaction.id}
+            data-slot="composer-interaction-drawer"
+            layout={reducedMotion ? false : "position"}
+            initial={hidden}
+            animate={{ opacity: 1, transform: "translateY(0)" }}
+            exit={hidden}
+            transition={transition}
+          >
+            <InteractionCard
+              ref={drawerRef}
+              interaction={interaction}
+              resolving={resolving}
+              onResolve={(submission) => onResolve(interaction.id, submission)}
+              onWithdraw={onWithdraw ? () => onWithdraw(interaction.id) : undefined}
+            />
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+      <motion.div
+        ref={originRef}
+        data-slot="composer-interaction-origin"
+        layout={reducedMotion ? false : "position"}
+        transition={transition}
+      >
+        {children}
+      </motion.div>
+    </div>
+  );
+}
+
 /* -------------------------------------------------------------- questions */
 
 /**
@@ -357,7 +443,6 @@ function InteractionQuestionFields({
   question,
   draft,
   disabled,
-  focusFreeTextOnMount,
   onDraftChange,
   onSubmit,
 }: {
@@ -365,7 +450,6 @@ function InteractionQuestionFields({
   question: InteractionQuestion;
   draft: InteractionDraft;
   disabled?: boolean;
-  focusFreeTextOnMount?: boolean;
   onDraftChange(next: InteractionDraft): void;
   /**
    * Takes the draft the caller wants sent, because a click that answers the
@@ -461,9 +545,7 @@ function InteractionQuestionFields({
           placeholder is the only label either form needs — the control talks. */}
       {fieldOpen ? (
         <Textarea
-          autoFocus={
-            revealed || (focusFreeTextOnMount && prompt.custom && prompt.options.length === 0)
-          }
+          autoFocus={revealed}
           value={written}
           disabled={disabled}
           // A placeholder is not a name: it leaves the box unnamed to AT, and

@@ -60,6 +60,10 @@ import { ActivityBundle, ToolRow } from "@renderer/components/chat/activity-ui";
 import {
   answerInteraction,
   composerModelSelection,
+  coordinateQueuedMutation,
+  coordinateQueuedSteerStart,
+  dispatchHeldMessage,
+  hasReconciledSessionSnapshot,
   heldStrip,
   holdList,
   messageRoute,
@@ -68,6 +72,7 @@ import {
   sameMessages,
   sessionBlocker,
   sessionModelStanding,
+  steerRollbackState,
   steerQueuedMessage,
   settledHeldIds,
   withdrawInteraction,
@@ -82,16 +87,21 @@ import {
   type ComposerModelSelection,
 } from "@renderer/components/chat/composer-ui";
 import {
+  ComposerInteractionStack,
   InteractionCard,
   InteractionReceiptLine,
-  PendingInteractionAnnouncement,
 } from "@renderer/components/chat/interaction-ui";
 import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Button } from "@renderer/components/ui/button";
+import { flushPendingAppStateKey } from "@renderer/lib/app-state-storage";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { cn } from "@renderer/lib/utils";
-import { useChatDraftsStore, type HeldMessage } from "@renderer/stores/chat-drafts";
+import {
+  CHAT_DRAFTS_APP_STATE_KEY,
+  useChatDraftsStore,
+  type HeldMessage,
+} from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -122,12 +132,14 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   const controller = useSessionController(sessionId, store);
   const sessionsStore = store ?? useChatSessionsStore;
   const {
+    claimQueued,
+    dequeueClaimed,
     enqueue,
-    dequeue,
     cancelInteraction,
     interrupt,
     recover,
     retryRuntime,
+    releaseQueuedClaim,
     resolveInteraction,
     selectModel,
     submit,
@@ -215,12 +227,12 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
    * dropped while the executor is coming up.
    */
   const deliver = React.useCallback(
-    async (id: string, text: string, intent: ComposerIntent): Promise<MessageDelivery | "held"> => {
+    async (message: QueuedMessage, intent: ComposerIntent): Promise<MessageDelivery | "held"> => {
       if (messageRoute(intent, deliverable) === "hold") {
-        enqueue({ id, text });
+        enqueue(message);
         return "held";
       }
-      return submit(text, intent === "steer" ? "steer" : "queue");
+      return submit(message, intent === "steer" ? "steer" : "queue");
     },
     [deliverable, enqueue, submit],
   );
@@ -241,16 +253,21 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
    */
   const send = React.useCallback(
     (text: string, intent: ComposerIntent) => {
-      const id = nextId();
-      holdMessage(sessionId, { id, text });
-      void deliver(id, text, intent).then((outcome) => {
-        if (outcome === "held") markHeld(sessionId, id, "queued");
-        // `recorded` is the message the runtime committed before the executor
-        // refused it: it is in the ledger and on screen in the transcript, so
-        // handing it back would be inviting a second copy of it. The blocker
-        // row owns that recovery.
-        else if (outcome === "refused") markHeld(sessionId, id, "unsent");
-        else dropHeld(sessionId, id);
+      const message = { id: nextId(), text };
+      holdMessage(sessionId, message);
+      void dispatchHeldMessage({
+        persist: () => flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY),
+        deliver: () => deliver(message, intent),
+        finish: async (outcome) => {
+          if (outcome === "held") markHeld(sessionId, message.id, "queued");
+          // `recorded` is the message the runtime committed before the executor
+          // refused it: it is in the ledger and on screen in the transcript, so
+          // handing it back would be inviting a second copy of it. The blocker
+          // row owns that recovery.
+          else if (outcome === "refused") markHeld(sessionId, message.id, "unsent");
+          else dropHeld(sessionId, message.id);
+          await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
+        },
       });
     },
     [deliver, dropHeld, holdMessage, markHeld, sessionId],
@@ -258,7 +275,15 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
 
   // What the Session is holding for you, from the two records that say it — see
   // `heldStrip`. One row per message, whichever of them names it.
-  const strip = React.useMemo(() => heldStrip(held, queue), [held, queue]);
+  const durableMessageIds = React.useMemo(
+    () => new Set(messages.map((message) => message.id)),
+    [messages],
+  );
+  const strip = React.useMemo(
+    () =>
+      heldStrip(held, queue, durableMessageIds, hasReconciledSessionSnapshot(slice?.projection)),
+    [durableMessageIds, held, queue, slice?.projection],
+  );
 
   // The composer only ever takes messages OUT of the strip — editing one puts
   // its words back in the box, removing one drops it — so the whole of this is
@@ -267,13 +292,21 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   const onQueuedChange = React.useCallback(
     (next: readonly QueuedMessage[]) => {
       const kept = new Set(next.map((entry) => entry.id));
-      for (const entry of strip) {
-        if (kept.has(entry.id)) continue;
-        dequeue(entry.id);
-        dropHeld(sessionId, entry.id);
-      }
+      const removed = strip.filter((entry) => !kept.has(entry.id));
+      if (removed.length === 0) return true;
+      if (removed.length !== 1) return false;
+      const entry = removed[0]!;
+      const current = sessionsStore.getState().sessions[sessionId];
+      const queueBacked = current?.queue.some((queued) => queued.id === entry.id) ?? false;
+      return coordinateQueuedMutation({
+        queueBacked,
+        claim: () => claimQueued(entry.id),
+        consumeClaim: () => dequeueClaimed(entry.id),
+        releaseClaim: () => releaseQueuedClaim(entry.id),
+        dropHeld: () => dropHeld(sessionId, entry.id),
+      });
     },
-    [dequeue, dropHeld, sessionId, strip],
+    [claimQueued, dequeueClaimed, dropHeld, releaseQueuedClaim, sessionId, sessionsStore, strip],
   );
 
   const onSteerQueued = React.useCallback(
@@ -287,20 +320,60 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
             steerable: current?.lifecycle === "working" && isDeliverable(current),
           };
         },
-        start: (visible, targetId) => {
-          // The durable write must precede dequeue: the resident client observes
-          // queue mutations synchronously and may start draining its neighbors.
-          beginQueuedSteer(sessionId, visible, targetId);
-          dequeue(targetId);
+        start: async (visible, targetId) => {
+          const before = sessionsStore.getState().sessions[sessionId];
+          const targetedTurnEpoch = before?.transcript.turnEpoch;
+          const queueBacked = before?.queue.some((entry) => entry.id === targetId) ?? false;
+          const heldBefore = useChatDraftsStore
+            .getState()
+            .drafts[sessionId]?.held.find((entry) => entry.id === targetId);
+          const restoreState = steerRollbackState(queueBacked, heldBefore?.state);
+          return coordinateQueuedSteerStart(targetedTurnEpoch, {
+            queueBacked,
+            claim: () => claimQueued(targetId),
+            persist: async () => {
+              // The claim freezes the entire ordered resident queue. Its
+              // selected row and visible neighbors become durable first.
+              beginQueuedSteer(sessionId, visible, targetId);
+              return flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
+            },
+            current: () => {
+              const current = sessionsStore.getState().sessions[sessionId];
+              return current === undefined
+                ? undefined
+                : {
+                    turnEpoch: current.transcript.turnEpoch,
+                    working: current.lifecycle === "working",
+                    deliverable: isDeliverable(current),
+                  };
+            },
+            consumeClaim: () => dequeueClaimed(targetId),
+            restore: async () => {
+              markHeld(sessionId, targetId, restoreState);
+              await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
+            },
+            releaseClaim: () => releaseQueuedClaim(targetId),
+          });
         },
-        submit: (message, delivery) => submit(message.text, delivery),
-        finish: (messageId, outcome) => {
+        submit: (message, delivery) => submit(message, delivery),
+        finish: async (messageId, outcome) => {
           if (outcome === "refused") markHeld(sessionId, messageId, "unsent");
           else dropHeld(sessionId, messageId);
+          await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
         },
       });
     },
-    [beginQueuedSteer, dequeue, dropHeld, markHeld, sessionId, sessionsStore, submit],
+    [
+      beginQueuedSteer,
+      claimQueued,
+      dequeueClaimed,
+      dropHeld,
+      markHeld,
+      releaseQueuedClaim,
+      sessionId,
+      sessionsStore,
+      submit,
+    ],
   );
 
   // The release queue is renderer memory and the held copy is what outlives it,
@@ -308,8 +381,8 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   // the runtime now owns. Nothing else can say it — the drain runs in the
   // resident client, which has no view and no drafts.
   React.useEffect(() => {
-    for (const id of settledHeldIds(held, queue)) dropHeld(sessionId, id);
-  }, [dropHeld, held, queue, sessionId]);
+    for (const id of settledHeldIds(held, queue, durableMessageIds)) dropHeld(sessionId, id);
+  }, [dropHeld, durableMessageIds, held, queue, sessionId]);
 
   /**
    * Which decisions the transcript is already showing, and which one is left for
@@ -338,10 +411,10 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
         resolve: resolveInteraction,
         // Sent, never steered: the redirection is the next thing said, not an
         // interruption of a turn that is already stopping to be told.
-        deliver: (message) => void deliver(nextId(), message, "send"),
+        deliver: (message) => send(message, "send"),
         resolving: (id, active) => setResolving((current) => resolvingWith(current, id, active)),
       }),
-    [deliver, resolveInteraction],
+    [resolveInteraction, send],
   );
 
   const withdraw = React.useCallback(
@@ -480,22 +553,14 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
           {/* Overlay on the composer, never in its place. Ask-user cards (and
               later plans / subagent activity) stack above the input so a
               follow-up can still be typed while the card waits. */}
-          <div className="flex flex-col gap-2">
-            <PendingInteractionAnnouncement interaction={pending} />
-            {pending ? (
-              <InteractionCard
-                // Keyed so a second question opening behind the first mounts its
-                // own draft rather than inheriting another one's answers.
-                key={pending.id}
-                interaction={pending}
-                resolving={resolving.has(pending.id)}
-                focusFreeTextOnMount
-                onResolve={(submission) => answer(pending.id, submission)}
-                // Request withdrawal cancels the durable interaction. The
-                // composer separately owns turn-only interrupt.
-                onWithdraw={() => withdraw(pending.id)}
-              />
-            ) : null}
+          <ComposerInteractionStack
+            interaction={pending}
+            resolving={pending ? resolving.has(pending.id) : false}
+            onResolve={answer}
+            // Request withdrawal cancels the durable interaction. The
+            // composer separately owns turn-only interrupt.
+            onWithdraw={withdraw}
+          >
             <SessionComposer
               value={input}
               onValueChange={onInputChange}
@@ -514,7 +579,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               onSubmit={send}
               onStop={() => void interrupt()}
             />
-          </div>
+          </ComposerInteractionStack>
         </ContentColumn>
       </div>
     </div>

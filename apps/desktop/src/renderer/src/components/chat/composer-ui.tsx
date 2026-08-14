@@ -83,7 +83,8 @@ export interface SessionComposerProps {
   /** Something is attached and a model is chosen. False makes the box inert. */
   ready: boolean;
   queued: readonly QueuedMessage[];
-  onQueuedChange(next: readonly QueuedMessage[]): void;
+  /** `false` means resident delivery already owns the row; leave its UI untouched. */
+  onQueuedChange(next: readonly QueuedMessage[]): boolean | void;
   onSteerQueued(id: string): void;
   onSubmit(text: string, intent: ComposerIntent): void;
   onStop(): void;
@@ -124,7 +125,7 @@ export function SessionComposer({
     const taken = takeQueued(queued, id);
     if (!taken) return;
     editedQueueId = id;
-    onQueuedChange(taken.queue);
+    if (onQueuedChange(taken.queue) === false) return;
     // Prepending keeps whatever is already typed rather than trading one draft
     // for another — unqueue must never be a way to lose a sentence.
     onValueChange(value.trim().length > 0 ? `${taken.text}\n${value}` : taken.text);
@@ -146,7 +147,7 @@ export function SessionComposer({
             <div
               key={entry.id}
               role="group"
-              aria-label="Queued message"
+              aria-label={`Queued message: ${entry.text}`}
               className="flex min-w-0 items-center gap-1 text-xs"
             >
               <span className="min-w-0 flex-1 truncate text-muted-foreground">{entry.text}</span>
@@ -156,7 +157,7 @@ export function SessionComposer({
                     type="button"
                     size="xs"
                     variant="ghost"
-                    aria-label="Steer queued message"
+                    aria-label={`Steer queued message: ${entry.text}`}
                     onClick={() => {
                       onSteerQueued(entry.id);
                       onComposerFocusRequest?.();
@@ -170,9 +171,10 @@ export function SessionComposer({
                   type="button"
                   size="icon-xs"
                   variant="ghost"
-                  aria-label="Remove queued message"
+                  aria-label={`Remove queued message: ${entry.text}`}
                   onClick={() => {
-                    onQueuedChange(queued.filter((item) => item.id !== entry.id));
+                    if (onQueuedChange(queued.filter((item) => item.id !== entry.id)) === false)
+                      return;
                     onComposerFocusRequest?.();
                   }}
                 >
@@ -184,7 +186,7 @@ export function SessionComposer({
                       type="button"
                       size="icon-xs"
                       variant="ghost"
-                      aria-label="Queued message actions"
+                      aria-label={`Queued message actions: ${entry.text}`}
                     >
                       <DotsThreeIcon className="size-3" weight="bold" />
                     </Button>
@@ -199,10 +201,7 @@ export function SessionComposer({
                       event.preventDefault();
                     }}
                   >
-                    <DropdownMenuItem
-                      className="py-1 text-ui [&_svg:not([class*='size-'])]:size-3.5"
-                      onSelect={() => editQueued(entry.id)}
-                    >
+                    <DropdownMenuItem density="compact" onSelect={() => editQueued(entry.id)}>
                       <PencilSimpleIcon weight="fill" />
                       Edit message
                     </DropdownMenuItem>
@@ -241,7 +240,7 @@ export function SessionComposer({
               event.preventDefault();
               const taken = unqueueLast(queued);
               if (!taken) return;
-              onQueuedChange(taken.queue);
+              if (onQueuedChange(taken.queue) === false) return;
               onValueChange(taken.text);
             }
           }}

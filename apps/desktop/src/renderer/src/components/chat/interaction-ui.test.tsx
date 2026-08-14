@@ -10,7 +10,11 @@ import type { SessionInteraction } from "@volli/shared";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { InteractionCard, PendingInteractionAnnouncement } from "./interaction-ui";
+import {
+  ComposerInteractionStack,
+  InteractionCard,
+  PendingInteractionAnnouncement,
+} from "./interaction-ui";
 
 const PERMISSION_OPTIONS = [
   { id: "once", label: "Allow once", description: null },
@@ -142,20 +146,17 @@ describe("the card's controls", () => {
     expect(html).toContain("rounded-2xl");
   });
 
-  it("autofocuses only a true free-text-only prompt at the composer mount", () => {
+  it("never autofocuses a request that mounts beside the live composer", () => {
     const freeForm = renderToStaticMarkup(
-      <InteractionCard interaction={freeText()} focusFreeTextOnMount onResolve={() => undefined} />,
-    );
-    const mixed = renderToStaticMarkup(
-      <InteractionCard
-        interaction={freeText([{ id: "main", label: "main", description: null }])}
-        focusFreeTextOnMount
-        onResolve={() => undefined}
-      />,
+      <ComposerInteractionStack interaction={freeText()} onResolve={() => undefined}>
+        <textarea aria-label="Message" />
+      </ComposerInteractionStack>,
     );
 
-    expect(freeForm).toMatch(/<textarea[^>]*autofocus=""/);
-    expect(mixed).not.toContain('autofocus=""');
+    expect(freeForm).toContain('aria-label="Message"');
+    expect(freeForm).toContain('data-slot="composer-interaction-drawer"');
+    expect(freeForm).toContain('data-slot="composer-interaction-origin"');
+    expect(freeForm).not.toContain('autofocus=""');
   });
 });
 

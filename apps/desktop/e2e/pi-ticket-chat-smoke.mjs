@@ -146,7 +146,7 @@ function messageBox(page) {
 }
 
 function queuedMessageRows(page) {
-  return page.getByRole("group", { name: "Queued message", exact: true });
+  return page.getByRole("group", { name: /^Queued message:/ });
 }
 
 function queuedMessageRow(page, text) {
@@ -208,7 +208,7 @@ async function assertComposerGeometry(page, label, menu = null, { timeout } = {}
         if (!(shell instanceof HTMLElement)) return null;
         const rect = shell.getBoundingClientRect();
         const rows = Array.from(
-          shell.querySelectorAll('[role="group"][aria-label="Queued message"]'),
+          shell.querySelectorAll('[role="group"][aria-label^="Queued message:"]'),
         );
         return {
           fits:
@@ -656,7 +656,7 @@ async function runQ2OverlayScenario(page, sessionId, visualSleep) {
     const q2Row = queuedMessageRow(page, QUEUED_TEXT.q2);
     if ((await q2Row.count()) !== 1) throw new Error("q2 row is not uniquely addressable");
     const q2Actions = q2Row.getByRole("button", {
-      name: "Queued message actions",
+      name: `Queued message actions: ${QUEUED_TEXT.q2}`,
       exact: true,
     });
     await armQueueMenuProbe(q2Actions, {
@@ -717,7 +717,7 @@ async function runQ2OverlayScenario(page, sessionId, visualSleep) {
       deadline,
     });
     const q2Remove = queuedMessageRow(page, QUEUED_TEXT.q2).getByRole("button", {
-      name: "Remove queued message",
+      name: `Remove queued message: ${QUEUED_TEXT.q2}`,
       exact: true,
     });
     await q2Remove.click({ timeout: deadline.timeout("removing q2") });
@@ -770,7 +770,7 @@ async function runQ1SteerScenario(page, barrierStartedAt) {
       deadline,
     });
     const q1Steer = queuedMessageRow(page, QUEUED_TEXT.q1).getByRole("button", {
-      name: "Steer queued message",
+      name: `Steer queued message: ${QUEUED_TEXT.q1}`,
       exact: true,
     });
     const [preClickStopCount, preClickQueue, preClickSteerCount] = await Promise.all([
@@ -1194,6 +1194,9 @@ async function main() {
               );
             }
             await chatTab.click();
+            // A durable q1 must reconcile its crash-safe held copy by identity,
+            // while deleted q2 must remain absent from both the queue and box.
+            await waitForComposerState(page2, [], { value: "", timeout: 10000 });
             const rendered = await waitUntil(
               "the durable original prompt, q1 steer, and reply sentinel to render without a live adapter",
               async () => {

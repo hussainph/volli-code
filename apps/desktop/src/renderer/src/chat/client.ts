@@ -410,6 +410,8 @@ export class ChatSessionClient {
   #projectionRefresh: Promise<void> | null = null;
   #projectionQueued = false;
   #draining = false;
+  /** Queue ids owned by either an explicit persisted steer or resident drain. */
+  readonly #claimedQueued = new Set<string>();
 
   constructor(sessionId: string, deps: ChatSessionClientDeps) {
     this.sessionId = sessionId;
@@ -436,6 +438,36 @@ export class ChatSessionClient {
    */
   connect(): Promise<void> {
     return this.#open(null);
+  }
+
+  /**
+   * Stops the resident release loop from taking one queued message while the
+   * renderer first makes its crash-safe held copy durable.
+   */
+  claimQueued(id: string): boolean {
+    const queued = this.#slice()?.queue.some((entry) => entry.id === id) ?? false;
+    if (!queued || this.#claimedQueued.has(id)) return false;
+    this.#claimedQueued.add(id);
+    return true;
+  }
+
+  /** Hands an unconsumed claim back to the ordinary ordered release loop. */
+  releaseQueuedClaim(id: string): void {
+    if (!this.#claimedQueued.delete(id)) return;
+    void this.#drain();
+  }
+
+  /**
+   * Consumes a claim and its queue row in one synchronous turn, before an
+   * explicit steer is submitted.
+   */
+  dequeueClaimed(id: string): boolean {
+    if (!this.#claimedQueued.has(id)) return false;
+    const queued = this.#slice()?.queue.some((entry) => entry.id === id) ?? false;
+    if (!queued) return false;
+    this.#claimedQueued.delete(id);
+    this.#writes().dequeue(this.sessionId, id);
+    return true;
   }
 
   /**
@@ -521,19 +553,19 @@ export class ChatSessionClient {
    * which is state and not a result. See {@link MessageDelivery} for why two
    * kinds of failure are not one.
    */
-  async submit(text: string, delivery: ChatMessageDelivery): Promise<MessageDelivery> {
+  async submit(message: QueuedMessage, delivery: ChatMessageDelivery): Promise<MessageDelivery> {
     const slice = this.#slice();
-    const body = text.trim();
+    const body = message.text.trim();
     if (slice === undefined || !isDeliverable(slice) || body.length === 0) return "refused";
     try {
-      const message = {
-        id: this.#newCommandId(),
+      const wireMessage = {
+        id: message.id,
         role: "user" as const,
         parts: [{ type: "text" as const, text: body }],
       };
-      const command: ChatCommand = { kind: "message.submit", message, delivery };
+      const command: ChatCommand = { kind: "message.submit", message: wireMessage, delivery };
       const delivered = await this.#rpc.session.command.mutate({
-        commandId: this.#newCommandId(),
+        commandId: message.id,
         sessionId: this.sessionId,
         command,
       });
@@ -787,6 +819,10 @@ export class ChatSessionClient {
         const slice = this.#slice();
         // The Session can close mid-release; the words went with it.
         if (slice === undefined) return;
+        // An explicit steer freezes the whole ordered queue while its selected
+        // row becomes durable. Releasing an earlier neighbor here would start
+        // a different turn and make the selected row steer the wrong work.
+        if (this.#claimedQueued.size > 0) return;
         const next = nextRelease(slice.queue, {
           working: slice.lifecycle === "working",
           // A failure is explicit recovery, not a reason to keep feeding a
@@ -794,8 +830,15 @@ export class ChatSessionClient {
           ready: slice.lifecycle !== "error" && isDeliverable(slice),
         });
         if (next === null) return;
-        this.#writes().dequeue(this.sessionId, next.id);
-        await this.submit(next.text, "queue");
+        this.#claimedQueued.add(next.id);
+        let outcome: MessageDelivery;
+        try {
+          outcome = await this.submit(next, "queue");
+          if (outcome !== "refused") this.#writes().dequeue(this.sessionId, next.id);
+        } finally {
+          this.#claimedQueued.delete(next.id);
+        }
+        if (outcome === "refused") return;
       }
     } finally {
       this.#draining = false;
