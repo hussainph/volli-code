@@ -44,7 +44,31 @@ import { inspectPiModelAccess } from "./model-access";
 import { piOwnedModels } from "./models";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
 import { createAskUserTool, createPiTools } from "./tools";
-import { attentionReasonFor, classifyAssistantMessage, recoveryRefFor } from "./transcript";
+import {
+  attentionReasonFor,
+  classifyAssistantMessage,
+  isTransientTransportFailure,
+  recoveryRefFor,
+  sanitizeDiagnostic,
+} from "./transcript";
+
+/**
+ * How hard a dropped socket is chased before the failure becomes the user's.
+ *
+ * Behavioral, not durable: nothing derived from these numbers is written to
+ * history, so retuning them changes only how long recovery takes and how many
+ * attempts the exhaustion message names.
+ */
+const AUTO_RETRY_LIMIT = 10;
+const AUTO_RETRY_BASE_MS = 500;
+const AUTO_RETRY_CEILING_MS = 8_000;
+const AUTO_RETRY_JITTER_MS = 100;
+
+/** Exponential backoff to a ceiling, jittered so ten Sessions do not reconnect in lockstep. */
+export function autoRetryDelayMs(attempt: number): number {
+  const backoff = Math.min(AUTO_RETRY_BASE_MS * 2 ** attempt, AUTO_RETRY_CEILING_MS);
+  return backoff + Math.random() * AUTO_RETRY_JITTER_MS;
+}
 
 export interface PiRuntimeHostOptions {
   /** Directory that owns every attachment's Pi JSONL recovery sidecar. */
@@ -65,6 +89,11 @@ export interface PiRuntimeHostOptions {
    * `ScopedExecutionEnv` is exactly that and is still built and tested for it.
    */
   executionEnvFactory?: (workspacePath: string) => Promise<ExecutionEnv>;
+  /**
+   * The wait before an auto-retried attempt, by zero-based attempt number.
+   * Injectable so deterministic tests need not spend the real backoff.
+   */
+  retryBackoffMs?: (attempt: number) => number;
 }
 
 /** Everything {@link attachSession} needs, with the default already chosen. */
@@ -73,6 +102,7 @@ interface PiRuntimeHost {
   models: Models;
   now: () => number;
   executionEnvFactory: (workspacePath: string) => Promise<ExecutionEnv>;
+  retryBackoffMs: (attempt: number) => number;
 }
 
 /**
@@ -88,6 +118,7 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
     models: options.models ?? piOwnedModels(),
     now: options.now ?? Date.now,
     executionEnvFactory: options.executionEnvFactory ?? piExecutionEnv,
+    retryBackoffMs: options.retryBackoffMs ?? autoRetryDelayMs,
   };
   return {
     inspectModelAccess: (input) => inspectPiModelAccess(host.models, host.now, input),
@@ -545,6 +576,20 @@ async function attachSession(
      * pressed stop that their Session broke.
      */
     let interrupting = false;
+    /**
+     * The transport attempts this turn has already spent, and whether the turn
+     * is mid-recovery.
+     *
+     * The budget belongs to the turn, not to the attachment: a turn that starts
+     * for its own reason — a new message, a manual Retry — gets a whole one,
+     * while a turn resumed in place carries on spending the same one, so a
+     * connection that will never hold cannot be chased forever.
+     */
+    let autoRetryAttempts = 0;
+    let autoRetryPending = false;
+    let resumingTurn = false;
+    /** Set only while a backoff is being waited out; see {@link interruptTurn}. */
+    let cancelBackoff: (() => void) | undefined;
     type PendingMessageDelivery = {
       commandId: string | null;
       operation: "message.submit";
@@ -680,22 +725,89 @@ async function attachSession(
       // thresholds and `ask` are then unreachable rather than quietly permissive.
       ...(spec.authority === undefined ? {} : { beforeToolCall: gateToolCalls(spec.authority) }),
     });
+    // Interrupting, closing and cancelling the attachment all arrive here, which
+    // is why one flag answers for all three downstream.
     interruptTurn = () => {
       interrupting = true;
+      cancelBackoff?.();
       agent.abort();
     };
     agent.steeringMode = "one-at-a-time";
     agent.followUpMode = "one-at-a-time";
 
+    /** A wait the turn can be taken out of, rather than one it has to sit through. */
+    const waitBeforeRetry = async (ms: number): Promise<void> => {
+      await new Promise<void>((wake) => {
+        const timer = setTimeout(wake, ms);
+        cancelBackoff = () => {
+          clearTimeout(timer);
+          wake();
+        };
+      });
+      cancelBackoff = undefined;
+    };
+
+    /**
+     * Run the failed attempt again without re-delivering anything the user said:
+     * the assistant message Pi settled as a failure is dropped, and the run
+     * continues from the user or tool-result message it answered.
+     */
+    const retryFailedTurn = async (commandId: string | null): Promise<DeliveryOutcome> => {
+      const messages = [...agent.state.messages];
+      const tail = messages.at(-1);
+      if (tail?.role === "assistant" && hasFailedStopReason(tail as AssistantMessage)) {
+        messages.pop();
+        agent.state.messages = messages;
+      } else if (tail?.role !== "user" && tail?.role !== "toolResult") {
+        return {
+          kind: "rejected",
+          reason: "retry-unavailable",
+          message: "There is no failed Pi turn to retry.",
+        };
+      }
+      pendingRunDelivery = {
+        commandId,
+        operation: "executor.retry" as const,
+        delivery: "retry" as const,
+      };
+      await agent.continue();
+      return { kind: "delivered", delivery: "retry" };
+    };
+
+    /**
+     * Spend the turn's remaining transport attempts, from the command boundary
+     * the failed run was started at.
+     *
+     * Not from the callback that decided to retry: Pi is still finishing that run
+     * while its `agent_end` listeners are awaited, and it refuses to begin a
+     * second one until they settle. The rejection arm of the retry cannot be
+     * reached from here — a turn only lands in this loop by failing, which leaves
+     * exactly the failed assistant message it needs to drop as the tail.
+     */
+    const drainAutoRetries = async (): Promise<void> => {
+      while (autoRetryPending) {
+        autoRetryPending = false;
+        resumingTurn = true;
+        await retryFailedTurn(null);
+      }
+    };
+
     unsubscribe = agent.subscribe(async (event) => {
       if (event.type === "agent_start") {
-        turnId = randomUUID();
+        // A resumed attempt is the same turn continuing, so it neither starts one
+        // nor refreshes the budget it is spending.
+        const resumed = resumingTurn;
+        resumingTurn = false;
         failure = undefined;
         interrupting = false;
         activityByToolCallId.clear();
-        await commitObservation(
-          await persistObservation({ kind: "turn", state: "started", turnId }),
-        );
+        if (!resumed) {
+          turnId = randomUUID();
+          autoRetryAttempts = 0;
+          await commitObservation(
+            await persistObservation({ kind: "turn", state: "started", turnId }),
+          );
+        }
         const delivery = pendingRunDelivery;
         pendingRunDelivery = undefined;
         if (await persistAcceptedDelivery(delivery, turnId)) {
@@ -809,15 +921,32 @@ async function attachSession(
       // was asked to. Neither is an unrecoverable failure, and neither deserves
       // a banner offering no way out of a state the user chose.
       if (failure.reason !== "aborted" && !interrupting) {
-        const reason = attentionReasonFor(failure);
-        const raised = await persistObservation({
-          kind: "attention",
-          state: "raised",
-          reason,
-          message: failure.message,
-        });
-        activeAttentionReasons.add(reason);
-        await commitObservation(raised);
+        // A socket that died mid-stream is not a decision anyone has to make, so
+        // the turn stays live over the wait and the attempt that follows: no
+        // completion, no interruption, and a follow-up typed meanwhile queues
+        // against the same run exactly as it would mid-stream. What survives the
+        // budget is reported as it always was.
+        if (isTransientTransportFailure(failure) && autoRetryAttempts < AUTO_RETRY_LIMIT) {
+          autoRetryAttempts += 1;
+          await waitBeforeRetry(host.retryBackoffMs(autoRetryAttempts - 1));
+          if (!interrupting) {
+            autoRetryPending = true;
+            return;
+          }
+        } else {
+          const reason = attentionReasonFor(failure);
+          const raised = await persistObservation({
+            kind: "attention",
+            state: "raised",
+            reason,
+            message:
+              autoRetryAttempts === 0
+                ? failure.message
+                : sanitizeDiagnostic(`${failure.message} (after ${autoRetryAttempts} retries)`),
+          });
+          activeAttentionReasons.add(reason);
+          await commitObservation(raised);
+        }
       }
       await commitObservation(
         await persistObservation({ kind: "turn", state: "interrupted", turnId }),
@@ -826,6 +955,7 @@ async function attachSession(
 
     const onAbort = (): void => {
       cancelled = true;
+      autoRetryPending = false;
       interruptTurn();
       // The active submit promise owns any observer failure from this same run.
       /* v8 ignore next -- abort-listener failures are intentionally suppressed */
@@ -871,6 +1001,7 @@ async function attachSession(
           message,
         };
         await agent.prompt(message);
+        await drainAutoRetries();
         const failed = observationDelivery.consumeFailure();
         if (failed !== undefined) {
           throw failed;
@@ -949,28 +1080,12 @@ async function attachSession(
             message: "Pi is already running.",
           };
         }
-        const messages = [...agent.state.messages];
-        const tail = messages.at(-1);
-        if (tail?.role === "assistant" && hasFailedStopReason(tail as AssistantMessage)) {
-          messages.pop();
-          agent.state.messages = messages;
-        } else if (tail?.role !== "user" && tail?.role !== "toolResult") {
-          return {
-            kind: "rejected",
-            reason: "retry-unavailable",
-            message: "There is no failed Pi turn to retry.",
-          };
-        }
         observationDelivery.consumeFailure();
-        pendingRunDelivery = {
-          commandId: commandId ?? null,
-          operation: "executor.retry" as const,
-          delivery: "retry" as const,
-        };
-        await agent.continue();
+        const outcome = await retryFailedTurn(commandId ?? null);
+        await drainAutoRetries();
         const failed = observationDelivery.consumeFailure();
         if (failed !== undefined) throw failed;
-        return { kind: "delivered", delivery: "retry" };
+        return outcome;
       },
 
       async interrupt(): Promise<void> {
@@ -981,6 +1096,10 @@ async function attachSession(
       async close(): Promise<void> {
         if (closed) return;
         closed = true;
+        // Withdrawn attachments retry nothing. Cleared rather than tested for at
+        // the drain: a decision to retry that was taken while this ran would
+        // otherwise start a Pi run against an environment already cleaned up.
+        autoRetryPending = false;
         spec.signal?.removeEventListener("abort", onAbort);
         interruptTurn();
         await agent.waitForIdle();

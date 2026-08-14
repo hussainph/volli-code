@@ -665,12 +665,16 @@ function providerRecovery(input: {
  *   `recover` does. A rate limit gets one because the wait is the whole fix; the
  *   provider's own time is shown when it sent one, and an absent one stays
  *   absent rather than becoming a guess.
+ * - **Retry of the run** — `adapter_unrecoverable`. The kind is named for having
+ *   no *automatic* recovery, and by the time it is raised the runtime has spent
+ *   every attempt it makes on its own; the run itself is still there to try
+ *   again, and re-running it is not the same act as re-establishing a
+ *   connection that never dropped.
  * - **Nothing** — `context_limit_reached` (compaction does not exist yet, so the
  *   only true answer is a new Session); `quota_exhausted` (a spent allowance is
  *   not retryable and no local setting refills it); `partial_turn_interrupted`
  *   (a stopped turn left the composer usable — resending is typing, not
- *   recovering); `adapter_unrecoverable` (the kind is named for having no
- *   recovery); `input_required` and `permission_required` (the answer lives on
+ *   recovering); `input_required` and `permission_required` (the answer lives on
  *   the interaction card, which outranks this row entirely).
  */
 function attentionBlocker(
@@ -724,7 +728,7 @@ function attentionBlocker(
     case "partial_turn_interrupted":
       return { message: "Turn interrupted", detail, tone: "waiting", action: null };
     case "adapter_unrecoverable":
-      return { message: "Session stopped", detail, tone: "error", action: null };
+      return { message: "Session stopped", detail, tone: "error", action: retryRuntime };
     case "input_required":
       return { message: "Waiting for an answer", detail, tone: "waiting", action: null };
     case "permission_required":
