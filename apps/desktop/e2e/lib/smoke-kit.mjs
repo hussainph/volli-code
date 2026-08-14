@@ -161,12 +161,22 @@ export function launchEnvFor(dbPath, extraEnv = {}) {
 }
 
 /**
+ * `VOLLI_SMOKE_APP_BINARY` points every smoke at a PACKAGED app binary
+ * (`…/Volli.app/Contents/MacOS/Volli`) instead of the dev Electron + source
+ * dir — the H2 lane. Electron itself honours `--user-data-dir`, so profile
+ * isolation carries over; `VOLLI_DB_PATH` does NOT (dev-gated in
+ * `main/index.ts`), so in packaged mode the DB lands at `<userData>/volli.db`
+ * — a smoke that reads `dbPath` directly cannot run in this mode unchanged.
+ *
  * @param {{dbPath:string, userDataDir:string, extraEnv?:Record<string,string>}} opts
  */
 export function launch({ dbPath, userDataDir, extraEnv = {} }) {
+  const packagedBinary = process.env.VOLLI_SMOKE_APP_BINARY;
   return _electron.launch({
-    executablePath: ELECTRON,
-    args: [APP_DIR, `--user-data-dir=${userDataDir}`],
+    executablePath: packagedBinary ?? ELECTRON,
+    args: packagedBinary
+      ? [`--user-data-dir=${userDataDir}`]
+      : [APP_DIR, `--user-data-dir=${userDataDir}`],
     env: launchEnvFor(dbPath, extraEnv),
   });
 }

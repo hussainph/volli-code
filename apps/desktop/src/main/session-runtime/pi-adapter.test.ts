@@ -14,8 +14,10 @@ import {
   type ModelAccessSnapshot,
   type ModelSelectionOutcome,
   type RuntimeAskRequest,
+  type RuntimeAskUserRequest,
   type RuntimeAttachmentHandle,
   type RuntimeObservation,
+  type SessionInteractionResolution,
   type SessionRuntimeSpec,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
@@ -65,9 +67,15 @@ class RecordingSink implements ObservationSink {
   readonly observations: RuntimeObservation[] = [];
   /** A Session write that will not commit — set to fail every emit from here on. */
   emitFailure: unknown = null;
+  /**
+   * Runs while a fact is committing, which is the only place an ordering claim
+   * can be read: "before" and "after" are the same tick once the emit resolves.
+   */
+  beforeEmit: ((observation: RuntimeObservation) => Promise<void>) | null = null;
 
   async emit(observation: RuntimeObservation): Promise<void> {
     this.observations.push(observation);
+    await this.beforeEmit?.(observation);
     if (this.emitFailure !== null) throw this.emitFailure;
   }
 }
@@ -235,6 +243,36 @@ function ask(
   );
 }
 
+/**
+ * The interaction id a model's own question is asked under, spelled out because
+ * it is durable — and deliberately sharing a tool call id with the escalation
+ * above, which is the collision the two prefixes exist to prevent.
+ */
+const ASK_USER_INTERACTION_ID = "ask-user:call-7";
+
+const ASK_USER_QUESTION = "Spike it, or migrate the whole thing?";
+
+function askUserRequest(overrides: Partial<RuntimeAskUserRequest> = {}): RuntimeAskUserRequest {
+  return { toolCallId: "call-7", question: ASK_USER_QUESTION, ...overrides };
+}
+
+/** How one model question ended. */
+type AskUserOutcome = { answered: SessionInteractionResolution } | { failed: string };
+
+/** Ask the way the ask tool does, folding both settlements exactly as it does. */
+function askUser(
+  runtime: FakeRuntime,
+  overrides: Partial<RuntimeAskUserRequest> = {},
+  signal: AbortSignal = new AbortController().signal,
+): Promise<AskUserOutcome> {
+  const port = runtime.spec.askUser;
+  if (port === undefined) throw new Error("The binding wired no ask-user port");
+  return port(askUserRequest(overrides), signal).then(
+    (answered): AskUserOutcome => ({ answered }),
+    (error: unknown): AskUserOutcome => ({ failed: errorMessage(error) }),
+  );
+}
+
 /** What a withdrawn question settles as, whoever stopped asking it. */
 const WITHDRAWN: AskOutcome = { failed: "The question was withdrawn before anyone answered it." };
 
@@ -256,6 +294,7 @@ function answerCommand(
   interactionId: string,
   optionIds: readonly string[],
   commandId = "command-answer",
+  response: string | null = null,
 ): HarnessCommand {
   return {
     kind: "interaction.resolve",
@@ -272,7 +311,7 @@ function answerCommand(
       multiple: false,
       native: { id: null, detail: null },
     },
-    resolution: { optionIds, response: null },
+    resolution: { optionIds, response },
   };
 }
 
@@ -916,9 +955,105 @@ describe("Pi native adapter escalation", () => {
 
     expect(receipt).toMatchObject({ commandId: "command-answer", status: "accepted" });
     expect(await answer).toEqual({ answered: "allow" });
-    // No `interaction.resolved` observation: the Engine writes that fact itself
-    // from the receipt above, and a second one here would record one answer twice.
-    expect(sink.observations).toHaveLength(1);
+    // The answer is announced, and it has to be: the Engine writes
+    // `interaction.resolved` from THIS observation and from nowhere else. The
+    // receipt above is a receipt, not a fact — `projectSession` folds it into
+    // `receipts` and never reads its `result` — so a silent adapter would settle
+    // the call, resume the turn, and leave the question active forever.
+    expect(sink.observations[1]).toEqual({
+      kind: "interaction",
+      state: "resolved",
+      occurredAt: 1001,
+      interactionId: ASK_INTERACTION_ID,
+      resolution: { optionIds: ["once"], response: null },
+    });
+    expect(sink.observations).toHaveLength(2);
+  });
+
+  it("records the answer before it settles the call that was waiting on it", async () => {
+    const { binding, runtime, sink } = await attached();
+
+    const answer = ask(runtime);
+    await flush();
+    // Read at the moment the fact commits: the ask must still be unsettled
+    // there, mirroring `#ask`, which refuses to park on a question the Session
+    // could not record. An answer reported as delivered before it is a fact
+    // would resume the turn on a decision history has no account of.
+    let settledDuringEmit: AskOutcome | "unsettled" = "unsettled";
+    let resolvedDuringEmit = false;
+    sink.beforeEmit = async (observation) => {
+      if (observation.kind !== "interaction" || observation.state !== "resolved") return;
+      resolvedDuringEmit = true;
+      settledDuringEmit = await Promise.race([
+        answer,
+        flush().then((): "unsettled" => "unsettled"),
+      ]);
+    };
+
+    await binding.dispatch(answerCommand(ASK_INTERACTION_ID, ["once"]));
+
+    expect(resolvedDuringEmit).toBe(true);
+    expect(settledDuringEmit).toBe("unsettled");
+    expect(await answer).toEqual({ answered: "allow" });
+  });
+
+  it("keeps a question answerable when the answer could not be recorded", async () => {
+    const { binding, runtime, sink } = await attached();
+
+    const answer = ask(runtime);
+    await flush();
+    sink.emitFailure = new Error("the resolution never committed");
+    const failed = await binding.dispatch(answerCommand(ASK_INTERACTION_ID, ["once"]));
+
+    // Rejected, not accepted: the turn must not resume on a decision the Session
+    // has no record of. And nothing was claimed, so the question is still parked
+    // and still active — which is the whole reason the claim happens after the
+    // emit. Claiming first would leave the ask unparked AND unrecorded, and the
+    // retry below would meet PI_INTERACTION_UNKNOWN with the turn blocked behind
+    // a card nothing could ever answer.
+    expect(failed).toMatchObject({
+      status: "rejected",
+      code: "PI_INTERACTION_NOT_RECORDED",
+      detail: expect.stringContaining("the resolution never committed"),
+    });
+
+    sink.emitFailure = null;
+    const retried = await binding.dispatch(
+      answerCommand(ASK_INTERACTION_ID, ["once"], "command-retry"),
+    );
+
+    expect(retried).toMatchObject({ commandId: "command-retry", status: "accepted" });
+    expect(await answer).toEqual({ answered: "allow" });
+  });
+
+  it("reports an answer that reached nobody when the question was withdrawn mid-record", async () => {
+    const { binding, runtime, sink } = await attached();
+    const turn = new AbortController();
+
+    const answer = ask(runtime, {}, turn.signal);
+    await flush();
+    // The narrow race the post-emit claim leaves open: the fact commits, and the
+    // turn gives up before the parked call can be settled. History keeps the
+    // resolution, which is true — a person did answer — but the runtime is no
+    // longer waiting, so the receipt says the decision reached nobody.
+    sink.beforeEmit = async (observation) => {
+      if (observation.kind !== "interaction" || observation.state !== "resolved") return;
+      turn.abort();
+      await flush();
+    };
+
+    const receipt = await binding.dispatch(answerCommand(ASK_INTERACTION_ID, ["once"]));
+
+    expect(receipt).toMatchObject({ status: "rejected", code: "PI_INTERACTION_UNKNOWN" });
+    expect(await answer).toEqual(WITHDRAWN);
+    // Both facts are announced, and which lands first is deliberately not
+    // pinned: two independent chains reach the ledger here and the interleave is
+    // unspecified. What must hold is that neither is lost — history says a
+    // person answered AND that the runtime stopped waiting, which is what
+    // actually happened.
+    expect(
+      sink.observations.map((one) => one.kind === "interaction" && one.state).toSorted(),
+    ).toEqual(["cancelled", "opened", "resolved"]);
   });
 
   it("reads a rejected permission back as the refusal it already was", async () => {
@@ -1094,6 +1229,287 @@ describe("Pi native adapter escalation", () => {
     // The card is stranded either way and that is the sink's failure to report.
     // What release must never do is hang on a promise nothing will settle.
     expect(await answer).toEqual(WITHDRAWN);
+    expect(runtime.closes).toBe(1);
+  });
+});
+
+/**
+ * The model's own question, which shares the parking machinery with an
+ * escalation and shares nothing else: its options are the model's, its answer is
+ * a tool result, and the two live under ids that cannot collide.
+ */
+describe("Pi native adapter model questions", () => {
+  it("opens the model's question as a card of the model's own options", async () => {
+    const { binding, runtime, sink } = await attached();
+
+    const answer = askUser(runtime, {
+      options: [
+        { id: "spike", label: "Spike first" },
+        { id: "migration", label: "Full migration", description: "Two more days" },
+      ],
+      multiple: true,
+    });
+    await flush();
+
+    expect(sink.observations).toEqual([
+      {
+        kind: "interaction",
+        state: "opened",
+        occurredAt: 1000,
+        interaction: {
+          // Spelled out rather than matched on shape, and never the escalation's
+          // `ask:` — this is a second durable derivation and the Engine mints
+          // `pi:interaction:<attachment>:ask-user:call-7:opened` from it, so a
+          // rename would not fail here, it would duplicate every question a
+          // Session ever asked.
+          id: "ask-user:call-7",
+          kind: "question",
+          title: ASK_USER_QUESTION,
+          detail: null,
+          options: [
+            { id: "spike", label: "Spike first", description: null },
+            { id: "migration", label: "Full migration", description: "Two more days" },
+          ],
+          multiple: true,
+          // Declared even though the flat fields above already say the same
+          // choice, because one thing has no flat home and it is the one the
+          // model does not get the last word on: a person choosing between two
+          // things it imagined must be able to say a third. `custom` lives on a
+          // prompt, so a question without prompts would durably say otherwise.
+          prompts: [
+            {
+              id: "prompt:0",
+              label: ASK_USER_QUESTION,
+              detail: null,
+              options: [
+                { id: "spike", label: "Spike first", description: null },
+                { id: "migration", label: "Full migration", description: "Two more days" },
+              ],
+              multiple: true,
+              custom: true,
+            },
+          ],
+          native: binding.native,
+        },
+      },
+    ]);
+
+    const receipt = await binding.dispatch(
+      answerCommand(ASK_USER_INTERACTION_ID, ["spike"], "command-answer", "and time-box it"),
+    );
+
+    expect(receipt).toMatchObject({ commandId: "command-answer", status: "accepted" });
+    // Handed back unread. The model wrote the question and every option id in
+    // it, so nothing between the card and the tool is entitled to decide what
+    // one of them meant — `askChoice` is the escalation's reading, and applying
+    // it here would turn an option a model happened to call `reject` into a
+    // refusal of something.
+    expect(await answer).toEqual({
+      answered: { optionIds: ["spike"], response: "and time-box it" },
+    });
+  });
+
+  it("asks for free text when the model offered nothing to choose between", async () => {
+    const { runtime, sink } = await attached();
+
+    void askUser(runtime);
+    await flush();
+
+    expect(sink.observations[0]).toMatchObject({
+      state: "opened",
+      interaction: {
+        options: [],
+        multiple: false,
+        prompts: [
+          {
+            id: "prompt:0",
+            label: ASK_USER_QUESTION,
+            detail: null,
+            options: [],
+            multiple: false,
+            custom: true,
+          },
+        ],
+      },
+    });
+  });
+
+  it("lets the model close the free-text answer when a listed option is required", async () => {
+    const { runtime, sink } = await attached();
+
+    void askUser(runtime, {
+      options: [{ id: "spike", label: "Spike first" }],
+      allowOther: false,
+    });
+    await flush();
+
+    expect(sink.observations[0]).toMatchObject({
+      state: "opened",
+      interaction: { prompts: [{ custom: false }] },
+    });
+  });
+
+  it("keeps free text open on a question with nothing to choose between", async () => {
+    const { runtime, sink } = await attached();
+
+    // The model's `false` is overruled here and only here: a closed question
+    // offering nothing asks for an answer no press can give, so the card would
+    // be one nobody could ever get past.
+    void askUser(runtime, { allowOther: false });
+    await flush();
+
+    expect(sink.observations[0]).toMatchObject({
+      state: "opened",
+      interaction: { options: [], prompts: [{ custom: true }] },
+    });
+  });
+
+  it("keeps the two kinds of question apart when one call raises both ids", async () => {
+    const { binding, runtime, sink } = await attached();
+
+    const escalation = ask(runtime);
+    const question = askUser(runtime);
+    await flush();
+
+    expect(
+      sink.observations.map(
+        (one) => one.kind === "interaction" && one.state === "opened" && one.interaction.id,
+      ),
+    ).toEqual([ASK_INTERACTION_ID, ASK_USER_INTERACTION_ID]);
+
+    await binding.dispatch(answerCommand(ASK_USER_INTERACTION_ID, ["spike"], "command-question"));
+    await binding.dispatch(answerCommand(ASK_INTERACTION_ID, ["once"], "command-escalation"));
+
+    // Both settle, and each settles as its own kind: one prefix reused for both
+    // would have let the first answer end the wrong wait.
+    expect(await question).toEqual({ answered: { optionIds: ["spike"], response: null } });
+    expect(await escalation).toEqual({ answered: "allow" });
+  });
+
+  it("records the model's answer before it settles the call that was waiting on it", async () => {
+    const { binding, runtime, sink } = await attached();
+
+    const answer = askUser(runtime);
+    await flush();
+    let settledDuringEmit: AskUserOutcome | "unsettled" = "unsettled";
+    let resolvedDuringEmit = false;
+    sink.beforeEmit = async (observation) => {
+      if (observation.kind !== "interaction" || observation.state !== "resolved") return;
+      resolvedDuringEmit = true;
+      settledDuringEmit = await Promise.race([
+        answer,
+        flush().then((): "unsettled" => "unsettled"),
+      ]);
+    };
+
+    await binding.dispatch(answerCommand(ASK_USER_INTERACTION_ID, ["spike"]));
+
+    expect(resolvedDuringEmit).toBe(true);
+    expect(settledDuringEmit).toBe("unsettled");
+    expect(await answer).toEqual({ answered: { optionIds: ["spike"], response: null } });
+  });
+
+  it("keeps the model's question answerable when the answer could not be recorded", async () => {
+    const { binding, runtime, sink } = await attached();
+
+    const answer = askUser(runtime);
+    await flush();
+    sink.emitFailure = new Error("the resolution never committed");
+    const failed = await binding.dispatch(answerCommand(ASK_USER_INTERACTION_ID, ["spike"]));
+
+    expect(failed).toMatchObject({
+      status: "rejected",
+      code: "PI_INTERACTION_NOT_RECORDED",
+      detail: expect.stringContaining("the resolution never committed"),
+    });
+
+    sink.emitFailure = null;
+    const retried = await binding.dispatch(
+      answerCommand(ASK_USER_INTERACTION_ID, ["spike"], "command-retry"),
+    );
+
+    expect(retried).toMatchObject({ commandId: "command-retry", status: "accepted" });
+    expect(await answer).toEqual({ answered: { optionIds: ["spike"], response: null } });
+  });
+
+  it("reports a model answer that reached nobody when the question was withdrawn mid-record", async () => {
+    const { binding, runtime, sink } = await attached();
+    const turn = new AbortController();
+
+    const answer = askUser(runtime, {}, turn.signal);
+    await flush();
+    sink.beforeEmit = async (observation) => {
+      if (observation.kind !== "interaction" || observation.state !== "resolved") return;
+      turn.abort();
+      await flush();
+    };
+
+    const receipt = await binding.dispatch(answerCommand(ASK_USER_INTERACTION_ID, ["spike"]));
+
+    expect(receipt).toMatchObject({ status: "rejected", code: "PI_INTERACTION_UNKNOWN" });
+    expect(await answer).toEqual(WITHDRAWN);
+  });
+
+  it("never parks the model on a question the Session could not record", async () => {
+    const { binding, runtime, sink } = await attached();
+    sink.emitFailure = new Error("the question never committed");
+
+    // A rejection reaches the model as a failed tool call, which is the honest
+    // account of a question nobody was shown.
+    expect(await askUser(runtime)).toEqual({ failed: "the question never committed" });
+
+    sink.emitFailure = null;
+    const receipt = await binding.dispatch(answerCommand(ASK_USER_INTERACTION_ID, ["spike"]));
+
+    expect(receipt).toMatchObject({ status: "rejected", code: "PI_INTERACTION_UNKNOWN" });
+  });
+
+  it("withdraws the model's question when the turn it belongs to stops waiting", async () => {
+    const { binding, runtime, sink } = await attached();
+    const turn = new AbortController();
+
+    const answer = askUser(runtime, {}, turn.signal);
+    await flush();
+    turn.abort();
+    await flush();
+
+    expect(sink.observations.at(-1)).toEqual(cancelled(1001, ASK_USER_INTERACTION_ID));
+    expect(await answer).toEqual(WITHDRAWN);
+    const late = await binding.dispatch(answerCommand(ASK_USER_INTERACTION_ID, ["spike"]));
+    expect(late).toMatchObject({ status: "rejected", code: "PI_INTERACTION_UNKNOWN" });
+  });
+
+  it("stops asking a model question the Session cancelled, without recording it twice", async () => {
+    const { binding, runtime, sink } = await attached();
+
+    const answer = askUser(runtime);
+    await flush();
+    await binding.withdrawInteraction?.(ASK_USER_INTERACTION_ID);
+    await binding.withdrawInteraction?.(ASK_USER_INTERACTION_ID);
+
+    expect(await answer).toEqual(WITHDRAWN);
+    expect(sink.observations).toHaveLength(1);
+    expect(sink.observations[0]).toMatchObject({ state: "opened" });
+  });
+
+  it("withdraws both kinds of parked question before release stops admitting facts", async () => {
+    const { binding, runtime, sink } = await attached();
+
+    const escalation = ask(runtime);
+    const question = askUser(runtime);
+    await flush();
+    await binding.release("requested");
+
+    // Both maps are drained, and drained before the released flag: `#observe`
+    // admits nothing after it, so a card cancelled a line later would stay up
+    // with nothing left alive to answer it.
+    expect(
+      sink.observations.map(
+        (one) => one.kind === "interaction" && one.state === "cancelled" && one.interactionId,
+      ),
+    ).toEqual([false, false, ASK_INTERACTION_ID, ASK_USER_INTERACTION_ID]);
+    expect(await escalation).toEqual(WITHDRAWN);
+    expect(await question).toEqual(WITHDRAWN);
     expect(runtime.closes).toBe(1);
   });
 });
