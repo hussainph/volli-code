@@ -1306,6 +1306,7 @@ app.whenReady().then(async () => {
       // claiming reporting that isn't happening.
       try {
         await regenerateHarnessRuntime();
+        console.info("[volli] harness runtime ready");
       } catch (error) {
         console.error("[volli] failed to generate harness wrappers:", errorMessage(error));
       }
