@@ -29,11 +29,14 @@ describe("renderProjection — line-class ops", () => {
 
   it("grows the line box for heading levels whose text outgrows it", () => {
     const h1 = decorationsFor("# a", [{ kind: "line-class", line: 1, className: "volli-md-h1" }]);
+    const h3 = decorationsFor("### a", [{ kind: "line-class", line: 1, className: "volli-md-h3" }]);
     const h4 = decorationsFor("#### a", [
       { kind: "line-class", line: 1, className: "volli-md-h4" },
     ]);
     expect(h1[0].options.lineHeight).toBeGreaterThan(1);
-    // h4–h6 render at (or below) the body size — the default line box already fits.
+    // h3 renders AT the body step and h4–h6 below it — the default line box
+    // already fits them, so only h1 and h2 ask Monaco for more room.
+    expect(h3[0].options.lineHeight).toBeUndefined();
     expect(h4[0].options.lineHeight).toBeUndefined();
   });
 

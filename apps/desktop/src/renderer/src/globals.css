@@ -47,23 +47,14 @@
   --background: #1c1310;
   --card: #211815;
   --popover: #251b18;
-  --secondary: #271d1a;
   --muted: #271d1a;
   --accent: #2d2220;
   --sidebar: #211815;
   --foreground: #e8e4e2;
-  --card-foreground: #e8e4e2;
-  --popover-foreground: #e8e4e2;
-  --secondary-foreground: #e8e4e2;
   --muted-foreground: #bdbab8;
-  --accent-foreground: #e8e4e2;
   --sidebar-foreground: #d0cdcb;
-  --sidebar-accent: #2d2220;
-  --sidebar-accent-foreground: #e8e4e2;
   --border: #312623;
-  --border-hover: #3c312c;
   --border-strong: #423632;
-  --input: #312623;
   --sidebar-border: #2d241f;
   /* The accent, derived from the canvas's primary stop on the SAME vibrancy
    curve the gradient rides — a near-neutral wash still yields near-neutral
@@ -82,14 +73,22 @@
    `--primary`; anything you read takes this. */
   --primary-text: #fc9a74;
   --ring: #d37550;
-  --sidebar-primary: #d37550;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-ring: #d37550;
-  /* Hue-locked: the semantic escape list never follows the canvas, or a red
-   canvas would make “delete” indistinguishable from “primary”. */
-  --destructive: #e5484d;
-  --destructive-foreground: #ffffff;
-  --radius: 0.625rem;
+  /* The hue-locked family: green/amber/blue/red mean working, waiting, moved
+   and gone by convention, so their HUE never follows the canvas — a red
+   canvas would otherwise make “delete” indistinguishable from “primary”.
+   Everything else about them is solved against the card at APCA Lc 65, so
+   all four read at one weight in either appearance, and each label is
+   whichever of white or a near-black tint of its own hue wins on the fill
+   — which is why they flip polarity between the two blocks. */
+  --destructive: #ffa49f;
+  --destructive-foreground: #290b0b;
+  --positive: #27d496;
+  --positive-foreground: #001c10;
+  --attention: #ffaa2f;
+  --attention-foreground: #221200;
+  --info: #65c6ff;
+  --info-foreground: #001827;
+  --radius: 0.75rem;
   /* Veils (#74). The canvas paints the whole window behind the chrome, so the
    sidebar cannot keep an opaque fill — but it is a LIGHTER rung than the
    rail, so plain transparency would darken it. Each veil is the color that,
@@ -98,7 +97,7 @@
   --sidebar-veil: rgb(123 105 111 / 0.1);
   --sidebar-accent-veil: rgb(153 124 131 / 0.1);
   --sidebar-border-veil: rgb(153 144 121 / 0.1);
-  /* THE CANVAS ITSELF, and the nine values derived alongside it
+  /* THE CANVAS ITSELF, and the ten values derived alongside it
    (`CANVAS_TOKEN_NAMES`, renderer/src/theme/canvas-paint.ts). The gradient
    is a `background` value, grain layer included, so the window can paint
    itself before any JS runs. */
@@ -124,6 +123,10 @@
   --shadow-raised: 0 1px 2px 0px rgb(2 0 0 / 0.09), 0 2px 7px -1px rgb(2 0 0 / 0.135);
   --shadow-card: 0 1px 3px 0px rgb(2 0 0 / 0.075), 0 10px 30px -6px rgb(2 0 0 / 0.18);
   --shadow-overlay: 0 2px 6px -2px rgb(2 0 0 / 0.105), 0 16px 44px -8px rgb(2 0 0 / 0.24);
+  /* The overlay wash (dialogs, sheets, the palette): the shadow's own ink
+   spread over the whole window instead of pooled under one edge, so it
+   dims the canvas in the canvas's own hue rather than in neutral black. */
+  --scrim: rgb(2 0 0 / 0.5);
 }
 
 /* Later in the file at equal specificity (0,2,0) to `:root.dark` and higher
@@ -136,23 +139,14 @@
   --background: #fdded2;
   --card: #f4d4c8;
   --popover: #f7d8cc;
-  --secondary: #eacabd;
   --muted: #eacabd;
   --accent: #dab9ad;
   --sidebar: #e2c3b7;
   --foreground: #120906;
-  --card-foreground: #120906;
-  --popover-foreground: #120906;
-  --secondary-foreground: #120906;
   --muted-foreground: #514541;
-  --accent-foreground: #120906;
   --sidebar-foreground: #080302;
-  --sidebar-accent: #dab9ad;
-  --sidebar-accent-foreground: #120906;
   --border: #d8b6a9;
-  --border-hover: #d3b0a3;
   --border-strong: #d5b2a5;
-  --input: #d8b6a9;
   --sidebar-border: #ddbbad;
   /* The accent, derived from the canvas's primary stop on the SAME vibrancy
    curve the gradient rides — a near-neutral wash still yields near-neutral
@@ -171,14 +165,22 @@
    `--primary`; anything you read takes this. */
   --primary-text: #9c441e;
   --ring: #d37550;
-  --sidebar-primary: #d37550;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-ring: #d37550;
-  /* Hue-locked: the semantic escape list never follows the canvas, or a red
-   canvas would make “delete” indistinguishable from “primary”. */
-  --destructive: #e5484d;
+  /* The hue-locked family: green/amber/blue/red mean working, waiting, moved
+   and gone by convention, so their HUE never follows the canvas — a red
+   canvas would otherwise make “delete” indistinguishable from “primary”.
+   Everything else about them is solved against the card at APCA Lc 65, so
+   all four read at one weight in either appearance, and each label is
+   whichever of white or a near-black tint of its own hue wins on the fill
+   — which is why they flip polarity between the two blocks. */
+  --destructive: #9b1e28;
   --destructive-foreground: #ffffff;
-  --radius: 0.625rem;
+  --positive: #005f40;
+  --positive-foreground: #ffffff;
+  --attention: #764900;
+  --attention-foreground: #ffffff;
+  --info: #005880;
+  --info-foreground: #ffffff;
+  --radius: 0.75rem;
   /* Veils (#74). The canvas paints the whole window behind the chrome, so the
    sidebar cannot keep an opaque fill — but it is a LIGHTER rung than the
    rail, so plain transparency would darken it. Each veil is the color that,
@@ -187,7 +189,7 @@
   --sidebar-veil: rgb(127 69 48 / 0.1);
   --sidebar-accent-veil: rgb(146 95 83 / 0.1);
   --sidebar-border-veil: rgb(176 115 83 / 0.1);
-  /* THE CANVAS ITSELF, and the nine values derived alongside it
+  /* THE CANVAS ITSELF, and the ten values derived alongside it
    (`CANVAS_TOKEN_NAMES`, renderer/src/theme/canvas-paint.ts). The gradient
    is a `background` value, grain layer included, so the window can paint
    itself before any JS runs. */
@@ -213,6 +215,10 @@
   --shadow-raised: 0 1px 2px 0px rgb(72 42 30 / 0.09), 0 2px 7px -1px rgb(72 42 30 / 0.135);
   --shadow-card: 0 1px 3px 0px rgb(72 42 30 / 0.075), 0 10px 30px -6px rgb(72 42 30 / 0.18);
   --shadow-overlay: 0 2px 6px -2px rgb(72 42 30 / 0.105), 0 16px 44px -8px rgb(72 42 30 / 0.24);
+  /* The overlay wash (dialogs, sheets, the palette): the shadow's own ink
+   spread over the whole window instead of pooled under one edge, so it
+   dims the canvas in the canvas's own hue rather than in neutral black. */
+  --scrim: rgb(72 42 30 / 0.3);
 }
 /* GENERATED THEME TOKENS — END */
 
@@ -220,51 +226,118 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
   --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary-text: var(--primary-text);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-positive: var(--positive);
+  --color-positive-foreground: var(--positive-foreground);
+  --color-attention: var(--attention);
+  --color-attention-foreground: var(--attention-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
   --color-border: var(--border);
-  --color-border-hover: var(--border-hover);
   --color-border-strong: var(--border-strong);
-  --color-input: var(--input);
   --color-ring: var(--ring);
   --color-rail: var(--rail);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-veil: var(--sidebar-veil);
   --color-sidebar-accent-veil: var(--sidebar-accent-veil);
   --color-sidebar-border-veil: var(--sidebar-border-veil);
+  /* The three elevation tiers, as `shadow-raised` / `shadow-card` /
+   * `shadow-overlay`. Every surface that lifts takes one of them by ROLE — a
+   * control or an active tab is raised, a card or a panel is a card, anything
+   * that portals to the body and floats over the whole window is an overlay —
+   * and the stock `shadow-xs…2xl` rungs are banned by
+   * `scripts/check-design-tokens.mjs`, because they are untinted black
+   * (`rgb(0 0 0 / …)`) on a canvas whose own shadows are warm.
+   *
+   * THE SELF-REFERENCE IS DELIBERATE AND SAFE, and it is worth stating because
+   * it looks like a cycle. Tailwind's box-shadow namespace IS `--shadow-*`, so
+   * a utility named `shadow-raised` can only come from a theme key spelled
+   * `--shadow-raised` — the same name the generated block above declares. The
+   * theme's copy lands inside `@layer theme`; the generated block is unlayered,
+   * and unlayered declarations beat every layer regardless of source order. So
+   * the generated value always wins the cascade and nothing ever evaluates
+   * `var(--shadow-raised)` against itself. What `inline` buys is that the
+   * UTILITY reads `var(--shadow-raised)` directly rather than through a second
+   * theme variable, which is what lets one class follow the live canvas as it
+   * repaints. */
+  --shadow-raised: var(--shadow-raised);
+  --shadow-card: var(--shadow-card);
+  --shadow-overlay: var(--shadow-overlay);
+  /* The overlay wash, as `bg-scrim`. Solved beside the tiers above and for the
+   * same reason: a scrim is the window's shadow spread over everything, so it
+   * follows the canvas instead of being a neutral `bg-black/N` that a warm
+   * gradient turns to dirt and a paper appearance wears as a bruise. */
+  --color-scrim: var(--scrim);
+  /* The UI ease-out — entrances, exits, press feedback, every overlay. It
+   * deliberately takes Tailwind's OWN `--ease-out` key rather than a new name:
+   * a second strong-ease-out token sitting beside the weak built-in is the
+   * drift it exists to end, and overriding the key moves every `ease-out` in
+   * the app onto one curve at once. Stock's cubic-bezier(0, 0, 0.2, 1) barely
+   * leaves the line; this one leaves fast and settles long, which is what makes
+   * a 150ms overlay read as already-there rather than as arriving. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   /* macOS-feel motion: fast start, long gentle settle (the iOS sheet curve).
    * Used for structural transitions like the sidebar collapse. */
   --ease-swift: cubic-bezier(0.32, 0.72, 0, 1);
   --font-sans: "Mona Sans Variable", system-ui, -apple-system, sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  /* Radius ladder (docs/DESIGN.md). Three rungs and one relation:
+   * a CONTROL is 12, a CONTAINER is 20, and anything that acts is a pill.
+   * `--radius-row` is not a fourth rung — it is the container seen from
+   * inside: a row sitting in a surface's own 4px inset takes 20 − 4 so the
+   * two corners stay concentric. Change the inset and this moves with it.
+   * The derived sm/md/lg/xl rungs below ride `--radius` (12px, = control) and
+   * exist for the surfaces that predate the ladder. */
+  --radius-control: 12px;
+  --radius-container: 20px;
+  --radius-row: 16px;
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
-  /* Type scale (docs/DESIGN.md) — six steps: label 11 · meta 12 (= text-xs) ·
-   * ui 13 · body 14 (= text-sm) · heading 18 · title 24. Named tokens below
-   * cover the steps Tailwind's stock scale lacks; meta/body ride on the stock
-   * utilities. Each step carries its paired line-height (and tracking where
-   * the size demands it) so components never pick these per-surface. */
+  /* Layout language (docs/DESIGN.md): the canonical reading measure (Tier A
+   * surfaces center on it via <ContentColumn>) and the unified page gutter
+   * every surface aligns its edges to. */
+  --container-content: 45rem;
+  --spacing-gutter: 1.5rem;
+}
+
+/*
+ * Type scale (docs/DESIGN.md) — five steps: label 11 · ui 13 · body 14
+ * (= text-sm) · heading 18 · title 24. Named tokens below cover the steps
+ * Tailwind's stock scale lacks; body rides on the stock utility. Each step
+ * carries its paired line-height (and tracking where the size demands it) so
+ * components never pick these per-surface.
+ *
+ * NOT `inline`, and that is the whole reason this is its own block. `@theme
+ * inline` compiles a step's VALUE into each utility and never emits the custom
+ * property, so `var(--text-heading)` resolved to nothing in a hand-authored
+ * stylesheet — which is why `typeset.css` and `editor/document-mode.css` grew
+ * their own `em` ladders and near-missed this one at every rung (a ticket <h2>
+ * at 18.9px beside a dialog title at 18). Plain `@theme` emits the properties,
+ * so those two files read the scale instead of restating it. Nothing here is
+ * themeable or canvas-derived, so the indirection `inline` exists to avoid
+ * costs nothing.
+ *
+ * THERE IS NO 12px RUNG. `text-xs` was a sixth step wedged between label (11)
+ * and ui (13); those three carried 71% of the app's sizing decisions inside a
+ * 2px band, which is three names for one size rather than a hierarchy. It is
+ * folded into `text-ui` and banned by `scripts/check-design-tokens.mjs` —
+ * banned rather than deleted, because it is a stock Tailwind utility that no
+ * missing `@theme` key can take out of reach. Below 13px the only rung is
+ * `text-label`, and it is a TREATMENT (caps, +0.05em) rather than a size.
+ */
+@theme {
   --text-label: 0.6875rem;
   --text-label--line-height: 1rem;
   --text-label--letter-spacing: 0.05em;
@@ -276,11 +349,6 @@
   --text-title: 1.5rem;
   --text-title--line-height: 1.875rem;
   --text-title--letter-spacing: -0.02em;
-  /* Layout language (docs/DESIGN.md): the canonical reading measure (Tier A
-   * surfaces center on it via <ContentColumn>) and the unified page gutter
-   * every surface aligns its edges to. */
-  --container-content: 45rem;
-  --spacing-gutter: 1.5rem;
 }
 
 @layer base {
@@ -345,9 +413,13 @@
  * gradient the sidebar actually sits on and clears it comfortably, so the
  * shortfall never reaches the screen.
  *
- * `--sidebar-accent-foreground` (the hover/selected promotion) rides along, and
- * ONLY here — the lab overrode it at the root, which also repainted Settings'
- * own nav rail inside the card, where the canvas ink is the wrong answer.
+ * The hover/selected promotion needs no line of its own any more. It used to
+ * ride along as `--sidebar-accent-foreground`, set here and ONLY here — the lab
+ * overrode it at the root, which also repainted Settings' own nav rail inside
+ * the card, where the canvas ink is the wrong answer. That token was an exact
+ * alias of `--foreground` and has been deleted, so the promotion now spells
+ * itself `text-foreground` and reads the line above — which is scoped to this
+ * selector for the same reason, and so keeps the same protection.
  *
  * Selectors mirror, and must be kept in step with:
  *   • `components/ui/sidebar.tsx` — `data-slot="sidebar"` is the `Sidebar`
@@ -364,7 +436,6 @@
      because it is the DEFAULT everything on the canvas inherits; those rules
      are the exceptions to it. */
   --sidebar-foreground: var(--canvas-ink-label);
-  --sidebar-accent-foreground: var(--canvas-ink);
 }
 
 /* THE ON-CANVAS COPY LADDER — which of the sidebar's tiers reads at which rung.
@@ -438,8 +509,8 @@
  *
  * Overriding the two TOKENS rather than `color` is what keeps the row's hover
  * and selected promotion working: that promotion is a third class
- * (`text-sidebar-accent-foreground`), so it reads a token this rule never
- * touches; a `color` declaration here would have silently killed it.
+ * (`text-foreground`), so it reads a token this rule never touches; a `color`
+ * declaration here would have silently killed it.
  *
  * The class pair names "the row's first line" — the meta line beneath it wears
  * `session-row-dim` too, and `text-ui` against its `text-label` is what tells
@@ -622,7 +693,10 @@
   margin: var(--shell-inset) 0 var(--shell-inset) var(--shell-inset);
   border: var(--shell-edge) solid var(--border);
   border-right-width: 0;
-  border-radius: var(--radius-xl) 0 0 var(--radius-xl);
+  /* The container rung, raw rather than through a utility — this is the
+   * outermost container on screen, and a shell rounded tighter than the
+   * dialogs and menus that open over it reads as the wrong way round. */
+  border-radius: var(--radius-container) 0 0 var(--radius-container);
   box-shadow: var(--shadow-card);
   clip-path: inset(-60px 0 -60px -60px);
   overflow: hidden;
@@ -656,7 +730,7 @@
    * at every zoom rung — see the note on this change. */
   margin: var(--shell-inset) var(--shell-inset) var(--shell-inset) 0;
   border-left-width: 0;
-  border-radius: 0 var(--radius-xl) var(--radius-xl) 0;
+  border-radius: 0 var(--radius-container) var(--radius-container) 0;
   clip-path: inset(-60px -60px -60px 0);
   box-shadow: var(--shadow-card);
 }
@@ -758,26 +832,6 @@
  * still has to read the real 60. */
 [data-volli-shell="framed"] [data-workspace-rail] {
   padding-left: min(var(--shell-inset), var(--rail-width));
-}
-
-/* Raised-on-a-surface: the active tab in every strip, and the board's cards.
- * A tab reads as a tab because of the halo under it, not because of its fill. */
-[role="tab"][aria-selected="true"],
-article.bg-card {
-  box-shadow: var(--shadow-raised);
-}
-
-/* Everything that portals to the body and floats over the whole window. */
-[data-slot="popover-content"],
-[data-slot="dropdown-menu-content"],
-[data-slot="dropdown-menu-sub-content"],
-[data-slot="context-menu-content"],
-[data-slot="context-menu-sub-content"],
-[data-slot="dialog-content"],
-[data-slot="alert-dialog-content"],
-[data-slot="sheet-content"],
-[data-slot="tooltip-content"] {
-  box-shadow: var(--shadow-overlay);
 }
 
 /* The micro-label tier.

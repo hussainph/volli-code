@@ -27,6 +27,7 @@ import {
   generateAccentTokens,
   generateThemeTokens,
   solveLightnessOrCeiling,
+  solveStatusTokens,
   type AccentTokens,
 } from "../generate";
 import type { ThemeTokens } from "../tokens";
@@ -53,15 +54,7 @@ const ACCENT_TEXT_LC = 60;
 /** Every foreground the two paths solve, and nothing else. */
 type CopyTokens = Pick<
   ThemeTokens,
-  | "--foreground"
-  | "--card-foreground"
-  | "--popover-foreground"
-  | "--secondary-foreground"
-  | "--accent-foreground"
-  | "--sidebar-accent-foreground"
-  | "--muted-foreground"
-  | "--sidebar-foreground"
-  | "--primary-text"
+  "--foreground" | "--muted-foreground" | "--sidebar-foreground" | "--primary-text"
 >;
 
 /**
@@ -95,14 +88,8 @@ function solveCopy(
   const at = (targetLc: number, surface: string) =>
     oklchToHex(solveLightnessOrCeiling(targetLc, ink.C, ink.h, surface), ink.C, ink.h);
 
-  const foreground = at(floors.body, ladder["--background"]);
   return {
-    "--foreground": foreground,
-    "--card-foreground": foreground,
-    "--popover-foreground": foreground,
-    "--secondary-foreground": foreground,
-    "--accent-foreground": foreground,
-    "--sidebar-accent-foreground": foreground,
+    "--foreground": at(floors.body, ladder["--background"]),
     "--muted-foreground": at(floors.secondary, ladder["--card"]),
     "--sidebar-foreground": at(floors.sidebar, ladder["--sidebar"]),
     "--primary-text": oklchToHex(
@@ -116,18 +103,21 @@ function solveCopy(
 /**
  * The light path: a mirror of `generateThemeTokens`, step for step.
  *
- * `dark` is passed in rather than recomputed because `--destructive` is taken
- * from it verbatim — hue-locked by the semantic escape list, so it ignores the
- * seed entirely. `accent` arrives already solved and is shared with the dark
- * path unchanged: `--primary` and `--primary-foreground` are a solved PAIR whose
- * floor is measured on the button itself, so the button holds whatever page it
- * sits on.
+ * `accent` arrives already solved and is shared with the dark path unchanged:
+ * `--primary` and `--primary-foreground` are a solved PAIR whose floor is
+ * measured on the button itself, so the button holds whatever page it sits on.
+ *
+ * The four hue-locked semantics are the opposite case: hue-locked and still not
+ * carryable, because they are SOLVED against the card, and this path's card is
+ * the one thing that is not the dark path's. Copying them here is precisely the
+ * hand-written `dark:` twin, moved into the generator. `--destructive` was the
+ * one member this path did copy across, back when it was frozen outright; it is
+ * solved now, so nothing crosses and the dark set is no longer a parameter.
  */
 function lightTokens(
   canvas: Canvas,
   seedChroma: number,
   hue: number,
-  dark: ThemeTokens,
   accent: AccentTokens,
   dials: SettledDials,
 ): ThemeTokens {
@@ -139,8 +129,7 @@ function lightTokens(
     ...ladder,
     ...solveCopy(ladder, "light", { C: tint, h: hue }, hexToOklch(accent["--primary"])),
     ...accent,
-    "--destructive": dark["--destructive"],
-    "--destructive-foreground": dark["--destructive-foreground"],
+    ...solveStatusTokens(ladder["--card"]),
   };
 }
 
@@ -149,9 +138,12 @@ function lightTokens(
  * BUILDS a ladder from authored rungs because light has no shipped counterpart;
  * this one starts from the generator's output and moves it, because dark does.
  *
- * What the ladder does NOT touch: the hue-locked `--destructive` family, carried
- * over by the spread below, and the accent family, which the spread replaces
+ * What the ladder does NOT touch: the accent family, which the spread replaces
  * wholesale with the one solved off the canvas's own chroma.
+ *
+ * The hue-locked family is re-solved rather than carried, even here where the
+ * mode matches: `dark` holds them solved against the SHIPPED ladder's card, and
+ * the whole job of `buildDarkLadder` is to move that card toward the canvas.
  */
 function darkTokens(
   canvas: Canvas,
@@ -171,6 +163,7 @@ function darkTokens(
     ...ladder,
     ...accent,
     ...solveCopy(ladder, "dark", ink, hexToOklch(accent["--primary"])),
+    ...solveStatusTokens(ladder["--card"]),
   };
 }
 
@@ -209,7 +202,7 @@ export function deriveCanvasTokens(canvas: Canvas, resolved: ResolvedAppearance)
   const dials = settled(resolved);
   return resolved === "dark"
     ? darkTokens(canvas, dark, accent, dials)
-    : lightTokens(canvas, chroma, h, dark, accent, dials);
+    : lightTokens(canvas, chroma, h, accent, dials);
 }
 
 /**

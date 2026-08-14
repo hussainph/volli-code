@@ -365,7 +365,7 @@ function PadOrb({
         marginTop: -size / 2,
         background: stop.hex,
       }}
-      className="absolute touch-none rounded-full shadow-lg ring-2 ring-white outline-1 outline-black/30 transition-[width,height,margin] duration-200 ease-out focus-visible:ring-4 focus-visible:outline-2"
+      className="absolute touch-none rounded-full shadow-raised ring-2 ring-white outline-1 outline-black/30 transition-[width,height,margin] duration-200 ease-out focus-visible:ring-4 focus-visible:outline-2"
     />
   );
 }
@@ -457,11 +457,11 @@ function StopRow({
             aria-pressed={primary}
             aria-label={`Colour ${index + 1}, ${stop.hex}${primary ? ", primary" : ""}`}
             data-testid={`canvas-stop-chip-${index}`}
-            className="flex items-center gap-1.5 rounded-full border border-border py-1 pr-2.5 pl-1.5 font-mono text-label transition-colors hover:bg-accent aria-pressed:border-ring aria-pressed:bg-secondary"
+            className="flex items-center gap-1 rounded-full border border-border py-1 pr-2 pl-1 font-mono text-label transition-colors hover:bg-accent aria-pressed:border-ring aria-pressed:bg-muted"
           >
             <span
               aria-hidden
-              className="size-3 rounded-full ring-1 ring-black/20"
+              className="size-3 rounded-full ring-1 ring-black/30"
               style={{ background: painted[index] }}
             />
             <span className={primary ? "text-foreground" : "text-muted-foreground"}>
@@ -590,7 +590,7 @@ function PrimaryColourRow({
       <div
         role="group"
         aria-label="Primary colour presets"
-        className="grid flex-1 grid-cols-9 gap-1.5"
+        className="grid flex-1 grid-cols-9 gap-1"
       >
         {CANVAS_SWATCH_PAGES[page].map((swatch) => (
           <button
@@ -600,7 +600,7 @@ function PrimaryColourRow({
             aria-label={swatch}
             aria-pressed={swatch === normalized}
             style={{ background: swatch }}
-            className="aspect-square w-full rounded-full outline-offset-2 ring-1 ring-black/15 transition-transform hover:scale-110 aria-pressed:outline-2 aria-pressed:outline-ring"
+            className="aspect-square w-full rounded-full outline-offset-2 ring-1 ring-black/10 transition-transform hover:scale-110 aria-pressed:outline-2 aria-pressed:outline-ring"
           />
         ))}
       </div>
@@ -673,7 +673,7 @@ function UnitSlider({
   onSettle(): void;
 }) {
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex items-center gap-4">
       {chip}
       <input
         id={id}
@@ -840,7 +840,7 @@ function GrainDial({
 /** One measured floor: what it scored, and whether it had anywhere left to go. */
 function FloorReading({ reading }: { reading: CanvasFloorReading }) {
   return (
-    <li className="flex items-baseline justify-between gap-3 text-xs leading-5">
+    <li className="flex items-baseline justify-between gap-4 text-ui leading-5">
       <span className="text-muted-foreground">{reading.what}</span>
       <span className="shrink-0 tabular-nums text-muted-foreground">
         Lc{" "}
@@ -891,10 +891,10 @@ function ContrastReport({
   onEase(vibrancy: number): void;
 }) {
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
       <div>
         <p className="text-label uppercase text-muted-foreground">Contrast</p>
-        <ul data-testid="canvas-contrast-readout" className="mt-1.5 flex flex-col">
+        <ul data-testid="canvas-contrast-readout" className="mt-1 flex flex-col">
           {report.readings.map((reading) => (
             <FloorReading key={reading.token} reading={reading} />
           ))}
@@ -905,11 +905,11 @@ function ContrastReport({
         <div
           role="status"
           data-testid="canvas-contrast-stranded"
-          className="flex gap-2.5 rounded-md border border-border bg-secondary/60 p-3"
+          className="flex gap-2 rounded-md border border-border bg-muted/50 p-4"
         >
           {/* Filled: this is the one thing on the page that went wrong, and the
               only glyph in the editor that is not a control's own noun. */}
-          <WarningIcon weight="fill" className="mt-0.5 size-4 shrink-0 text-primary-text" />
+          <WarningIcon weight="fill" className="mt-1 size-4 shrink-0 text-primary-text" />
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium">
               {report.stranded.length === 1
@@ -1047,7 +1047,7 @@ export function CanvasEditor({
 
   return (
     <>
-      <div className="flex flex-col gap-3 pb-4">
+      <div className="flex flex-col gap-4 pb-4">
         <GradientPad
           canvas={live}
           resolved={resolved}
@@ -1078,7 +1078,7 @@ export function CanvasEditor({
           chip={
             <span
               aria-hidden
-              className="size-6 shrink-0 rounded-md ring-1 ring-black/15"
+              className="size-6 shrink-0 rounded-md ring-1 ring-black/10"
               style={{ background: vibrancyChip }}
             />
           }
@@ -1100,7 +1100,7 @@ export function CanvasEditor({
         </span>
       </SettingsRow>
 
-      <div className="border-t border-border/60 pt-4">
+      <div className="border-t border-border/50 pt-4">
         <ContrastReport
           report={report}
           eased={eased}

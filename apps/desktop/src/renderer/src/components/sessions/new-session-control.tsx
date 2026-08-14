@@ -131,7 +131,11 @@ export function NewSessionControl({
             would otherwise multiply into an unreadable 25%). */}
         <div
           className={cn(
-            "inline-flex shrink-0 items-center rounded-full transition-transform duration-100 ease-out active:scale-[0.97] motion-reduce:transform-none",
+            // `transition-transform` already covers `scale` (v4 expands it to
+            // transform,translate,scale,rotate), so only the reduced-motion
+            // cancel had to change: `transform: none` cannot cancel a `scale`
+            // declaration. See the press note in `ui/button.tsx`.
+            "inline-flex shrink-0 items-center rounded-full transition-transform duration-100 ease-out active:scale-[0.97] motion-reduce:scale-100!",
             disabled && "pointer-events-none opacity-50",
             className,
           )}
@@ -144,7 +148,12 @@ export function NewSessionControl({
             aria-label="New chat"
             {...(shortcuts ? { "aria-keyshortcuts": "Meta+T" } : {})}
             onClick={onNewChat}
-            className="rounded-r-none pr-1.5 active:scale-100 disabled:opacity-100"
+            // `scale-100!`, not `scale-100`: both halves' opt-out and the
+            // Button's own `active:scale-[0.97]` land on the same element at
+            // the same (0,1,1), and Tailwind emits the arbitrary value last —
+            // so the plain cancel lost, and each half depressed inside the
+            // wrapper that was already depressing.
+            className="rounded-r-none pr-1 active:scale-100! disabled:opacity-100"
           >
             {/* Outline, the baseline. The Button's own size rule draws this at
                 14px in `strip`/`empty`, above CLAUDE.md's ≤12px small-size tier
@@ -166,11 +175,16 @@ export function NewSessionControl({
                 // 12px caret and exists to be SEEN, not aimed at — the whole
                 // menu is also on right-click, so a tab strip pays the smallest
                 // width that still says "there is another kind".
-                className="group w-4! rounded-l-none px-0 active:scale-100 disabled:opacity-100"
+                className="group w-4! rounded-l-none px-0 active:scale-100! disabled:opacity-100"
               >
                 <CaretDownIcon
                   weight="bold"
-                  className="size-3 transition-transform duration-150 ease-out group-data-[state=open]:rotate-180 motion-reduce:transform-none"
+                  // The flip is STATE, not decoration, so reduced motion drops
+                  // the travel and keeps the end position — `transition-none`,
+                  // not a cancelled rotation. (`transform-none` was neither:
+                  // v4 compiles `rotate-180` to the standalone `rotate`
+                  // property, which `transform: none` cannot touch.)
+                  className="size-3 transition-transform duration-150 ease-out group-data-[state=open]:rotate-180 motion-reduce:transition-none"
                 />
               </Button>
             </DropdownMenuTrigger>

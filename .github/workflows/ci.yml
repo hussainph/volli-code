@@ -58,6 +58,21 @@ jobs:
       - name: Check
         run: vp check
 
+      # The encoded design system (the tokens ARE the spec, not a document).
+      # `vp check` is fmt + lint + types with no plugin point, and neither of
+      # these is expressible as a lint rule, so this step is the only thing that
+      # runs them — the theme generator's staleness gate had carried a "CI-able"
+      # comment since it was written and was wired nowhere.
+      #   check:theme-css      — globals.css / terminal fallbacks vs the canvas
+      #                          pipeline's current output.
+      #   check:design-tokens  — self-tests its matcher, then fails on any
+      #                          off-ladder utility not recorded in
+      #                          scripts/design-token-allowlist.json.
+      - name: Check design system
+        run: |
+          vp run --filter @volli/desktop check:theme-css
+          vp run --filter @volli/desktop check:design-tokens
+
       # Two invocations: `vp run -r` covers workspace packages only — the root
       # vite.config.ts (quality-stack config) needs its own tsc pass.
       - name: Typecheck

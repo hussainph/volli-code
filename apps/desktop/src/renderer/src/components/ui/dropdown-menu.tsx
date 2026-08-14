@@ -6,6 +6,21 @@ import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 
 import { cn } from "@renderer/lib/utils";
+import {
+  MENU_INDICATOR,
+  MENU_INDICATOR_MARK,
+  MENU_LABEL,
+  MENU_ROW,
+  MENU_ROW_DESTRUCTIVE,
+  MENU_ROW_INDICATED,
+  MENU_ROW_OPEN,
+  MENU_ROW_STATE,
+  MENU_SEPARATOR,
+  MENU_SHORTCUT,
+  MENU_SURFACE,
+  MENU_SURFACE_MOTION,
+  MENU_SURFACE_PAD,
+} from "@renderer/components/ui/menu-classes";
 
 function DropdownMenu({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
   return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />;
@@ -34,7 +49,10 @@ function DropdownMenuContent({
         data-slot="dropdown-menu-content"
         sideOffset={sideOffset}
         className={cn(
-          "z-50 max-h-(--radix-dropdown-menu-content-available-height) min-w-[8rem] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md motion-reduce:animate-none data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
+          MENU_SURFACE,
+          MENU_SURFACE_PAD,
+          MENU_SURFACE_MOTION,
+          "max-h-(--radix-dropdown-menu-content-available-height) origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto",
           className,
         )}
         {...props}
@@ -49,29 +67,16 @@ function DropdownMenuGroup({ ...props }: React.ComponentProps<typeof DropdownMen
 
 function DropdownMenuItem({
   className,
-  inset,
   variant = "default",
-  density = "default",
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Item> & {
-  inset?: boolean;
   variant?: "default" | "destructive";
-  /** 28px row for menus embedded in an already-compact control strip. */
-  density?: "default" | "compact";
 }) {
   return (
     <DropdownMenuPrimitive.Item
       data-slot="dropdown-menu-item"
-      data-inset={inset}
       data-variant={variant}
-      data-density={density}
-      className={cn(
-        "relative flex cursor-default items-center gap-2 rounded-sm px-2 outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[inset]:pl-8 data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive dark:data-[variant=destructive]:focus:bg-destructive/20 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='text-'])]:text-muted-foreground data-[variant=destructive]:*:[svg]:text-destructive!",
-        density === "compact"
-          ? "py-1 text-ui [&_svg:not([class*='size-'])]:size-3.5"
-          : "py-1.5 text-sm [&_svg:not([class*='size-'])]:size-4",
-        className,
-      )}
+      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_DESTRUCTIVE, className)}
       {...props}
     />
   );
@@ -80,7 +85,7 @@ function DropdownMenuItem({
 // Checkbox/radio items put the selection indicator TRAILING (right edge,
 // Linear-style) rather than stock shadcn's leading pl-8 gutter: these menus
 // carry their own leading icons (priority bars, tag dots), and an empty
-// 32px check column in front of them read as dead space.
+// check column in front of them read as dead space.
 function DropdownMenuCheckboxItem({
   className,
   children,
@@ -90,17 +95,14 @@ function DropdownMenuCheckboxItem({
   return (
     <DropdownMenuPrimitive.CheckboxItem
       data-slot="dropdown-menu-checkbox-item"
-      className={cn(
-        "relative flex cursor-default items-center gap-2 rounded-sm py-1.5 pr-8 pl-2 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
-        className,
-      )}
+      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_INDICATED, className)}
       checked={checked}
       {...props}
     >
       {children}
-      <span className="pointer-events-none absolute right-2 flex size-3.5 items-center justify-center">
+      <span className={MENU_INDICATOR}>
         <DropdownMenuPrimitive.ItemIndicator>
-          <CheckIcon weight="bold" className="size-4" />
+          <CheckIcon weight="bold" className={MENU_INDICATOR_MARK} />
         </DropdownMenuPrimitive.ItemIndicator>
       </span>
     </DropdownMenuPrimitive.CheckboxItem>
@@ -124,16 +126,13 @@ function DropdownMenuRadioItem({
   return (
     <DropdownMenuPrimitive.RadioItem
       data-slot="dropdown-menu-radio-item"
-      className={cn(
-        "relative flex cursor-default items-center gap-2 rounded-sm py-1.5 pr-8 pl-2 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
-        className,
-      )}
+      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_INDICATED, className)}
       {...props}
     >
       {children}
-      <span className="pointer-events-none absolute right-2 flex size-3.5 items-center justify-center">
+      <span className={MENU_INDICATOR}>
         <DropdownMenuPrimitive.ItemIndicator>
-          <CheckIcon weight="bold" className="size-4" />
+          <CheckIcon weight="bold" className={MENU_INDICATOR_MARK} />
         </DropdownMenuPrimitive.ItemIndicator>
       </span>
     </DropdownMenuPrimitive.RadioItem>
@@ -142,16 +141,12 @@ function DropdownMenuRadioItem({
 
 function DropdownMenuLabel({
   className,
-  inset,
   ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.Label> & {
-  inset?: boolean;
-}) {
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Label>) {
   return (
     <DropdownMenuPrimitive.Label
       data-slot="dropdown-menu-label"
-      data-inset={inset}
-      className={cn("px-2 py-1.5 text-sm font-medium text-foreground data-[inset]:pl-8", className)}
+      className={cn(MENU_LABEL, className)}
       {...props}
     />
   );
@@ -164,29 +159,15 @@ function DropdownMenuSeparator({
   return (
     <DropdownMenuPrimitive.Separator
       data-slot="dropdown-menu-separator"
-      className={cn("-mx-1 my-1 h-px bg-border", className)}
+      className={cn(MENU_SEPARATOR, className)}
       {...props}
     />
   );
 }
 
-// The shortcut column, shared verbatim with context-menu.tsx's
-// `ContextMenuShortcut` — same span, same classes, different `data-slot`. The
-// reason lives here so it is written once:
-//
-// No `tracking-widest` (stock shadcn's): letter spacing is applied AFTER the
-// last glyph as well as between them, so every chord sits a pixel short of the
-// right edge and the column reads inset from the menu's own padding — visible
-// precisely because `ml-auto` promised it would be flush, and worse with rows
-// of different width stacked. Latin chords absorb it; the ⌥⌘ glyph runs this
-// app actually ships (⌘D, ⇧⌘D, ⌘T, ⌥⌘T) do not.
 function DropdownMenuShortcut({ className, ...props }: React.ComponentProps<"span">) {
   return (
-    <span
-      data-slot="dropdown-menu-shortcut"
-      className={cn("ml-auto text-xs text-muted-foreground", className)}
-      {...props}
-    />
+    <span data-slot="dropdown-menu-shortcut" className={cn(MENU_SHORTCUT, className)} {...props} />
   );
 }
 
@@ -196,20 +177,13 @@ function DropdownMenuSub({ ...props }: React.ComponentProps<typeof DropdownMenuP
 
 function DropdownMenuSubTrigger({
   className,
-  inset,
   children,
   ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.SubTrigger> & {
-  inset?: boolean;
-}) {
+}: React.ComponentProps<typeof DropdownMenuPrimitive.SubTrigger>) {
   return (
     <DropdownMenuPrimitive.SubTrigger
       data-slot="dropdown-menu-sub-trigger"
-      data-inset={inset}
-      className={cn(
-        "flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-[inset]:pl-8 data-[state=open]:bg-accent data-[state=open]:text-accent-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground",
-        className,
-      )}
+      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_OPEN, className)}
       {...props}
     >
       {children}
@@ -226,7 +200,10 @@ function DropdownMenuSubContent({
     <DropdownMenuPrimitive.SubContent
       data-slot="dropdown-menu-sub-content"
       className={cn(
-        "z-50 min-w-[8rem] origin-(--radix-dropdown-menu-content-transform-origin) overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-lg motion-reduce:animate-none data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
+        MENU_SURFACE,
+        MENU_SURFACE_PAD,
+        MENU_SURFACE_MOTION,
+        "origin-(--radix-dropdown-menu-content-transform-origin) overflow-hidden",
         className,
       )}
       {...props}

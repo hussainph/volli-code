@@ -201,7 +201,7 @@ function hasTextSelection(): boolean {
  * their own margin, which is the ragged left edge this design exists to remove.
  */
 const ROW_CLASS =
-  "group/row flex w-full min-w-0 items-center gap-1.5 rounded-md py-0.5 text-left text-xs text-muted-foreground outline-none transition-colors";
+  "group/row flex w-full min-w-0 items-center gap-1 rounded-md py-1 text-left text-ui text-muted-foreground outline-none transition-colors";
 const ROW_INTERACTIVE = "cursor-pointer hover:text-foreground";
 /** Only for rows that are themselves a control — a tool row's ring is on its caret. */
 const ROW_FOCUSABLE = "focus-visible:ring-1 focus-visible:ring-ring";
@@ -261,7 +261,7 @@ function RowDisclosure({
         event.stopPropagation();
         onToggle();
       }}
-      className="flex shrink-0 rounded outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      className="flex shrink-0 rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
     >
       <Caret open={open} />
     </button>
@@ -465,7 +465,7 @@ function RowObject({ row, onOpenFile }: { row: ActivityRow; onOpenFile?(path: st
   const openPath = row.openPath;
   if (!openPath || !onOpenFile) {
     return (
-      <code className="min-w-0 truncate font-mono text-xs text-foreground">
+      <code className="min-w-0 truncate font-mono text-ui text-foreground">
         <ObjectText value={object} />
       </code>
     );
@@ -478,7 +478,7 @@ function RowObject({ row, onOpenFile }: { row: ActivityRow; onOpenFile?(path: st
         event.stopPropagation();
         onOpenFile(openPath);
       }}
-      className="min-w-0 truncate rounded font-mono text-xs text-foreground underline decoration-transparent decoration-dotted underline-offset-[3px] transition-colors hover:decoration-primary hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      className="min-w-0 truncate rounded-sm font-mono text-ui text-foreground underline decoration-transparent decoration-dotted underline-offset-[3px] transition-colors hover:decoration-primary hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
     >
       <ObjectText value={object} />
     </button>
@@ -551,7 +551,7 @@ function RowActions({ row }: { row: ActivityRow }) {
 /* -------------------------------------------------------------------- detail */
 
 const DETAIL_FRAME =
-  "max-h-72 overflow-auto overscroll-contain rounded-md border border-border/60 bg-muted/25 p-2 font-mono text-xs leading-5";
+  "max-h-72 overflow-auto overscroll-contain rounded-md border border-border/50 bg-muted/30 p-2 font-mono text-ui leading-5";
 
 /**
  * The detail is a window, not a dump — and it is flush, not indented.
@@ -585,7 +585,7 @@ function DetailFrame({
 }: React.PropsWithChildren<{ revision: number; className?: string }>) {
   const { ref, clipped } = useClipped<HTMLDivElement>(revision);
   return (
-    <div className="relative my-0.5">
+    <div className="relative my-1">
       <div ref={ref} className={cn(DETAIL_FRAME, className)}>
         {children}
       </div>
@@ -608,7 +608,7 @@ function ToolDetail({ detail }: { detail: ActivityDetail }) {
                 "whitespace-pre",
                 line.kind === "add" && "text-primary-text",
                 line.kind === "remove" && "text-destructive",
-                line.kind === "hunk" && "text-muted-foreground/60",
+                line.kind === "hunk" && "text-muted-foreground/50",
                 line.kind === "context" && "text-muted-foreground",
               )}
             >
@@ -621,7 +621,7 @@ function ToolDetail({ detail }: { detail: ActivityDetail }) {
       return (
         <DetailFrame revision={detail.lines.length}>
           {detail.lines.map((line) => (
-            <div key={line.number} className="flex gap-3 whitespace-pre">
+            <div key={line.number} className="flex gap-4 whitespace-pre">
               <span className="w-8 shrink-0 text-right text-muted-foreground/50 tabular-nums">
                 {line.number}
               </span>
@@ -632,19 +632,19 @@ function ToolDetail({ detail }: { detail: ActivityDetail }) {
       );
     case "matches":
       return (
-        <DetailFrame revision={detail.groups.length} className="space-y-1.5">
+        <DetailFrame revision={detail.groups.length} className="space-y-1">
           {detail.groups.map((group) => (
             <div key={group.file}>
               <div className="truncate text-foreground">
                 <ObjectText value={group.file} />
               </div>
               {group.lines.map((line) => (
-                <div key={line} className="truncate pl-3 text-muted-foreground">
+                <div key={line} className="truncate pl-4 text-muted-foreground">
                   {line}
                 </div>
               ))}
               {group.hidden > 0 ? (
-                <div className="pl-3 text-muted-foreground/50">+{group.hidden}</div>
+                <div className="pl-4 text-muted-foreground/50">+{group.hidden}</div>
               ) : null}
             </div>
           ))}
@@ -713,7 +713,7 @@ export const ActivityBundle = React.memo(
     const { ref, clipped } = useClipped<HTMLDivElement>(rows.length);
 
     const list = (
-      <div className="space-y-0.5">
+      <div className="space-y-1">
         {rows.map((row) => (
           <BundleRowView key={row.key} row={row} onOpenFile={onOpenFile} />
         ))}
@@ -840,7 +840,7 @@ const ReasoningRow = React.memo(function ReasoningRow({
       </div>
       {body !== null ? (
         <Disclosure open={open}>
-          <ReasoningBody className="my-0.5 rounded-md border border-border/60 bg-muted/25 p-2 text-xs leading-5">
+          <ReasoningBody className="my-1 rounded-md border border-border/50 bg-muted/30 p-2 text-ui leading-5">
             {body}
           </ReasoningBody>
         </Disclosure>
@@ -863,7 +863,7 @@ export function AttentionReceipt({ part }: { part: DynamicToolUIPart }) {
   const row = describeActivity(part);
   const approved = row.status !== "denied";
   return (
-    <div className="not-prose flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+    <div className="not-prose flex min-w-0 items-center gap-1 text-ui text-muted-foreground">
       {/* Outline, even for the denial. The row this receipt hangs under already
           carries the filled destructive Prohibit that says the call was refused;
           the receipt is the settled record of what you did about it, and a
@@ -875,7 +875,7 @@ export function AttentionReceipt({ part }: { part: DynamicToolUIPart }) {
       )}
       <span className="shrink-0">You {approved ? "allowed" : "denied"}</span>
       {row.object ? (
-        <code className="min-w-0 truncate font-mono text-xs text-foreground">{row.object}</code>
+        <code className="min-w-0 truncate font-mono text-ui text-foreground">{row.object}</code>
       ) : null}
       <span className="shrink-0">this time</span>
     </div>

@@ -258,7 +258,7 @@ export function ComposerForm({
         />
       </div>
 
-      <div className="flex flex-col gap-2 px-4 pt-3 pb-3">
+      <div className="flex flex-col gap-2 px-4 pt-4 pb-4">
         <input
           ref={titleRef}
           autoFocus
@@ -297,7 +297,7 @@ export function ComposerForm({
         />
       </div>
 
-      <div className="px-4 pb-3">
+      <div className="px-4 pb-4">
         <ComposerChips
           projectId={target.id}
           status={status}
@@ -318,7 +318,7 @@ export function ComposerForm({
         />
       </div>
 
-      <div className="border-t border-border px-4 py-2.5">
+      <div className="border-t border-border px-4 py-2">
         <ComposerFooter
           fileIndex={fileIndex}
           onInsertRef={(relPath) => editorRef.current?.insertAtCursor(`@${relPath}`)}

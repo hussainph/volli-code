@@ -286,11 +286,11 @@ function ListingRows({
   }
 
   if (isListingError(listing)) {
-    return <div className="truncate px-2 py-1 text-xs text-destructive">{listing.error}</div>;
+    return <div className="truncate px-2 py-1 text-ui text-destructive">{listing.error}</div>;
   }
 
   if (listing.length === 0) {
-    return <div className="px-2 py-1 text-xs text-muted-foreground italic">Empty</div>;
+    return <div className="px-2 py-1 text-ui text-muted-foreground italic">Empty</div>;
   }
 
   return (
@@ -423,7 +423,7 @@ function DirectoryNode({ name, path, project }: { name: string; path: string; pr
         <CollapsibleContent>
           {/* Tighter than stock (mx-3.5 px-2.5): real repos nest deep, and at
               ~48px/level names vanish by depth four even in a wide sidebar. */}
-          <SidebarMenuSub className="mr-0 ml-3 pr-0 pl-1.5">
+          <SidebarMenuSub className="mr-0 ml-4 pr-0 pl-1">
             <ListingRows listing={children} parentPath={path} project={project} />
           </SidebarMenuSub>
         </CollapsibleContent>

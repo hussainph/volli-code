@@ -29,6 +29,7 @@ import type {
   SessionRowKind,
 } from "@renderer/components/sidebar/active-session-listing";
 import { SidebarMenuButton, SidebarMenuItem } from "@renderer/components/ui/sidebar";
+import { StatusDot } from "@renderer/components/ui/status-dot";
 import { compactAge } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
 
@@ -180,15 +181,21 @@ export function ActiveBandRow({
         onClick={onSelect}
         // Two lines at the tighter padding: long titles stay readable and the
         // band stops out-massing the board it sits beside.
-        className="h-auto min-h-9 items-start gap-2 py-1 [&:hover_.session-row-dim]:text-sidebar-accent-foreground [&[data-active=true]_.session-row-dim]:text-sidebar-accent-foreground"
+        className="h-auto min-h-9 items-start gap-2 py-1 [&:hover_.session-row-dim]:text-foreground [&[data-active=true]_.session-row-dim]:text-foreground"
       >
-        <span
-          aria-hidden
-          className={cn(
-            "mt-1.5 size-1.5 shrink-0 rounded-full",
-            needsYou ? "bg-amber-500" : working ? "bg-emerald-500" : "bg-muted-foreground/40",
-          )}
-        />
+        {/* The third copy of the status→tone map was written out right here,
+            which is how this band could paint a Session amber while the ticket
+            strip painted the same one with the accent. The row states the STATE
+            and `ui/status-dot.tsx` owns what colour that is. */}
+        {/* THE TWO HALF-STEPS HERE ARE DELIBERATE, and they are the recorded
+            exception to the 0/4/8/16/24 spacing collapse. `mt-1.5` is optical
+            alignment — it drops the dot onto the title's cap height, which is a
+            measurement of the type, not a rung of the rhythm. `gap-0.5` is what
+            binds the title to its meta line: at 4px the pair spaces the same as
+            the gap BETWEEN rows and the two lines stop reading as one entity,
+            which is the whole shape of this band. Screenshot-verified against
+            the collapse; anything that moves them has to look at the band. */}
+        <StatusDot state={needsYou ? "waiting" : working ? "working" : "idle"} className="mt-1.5" />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           {working ? (
             <span className="session-row-dim session-title-sweep text-ui">
@@ -254,7 +261,7 @@ export function PreviousBandRow({
         // `px-2` is gone rather than kept: the button's own `p-2` is already
         // 8px, so the override was a no-op that read like a deliberate
         // difference from the Active row above it.
-        className={cn("h-6 gap-1.5 text-xs text-muted-foreground", row.cleaned && "opacity-80")}
+        className={cn("h-6 gap-1.5 text-ui text-muted-foreground", row.cleaned && "opacity-80")}
       >
         {/* No `session-row-dim` here: this band is uniformly muted, with no
             dim/promote pairing to join — and that class also names the Active

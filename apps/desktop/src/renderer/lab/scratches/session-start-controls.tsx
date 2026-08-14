@@ -933,7 +933,7 @@ function StripTab({ tab, active }: { tab: DemoTab; active: boolean }) {
         aria-hidden
         className={cn(
           "size-1.5 shrink-0 rounded-full",
-          tab.live ? (active ? "bg-primary" : "bg-emerald-500") : "bg-muted-foreground/50",
+          tab.live ? (active ? "bg-primary" : "bg-positive") : "bg-muted-foreground/50",
         )}
       />
       {tab.kind === "chat" ? (
@@ -1044,7 +1044,7 @@ function RailRow({ tab }: { tab: DemoTab }) {
         <span
           className={cn(
             "size-1.5 rounded-full",
-            tab.live ? "bg-emerald-500" : "bg-muted-foreground/50",
+            tab.live ? "bg-positive" : "bg-muted-foreground/50",
           )}
         />
         {tab.live ? "Working" : "Idle"}

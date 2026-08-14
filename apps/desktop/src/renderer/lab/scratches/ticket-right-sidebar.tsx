@@ -104,25 +104,10 @@ const CHANGES: readonly ChangeRow[] = [
   },
 ];
 
-const CHANGE_STATUS: Record<
-  ChangeRow["status"],
-  { icon: PhosphorIcon; iconClass: string; labelClass: string }
-> = {
-  Modified: {
-    icon: GitDiffIcon,
-    iconClass: "text-amber-600 dark:text-amber-400",
-    labelClass: "text-amber-900 dark:text-amber-400",
-  },
-  Added: {
-    icon: PlusIcon,
-    iconClass: "text-emerald-600 dark:text-emerald-400",
-    labelClass: "text-emerald-900 dark:text-emerald-400",
-  },
-  Renamed: {
-    icon: ArrowRightIcon,
-    iconClass: "text-sky-600 dark:text-sky-400",
-    labelClass: "text-sky-900 dark:text-sky-400",
-  },
+const CHANGE_STATUS: Record<ChangeRow["status"], { icon: PhosphorIcon; ink: string }> = {
+  Modified: { icon: GitDiffIcon, ink: "text-attention" },
+  Added: { icon: PlusIcon, ink: "text-positive" },
+  Renamed: { icon: ArrowRightIcon, ink: "text-info" },
 };
 
 const FILES = [
@@ -216,10 +201,10 @@ function ActiveLabelTabs({
           "flex h-10 items-center gap-0.5 p-1",
           variant === "calm" &&
             cn(
-              "mx-auto rounded-full border border-sidebar-border bg-background/75 shadow-sm",
+              "mx-auto rounded-full border border-sidebar-border bg-background/75 shadow-raised",
               modes.length === 3 ? "w-40" : "w-[194px]",
             ),
-          variant === "toolbar" && "w-full justify-between rounded-lg bg-sidebar-accent/70",
+          variant === "toolbar" && "w-full justify-between rounded-lg bg-accent/70",
           variant === "linear" &&
             cn("mx-auto rounded-full bg-background/35", modes.length === 3 ? "w-40" : "w-[194px]"),
         )}
@@ -255,12 +240,12 @@ function ActiveLabelTabs({
               className={cn(
                 "relative flex h-8 items-center justify-center gap-1.5 overflow-hidden rounded-full text-ui outline-none",
                 variant === "toolbar" ? "min-w-8 flex-1 px-2" : active ? "w-[84px]" : "w-8",
-                "focus-visible:ring-2 focus-visible:ring-sidebar-ring/50 active:scale-[0.97]",
+                "focus-visible:ring-2 focus-visible:ring-ring/50 active:scale-[0.97]",
                 !reducedMotion &&
                   "transition-[color,background-color,box-shadow,transform] duration-150 [transition-timing-function:cubic-bezier(0.23,1,0.32,1)]",
                 active
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-xs"
-                  : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground",
+                  ? "bg-accent text-foreground shadow-raised"
+                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
               )}
             >
               <motion.span layout="position" className="flex shrink-0 items-center">
@@ -315,8 +300,8 @@ function DiffTotals({ compact = false }: { compact?: boolean }) {
         compact ? "text-xs" : "text-ui",
       )}
     >
-      <span className="text-emerald-900 dark:text-emerald-400">+281</span>
-      <span className="text-red-900 dark:text-red-400">−166</span>
+      <span className="text-positive">+281</span>
+      <span className="text-destructive">−166</span>
     </span>
   );
 }
@@ -369,7 +354,7 @@ function CommitDialog({ onComplete }: { onComplete(message: string): void }) {
         <Button
           size="sm"
           variant="outline"
-          className="min-w-0 border-sidebar-border bg-background/35 px-2.5 text-xs shadow-xs"
+          className="min-w-0 border-sidebar-border bg-background/35 px-2.5 text-xs shadow-raised"
         >
           <GitCommitIcon />
           <span>Publish</span>
@@ -432,7 +417,7 @@ function PublishControl({
               <Button
                 size="icon-sm"
                 variant="outline"
-                className="border-sidebar-border bg-background/35 shadow-xs"
+                className="border-sidebar-border bg-background/35 shadow-raised"
                 aria-label="More repository actions"
               >
                 <DotsThreeIcon weight="bold" />
@@ -462,7 +447,7 @@ function PublishControl({
           size="sm"
           variant="outline"
           aria-label="Compare branch with main on GitHub"
-          className="border-sidebar-border bg-background/35 px-2.5 text-xs shadow-xs"
+          className="border-sidebar-border bg-background/35 px-2.5 text-xs shadow-raised"
           onClick={onCompare}
         >
           {narrow ? null : <GithubLogoIcon weight="fill" />}
@@ -484,10 +469,7 @@ function ScenarioState({
     return (
       <div className="flex flex-col gap-2 p-3" aria-label={`Loading ${kind}`}>
         {["w-4/5", "w-3/5", "w-full"].map((width) => (
-          <div
-            key={width}
-            className={cn("h-8 animate-pulse rounded-md bg-sidebar-accent/70", width)}
-          />
+          <div key={width} className={cn("h-8 animate-pulse rounded-md bg-accent/70", width)} />
         ))}
       </div>
     );
@@ -541,13 +523,13 @@ function EnvironmentSummary({
         type="button"
         onClick={onShowChanges}
         aria-label={clean ? "No changes, show Diffs" : "4 changes, show Diffs"}
-        className="group grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-[14px] pt-3 pb-2.5 text-left hover:bg-sidebar-accent/45"
+        className="group grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-[14px] pt-3 pb-2.5 text-left hover:bg-accent/45"
       >
         <span className="flex min-w-0 items-center gap-2">
           <GitDiffIcon className="size-4 shrink-0 text-muted-foreground" />
           <span className="truncate text-ui font-medium">{clean ? "No changes" : "4 changes"}</span>
         </span>
-        {clean ? <CheckCircleIcon className="text-emerald-500" /> : <DiffTotals compact />}
+        {clean ? <CheckCircleIcon className="text-positive" /> : <DiffTotals compact />}
       </button>
       <RepositoryPopover noWorktree={noWorktree}>
         <button
@@ -555,7 +537,7 @@ function EnvironmentSummary({
           aria-label={
             noWorktree ? "Project branch main" : "Branch from main to ui/right-sidebar-fixes"
           }
-          className="flex min-h-8 w-full items-center gap-2 border-t border-sidebar-border/70 px-[14px] py-2.5 text-left hover:bg-sidebar-accent/45"
+          className="flex min-h-8 w-full items-center gap-2 border-t border-sidebar-border/70 px-[14px] py-2.5 text-left hover:bg-accent/45"
         >
           <GitBranchIcon className="size-4 shrink-0 text-muted-foreground" />
           {noWorktree ? null : (
@@ -594,7 +576,7 @@ function EnvironmentSummary({
       // channel-triplet shaped.
       <section
         className={cn(
-          "overflow-hidden rounded-xl border border-sidebar-border/70 bg-background/55 shadow-[var(--shadow-raised)] dark:bg-sidebar-accent/45 dark:shadow-none",
+          "overflow-hidden rounded-xl border border-sidebar-border/70 bg-background/55 shadow-raised dark:bg-accent/45 dark:shadow-none",
           narrow ? "mx-3" : "mx-4",
         )}
       >
@@ -610,9 +592,9 @@ function EnvironmentSummary({
 
 function SessionRows({ variant, narrow }: { variant: Variant; narrow: boolean }) {
   const rows = [
-    { title: "Right sidebar redesign", detail: "Waiting for you", tone: "bg-amber-500" },
-    { title: "Architecture audit", detail: "Working", tone: "bg-emerald-500" },
-    { title: "Previous implementation", detail: "18m ago", tone: "bg-muted-foreground/35" },
+    { title: "Right sidebar redesign", detail: "Waiting for you", tone: "bg-attention" },
+    { title: "Architecture audit", detail: "Working", tone: "bg-positive" },
+    { title: "Previous implementation", detail: "18m ago", tone: "bg-muted-foreground/30" },
   ];
   return (
     <section
@@ -634,7 +616,7 @@ function SessionRows({ variant, narrow }: { variant: Variant; narrow: boolean })
           key={row.title}
           type="button"
           className={cn(
-            "flex w-full items-center gap-2 px-2 py-2 text-left hover:bg-sidebar-accent/60",
+            "flex w-full items-center gap-2 px-2 py-2 text-left hover:bg-accent/60",
             variant === "calm" &&
               "rounded-lg border border-transparent hover:border-sidebar-border",
             variant === "linear" && index > 0 && "border-t border-sidebar-border/70",
@@ -769,7 +751,7 @@ function ChangesPanel({
           className={cn("flex min-h-7 items-center gap-1 pt-1 pb-3", narrow ? "px-3" : "px-4")}
         >
           <p className="text-ui font-medium">Diffs</p>
-          <span className="rounded-full bg-sidebar-accent px-1.5 font-mono text-label text-muted-foreground">
+          <span className="rounded-full bg-accent px-1.5 font-mono text-label text-muted-foreground">
             0
           </span>
         </header>
@@ -779,7 +761,7 @@ function ChangesPanel({
             narrow ? "mx-3" : "mx-4",
           )}
         >
-          <CheckCircleIcon className="mt-0.5 size-4 shrink-0 text-emerald-500" weight="fill" />
+          <CheckCircleIcon className="mt-0.5 size-4 shrink-0 text-positive" weight="fill" />
           <div>
             <p className="text-ui font-medium">No changes vs main</p>
             <p className="mt-0.5 text-xs text-muted-foreground">The branch is up to date.</p>
@@ -794,7 +776,7 @@ function ChangesPanel({
       <header className={cn("flex shrink-0 flex-col gap-2 pt-1 pb-3", narrow ? "px-3" : "px-4")}>
         <div className="flex min-h-7 items-center gap-1">
           <p className="text-ui font-medium">Diffs</p>
-          <span className="rounded-full bg-sidebar-accent px-1.5 font-mono text-label text-muted-foreground">
+          <span className="rounded-full bg-accent px-1.5 font-mono text-label text-muted-foreground">
             4
           </span>
           <Hint label="Refresh changes">
@@ -844,7 +826,7 @@ function ChangesPanel({
                 className={cn(
                   "group relative w-full text-left",
                   variant === "calm" ? "rounded-lg" : "border-b border-sidebar-border/70",
-                  active ? "bg-sidebar-accent/80" : "hover:bg-sidebar-accent/55",
+                  active ? "bg-accent/80" : "hover:bg-accent/55",
                 )}
               >
                 <button
@@ -854,16 +836,16 @@ function ChangesPanel({
                     setSelected(row.path);
                     onOpen(row.path);
                   }}
-                  className="grid min-h-[52px] w-full grid-cols-[16px_minmax(0,1fr)_72px] items-center gap-x-2 px-2.5 py-[7px] text-left outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/50"
+                  className="grid min-h-[52px] w-full grid-cols-[16px_minmax(0,1fr)_72px] items-center gap-x-2 px-2.5 py-[7px] text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
                 >
-                  <StatusIcon className={cn("size-4 shrink-0", status.iconClass)} weight="bold" />
+                  <StatusIcon className={cn("size-4 shrink-0", status.ink)} weight="bold" />
                   <span className="min-w-0">
                     <span className="flex min-w-0 items-center gap-1.5">
                       <span className="truncate text-ui font-medium">{filename}</span>
                       <span
                         className={cn(
                           "shrink-0 text-label font-medium transition-opacity duration-100 group-hover:opacity-0 group-focus-within:opacity-0",
-                          status.labelClass,
+                          status.ink,
                           narrow && "sr-only",
                         )}
                       >
@@ -875,18 +857,14 @@ function ChangesPanel({
                     </span>
                   </span>
                   <span className="flex w-[72px] shrink-0 justify-end gap-1 font-mono text-xs tabular-nums">
-                    <span className="font-medium text-emerald-900 dark:text-emerald-400">
-                      +{row.additions}
-                    </span>
-                    <span className="font-medium text-red-900 dark:text-red-400">
-                      −{row.deletions}
-                    </span>
+                    <span className="font-medium text-positive">+{row.additions}</span>
+                    <span className="font-medium text-destructive">−{row.deletions}</span>
                   </span>
                 </button>
                 <RowActions
                   path={row.path}
                   onOpen={onOpen}
-                  className="absolute top-[5px] right-20 z-10 rounded-md bg-sidebar-accent/95 px-0.5 shadow-xs"
+                  className="absolute top-[5px] right-20 z-10 rounded-md bg-accent/95 px-0.5 shadow-raised"
                 />
               </div>
             </li>
@@ -947,14 +925,14 @@ function FilesPanel({
             <li key={row.path}>
               <div
                 className={cn(
-                  "group flex w-full items-center gap-2 px-2 py-2 text-left hover:bg-sidebar-accent/55",
+                  "group flex w-full items-center gap-2 px-2 py-2 text-left hover:bg-accent/55",
                   variant === "calm" ? "rounded-lg" : "border-b border-sidebar-border/70",
                 )}
               >
                 <button
                   type="button"
                   onClick={() => onPreview(row.path)}
-                  className="flex min-w-0 flex-1 items-center gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/50"
+                  className="flex min-w-0 flex-1 items-center gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
                 >
                   <Icon className="size-4 shrink-0 text-muted-foreground" weight="fill" />
                   <span className="min-w-0 flex-1">
@@ -1000,7 +978,7 @@ function ChoicePopover({
         <button
           type="button"
           aria-label={`${label}: ${value}`}
-          className="flex h-6 items-center gap-2 rounded-full border border-sidebar-border bg-background/40 px-2 text-xs hover:bg-sidebar-accent/60"
+          className="flex h-6 items-center gap-2 rounded-full border border-sidebar-border bg-background/40 px-2 text-xs hover:bg-accent/60"
         >
           <Icon className="size-4 text-muted-foreground" />
           <span>{value}</span>
@@ -1054,7 +1032,7 @@ function PropertiesSection({ narrow = false }: { narrow?: boolean }) {
           key={label}
           type="button"
           onClick={() => setLabels((current) => current.filter((item) => item !== label))}
-          className="flex h-6 items-center gap-2 rounded-full border border-sidebar-border bg-background/40 px-2 text-xs hover:bg-sidebar-accent/60"
+          className="flex h-6 items-center gap-2 rounded-full border border-sidebar-border bg-background/40 px-2 text-xs hover:bg-accent/60"
         >
           <span
             className={cn(
@@ -1233,7 +1211,7 @@ function ControlDeck({
   onHomeLabel(value: "Now" | "Sessions"): void;
 }) {
   return (
-    <div className="fixed bottom-14 left-3 z-[100] flex max-w-[calc(100vw-24px)] flex-wrap items-center gap-2 rounded-xl border border-border bg-background/95 p-2 text-xs shadow-lg backdrop-blur-xl">
+    <div className="fixed bottom-14 left-3 z-[100] flex max-w-[calc(100vw-24px)] flex-wrap items-center gap-2 rounded-xl border border-border bg-background/95 p-2 text-xs shadow-overlay backdrop-blur-xl">
       <select
         aria-label="Prototype scenario"
         value={scenario}
@@ -1319,7 +1297,7 @@ export default function TicketRightSidebarScratch() {
   return (
     <TooltipProvider delayDuration={400} skipDelayDuration={200}>
       <div className="h-svh w-full overflow-hidden bg-rail p-2 text-foreground">
-        <div className="flex h-full overflow-hidden rounded-xl border border-border bg-background shadow-xl">
+        <div className="flex h-full overflow-hidden rounded-xl border border-border bg-background shadow-card">
           <WorkbenchMock activeSurface={activeSurface} />
           <aside
             className="relative flex shrink-0 flex-col border-l border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-200 ease-out"
@@ -1342,8 +1320,8 @@ export default function TicketRightSidebarScratch() {
               }}
             />
             {activity !== null ? (
-              <div className="absolute right-3 bottom-3 left-3 flex items-center gap-2 rounded-lg border border-sidebar-border bg-background/95 px-3 py-2 text-xs shadow-lg">
-                <CheckCircleIcon className="text-emerald-500" weight="fill" />
+              <div className="absolute right-3 bottom-3 left-3 flex items-center gap-2 rounded-lg border border-sidebar-border bg-background/95 px-3 py-2 text-xs shadow-overlay">
+                <CheckCircleIcon className="text-positive" weight="fill" />
                 <span className="min-w-0 flex-1 truncate">{activity}</span>
                 <button type="button" onClick={() => setActivity(null)} aria-label="Dismiss">
                   ×

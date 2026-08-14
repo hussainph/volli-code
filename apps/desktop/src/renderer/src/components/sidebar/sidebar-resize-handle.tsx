@@ -141,7 +141,7 @@ export function SidebarResizeHandle({ onResizingChange }: SidebarResizeHandlePro
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
       onDoubleClick={() => setSidebarWidth(SIDEBAR_DEFAULT_WIDTH)}
-      className="absolute inset-y-0 right-0 z-20 w-1 cursor-col-resize select-none after:absolute after:inset-y-0 after:right-0 after:w-[2px] after:bg-transparent after:transition-colors hover:after:bg-sidebar-border active:after:bg-sidebar-ring"
+      className="absolute inset-y-0 right-0 z-20 w-1 cursor-col-resize select-none after:absolute after:inset-y-0 after:right-0 after:w-[2px] after:bg-transparent after:transition-colors hover:after:bg-sidebar-border active:after:bg-primary"
     />
   );
 }

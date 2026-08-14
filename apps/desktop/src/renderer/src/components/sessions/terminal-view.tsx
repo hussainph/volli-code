@@ -127,7 +127,7 @@ export function TerminalView({
       data-terminal-renderer={sessionId}
       // Six pixels keeps the first glyph/cursor off Volli's chrome edge while
       // preserving nearly the full terminal grid.
-      className={cn("h-full min-h-0 w-full min-w-0 overflow-hidden p-1.5", !visible && "hidden")}
+      className={cn("h-full min-h-0 w-full min-w-0 overflow-hidden p-1", !visible && "hidden")}
       onMouseDown={() => {
         onActivate();
         getEngine(sessionId)?.focus();

@@ -58,10 +58,13 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       onOpenChange={onOpenChange}
       label="Search tickets and sessions"
       loop
-      // One notch heavier than the dialog scrim (this one also blurs), split by
-      // mode for the reason spelled out on DialogOverlay.
-      overlayClassName="fixed inset-0 z-50 bg-black/35 backdrop-blur-[2px] dark:bg-black/55"
-      contentClassName="fixed top-[18%] left-1/2 z-50 w-[min(640px,calc(100vw-32px))] -translate-x-1/2 overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl outline-none"
+      // The app's one `--scrim`, plus a blur no other overlay takes. This used
+      // to be a notch heavier than the dialog's — 35/55 against 30/50, a
+      // difference nobody could name behind a backdrop it also blurs, and the
+      // third and fourth spellings of one wash. The blur is what makes this
+      // overlay the exception; the wash is not.
+      overlayClassName="fixed inset-0 z-50 bg-scrim backdrop-blur-[2px]"
+      contentClassName="fixed top-[18%] left-1/2 z-50 w-[min(640px,calc(100vw-32px))] -translate-x-1/2 overflow-hidden rounded-xl border border-border bg-popover text-foreground shadow-overlay outline-none"
     >
       <div className="flex h-12 items-center gap-2 border-b border-border px-4">
         <MagnifyingGlassIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
@@ -72,19 +75,19 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           placeholder="Search tickets and sessions…"
           className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
         />
-        <kbd className="rounded-md border border-border bg-muted px-1.5 py-0.5 text-label text-muted-foreground">
+        <kbd className="rounded-md border border-border bg-muted px-1 py-1 text-label text-muted-foreground">
           esc
         </kbd>
       </div>
       <Command.List className="max-h-[min(460px,60vh)] overflow-y-auto p-2 [scrollbar-gutter:stable]">
-        <Command.Empty className="py-10 text-center text-sm text-muted-foreground">
+        <Command.Empty className="py-8 text-center text-sm text-muted-foreground">
           No matching tickets or sessions.
         </Command.Empty>
 
         {items.sessions.length > 0 ? (
           <Command.Group
             heading="Sessions"
-            className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-label [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group-heading]]:uppercase"
+            className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-label [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group-heading]]:uppercase"
           >
             {items.sessions.map((item) => {
               const context =
@@ -108,14 +111,14 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                     }
                     finishNavigation();
                   }}
-                  className="flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-2 outline-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
+                  className="flex cursor-pointer items-center gap-4 rounded-lg px-2 py-2 outline-none data-[selected=true]:bg-accent data-[selected=true]:text-foreground"
                 >
                   <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-card text-muted-foreground">
                     <TerminalWindowIcon className="size-3.5" />
                   </span>
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate text-sm font-medium">{item.title}</span>
-                    <span className="truncate text-xs text-muted-foreground">{context}</span>
+                    <span className="truncate text-ui text-muted-foreground">{context}</span>
                   </span>
                   <span className="shrink-0 text-label text-muted-foreground">Open session</span>
                 </Command.Item>
@@ -126,7 +129,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
 
         <Command.Group
           heading="Tickets"
-          className="mt-1 border-t border-border pt-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-label [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group-heading]]:uppercase"
+          className="mt-1 border-t border-border pt-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-label [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group-heading]]:uppercase"
         >
           {items.tickets.map((item) => (
             <Command.Item
@@ -140,14 +143,14 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 });
                 finishNavigation();
               }}
-              className="flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-2 outline-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
+              className="flex cursor-pointer items-center gap-4 rounded-lg px-2 py-2 outline-none data-[selected=true]:bg-accent data-[selected=true]:text-foreground"
             >
               <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-card text-muted-foreground">
                 <TicketIcon className="size-3.5" />
               </span>
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate text-sm font-medium">{item.title}</span>
-                <span className="truncate text-xs text-muted-foreground">
+                <span className="truncate text-ui text-muted-foreground">
                   <span className="font-mono">{item.displayId}</span> · {item.projectName}
                 </span>
               </span>
@@ -156,7 +159,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           ))}
         </Command.Group>
       </Command.List>
-      <div className="flex h-9 items-center justify-end gap-3 border-t border-border px-3 text-label text-muted-foreground">
+      <div className="flex h-9 items-center justify-end gap-4 border-t border-border px-4 text-label text-muted-foreground">
         <span>↑↓ navigate</span>
         <span>↵ open</span>
       </div>

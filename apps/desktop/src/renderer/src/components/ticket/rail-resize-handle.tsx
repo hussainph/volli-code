@@ -64,7 +64,7 @@ export function RailResizeHandle() {
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
       onDoubleClick={() => setRailWidth(RAIL_DEFAULT_WIDTH)}
-      className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-col-resize select-none after:absolute after:inset-y-0 after:left-0 after:w-[2px] after:bg-transparent after:transition-colors hover:after:bg-sidebar-border active:after:bg-sidebar-ring"
+      className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-col-resize select-none after:absolute after:inset-y-0 after:left-0 after:w-[2px] after:bg-transparent after:transition-colors hover:after:bg-sidebar-border active:after:bg-primary"
     />
   );
 }

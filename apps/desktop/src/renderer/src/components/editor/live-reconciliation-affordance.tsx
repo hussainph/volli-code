@@ -19,7 +19,7 @@ export function LiveReconciliationAffordance(props: LiveReconciliationAffordance
         role="status"
         aria-live="polite"
         aria-atomic="true"
-        className="mx-2 mt-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+        className="mx-2 mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-ui text-destructive"
       >
         {props.message}
       </div>
@@ -30,7 +30,7 @@ export function LiveReconciliationAffordance(props: LiveReconciliationAffordance
     <div
       data-testid="live-reconciliation-conflict"
       data-kind={props.kind}
-      className="mx-2 mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+      className="mx-2 mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/30 px-4 py-2 text-ui text-muted-foreground"
     >
       {/*
         Only the announcement is the live region. Buttons inside one get

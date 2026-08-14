@@ -84,7 +84,7 @@ function FileRow({
   const primary = kind === "reference" ? label : filename;
   const Icon = ROW_ICONS[kind];
   return (
-    <div className="group flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-sidebar-accent/55">
+    <div className="group flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-accent/50">
       <button
         type="button"
         data-testid="ticket-files-row"
@@ -92,7 +92,7 @@ function FileRow({
         data-kind={kind}
         onClick={onActivate}
         onDoubleClick={onPin}
-        className="flex min-w-0 flex-1 items-center gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/50"
+        className="flex min-w-0 flex-1 items-center gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/45"
       >
         <Icon className="size-4 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1">
@@ -102,7 +102,7 @@ function FileRow({
           </span>
           {/* A reference says so here rather than under a caption, which is
               what lets both kinds share one list. */}
-          <span className="block truncate text-xs text-muted-foreground/75">
+          <span className="block truncate text-ui text-muted-foreground/70">
             {kind === "reference" ? `Referenced · ${parentPath}` : parentPath}
           </span>
         </span>
@@ -256,7 +256,7 @@ export function TicketFilesPanel({
         className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-4 py-8 text-center"
       >
         <p className="text-ui font-medium text-muted-foreground">No worktree yet</p>
-        <p className="text-xs text-muted-foreground/80">
+        <p className="text-ui text-muted-foreground/70">
           Reference files in the Ticket Body with @path
         </p>
       </div>
@@ -275,7 +275,7 @@ export function TicketFilesPanel({
 
   return (
     <div data-testid="ticket-files-panel" className="flex min-h-0 flex-1 flex-col">
-      <header className={cn("flex shrink-0 flex-col gap-2 pt-1 pb-3", RAIL_PANEL_INSET)}>
+      <header className={cn("flex shrink-0 flex-col gap-2 pt-1 pb-4", RAIL_PANEL_INSET)}>
         <div className="flex items-center gap-2">
           <div className="min-w-0 flex-1">
             <p className="text-ui font-medium">Ticket files</p>
@@ -284,7 +284,7 @@ export function TicketFilesPanel({
                 folder instead, and becomes the way back out — the same line
                 doing the same job, one level down. */}
             {cwd === "" ? (
-              <p className="truncate font-mono text-xs text-muted-foreground">
+              <p className="truncate font-mono text-ui text-muted-foreground">
                 {ticket.branch ?? ticket.baseBranch ?? "No branch yet"}
               </p>
             ) : (
@@ -293,7 +293,7 @@ export function TicketFilesPanel({
                 data-testid="ticket-files-up"
                 onClick={navigateUp}
                 aria-label={`Leave ${cwd}`}
-                className="flex min-w-0 items-center gap-1 font-mono text-xs text-muted-foreground hover:text-foreground"
+                className="flex min-w-0 items-center gap-1 font-mono text-ui text-muted-foreground hover:text-foreground"
               >
                 <ArrowUUpLeftIcon className="size-3 shrink-0" />
                 <span className="truncate">{cwd}</span>

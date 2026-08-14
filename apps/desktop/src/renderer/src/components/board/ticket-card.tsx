@@ -58,15 +58,24 @@ export function TicketCardContent({
   return (
     <article
       className={cn(
-        "flex flex-col gap-1.5 rounded-lg border bg-card px-3 py-2.5 cursor-default select-none transition-[border-color] duration-150 ease-out",
+        // `shadow-raised` and not `shadow-card`: the tier names an elevation,
+        // not a component noun. A board card is a tile lying ON its column, the
+        // same lift an active tab takes; `shadow-card` is the deeper halo the
+        // detached drag preview wears while the tile is off the board
+        // (`board.tsx`). This shadow used to be applied from a hand-maintained
+        // `article.bg-card` selector in globals.css, which is exactly why the
+        // three overlays that selector forgot were wearing stock black.
+        // px-3, not the ladder's 4: a dense card trades air for content, and at
+        // px-4 real titles truncate a word earlier. Recorded spacing exception.
+        "flex flex-col gap-1 rounded-lg border bg-card px-3 py-2 shadow-raised cursor-default select-none transition-[border-color] duration-150 ease-out",
         // Selection colors the card's own border: a ring draws OUTSIDE the box
         // and the column scroller clips its top edge on the first card.
-        selected ? "border-primary/70" : "border-border hover:border-border-hover",
+        selected ? "border-primary/70" : "border-border hover:border-border-strong",
       )}
     >
       <div className="flex items-center justify-between gap-2">
         <span className="font-mono text-label text-muted-foreground">{displayId}</span>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1">
           <ArchiveReadyBadge ticket={ticket} />
           <PriorityIndicator priority={ticket.priority} />
         </div>
@@ -75,7 +84,7 @@ export function TicketCardContent({
         {ticket.title}
       </p>
       {ticket.labels.length > 0 ? (
-        <div className="flex flex-wrap gap-1 pt-0.5">
+        <div className="flex flex-wrap gap-1 pt-1">
           {ticket.labels.map((label) => (
             <TagChip key={label} tag={label} color={resolveLabelColor(projectLabels, label)} />
           ))}
@@ -85,10 +94,13 @@ export function TicketCardContent({
   );
 }
 
-// Sibling shift while a drag reorders the column: Linear-crisp, a strong
-// ease-out well under 300ms (dnd-kit's 250ms default reads floaty). Shared by
-// the board card and the list row so the two views' drag feel stays one value.
-export const SORT_TRANSITION = { duration: 180, easing: "cubic-bezier(0.23, 1, 0.32, 1)" };
+// Sibling shift while a drag reorders the column: Linear-crisp, well under
+// 300ms (dnd-kit's 250ms default reads floaty). Shared by the board card and
+// the list row so the two views' drag feel stays one value. The curve is
+// `--ease-out` by reference, not by re-typing it: this used to be the literal
+// that the token was later minted from, and a second copy is how a token
+// silently stops being one.
+export const SORT_TRANSITION = { duration: 180, easing: "var(--ease-out)" };
 
 /**
  * Sortable + context-menu wrapper shared by the board card and the list row:

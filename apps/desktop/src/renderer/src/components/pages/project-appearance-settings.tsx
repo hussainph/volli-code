@@ -196,7 +196,7 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
         </div>
       ) : (
         <>
-          <div className="pb-3">
+          <div className="pb-4">
             <ThemeOriginPill emphasized>Set by this project</ThemeOriginPill>
           </div>
           <CanvasEditor scope={scope} canvas={choice.canvas} resolved={resolved} />

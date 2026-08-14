@@ -65,7 +65,7 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
                     // `text-white` is ink on the PROJECT's own color, not on
                     // the page — `PROJECT_COLORS` is identity, not theme, so it
                     // holds still across a mode flip and so does the ink on it.
-                    "group/tile relative flex size-9 items-center justify-center rounded-[10px] text-sm font-semibold text-white transition-transform duration-100 ease-out active:scale-[0.96]",
+                    "group/tile relative flex size-9 items-center justify-center rounded-control text-sm font-semibold text-white transition-transform duration-100 ease-out active:scale-[0.96] motion-reduce:scale-100!",
                     // `ring-offset-transparent`, NOT `ring-offset-rail` (#74):
                     // the rail gave up its fill to sit on the canvas, so an
                     // offset painted in `--rail` would punch an opaque dark
@@ -78,16 +78,16 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
                   {monogram(project.name)}
                   <span
                     aria-hidden
-                    className="pointer-events-none absolute inset-0 rounded-[10px] bg-foreground/8 opacity-0 group-hover/tile:opacity-100"
+                    className="pointer-events-none absolute inset-0 rounded-control bg-foreground/10 opacity-0 group-hover/tile:opacity-100"
                   />
                 </button>
               </TooltipTrigger>
             </ContextMenuTrigger>
             <TooltipContent side="right" className="max-w-80">
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1">
                 <span className="font-bold">{project.name}</span>
                 {index < 9 && (
-                  <kbd className="rounded-sm bg-background/20 px-1 py-px font-sans text-label font-bold">
+                  <kbd className="rounded-sm bg-background/30 px-1 py-px font-sans text-label font-bold">
                     ⌘{index + 1}
                   </kbd>
                 )}

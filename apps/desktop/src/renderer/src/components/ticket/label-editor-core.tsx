@@ -150,7 +150,7 @@ export function LabelEditorCore({
           type="button"
           aria-label={`Remove ${label}`}
           onClick={() => remove(label)}
-          className="-ml-1.5 flex size-4 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-opacity duration-150 ease-out group-hover/chip:opacity-100 hover:text-foreground"
+          className="-ml-1 flex size-4 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-opacity duration-150 ease-out group-hover/chip:opacity-100 hover:text-foreground"
         >
           <XIcon className="size-2.5" />
         </button>
@@ -172,12 +172,12 @@ export function LabelEditorCore({
           }}
           placeholder={addPlaceholder}
           // `dark:bg-transparent` only looks redundant next to `bg-transparent`:
-          // Input carries `dark:bg-input/30`, which outranks an unprefixed
+          // Input carries `dark:bg-border/30`, which outranks an unprefixed
           // class, so the dark variant is what actually strips the fill there.
-          className="h-8 w-full rounded-none border-0 bg-transparent px-3 text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
+          className="h-8 w-full rounded-none border-0 bg-transparent px-4 text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
         />
         {value.length > 0 ? (
-          <div className="flex flex-wrap items-center gap-1.5 border-t border-border p-2">
+          <div className="flex flex-wrap items-center gap-1 border-t border-border p-2">
             {chips}
           </div>
         ) : null}
@@ -186,7 +186,7 @@ export function LabelEditorCore({
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div className="flex flex-wrap items-center gap-1">
       {chips}
       {showInput ? (
         <Input
@@ -206,7 +206,7 @@ export function LabelEditorCore({
             }
           }}
           placeholder={addPlaceholder}
-          className="h-6 w-28 px-1.5 text-xs"
+          className="h-6 w-28 px-1 text-ui"
         />
       ) : (
         <Button

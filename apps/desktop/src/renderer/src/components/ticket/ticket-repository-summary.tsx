@@ -121,7 +121,7 @@ import { ticketScope } from "@renderer/stores/sessions";
 import { phaseFor, useWorktreeStore } from "@renderer/stores/worktree";
 
 /** One card row's shared frame: full-width, quiet hover, seam above every row but the first. */
-const ROW = "flex w-full items-center gap-2 px-3.5 text-left";
+const ROW = "flex w-full items-center gap-2 px-4 text-left";
 
 function CardLabel({ children }: { children: React.ReactNode }) {
   return <p className="text-label font-medium text-muted-foreground uppercase">{children}</p>;
@@ -197,15 +197,15 @@ function CommitGateDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md gap-5" data-testid="ticket-commit-gate">
+      <DialogContent className="max-w-md gap-4" data-testid="ticket-commit-gate">
         <DialogHeader>
           <DialogTitle className="flex min-w-0 items-center gap-2">
             <GitBranchIcon className="shrink-0" />
             <span className="truncate font-mono text-sm">{branch}</span>
           </DialogTitle>
         </DialogHeader>
-        <div className="flex flex-col gap-3">
-          <div className="flex items-center gap-2 rounded-lg border border-border p-3">
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center gap-2 rounded-lg border border-border p-4">
             <GitDiffIcon className="size-4 shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1 truncate text-ui font-medium">{changesLabel}</span>
             {diff === null ? null : <DiffTotals diff={diff} />}
@@ -232,7 +232,7 @@ function CommitGateDialog({
           {/* The one line this dialog is allowed (CLAUDE.md: irreversible
               confirms). It names the boundary — git can undo this, Volli
               cannot — which is the whole reason the gate exists. */}
-          <p className="text-xs text-muted-foreground">Volli can't undo a commit.</p>
+          <p className="text-ui text-muted-foreground">Volli can't undo a commit.</p>
           <div className="flex items-center gap-2">
             <Button variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
@@ -307,7 +307,7 @@ function InlineTextField({
             cancel();
           }
         }}
-        className="h-7 font-mono text-xs"
+        className="h-7 font-mono text-ui"
       />
     );
   }
@@ -320,7 +320,7 @@ function InlineTextField({
         setDraft(value ?? "");
         setEditing(true);
       }}
-      className="w-full truncate rounded-md px-2 py-1 text-left font-mono text-xs text-foreground hover:bg-accent"
+      className="w-full truncate rounded-md px-2 py-1 text-left font-mono text-ui text-foreground hover:bg-accent"
     >
       {value ?? <span className="text-muted-foreground">—</span>}
     </button>
@@ -369,16 +369,16 @@ function BaseBranchField({ projectId, ticket }: { projectId: string; ticket: Tic
         <Button
           variant="ghost"
           size="sm"
-          className="w-fit gap-1.5 border border-border px-2.5 text-xs text-muted-foreground"
+          className="w-fit gap-1 border border-border px-2 text-ui text-muted-foreground"
         >
           Select branch…
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         {loading ? (
-          <div className="px-2 py-1.5 text-xs text-muted-foreground">Loading…</div>
+          <div className="px-2 py-1 text-ui text-muted-foreground">Loading…</div>
         ) : options.length === 0 ? (
-          <div className="px-2 py-1.5 text-xs text-muted-foreground">No branches found</div>
+          <div className="px-2 py-1 text-ui text-muted-foreground">No branches found</div>
         ) : (
           <DropdownMenuRadioGroup
             value={ticket.baseBranch ?? ""}
@@ -418,8 +418,8 @@ function WorktreeFailedNotice({ projectId, ticketId }: { projectId: string; tick
   }
 
   return (
-    <div className="flex flex-col items-start gap-1.5 rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-2">
-      <span className="text-xs text-destructive">Worktree setup failed.</span>
+    <div className="flex flex-col items-start gap-1 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-2">
+      <span className="text-ui text-destructive">Worktree setup failed.</span>
       <Button variant="outline" size="xs" disabled={retrying} onClick={() => void retry()}>
         Retry
       </Button>
@@ -447,21 +447,21 @@ function RepositoryPopoverContent({ projectId, ticket }: { projectId: string; ti
   }
 
   return (
-    <PopoverContent align="start" className="flex w-72 flex-col gap-3 p-3">
-      <div className="flex flex-col gap-1.5">
+    <PopoverContent align="start" className="flex w-72 flex-col gap-4 p-4">
+      <div className="flex flex-col gap-1">
         <CardLabel>Base branch</CardLabel>
         {ticket.baseBranch ? (
-          <span className="block truncate px-2 font-mono text-xs text-foreground">
+          <span className="block truncate px-2 font-mono text-ui text-foreground">
             {ticket.baseBranch}
           </span>
         ) : (
           <BaseBranchField projectId={projectId} ticket={ticket} />
         )}
       </div>
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-1">
         <CardLabel>Branch</CardLabel>
         {ticket.branch ? (
-          <span className="block truncate px-2 font-mono text-xs text-foreground">
+          <span className="block truncate px-2 font-mono text-ui text-foreground">
             {ticket.branch}
           </span>
         ) : (
@@ -473,12 +473,12 @@ function RepositoryPopoverContent({ projectId, ticket }: { projectId: string; ti
           />
         )}
       </div>
-      <div className="flex flex-col gap-1.5 border-t border-border pt-3">
+      <div className="flex flex-col gap-1 border-t border-border pt-4">
         <CardLabel>Worktree</CardLabel>
         <div className="flex items-center gap-1">
           <span
             title={ticket.worktreePath ?? undefined}
-            className="min-w-0 flex-1 truncate px-2 font-mono text-xs text-foreground"
+            className="min-w-0 flex-1 truncate px-2 font-mono text-ui text-foreground"
           >
             {ticket.worktreePath ?? <span className="text-muted-foreground">—</span>}
           </span>
@@ -543,7 +543,7 @@ function DoneFlowMenuItem({
         {action.label}
       </span>
       {action.disabled && action.reason ? (
-        <span className="text-xs text-muted-foreground">{action.reason}</span>
+        <span className="text-ui text-muted-foreground">{action.reason}</span>
       ) : null}
     </DropdownMenuItem>
   );
@@ -562,7 +562,7 @@ function toastPushResult(isUpdate: boolean, existing: boolean) {
  */
 function RetentionNoticeLine({ notice }: { notice: RetentionNotice }) {
   const line = (
-    <span className="flex w-fit items-center gap-1.5 text-xs text-muted-foreground">
+    <span className="flex w-fit items-center gap-1 text-ui text-muted-foreground">
       <WarningIcon />
       {notice.text}
     </span>
@@ -928,7 +928,7 @@ export function TicketRepositorySummary({
   // edge. It truncates and keeps its full label in `title` instead — a control
   // you can read to the end elsewhere beats one you cannot reach.
   const primaryClassName =
-    "min-w-0 shrink border-sidebar-border bg-background/35 px-2.5 text-xs shadow-xs [&>span]:truncate";
+    "min-w-0 shrink border-sidebar-border bg-background/30 px-2 text-ui shadow-raised [&>span]:truncate";
 
   const doneFlowPrimaryButton = (
     <Button
@@ -974,7 +974,7 @@ export function TicketRepositorySummary({
           <Button
             variant="outline"
             size="sm"
-            className="shrink-0 border-sidebar-border bg-background/35 px-2.5 text-xs shadow-xs"
+            className="shrink-0 border-sidebar-border bg-background/30 px-2 text-ui shadow-raised"
             aria-label="Open the pull request on GitHub"
             onClick={openPr}
           >
@@ -992,12 +992,12 @@ export function TicketRepositorySummary({
     // invalid value the browser drops, so the card that was reviewed and
     // approved is flat in BOTH appearances (verified in the lab, computed
     // `box-shadow: none` under `.light`). Border plus surface is the whole
-    // frame. To add the lift the scratch intended, this wants
-    // `shadow-[0_1px_2px_var(--shadow-ink)/6%,…]` and a real token, not a
-    // revival of the broken string.
+    // frame. The lift the scratch intended is `shadow-raised` —
+    // one of the three solved tiers, tinted to the canvas in both appearances —
+    // and adding it is a visual call, not a revival of the broken string.
     <section
       data-testid="ticket-repository-summary"
-      className="mx-4 overflow-hidden rounded-xl border border-sidebar-border/70 bg-background/55 group-data-[narrow=true]/rail:mx-3 dark:bg-sidebar-accent/45"
+      className="mx-4 overflow-hidden rounded-xl border border-sidebar-border/70 bg-background/50 group-data-[narrow=true]/rail:mx-3 dark:bg-accent/50"
     >
       <button
         type="button"
@@ -1006,7 +1006,7 @@ export function TicketRepositorySummary({
         title={changeSetSummary ?? undefined}
         aria-busy={loadingChanges || undefined}
         aria-label={`${loadingChanges ? "Reading changes" : changesLabel}, show Diffs`}
-        className={cn(ROW, "pt-3 pb-2.5 hover:bg-sidebar-accent/45")}
+        className={cn(ROW, "pt-4 pb-2 hover:bg-accent/50")}
       >
         <GitDiffIcon className="size-4 shrink-0 text-muted-foreground" />
         {/* One flex child either way, so the label lands where the bar was
@@ -1017,14 +1017,14 @@ export function TicketRepositorySummary({
             <span
               aria-hidden
               data-testid="ticket-repository-changes-loading"
-              className="my-[3px] block h-3.5 w-24 animate-pulse rounded bg-sidebar-accent/70 motion-reduce:animate-none"
+              className="my-[3px] block h-3.5 w-24 animate-pulse rounded-md bg-accent/70 motion-reduce:animate-none"
             />
           ) : (
             <span className="block truncate text-ui font-medium">{changesLabel}</span>
           )}
         </span>
         {diff === null ? null : fileCount === 0 ? (
-          <CheckCircleIcon className="shrink-0 text-emerald-500" />
+          <CheckCircleIcon className="shrink-0 text-positive" />
         ) : (
           <DiffTotals diff={diff} />
         )}
@@ -1040,21 +1040,18 @@ export function TicketRepositorySummary({
                 ? "Worktree identity"
                 : `Branch ${ticket.baseBranch ?? "base"} to ${ticket.branch}`
             }
-            className={cn(
-              ROW,
-              "min-h-8 border-t border-sidebar-border/70 py-2.5 hover:bg-sidebar-accent/45",
-            )}
+            className={cn(ROW, "min-h-8 border-t border-sidebar-border/70 py-2 hover:bg-accent/50")}
           >
             <GitBranchIcon className="size-4 shrink-0 text-muted-foreground" />
             {ticket.baseBranch !== null && ticket.branch !== null ? (
               <>
-                <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                <span className="shrink-0 font-mono text-ui text-muted-foreground">
                   {ticket.baseBranch}
                 </span>
                 <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground" />
               </>
             ) : null}
-            <span className="min-w-0 flex-1 truncate font-mono text-xs text-sidebar-foreground">
+            <span className="min-w-0 flex-1 truncate font-mono text-ui text-sidebar-foreground">
               {ticket.branch ?? ticket.baseBranch ?? "No branch yet"}
             </span>
             <CaretDownIcon className="size-3 shrink-0 text-muted-foreground" />
@@ -1064,7 +1061,7 @@ export function TicketRepositorySummary({
       </Popover>
 
       {hasWorktree ? (
-        <div className="flex flex-col gap-2 border-t border-sidebar-border/70 px-3.5 py-2.5">
+        <div className="flex flex-col gap-2 border-t border-sidebar-border/70 px-4 py-2">
           {fault !== null ? (
             // The whole block, not a line above it: with no readable worktree
             // there is no honest publish state to offer, and the retention
@@ -1084,7 +1081,7 @@ export function TicketRepositorySummary({
             <>
               {/* The archive-reason context line — why the wrap-up is being offered. */}
               {retentionView.archiveReady && retentionView.reasonLine ? (
-                <span className="flex items-center gap-1.5 text-xs text-foreground">
+                <span className="flex items-center gap-1 text-ui text-foreground">
                   <ArchiveIcon className="text-primary" />
                   {retentionView.reasonLine}
                 </span>
@@ -1117,7 +1114,7 @@ export function TicketRepositorySummary({
                             variant="outline"
                             size="icon-sm"
                             aria-label="More repository actions"
-                            className="border-sidebar-border bg-background/35 shadow-xs"
+                            className="border-sidebar-border bg-background/30 shadow-raised"
                           >
                             <DotsThreeIcon weight="bold" />
                           </Button>
@@ -1140,7 +1137,7 @@ export function TicketRepositorySummary({
                               {view.primary.label}
                             </span>
                             {view.primary.disabled && view.primary.reason ? (
-                              <span className="text-xs text-muted-foreground">
+                              <span className="text-ui text-muted-foreground">
                                 {view.primary.reason}
                               </span>
                             ) : null}
@@ -1194,7 +1191,7 @@ export function TicketRepositorySummary({
               </div>
               {/* The quiet "kept" state (Keep exempts the ticket from both paths) with its un-keep path. */}
               {retentionView.kept ? (
-                <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <span className="flex items-center gap-1 text-ui text-muted-foreground">
                   <PushPinIcon />
                   Worktree kept
                   <button

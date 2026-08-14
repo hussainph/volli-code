@@ -121,7 +121,7 @@ function BranchRows({
                   option.remote ? "text-muted-foreground" : "text-foreground",
                 )}
               />
-              <span className="truncate font-mono text-xs text-foreground">{option.name}</span>
+              <span className="truncate font-mono text-ui text-foreground">{option.name}</span>
               {option.name === value ? (
                 <CheckIcon weight="bold" className="ml-auto size-3.5 shrink-0 text-foreground" />
               ) : null}
@@ -151,18 +151,18 @@ function BranchListBody({
     // A repo we cannot read is the one case worth a sentence: the chip alone
     // cannot say why it has nothing to offer.
     return (
-      <div className="flex items-start gap-2 px-2 py-2 text-xs text-muted-foreground">
+      <div className="flex items-start gap-2 px-2 py-2 text-ui text-muted-foreground">
         <CloudArrowDownIcon className="mt-px size-3.5 shrink-0" />
         {state.error}
       </div>
     );
   }
   if (state.status === "loading") {
-    return <div className="px-2 py-2 text-xs text-muted-foreground">Reading branches…</div>;
+    return <div className="px-2 py-2 text-ui text-muted-foreground">Reading branches…</div>;
   }
   if (groups.length === 0) {
     return (
-      <div className="px-2 py-2 text-xs text-muted-foreground">
+      <div className="px-2 py-2 text-ui text-muted-foreground">
         {query.trim() === "" ? "No branches" : "No matching branches"}
       </div>
     );
@@ -309,7 +309,7 @@ export function ComposerBranchRow({
           <ArrowRightIcon
             aria-hidden
             weight="bold"
-            className="size-3 shrink-0 text-muted-foreground/60"
+            className="size-3 shrink-0 text-muted-foreground/50"
           />
         </>
       ) : null}

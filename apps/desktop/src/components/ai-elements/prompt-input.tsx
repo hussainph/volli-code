@@ -863,7 +863,7 @@ export const PromptInput = ({
         type="file"
       />
       <form className={cn("w-full", className)} onSubmit={handleSubmit} ref={formRef} {...props}>
-        <InputGroup className="overflow-hidden rounded-2xl border-0 bg-transparent shadow-none dark:bg-transparent">
+        <InputGroup className="overflow-hidden rounded-container border-0 bg-transparent shadow-none dark:bg-transparent">
           {children}
         </InputGroup>
       </form>
@@ -1248,7 +1248,7 @@ export type PromptInputTabLabelProps = HTMLAttributes<HTMLHeadingElement>;
 export const PromptInputTabLabel = ({ className, ...props }: PromptInputTabLabelProps) => (
   // Content provided via children in props
   // oxlint-disable-next-line eslint-plugin-jsx-a11y(heading-has-content)
-  <h3 className={cn("mb-2 px-3 font-medium text-muted-foreground text-xs", className)} {...props} />
+  <h3 className={cn("mb-2 px-4 font-medium text-muted-foreground text-ui", className)} {...props} />
 );
 
 export type PromptInputTabBodyProps = HTMLAttributes<HTMLDivElement>;
@@ -1261,7 +1261,7 @@ export type PromptInputTabItemProps = HTMLAttributes<HTMLDivElement>;
 
 export const PromptInputTabItem = ({ className, ...props }: PromptInputTabItemProps) => (
   <div
-    className={cn("flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent", className)}
+    className={cn("flex items-center gap-2 px-4 py-2 text-ui hover:bg-accent", className)}
     {...props}
   />
 );

@@ -30,9 +30,17 @@ function SheetOverlay({
     <SheetPrimitive.Overlay
       data-slot="sheet-overlay"
       className={cn(
-        // Same scrim weights as DialogOverlay, and for the same reason — see
-        // the note there.
-        "fixed inset-0 z-50 bg-black/30 motion-reduce:animate-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0 dark:bg-black/50",
+        // The same `--scrim` as DialogOverlay — see the note there.
+        //
+        // The timing is SheetContent's, not the dialog's: this scrim rides an
+        // asymmetric 250ms-in / 200ms-out gesture on the iOS sheet curve, and
+        // inheriting `tw-animate-css`'s 150ms bare `ease` left it a full 100ms
+        // and a different curve away from the panel it belongs to.
+        //
+        // `animate-none!` is important on purpose — the reduced-motion gate
+        // loses to `data-[state=open]:animate-in` without it; the full argument
+        // is on MENU_SURFACE_FADE in `ui/menu-classes.ts`.
+        "fixed inset-0 z-50 bg-scrim ease-swift motion-reduce:animate-none! data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:duration-[200ms] data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:duration-[250ms]",
         className,
       )}
       {...props}
@@ -56,7 +64,7 @@ function SheetContent({
       <SheetPrimitive.Content
         data-slot="sheet-content"
         className={cn(
-          "fixed z-50 flex flex-col gap-4 bg-background shadow-lg transition ease-swift motion-reduce:animate-none data-[state=closed]:animate-out data-[state=closed]:duration-[200ms] data-[state=open]:animate-in data-[state=open]:duration-[250ms]",
+          "fixed z-50 flex flex-col gap-4 bg-background shadow-overlay transition ease-swift motion-reduce:animate-none! data-[state=closed]:animate-out data-[state=closed]:duration-[200ms] data-[state=open]:animate-in data-[state=open]:duration-[250ms]",
           side === "right" &&
             "inset-y-0 right-0 h-full w-3/4 border-l data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-sm",
           side === "left" &&
@@ -71,7 +79,7 @@ function SheetContent({
       >
         {children}
         {showCloseButton && (
-          <SheetPrimitive.Close className="absolute top-4 right-4 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none data-[state=open]:bg-secondary">
+          <SheetPrimitive.Close className="absolute top-4 right-4 rounded-full opacity-70 transition-opacity outline-none hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/45 disabled:pointer-events-none data-[state=open]:bg-muted">
             <XIcon weight="bold" className="size-4" />
             <span className="sr-only">Close</span>
           </SheetPrimitive.Close>
@@ -83,11 +91,7 @@ function SheetContent({
 
 function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
-    <div
-      data-slot="sheet-header"
-      className={cn("flex flex-col gap-1.5 p-4", className)}
-      {...props}
-    />
+    <div data-slot="sheet-header" className={cn("flex flex-col gap-1 p-4", className)} {...props} />
   );
 }
 

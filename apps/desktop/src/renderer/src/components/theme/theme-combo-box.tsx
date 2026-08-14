@@ -144,7 +144,7 @@ export function ThemeComboBox<Value extends string>({
             autoFocus
             aria-label={searchLabel}
             placeholder={searchPlaceholder}
-            className="h-9 border-b border-border bg-transparent px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+            className="h-9 border-b border-border bg-transparent px-4 text-sm text-foreground outline-none placeholder:text-muted-foreground"
           />
           <Command.List className="max-h-64 overflow-y-auto p-1">
             <Command.Empty className="py-6 text-center text-sm text-muted-foreground">
@@ -167,7 +167,7 @@ export function ThemeComboBox<Value extends string>({
                     })
                     .finally(endHighlightedPreview);
                 }}
-                className="flex cursor-pointer items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-sm outline-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
+                className="flex cursor-pointer items-center justify-between gap-2 rounded-sm px-2 py-1 text-sm outline-none data-[selected=true]:bg-accent data-[selected=true]:text-foreground"
               >
                 <span className="truncate">{item.label}</span>
                 {item.value === activeValue ? (
@@ -201,8 +201,8 @@ export function ThemeOriginPill({
   return (
     <span
       className={cn(
-        "rounded-full border px-2 py-0.5 text-label",
-        emphasized ? "border-primary/40 text-primary-text" : "border-border text-muted-foreground",
+        "rounded-full border px-2 py-1 text-label",
+        emphasized ? "border-primary/30 text-primary-text" : "border-border text-muted-foreground",
       )}
     >
       {children}

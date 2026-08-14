@@ -40,8 +40,8 @@ export function TicketRowContent({
   return (
     <div
       className={cn(
-        "flex h-9 cursor-default select-none items-center gap-3 border-b border-border/40 px-gutter",
-        selected ? "bg-primary/10" : "hover:bg-muted/40",
+        "flex h-9 cursor-default select-none items-center gap-4 border-b border-border/30 px-gutter",
+        selected ? "bg-primary/10" : "hover:bg-muted/30",
       )}
     >
       <PriorityIndicator priority={ticket.priority} />
@@ -131,9 +131,9 @@ function ListSection({
 
   return (
     <section data-list-section data-status={status}>
-      <div className="sticky top-0 z-10 flex items-center gap-2 bg-muted/40 px-gutter py-1.5 backdrop-blur-sm">
+      <div className="sticky top-0 z-10 flex items-center gap-2 bg-muted/30 px-gutter py-1 backdrop-blur-sm">
         <span className="text-ui font-medium text-foreground">{TICKET_STATUS_LABELS[status]}</span>
-        <span className="font-mono text-xs text-muted-foreground">{tickets.length}</span>
+        <span className="font-mono text-ui text-muted-foreground">{tickets.length}</span>
       </div>
       <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
         <div ref={setNodeRef} className={cn(dragActive && "min-h-9")}>
@@ -170,7 +170,7 @@ function SectionComposer({ projectId, status }: { projectId: string; status: Tic
       <button
         type="button"
         onClick={composer.openComposer}
-        className="flex h-8 w-full items-center gap-1.5 px-gutter text-xs text-muted-foreground transition-colors duration-150 ease-out hover:text-foreground"
+        className="flex h-8 w-full items-center gap-1 px-gutter text-ui text-muted-foreground transition-colors duration-150 ease-out hover:text-foreground"
       >
         <PlusIcon className="size-3.5" />
         New
@@ -179,7 +179,7 @@ function SectionComposer({ projectId, status }: { projectId: string; status: Tic
   }
 
   return (
-    <div className="flex h-9 items-center border-b border-border/40 bg-card px-gutter">
+    <div className="flex h-9 items-center border-b border-border/30 bg-card px-gutter">
       <input
         ref={composer.inputRef}
         autoFocus
@@ -207,14 +207,14 @@ function EmptyDropRow({ status }: { status: TicketStatus }) {
     <div
       ref={setNodeRef}
       className={cn(
-        "flex h-9 items-center gap-2 border-b border-border/40 px-gutter transition-colors duration-150 ease-out",
-        isOver ? "bg-accent ring-1 ring-inset ring-primary/60" : "bg-muted/20",
+        "flex h-9 items-center gap-2 border-b border-border/30 px-gutter transition-colors duration-150 ease-out",
+        isOver ? "bg-accent ring-1 ring-inset ring-primary/50" : "bg-muted/30",
       )}
     >
       <span className="text-ui font-medium text-muted-foreground">
         {TICKET_STATUS_LABELS[status]}
       </span>
-      <span className="font-mono text-xs text-muted-foreground">0</span>
+      <span className="font-mono text-ui text-muted-foreground">0</span>
     </div>
   );
 }

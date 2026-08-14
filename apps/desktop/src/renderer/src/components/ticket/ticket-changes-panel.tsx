@@ -86,46 +86,25 @@ export function toChangeListRow(file: ChangeSetFile, recency: ChangeRecencyState
  * `deleted` takes the removal mark in the deletions' own red, `untracked`
  * shares `added`'s green because both are "this file is new" (the status word
  * beside it is what separates staged from not), and `conflicted` is the one
- * failure among them, so it takes the warning glyph and the destructive ink.
+ * failure among them, so it takes the warning glyph.
+ *
+ * ONE ink per status, where this was a `{iconClass, labelClass}` pair. The pair
+ * only ever encoded a light-mode shade step (`-600` glyph, `-900` label) that
+ * dark mode collapsed anyway — six statuses × two fields × two appearances of
+ * hand-written Tailwind, saying what the canvas now solves once. The glyph and
+ * its label are one object; they were never two decisions.
  *
  * `bold`, not `fill`: at 16px a status mark sits beside an 11px label, which is
  * the size tier where regular draws lighter than its own text (CLAUDE.md).
  * Filling them would make five different drawings rather than one heavier set.
  */
-const CHANGE_STATUS: Record<
-  ChangeSetFileStatus,
-  { icon: PhosphorIcon; iconClass: string; labelClass: string }
-> = {
-  modified: {
-    icon: GitDiffIcon,
-    iconClass: "text-amber-600 dark:text-amber-400",
-    labelClass: "text-amber-900 dark:text-amber-400",
-  },
-  added: {
-    icon: PlusIcon,
-    iconClass: "text-emerald-600 dark:text-emerald-400",
-    labelClass: "text-emerald-900 dark:text-emerald-400",
-  },
-  untracked: {
-    icon: PlusIcon,
-    iconClass: "text-emerald-600 dark:text-emerald-400",
-    labelClass: "text-emerald-900 dark:text-emerald-400",
-  },
-  renamed: {
-    icon: ArrowRightIcon,
-    iconClass: "text-sky-600 dark:text-sky-400",
-    labelClass: "text-sky-900 dark:text-sky-400",
-  },
-  deleted: {
-    icon: MinusIcon,
-    iconClass: "text-red-600 dark:text-red-400",
-    labelClass: "text-red-900 dark:text-red-400",
-  },
-  conflicted: {
-    icon: WarningIcon,
-    iconClass: "text-destructive",
-    labelClass: "text-destructive",
-  },
+const CHANGE_STATUS: Record<ChangeSetFileStatus, { icon: PhosphorIcon; ink: string }> = {
+  modified: { icon: GitDiffIcon, ink: "text-attention" },
+  added: { icon: PlusIcon, ink: "text-positive" },
+  untracked: { icon: PlusIcon, ink: "text-positive" },
+  renamed: { icon: ArrowRightIcon, ink: "text-info" },
+  deleted: { icon: MinusIcon, ink: "text-destructive" },
+  conflicted: { icon: WarningIcon, ink: "text-destructive" },
 };
 
 /** The page's name and its count — the one line both the empty and full list wear. */
@@ -133,7 +112,7 @@ function ChangesTitle({ count }: { count: number }) {
   return (
     <>
       <p className="text-ui font-medium">Diffs</p>
-      <span className="rounded-full bg-sidebar-accent px-1.5 font-mono text-label text-muted-foreground">
+      <span className="rounded-full bg-accent px-1 font-mono text-label text-muted-foreground">
         {count}
       </span>
     </>
@@ -188,7 +167,7 @@ export function TicketChangesList({
     return (
       <div
         data-testid="ticket-changes-error"
-        className={cn("flex min-h-0 flex-1 flex-col py-5", RAIL_PANEL_INSET)}
+        className={cn("flex min-h-0 flex-1 flex-col py-4", RAIL_PANEL_INSET)}
         role="alert"
       >
         <p className="text-ui text-destructive">{error}</p>
@@ -204,14 +183,14 @@ export function TicketChangesList({
       <div
         data-testid="ticket-changes-empty"
         className={cn(
-          "flex items-start gap-2.5 rounded-lg border border-sidebar-border/70 bg-background/35 p-3",
+          "flex items-start gap-2 rounded-lg border border-sidebar-border/70 bg-background/30 p-4",
           RAIL_PANEL_MARGIN,
         )}
       >
-        <CheckCircleIcon className="mt-0.5 size-4 shrink-0 text-emerald-500" weight="fill" />
+        <CheckCircleIcon className="mt-1 size-4 shrink-0 text-positive" weight="fill" />
         <div>
           <p className="text-ui font-medium">No changes vs base</p>
-          <p className="mt-0.5 text-xs text-muted-foreground">The branch is up to date.</p>
+          <p className="mt-1 text-ui text-muted-foreground">The branch is up to date.</p>
         </div>
       </div>
     );
@@ -233,7 +212,7 @@ export function TicketChangesList({
             <div
               className={cn(
                 "group relative w-full rounded-lg text-left",
-                focused ? "bg-sidebar-accent/80" : "hover:bg-sidebar-accent/55",
+                focused ? "bg-accent/70" : "hover:bg-accent/50",
               )}
             >
               <button
@@ -243,11 +222,11 @@ export function TicketChangesList({
                 data-focused={focused ? "true" : undefined}
                 aria-label={`${row.statusLabel}: ${row.path}`}
                 onClick={() => onSelectRow(row.path)}
-                className="grid min-h-[52px] w-full grid-cols-[16px_minmax(0,1fr)_72px] items-center gap-x-2 px-2.5 py-[7px] text-left outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/50"
+                className="grid min-h-[52px] w-full grid-cols-[16px_minmax(0,1fr)_72px] items-center gap-x-2 px-2 py-[7px] text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/45"
               >
-                <StatusIcon className={cn("size-4 shrink-0", status.iconClass)} weight="bold" />
+                <StatusIcon className={cn("size-4 shrink-0", status.ink)} weight="bold" />
                 <span className="min-w-0">
-                  <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="flex min-w-0 items-center gap-1">
                     <span className="truncate text-ui font-medium">{row.filename}</span>
                     {row.updatedLabel !== undefined && row.updatedDescription !== undefined ? (
                       <span
@@ -265,27 +244,23 @@ export function TicketChangesList({
                       className={cn(
                         "shrink-0 text-label font-medium transition-opacity duration-100 group-focus-within:opacity-0 group-hover:opacity-0 motion-reduce:transition-none",
                         "group-data-[narrow=true]/rail:sr-only",
-                        status.labelClass,
+                        status.ink,
                       )}
                     >
                       {row.statusLabel}
                     </span>
                   </span>
-                  <span className="block truncate text-xs text-muted-foreground/75">
+                  <span className="block truncate text-ui text-muted-foreground/70">
                     {row.renameFrom !== null ? `← ${row.renameFrom}` : row.parentPath}
                   </span>
                 </span>
-                <span className="flex w-[72px] shrink-0 justify-end gap-1 font-mono text-xs tabular-nums">
+                <span className="flex w-[72px] shrink-0 justify-end gap-1 font-mono text-ui tabular-nums">
                   {row.binary ? (
                     <span className="text-muted-foreground">Binary</span>
                   ) : row.insertions === null || row.deletions === null ? null : (
                     <>
-                      <span className="font-medium text-emerald-900 dark:text-emerald-400">
-                        +{row.insertions}
-                      </span>
-                      <span className="font-medium text-red-900 dark:text-red-400">
-                        −{row.deletions}
-                      </span>
+                      <span className="font-medium text-positive">+{row.insertions}</span>
+                      <span className="font-medium text-destructive">−{row.deletions}</span>
                     </>
                   )}
                 </span>
@@ -296,7 +271,7 @@ export function TicketChangesList({
               <RailRowActions
                 path={row.path}
                 onOpen={onSelectRow}
-                className="absolute top-[5px] right-20 z-10 rounded-md bg-sidebar-accent/95 px-0.5 shadow-xs"
+                className="absolute top-[5px] right-20 z-10 rounded-md bg-accent/90 px-1 shadow-raised"
               />
             </div>
           </li>
@@ -306,7 +281,7 @@ export function TicketChangesList({
         <li
           data-testid="ticket-changes-truncated"
           data-hidden-count={hiddenCount}
-          className="px-2.5 py-1.5 text-xs text-muted-foreground/80"
+          className="px-2 py-1 text-ui text-muted-foreground/70"
           role="presentation"
         >
           {hiddenCount.toLocaleString()} more {hiddenCount === 1 ? "file" : "files"} not shown
@@ -471,7 +446,7 @@ export function TicketChangesPanel({
         className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-4 py-8 text-center"
       >
         <p className="text-ui font-medium text-muted-foreground">No worktree yet</p>
-        <p className="text-xs text-muted-foreground/80">Move this ticket to Doing to start one</p>
+        <p className="text-ui text-muted-foreground/70">Move this ticket to Doing to start one</p>
       </div>
     );
   }
@@ -486,7 +461,7 @@ export function TicketChangesPanel({
 
   return (
     <div data-testid="ticket-changes-panel" className="flex min-h-0 flex-1 flex-col">
-      <header className={cn("flex shrink-0 flex-col gap-2 pt-1 pb-3", RAIL_PANEL_INSET)}>
+      <header className={cn("flex shrink-0 flex-col gap-2 pt-1 pb-4", RAIL_PANEL_INSET)}>
         {/* Nothing to refine or total up on a clean branch, so the header
             keeps only its name and its zero — the controls would be three
             no-ops over an empty list. */}

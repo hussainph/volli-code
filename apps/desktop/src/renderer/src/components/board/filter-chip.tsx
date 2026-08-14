@@ -36,7 +36,7 @@ export function FilterChip({ label, options, selected, onToggle }: FilterChipPro
         <Button
           variant="ghost"
           className={cn(
-            "border border-border px-2.5 text-xs text-muted-foreground",
+            "border border-border px-2 text-ui text-muted-foreground",
             active && "border-border-strong text-foreground",
           )}
         >

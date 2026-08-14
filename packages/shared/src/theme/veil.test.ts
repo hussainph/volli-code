@@ -51,7 +51,7 @@ describe("generateVeilTokens", () => {
         // Stacked on the sidebar's own veil — two deep, and never more. Apple's
         // rule: a light translucent surface never sits on another one.
         expect(compositeOver(veils["--sidebar-accent-veil"], tokens["--sidebar"])).toEqual(
-          hexChannels(tokens["--sidebar-accent"]),
+          hexChannels(tokens["--accent"]),
         );
       }
     }

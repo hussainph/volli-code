@@ -81,22 +81,67 @@ const LADDER: readonly { tokens: readonly ThemeTokenName[]; L: number; k: number
   { tokens: ["--background"], L: 0.178, k: 1.0 },
   { tokens: ["--card"], L: 0.2, k: 1.1 },
   { tokens: ["--popover"], L: 0.218, k: 1.1 },
-  { tokens: ["--secondary", "--muted"], L: 0.226, k: 1.2 },
+  { tokens: ["--muted"], L: 0.226, k: 1.2 },
   { tokens: ["--accent"], L: 0.252, k: 1.3 },
   { tokens: ["--sidebar-border"], L: 0.255, k: 1.4 },
-  { tokens: ["--border", "--input"], L: 0.269, k: 1.4 },
-  { tokens: ["--border-hover"], L: 0.321, k: 1.5 },
+  { tokens: ["--border"], L: 0.269, k: 1.4 },
   { tokens: ["--border-strong"], L: 0.349, k: 1.5 },
 ];
 
 /**
- * `--destructive`, frozen in OKLCH. Hue-locked per the semantic escape list:
- * without it a red seed makes *delete* indistinguishable from *primary*, and
- * a green seed makes it read as success. These numbers are today's `#e5484d`
- * decomposed — it round-trips to that hex exactly — kept in OKLCH rather than
- * as a literal so a future light mode is a lightness change, not a new color.
+ * The four hue-locked semantics, frozen at hue and NOTHING ELSE.
+ *
+ * Three are today's Tailwind anchors decomposed in OKLCH: the `-500` rung of
+ * emerald, amber and sky, because `bg-emerald-500` is the dot the app has been
+ * drawing and a dot is what carries a status colour's identity. `destructive` is
+ * `#e5484d` decomposed the same way, the red this app has always deleted with.
+ * Hue is the only thing taken from any of them. It is also the only thing that
+ * MEANS anything — green/amber/blue/red read as working/waiting/moved/gone by
+ * convention, and a family that followed the canvas's seed would be four colours
+ * saying nothing.
+ *
+ * Everything else is solved, which is what an authored hex could never be. These
+ * are painted as a dot on a rail AND read as a label in a panel, in two
+ * appearances, on whatever canvas the user armed — and one frozen value cannot be
+ * right in more than one of those. `--destructive` was the last holdout: frozen
+ * outright, it scored Lc ~35 on the card in dark while its three peers were
+ * solved to 65, so a red diff count read visibly quieter than the green one
+ * beside it. It joins the family here; only its hue is still a decision.
  */
-const DESTRUCTIVE = { L: 0.6256, C: 0.1933, h: 23.026 } as const;
+const STATUS_HUES = {
+  positive: 162.48,
+  attention: 70.08,
+  info: 237.32,
+  destructive: 23.026,
+} as const;
+
+/**
+ * The chroma every status token asks for. Gamut mapping takes back whatever a
+ * hue cannot hold at the lightness it lands on, so the ask is a ceiling shared
+ * by three hues rather than three hand-tuned saturations — sRGB's blue simply
+ * cannot be as vivid as its green at equal contrast, and pretending otherwise
+ * is how one status colour ends up shouting over its peers.
+ *
+ * 0.16 because it is roughly where green and amber top out near the lightnesses
+ * {@link STATUS_LC} solves to, so the ask binds on hue rather than on taste.
+ */
+const STATUS_CHROMA = 0.16;
+
+/**
+ * The contrast every status token is solved to, and the reason the family is
+ * perceptually matched rather than merely similar.
+ *
+ * Above {@link MUTED_LC}: a status label that read quieter than the secondary
+ * copy beside it would be a signal losing to its own caption. Below
+ * {@link BODY_LC}: it is a dot and a short label, not prose.
+ *
+ * Measured on `--card` for {@link solveStatusTokens}'s callers, for
+ * `--muted-foreground`'s reason — status ink lives a rung down, in panels and
+ * rails, and the card is the harder of the two surfaces in BOTH appearances
+ * (it is the darker rung in light and the lighter one in dark), so a floor met
+ * there is met on `--background` too.
+ */
+const STATUS_LC = 65;
 
 /**
  * Every contrast floor this generator solves to, restated as data.
@@ -116,6 +161,14 @@ export const THEME_CONTRAST_FLOORS = [
   { text: "--sidebar-foreground", surface: "--sidebar", floor: SIDEBAR_LC, what: "Sidebar nav" },
   { text: "--primary-text", surface: "--background", floor: MUTED_LC, what: "Accent as text" },
   { text: "--primary-foreground", surface: "--primary", floor: MUTED_LC, what: "Button label" },
+  // The status family, on the rung it is actually painted on. These are the
+  // only entries whose floor the *canvas* layer has to re-meet rather than
+  // inherit — `solveStatusTokens` runs again per ladder — so the sweep over
+  // every authorable canvas is what proves the re-solve happened at all.
+  { text: "--positive", surface: "--card", floor: STATUS_LC, what: "Positive status" },
+  { text: "--attention", surface: "--card", floor: STATUS_LC, what: "Attention status" },
+  { text: "--info", surface: "--card", floor: STATUS_LC, what: "Info status" },
+  { text: "--destructive", surface: "--card", floor: STATUS_LC, what: "Destructive status" },
 ] as const satisfies readonly {
   text: ThemeTokenName;
   surface: ThemeTokenName;
@@ -232,6 +285,73 @@ export function solveLightnessOrCeiling(
 }
 
 /**
+ * The status family: four fills and the label each one carries.
+ *
+ * Deliberately no wider. A status colour has one job and does not need a muted
+ * tier: the sites that want a quiet version already wash the token
+ * (`bg-positive/10`, `bg-destructive/10`) the way the rest of the app washes
+ * every other colour.
+ */
+export type StatusTokens = Pick<
+  ThemeTokens,
+  | "--positive"
+  | "--positive-foreground"
+  | "--attention"
+  | "--attention-foreground"
+  | "--info"
+  | "--info-foreground"
+  | "--destructive"
+  | "--destructive-foreground"
+>;
+
+/**
+ * The status family solved against the surface it is painted on.
+ *
+ * A second entry point rather than a slice of {@link generateThemeTokens}'s
+ * output for the same reason {@link generateAccentTokens} is one: the canvas
+ * layer moves the very surface these are measured against, so it has to ask
+ * again with its OWN card rather than inherit an answer solved on the shipped
+ * ladder's. Nothing solved can be carried across a ladder change, and every
+ * member of this family is now solved — `--destructive` included, which is why
+ * the light path no longer copies it out of the dark one.
+ *
+ * Each label is {@link pickAccentLabel}'s verdict — whichever of white or a
+ * near-black tint of the status hue reads better ON the fill. Unlike the accent
+ * pair there is no repair step, and there is no room for one: the fill's
+ * lightness is already spoken for by {@link STATUS_LC}, so the only axis
+ * `solveAccentPair` has to trade is the one axis a status colour cannot give up.
+ * The two candidates straddle every lightness a status fill can take, so the
+ * better of them is legible by construction — and because the fill is solved per
+ * appearance, so is the label: a destructive button is white-on-red where the
+ * red is light enough to carry white, and dark-on-red where a light ladder
+ * pushed it down. That flip is the point, not an inconsistency.
+ */
+export function solveStatusTokens(surface: string): StatusTokens {
+  const solve = (hue: number) => {
+    const fill = oklchToHex(
+      solveLightnessOrCeiling(STATUS_LC, STATUS_CHROMA, hue, surface),
+      STATUS_CHROMA,
+      hue,
+    );
+    return { fill, label: pickAccentLabel(fill, hue).hex };
+  };
+  const positive = solve(STATUS_HUES.positive);
+  const attention = solve(STATUS_HUES.attention);
+  const info = solve(STATUS_HUES.info);
+  const destructive = solve(STATUS_HUES.destructive);
+  return {
+    "--positive": positive.fill,
+    "--positive-foreground": positive.label,
+    "--attention": attention.fill,
+    "--attention-foreground": attention.label,
+    "--info": info.fill,
+    "--info-foreground": info.label,
+    "--destructive": destructive.fill,
+    "--destructive-foreground": destructive.label,
+  };
+}
+
+/**
  * Generates the complete token set from an authored theme.
  *
  * Pure and deterministic: the same definition always yields the same hexes,
@@ -304,9 +424,10 @@ export function generateThemeTokens(theme: ThemeDefinition): ThemeTokens {
 
   const tokens: ThemeTokens = {
     ...ladder,
-    // 8. Hue-locked semantics — these ignore the seed entirely.
-    "--destructive": oklchToHex(DESTRUCTIVE.L, DESTRUCTIVE.C, DESTRUCTIVE.h),
-    "--destructive-foreground": "#ffffff",
+    // 8. Hue-locked semantics — these ignore the seed entirely. All four keep
+    // only their hue and are solved onto the card, so they follow the ladder's
+    // lightness without following its colour.
+    ...solveStatusTokens(ladder["--card"]!),
 
     "--foreground": foreground,
     "--muted-foreground": mutedForeground,
@@ -315,20 +436,22 @@ export function generateThemeTokens(theme: ThemeDefinition): ThemeTokens {
     "--primary-foreground": primaryForeground,
     "--primary-text": primaryText,
 
-    // Aliases. Each mirrors a relationship authored in globals.css today:
-    // the sidebar panel is a card, its hover state is the accent surface, and
-    // every "…-foreground on a neutral surface" collapses to one value.
+    // The two names that still resolve to a value another name carries, and the
+    // reason each survived the collapse. The sidebar panel IS a card — same rung,
+    // and the two-tier depth is expressed by `--rail` sitting below it, not by a
+    // third fill. `--ring` is the accent, and stays a separate name because it
+    // answers a separate question (see `tokens.ts`).
+    //
+    // Everything else that used to be here is gone. `--popover-foreground`,
+    // `--secondary-foreground` and `--accent-foreground` were `--foreground`
+    // spelled three more ways, and `--input` was `--border`: a name emitted here
+    // is a name the renderer writes onto the DOM, the e2e smoke asserts, and a
+    // component picks between, and six spellings of one hex do not make that
+    // choice richer — they make it arbitrary. A future canvas that needs a
+    // divergent popover ink gets the token back, with the evidence that it
+    // diverged.
     "--sidebar": sidebar,
-    "--sidebar-accent": ladder["--accent"]!,
-    "--card-foreground": foreground,
-    "--popover-foreground": foreground,
-    "--secondary-foreground": foreground,
-    "--accent-foreground": foreground,
-    "--sidebar-accent-foreground": foreground,
     "--ring": primary,
-    "--sidebar-primary": primary,
-    "--sidebar-ring": primary,
-    "--sidebar-primary-foreground": primaryForeground,
   };
 
   // 9. Overrides land last — after generation and after every floor above —
@@ -339,23 +462,15 @@ export function generateThemeTokens(theme: ThemeDefinition): ThemeTokens {
 }
 
 /**
- * The accent family and nothing else: `--primary`, its label, and the four
- * aliases of the two.
+ * The accent family and nothing else: `--primary`, its label, and the one
+ * surviving alias of the two.
  *
  * `--primary-text` is deliberately NOT a member. It is the accent solved as
  * *copy*, which means solved against the surface it is read on — `--background`
  * here, `--card` in the canvas layer — so it belongs to whoever knows that
  * surface, and a value in this record would be one solved against neither.
  */
-export type AccentTokens = Pick<
-  ThemeTokens,
-  | "--primary"
-  | "--primary-foreground"
-  | "--ring"
-  | "--sidebar-primary"
-  | "--sidebar-primary-foreground"
-  | "--sidebar-ring"
->;
+export type AccentTokens = Pick<ThemeTokens, "--primary" | "--primary-foreground" | "--ring">;
 
 /**
  * Step 6–7 on its own: a seed hex in, the accent family out, at the seed's
@@ -386,9 +501,6 @@ export function generateAccentTokens(seed: string): AccentTokens {
     "--primary": primary,
     "--primary-foreground": primaryForeground,
     "--ring": primary,
-    "--sidebar-primary": primary,
-    "--sidebar-primary-foreground": primaryForeground,
-    "--sidebar-ring": primary,
   };
 }
 

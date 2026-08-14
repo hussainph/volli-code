@@ -39,13 +39,13 @@ export function ComposerBreadcrumb({
   onClose: () => void;
 }) {
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex items-center gap-1">
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button
             type="button"
             data-testid="composer-project-chip"
-            className="flex min-w-0 max-w-64 items-center gap-1.5 rounded-md px-1.5 py-1 text-ui font-medium text-foreground transition-colors duration-150 ease-out outline-none hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            className="flex min-w-0 max-w-64 items-center gap-1 rounded-md px-1 py-1 text-ui font-medium text-foreground transition-colors duration-150 ease-out outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/45"
           >
             <ProjectMonogram project={target} />
             <span className="truncate">{target.name}</span>
@@ -65,10 +65,10 @@ export function ComposerBreadcrumb({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <CaretRightIcon weight="bold" className="size-3 shrink-0 text-muted-foreground/60" />
+      <CaretRightIcon weight="bold" className="size-3 shrink-0 text-muted-foreground/50" />
       <span className="shrink-0 text-ui text-muted-foreground">New ticket</span>
 
-      <div className="ml-auto flex shrink-0 items-center gap-0.5">
+      <div className="ml-auto flex shrink-0 items-center gap-1">
         <Button
           variant="ghost"
           size="icon-xs"

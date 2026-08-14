@@ -407,7 +407,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
                   // does not match and the card becomes a whole card again —
                   // four corners, its own left border, standing on the canvas.
                   "border border-border",
-                  !pinned && "m-2 rounded-xl shadow-[var(--shadow-card)]",
+                  !pinned && "m-2 rounded-xl shadow-card",
                 ),
           )}
         >
@@ -501,7 +501,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
                 // pane would be overruled in every mode. The lift then
                 // composites over this glass, which is the correct order
                 // anyway: material first, tier on top.
-                "overflow-hidden rounded-xl border border-border bg-sidebar/90 shadow-[var(--shadow-overlay)] backdrop-blur-2xl",
+                "overflow-hidden rounded-xl border border-border bg-sidebar/90 shadow-overlay backdrop-blur-2xl",
               panelShown
                 ? "translate-x-0"
                 : // Reduced motion: the surface arrives where it will rest
@@ -564,7 +564,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
             <div
               className={cn(
                 "absolute inset-y-2 left-[2px] w-[2px] rounded-full transition-colors duration-150",
-                reveal.arming ? "bg-foreground/35" : "bg-foreground/12",
+                reveal.arming ? "bg-foreground/30" : "bg-foreground/10",
               )}
             />
           </div>

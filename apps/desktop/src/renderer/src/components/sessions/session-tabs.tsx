@@ -10,7 +10,7 @@ import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
 import { runOnLivePanes, terminalTabState } from "@renderer/components/sessions/terminal-tab-state";
-import { TAB_STATUS_CLASS, type TicketTabStatus } from "@renderer/components/ticket/ticket-tabs";
+import type { TicketTabStatus } from "@renderer/components/ticket/ticket-tabs";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -18,6 +18,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
+import { StatusDot } from "@renderer/components/ui/status-dot";
 import { cn } from "@renderer/lib/utils";
 import { useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
 
@@ -270,9 +271,16 @@ function TabShell({
       }}
       title={hint}
       className={cn(
-        "group flex h-7 shrink-0 items-center gap-1.5 rounded-md pr-1 pl-2.5 text-xs outline-none transition-[color,background-color,box-shadow,transform] duration-150 ease-out active:scale-[0.97] motion-reduce:transform-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+        // `scale` is in the transition list and `scale-100!` is the
+        // reduced-motion cancel — see the press note in `ui/button.tsx`.
+        "group flex h-7 shrink-0 items-center gap-1 rounded-md pr-1 pl-2 text-ui outline-none transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out active:scale-[0.97] motion-reduce:scale-100! focus-visible:ring-2 focus-visible:ring-ring/45",
+        // The halo is what makes an active tab read as a tab — its fill alone
+        // is one rung off the strip's. Carried here rather than by the
+        // `[role="tab"][aria-selected="true"]` rule globals.css used to hold:
+        // a shadow you cannot see in the component is a shadow nobody can tell
+        // is live, which is how three overlays ended up wearing stock black.
         active
-          ? "bg-accent text-foreground"
+          ? "bg-accent text-foreground shadow-raised"
           : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
       )}
     >
@@ -280,14 +288,14 @@ function TabShell({
         <InlineRename
           value={label}
           ariaLabel={`Rename ${label}`}
-          className="h-5 w-40 text-xs"
+          className="h-5 w-40 text-ui"
           onCommit={onCommitRename}
           onCancel={onCancelRename}
         />
       ) : (
         // Label content only — the tab div (role="tab") above owns click/keyboard
         // activation, so no nested interactive control.
-        <span className="flex min-w-0 items-center gap-1.5">
+        <span className="flex min-w-0 items-center gap-1">
           {leading}
           <span className={cn("max-w-40 truncate", labelClassName)}>{label}</span>
         </span>
@@ -302,7 +310,7 @@ function TabShell({
           focusNeighborTab(event.currentTarget);
           onClose();
         }}
-        className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 outline-none transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-border hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 outline-none transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-border hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/45"
       >
         <XIcon className="size-3" />
       </button>
@@ -373,7 +381,7 @@ function TerminalTab({ tab, onSelect, ...shell }: KindTabProps & { tab: SessionT
                 className={cn(
                   "size-1.5 shrink-0 rounded-full",
                   exited
-                    ? "bg-muted-foreground/40"
+                    ? "bg-muted-foreground/30"
                     : shell.active
                       ? "bg-primary"
                       : "bg-muted-foreground",
@@ -460,10 +468,7 @@ function ChatTab({
           onActivate={onSelect}
           leading={
             <>
-              <span
-                aria-hidden
-                className={cn("size-1.5 shrink-0 rounded-full", TAB_STATUS_CLASS[status])}
-              />
+              <StatusDot state={status} />
               {/* Bold, not filled: the dot beside it is already a solid object,
                   and two in a 12px row is one too many. Same treatment as the
                   sidebar's kind glyph — at this size regular draws lighter than

@@ -565,10 +565,10 @@ export function DiffView({
   }, [conflict, handleSave, name]);
 
   if (state.status === "loading") {
-    return <p className="px-gutter py-4 text-xs text-muted-foreground">Loading diff…</p>;
+    return <p className="px-gutter py-4 text-ui text-muted-foreground">Loading diff…</p>;
   }
   if (state.status === "error") {
-    return <p className="px-gutter py-4 text-xs text-destructive">{state.error}</p>;
+    return <p className="px-gutter py-4 text-ui text-destructive">{state.error}</p>;
   }
   if (state.status === "stub") {
     return (

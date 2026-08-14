@@ -14,7 +14,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { apcaLc, hexToOklch, isHexColor, oklchToHex } from "../color";
-import { THEME_CONTRAST_FLOORS } from "../generate";
+import { solveStatusTokens, THEME_CONTRAST_FLOORS } from "../generate";
 import { THEME_TOKEN_NAMES, type ThemeTokenName } from "../tokens";
 import { deriveCanvasTokens, deriveLabelInk, windowBackground } from "./derive";
 import { copyFloors } from "./floors";
@@ -197,7 +197,7 @@ describe("deriveCanvasTokens", () => {
     // rung pair outside the window silently emits an out-of-range rgb().
     const pairs: [ThemeTokenName, ThemeTokenName][] = [
       ["--sidebar", "--rail"],
-      ["--sidebar-accent", "--sidebar"],
+      ["--accent", "--sidebar"],
       ["--sidebar-border", "--sidebar"],
     ];
     for (const { hex, vibrancy } of everyCase().filter((one) => one.resolved === "light")) {
@@ -307,7 +307,7 @@ describe("deriveCanvasTokens", () => {
     expect(chromaAt(1)).toBeGreaterThan(chromaAt(0.6));
   });
 
-  it("holds the light ladder's order down to `--border-hover`", () => {
+  it("holds the light ladder's order down to `--border-strong`", () => {
     // The tint moves every rung by the same fraction toward the same target, so
     // gaps scale by (1 − tint) and the order among them is preserved by
     // construction. The SPREAD is what can break it, and the assertion stops one
@@ -320,12 +320,12 @@ describe("deriveCanvasTokens", () => {
       "--popover",
       "--card",
       "--rail",
-      "--secondary",
+      "--muted",
       "--sidebar",
       "--sidebar-border",
       "--accent",
       "--border",
-      "--border-hover",
+      "--border-strong",
     ];
     for (const { hex, vibrancy } of everyCase().filter((one) => one.resolved === "light")) {
       const tokens = deriveCanvasTokens(canvasOf(hex, vibrancy), "light");
@@ -337,29 +337,66 @@ describe("deriveCanvasTokens", () => {
     }
   });
 
-  it("bounds the last rung's inversion, which the settled spread introduces", () => {
-    // A characterization, not an endorsement. `spreadCurve` applies its FADED
-    // multiplier to a rung's whole distance from paper rather than integrating it
-    // along the way, which makes the map non-monotone once the gain passes 2.0 —
-    // and light's settled gain is 2.509. So `--border-strong`, which sits at the
-    // fade's far end and by design does not move at all, ends up a little LIGHTER
-    // than `--border-hover`, which is still being pushed.
+  it("re-solves every hue-locked semantic per appearance", () => {
+    // The whole claim behind deleting 36 `dark:` twins: one token name is
+    // correct on paper AND in the dark because the two appearances derive two
+    // different colours for it, not because a call site wrote both by hand.
     //
-    // Measured at ΔL 0.0063 on ember and never more across the sweep: two
-    // hairline borders a hundredth of a lightness unit out of order, under a
-    // ladder whose visible surfaces all sit above them and whose veil pairs do not
-    // involve either. Left rather than fixed because the fix is a change to the
-    // curve, and the curve is what the settled spread was chosen against.
+    // `--destructive` is in the list now rather than standing outside it as the
+    // frozen control. It was the one member a light surface made no brighter —
+    // and no darker either, which is what "frozen" bought and what it cost:
+    // Lc ~35 on a dark card against its peers' 65.
+    const STATUS = ["--positive", "--attention", "--info", "--destructive"] as const;
+    for (const { hex, vibrancy } of everyCase().filter((one) => one.resolved === "dark")) {
+      const dark = deriveCanvasTokens(canvasOf(hex, vibrancy), "dark");
+      const light = deriveCanvasTokens(canvasOf(hex, vibrancy), "light");
+      const at = `${hex} @ v${vibrancy}`;
+      for (const token of STATUS) {
+        expect({ at, token, flips: dark[token] !== light[token] }).toEqual({
+          at,
+          token,
+          flips: true,
+        });
+        // And the light one is the DARKER ink, not merely a different hex —
+        // the polarity flip the twins were hand-writing.
+        expect({ at, token, darkerOnPaper: true }).toEqual({
+          at,
+          token,
+          darkerOnPaper: hexToOklch(light[token]).L < hexToOklch(dark[token]).L,
+        });
+      }
+    }
+  });
+
+  it("solves the status family against the canvas's OWN card, not the shipped ladder's", () => {
+    // Stated as an identity rather than as a difference, and that is the point.
+    // `darkTokens` spreads `generateThemeTokens`'s output — which already
+    // carries a status family, solved on the SHIPPED ladder's card — and then
+    // moves the ladder toward the canvas. A carried value would still be a
+    // green, still clear its floor, and still be wrong for the card the window
+    // is now painting; in dark it would be wrong by a single 8-bit step, which
+    // is exactly the size of mistake no spot-check ever catches.
     //
-    // Bounded here so it cannot grow: if a later edit widens it into something
-    // visible, or pushes the inversion up into a rung that carries a surface, this
-    // fails.
-    for (const { hex, vibrancy } of everyCase().filter((one) => one.resolved === "light")) {
-      const tokens = deriveCanvasTokens(canvasOf(hex, vibrancy), "light");
-      const hover = hexToOklch(tokens["--border-hover"]).L;
-      const strong = hexToOklch(tokens["--border-strong"]).L;
-      const at = `${hex} @ v${vibrancy} — hover ${hover.toFixed(4)} strong ${strong.toFixed(4)}`;
-      expect({ at, hairline: strong - hover < 0.01 }).toEqual({ at, hairline: true });
+    // So the assertion is that the emitted colour IS the solve of the emitted
+    // card. Delete either `solveStatusTokens` call in `derive.ts` and this
+    // fails on the first canvas whose card differs from the default's.
+    for (const { hex, vibrancy, resolved } of everyCase()) {
+      const tokens = deriveCanvasTokens(canvasOf(hex, vibrancy), resolved);
+      const at = `${hex} @ v${vibrancy} ${resolved}`;
+      const expected = solveStatusTokens(tokens["--card"]);
+      expect({ at, positive: tokens["--positive"] }).toEqual({
+        at,
+        positive: expected["--positive"],
+      });
+      expect({ at, attention: tokens["--attention"] }).toEqual({
+        at,
+        attention: expected["--attention"],
+      });
+      expect({ at, info: tokens["--info"] }).toEqual({ at, info: expected["--info"] });
+      expect({ at, destructive: tokens["--destructive"] }).toEqual({
+        at,
+        destructive: expected["--destructive"],
+      });
     }
   });
 });
@@ -381,9 +418,6 @@ describe("the accent", () => {
     "--primary-foreground",
     "--primary-text",
     "--ring",
-    "--sidebar-primary",
-    "--sidebar-primary-foreground",
-    "--sidebar-ring",
   ];
 
   it("walks from a near-neutral chrome to the brand color exactly, as vibrancy travels", () => {
@@ -457,52 +491,46 @@ describe("the accent", () => {
         "--background": "#1c1310",
         "--card": "#211815",
         "--popover": "#251b18",
-        "--secondary": "#271d1a",
         "--muted": "#271d1a",
         "--accent": "#2d2220",
         "--sidebar": "#211815",
         "--foreground": "#e8e4e2",
-        "--card-foreground": "#e8e4e2",
-        "--popover-foreground": "#e8e4e2",
-        "--secondary-foreground": "#e8e4e2",
         "--muted-foreground": "#bdbab8",
-        "--accent-foreground": "#e8e4e2",
         "--sidebar-foreground": "#d0cdcb",
-        "--sidebar-accent": "#2d2220",
-        "--sidebar-accent-foreground": "#e8e4e2",
         "--border": "#312623",
-        "--border-hover": "#3c312c",
         "--border-strong": "#423632",
-        "--input": "#312623",
         "--sidebar-border": "#2d241f",
-        "--destructive": "#e5484d",
-        "--destructive-foreground": "#ffffff",
+        "--destructive": "#ffa49f",
+        "--destructive-foreground": "#290b0b",
+        "--positive": "#27d496",
+        "--positive-foreground": "#001c10",
+        "--attention": "#ffaa2f",
+        "--attention-foreground": "#221200",
+        "--info": "#65c6ff",
+        "--info-foreground": "#001827",
       },
       light: {
         "--rail": "#edd1c6",
         "--background": "#fdded2",
         "--card": "#f4d4c8",
         "--popover": "#f7d8cc",
-        "--secondary": "#eacabd",
         "--muted": "#eacabd",
         "--accent": "#dab9ad",
         "--sidebar": "#e2c3b7",
         "--foreground": "#120906",
-        "--card-foreground": "#120906",
-        "--popover-foreground": "#120906",
-        "--secondary-foreground": "#120906",
         "--muted-foreground": "#514541",
-        "--accent-foreground": "#120906",
         "--sidebar-foreground": "#080302",
-        "--sidebar-accent": "#dab9ad",
-        "--sidebar-accent-foreground": "#120906",
         "--border": "#d8b6a9",
-        "--border-hover": "#d3b0a3",
         "--border-strong": "#d5b2a5",
-        "--input": "#d8b6a9",
         "--sidebar-border": "#ddbbad",
-        "--destructive": "#e5484d",
+        "--destructive": "#9b1e28",
         "--destructive-foreground": "#ffffff",
+        "--positive": "#005f40",
+        "--positive-foreground": "#ffffff",
+        "--attention": "#764900",
+        "--attention-foreground": "#ffffff",
+        "--info": "#005880",
+        "--info-foreground": "#ffffff",
       },
     };
     for (const resolved of MODES) {

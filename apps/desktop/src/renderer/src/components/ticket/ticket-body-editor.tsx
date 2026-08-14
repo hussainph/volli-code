@@ -139,7 +139,7 @@ export function TicketBodyEditor({
   return (
     <div className="flex flex-col gap-2">
       {conflict !== null && (
-        <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+        <div className="flex items-center justify-between gap-4 rounded-md border border-border bg-muted/30 px-4 py-2 text-ui text-muted-foreground">
           <span>Changed elsewhere. Autosave paused.</span>
           <Button size="sm" variant="secondary" onClick={reload}>
             <ArrowClockwiseIcon />
@@ -147,11 +147,11 @@ export function TicketBodyEditor({
           </Button>
         </div>
       )}
-      {/* -mx-3/px-3 bleeds the block into the gutter (Notion-style) so the body
+      {/* -mx-4/px-4 bleeds the block into the gutter (Notion-style) so the body
           TEXT left-aligns with the title on the column edge. The padding is on
           the wrapper, never on the editor host, which IS the editor's layout
           box (see MonacoDocumentEditor). */}
-      <div className="-mx-3 rounded-md px-3">
+      <div className="-mx-4 rounded-md px-4">
         <MonacoDocumentEditor
           identity={{ kind: "ticket-body", projectId: ticket.projectId, ticketId: ticket.id }}
           viewId={`ticket-body:${ticket.id}`}

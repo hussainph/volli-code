@@ -184,7 +184,7 @@ describe("the card's controls", () => {
     const html = renderToStaticMarkup(
       <InteractionCard interaction={asked()} onResolve={() => undefined} />,
     );
-    expect(html).toContain("rounded-2xl");
+    expect(html).toContain("rounded-container");
   });
 
   it("never autofocuses a request that mounts beside the live composer", () => {
@@ -360,7 +360,7 @@ describe("the two cards as one family", () => {
       "Allow once",
     );
     const answer = optionRow(drawn(ask([askPrompt()])), "main");
-    for (const shared of ["gap-2.5", "rounded-lg", "px-2", "py-2", "transition-colors"])
+    for (const shared of ["gap-2", "rounded-lg", "px-2", "py-2", "transition-colors"])
       expect([shared, verdict.includes(shared), answer.includes(shared)]).toEqual([
         shared,
         true,

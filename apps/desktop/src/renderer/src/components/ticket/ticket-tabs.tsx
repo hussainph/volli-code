@@ -37,6 +37,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
+import { StatusDot } from "@renderer/components/ui/status-dot";
 import { cn } from "@renderer/lib/utils";
 import { useSessionsStore } from "@renderer/stores/sessions";
 
@@ -91,17 +92,6 @@ export type TicketTabKind = "body" | "session" | "file" | "diff" | "chat";
  * PTY, a chat tab off its resident slice's lifecycle.
  */
 export type TicketTabStatus = "idle" | "starting" | "ready" | "working" | "error";
-
-/** One vocabulary for a Session's dot, shared with the scratch strip (`session-tabs.tsx`). */
-export const TAB_STATUS_CLASS: Record<TicketTabStatus, string> = {
-  // The halo only rides `working`, so a live turn is legible from the strip
-  // without the resting states competing for the same attention.
-  working: "bg-primary shadow-[0_0_0_3px_color-mix(in_oklab,var(--primary)_18%,transparent)]",
-  ready: "bg-primary",
-  error: "bg-destructive",
-  starting: "bg-muted-foreground",
-  idle: "bg-muted-foreground",
-};
 
 /** Whether a ticket-strip tab of this kind shows a close affordance. */
 export function isClosableTicketTab(kind: TicketTabKind): boolean {
@@ -300,21 +290,23 @@ function TicketTab({
       }}
       title={hint}
       className={cn(
-        "group relative flex h-8 shrink-0 items-center rounded-t-lg text-sm outline-none transition-[color,background-color,box-shadow,transform] duration-150 ease-out active:scale-[0.97] motion-reduce:transform-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
-        closable ? "pr-1 pl-3" : "px-3.5",
+        // `scale` is in the transition list and `scale-100!` is the
+        // reduced-motion cancel — see the press note in `ui/button.tsx`.
+        "group relative flex h-8 shrink-0 items-center rounded-t-lg text-sm outline-none transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out active:scale-[0.97] motion-reduce:scale-100! focus-visible:ring-2 focus-visible:ring-ring/45",
+        closable ? "pr-1 pl-4" : "px-4",
         active
           ? // -mb-px pulls the active tab 1px past the strip's bottom border so
             // its content-colored fill covers that seam — the tab reads as
             // physically connected to the content plane below (no dividing line).
-            "-mb-px bg-background text-foreground"
+            // `shadow-raised` is the halo that says "active", carried here
+            // rather than by the `[role="tab"][aria-selected="true"]` rule
+            // globals.css used to hold.
+            "-mb-px bg-background text-foreground shadow-raised"
           : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
       )}
     >
       {tab.status !== undefined ? (
-        <span
-          aria-hidden
-          className={cn("mr-1.5 size-2 shrink-0 rounded-full", TAB_STATUS_CLASS[tab.status])}
-        />
+        <StatusDot state={tab.status} size="md" className="mr-1" />
       ) : terminal !== null ? (
         // A terminal tab's liveness, in the SAME leading slot and at the same
         // size as a chat tab's dot, so the column reads as liveness whatever the
@@ -325,14 +317,14 @@ function TicketTab({
           <MoonIcon
             aria-hidden
             weight="bold"
-            className="mr-1.5 size-3 shrink-0 text-muted-foreground"
+            className="mr-1 size-3 shrink-0 text-muted-foreground"
           />
         ) : (
           <span
             aria-hidden
             className={cn(
-              "mr-1.5 size-2 shrink-0 rounded-full",
-              exited ? "bg-muted-foreground/40" : active ? "bg-primary" : "bg-muted-foreground",
+              "mr-1 size-2 shrink-0 rounded-full",
+              exited ? "bg-muted-foreground/30" : active ? "bg-primary" : "bg-muted-foreground",
             )}
           />
         )
@@ -343,7 +335,7 @@ function TicketTab({
         <span
           aria-label="Worktree copy"
           title="Worktree copy"
-          className="mr-1.5 size-1.5 shrink-0 rounded-full bg-primary"
+          className="mr-1 size-1.5 shrink-0 rounded-full bg-primary"
         />
       ) : null}
       {editing ? (
@@ -381,7 +373,7 @@ function TicketTab({
             onClose();
           }}
           className={cn(
-            "group/close ml-1.5 flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none transition-opacity hover:bg-border hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50",
+            "group/close ml-1 flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none transition-opacity hover:bg-border hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/45",
             // Same idiom as the Project Files strip: a dirty tab's control is
             // always present because it IS the unsaved dot, and turns back into
             // an × on hover so the tab still closes in one click. A clean tab's
@@ -496,7 +488,7 @@ export function TicketTabStrip({
   const [editingId, setEditingId] = React.useState<string | null>(null);
 
   return (
-    <div className="flex shrink-0 items-end border-b border-border bg-rail pt-1.5">
+    <div className="flex shrink-0 items-end border-b border-border bg-rail pt-1">
       {/* Tabs own the left and scroll; actions own the right and do not. The
           session-start control used to ride INSIDE this scroller, immediately
           after the last tab, and that is what made it read as one more tab: same
@@ -511,7 +503,7 @@ export function TicketTabStrip({
           role="tablist"
           aria-label="Ticket tabs"
           aria-orientation="horizontal"
-          className="flex items-end gap-0.5"
+          className="flex items-end gap-1"
         >
           {tabs.map((tab) => (
             <TicketTab
@@ -546,7 +538,7 @@ export function TicketTabStrip({
           -mt-1.5 cancels the strip's pt-1.5 so this column spans the true top
           edge to bottom (the framed card's rounded-t-lg + overflow clips the
           outer corner). */}
-      <div className="-mt-1.5 flex shrink-0 items-stretch self-stretch border-l border-border/70 pr-1.5 pl-2">
+      <div className="-mt-1 flex shrink-0 items-stretch self-stretch border-l border-border/70 pr-1 pl-2">
         <div className="flex items-center">
           {/* The chord hint belongs here now: ⌘T / ⌥⌘T resolve against the
               surface in front (`lib/new-session-shortcut.ts`), so inside a ticket

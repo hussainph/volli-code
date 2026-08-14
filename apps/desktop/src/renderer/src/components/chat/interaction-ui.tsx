@@ -134,11 +134,11 @@ const FIELD_LABEL: Record<InteractionFieldRole, string> = {
  * drift apart a class at a time.
  */
 const OPTION_ROW =
-  "group flex min-w-0 cursor-pointer items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors outline-none";
+  "group flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors outline-none";
 
 /** The disc at the head of a row: a numeral on one card, a tick on the other. */
 const OPTION_MARK =
-  "flex size-5 shrink-0 items-center justify-center rounded-full text-xs tabular-nums transition-colors";
+  "flex size-5 shrink-0 items-center justify-center rounded-full text-ui tabular-nums transition-colors";
 
 /**
  * The row's own verb, on the row that is one press from a decision.
@@ -331,7 +331,7 @@ function DecisionCard({
         className,
       )}
     >
-      <div className="flex items-start gap-2 px-3 pt-3">
+      <div className="flex items-start gap-2 px-4 pt-4">
         {/* The card's palm and the footer's Warning are the
             only filled glyphs the chat surface has left: an interaction is the
             exception in a transcript that is otherwise outline throughout. */}
@@ -345,11 +345,11 @@ function DecisionCard({
               command or the path being authorized, and at the foot mount it is
               the only place the subject appears at all — truncated to one
               muted line it was the dimmest thing on a card whose whole purpose
-              is to show it. Machine text stays mono and `text-xs`; what
+              is to show it. Machine text stays mono at the UI step; what
               changes is the ink and that it is readable in full, the way the
               scrollable `pre` this card replaced showed it. */}
           {interaction.detail ? (
-            <pre className="mt-1 max-h-32 overflow-y-auto font-mono text-xs whitespace-pre-wrap break-words text-foreground">
+            <pre className="mt-1 max-h-32 overflow-y-auto font-mono text-ui whitespace-pre-wrap break-words text-foreground">
               {interaction.detail}
             </pre>
           ) : null}
@@ -362,7 +362,7 @@ function DecisionCard({
       {/* The same cross-fade the ask-user card steps with. A permission that
           asked one thing never sees it; one that asked several is walked
           through the same way, by the carousel it already had. */}
-      <div className="px-3 pt-2">
+      <div className="px-4 pt-2">
         <AnimatePresence initial={false} mode="popLayout">
           {asked ? (
             <motion.div
@@ -385,7 +385,7 @@ function DecisionCard({
         </AnimatePresence>
       </div>
 
-      <div className="mt-1.5 flex items-center gap-1 border-t border-border/70 px-3 py-2">
+      <div className="mt-1 flex items-center gap-1 border-t border-border/70 px-4 py-2">
         {/* Worded, not a bare glyph. Cancel request is not the composer's Stop
             turn: it withdraws the durable interaction as well as interrupting
             the turn that asked it.
@@ -413,7 +413,7 @@ function DecisionCard({
             the foot mount a session blocker says it too; on a row there is
             nothing else on screen that would. */}
         {failed ? (
-          <span role="alert" className="flex min-w-0 items-center gap-1.5 text-xs text-destructive">
+          <span role="alert" className="flex min-w-0 items-center gap-1 text-ui text-destructive">
             <WarningIcon aria-hidden className="size-3.5 shrink-0" weight="fill" />
             <span className="min-w-0 truncate">Not delivered</span>
           </span>
@@ -621,7 +621,7 @@ function QuestionCard({
               animate={{ opacity: 1, transform: "translateX(0px)" }}
               exit={{ opacity: 0, transform: `translateX(${direction * -offset}px)` }}
               transition={transition}
-              className="px-3 pt-3"
+              className="px-4 pt-4"
             >
               <QuestionStep
                 step={step}
@@ -641,10 +641,10 @@ function QuestionCard({
 
       <div
         className={cn(
-          "flex items-center gap-1 px-3 py-2",
+          "flex items-center gap-1 px-4 py-2",
           // No rule under nothing: a request that declares no questions is all
           // footer, and the line would be drawing the top edge of the card.
-          step && "mt-1.5 border-t border-border/70",
+          step && "mt-1 border-t border-border/70",
         )}
       >
         {onWithdraw ? (
@@ -668,7 +668,7 @@ function QuestionCard({
             is at the current step — without a live region the press is
             rejected silently to anyone not looking at the footer. */}
         {failed || blocked ? (
-          <span role="alert" className="flex min-w-0 items-center gap-1.5 text-xs text-destructive">
+          <span role="alert" className="flex min-w-0 items-center gap-1 text-ui text-destructive">
             <WarningIcon aria-hidden className="size-3.5 shrink-0" weight="fill" />
             <span className="min-w-0 truncate">{failed ? "Not delivered" : blocked}</span>
           </span>
@@ -789,7 +789,7 @@ function QuestionStep({
     <fieldset className="min-w-0" disabled={disabled}>
       {step.count > 1 ? (
         <div className="mb-1 flex items-center gap-1">
-          <span className="text-xs text-muted-foreground tabular-nums">
+          <span className="text-ui text-muted-foreground tabular-nums">
             Question {step.index + 1} of {step.count}
           </span>
           <Button
@@ -812,7 +812,7 @@ function QuestionStep({
         {step.heading}
       </p>
       {interaction.detail ? (
-        <pre className="mt-1 max-h-32 overflow-y-auto font-mono text-xs whitespace-pre-wrap break-words text-foreground">
+        <pre className="mt-1 max-h-32 overflow-y-auto font-mono text-ui whitespace-pre-wrap break-words text-foreground">
           {interaction.detail}
         </pre>
       ) : null}
@@ -821,7 +821,7 @@ function QuestionStep({
         <div
           role={prompt.multiple ? "group" : "radiogroup"}
           aria-labelledby={headingId}
-          className="-mx-2 mt-3 flex flex-col"
+          className="-mx-2 mt-4 flex flex-col"
           onKeyDown={(event) => {
             if (event.nativeEvent.isComposing) return;
             const forward = event.key === "ArrowDown" || event.key === "ArrowRight";
@@ -881,7 +881,7 @@ function QuestionStep({
                 onClick={() => onChoose(option)}
                 className={cn(
                   OPTION_ROW,
-                  "hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:ring-1 focus-visible:ring-ring",
+                  "hover:bg-muted/30 focus-visible:bg-muted/30 focus-visible:ring-1 focus-visible:ring-ring",
                   checked && "bg-muted/70",
                   superseded && "cursor-default opacity-50",
                   step.layout === "stacked" && "items-start",
@@ -896,7 +896,7 @@ function QuestionStep({
                 <span
                   className={cn(
                     "flex min-w-0 flex-1",
-                    step.layout === "stacked" ? "flex-col gap-0.5" : "items-baseline gap-1.5",
+                    step.layout === "stacked" ? "flex-col gap-1" : "items-baseline gap-1",
                   )}
                 >
                   <span
@@ -936,11 +936,11 @@ function QuestionStep({
       {fieldOpen ? (
         <div
           className={cn(
-            "flex min-w-0 items-start gap-2.5 rounded-lg",
+            "flex min-w-0 items-start gap-2 rounded-lg",
             // Beside options it is the last row of the same list, and it wears
             // the row's own padding and number. Alone it is the answer, and a
             // field is what an answer is typed into.
-            alone ? "mt-3" : "-mx-2 mt-0.5 px-2 py-2",
+            alone ? "mt-4" : "-mx-2 mt-1 px-2 py-2",
           )}
         >
           {alone ? null : (
@@ -1017,7 +1017,7 @@ function OptionChip({
       aria-hidden
       className={cn(
         OPTION_MARK,
-        outlined && !checked && "border border-muted-foreground/40",
+        outlined && !checked && "border border-muted-foreground/30",
         checked ? "bg-primary font-medium text-primary-foreground" : "text-muted-foreground",
         className,
       )}
@@ -1198,7 +1198,7 @@ function InteractionQuestionFields({
               key={option.id}
               className={cn(
                 OPTION_ROW,
-                "hover:bg-muted/40 has-[:focus-visible]:bg-muted/40 has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-ring",
+                "hover:bg-muted/30 has-[:focus-visible]:bg-muted/30 has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-ring",
                 checked && "bg-muted/70",
                 superseded && "cursor-default opacity-50",
               )}
@@ -1229,7 +1229,7 @@ function InteractionQuestionFields({
                   OPTION_MARK,
                   checked
                     ? "bg-primary text-primary-foreground"
-                    : "border border-muted-foreground/40",
+                    : "border border-muted-foreground/30",
                   // The same 70% the native input wore, on the mark that
                   // replaced it: ink, and only ink.
                   polarity === "standing" && "opacity-70",
@@ -1325,7 +1325,7 @@ function InteractionSteps({
   onStep(index: number): void;
 }) {
   return (
-    <div className="flex shrink-0 items-center gap-0.5">
+    <div className="flex shrink-0 items-center gap-1">
       <Button
         type="button"
         variant="ghost"
@@ -1338,7 +1338,7 @@ function InteractionSteps({
       </Button>
       <span
         className={cn(
-          "shrink-0 font-mono text-xs tabular-nums",
+          "shrink-0 font-mono text-ui tabular-nums",
           carousel.answered[carousel.index] ? "text-foreground" : "text-muted-foreground",
         )}
       >
@@ -1375,7 +1375,7 @@ export function InteractionReceiptLine({
 }) {
   const receipt = describeInteractionResolution(interaction, resolution);
   return (
-    <div className="not-prose flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+    <div className="not-prose flex min-w-0 items-center gap-1 text-ui text-muted-foreground">
       {/* Outline: the card that asked wore the filled palm, and this is the
           line it leaves behind once the decision is made. Ink still separates
           the two verdicts; weight is not asked to say it a second time. */}
@@ -1387,7 +1387,7 @@ export function InteractionReceiptLine({
         )}
       />
       <span className="shrink-0">{receipt.lead}</span>
-      <code className="min-w-0 truncate font-mono text-xs text-foreground">{receipt.subject}</code>
+      <code className="min-w-0 truncate font-mono text-ui text-foreground">{receipt.subject}</code>
       {receipt.trailer ? <span className="shrink-0">{receipt.trailer}</span> : null}
     </div>
   );

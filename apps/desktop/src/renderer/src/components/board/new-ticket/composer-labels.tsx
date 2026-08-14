@@ -66,7 +66,7 @@ export function ComposerLabels({
                 key={label.id}
                 type="button"
                 onClick={() => onChange([...value, label.name])}
-                className="rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/45"
               >
                 <TagChip tag={label.name} color={resolveLabelColor(projectLabels, label.name)} />
               </button>

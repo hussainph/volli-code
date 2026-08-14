@@ -40,7 +40,7 @@ export function PriorityIndicator({ priority }: { priority: TicketPriority }) {
       {BAR_HEIGHTS.map((height, index) => (
         <div
           key={height}
-          className="w-[2px] rounded-[1px]"
+          className="w-[2px] rounded-none"
           style={{
             height,
             backgroundColor: index < filled ? FILLED_COLOR[priority] : UNFILLED_COLOR,

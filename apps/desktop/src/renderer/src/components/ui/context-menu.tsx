@@ -6,19 +6,36 @@
  * alike — and is drawn at Phosphor's default weight, with no way to override it.
  *
  * Every action in a menu is a peer of every other, so a filled glyph here marks
- * nothing — and at 16px beside 14px text the mark is already the larger object.
+ * nothing — and at 14px beside 13px text the mark is already the larger object.
  * Fill is reserved for the one item that is the exception among its neighbours;
  * a menu has none, which is why these primitives do not offer the choice. The
- * radio item's dot is no counter-example: it is a filled shape, not an icon.
+ * selection mark is no counter-example: it is the row's state, not an icon.
+ *
+ * Geometry comes from `menu-classes.ts` — this file states no menu size of its
+ * own, so it cannot drift from the dropdown it is the right-click twin of.
  */
 import * as React from "react";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { CircleIcon } from "@phosphor-icons/react/dist/csr/Circle";
 import type { Icon } from "@phosphor-icons/react";
 import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
 
 import { cn } from "@renderer/lib/utils";
+import {
+  MENU_INDICATOR,
+  MENU_INDICATOR_MARK,
+  MENU_LABEL,
+  MENU_ROW,
+  MENU_ROW_DESTRUCTIVE,
+  MENU_ROW_INDICATED,
+  MENU_ROW_OPEN,
+  MENU_ROW_STATE,
+  MENU_SEPARATOR,
+  MENU_SHORTCUT,
+  MENU_SURFACE,
+  MENU_SURFACE_MOTION,
+  MENU_SURFACE_PAD,
+} from "@renderer/components/ui/menu-classes";
 
 function ContextMenu({ ...props }: React.ComponentProps<typeof ContextMenuPrimitive.Root>) {
   return <ContextMenuPrimitive.Root data-slot="context-menu" {...props} />;
@@ -51,22 +68,16 @@ function ContextMenuRadioGroup({
 /** Required `icon`, default weight, no override — see the module note. */
 function ContextMenuSubTrigger({
   className,
-  inset,
   icon: ItemIcon,
   children,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.SubTrigger> & {
-  inset?: boolean;
   icon: Icon;
 }) {
   return (
     <ContextMenuPrimitive.SubTrigger
       data-slot="context-menu-sub-trigger"
-      data-inset={inset}
-      className={cn(
-        "flex cursor-default items-center gap-2.5 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-[inset]:pl-8 data-[state=open]:bg-accent data-[state=open]:text-accent-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground",
-        className,
-      )}
+      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_OPEN, className)}
       {...props}
     >
       <ItemIcon aria-hidden />
@@ -84,7 +95,10 @@ function ContextMenuSubContent({
     <ContextMenuPrimitive.SubContent
       data-slot="context-menu-sub-content"
       className={cn(
-        "z-50 min-w-[8rem] origin-(--radix-context-menu-content-transform-origin) overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-lg motion-reduce:animate-none data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
+        MENU_SURFACE,
+        MENU_SURFACE_PAD,
+        MENU_SURFACE_MOTION,
+        "origin-(--radix-context-menu-content-transform-origin) overflow-hidden",
         className,
       )}
       {...props}
@@ -101,7 +115,10 @@ function ContextMenuContent({
       <ContextMenuPrimitive.Content
         data-slot="context-menu-content"
         className={cn(
-          "z-50 max-h-(--radix-context-menu-content-available-height) min-w-[8rem] origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md motion-reduce:animate-none data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
+          MENU_SURFACE,
+          MENU_SURFACE_PAD,
+          MENU_SURFACE_MOTION,
+          "max-h-(--radix-context-menu-content-available-height) origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto",
           className,
         )}
         {...props}
@@ -113,25 +130,19 @@ function ContextMenuContent({
 /** Required `icon`, default weight, no override — see the module note. */
 function ContextMenuItem({
   className,
-  inset,
   variant = "default",
   icon: ItemIcon,
   children,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Item> & {
-  inset?: boolean;
   variant?: "default" | "destructive";
   icon: Icon;
 }) {
   return (
     <ContextMenuPrimitive.Item
       data-slot="context-menu-item"
-      data-inset={inset}
       data-variant={variant}
-      className={cn(
-        "relative flex cursor-default items-center gap-2.5 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[inset]:pl-8 data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive dark:data-[variant=destructive]:focus:bg-destructive/20 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground data-[variant=destructive]:*:[svg]:text-destructive!",
-        className,
-      )}
+      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_DESTRUCTIVE, className)}
       {...props}
     >
       <ItemIcon aria-hidden />
@@ -149,23 +160,23 @@ function ContextMenuCheckboxItem({
   return (
     <ContextMenuPrimitive.CheckboxItem
       data-slot="context-menu-checkbox-item"
-      className={cn(
-        "relative flex cursor-default items-center gap-2 rounded-sm py-1.5 pr-2 pl-8 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
-        className,
-      )}
+      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_INDICATED, className)}
       checked={checked}
       {...props}
     >
-      <span className="pointer-events-none absolute left-2 flex size-3.5 items-center justify-center">
+      {children}
+      <span className={MENU_INDICATOR}>
         <ContextMenuPrimitive.ItemIndicator>
-          <CheckIcon weight="bold" className="size-4" />
+          <CheckIcon weight="bold" className={MENU_INDICATOR_MARK} />
         </ContextMenuPrimitive.ItemIndicator>
       </span>
-      {children}
     </ContextMenuPrimitive.CheckboxItem>
   );
 }
 
+// A check, not a radio dot, and trailing rather than leading — the same mark in
+// the same column as the checkbox item above and as the dropdown's pair, so
+// single-select and multi-select menus read as one language.
 function ContextMenuRadioItem({
   className,
   children,
@@ -174,36 +185,27 @@ function ContextMenuRadioItem({
   return (
     <ContextMenuPrimitive.RadioItem
       data-slot="context-menu-radio-item"
-      className={cn(
-        "relative flex cursor-default items-center gap-2 rounded-sm py-1.5 pr-2 pl-8 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
-        className,
-      )}
+      className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_INDICATED, className)}
       {...props}
     >
-      <span className="pointer-events-none absolute left-2 flex size-3.5 items-center justify-center">
+      {children}
+      <span className={MENU_INDICATOR}>
         <ContextMenuPrimitive.ItemIndicator>
-          {/* Solid IS the meaning here, and the off state is absence rather
-              than an outline. At 8px nothing else resolves anyway. */}
-          <CircleIcon weight="fill" className="size-2" />
+          <CheckIcon weight="bold" className={MENU_INDICATOR_MARK} />
         </ContextMenuPrimitive.ItemIndicator>
       </span>
-      {children}
     </ContextMenuPrimitive.RadioItem>
   );
 }
 
 function ContextMenuLabel({
   className,
-  inset,
   ...props
-}: React.ComponentProps<typeof ContextMenuPrimitive.Label> & {
-  inset?: boolean;
-}) {
+}: React.ComponentProps<typeof ContextMenuPrimitive.Label>) {
   return (
     <ContextMenuPrimitive.Label
       data-slot="context-menu-label"
-      data-inset={inset}
-      className={cn("px-2 py-1.5 text-sm font-medium text-foreground data-[inset]:pl-8", className)}
+      className={cn(MENU_LABEL, className)}
       {...props}
     />
   );
@@ -216,24 +218,15 @@ function ContextMenuSeparator({
   return (
     <ContextMenuPrimitive.Separator
       data-slot="context-menu-separator"
-      className={cn("-mx-1 my-1 h-px bg-border", className)}
+      className={cn(MENU_SEPARATOR, className)}
       {...props}
     />
   );
 }
 
-// The same span as dropdown-menu.tsx's `DropdownMenuShortcut`, down to the
-// classes, and dropped for the same reason: no `tracking-widest`, because
-// trailing letter spacing pushes a chord off the flush right edge `ml-auto`
-// promised. That file carries the measurement; the split terminal menu's
-// ⌘D / ⇧⌘D pair and the session menus' ⌥⌘T are where it shows here.
 function ContextMenuShortcut({ className, ...props }: React.ComponentProps<"span">) {
   return (
-    <span
-      data-slot="context-menu-shortcut"
-      className={cn("ml-auto text-xs text-muted-foreground", className)}
-      {...props}
-    />
+    <span data-slot="context-menu-shortcut" className={cn(MENU_SHORTCUT, className)} {...props} />
   );
 }
 

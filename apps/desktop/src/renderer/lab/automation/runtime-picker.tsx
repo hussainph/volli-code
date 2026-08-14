@@ -67,8 +67,7 @@ function CommandPeek({ runtime }: { runtime: AutomationRuntime }) {
   );
 }
 
-const PEEK_CONTENT =
-  "border border-border bg-popover px-2.5 py-2 text-popover-foreground shadow-md";
+const PEEK_CONTENT = "border border-border bg-popover px-2.5 py-2 text-foreground shadow-overlay";
 
 /* ---------------------------------------------------------------- harness */
 
@@ -281,7 +280,7 @@ function EffortRail({
           aria-hidden
           className={cn(
             "absolute top-1/2 size-4 -translate-x-1/2 -translate-y-1/2 rounded-full",
-            "border-2 border-background shadow-md",
+            "border-2 border-background shadow-raised",
             "transition-[left,transform,background-color] duration-150 ease-out",
             "motion-reduce:transition-none",
             dragging && "scale-[0.97] transition-none",

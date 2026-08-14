@@ -21,7 +21,7 @@
  * because nothing but the note connected them. Now one command writes both, and
  * `terminal/appearance.test.ts` fails if either drifts.
  *
- * WHAT IT WRITES. Everything between the BEGIN/END markers in both files: the 31
+ * WHAT IT WRITES. Everything between the BEGIN/END markers in both files: the 25
  * app tokens (`generateThemeTokens` → the canvas ladder), the 3 veils solved
  * from them, and the 10 canvas properties (`CANVAS_TOKEN_NAMES` in
  * `renderer/src/theme/canvas-paint.ts`) — the gradient, the on-canvas ink
@@ -127,8 +127,13 @@ const NOTES = {
     "   its lightness is what makes it work as a fill. Fills and icons take\n" +
     "   `--primary`; anything you read takes this.",
   "--destructive":
-    "Hue-locked: the semantic escape list never follows the canvas, or a red\n" +
-    "   canvas would make “delete” indistinguishable from “primary”.",
+    "The hue-locked family: green/amber/blue/red mean working, waiting, moved\n" +
+    "   and gone by convention, so their HUE never follows the canvas — a red\n" +
+    "   canvas would otherwise make “delete” indistinguishable from “primary”.\n" +
+    "   Everything else about them is solved against the card at APCA Lc 65, so\n" +
+    "   all four read at one weight in either appearance, and each label is\n" +
+    "   whichever of white or a near-black tint of its own hue wins on the fill\n" +
+    "   — which is why they flip polarity between the two blocks.",
   "--rail": "Two-tier sidebar depth: rail darkest, panel between rail and content.",
   "--sidebar-veil":
     "Veils (#74). The canvas paints the whole window behind the chrome, so the\n" +
@@ -137,7 +142,7 @@ const NOTES = {
     "   at 10% over the surface named beside it, composites to the opaque token\n" +
     "   above byte-exactly.",
   "--canvas":
-    "THE CANVAS ITSELF, and the nine values derived alongside it\n" +
+    "THE CANVAS ITSELF, and the ten values derived alongside it\n" +
     "   (`CANVAS_TOKEN_NAMES`, renderer/src/theme/canvas-paint.ts). The gradient\n" +
     "   is a `background` value, grain layer included, so the window can paint\n" +
     "   itself before any JS runs.",
@@ -152,6 +157,10 @@ const NOTES = {
     "   uniform — so it is `transparent` by design, not by omission.",
   "--label-ink": "The card's micro-label tier, between body and secondary.",
   "--shadow-raised": "The three shadow tiers: raised on a surface, the card, and overlays.",
+  "--scrim":
+    "The overlay wash (dialogs, sheets, the palette): the shadow's own ink\n" +
+    "   spread over the whole window instead of pooled under one edge, so it\n" +
+    "   dims the canvas in the canvas's own hue rather than in neutral black.",
 };
 
 /**
@@ -188,7 +197,7 @@ function tokensFor(resolved) {
   // Not a generated token, and not themeable — but it lives in this block
   // because every other value around it does, and a radius stranded outside the
   // markers would be the one line a regeneration silently dropped.
-  css += declaration("--radius", "0.625rem");
+  css += declaration("--radius", "0.75rem");
   for (const name of THEME_VEIL_TOKEN_NAMES) css += declaration(name, veils[name]);
   for (const name of CANVAS_TOKEN_NAMES) css += declaration(name, canvasTokens[name]);
   return css;

@@ -594,7 +594,7 @@ export function MonacoFileEditor({
         data-monaco-fallback="true"
         aria-label={ariaLabel}
         title={`Monaco unavailable: ${currentFailure.message}`}
-        className="h-full overflow-auto whitespace-pre-wrap p-3 font-mono text-ui text-foreground"
+        className="h-full overflow-auto whitespace-pre-wrap p-4 font-mono text-ui text-foreground"
       >
         {value}
       </pre>

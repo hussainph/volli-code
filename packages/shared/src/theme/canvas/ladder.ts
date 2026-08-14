@@ -68,12 +68,11 @@ export const LIGHT_LADDER = {
     { tokens: ["--popover"], L: 0.945, k: 1.0 },
     { tokens: ["--card"], L: 0.938, k: 1.1 },
     { tokens: ["--rail"], L: 0.93, k: 0.8 },
-    { tokens: ["--secondary", "--muted"], L: 0.918, k: 1.2 },
+    { tokens: ["--muted"], L: 0.918, k: 1.2 },
     { tokens: ["--sidebar"], L: 0.9, k: 1.1 },
     { tokens: ["--sidebar-border"], L: 0.878, k: 1.4 },
-    { tokens: ["--accent", "--sidebar-accent"], L: 0.872, k: 1.3 },
-    { tokens: ["--border", "--input"], L: 0.858, k: 1.4 },
-    { tokens: ["--border-hover"], L: 0.806, k: 1.5 },
+    { tokens: ["--accent"], L: 0.872, k: 1.3 },
+    { tokens: ["--border"], L: 0.858, k: 1.4 },
     { tokens: ["--border-strong"], L: 0.778, k: 1.5 },
   ] satisfies readonly { tokens: readonly ThemeTokenName[]; L: number; k: number }[],
 
@@ -105,6 +104,17 @@ export const LIGHT_LADDER = {
    * get the correction and the rungs that already work are left alone;
    * `--border-strong`, the furthest, does not move at all. Appendix § Surface
    * spread.
+   *
+   * ONE PROPERTY THIS CURVE DOES NOT HAVE: monotonicity past a gain of 2.0.
+   * `spreadCurve` applies the faded multiplier to a rung's whole distance from
+   * paper rather than integrating it along the way, and light's settled gain is
+   * 2.509 — so two rungs both sitting at the fade's far end come out in the
+   * wrong order relative to each other. That was measurable while `--border-hover`
+   * and `--border-strong` were both down there (ΔL 0.0063 on ember, and a test
+   * existed only to bound it); collapsing the two edge tokens into one removed
+   * the pair, and with it the inversion. Adding a second rung below `--border`
+   * brings it straight back, so a rung added there needs the curve fixed first,
+   * not a characterization test.
    */
   spread: { min: 1, max: 2.6 },
 } as const;
@@ -130,15 +140,11 @@ export const DARK_LADDER = {
     "--background",
     "--card",
     "--popover",
-    "--secondary",
     "--muted",
     "--accent",
     "--sidebar",
-    "--sidebar-accent",
     "--border",
-    "--border-hover",
     "--border-strong",
-    "--input",
     "--sidebar-border",
   ] satisfies readonly ThemeTokenName[],
 

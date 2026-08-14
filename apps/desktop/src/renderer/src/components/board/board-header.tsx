@@ -57,7 +57,7 @@ function OrderingMenu({ projectId }: { projectId: string }) {
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
-          className="gap-1.5 border border-border px-2.5 text-xs text-muted-foreground"
+          className="gap-1 border border-border px-2 text-ui text-muted-foreground"
         >
           <ArrowsDownUpIcon className="size-3.5" />
           {TICKET_SORT_LABELS[sort.key]}
@@ -113,8 +113,10 @@ function ViewToggle({ projectId }: { projectId: string }) {
       onClick={() => setBoardView(projectId, value)}
       className={cn(
         // Button-primitive idiom (ui/button.tsx): press/focus feedback for a
-        // hand-rolled control, segmented look unchanged at rest.
-        "flex size-6 items-center justify-center rounded-md text-muted-foreground outline-none transition-[color,transform,box-shadow] duration-150 ease-out hover:text-foreground active:scale-[0.97] motion-reduce:transform-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+        // hand-rolled control, segmented look unchanged at rest. `scale` is
+        // named in the transition list and cancelled by `scale-100!` under
+        // reduced motion for the reason spelled out there.
+        "flex size-6 items-center justify-center rounded-md text-muted-foreground outline-none transition-[color,transform,scale,box-shadow] duration-150 ease-out hover:text-foreground active:scale-[0.97] motion-reduce:scale-100! focus-visible:ring-2 focus-visible:ring-ring/45",
         view === value && "bg-accent text-foreground",
       )}
     >
@@ -123,7 +125,7 @@ function ViewToggle({ projectId }: { projectId: string }) {
   );
 
   return (
-    <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5">
+    <div className="flex items-center gap-1 rounded-lg border border-border p-1">
       {segment("board", "Board view", KanbanIcon)}
       {segment("list", "List view", ListBulletsIcon)}
     </div>
@@ -140,7 +142,7 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
   return (
     <PageHeader>
       <h2 className="shrink-0 text-sm font-semibold">Board</h2>
-      <span className="shrink-0 font-mono text-xs text-muted-foreground">{ticketCount}</span>
+      <span className="shrink-0 font-mono text-ui text-muted-foreground">{ticketCount}</span>
       <FilterBar projectId={projectId} tickets={tickets} filter={filter} className="ml-4" />
       {/* ml-auto parks the ordering + view cluster on the right so it doesn't
           fight the filter bar as chips wrap onto a second line. */}
@@ -167,7 +169,7 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
             ticket", not bare "New" — the column composers' buttons are named
             "New" and the e2e smoke matches both with exact:true. */}
         <Button
-          className="gap-1 px-2.5 text-xs"
+          className="gap-1 px-2 text-ui"
           onClick={() => useUiStore.getState().setNewTicketOpen(true)}
         >
           <PlusIcon className="size-3.5" />

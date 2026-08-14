@@ -15,7 +15,6 @@ interface InspectableProps {
   "aria-label"?: string;
   children?: React.ReactNode;
   className?: string;
-  density?: "default" | "compact";
   onClick?(): void;
   onCloseAutoFocus?(event: { preventDefault(): void }): void;
   onSelect?(): void;
@@ -114,7 +113,6 @@ describe("the queued message row", () => {
 
     expect(edits).toHaveLength(1);
     expect(renderToStaticMarkup(<>{edit?.props.children}</>)).toContain("Edit message");
-    expect(edit?.props.density).toBe("compact");
     // Dismissing a menu with its trigger intact keeps Radix's normal restore.
     menu?.props.onCloseAutoFocus?.({ preventDefault: () => (restorePrevented = true) });
     expect(restorePrevented).toBe(false);
@@ -193,12 +191,14 @@ describe("the queued message row", () => {
     expect(html).toContain('aria-label="Queued message actions:');
   });
 
-  it("names turn interruption and draws keyboard focus on the outer rounded shell", () => {
+  it("names turn interruption and wears no focus dressing on the shell", () => {
     const html = renderComposer();
 
     expect(html).toContain('aria-label="Stop turn"');
     expect(html).not.toContain('aria-label="Stop"');
-    expect(html).toContain("has-[[data-slot=input-group-control]:focus-visible]:ring-[3px]");
+    // The caret is the field's focus indicator (field-classes.ts records the
+    // decision); a shell that lights up on focus is a regression.
+    expect(html).not.toContain("focus-visible]:border-ring");
   });
 });
 
@@ -290,7 +290,7 @@ describe("the picker card", () => {
     const html = renderPicker(pickerState());
 
     expect(html).toContain('data-slot="composer-picker"');
-    expect(html).toContain("rounded-2xl");
+    expect(html).toContain("rounded-container");
     expect(html).not.toContain('data-slot="popover-content"');
   });
 

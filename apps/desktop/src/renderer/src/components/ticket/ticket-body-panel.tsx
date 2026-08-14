@@ -19,7 +19,7 @@ export function TicketBodyPanel({
   fileRefs?: DocumentFileRefs;
 }) {
   return (
-    <ContentColumn className="flex flex-col gap-8 pt-3 pb-16">
+    <ContentColumn className="flex flex-col gap-8 pt-4 pb-16">
       <TicketBodyEditor ticket={ticket} fileRefs={fileRefs} />
       <TicketActivityFeed ticket={ticket} />
     </ContentColumn>

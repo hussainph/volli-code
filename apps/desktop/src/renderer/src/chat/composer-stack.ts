@@ -4,5 +4,4 @@
  * *above* the input and never replaces it; both shells use this radius so
  * they read as one family.
  */
-export const COMPOSER_STACK_SHELL =
-  "rounded-2xl border border-border bg-card shadow-[var(--shadow-raised)]";
+export const COMPOSER_STACK_SHELL = "rounded-container border border-border bg-card shadow-raised";

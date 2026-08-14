@@ -10,5 +10,5 @@
  * a strip of quiet outlines under the description rather than five buttons.
  */
 export function composerChipClass(): string {
-  return "border border-border px-2.5 text-xs font-medium text-muted-foreground";
+  return "border border-border px-2 text-ui font-medium text-muted-foreground";
 }

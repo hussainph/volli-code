@@ -1,0 +1,4 @@
+{
+  "note": "Recorded exceptions to check-design-tokens.mjs. An entry excuses one rule on the lines of one file whose text contains `contains`. Every entry needs a reason, and an entry that stops matching FAILS the check — retiring these is part of finishing the sweep that made them unnecessary.",
+  "entries": []
+}

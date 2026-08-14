@@ -190,23 +190,23 @@ export function SessionComposer({
     >
       <PromptInput
         className={cn(
-          "pointer-events-auto overflow-hidden transition-[color,box-shadow] has-[[data-slot=input-group-control]:focus-visible]:border-ring has-[[data-slot=input-group-control]:focus-visible]:ring-[3px] has-[[data-slot=input-group-control]:focus-visible]:ring-ring/50",
+          "pointer-events-auto overflow-hidden transition-[color,border-color,box-shadow]",
           COMPOSER_STACK_SHELL,
           className,
         )}
         onSubmit={() => send(composerIntent({ working, steer: false }))}
       >
         {queued.length > 0 ? (
-          <PromptInputHeader className="flex-col items-stretch gap-0.5 border-b border-border/70">
+          <PromptInputHeader className="flex-col items-stretch gap-1 border-b border-border/70">
             {queued.map((entry) => (
               <div
                 key={entry.id}
                 role="group"
                 aria-label={`Queued message: ${entry.text}`}
-                className="flex min-w-0 items-center gap-1 text-xs"
+                className="flex min-w-0 items-center gap-1 text-ui"
               >
                 <span className="min-w-0 flex-1 truncate text-muted-foreground">{entry.text}</span>
-                <span className="flex shrink-0 items-center gap-0.5">
+                <span className="flex shrink-0 items-center gap-1">
                   {working ? (
                     <Button
                       type="button"
@@ -256,7 +256,7 @@ export function SessionComposer({
                         event.preventDefault();
                       }}
                     >
-                      <DropdownMenuItem density="compact" onSelect={() => editQueued(entry.id)}>
+                      <DropdownMenuItem onSelect={() => editQueued(entry.id)}>
                         <PencilSimpleIcon weight="fill" />
                         Edit message
                       </DropdownMenuItem>
@@ -316,9 +316,9 @@ export function SessionComposer({
               aria-label={working ? "Queue" : "Send"}
             >
               {working ? (
-                <QueueIcon className="size-4" />
+                <QueueIcon className="size-3.5" />
               ) : (
-                <ArrowUpIcon className="size-4" weight="bold" />
+                <ArrowUpIcon className="size-3.5" weight="bold" />
               )}
             </PromptInputSubmit>
           </div>
@@ -776,7 +776,7 @@ function EffortSegment({
   onChange(variant: string): void;
 }) {
   return (
-    <span className="flex shrink-0 items-center gap-0.5 rounded-full bg-muted p-0.5">
+    <span className="flex shrink-0 items-center gap-1 rounded-full bg-muted p-1">
       {variants.map((variant) => (
         <button
           key={variant}
@@ -787,9 +787,9 @@ function EffortSegment({
             onChange(variant);
           }}
           className={cn(
-            "rounded-full px-2 py-0.5 text-xs transition-colors duration-150 ease-swift",
+            "rounded-full px-2 py-1 text-ui transition-colors duration-150 ease-swift",
             variant === value
-              ? "bg-background text-foreground shadow-[var(--shadow-raised)]"
+              ? "bg-background text-foreground shadow-raised"
               : "text-muted-foreground hover:text-foreground",
           )}
         >

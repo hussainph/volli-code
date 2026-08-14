@@ -77,6 +77,24 @@ export interface CanvasElevation {
    * value, and a second door to it is a second thing to keep in step.
    */
   shadows: CanvasShadows;
+  /**
+   * The overlay wash — one `rgb(R G B / a)` for every dialog, sheet and palette
+   * scrim in the app.
+   *
+   * IT IS THE SHADOW'S OWN INK, and that is the whole idea rather than a
+   * shortcut: a scrim is the window's shadow spread over everything instead of
+   * pooled under one edge, so the color that is already solved to sit below
+   * every canvas this mode can produce is exactly the color that should dim it.
+   * The sites this replaces were `bg-black/30` and `bg-black/35 dark:bg-black/55`
+   * — neutral black over a warm gradient, which desaturates the pixels beneath
+   * it and reads as dirt rather than as an absence of light, and which no canvas
+   * could ever move.
+   *
+   * NOT scaled by the shadow strength dial. A user who turns shadows off is
+   * asking for flat surfaces, not for a modal that stops separating from the
+   * page behind it.
+   */
+  scrim: string;
 }
 
 /**
@@ -146,9 +164,12 @@ function liftTarget(
  * and on a pastel canvas that is the difference between a shadow and a stain —
  * grey over a warm wash desaturates the pixels beneath it.
  */
-function shadowSet(canvas: Canvas, resolved: ResolvedAppearance): CanvasShadows {
+function shadowSet(
+  canvas: Canvas,
+  resolved: ResolvedAppearance,
+): { shadows: CanvasShadows; scrim: string } {
   const { shadow: strength } = settled(resolved);
-  const { color, raised, card, overlay } = ARC_TUNING.shadow;
+  const { color, raised, card, overlay, scrim } = ARC_TUNING.shadow;
   const { h } = hexToOklch(canvas.stops[canvas.primaryIndex].hex);
   const { L, C } = color[resolved];
   const [r, g, b] = hexChannels(oklchToHex(L, C, h));
@@ -160,7 +181,10 @@ function shadowSet(canvas: Canvas, resolved: ResolvedAppearance): CanvasShadows 
       )
       .join(", ");
 
-  return { raised: layers(raised), card: layers(card), overlay: layers(overlay) };
+  return {
+    shadows: { raised: layers(raised), card: layers(card), overlay: layers(overlay) },
+    scrim: `rgb(${r} ${g} ${b} / ${scrim[resolved]})`,
+  };
 }
 
 /**
@@ -214,10 +238,13 @@ export function canvasElevation(
   const inner = shares[shares.length - 1];
   const sidebarTowardPaper = settled(resolved).lift > 0 ? target.alpha * inner : 0;
 
+  const { shadows, scrim } = shadowSet(canvas, resolved);
+
   return {
     tiers,
     surfaces: tiers.flatMap((tier) => tier.surfaces),
     sidebarTowardPaper,
-    shadows: shadowSet(canvas, resolved),
+    shadows,
+    scrim,
   };
 }

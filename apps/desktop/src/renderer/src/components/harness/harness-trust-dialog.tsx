@@ -89,10 +89,10 @@ export function HarnessTrustDialog() {
           </AlertDialogDescription>
         </AlertDialogHeader>
         <div className="flex flex-col gap-2">
-          <pre className="overflow-x-auto rounded-md border border-border bg-background/40 px-3 py-2 font-mono text-xs text-foreground">
+          <pre className="overflow-x-auto rounded-md border border-border bg-background/30 px-4 py-2 font-mono text-ui text-foreground">
             {manifest === undefined ? "" : harnessCommandLine(manifest)}
           </pre>
-          <p className="truncate font-mono text-xs text-muted-foreground">
+          <p className="truncate font-mono text-ui text-muted-foreground">
             {manifest?.manifestPath}
           </p>
           {manifest !== undefined && manifest.claimedEvents.length > 0 ? (
@@ -100,7 +100,7 @@ export function HarnessTrustDialog() {
               {manifest.claimedEvents.map((event) => (
                 <span
                   key={event}
-                  className="rounded-full border border-border px-2 py-0.5 font-mono text-xs text-muted-foreground"
+                  className="rounded-full border border-border px-2 py-1 font-mono text-ui text-muted-foreground"
                 >
                   {event}
                 </span>

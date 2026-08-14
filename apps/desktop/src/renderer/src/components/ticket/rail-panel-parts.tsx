@@ -23,7 +23,18 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 
-/** Every rail page insets to the column's edge, and tightens at the 240px floor. */
+/**
+ * Every rail page insets to the column's edge, and tightens at the 240px floor.
+ *
+ * THE NARROW STEP IS 12px, and it is a recorded exception to the 0/4/8/16/24
+ * spacing collapse. The step exists to buy content width back on a rail the user
+ * has dragged narrow, so it has to be SMALLER than 16 and still be an inset; the
+ * collapsed ladder's next rung down is 8, which halves the edge and reads as a
+ * different surface rather than a tighter one. Run mechanically the sweep made
+ * both halves 16 and the narrow variant became a no-op — the rail simply stopped
+ * responding to its own width, silently. `ticket-sessions-panel-rows.test.tsx`
+ * asserts the pair, which is how that was caught; keep it asserting.
+ */
 export const RAIL_PANEL_INSET = "px-4 group-data-[narrow=true]/rail:px-3";
 
 /** The same inset expressed as a horizontal MARGIN, for blocks that float inside a page. */
@@ -31,15 +42,20 @@ export const RAIL_PANEL_MARGIN = "mx-4 group-data-[narrow=true]/rail:mx-3";
 
 /**
  * Insertions and deletions as one pair — the repository card's changes row, the
- * Diffs header, and the commit gate all wear it. Raw palette colors rather than
- * theme tokens, the same exception the session status dots already take: added
- * and removed are a fixed, universally-read pair, not a canvas-derived surface.
+ * Diffs header, and the commit gate all wear it.
+ *
+ * On the canvas's own semantics now, not raw palette. The old exception —
+ * "added and removed are a fixed, universally-read pair, not a canvas-derived
+ * surface" — had the first half right and drew the wrong conclusion from it:
+ * `--positive` is hue-locked precisely so that green stays green on a cool
+ * workspace, which is what makes the pair readable AND themed instead of one
+ * or the other.
  */
 export function DiffTotals({ diff }: { diff: DiffStat }) {
   return (
-    <span className="flex shrink-0 items-center gap-1.5 font-mono text-xs font-medium tabular-nums">
-      <span className="text-emerald-900 dark:text-emerald-400">+{diff.insertions}</span>
-      <span className="text-red-900 dark:text-red-400">−{diff.deletions}</span>
+    <span className="flex shrink-0 items-center gap-1 font-mono text-ui font-medium tabular-nums">
+      <span className="text-positive">+{diff.insertions}</span>
+      <span className="text-destructive">−{diff.deletions}</span>
     </span>
   );
 }
@@ -83,7 +99,7 @@ export function RailRowActions({
   return (
     <span
       className={cn(
-        "flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-100 group-focus-within:opacity-100 group-hover:opacity-100 motion-reduce:transition-none",
+        "flex shrink-0 items-center gap-1 opacity-0 transition-opacity duration-100 group-focus-within:opacity-100 group-hover:opacity-100 motion-reduce:transition-none",
         className,
       )}
     >
@@ -161,7 +177,7 @@ export function RailFaultBanner({
       title={error}
       data-testid={testId}
       className={cn(
-        "flex items-center gap-2 rounded-lg border border-destructive/25 bg-destructive/5 px-2.5 py-2 text-xs text-destructive",
+        "flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-2 py-2 text-ui text-destructive",
         inset && cn("mb-2 shrink-0", RAIL_PANEL_MARGIN),
         className,
       )}
@@ -188,12 +204,12 @@ export function RailFaultBanner({
  */
 export function RailPanelSkeleton({ label, testId }: { label: string; testId: string }) {
   return (
-    <div className="flex flex-col gap-2 p-3" data-testid={testId} aria-label={`Loading ${label}`}>
+    <div className="flex flex-col gap-2 p-4" data-testid={testId} aria-label={`Loading ${label}`}>
       {["w-4/5", "w-3/5", "w-full"].map((width) => (
         <div
           key={width}
           className={cn(
-            "h-8 animate-pulse rounded-md bg-sidebar-accent/70 motion-reduce:animate-none",
+            "h-8 animate-pulse rounded-md bg-accent/70 motion-reduce:animate-none",
             width,
           )}
         />
