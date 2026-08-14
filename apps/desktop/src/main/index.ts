@@ -1434,4 +1434,10 @@ app.on("window-all-closed", () => {
 registerAgentSocketWillQuit({
   lifecycle: app,
   shutdownAgentSocket,
+  reportFailure: (error) => {
+    console.error(
+      "[volli] failed to close the agent socket during app shutdown:",
+      errorMessage(error),
+    );
+  },
 });

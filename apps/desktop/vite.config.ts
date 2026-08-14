@@ -152,6 +152,7 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/pty.ts",
         "**/src/main/park.ts",
         "**/src/main/quit-gate.ts",
+        "**/src/main/shutdown-deadline.ts",
         "**/src/main/fs-deps.ts",
         "**/src/main/ghostty-config.ts",
         "**/src/main/harness-ipc.ts",

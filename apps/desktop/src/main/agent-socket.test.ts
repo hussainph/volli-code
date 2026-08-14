@@ -314,6 +314,7 @@ describe("agent socket", () => {
         exit,
       },
       shutdownAgentSocket: agentSocket.shutdown,
+      reportFailure: vi.fn(),
     });
 
     const event = { preventDefault: vi.fn() };
@@ -325,6 +326,87 @@ describe("agent socket", () => {
     await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
     finishClose?.();
     await vi.waitFor(() => expect(exit).toHaveBeenCalledExactlyOnceWith(0));
+  });
+
+  it("forces one will-quit after the shutdown deadline and observes a late rejection", async () => {
+    vi.useFakeTimers();
+    try {
+      const handlers = new Map<string, (event: { preventDefault(): void }) => void>();
+      let failShutdown!: (error: unknown) => void;
+      const shutdownAgentSocket = vi.fn(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            failShutdown = reject;
+          }),
+      );
+      const reportFailure = vi.fn();
+      const exit = vi.fn();
+      registerAgentSocketWillQuit({
+        lifecycle: {
+          on(event, listener) {
+            handlers.set(event, listener);
+          },
+          exit,
+        },
+        shutdownAgentSocket,
+        shutdownDeadlineMs: 25,
+        reportFailure,
+      });
+
+      const first = { preventDefault: vi.fn() };
+      const repeated = { preventDefault: vi.fn() };
+      handlers.get("will-quit")?.(first);
+      handlers.get("will-quit")?.(repeated);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(first.preventDefault).toHaveBeenCalledExactlyOnceWith();
+      expect(repeated.preventDefault).toHaveBeenCalledExactlyOnceWith();
+      expect(shutdownAgentSocket).toHaveBeenCalledTimes(1);
+      expect(exit).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(reportFailure).toHaveBeenCalledExactlyOnceWith(
+        new Error("Application shutdown did not settle within 25ms."),
+      );
+      expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+
+      failShutdown(new Error("late socket failure"));
+      await vi.advanceTimersByTimeAsync(0);
+      handlers.get("will-quit")?.({ preventDefault: vi.fn() });
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(reportFailure).toHaveBeenNthCalledWith(2, new Error("late socket failure"));
+      expect(reportFailure).toHaveBeenCalledTimes(2);
+      expect(exit).toHaveBeenCalledTimes(1);
+      expect(shutdownAgentSocket).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports a will-quit shutdown rejection before exiting", async () => {
+    const handlers = new Map<string, (event: { preventDefault(): void }) => void>();
+    const failure = new Error("socket shutdown rejected");
+    const reportFailure = vi.fn();
+    const exit = vi.fn();
+    registerAgentSocketWillQuit({
+      lifecycle: {
+        on(event, listener) {
+          handlers.set(event, listener);
+        },
+        exit,
+      },
+      shutdownAgentSocket: () => Promise.reject(failure),
+      reportFailure,
+    });
+
+    const event = { preventDefault: vi.fn() };
+    handlers.get("will-quit")?.(event);
+
+    await vi.waitFor(() => expect(exit).toHaveBeenCalledExactlyOnceWith(0));
+    expect(event.preventDefault).toHaveBeenCalledExactlyOnceWith();
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith(failure);
   });
 
   it("serves a real create-move-comment-board round trip on a private Unix socket", async () => {

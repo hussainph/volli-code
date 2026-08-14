@@ -1,3 +1,5 @@
+import { settleShutdownBeforeDeadline } from "./shutdown-deadline";
+
 /**
  * The quit decision: whether ⌘Q is allowed to destroy work, and how a refusal
  * survives the listeners behind it.
@@ -134,6 +136,7 @@ export function registerAcceptedQuitCoordinator(options: {
   lifecycle: AcceptedQuitLifecycle;
   shutdownNativeSessions(): Promise<void>;
   shutdownAgentSocket(): Promise<void>;
+  shutdownDeadlineMs?: number;
   reportFailure(error: unknown): void;
 }): void {
   let shutdownInFlight = false;
@@ -147,20 +150,15 @@ export function registerAcceptedQuitCoordinator(options: {
     void Promise.resolve().then(() => {
       if (quitAlreadyRefused(event) || shutdownInFlight) return;
       shutdownInFlight = true;
-      const shutdowns = [
-        Promise.resolve().then(() => options.shutdownNativeSessions()),
-        Promise.resolve().then(() => options.shutdownAgentSocket()),
-      ];
-      void Promise.allSettled(shutdowns)
-        .then((results) => {
-          for (const result of results) {
-            if (result.status === "rejected") options.reportFailure(result.reason);
-          }
-        })
-        .finally(
-          // Re-issuing app.quit() during before-quit is swallowed by Electron.
-          () => options.lifecycle.exit(0),
-        );
+      void settleShutdownBeforeDeadline({
+        shutdowns: [options.shutdownNativeSessions, options.shutdownAgentSocket],
+        deadlineMs: options.shutdownDeadlineMs,
+        reportFailure: options.reportFailure,
+      }).then(
+        // Re-issuing app.quit() during before-quit is swallowed by Electron.
+        () => options.lifecycle.exit(0),
+        () => options.lifecycle.exit(0),
+      );
     });
   });
 }

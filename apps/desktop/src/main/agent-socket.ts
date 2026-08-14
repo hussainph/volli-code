@@ -9,6 +9,8 @@ import {
   type AgentResponse,
 } from "@volli/shared";
 
+import { settleShutdownBeforeDeadline } from "./shutdown-deadline";
+
 const MAX_REQUEST_BYTES = 1024 * 1024;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_CONNECTIONS = 64;
@@ -106,13 +108,19 @@ interface AgentSocketAppLifecycle {
 export function registerAgentSocketWillQuit(options: {
   lifecycle: AgentSocketAppLifecycle;
   shutdownAgentSocket: ShutdownAgentSocket;
+  shutdownDeadlineMs?: number;
+  reportFailure(error: unknown): void;
 }): void {
   let shutdownStarted = false;
   options.lifecycle.on("will-quit", (event) => {
     event.preventDefault();
     if (shutdownStarted) return;
     shutdownStarted = true;
-    void options.shutdownAgentSocket().then(
+    void settleShutdownBeforeDeadline({
+      shutdowns: [options.shutdownAgentSocket],
+      deadlineMs: options.shutdownDeadlineMs,
+      reportFailure: options.reportFailure,
+    }).then(
       () => options.lifecycle.exit(0),
       () => options.lifecycle.exit(0),
     );
