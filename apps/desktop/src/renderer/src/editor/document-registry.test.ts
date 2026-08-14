@@ -307,13 +307,13 @@ describe("DocumentRegistry", () => {
     expect(reopened.model.canUndo()).toBe(true);
   });
 
-  it("lands a newer seed on the parked model as an undoable edit", () => {
+  it("refreshes a parked clean model without making the new disk baseline undoable", () => {
     const { registry, models } = makeRegistry();
     const file = registry.acquire({
       identity: mainIdentity,
       viewId: "file",
       seed: { value: "old baseline", revision: "r1" },
-      savePolicy: "read-only",
+      savePolicy: "explicit",
     });
     expect(file.restoreViewState()).toBeNull();
     file.release({ cursor: 7 });
@@ -322,7 +322,7 @@ describe("DocumentRegistry", () => {
       identity: mainIdentity,
       viewId: "file",
       seed: { value: "new baseline", revision: "r2" },
-      savePolicy: "read-only",
+      savePolicy: "explicit",
     });
 
     // The model the view gets back must hold what disk holds, or the mount
@@ -335,6 +335,9 @@ describe("DocumentRegistry", () => {
       dirty: false,
     });
     expect(models).toHaveLength(1);
+    // There was nothing to undo before the tab switch. The agent's newer disk
+    // bytes are now the clean baseline, not a user edit that ⌘Z may resurrect.
+    expect(reopened.model.canUndo()).toBe(false);
   });
 
   it("parks a clean entry even when its view kept no state to remember", () => {
@@ -617,11 +620,7 @@ describe("DocumentRegistry", () => {
     expect(applyEdit).not.toHaveBeenCalled();
   });
 
-  /**
-   * Adoption is the agent-wrote-while-you-watched path. It must reach the model
-   * without emptying the history the user still has a right to.
-   */
-  it("adopts a fresh baseline into a clean model as an undoable edit", () => {
+  it("adopts a fresh baseline into a clean model without adding an undo step", () => {
     const { registry } = makeRegistry();
     const file = registry.acquire({
       identity: mainIdentity,
@@ -635,8 +634,8 @@ describe("DocumentRegistry", () => {
     file.adoptCleanBaseline({ value: "def main() -> None:\n", revision: "r2" });
 
     expect(model.getValue()).toBe("def main() -> None:\n");
-    expect(setValue).not.toHaveBeenCalled();
-    expect(model.canUndo()).toBe(true);
+    expect(setValue).toHaveBeenCalledWith("def main() -> None:\n");
+    expect(model.canUndo()).toBe(false);
   });
 
   it("peeks a document that is already open, exposing its live model and dirty flag", () => {

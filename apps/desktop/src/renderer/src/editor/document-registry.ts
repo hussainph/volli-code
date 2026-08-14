@@ -185,7 +185,7 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
         // hand the next view a buffer full of the file's old text under a
         // baseline that says otherwise, and the mount reconcile would then read
         // that stale text as the user's own unsaved draft. `adoptCleanBaseline`
-        // lands it as an undoable edit and leaves a dirty draft alone, recording
+        // refreshes the clean model and leaves a dirty draft alone, recording
         // only the newer external revision.
         this.adoptCleanBaseline(entry, input.seed);
       }
@@ -339,11 +339,11 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
       entry.baselineRevision = seed.revision;
       this.setDirty(entry, false);
       if (entry.model !== null && entry.model.getValue() !== seed.value) {
-        // An undoable edit rather than `setValue`, for the same reason an
-        // external update is one: the model may be parked with a history the
-        // user can still reach, and Monaco maps carets through edit ranges but
-        // resets them on a whole-buffer replace.
-        this.factory.applyExternalEdit(entry.model, seed.value);
+        // This seed is the clean disk baseline, not a user edit. Putting it on
+        // Monaco's undo stack lets ⌘Z turn stale bytes into a dirty draft, and a
+        // following save can then overwrite the external write. A clean
+        // re-seed deliberately resets the old history with the model value.
+        entry.model.setValue(seed.value);
       }
     } finally {
       entry.applyingBaseline = false;
