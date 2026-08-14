@@ -365,7 +365,7 @@ const LIFT_CLASS: Record<Lift, string> = {
   // widest the token set has, and it moves the same direction in both modes
   // (light's accent is darker than its rail, which is already how the app draws
   // a selected row). Border, shadow and the ember underline carry the rest.
-  focused: "border-border-strong bg-accent text-foreground shadow-sm font-medium",
+  focused: "border-border-strong bg-accent text-foreground shadow-raised font-medium",
 };
 
 /* ------------------------------------------------------------------- pane */
@@ -1382,7 +1382,7 @@ export default function SplitTabsScratch(): React.JSX.Element {
               const shared = cx(
                 "group relative flex h-7 shrink-0 select-none items-center gap-1.5 rounded-md border pr-1 pl-2.5 text-ui outline-none",
                 "transition-[background-color,border-color,box-shadow,color] duration-150 ease-out",
-                dragged && "z-10 cursor-grabbing opacity-90 shadow-lg",
+                dragged && "z-10 cursor-grabbing opacity-90 shadow-card",
                 merging && "ring-2 ring-primary/70",
               );
               const style = dragged ? { transform: `translateX(${drag.dx}px)` } : undefined;
@@ -1420,7 +1420,7 @@ export default function SplitTabsScratch(): React.JSX.Element {
                     className={cx(
                       "relative flex shrink-0 items-center rounded-md border",
                       pairStyle === "boxed" ? "border-border bg-card p-px" : "border-transparent",
-                      dragged && "z-10 opacity-90 shadow-lg",
+                      dragged && "z-10 opacity-90 shadow-card",
                       merging && "ring-2 ring-primary/70",
                     )}
                   >
@@ -1492,7 +1492,7 @@ export default function SplitTabsScratch(): React.JSX.Element {
                   {open ? (
                     <div
                       data-inert
-                      className="fixed z-50 w-56 rounded-lg border border-border bg-popover p-1 shadow-2xl"
+                      className="fixed z-50 w-56 rounded-lg border border-border bg-popover p-1 shadow-overlay"
                       style={{ left: openGroup.left, top: openGroup.top }}
                     >
                       {members.map((paneId) => {

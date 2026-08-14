@@ -128,7 +128,7 @@ export default function RailPortCheck() {
   return (
     <TooltipProvider delayDuration={400} skipDelayDuration={200}>
       <div className="flex h-svh w-full overflow-hidden bg-rail p-2 text-foreground">
-        <div className="flex h-full flex-1 overflow-hidden rounded-xl border border-border bg-background shadow-xl">
+        <div className="flex h-full flex-1 overflow-hidden rounded-xl border border-border bg-background shadow-card">
           <main className="flex min-w-0 flex-1 flex-col items-start gap-2 p-6">
             {([240, 300, 420] as const).map((width) => (
               <button

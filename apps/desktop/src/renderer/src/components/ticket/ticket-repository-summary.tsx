@@ -928,7 +928,7 @@ export function TicketRepositorySummary({
   // edge. It truncates and keeps its full label in `title` instead — a control
   // you can read to the end elsewhere beats one you cannot reach.
   const primaryClassName =
-    "min-w-0 shrink border-sidebar-border bg-background/35 px-2.5 text-xs shadow-xs [&>span]:truncate";
+    "min-w-0 shrink border-sidebar-border bg-background/35 px-2.5 text-xs shadow-raised [&>span]:truncate";
 
   const doneFlowPrimaryButton = (
     <Button
@@ -974,7 +974,7 @@ export function TicketRepositorySummary({
           <Button
             variant="outline"
             size="sm"
-            className="shrink-0 border-sidebar-border bg-background/35 px-2.5 text-xs shadow-xs"
+            className="shrink-0 border-sidebar-border bg-background/35 px-2.5 text-xs shadow-raised"
             aria-label="Open the pull request on GitHub"
             onClick={openPr}
           >
@@ -992,7 +992,7 @@ export function TicketRepositorySummary({
     // invalid value the browser drops, so the card that was reviewed and
     // approved is flat in BOTH appearances (verified in the lab, computed
     // `box-shadow: none` under `.light`). Border plus surface is the whole
-    // frame. The lift the scratch intended is `shadow-[var(--shadow-raised)]` —
+    // frame. The lift the scratch intended is `shadow-raised` —
     // one of the three solved tiers, tinted to the canvas in both appearances —
     // and adding it is a visual call, not a revival of the broken string.
     <section
@@ -1117,7 +1117,7 @@ export function TicketRepositorySummary({
                             variant="outline"
                             size="icon-sm"
                             aria-label="More repository actions"
-                            className="border-sidebar-border bg-background/35 shadow-xs"
+                            className="border-sidebar-border bg-background/35 shadow-raised"
                           >
                             <DotsThreeIcon weight="bold" />
                           </Button>

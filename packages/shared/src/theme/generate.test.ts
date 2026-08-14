@@ -42,26 +42,21 @@ describe("the ember golden", () => {
     "--background": "#15100e",
     "--card": "#1b1412",
     "--popover": "#1f1816",
-    "--secondary": "#211a17",
     "--muted": "#211a17",
     "--accent": "#28201d",
     "--sidebar": "#1b1412",
     "--foreground": "#ebe3df",
-    "--popover-foreground": "#ebe3df",
-    "--secondary-foreground": "#ebe3df",
     "--muted-foreground": "#b9b0ad",
-    "--accent-foreground": "#ebe3df",
     "--sidebar-foreground": "#d3cbc7",
     "--border": "#2d2421",
     "--border-strong": "#423834",
-    "--input": "#2d2421",
     "--sidebar-border": "#29211d",
     "--primary": "#e8652a",
     "--primary-foreground": "#ffffff",
     "--primary-text": "#ff966c",
     "--ring": "#e8652a",
-    "--destructive": "#e5484d",
-    "--destructive-foreground": "#ffffff",
+    "--destructive": "#ffa39e",
+    "--destructive-foreground": "#290b0b",
     "--positive": "#27d496",
     "--positive-foreground": "#001c10",
     "--attention": "#fea92e",
@@ -80,8 +75,14 @@ describe("the ember golden", () => {
     expect(generateThemeTokens(DEFAULT_THEME)["--primary"]).toBe("#e8652a");
   });
 
-  it("keeps today's destructive red exactly", () => {
-    expect(generateThemeTokens(DEFAULT_THEME)["--destructive"]).toBe("#e5484d");
+  it("solves the destructive red onto the card, like the rest of its family", () => {
+    // Frozen at #e5484d until this change, which put it at Lc ~35 on the card
+    // while --positive, --attention and --info were solved to 65 — so a red
+    // diff count read visibly quieter than the green one beside it. Hue is
+    // still locked (23.03°, that same red decomposed); nothing else is.
+    const tokens = generateThemeTokens(DEFAULT_THEME);
+    expect(tokens["--destructive"]).toBe("#ffa39e");
+    expect(apcaLc(tokens["--destructive"], tokens["--card"])).toBeGreaterThanOrEqual(65);
   });
 
   it("pins the ember ladder's background, card and accent rungs", () => {
@@ -152,7 +153,7 @@ describe("the generator's guarantees, over 360 hues × 5 chromas", () => {
     // Asserted in ΔL and never in APCA: APCA low-clips below Lc ~10, so it
     // returns a flat 0 for every border/background pair and cannot tell a
     // visible edge from an invisible one.
-    const borders = ["--border", "--input", "--border-strong", "--sidebar-border"] as const;
+    const borders = ["--border", "--border-strong", "--sidebar-border"] as const;
     for (const { seed, tokens } of sweep) {
       const backgroundL = hexToOklch(tokens["--background"]).L;
       for (const border of borders) {
@@ -171,15 +172,15 @@ describe("the generator's guarantees, over 360 hues × 5 chromas", () => {
     // one above says nothing about this one.
     //
     // The floor is 0.062 against a measured sweep minimum of 0.0656, at seed
-    // #997964 (--border/--input, the lowest border rung); the headroom is
-    // 8-bit quantisation of two rungs, same as the --background test's.
+    // #997964 (--border, the lowest border rung); the headroom is 8-bit
+    // quantisation of two rungs, same as the --background test's.
     //
     // --sidebar-border is deliberately absent. Its rung (L 0.255) is only 0.055
     // above --card's by construction, so it *cannot* meet this floor — measured
     // minimum 0.0517 at seed #71886b. Moving the ladder to fix that would
     // repaint every shipped theme, so it stays as authored and stays asserted
     // against --background, where it clears comfortably.
-    const borders = ["--border", "--input", "--border-strong"] as const;
+    const borders = ["--border", "--border-strong"] as const;
     for (const { seed, tokens } of sweep) {
       const cardL = hexToOklch(tokens["--card"]).L;
       for (const border of borders) {
@@ -199,7 +200,7 @@ describe("the generator's guarantees, over 360 hues × 5 chromas", () => {
       ["--background", 0.178],
       ["--card", 0.2],
       ["--popover", 0.218],
-      ["--secondary", 0.226],
+      ["--muted", 0.226],
       ["--accent", 0.252],
       ["--sidebar-border", 0.255],
       ["--border", 0.269],
@@ -213,13 +214,6 @@ describe("the generator's guarantees, over 360 hues × 5 chromas", () => {
           0.004,
         );
       }
-    }
-  });
-
-  it("pins --destructive regardless of the seed", () => {
-    for (const { tokens } of sweep) {
-      expect(tokens["--destructive"]).toBe("#e5484d");
-      expect(tokens["--destructive-foreground"]).toBe("#ffffff");
     }
   });
 
@@ -272,11 +266,11 @@ describe("--primary-text, the accent at body-copy contrast", () => {
     // lands on cards, popovers and control fills, which sit one to three rungs
     // lighter. Those cannot reach 60 from a solve aimed at --background; what
     // matters is that they stay within a hair of it rather than falling away.
-    // Measured minima: --card 59.57, --popover 59.10, --secondary 58.87 (the
+    // Measured minima: --card 59.57, --popover 59.10, --muted 58.87 (the
     // last two at seed #009a42). The 58.5 floor is that worst case with room
     // for 8-bit quantisation, not a target.
     for (const { seed, tokens } of sweep) {
-      for (const surface of ["--card", "--popover", "--secondary"] as const) {
+      for (const surface of ["--card", "--popover", "--muted"] as const) {
         expect(
           referenceLc(tokens["--primary-text"], tokens[surface]),
           `--primary-text on ${surface} for seed ${seed}`,
@@ -370,7 +364,7 @@ describe("--primary-text, the accent at body-copy contrast", () => {
 
 describe("the ladder's monotonicity", () => {
   // NOTE: the spec is self-inconsistent here. Its ladder table sets --popover
-  // at L 0.218 and --secondary at L 0.226 — a step of 0.008 — while its Tests
+  // at L 0.218 and --muted at L 0.226 — a step of 0.008 — while its Tests
   // paragraph asks for ΔL ≥ 0.015 "between adjacent surfaces". Both cannot
   // hold. The ladder wins: it is given explicitly, with worked hexes for two
   // hues, and it reproduces the values shipping in globals.css today (#1a1a1a
@@ -378,14 +372,14 @@ describe("the ladder's monotonicity", () => {
   //
   // The 0.015 floor is kept where it is load-bearing — between surfaces that
   // actually stack, and between every state/edge token and the background it
-  // is drawn on. --popover and --secondary never touch: a popover is a
-  // floating surface, --secondary is a control fill on --background or --card.
+  // is drawn on. --popover and --muted never touch: a popover is a floating
+  // surface, --muted is a control fill on --background or --card.
   const ORDER = [
     "--rail",
     "--background",
     "--card",
     "--popover",
-    "--secondary",
+    "--muted",
     "--accent",
     "--sidebar-border",
     "--border",
@@ -426,11 +420,9 @@ describe("the ladder's monotonicity", () => {
 
   it("separates every state and edge token from --background by ΔL ≥ 0.015", () => {
     const layered = [
-      "--secondary",
       "--muted",
       "--accent",
       "--border",
-      "--input",
       "--border-strong",
       "--sidebar-border",
     ] as const;
@@ -585,13 +577,15 @@ describe("overrides", () => {
   });
 
   it("does not follow an aliased token", () => {
-    // --accent-foreground is generated as a copy of --foreground, but
-    // overriding one must not silently move the other.
+    // --ring is generated as a copy of --primary, but overriding one must not
+    // silently move the other — that separability is the whole reason the two
+    // names survived the alias collapse (see tokens.ts).
     const tokens = generateThemeTokens({
       ...DEFAULT_THEME,
-      overrides: { "--foreground": "#1a1a1a" },
+      overrides: { "--primary": "#1a1a1a" },
     });
-    expect(tokens["--accent-foreground"]).toBe("#ebe3df");
+    expect(tokens["--primary"]).toBe("#1a1a1a");
+    expect(tokens["--ring"]).toBe("#e8652a");
   });
 });
 
@@ -796,11 +790,16 @@ describe("the accent repair path", () => {
 });
 
 describe("the status family", () => {
-  // The three hues, restated here rather than imported: a test that reads the
+  // The four hues, restated here rather than imported: a test that reads the
   // constant it is checking cannot notice the constant moving, and "green means
   // working" is exactly the kind of fact that must break loudly when edited.
-  const HUES = { "--positive": 162.48, "--attention": 70.08, "--info": 237.32 };
-  const FILLS = ["--positive", "--attention", "--info"] as const;
+  const HUES = {
+    "--positive": 162.48,
+    "--attention": 70.08,
+    "--info": 237.32,
+    "--destructive": 23.026,
+  };
+  const FILLS = ["--positive", "--attention", "--info", "--destructive"] as const;
 
   /**
    * Cards a ladder can actually produce: both ends of the shipped canvas, and
@@ -810,7 +809,7 @@ describe("the status family", () => {
    */
   const SURFACES = ["#1b1412", "#f4d4c8", "#0a0a0a", "#ffffff"];
 
-  it("emits the six names and nothing else, as paintable hexes", () => {
+  it("emits the eight names and nothing else, as paintable hexes", () => {
     for (const surface of SURFACES) {
       const status = solveStatusTokens(surface);
       expect(Object.keys(status).toSorted()).toEqual(
@@ -825,16 +824,30 @@ describe("the status family", () => {
   it("keeps each hue locked, whatever surface it is solved against", () => {
     // The solve moves lightness and gamut mapping takes chroma; neither may
     // touch hue, because hue is the only part of a status colour that MEANS
-    // anything. A degree of slack for the 8-bit round trip.
+    // anything.
+    //
+    // ONE DEGREE of slack, and it is the 8-bit round trip rather than taste: a
+    // solved fill is emitted as a hex and read back, and one quantisation step
+    // subtends a wider hue arc the closer the colour sits to the sRGB cube's
+    // surface. Measured worst case over these four surfaces is 0.49°
+    // (`--info` on white); over the 1800-seed sweep below it is 0.52°
+    // (`--destructive`, which solves to a pale #ffa39e in dark and lives right
+    // out at that corner). A `toBeCloseTo(hue, 0)` — tolerance exactly 0.5 —
+    // therefore passed only by luck and failed the moment the family gained a
+    // fourth member. 1° is well inside "the same red" and far outside anything
+    // a retune of STATUS_HUES could reach without this noticing.
     for (const surface of SURFACES) {
       const status = solveStatusTokens(surface);
       for (const fill of FILLS) {
-        expect(hexToOklch(status[fill]).h, `${fill} on ${surface}`).toBeCloseTo(HUES[fill], 0);
+        expect(
+          Math.abs(hexToOklch(status[fill]).h - HUES[fill]),
+          `${fill} on ${surface}`,
+        ).toBeLessThan(1);
       }
     }
   });
 
-  it("lands all three at one contrast, so no status colour shouts over its peers", () => {
+  it("lands all four at one contrast, so no status colour shouts over its peers", () => {
     // The point of solving them rather than authoring them. Today's raw palette
     // put emerald-500 at Lc 52, sky-500 at 48 and amber-500 at 60 on the same
     // dark card — a 12-point spread that reads as amber being more urgent than
@@ -899,7 +912,10 @@ describe("the status family", () => {
     // is the contrast. The colour tracking its own surface is the feature.
     for (const { seed, tokens } of sweep) {
       for (const fill of FILLS) {
-        expect(hexToOklch(tokens[fill]).h, `${fill} for seed ${seed}`).toBeCloseTo(HUES[fill], 0);
+        expect(
+          Math.abs(hexToOklch(tokens[fill]).h - HUES[fill]),
+          `${fill} for seed ${seed}`,
+        ).toBeLessThan(1);
         expect(
           apcaLc(tokens[fill], tokens["--card"]),
           `${fill} on --card for seed ${seed}`,

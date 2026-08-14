@@ -269,12 +269,21 @@ describe("the token-derived terminal fallback", () => {
     expect(getCurrentAppearance()).not.toBe(first);
   });
 
-  it("mirrors --destructive into normal red in both modes", () => {
-    expect(getCurrentAppearance().theme.colors.palette[1]).toEqual({ r: 0xe5, g: 0x48, b: 0x4d });
+  it("mirrors --destructive into normal red, per mode", () => {
+    // Two hexes rather than one, and the change is the point. `--destructive`
+    // was frozen at #e5484d, so "in both modes" used to be a single value; it
+    // is solved against the card now, like the rest of the hue-locked family,
+    // and the terminal's ANSI red follows the page it is drawn on — pale on
+    // dark paper, deep on light — exactly as every other token-derived entry
+    // in this palette already did.
+    // The ember ladder's own, from the `beforeEach` — one 8-bit step off the
+    // shipped canvas's #ffa49f, because the canvas moves the card the red is
+    // solved against.
+    expect(getCurrentAppearance().theme.colors.palette[1]).toEqual({ r: 0xff, g: 0xa3, b: 0x9e });
 
     applyLightTokens();
 
-    expect(getCurrentAppearance().theme.colors.palette[1]).toEqual({ r: 0xe5, g: 0x48, b: 0x4d });
+    expect(getCurrentAppearance().theme.colors.palette[1]).toEqual({ r: 0x9b, g: 0x1e, b: 0x28 });
   });
 
   it("swaps the whole ANSI set when the background crosses over", () => {

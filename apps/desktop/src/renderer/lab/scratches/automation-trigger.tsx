@@ -828,7 +828,7 @@ function DragGhost({
   if (onList) {
     return (
       <div
-        className="pointer-events-none fixed z-[160] flex w-fit max-w-72 items-center gap-2 rounded-md border border-border bg-card py-1 pr-2 pl-2.5 shadow-lg"
+        className="pointer-events-none fixed z-[160] flex w-fit max-w-72 items-center gap-2 rounded-md border border-border bg-card py-1 pr-2 pl-2.5 shadow-overlay"
         // Hung down-and-right off the pointer, the way a drag badge is: the
         // cursor tip stays clear, and everything above and left of the hand —
         // which is where the rows you are choosing between live — stays visible.
@@ -843,7 +843,7 @@ function DragGhost({
   }
   return (
     <div
-      className="pointer-events-none fixed z-[100] w-64 rotate-2 rounded-lg border border-border bg-card px-3 py-2 shadow-lg"
+      className="pointer-events-none fixed z-[100] w-64 rotate-2 rounded-lg border border-border bg-card px-3 py-2 shadow-overlay"
       style={{ left: point.x - 24, top: point.y - 18 }}
     >
       <p className="font-mono text-label text-muted-foreground">{ticketRef(ticket)}</p>
@@ -925,7 +925,7 @@ function ColumnAutomationList({
         // own cards, so it needs its own surface to be read against. The
         // dragged card no longer competes with it — see {@link DragGhost},
         // which shrinks to a one-line badge the moment it is over a column.
-        "relative z-[130] mb-2 flex flex-col rounded-lg border border-border bg-popover shadow-md",
+        "relative z-[130] mb-2 flex flex-col rounded-lg border border-border bg-popover shadow-overlay",
         "transition-[gap,padding] duration-150 ease-out",
         expanded ? "gap-1.5 p-1.5" : "gap-px p-1",
       )}
@@ -1481,7 +1481,7 @@ function DragTab({
             // as "this landed here" rather than as a notification that happens
             // to be nearby. The x-translate is the centring; the y-axis is left
             // free for the animation to use.
-            "pointer-events-none fixed z-[110] w-64 -translate-x-1/2 rounded-lg border border-border bg-popover px-3 py-2 shadow-lg",
+            "pointer-events-none fixed z-[110] w-64 -translate-x-1/2 rounded-lg border border-border bg-popover px-3 py-2 shadow-overlay",
             "transition-[opacity,transform,translate,scale] duration-200 ease-out starting:translate-y-1 starting:opacity-0 motion-reduce:starting:translate-y-0",
             confirmationLeaving && "-translate-y-1 opacity-0 motion-reduce:transition-none",
           )}

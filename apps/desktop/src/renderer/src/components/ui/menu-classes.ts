@@ -19,7 +19,7 @@
  * the menu that opened it.
  */
 export const MENU_SURFACE =
-  "z-50 min-w-[8rem] rounded-container border bg-popover text-popover-foreground shadow-md";
+  "z-50 min-w-[8rem] rounded-container border bg-popover text-foreground shadow-overlay";
 
 /**
  * The 4px the rows sit inside. Separate from {@link MENU_SURFACE} because the
@@ -78,14 +78,14 @@ export const MENU_ROW =
 
 /** Radix row states: `focus` is the roving highlight, `data-disabled` a bare attribute. */
 export const MENU_ROW_STATE =
-  "focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
+  "focus:bg-accent focus:text-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
 
 /** cmdk row states: a controlled `data-selected`, and `data-disabled="true"`. */
 export const MENU_ROW_STATE_CMDK =
-  "data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50";
+  "data-[selected=true]:bg-accent data-[selected=true]:text-foreground data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50";
 
 /** A sub-menu trigger stays lit for as long as the surface it opened is up. */
-export const MENU_ROW_OPEN = "data-[state=open]:bg-accent data-[state=open]:text-accent-foreground";
+export const MENU_ROW_OPEN = "data-[state=open]:bg-accent data-[state=open]:text-foreground";
 
 /** The destructive row, and its glyph, which the muted-icon rule must not claim. */
 export const MENU_ROW_DESTRUCTIVE =

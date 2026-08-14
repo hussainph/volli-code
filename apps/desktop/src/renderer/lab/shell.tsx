@@ -103,7 +103,7 @@ function WindowStage({ scratch }: { scratch: Scratch }) {
           is a control you will eventually mistake for one. */}
       <a
         href="#"
-        className="fixed right-3 bottom-3 z-[9999] flex items-center gap-2 rounded-full border border-border bg-background/90 px-3 py-1.5 text-label text-muted-foreground shadow-lg backdrop-blur transition-colors hover:text-foreground"
+        className="fixed right-3 bottom-3 z-[9999] flex items-center gap-2 rounded-full border border-border bg-background/90 px-3 py-1.5 text-label text-muted-foreground shadow-overlay backdrop-blur transition-colors hover:text-foreground"
       >
         <span aria-hidden>←</span>
         <span>Lab</span>

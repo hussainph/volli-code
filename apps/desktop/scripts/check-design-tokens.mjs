@@ -101,6 +101,22 @@ const RULES = [
     match: (base) => /(^|-)(emerald|amber|sky)-\d{2,3}(\/\d{1,3})?$/.test(base),
   },
   {
+    id: "shadow-stock-tier",
+    // Tailwind's stock shadows are untinted black — `rgb(0 0 0 / 0.05…0.25)` —
+    // on a canvas whose own three tiers are tinted to it (`rgb(2 0 0)` in dark,
+    // `rgb(72 42 30)` in light). The tiers are registered utilities now, so the
+    // fix is always a rename by ROLE: a control, field or active tab is
+    // `shadow-raised`, a panel or a dragged tile is `shadow-card`, and anything
+    // that portals to the body is `shadow-overlay`.
+    //
+    // `shadow-none` and the arbitrary form are both untouched. The first is a
+    // reset and resets nothing else spells; the second is currently three
+    // zero-blur `shadow-[0_0_0_Npx_…]` rings, which are the focus idiom in
+    // disguise and belong to the focus pass, not to a rung this ladder answers.
+    summary: "stock shadow tier — use shadow-raised / shadow-card / shadow-overlay",
+    match: (base) => /^-?shadow-(2xs|xs|sm|md|lg|xl|2xl)$/.test(base),
+  },
+  {
     id: "focus-ring-loud",
     // shadcn's 3px halo is tuned for a 36px control; this app's default is 28px
     // and its smallest is 20px, where 3px is a third of the shape. The one
@@ -359,6 +375,11 @@ function selfTest() {
     ['"dark:bg-amber-500/70 gap-1"', ["status-raw-palette"]],
     ['"text-sky-900 gap-1"', ["status-raw-palette"]],
     ['"focus-visible:ring-[3px] ring-ring/50"', ["focus-ring-loud"]],
+    ['"rounded-lg bg-popover shadow-md"', ["shadow-stock-tier"]],
+    ['"shadow-2xl"', ["shadow-stock-tier"]],
+    ['"hover:shadow-lg transition-shadow"', ["shadow-stock-tier"]],
+    ['"group-data-[variant=floating]:shadow-sm"', ["shadow-stock-tier"]],
+    ['"shadow-xs shadow-2xs"', ["shadow-stock-tier", "shadow-stock-tier"]],
     // The ladder itself is never a violation.
     ['"rounded-full rounded-none rounded-sm rounded-md rounded-lg rounded-xl"', []],
     ['"rounded-control rounded-container rounded-row"', []],
@@ -366,6 +387,11 @@ function selfTest() {
     ['"text-label text-xs text-ui text-sm text-heading text-title"', []],
     ['"ring-2 ring-1 ring-ring/45"', []],
     ['"bg-positive text-attention-foreground border-info"', []],
+    ['"shadow-raised shadow-card shadow-overlay shadow-none"', []],
+    // Neighbouring namespaces this ladder has no rung for, and one zero-blur
+    // box-shadow that is a focus ring wearing a shadow's name.
+    ['"text-shadow-md drop-shadow-lg inset-shadow-sm"', []],
+    ['"shadow-[0_0_0_1px_var(--sidebar-border)]"', []],
     // Colors that merely contain a banned word are not the banned utility.
     ['"bg-amberglow text-skyline"', []],
     ['"rounded-2xlarge"', []],

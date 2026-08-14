@@ -320,7 +320,7 @@ describe("deriveCanvasTokens", () => {
       "--popover",
       "--card",
       "--rail",
-      "--secondary",
+      "--muted",
       "--sidebar",
       "--sidebar-border",
       "--accent",
@@ -337,16 +337,16 @@ describe("deriveCanvasTokens", () => {
     }
   });
 
-  it("re-solves the status family per appearance, where it carries --destructive across", () => {
+  it("re-solves every hue-locked semantic per appearance", () => {
     // The whole claim behind deleting 36 `dark:` twins: one token name is
     // correct on paper AND in the dark because the two appearances derive two
     // different colours for it, not because a call site wrote both by hand.
     //
-    // `--destructive` is the control. It is hue-locked the same way and it is
-    // deliberately identical across the flip, because it is frozen outright
-    // rather than solved — which is also why it is the one status-adjacent
-    // colour a light surface makes no brighter.
-    const STATUS = ["--positive", "--attention", "--info"] as const;
+    // `--destructive` is in the list now rather than standing outside it as the
+    // frozen control. It was the one member a light surface made no brighter —
+    // and no darker either, which is what "frozen" bought and what it cost:
+    // Lc ~35 on a dark card against its peers' 65.
+    const STATUS = ["--positive", "--attention", "--info", "--destructive"] as const;
     for (const { hex, vibrancy } of everyCase().filter((one) => one.resolved === "dark")) {
       const dark = deriveCanvasTokens(canvasOf(hex, vibrancy), "dark");
       const light = deriveCanvasTokens(canvasOf(hex, vibrancy), "light");
@@ -365,7 +365,6 @@ describe("deriveCanvasTokens", () => {
           darkerOnPaper: hexToOklch(light[token]).L < hexToOklch(dark[token]).L,
         });
       }
-      expect(light["--destructive"]).toBe(dark["--destructive"]);
     }
   });
 
@@ -394,6 +393,10 @@ describe("deriveCanvasTokens", () => {
         attention: expected["--attention"],
       });
       expect({ at, info: tokens["--info"] }).toEqual({ at, info: expected["--info"] });
+      expect({ at, destructive: tokens["--destructive"] }).toEqual({
+        at,
+        destructive: expected["--destructive"],
+      });
     }
   });
 });
@@ -488,22 +491,17 @@ describe("the accent", () => {
         "--background": "#1c1310",
         "--card": "#211815",
         "--popover": "#251b18",
-        "--secondary": "#271d1a",
         "--muted": "#271d1a",
         "--accent": "#2d2220",
         "--sidebar": "#211815",
         "--foreground": "#e8e4e2",
-        "--popover-foreground": "#e8e4e2",
-        "--secondary-foreground": "#e8e4e2",
         "--muted-foreground": "#bdbab8",
-        "--accent-foreground": "#e8e4e2",
         "--sidebar-foreground": "#d0cdcb",
         "--border": "#312623",
         "--border-strong": "#423632",
-        "--input": "#312623",
         "--sidebar-border": "#2d241f",
-        "--destructive": "#e5484d",
-        "--destructive-foreground": "#ffffff",
+        "--destructive": "#ffa49f",
+        "--destructive-foreground": "#290b0b",
         "--positive": "#27d496",
         "--positive-foreground": "#001c10",
         "--attention": "#ffaa2f",
@@ -516,21 +514,16 @@ describe("the accent", () => {
         "--background": "#fdded2",
         "--card": "#f4d4c8",
         "--popover": "#f7d8cc",
-        "--secondary": "#eacabd",
         "--muted": "#eacabd",
         "--accent": "#dab9ad",
         "--sidebar": "#e2c3b7",
         "--foreground": "#120906",
-        "--popover-foreground": "#120906",
-        "--secondary-foreground": "#120906",
         "--muted-foreground": "#514541",
-        "--accent-foreground": "#120906",
         "--sidebar-foreground": "#080302",
         "--border": "#d8b6a9",
         "--border-strong": "#d5b2a5",
-        "--input": "#d8b6a9",
         "--sidebar-border": "#ddbbad",
-        "--destructive": "#e5484d",
+        "--destructive": "#9b1e28",
         "--destructive-foreground": "#ffffff",
         "--positive": "#005f40",
         "--positive-foreground": "#ffffff",

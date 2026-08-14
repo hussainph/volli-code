@@ -160,7 +160,7 @@ function AuthorChip({ actor }: { actor: string }) {
     <span
       className={cn(
         "inline-flex size-5 shrink-0 items-center justify-center rounded-full text-label font-semibold",
-        isAgentActor(actor) ? "bg-primary/15 text-primary" : "bg-accent text-accent-foreground",
+        isAgentActor(actor) ? "bg-primary/15 text-primary" : "bg-accent text-foreground",
       )}
       aria-hidden
     >
@@ -270,7 +270,7 @@ function CommentBlock({ comment, onChanged }: { comment: TicketComment; onChange
                 setEditing(false);
               }
             }}
-            className="min-h-16 w-full resize-none rounded-md border border-input bg-transparent px-2.5 py-1.5 font-mono text-sm text-foreground outline-none [field-sizing:content] focus-visible:border-ring"
+            className="min-h-16 w-full resize-none rounded-md border border-border bg-transparent px-2.5 py-1.5 font-mono text-sm text-foreground outline-none [field-sizing:content] focus-visible:border-ring"
           />
           <div className="flex justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>

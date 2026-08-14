@@ -365,7 +365,7 @@ function PadOrb({
         marginTop: -size / 2,
         background: stop.hex,
       }}
-      className="absolute touch-none rounded-full shadow-lg ring-2 ring-white outline-1 outline-black/30 transition-[width,height,margin] duration-200 ease-out focus-visible:ring-4 focus-visible:outline-2"
+      className="absolute touch-none rounded-full shadow-raised ring-2 ring-white outline-1 outline-black/30 transition-[width,height,margin] duration-200 ease-out focus-visible:ring-4 focus-visible:outline-2"
     />
   );
 }
@@ -457,7 +457,7 @@ function StopRow({
             aria-pressed={primary}
             aria-label={`Colour ${index + 1}, ${stop.hex}${primary ? ", primary" : ""}`}
             data-testid={`canvas-stop-chip-${index}`}
-            className="flex items-center gap-1.5 rounded-full border border-border py-1 pr-2.5 pl-1.5 font-mono text-label transition-colors hover:bg-accent aria-pressed:border-ring aria-pressed:bg-secondary"
+            className="flex items-center gap-1.5 rounded-full border border-border py-1 pr-2.5 pl-1.5 font-mono text-label transition-colors hover:bg-accent aria-pressed:border-ring aria-pressed:bg-muted"
           >
             <span
               aria-hidden
@@ -905,7 +905,7 @@ function ContrastReport({
         <div
           role="status"
           data-testid="canvas-contrast-stranded"
-          className="flex gap-2.5 rounded-md border border-border bg-secondary/60 p-3"
+          className="flex gap-2.5 rounded-md border border-border bg-muted/60 p-3"
         >
           {/* Filled: this is the one thing on the page that went wrong, and the
               only glyph in the editor that is not a control's own noun. */}

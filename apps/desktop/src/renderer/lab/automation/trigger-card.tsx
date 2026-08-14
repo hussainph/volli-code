@@ -73,7 +73,7 @@ function ColumnStrip({
               "motion-reduce:transition-none active:scale-[0.97]",
               "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
               on
-                ? "bg-card text-foreground shadow-sm ring-1 ring-primary/35"
+                ? "bg-card text-foreground shadow-raised ring-1 ring-primary/35"
                 : "text-muted-foreground hover:text-foreground",
             )}
           >

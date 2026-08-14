@@ -81,40 +81,39 @@ const LADDER: readonly { tokens: readonly ThemeTokenName[]; L: number; k: number
   { tokens: ["--background"], L: 0.178, k: 1.0 },
   { tokens: ["--card"], L: 0.2, k: 1.1 },
   { tokens: ["--popover"], L: 0.218, k: 1.1 },
-  { tokens: ["--secondary", "--muted"], L: 0.226, k: 1.2 },
+  { tokens: ["--muted"], L: 0.226, k: 1.2 },
   { tokens: ["--accent"], L: 0.252, k: 1.3 },
   { tokens: ["--sidebar-border"], L: 0.255, k: 1.4 },
-  { tokens: ["--border", "--input"], L: 0.269, k: 1.4 },
+  { tokens: ["--border"], L: 0.269, k: 1.4 },
   { tokens: ["--border-strong"], L: 0.349, k: 1.5 },
 ];
 
 /**
- * `--destructive`, frozen in OKLCH. Hue-locked per the semantic escape list:
- * without it a red seed makes *delete* indistinguishable from *primary*, and
- * a green seed makes it read as success. These numbers are today's `#e5484d`
- * decomposed — it round-trips to that hex exactly — kept in OKLCH rather than
- * as a literal so a future light mode is a lightness change, not a new color.
- */
-const DESTRUCTIVE = { L: 0.6256, C: 0.1933, h: 23.026 } as const;
-
-/**
- * The three status semantics, frozen at hue and NOTHING ELSE — the difference
- * from {@link DESTRUCTIVE} above, and the whole point of the family.
+ * The four hue-locked semantics, frozen at hue and NOTHING ELSE.
  *
- * These are today's Tailwind anchors decomposed in OKLCH: the `-500` rung of
+ * Three are today's Tailwind anchors decomposed in OKLCH: the `-500` rung of
  * emerald, amber and sky, because `bg-emerald-500` is the dot the app has been
- * drawing and a dot is what carries a status colour's identity. Hue is the only
- * thing taken from them. It is also the only thing that MEANS anything —
- * green/amber/blue read as working/waiting/moved by convention, and a status
- * family that followed the canvas's seed would be three colours saying nothing.
+ * drawing and a dot is what carries a status colour's identity. `destructive` is
+ * `#e5484d` decomposed the same way, the red this app has always deleted with.
+ * Hue is the only thing taken from any of them. It is also the only thing that
+ * MEANS anything — green/amber/blue/red read as working/waiting/moved/gone by
+ * convention, and a family that followed the canvas's seed would be four colours
+ * saying nothing.
  *
- * Everything else is solved, which is what `-500` could never be. A status
- * colour is painted as a dot on a rail AND read as a label in a panel, in two
- * appearances, on whatever canvas the user armed — and one authored hex cannot
- * be right in more than one of those. That is exactly why every site swept in
- * this change carried a hand-written `dark:` twin.
+ * Everything else is solved, which is what an authored hex could never be. These
+ * are painted as a dot on a rail AND read as a label in a panel, in two
+ * appearances, on whatever canvas the user armed — and one frozen value cannot be
+ * right in more than one of those. `--destructive` was the last holdout: frozen
+ * outright, it scored Lc ~35 on the card in dark while its three peers were
+ * solved to 65, so a red diff count read visibly quieter than the green one
+ * beside it. It joins the family here; only its hue is still a decision.
  */
-const STATUS_HUES = { positive: 162.48, attention: 70.08, info: 237.32 } as const;
+const STATUS_HUES = {
+  positive: 162.48,
+  attention: 70.08,
+  info: 237.32,
+  destructive: 23.026,
+} as const;
 
 /**
  * The chroma every status token asks for. Gamut mapping takes back whatever a
@@ -169,6 +168,7 @@ export const THEME_CONTRAST_FLOORS = [
   { text: "--positive", surface: "--card", floor: STATUS_LC, what: "Positive status" },
   { text: "--attention", surface: "--card", floor: STATUS_LC, what: "Attention status" },
   { text: "--info", surface: "--card", floor: STATUS_LC, what: "Info status" },
+  { text: "--destructive", surface: "--card", floor: STATUS_LC, what: "Destructive status" },
 ] as const satisfies readonly {
   text: ThemeTokenName;
   surface: ThemeTokenName;
@@ -285,12 +285,12 @@ export function solveLightnessOrCeiling(
 }
 
 /**
- * The status family: three fills and the label each one carries.
+ * The status family: four fills and the label each one carries.
  *
- * `--destructive` has exactly this shape — a semantic and its foreground — and
- * this is deliberately no wider. A status colour has one job and does not need
- * a muted tier: the sites that want a quiet version already wash the token
- * (`bg-positive/10`) the way the rest of the app washes every other colour.
+ * Deliberately no wider. A status colour has one job and does not need a muted
+ * tier: the sites that want a quiet version already wash the token
+ * (`bg-positive/10`, `bg-destructive/10`) the way the rest of the app washes
+ * every other colour.
  */
 export type StatusTokens = Pick<
   ThemeTokens,
@@ -300,6 +300,8 @@ export type StatusTokens = Pick<
   | "--attention-foreground"
   | "--info"
   | "--info-foreground"
+  | "--destructive"
+  | "--destructive-foreground"
 >;
 
 /**
@@ -309,8 +311,9 @@ export type StatusTokens = Pick<
  * output for the same reason {@link generateAccentTokens} is one: the canvas
  * layer moves the very surface these are measured against, so it has to ask
  * again with its OWN card rather than inherit an answer solved on the shipped
- * ladder's. `--destructive` can be carried across verbatim because it is
- * frozen; nothing solved can be.
+ * ladder's. Nothing solved can be carried across a ladder change, and every
+ * member of this family is now solved — `--destructive` included, which is why
+ * the light path no longer copies it out of the dark one.
  *
  * Each label is {@link pickAccentLabel}'s verdict — whichever of white or a
  * near-black tint of the status hue reads better ON the fill. Unlike the accent
@@ -318,7 +321,10 @@ export type StatusTokens = Pick<
  * lightness is already spoken for by {@link STATUS_LC}, so the only axis
  * `solveAccentPair` has to trade is the one axis a status colour cannot give up.
  * The two candidates straddle every lightness a status fill can take, so the
- * better of them is legible by construction.
+ * better of them is legible by construction — and because the fill is solved per
+ * appearance, so is the label: a destructive button is white-on-red where the
+ * red is light enough to carry white, and dark-on-red where a light ladder
+ * pushed it down. That flip is the point, not an inconsistency.
  */
 export function solveStatusTokens(surface: string): StatusTokens {
   const solve = (hue: number) => {
@@ -332,6 +338,7 @@ export function solveStatusTokens(surface: string): StatusTokens {
   const positive = solve(STATUS_HUES.positive);
   const attention = solve(STATUS_HUES.attention);
   const info = solve(STATUS_HUES.info);
+  const destructive = solve(STATUS_HUES.destructive);
   return {
     "--positive": positive.fill,
     "--positive-foreground": positive.label,
@@ -339,6 +346,8 @@ export function solveStatusTokens(surface: string): StatusTokens {
     "--attention-foreground": attention.label,
     "--info": info.fill,
     "--info-foreground": info.label,
+    "--destructive": destructive.fill,
+    "--destructive-foreground": destructive.label,
   };
 }
 
@@ -415,12 +424,9 @@ export function generateThemeTokens(theme: ThemeDefinition): ThemeTokens {
 
   const tokens: ThemeTokens = {
     ...ladder,
-    // 8. Hue-locked semantics — these ignore the seed entirely. The red is
-    // frozen outright; the three status hues keep only their hue and are solved
-    // onto the card, so they follow the ladder's lightness without following
-    // its colour.
-    "--destructive": oklchToHex(DESTRUCTIVE.L, DESTRUCTIVE.C, DESTRUCTIVE.h),
-    "--destructive-foreground": "#ffffff",
+    // 8. Hue-locked semantics — these ignore the seed entirely. All four keep
+    // only their hue and are solved onto the card, so they follow the ladder's
+    // lightness without following its colour.
     ...solveStatusTokens(ladder["--card"]!),
 
     "--foreground": foreground,
@@ -430,23 +436,21 @@ export function generateThemeTokens(theme: ThemeDefinition): ThemeTokens {
     "--primary-foreground": primaryForeground,
     "--primary-text": primaryText,
 
-    // Aliases: names that resolve to a value another name already carries. The
-    // sidebar panel is a card, and every "…-foreground on a neutral surface"
-    // collapses to one value.
+    // The two names that still resolve to a value another name carries, and the
+    // reason each survived the collapse. The sidebar panel IS a card — same rung,
+    // and the two-tier depth is expressed by `--rail` sitting below it, not by a
+    // third fill. `--ring` is the accent, and stays a separate name because it
+    // answers a separate question (see `tokens.ts`).
     //
-    // The list is shorter than the relationships are, deliberately. The solver
-    // stays general — it *could* drive a card's ink away from `--foreground` for
-    // a canvas with an unusual card lightness — but a name emitted here is a
-    // name the renderer writes onto the DOM, the e2e smoke asserts, and a
-    // component picks between. Six spellings of one hex do not make that choice
-    // richer, they make it arbitrary, so the sidebar's accent rungs and the
-    // card's ink now say `--accent`, `--primary` and `--foreground` at the point
-    // of use. A future canvas that needs a divergent card ink gets the token
-    // back, with the evidence that it diverged.
+    // Everything else that used to be here is gone. `--popover-foreground`,
+    // `--secondary-foreground` and `--accent-foreground` were `--foreground`
+    // spelled three more ways, and `--input` was `--border`: a name emitted here
+    // is a name the renderer writes onto the DOM, the e2e smoke asserts, and a
+    // component picks between, and six spellings of one hex do not make that
+    // choice richer — they make it arbitrary. A future canvas that needs a
+    // divergent popover ink gets the token back, with the evidence that it
+    // diverged.
     "--sidebar": sidebar,
-    "--popover-foreground": foreground,
-    "--secondary-foreground": foreground,
-    "--accent-foreground": foreground,
     "--ring": primary,
   };
 

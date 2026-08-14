@@ -61,7 +61,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       // One notch heavier than the dialog scrim (this one also blurs), split by
       // mode for the reason spelled out on DialogOverlay.
       overlayClassName="fixed inset-0 z-50 bg-black/35 backdrop-blur-[2px] dark:bg-black/55"
-      contentClassName="fixed top-[18%] left-1/2 z-50 w-[min(640px,calc(100vw-32px))] -translate-x-1/2 overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl outline-none"
+      contentClassName="fixed top-[18%] left-1/2 z-50 w-[min(640px,calc(100vw-32px))] -translate-x-1/2 overflow-hidden rounded-xl border border-border bg-popover text-foreground shadow-overlay outline-none"
     >
       <div className="flex h-12 items-center gap-2 border-b border-border px-4">
         <MagnifyingGlassIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
@@ -108,7 +108,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                     }
                     finishNavigation();
                   }}
-                  className="flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-2 outline-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
+                  className="flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-2 outline-none data-[selected=true]:bg-accent data-[selected=true]:text-foreground"
                 >
                   <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-card text-muted-foreground">
                     <TerminalWindowIcon className="size-3.5" />
@@ -140,7 +140,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 });
                 finishNavigation();
               }}
-              className="flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-2 outline-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
+              className="flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-2 outline-none data-[selected=true]:bg-accent data-[selected=true]:text-foreground"
             >
               <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-card text-muted-foreground">
                 <TicketIcon className="size-3.5" />

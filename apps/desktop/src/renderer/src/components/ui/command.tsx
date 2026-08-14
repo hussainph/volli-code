@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Command as CommandPrimitive } from "cmdk";
-import { SearchIcon } from "lucide-react";
+import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 
 import { cn } from "@renderer/lib/utils";
 import {
@@ -18,7 +18,7 @@ function Command({ className, ...props }: React.ComponentProps<typeof CommandPri
     <CommandPrimitive
       data-slot="command"
       className={cn(
-        "flex h-full w-full flex-col overflow-hidden rounded-container bg-popover text-popover-foreground",
+        "flex h-full w-full flex-col overflow-hidden rounded-container bg-popover text-foreground",
         className,
       )}
       {...props}
@@ -35,7 +35,7 @@ function CommandInput({
     // input inside a 36px wrapper — the field was taller than the box clipping
     // it, so its own padding decided where the text sat.
     <div data-slot="command-input-wrapper" className="flex h-8 items-center gap-2 border-b px-3">
-      <SearchIcon className="size-3.5 shrink-0 opacity-50" />
+      <MagnifyingGlassIcon className="size-3.5 shrink-0 opacity-50" />
       <CommandPrimitive.Input
         data-slot="command-input"
         className={cn(

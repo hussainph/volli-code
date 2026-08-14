@@ -63,13 +63,13 @@ export const FALLBACK_TOKENS: Record<ResolvedAppearance, FallbackTokens> = {
     background: rgb(0x1c, 0x13, 0x10), // --background
     foreground: rgb(0xe8, 0xe4, 0xe2), // --foreground
     cursor: rgb(0xd3, 0x75, 0x50), // --primary
-    ansiRed: rgb(0xe5, 0x48, 0x4d), // --destructive
+    ansiRed: rgb(0xff, 0xa4, 0x9f), // --destructive
   },
   light: {
     background: rgb(0xfd, 0xde, 0xd2), // --background
     foreground: rgb(0x12, 0x09, 0x06), // --foreground
     cursor: rgb(0xd3, 0x75, 0x50), // --primary
-    ansiRed: rgb(0xe5, 0x48, 0x4d), // --destructive
+    ansiRed: rgb(0x9b, 0x1e, 0x28), // --destructive
   },
 };
 /* GENERATED TERMINAL FALLBACK TOKENS — END */

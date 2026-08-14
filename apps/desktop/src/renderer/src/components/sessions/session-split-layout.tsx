@@ -159,7 +159,7 @@ function PaneFocusControl({ sessionId }: { sessionId: string }) {
           // toward white in dark and black in light), so it stays a lift in both
           // modes the way the ⌘K pill does, and the blur keeps the border legible
           // against a moving canvas.
-          "border border-border/60 bg-background/80 text-muted-foreground shadow-sm backdrop-blur-sm",
+          "border border-border/60 bg-background/80 text-muted-foreground shadow-raised backdrop-blur-sm",
           "hover:bg-background hover:text-foreground",
           // Chrome charged to the canvas only while the pointer is on it. Opacity
           // alone, so there is nothing here for reduced motion to object to.
@@ -239,7 +239,7 @@ function SplitNode(props: SplitNodeProps) {
                   type="button"
                   size="sm"
                   variant="secondary"
-                  className="pointer-events-auto shadow-md"
+                  className="pointer-events-auto shadow-raised"
                   onClick={(event) => {
                     event.stopPropagation();
                     props.onResume?.(layout.sessionId);
