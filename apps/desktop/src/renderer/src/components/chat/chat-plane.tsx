@@ -68,6 +68,7 @@ import {
   sameMessages,
   sessionBlocker,
   sessionModelStanding,
+  steerQueuedMessage,
   settledHeldIds,
   withdrawInteraction,
   type CatalogState,
@@ -80,13 +81,18 @@ import {
   type ComposerModel,
   type ComposerModelSelection,
 } from "@renderer/components/chat/composer-ui";
-import { InteractionCard, InteractionReceiptLine } from "@renderer/components/chat/interaction-ui";
+import {
+  InteractionCard,
+  InteractionReceiptLine,
+  PendingInteractionAnnouncement,
+} from "@renderer/components/chat/interaction-ui";
 import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Button } from "@renderer/components/ui/button";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { cn } from "@renderer/lib/utils";
 import { useChatDraftsStore, type HeldMessage } from "@renderer/stores/chat-drafts";
+import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useUiStore } from "@renderer/stores/ui";
 
 const NO_MESSAGES: readonly UIMessage[] = [];
@@ -114,6 +120,7 @@ export interface ChatPlaneProps {
 
 export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlaneProps) {
   const controller = useSessionController(sessionId, store);
+  const sessionsStore = store ?? useChatSessionsStore;
   const {
     enqueue,
     dequeue,
@@ -135,6 +142,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   const held = useChatDraftsStore((state) => state.drafts[sessionId]?.held ?? NO_HELD);
   const setDraft = useChatDraftsStore((state) => state.setDraft);
   const holdMessage = useChatDraftsStore((state) => state.holdMessage);
+  const beginQueuedSteer = useChatDraftsStore((state) => state.beginQueuedSteer);
   const markHeld = useChatDraftsStore((state) => state.markHeld);
   const dropHeld = useChatDraftsStore((state) => state.dropHeld);
   const onInputChange = React.useCallback(
@@ -148,6 +156,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
   const composerHeight = useMeasuredHeight<HTMLDivElement>();
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const steeringQueued = React.useRef(new Set<string>());
 
   const messages = slice?.transcript.messages ?? NO_MESSAGES;
   const queue = slice?.queue ?? NO_QUEUE;
@@ -265,6 +274,33 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
       }
     },
     [dequeue, dropHeld, sessionId, strip],
+  );
+
+  const onSteerQueued = React.useCallback(
+    (id: string) => {
+      void steerQueuedMessage(id, steeringQueued.current, {
+        read: () => {
+          const current = sessionsStore.getState().sessions[sessionId];
+          return {
+            held: useChatDraftsStore.getState().drafts[sessionId]?.held ?? NO_HELD,
+            queue: current?.queue ?? NO_QUEUE,
+            steerable: current?.lifecycle === "working" && isDeliverable(current),
+          };
+        },
+        start: (visible, targetId) => {
+          // The durable write must precede dequeue: the resident client observes
+          // queue mutations synchronously and may start draining its neighbors.
+          beginQueuedSteer(sessionId, visible, targetId);
+          dequeue(targetId);
+        },
+        submit: (message, delivery) => submit(message.text, delivery),
+        finish: (messageId, outcome) => {
+          if (outcome === "refused") markHeld(sessionId, messageId, "unsent");
+          else dropHeld(sessionId, messageId);
+        },
+      });
+    },
+    [beginQueuedSteer, dequeue, dropHeld, markHeld, sessionId, sessionsStore, submit],
   );
 
   // The release queue is renderer memory and the held copy is what outlives it,
@@ -445,6 +481,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               later plans / subagent activity) stack above the input so a
               follow-up can still be typed while the card waits. */}
           <div className="flex flex-col gap-2">
+            <PendingInteractionAnnouncement interaction={pending} />
             {pending ? (
               <InteractionCard
                 // Keyed so a second question opening behind the first mounts its
@@ -452,17 +489,18 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
                 key={pending.id}
                 interaction={pending}
                 resolving={resolving.has(pending.id)}
-                autoFocus
+                focusFreeTextOnMount
                 onResolve={(submission) => answer(pending.id, submission)}
-                // Stop on the card withdraws the question. The composer still
-                // owns interrupt for the turn.
-                onStop={() => withdraw(pending.id)}
+                // Request withdrawal cancels the durable interaction. The
+                // composer separately owns turn-only interrupt.
+                onWithdraw={() => withdraw(pending.id)}
               />
             ) : null}
             <SessionComposer
               value={input}
               onValueChange={onInputChange}
               textareaRef={textareaRef}
+              onComposerFocusRequest={() => textareaRef.current?.focus()}
               models={composerModels}
               selection={selection}
               selectionProviderLabel={sessionModel?.providerLabel}
@@ -472,6 +510,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               ready={composable}
               queued={strip}
               onQueuedChange={onQueuedChange}
+              onSteerQueued={onSteerQueued}
               onSubmit={send}
               onStop={() => void interrupt()}
             />

@@ -15,7 +15,7 @@ import type {
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
-import type { HeldMessage } from "@renderer/stores/chat-drafts";
+import { createChatDraftsStore, type HeldMessage } from "@renderer/stores/chat-drafts";
 
 import {
   answerInteraction,
@@ -28,15 +28,67 @@ import {
   sameMessages,
   sessionBlocker,
   sessionModelStanding,
+  steerQueuedMessage,
   settledHeldIds,
   terminalCompanionTabId,
   withdrawInteraction,
   type SessionBlockerActs,
   type SessionBlockerInput,
+  type QueuedSteerActs,
+  type QueuedSteerDelivery,
 } from "./chat-plane-model";
 
 function heldMessage(id: string, text: string, state: HeldMessage["state"]): HeldMessage {
   return { id, text, state };
+}
+
+interface SteerHarnessInput {
+  held?: readonly HeldMessage[];
+  queue?: readonly { id: string; text: string }[];
+  steerable?: boolean;
+  submit?: QueuedSteerActs["submit"];
+}
+
+function steerHarness({ held = [], queue = [], steerable = true, submit }: SteerHarnessInput = {}) {
+  const drafts = createChatDraftsStore({
+    getItem: () => null,
+    setItem: () => undefined,
+    removeItem: () => undefined,
+  });
+  for (const entry of held) {
+    drafts.getState().holdMessage("s1", entry);
+    drafts.getState().markHeld("s1", entry.id, entry.state);
+  }
+  let releaseQueue = [...queue];
+  const events: string[] = [];
+  const acts: QueuedSteerActs = {
+    read: () => ({
+      held: drafts.getState().drafts.s1?.held ?? [],
+      queue: releaseQueue,
+      steerable,
+    }),
+    start: (visible, targetId) => {
+      events.push(`start:${visible.map((entry) => entry.id).join(",")}:${targetId}`);
+      drafts.getState().beginQueuedSteer("s1", visible, targetId);
+      releaseQueue = releaseQueue.filter((entry) => entry.id !== targetId);
+    },
+    submit: (message, delivery) => {
+      events.push(`submit:${message.id}:${delivery}`);
+      return submit?.(message, delivery) ?? Promise.resolve("delivered");
+    },
+    finish: (id, outcome) => {
+      events.push(`finish:${id}:${outcome}`);
+      if (outcome === "refused") drafts.getState().markHeld("s1", id, "unsent");
+      else drafts.getState().dropHeld("s1", id);
+    },
+  };
+  return {
+    acts,
+    events,
+    held: () => drafts.getState().drafts.s1?.held ?? [],
+    queue: () => releaseQueue,
+    strip: () => heldStrip(drafts.getState().drafts.s1?.held ?? [], releaseQueue),
+  };
 }
 
 describe("composer model selection", () => {
@@ -538,7 +590,7 @@ describe("answerInteraction", () => {
 });
 
 describe("withdrawInteraction", () => {
-  /** The card's controls are disabled by this latch, and Stop was outside it. */
+  /** The card's controls, including Cancel request, share this in-flight latch. */
   it("holds the card's own in-flight latch for the whole round trip", async () => {
     const flags: [string, boolean][] = [];
     const acts: string[] = [];
@@ -611,6 +663,155 @@ describe("messageRoute", () => {
   it("sends when the Session can take it", () => {
     expect(messageRoute("send", true)).toBe("send");
     expect(messageRoute("steer", true)).toBe("send");
+  });
+});
+
+describe("steerQueuedMessage", () => {
+  it("persists the ordered strip before dequeueing and submitting", async () => {
+    const state = steerHarness({
+      held: [heldMessage("q1", "first", "queued")],
+      queue: [{ id: "q1", text: "first" }],
+      submit: (message, delivery) => {
+        expect(message).toEqual({ id: "q1", text: "first" });
+        expect(delivery).toBe("steer");
+        expect(state.held()).toEqual([heldMessage("q1", "first", "sending")]);
+        expect(state.queue()).toEqual([]);
+        return Promise.resolve("delivered");
+      },
+    });
+
+    await expect(steerQueuedMessage("q1", new Set(), state.acts)).resolves.toBe("delivered");
+
+    expect(state.held()).toEqual([]);
+    expect(state.events).toEqual(["start:q1:q1", "submit:q1:steer", "finish:q1:delivered"]);
+  });
+
+  it("restores a refused queue-only row between its original neighbors", async () => {
+    const state = steerHarness({
+      queue: [
+        { id: "q1", text: "first" },
+        { id: "q2", text: "second" },
+        { id: "q3", text: "third" },
+      ],
+      submit: () => Promise.resolve("refused"),
+    });
+
+    await expect(steerQueuedMessage("q2", new Set(), state.acts)).resolves.toBe("refused");
+
+    expect(state.held()).toEqual([
+      heldMessage("q1", "first", "queued"),
+      heldMessage("q2", "second", "unsent"),
+      heldMessage("q3", "third", "queued"),
+    ]);
+    expect(state.strip().map((message) => message.id)).toEqual(["q1", "q2", "q3"]);
+    expect(new Set(state.strip().map((message) => message.id)).size).toBe(3);
+  });
+
+  it.each(["delivered", "recorded"] satisfies readonly QueuedSteerDelivery[])(
+    "retires only the queue-only target after a %s steer",
+    async (outcome) => {
+      const state = steerHarness({
+        queue: [
+          { id: "q1", text: "first" },
+          { id: "q2", text: "second" },
+          { id: "q3", text: "third" },
+        ],
+        submit: () => Promise.resolve(outcome),
+      });
+
+      await expect(steerQueuedMessage("q2", new Set(), state.acts)).resolves.toBe(outcome);
+
+      expect(state.strip().map((message) => message.id)).toEqual(["q1", "q3"]);
+      expect(state.held()).toEqual([
+        heldMessage("q1", "first", "queued"),
+        heldMessage("q3", "third", "queued"),
+      ]);
+    },
+  );
+
+  it("leaves a queue-only source untouched when the Session is no longer steerable", async () => {
+    const state = steerHarness({
+      queue: [
+        { id: "q1", text: "first" },
+        { id: "q2", text: "second" },
+      ],
+      steerable: false,
+    });
+
+    await expect(steerQueuedMessage("q1", new Set(), state.acts)).resolves.toBe("held");
+
+    expect(state.held()).toEqual([]);
+    expect(state.queue().map((message) => message.id)).toEqual(["q1", "q2"]);
+    expect(state.events).toEqual([]);
+  });
+
+  it("leaves a held-only source untouched when the Session is no longer steerable", async () => {
+    const state = steerHarness({
+      held: [heldMessage("q1", "first", "unsent")],
+      steerable: false,
+    });
+
+    await expect(steerQueuedMessage("q1", new Set(), state.acts)).resolves.toBe("held");
+
+    expect(state.held()).toEqual([heldMessage("q1", "first", "unsent")]);
+    expect(state.queue()).toEqual([]);
+    expect(state.events).toEqual([]);
+  });
+
+  it("ignores a repeated steer while the first click owns the queue-only id", async () => {
+    let settle!: (outcome: "recorded") => void;
+    let submissions = 0;
+    const state = steerHarness({
+      queue: [
+        { id: "q1", text: "first" },
+        { id: "q2", text: "second" },
+        { id: "q3", text: "third" },
+      ],
+      submit: () => {
+        submissions += 1;
+        return new Promise<"recorded">((resolve) => {
+          settle = resolve;
+        });
+      },
+    });
+    const inFlight = new Set<string>();
+
+    const first = steerQueuedMessage("q2", inFlight, state.acts);
+    await expect(steerQueuedMessage("q2", inFlight, state.acts)).resolves.toBe("stale");
+
+    expect(submissions).toBe(1);
+    expect(state.strip().map((message) => message.id)).toEqual(["q1", "q3"]);
+    settle("recorded");
+    await expect(first).resolves.toBe("recorded");
+    expect(state.strip().map((message) => message.id)).toEqual(["q1", "q3"]);
+  });
+
+  it("retries a held-only row without moving either neighbor", async () => {
+    const state = steerHarness({
+      held: [
+        heldMessage("q1", "first", "unsent"),
+        heldMessage("q2", "second", "unsent"),
+        heldMessage("q3", "third", "unsent"),
+      ],
+    });
+
+    await expect(steerQueuedMessage("q2", new Set(), state.acts)).resolves.toBe("delivered");
+
+    expect(state.strip().map((message) => message.id)).toEqual(["q1", "q3"]);
+    expect(state.events).toEqual(["start:q1,q2,q3:q2", "submit:q2:steer", "finish:q2:delivered"]);
+  });
+
+  it("leaves a missing, already-sending, or already-released row untouched as stale", async () => {
+    const states = [
+      steerHarness(),
+      steerHarness({ held: [heldMessage("q1", "first", "sending")] }),
+      steerHarness({ held: [heldMessage("q1", "first", "queued")] }),
+    ];
+
+    await expect(steerQueuedMessage("q1", new Set(), states[0]!.acts)).resolves.toBe("stale");
+    await expect(steerQueuedMessage("q1", new Set(), states[1]!.acts)).resolves.toBe("stale");
+    await expect(steerQueuedMessage("q1", new Set(), states[2]!.acts)).resolves.toBe("stale");
+    expect(states.flatMap((state) => state.events)).toEqual([]);
   });
 });
 
@@ -688,6 +889,9 @@ describe("heldStrip", () => {
   // reads as a message that failed to leave.
   it("draws nothing for a message with a round trip still open on it", () => {
     expect(heldStrip([heldMessage("m1", "ship it", "sending")], [])).toEqual([]);
+    expect(
+      heldStrip([heldMessage("m1", "ship it", "sending")], [{ id: "m1", text: "ship it" }]),
+    ).toEqual([]);
   });
 
   // A crash between the box emptying and anything accepting the words. The

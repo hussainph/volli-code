@@ -618,7 +618,7 @@ export default function ChatActivityScratch() {
           <InteractionCard
             interaction={QUESTION}
             onResolve={() => undefined}
-            onStop={() => undefined}
+            onWithdraw={() => undefined}
           />
           <SessionComposer
             value=""
@@ -634,6 +634,7 @@ export default function ChatActivityScratch() {
             ready
             queued={[]}
             onQueuedChange={() => undefined}
+            onSteerQueued={() => undefined}
             onSubmit={() => undefined}
             onStop={() => undefined}
           />
@@ -666,6 +667,7 @@ export default function ChatActivityScratch() {
         <AttentionReceipt part={DENIED_ROW} />
       </Section>
 
+      <QueuedRowWidths />
       <ComposerStates />
     </ContentColumn>
   );
@@ -684,6 +686,45 @@ function Section({ label, children }: React.PropsWithChildren<{ label: string }>
 
 const COMPOSER_STATES = ["idle", "working", "queued", "approval"] as const;
 type ComposerStateName = (typeof COMPOSER_STATES)[number];
+
+function QueuedRowWidths() {
+  return (
+    <Section label="Queue row · overflow menu at normal and narrow widths">
+      <div className="flex flex-col gap-4">
+        <QueuedRowWidth label="Normal" id="queued-normal" />
+        <div className="w-full max-w-sm">
+          <QueuedRowWidth label="Narrow" id="queued-narrow" />
+        </div>
+      </div>
+    </Section>
+  );
+}
+
+function QueuedRowWidth({ label, id }: { label: string; id: string }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-label uppercase text-muted-foreground">{label}</span>
+      <SessionComposer
+        value=""
+        onValueChange={() => undefined}
+        models={MODELS}
+        selection={{
+          providerId: "anthropic",
+          modelId: "claude-sonnet-4-5",
+          reasoningLevel: "high",
+        }}
+        onSelectionChange={() => undefined}
+        working
+        ready
+        queued={[{ id, text: "also add a test for the empty-name branch" }]}
+        onQueuedChange={() => undefined}
+        onSteerQueued={() => undefined}
+        onSubmit={() => undefined}
+        onStop={() => undefined}
+      />
+    </div>
+  );
+}
 
 /**
  * The composer is fully controlled, so its four states are four prop sets
@@ -742,6 +783,9 @@ function ComposerStates() {
           // turn to queue behind.
           queued={state === "idle" ? [] : queued}
           onQueuedChange={setQueued}
+          onSteerQueued={(id) =>
+            setQueued((current) => current.filter((message) => message.id !== id))
+          }
           onSubmit={(text, intent) => {
             setValue("");
             if (intent !== "queue") return;

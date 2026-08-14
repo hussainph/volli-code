@@ -89,6 +89,20 @@ interface ChatDraftsState {
    */
   holdMessage(sessionId: string, message: { id: string; text: string }): void;
   /**
+   * Starts an explicit steer from the displayed strip in one durable write.
+   *
+   * Queue-only neighbors gain `queued` copies in their current display order
+   * before the target can leave the renderer queue. Existing held states stay
+   * intact; only the target becomes `sending`. Unlike {@link holdMessage}, the
+   * current composer text stays where it is because every row already left the
+   * box earlier.
+   */
+  beginQueuedSteer(
+    sessionId: string,
+    visible: readonly { id: string; text: string }[],
+    targetId: string,
+  ): void;
+  /**
    * Re-states where a held message stands. Update-only: a Session closed while
    * its message was in flight has no draft left to write, and minting one would
    * spend a capped slot on a Session nothing can ever open again.
@@ -228,6 +242,34 @@ export function createChatDraftsStore(storage?: StateStorage) {
                     held: [...draft.held, { ...message, state: "sending" }],
                     touchedAt: Date.now(),
                   },
+                },
+              };
+            }),
+          beginQueuedSteer: (sessionId, visible, targetId) =>
+            set((state) => {
+              const draft = draftFor(state.drafts, sessionId);
+              const visibleById = new Map(visible.map((entry) => [entry.id, entry]));
+              const existingIds = new Set(draft.held.map((entry) => entry.id));
+              // Existing held chronology wins, including a hidden `sending`
+              // entry whose refusal may make it visible again later.
+              const held: HeldMessage[] = draft.held.map((entry) => {
+                const displayed = visibleById.get(entry.id);
+                if (displayed === undefined) return entry;
+                return {
+                  ...entry,
+                  text: displayed.text,
+                  state: entry.id === targetId ? "sending" : entry.state,
+                };
+              });
+              // What is missing is queue-only, already ordered by the strip.
+              for (const entry of visible) {
+                if (existingIds.has(entry.id)) continue;
+                held.push({ ...entry, state: entry.id === targetId ? "sending" : "queued" });
+              }
+              return {
+                drafts: {
+                  ...state.drafts,
+                  [sessionId]: { ...draft, held, touchedAt: Date.now() },
                 },
               };
             }),

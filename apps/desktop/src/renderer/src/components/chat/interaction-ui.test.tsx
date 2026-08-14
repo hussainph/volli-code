@@ -10,7 +10,7 @@ import type { SessionInteraction } from "@volli/shared";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { InteractionCard } from "./interaction-ui";
+import { InteractionCard, PendingInteractionAnnouncement } from "./interaction-ui";
 
 const PERMISSION_OPTIONS = [
   { id: "once", label: "Allow once", description: null },
@@ -65,6 +65,29 @@ function asked(): SessionInteraction {
   };
 }
 
+function freeText(options: SessionInteraction["options"] = []): SessionInteraction {
+  return {
+    id: "question:free-text",
+    attachmentId: "attach-1",
+    kind: "question",
+    title: "What should change?",
+    detail: null,
+    options,
+    multiple: false,
+    prompts: [
+      {
+        id: "prompt:0",
+        label: "What should change?",
+        detail: null,
+        options,
+        multiple: false,
+        custom: true,
+      },
+    ],
+    native: { id: "q-free-text", detail: null },
+  };
+}
+
 /**
  * The variant the button carrying this label was drawn with.
  *
@@ -80,26 +103,26 @@ function buttonVariant(html: string, label: string): string | null {
 }
 
 describe("the card's controls", () => {
-  it("draws an interrupt and a refusal at different weights", () => {
-    // Stop ends the turn and Reject answers the card. Both as `ghost size="sm"`
-    // said they were the same kind of act, in the one place a reader is deciding
-    // between them.
+  it("draws request withdrawal and refusal at different weights", () => {
+    // Withdrawing the request and rejecting it are different durable acts. Both
+    // as `ghost size="sm"` said they were the same kind of act, in the one place
+    // a reader is deciding between them.
     const html = renderToStaticMarkup(
       <InteractionCard
         interaction={asked()}
         onResolve={() => undefined}
-        onStop={() => undefined}
+        onWithdraw={() => undefined}
       />,
     );
-    expect(buttonVariant(html, "Stop")).toBe("ghost");
+    expect(buttonVariant(html, "Cancel request")).toBe("ghost");
     expect(buttonVariant(html, "Reject")).toBe("outline");
   });
 
-  it("leaves Stop off the mount that did not ask for one", () => {
+  it("leaves request withdrawal off the mount that did not ask for one", () => {
     // A card on a row sits beside a composer that still has its own.
     expect(
       renderToStaticMarkup(<InteractionCard interaction={asked()} onResolve={() => undefined} />),
-    ).not.toContain("Stop");
+    ).not.toContain("Cancel request");
   });
 
   it("names the box it opens rather than repeating the box's own question", () => {
@@ -117,5 +140,41 @@ describe("the card's controls", () => {
       <InteractionCard interaction={asked()} onResolve={() => undefined} />,
     );
     expect(html).toContain("rounded-2xl");
+  });
+
+  it("autofocuses only a true free-text-only prompt at the composer mount", () => {
+    const freeForm = renderToStaticMarkup(
+      <InteractionCard interaction={freeText()} focusFreeTextOnMount onResolve={() => undefined} />,
+    );
+    const mixed = renderToStaticMarkup(
+      <InteractionCard
+        interaction={freeText([{ id: "main", label: "main", description: null }])}
+        focusFreeTextOnMount
+        onResolve={() => undefined}
+      />,
+    );
+
+    expect(freeForm).toMatch(/<textarea[^>]*autofocus=""/);
+    expect(mixed).not.toContain('autofocus=""');
+  });
+});
+
+describe("the co-mounted request announcement", () => {
+  it("politely announces a pending title without a focusable control", () => {
+    const html = renderToStaticMarkup(<PendingInteractionAnnouncement interaction={asked()} />);
+
+    expect(html).toContain('role="status"');
+    expect(html).toContain('aria-live="polite"');
+    expect(html).toContain('aria-atomic="true"');
+    expect(html).toContain("Request pending: Which branch?");
+    expect(html).not.toContain("tabindex");
+    expect(html).not.toContain("autofocus");
+  });
+
+  it("keeps the live region mounted while there is nothing to announce", () => {
+    const html = renderToStaticMarkup(<PendingInteractionAnnouncement interaction={null} />);
+
+    expect(html).toContain('role="status"');
+    expect(html).not.toContain("Request pending:");
   });
 });

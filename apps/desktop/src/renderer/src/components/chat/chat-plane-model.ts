@@ -152,6 +152,64 @@ export function messageRoute(intent: ComposerIntent, deliverable: boolean): Mess
   return intent !== "queue" && deliverable ? "send" : "hold";
 }
 
+export interface QueuedSteerActs {
+  /** One synchronous reading of both resident sources and current liveness. */
+  read(): {
+    held: readonly HeldMessage[];
+    queue: readonly QueuedMessage[];
+    steerable: boolean;
+  };
+  /**
+   * Persists the visible order, marks the target sending, then removes only the
+   * target from the release queue. No async boundary may split those acts.
+   */
+  start(visible: readonly QueuedMessage[], targetId: string): void;
+  submit(message: QueuedMessage, delivery: "steer"): Promise<QueuedSteerDelivery>;
+  finish(id: string, outcome: QueuedSteerDelivery): void;
+}
+
+export type QueuedSteerDelivery = "delivered" | "recorded" | "refused";
+export type QueuedSteerOutcome = QueuedSteerDelivery | "held" | "stale";
+
+/**
+ * Moves one existing strip row into the active turn without changing its id.
+ *
+ * A queue-only row gains its durable held copy before dequeue. An unsent
+ * held-only row already has one. A held `queued` row whose release queue entry
+ * vanished is stale: the resident client may already own it, so steering it
+ * again would risk a duplicate turn.
+ */
+export async function steerQueuedMessage(
+  id: string,
+  inFlight: Set<string>,
+  acts: QueuedSteerActs,
+): Promise<QueuedSteerOutcome> {
+  if (inFlight.has(id)) return "stale";
+  const snapshot = acts.read();
+  const held = snapshot.held.find((entry) => entry.id === id);
+  const queued = snapshot.queue.find((entry) => entry.id === id);
+  if (held?.state === "sending" || (held?.state === "queued" && queued === undefined)) {
+    return "stale";
+  }
+  const message = held === undefined ? queued : { id: held.id, text: held.text };
+  if (message === undefined) return "stale";
+  // A click cannot improve a queue while the Session cannot steer. In
+  // particular, never manufacture a release-queue copy for a held-only row:
+  // the resident client observes enqueue synchronously and can drain that copy
+  // before this transition marks the held source as queued.
+  if (!snapshot.steerable) return "held";
+
+  inFlight.add(id);
+  try {
+    acts.start(heldStrip(snapshot.held, snapshot.queue), id);
+    const outcome = await acts.submit(message, "steer");
+    acts.finish(id, outcome);
+    return outcome;
+  } finally {
+    inFlight.delete(id);
+  }
+}
+
 /**
  * Every message this Session is holding for you, in one strip.
  *
@@ -173,9 +231,12 @@ export function heldStrip(
   const rows: QueuedMessage[] = [];
   const drawn = new Set<string>();
   for (const entry of held) {
+    // Sending still owns this id even though it owns no row. If the queue has
+    // not observed the start transition yet, drawing its copy would flash the
+    // target back into the strip and invite a second click.
+    drawn.add(entry.id);
     if (entry.state === "sending") continue;
     rows.push({ id: entry.id, text: entry.text });
-    drawn.add(entry.id);
   }
   for (const entry of queue) if (!drawn.has(entry.id)) rows.push(entry);
   return rows;

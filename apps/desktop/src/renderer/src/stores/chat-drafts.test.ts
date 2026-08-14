@@ -122,6 +122,62 @@ describe("holdMessage", () => {
   });
 });
 
+describe("beginQueuedSteer", () => {
+  it("persists the visible strip in order without clearing what is being typed", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().setDraft("s1", "new thought");
+
+    store.getState().beginQueuedSteer(
+      "s1",
+      [
+        { id: "q1", text: "first" },
+        { id: "q2", text: "second" },
+        { id: "q3", text: "third" },
+      ],
+      "q2",
+    );
+
+    expect(store.getState().drafts.s1).toEqual(
+      expect.objectContaining({
+        text: "new thought",
+        held: [
+          { id: "q1", text: "first", state: "queued" },
+          { id: "q2", text: "second", state: "sending" },
+          { id: "q3", text: "third", state: "queued" },
+        ],
+      }),
+    );
+  });
+
+  it("keeps existing source states while updating text and never duplicates ids", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().holdMessage("s1", { id: "q1", text: "old copy" });
+    store.getState().holdMessage("s1", { id: "hidden", text: "already sending" });
+    store.getState().markHeld("s1", "q1", "unsent");
+    store.getState().setDraft("s1", "new thought");
+
+    store.getState().beginQueuedSteer(
+      "s1",
+      [
+        { id: "q1", text: "latest copy" },
+        { id: "q2", text: "neighbor" },
+      ],
+      "q2",
+    );
+
+    expect(store.getState().drafts.s1).toEqual(
+      expect.objectContaining({
+        text: "new thought",
+        held: [
+          { id: "q1", text: "latest copy", state: "unsent" },
+          { id: "hidden", text: "already sending", state: "sending" },
+          { id: "q2", text: "neighbor", state: "sending" },
+        ],
+      }),
+    );
+  });
+});
+
 describe("markHeld", () => {
   it("restates where a held message stands", () => {
     const store = createChatDraftsStore(createMemoryStorage());

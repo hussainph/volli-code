@@ -13,8 +13,8 @@
  *  - **At the foot**, stacked *above* the composer, for an interaction no row
  *    can hold — a question, or a permission the harness raised with no call.
  *    The composer stays: a follow-up can still be typed (or queued) while the
- *    card waits. Stop rides the card as well as the composer, because
- *    withdrawing the question is not the same act as interrupting the turn.
+ *    card waits. Cancel request rides the card because withdrawing the question
+ *    is not the same act as the composer's Stop turn.
  *
  * The old approval card took a `DynamicToolUIPart` and drew three hardcoded
  * buttons, so an option a harness declared could never reach the screen and an
@@ -37,18 +37,19 @@
  * (`promptTextCarrier`, `promptFieldOpen`), not this file's.
  *
  * Decision logic lives in `interaction.ts`. Everything here is presentation
- * plus the four things only a mounted card can own: where focus is, that the
- * reader asked for a box that was not already open, that the last decision did
- * not land, and which keys this surface can act on. No gesture here throws a
- * pending decision away: the card is left, never dismissed.
+ * plus the four things only a mounted card can own: whether a lone text answer
+ * takes initial focus, that the reader asked for a box that was not already
+ * open, that the last decision did not land, and which keys this surface can
+ * act on. No gesture here throws a pending decision away: the card is left,
+ * never dismissed.
  */
 import * as React from "react";
 import {
   CaretLeftIcon,
   CaretRightIcon,
   HandPalmIcon,
-  SquareIcon,
   WarningIcon,
+  XCircleIcon,
 } from "@phosphor-icons/react";
 import type { SessionInteraction, SessionInteractionResolution } from "@volli/shared";
 
@@ -102,6 +103,24 @@ const FIELD_LABEL: Record<InteractionFieldRole, string> = {
   redirection: "Instructions",
 };
 
+/**
+ * A stable, non-focusable announcement point for the request above a composer.
+ * It stays mounted while the pending value changes so assistive technology
+ * observes changed text instead of depending on a live region and its content
+ * appearing in the same commit.
+ */
+export function PendingInteractionAnnouncement({
+  interaction,
+}: {
+  interaction: SessionInteraction | null;
+}) {
+  return (
+    <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+      {interaction ? `Request pending: ${interaction.title}` : ""}
+    </span>
+  );
+}
+
 export interface InteractionCardProps {
   interaction: SessionInteraction;
   /**
@@ -113,22 +132,15 @@ export interface InteractionCardProps {
    */
   onResolve(submission: InteractionSubmission): void | Promise<boolean | void>;
   /**
-   * The turn's only other exit, at the mount where the composer is not on
-   * screen to offer it — as a control and as Escape, which is the same act by
-   * keyboard. A card on a row leaves it off: the composer is still there with
-   * its own, and two Stops in view are two different-looking ways to do one
-   * thing.
+   * Withdraws this durable request, as a control and as Escape. A card on a row
+   * leaves it off because only the co-mounted foot offers request withdrawal.
+   * This is deliberately distinct from the composer's turn-only interrupt.
    */
-  onStop?(): void;
+  onWithdraw?(): void;
   /** A decision is in flight; the harness's own verdict is what clears the card. */
   resolving?: boolean;
-  /**
-   * Whether the card takes the keyboard as it mounts. True where it replaced
-   * the composer, which held the focus; false on a row, where the composer
-   * still has it and a card appearing mid-turn would swallow a keystroke the
-   * reader was aiming somewhere else.
-   */
-  autoFocus?: boolean;
+  /** Only an optionless custom prompt may take initial focus at the composer mount. */
+  focusFreeTextOnMount?: boolean;
   ref?: React.Ref<HTMLFormElement>;
   className?: string;
 }
@@ -136,9 +148,9 @@ export interface InteractionCardProps {
 export function InteractionCard({
   interaction,
   onResolve,
-  onStop,
+  onWithdraw,
   resolving,
-  autoFocus,
+  focusFreeTextOnMount,
   ref,
   className,
 }: InteractionCardProps) {
@@ -157,35 +169,6 @@ export function InteractionCard({
   const refusable = needsOwnRefusal(interaction);
   const submission = interactionSubmission(interaction, draft);
   const submittable = submission !== null && !resolving;
-  const own = React.useRef<HTMLFormElement>(null);
-
-  // The composer stays mounted under this card. Taking focus here still
-  // keeps the keyboard on the thing that can move the turn forward — the
-  // question — instead of leaving it in the textarea behind.
-  //
-  // On the first answerable control, not on the form. Focusing the form left
-  // the caret on a `tabIndex={-1}` element, so the first keystroke after the
-  // card mounted did nothing and the keyboard path to a one-word decision was
-  // Tab, then an arrow, then Enter. Read off the DOM rather than threaded down
-  // as a ref, because which control comes first is a fact about what the
-  // harness declared — options, or nothing but a box — and the query answers
-  // that without every question shape having to say so.
-  //
-  // Focus is not selection: an unchecked radio stays unchecked when it takes
-  // focus, so nothing here preselects a verdict.
-  //
-  // Re-seated whenever the card is showing a *different* interaction. Both
-  // mounts key on the id today, so this usually runs once on a fresh tree — but
-  // a caller that reuses the component leaves an answered question's focus
-  // sitting on the next one's controls, and the effect must not depend on a
-  // convention outside the file.
-  React.useEffect(() => {
-    if (!autoFocus) return;
-    const form = own.current;
-    const first = form?.querySelector<HTMLElement>("input:not(:disabled), textarea:not(:disabled)");
-    (first ?? form)?.focus();
-  }, [autoFocus, interaction.id]);
-
   // One door out for both controls, so a refusal that never reached the harness
   // reports itself the same way a submitted answer does. The flag clears on the
   // attempt rather than on the next keystroke: what it says is that the last
@@ -210,7 +193,7 @@ export function InteractionCard({
 
   return (
     <form
-      ref={mergeRefs(own, ref)}
+      ref={ref}
       tabIndex={-1}
       aria-label={interaction.title}
       onSubmit={(event) => {
@@ -221,22 +204,22 @@ export function InteractionCard({
         if (event.key !== "Escape") return;
         // Escape ends the turn; it never dismisses the question, which outlives
         // the turn and leaves the projection only when it is answered or
-        // withdrawn. So it does exactly what Stop does, and only where this card
-        // has a Stop — at the foot, where withdrawing the question is its own
-        // exit next to the composer that still owns interrupt.
+        // withdrawn. So it does exactly what Cancel request does, and only where
+        // this card offers withdrawal — at the foot, next to the composer that
+        // still owns turn-only interrupt.
         //
         // Where there is none, the key is left to bubble. Swallowing it there
         // meant a card on a row absorbed the one gesture that interrupts from
         // anywhere and offered nothing back: the composer beside it still owns
         // the exit, and a key claimed by a surface that cannot act on it is a
         // key that does nothing.
-        if (!onStop) return;
+        if (!onWithdraw) return;
         // Never mid-word: Escape closes an IME's candidate window, and taking
         // that keystroke would end the turn under someone who was typing.
         if (event.nativeEvent.isComposing) return;
         event.preventDefault();
         event.stopPropagation();
-        if (!resolving) onStop();
+        if (!resolving) onWithdraw();
       }}
       className={cn(
         "pointer-events-auto overflow-hidden outline-none",
@@ -245,7 +228,7 @@ export function InteractionCard({
       )}
     >
       <div className="flex items-start gap-2 px-3 pt-2.5">
-        {/* The card's palm, the footer's Warning and the Stop square are the
+        {/* The card's palm and the footer's Warning are the
             only filled glyphs the chat surface has left: an interaction is the
             exception in a transcript that is otherwise outline throughout. */}
         <HandPalmIcon aria-hidden className="mt-0.5 size-3.5 shrink-0 text-primary" weight="fill" />
@@ -277,6 +260,7 @@ export function InteractionCard({
             question={asked}
             draft={draft}
             disabled={resolving}
+            focusFreeTextOnMount={focusFreeTextOnMount}
             onDraftChange={setDraft}
             onSubmit={submit}
           />
@@ -284,27 +268,25 @@ export function InteractionCard({
       </div>
 
       <div className="mt-2.5 flex items-center gap-1 border-t border-border/70 px-3 py-2">
-        {/* Worded, not a bare glyph. Stop is the composer's control, and it
-            reads there because it stands beside Send in a row of controls; a
-            naked square in the bottom-left corner of a *blocking* card reads as
-            a checkbox you have to tick before the card will let you submit,
-            which is the worst thing this footer could say.
+        {/* Worded, not a bare glyph. Cancel request is not the composer's Stop
+            turn: it withdraws the durable interaction as well as interrupting
+            the turn that asked it.
 
-            Ghost and muted, because Stop is not an answer. It reads at the
+            Ghost and muted, because withdrawal is not an answer. It reads at the
             weight of the exit it is — below the verdict beside it, which is
             what the card actually asked for. Two controls at one weight said an
             interrupt and a refusal were the same kind of act. */}
-        {onStop ? (
+        {onWithdraw ? (
           <Button
             type="button"
             variant="ghost"
             size="sm"
             className="text-muted-foreground"
             disabled={resolving}
-            onClick={onStop}
+            onClick={onWithdraw}
           >
-            <SquareIcon className="size-3.5" weight="fill" />
-            Stop
+            <XCircleIcon className="size-3.5" />
+            Cancel request
           </Button>
         ) : null}
         {/* The decision that never reached the harness. Two words and the ink
@@ -328,7 +310,7 @@ export function InteractionCard({
               alongside the refusal.
 
               Outlined: it stands beside the primary control because it is the
-              other half of the same decision, and above Stop because it is one. */}
+              other half of the same decision, and above withdrawal because it is one. */}
           {refusable ? (
             <Button
               type="button"
@@ -375,6 +357,7 @@ function InteractionQuestionFields({
   question,
   draft,
   disabled,
+  focusFreeTextOnMount,
   onDraftChange,
   onSubmit,
 }: {
@@ -382,6 +365,7 @@ function InteractionQuestionFields({
   question: InteractionQuestion;
   draft: InteractionDraft;
   disabled?: boolean;
+  focusFreeTextOnMount?: boolean;
   onDraftChange(next: InteractionDraft): void;
   /**
    * Takes the draft the caller wants sent, because a click that answers the
@@ -477,7 +461,9 @@ function InteractionQuestionFields({
           placeholder is the only label either form needs — the control talks. */}
       {fieldOpen ? (
         <Textarea
-          autoFocus={revealed}
+          autoFocus={
+            revealed || (focusFreeTextOnMount && prompt.custom && prompt.options.length === 0)
+          }
           value={written}
           disabled={disabled}
           // A placeholder is not a name: it leaves the box unnamed to AT, and
@@ -597,15 +583,4 @@ export function InteractionReceiptLine({
       {receipt.trailer ? <span className="shrink-0">{receipt.trailer}</span> : null}
     </div>
   );
-}
-
-/* ----------------------------------------------------------------- shared */
-
-/** The card owns focus; a caller may still want a handle on the same node. */
-function mergeRefs<T>(own: React.RefObject<T | null>, forwarded: React.Ref<T> | undefined) {
-  return (node: T | null) => {
-    own.current = node;
-    if (typeof forwarded === "function") forwarded(node);
-    else if (forwarded) forwarded.current = node;
-  };
 }
