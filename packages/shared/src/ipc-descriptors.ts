@@ -611,6 +611,11 @@ export const FILE_IPC: { readonly [C in FileIpcChannel]: IpcRequestDescriptor<C>
       args.length === 1 && isDirPathInput(args[0]),
     invalidError: "Invalid request",
   },
+  "volli:prompt-templates": {
+    guard: (args): args is IpcArgs<"volli:prompt-templates"> =>
+      args.length === 1 && isProjectIdInput(args[0]),
+    invalidError: "Invalid request",
+  },
 };
 
 /** Every channel the file-IPC surface owns, derived — never hand-synced. */

@@ -835,9 +835,11 @@ app.whenReady().then(async () => {
     interruptTicketSessions: interruptTicketSessionsAnnounced,
   });
   // Global-artifacts + @file fs plumbing (file index/read/write, artifact
-  // create, reveal, per-tab watch); same degraded-DB stance as
-  // registerDataIpcHandlers.
-  registerFileIpcHandlers(dbHandle);
+  // create, reveal, per-tab watch) plus the composer `/` picker's prompt
+  // templates; same degraded-DB stance as registerDataIpcHandlers.
+  registerFileIpcHandlers(dbHandle, {
+    globalCommandsDir: join(fsDeps.userDataDir, "commands"),
+  });
   // Theming: resolved state, global theme, per-project override, and the
   // ghostty overlay write path. Same degraded-DB stance as the two above; the
   // `userData` root is where Volli's overlay files live (never the user's own

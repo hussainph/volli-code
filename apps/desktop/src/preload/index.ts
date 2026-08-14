@@ -55,6 +55,8 @@ import type {
   ProjectMutationResult,
   ProjectUpdateInput,
   ProjectUpdateResult,
+  PromptTemplateIndexInput,
+  PromptTemplateIndexResult,
   Result,
   RevealResult,
   SessionRenameInput,
@@ -467,6 +469,9 @@ const api = {
     /** Creates a new, minimally-templated `.md` in `.volli/artifacts/`; `name` is forced to `.md`. Resolves with its `@ref`-able relPath. */
     createArtifact: (input: ArtifactCreateInput): Promise<ArtifactCreateResult> =>
       invoke("volli:artifact-create", input),
+    /** The composer `/` picker's prompt templates: the project's `.volli/commands/` over the global `<userData>/commands/`. A missing directory is an empty list, not an error. */
+    promptTemplates: (input: PromptTemplateIndexInput): Promise<PromptTemplateIndexResult> =>
+      invoke("volli:prompt-templates", input),
     /** Reveals the resolved file in Finder. */
     reveal: (input: FilePathInput): Promise<Result> => invoke("volli:file-reveal", input),
     /** Watches one open file tab (debounced main→renderer change events); pair with `unwatch` on unmount. */

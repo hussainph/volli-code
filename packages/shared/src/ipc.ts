@@ -14,6 +14,7 @@ import type { DirEntry } from "./fs-entries";
 import type { Label } from "./label";
 import type { LegacyProject } from "./legacy-import";
 import type { Project } from "./project-identity";
+import type { PromptTemplate } from "./prompt-template";
 import type { HarnessEventOrder, SessionListingRow } from "./session";
 import type { SessionRpcIpcRequest, SessionRpcIpcResponse } from "./session-rpc-wire";
 import type {
@@ -415,6 +416,11 @@ export interface VolliFileIpcContract {
    */
   "volli:dir-watch": { args: [input: DirPathInput]; result: Result };
   "volli:dir-unwatch": { args: [input: DirPathInput]; result: Result };
+  /** The `/` picker's prompt templates: the project's `.volli/commands/` over the global `<userData>/commands/`. */
+  "volli:prompt-templates": {
+    args: [input: PromptTemplateIndexInput];
+    result: PromptTemplateIndexResult;
+  };
 }
 
 export type FileIpcChannel = keyof VolliFileIpcContract;
@@ -1106,6 +1112,22 @@ export type SessionRenameResult = Result;
  * when the ~20k entry cap was hit.
  */
 export type FileIndexResult = Result<{ files: IndexedFile[]; truncated: boolean }>;
+
+/** The composer's `/` picker is project-scoped, exactly like the file index. */
+export interface PromptTemplateIndexInput {
+  projectId: string;
+}
+
+/**
+ * Every prompt template the composer's `/` picker can offer — returned by
+ * `volli:prompt-templates`, already merged (project over global) and sorted.
+ *
+ * A missing commands directory is an empty list, never an error: most projects
+ * have no `.volli/commands/` and a picker that toasts about it on every open
+ * would be reporting the normal case. `ok: false` means a directory that DOES
+ * exist could not be read.
+ */
+export type PromptTemplateIndexResult = Result<{ templates: PromptTemplate[] }>;
 
 /**
  * A read file's content, discriminated by how the renderer must render it:

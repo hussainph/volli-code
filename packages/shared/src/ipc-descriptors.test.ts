@@ -1372,13 +1372,39 @@ describe("FILE_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:prompt-templates", () => {
+    const { guard, invalidError } = FILE_IPC["volli:prompt-templates"];
+
+    it("accepts a valid payload", () => {
+      expect(guard([{ projectId: "p1" }])).toBe(true);
+    });
+
+    it("rejects a non-object payload", () => {
+      expect(guard([null])).toBe(false);
+    });
+
+    it("rejects a non-string projectId", () => {
+      expect(guard([{ projectId: 1 }])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+      expect(guard([{ projectId: "p1" }, { projectId: "p2" }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid request");
+    });
+  });
+
   describe("FILE_CHANNELS derivation", () => {
     it("is exactly the descriptor table's key set — membership cannot be forgotten", () => {
       expect(FILE_CHANNELS).toEqual(Object.keys(FILE_IPC));
     });
 
-    it("covers all 9 file channels", () => {
-      expect(FILE_CHANNELS).toHaveLength(9);
+    it("covers all 10 file channels", () => {
+      expect(FILE_CHANNELS).toHaveLength(10);
+      expect(FILE_CHANNELS).toContain("volli:prompt-templates");
       expect(FILE_CHANNELS).toContain("volli:file-index");
       expect(FILE_CHANNELS).toContain("volli:file-unwatch");
       expect(FILE_CHANNELS).toContain("volli:dir-watch");

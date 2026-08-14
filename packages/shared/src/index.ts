@@ -19,6 +19,7 @@ export * from "./change-set";
 export * from "./ticket-filter";
 export * from "./ticket-sort";
 export * from "./project-identity";
+export * from "./prompt-template";
 export * from "./tag-color";
 export * from "./label";
 export * from "./legacy-import";
