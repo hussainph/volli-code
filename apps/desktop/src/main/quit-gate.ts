@@ -30,6 +30,17 @@ const MAX_NAMED_FILES = 4;
  */
 let unsavedNames: readonly string[] = [];
 
+interface WindowClosedLifecycle {
+  on(event: "closed", listener: () => void): void;
+}
+
+/** Bounds the renderer's last unsaved report to the lifetime of its window. */
+export function clearUnsavedDocumentsOnWindowClosed(window: WindowClosedLifecycle): void {
+  window.on("closed", () => {
+    unsavedNames = [];
+  });
+}
+
 /**
  * The quit events some gate has refused.
  *
@@ -111,4 +122,39 @@ export function refuseQuit(event: { preventDefault(): void }): void {
  */
 export function quitAlreadyRefused(event: object): boolean {
   return refusedQuits.has(event);
+}
+
+interface AcceptedQuitLifecycle {
+  on(event: "before-quit", listener: (event: { preventDefault(): void }) => void): void;
+  exit(code: number): void;
+}
+
+/** Coordinates the asynchronous teardown after every cancellable quit gate has accepted. */
+export function registerAcceptedQuitCoordinator(options: {
+  lifecycle: AcceptedQuitLifecycle;
+  shutdownNativeSessions(): Promise<void>;
+  shutdownAgentSocket(): Promise<void>;
+  reportFailure(error: unknown): void;
+}): void {
+  let shutdownInFlight = false;
+  options.lifecycle.on("before-quit", (event) => {
+    if (quitAlreadyRefused(event)) return;
+    event.preventDefault();
+    if (shutdownInFlight) return;
+    shutdownInFlight = true;
+    const shutdowns = [
+      Promise.resolve().then(() => options.shutdownNativeSessions()),
+      Promise.resolve().then(() => options.shutdownAgentSocket()),
+    ];
+    void Promise.allSettled(shutdowns)
+      .then((results) => {
+        for (const result of results) {
+          if (result.status === "rejected") options.reportFailure(result.reason);
+        }
+      })
+      .finally(
+        // Re-issuing app.quit() during before-quit is swallowed by Electron.
+        () => options.lifecycle.exit(0),
+      );
+  });
 }

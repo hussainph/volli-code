@@ -1,13 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  clearUnsavedDocumentsOnWindowClosed,
   planUnsavedQuit,
   quitAlreadyRefused,
   quitConfirmDetail,
   recordUnsavedDocuments,
+  registerAcceptedQuitCoordinator,
   refuseQuit,
   unsavedDocumentNames,
 } from "./quit-gate";
+import { registerAgentSocketWillQuit } from "./agent-socket";
 
 describe("recordUnsavedDocuments", () => {
   beforeEach(() => {
@@ -32,6 +35,20 @@ describe("recordUnsavedDocuments", () => {
 
     recordUnsavedDocuments(undefined as unknown as { names: string[] });
     expect(unsavedDocumentNames()).toEqual(["train.py"]);
+  });
+
+  it("clears the last renderer report when its window closes", () => {
+    const handlers = new Map<string, () => void>();
+    clearUnsavedDocumentsOnWindowClosed({
+      on(event, listener) {
+        handlers.set(event, listener);
+      },
+    });
+    recordUnsavedDocuments({ names: ["train.py"] });
+
+    handlers.get("closed")?.();
+
+    expect(unsavedDocumentNames()).toEqual([]);
   });
 });
 
@@ -99,5 +116,173 @@ describe("refuseQuit", () => {
     refuseQuit({ preventDefault: vi.fn() });
 
     expect(quitAlreadyRefused({ preventDefault: vi.fn() })).toBe(false);
+  });
+});
+
+describe("registerAcceptedQuitCoordinator", () => {
+  it("holds every repeated accepted quit until the full shutdown settles", async () => {
+    type QuitEvent = { preventDefault(): void };
+    const handlers = new Map<"before-quit" | "will-quit", (event: QuitEvent) => void>();
+    const exit = vi.fn();
+    const lifecycle = {
+      on(event: "before-quit" | "will-quit", listener: (event: QuitEvent) => void) {
+        handlers.set(event, listener);
+      },
+      exit,
+    };
+    let finishSessions: (() => void) | undefined;
+    const shutdownNativeSessions = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSessions = resolve;
+        }),
+    );
+    const shutdownAgentSocket = vi.fn(() => Promise.resolve());
+    let willQuitReached = false;
+    const attemptQuit = (): QuitEvent => {
+      let prevented = false;
+      const event = {
+        preventDefault: vi.fn(() => {
+          prevented = true;
+        }),
+      };
+      handlers.get("before-quit")?.(event);
+      if (!prevented) {
+        willQuitReached = true;
+        handlers.get("will-quit")?.({ preventDefault: vi.fn() });
+      }
+      return event;
+    };
+
+    registerAgentSocketWillQuit({ lifecycle, shutdownAgentSocket });
+    registerAcceptedQuitCoordinator({
+      lifecycle,
+      shutdownNativeSessions,
+      shutdownAgentSocket,
+      reportFailure: vi.fn(),
+    });
+
+    const first = attemptQuit();
+    await vi.waitFor(() => expect(shutdownAgentSocket).toHaveBeenCalledTimes(1));
+    const second = attemptQuit();
+
+    expect(first.preventDefault).toHaveBeenCalledExactlyOnceWith();
+    expect(second.preventDefault).toHaveBeenCalledExactlyOnceWith();
+    expect(willQuitReached).toBe(false);
+    expect(shutdownNativeSessions).toHaveBeenCalledTimes(1);
+    expect(exit).not.toHaveBeenCalled();
+
+    finishSessions?.();
+    await vi.waitFor(() => expect(exit).toHaveBeenCalledExactlyOnceWith(0));
+  });
+
+  it("closes the agent socket before forcing an accepted quit", async () => {
+    const handlers = new Map<string, (event: { preventDefault(): void }) => void>();
+    const order: string[] = [];
+    let finishSessions: (() => void) | undefined;
+    let finishSocket: (() => void) | undefined;
+    const shutdownAgentSocket = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSocket = () => {
+            order.push("socket");
+            resolve();
+          };
+        }),
+    );
+    const exit = vi.fn(() => {
+      order.push("exit");
+    });
+    registerAcceptedQuitCoordinator({
+      lifecycle: {
+        on(event, listener) {
+          handlers.set(event, listener);
+        },
+        exit,
+      },
+      shutdownNativeSessions: () =>
+        new Promise<void>((resolve) => {
+          finishSessions = () => {
+            order.push("sessions");
+            resolve();
+          };
+        }),
+      shutdownAgentSocket,
+      reportFailure: vi.fn(),
+    });
+
+    const event = { preventDefault: vi.fn() };
+    handlers.get("before-quit")?.(event);
+
+    expect(event.preventDefault).toHaveBeenCalledExactlyOnceWith();
+    expect(exit).not.toHaveBeenCalled();
+
+    await vi.waitFor(() => expect(shutdownAgentSocket).toHaveBeenCalledTimes(1));
+    expect(exit).not.toHaveBeenCalled();
+
+    finishSocket?.();
+    await Promise.resolve();
+    expect(exit).not.toHaveBeenCalled();
+
+    finishSessions?.();
+    await vi.waitFor(() => expect(exit).toHaveBeenCalledExactlyOnceWith(0));
+    expect(order).toEqual(["socket", "sessions", "exit"]);
+  });
+
+  it("reports synchronous and asynchronous shutdown failures before forcing quit", async () => {
+    const handlers = new Map<string, (event: { preventDefault(): void }) => void>();
+    const nativeFailure = new Error("native close threw");
+    const socketFailure = new Error("socket close rejected");
+    const reportFailure = vi.fn();
+    const exit = vi.fn();
+    registerAcceptedQuitCoordinator({
+      lifecycle: {
+        on(event, listener) {
+          handlers.set(event, listener);
+        },
+        exit,
+      },
+      shutdownNativeSessions() {
+        throw nativeFailure;
+      },
+      shutdownAgentSocket: () => Promise.reject(socketFailure),
+      reportFailure,
+    });
+
+    const event = { preventDefault: vi.fn() };
+    handlers.get("before-quit")?.(event);
+
+    await vi.waitFor(() => expect(exit).toHaveBeenCalledExactlyOnceWith(0));
+    expect(event.preventDefault).toHaveBeenCalledExactlyOnceWith();
+    expect(reportFailure).toHaveBeenNthCalledWith(1, nativeFailure);
+    expect(reportFailure).toHaveBeenNthCalledWith(2, socketFailure);
+    expect(reportFailure).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves the agent socket when an earlier quit gate cancels", () => {
+    const handlers = new Map<string, (event: { preventDefault(): void }) => void>();
+    const shutdownNativeSessions = vi.fn(() => Promise.resolve());
+    const shutdownAgentSocket = vi.fn(() => Promise.resolve());
+    const exit = vi.fn();
+    registerAcceptedQuitCoordinator({
+      lifecycle: {
+        on(event, listener) {
+          handlers.set(event, listener);
+        },
+        exit,
+      },
+      shutdownNativeSessions,
+      shutdownAgentSocket,
+      reportFailure: vi.fn(),
+    });
+
+    const event = { preventDefault: vi.fn() };
+    refuseQuit(event);
+    handlers.get("before-quit")?.(event);
+
+    expect(event.preventDefault).toHaveBeenCalledExactlyOnceWith();
+    expect(shutdownNativeSessions).not.toHaveBeenCalled();
+    expect(shutdownAgentSocket).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
   });
 });
