@@ -184,7 +184,7 @@ describe("the card's controls", () => {
     const html = renderToStaticMarkup(
       <InteractionCard interaction={asked()} onResolve={() => undefined} />,
     );
-    expect(html).toContain("rounded-2xl");
+    expect(html).toContain("rounded-container");
   });
 
   it("never autofocuses a request that mounts beside the live composer", () => {
