@@ -135,6 +135,29 @@ describe("agent socket", () => {
     });
   });
 
+  it("still writes the reply after the client half-closes, even when execute awaits", async () => {
+    ctx = openTestDb();
+    const socketPath = join(dirname(ctx.dbPath), "volli.sock");
+    server = await startAgentSocket({
+      socketPath,
+      execute: async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 20);
+        });
+        return { v: 1, ok: true, data: { delayed: true } };
+      },
+    });
+
+    await expect(
+      roundTrip(socketPath, {
+        v: 1,
+        cmd: "identify",
+        args: {},
+        ctx: { cwd: "/repo/volli", env: {} },
+      }),
+    ).resolves.toEqual({ v: 1, ok: true, data: { delayed: true } });
+  });
+
   it("refuses to replace a live agent socket and leaves its owner reachable", async () => {
     ctx = openTestDb();
     const socketPath = join(dirname(ctx.dbPath), "volli.sock");

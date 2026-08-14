@@ -65,6 +65,7 @@ function parseRequest(line: string): AgentRequest | AgentResponse {
 }
 
 function writeResponse(socket: Socket, response: AgentResponse): void {
+  if (!socket.writable) return;
   socket.end(`${JSON.stringify(response)}\n`);
 }
 
@@ -113,6 +114,17 @@ function handleConnection(
           },
         }),
       );
+  });
+  socket.on("end", () => {
+    // A probe (`socketIsReachable`) connects and destroys with no request.
+    // With half-open on, that would otherwise sit until the 10s timeout and
+    // pin `server.close()`. A real client half-closes AFTER the line, which
+    // already set `handled` in `data`, so this must not end the writable
+    // before `writeResponse`.
+    if (handled) return;
+    handled = true;
+    socket.setTimeout(0);
+    if (socket.writable) socket.end();
   });
   socket.on("error", () => {
     // Individual client failures do not take down the listening socket.
@@ -174,7 +186,13 @@ async function removeStaleSocket(socketPath: string): Promise<boolean> {
 }
 
 function agentServer(options: AgentSocketOptions): Server {
-  const server = createServer((socket) =>
+  // The client writes one line and half-closes (`socket.end(request+"\n")`).
+  // Node's default `allowHalfOpen: false` then ends the writable side on FIN,
+  // so any `await` in `execute` — `realpath` in doctorFacts, a future
+  // `doctor --fix` — loses the race and the CLI sees SOCKET_PROTOCOL
+  // "closed without a response." Client tests already create the peer with
+  // half-open on; the production server must too.
+  const server = createServer({ allowHalfOpen: true }, (socket) =>
     handleConnection(
       socket,
       options.execute,
