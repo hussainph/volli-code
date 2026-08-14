@@ -30,6 +30,7 @@
  * detection callers.
  */
 import { spawn } from "node:child_process";
+import { isAbsolute } from "node:path";
 
 import { resolveShell } from "@volli/shared";
 
@@ -40,20 +41,23 @@ const SHELL_TIMEOUT_MS = 4000;
 const MAX_OUTPUT_BYTES = 1 << 16;
 
 /**
- * No marker, unlike `login-path.ts`: `.zprofile`/`.zshenv` run and finish
- * BEFORE the `-c` command ever starts, and nothing runs after it for a
- * non-interactive shell (`.zlogout` only fires for an interactive one on
- * exit) — so whatever a chatty profile printed is complete, newline-
- * terminated lines that precede this command's own output, never woven
- * through it. {@link parseLoginShellPathOutput} takes the position that
- * guarantees rather than a marker that would cost a second process argument.
+ * A profile is allowed to talk, and `xtrace` can echo our command before it
+ * runs. The marker lets {@link parseLoginShellPathOutput} find the final PATH
+ * even when that chatter does not end in a newline.
  */
-const PRINT_PATH_COMMAND = "printf '%s' \"$PATH\"";
+const PATH_MARKER = "__VOLLI_PATH__";
+const PRINT_PATH_COMMAND = `printf ${PATH_MARKER}; printenv PATH`;
+
+export interface LoginShellPathResult {
+  stdout: string;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+}
 
 export interface LoginShellPathDeps {
   env: Record<string, string | undefined>;
-  /** Runs the shell and resolves its stdout, or `null` on any failure or timeout. */
-  runShell(file: string, args: readonly string[]): Promise<string | null>;
+  /** Runs the shell, or returns `null` on a spawn failure or timeout. */
+  runShell(file: string, args: readonly string[]): Promise<LoginShellPathResult | null>;
 }
 
 /**
@@ -67,7 +71,10 @@ export interface LoginShellPathDeps {
  * `/dev/null`, never a pipe, for the same reason that module gives: a
  * profile that reads stdin blocks on a pipe nothing will ever write to.
  */
-async function runLoginShell(file: string, args: readonly string[]): Promise<string | null> {
+async function runLoginShell(
+  file: string,
+  args: readonly string[],
+): Promise<LoginShellPathResult | null> {
   const child = spawn(file, [...args], { detached: true, stdio: ["ignore", "pipe", "ignore"] });
   let output = "";
   let failed = false;
@@ -87,16 +94,16 @@ async function runLoginShell(file: string, args: readonly string[]): Promise<str
     }
   }, SHELL_TIMEOUT_MS);
   try {
-    await new Promise<void>((resolve) => {
+    const result = await new Promise<Omit<LoginShellPathResult, "stdout"> | null>((resolve) => {
       // `close`, not `exit`: a foreground grandchild the timeout killed can
       // still hold the pipe open a moment after the shell itself is gone.
-      child.once("close", () => resolve());
-      child.once("error", () => resolve());
+      child.once("close", (exitCode, signal) => resolve({ exitCode, signal }));
+      child.once("error", () => resolve(null));
     });
+    return failed || result === null ? null : { stdout: output, ...result };
   } finally {
     clearTimeout(timer);
   }
-  return failed ? null : output;
 }
 
 function processDeps(): LoginShellPathDeps {
@@ -106,15 +113,26 @@ function processDeps(): LoginShellPathDeps {
 /**
  * What a login shell printed, or `null` when there was nothing usable in it.
  *
- * Reads everything after the LAST newline: `printf` adds none of its own, and
- * it is the last thing this shell ever runs, so a profile that greets the
- * user or logs a version-manager line lands in whole lines ahead of it —
- * never spliced into the value itself.
+ * The final usable marker wins. `xtrace` can echo a command carrying the
+ * marker before the command runs, and a profile can print chatter without a
+ * trailing newline. Only a colon-separated sequence of non-empty absolute
+ * directories is a safe PATH to adopt.
  */
 export function parseLoginShellPathOutput(stdout: string): string | null {
-  const lastNewline = stdout.lastIndexOf("\n");
-  const value = (lastNewline === -1 ? stdout : stdout.slice(lastNewline + 1)).trim();
-  return value.length === 0 ? null : value;
+  let markerIndex = stdout.lastIndexOf(PATH_MARKER);
+  while (markerIndex !== -1) {
+    const valueStart = markerIndex + PATH_MARKER.length;
+    const lineEnd = stdout.indexOf("\n", valueStart);
+    const value = stdout.slice(valueStart, lineEnd === -1 ? undefined : lineEnd).trim();
+    if (
+      value.length > 0 &&
+      value.split(":").every((entry) => entry.length > 0 && isAbsolute(entry))
+    ) {
+      return value;
+    }
+    markerIndex = markerIndex === 0 ? -1 : stdout.lastIndexOf(PATH_MARKER, markerIndex - 1);
+  }
+  return null;
 }
 
 /**
@@ -126,8 +144,13 @@ export async function resolveLoginShellPath(
   deps: LoginShellPathDeps = processDeps(),
 ): Promise<string | null> {
   const { file, args } = resolveShell(deps.env);
-  const stdout = await deps.runShell(file, [...args, "-c", PRINT_PATH_COMMAND]);
-  return stdout === null ? null : parseLoginShellPathOutput(stdout);
+  try {
+    const result = await deps.runShell(file, [...args, "-c", PRINT_PATH_COMMAND]);
+    if (result === null || result.exitCode !== 0 || result.signal !== null) return null;
+    return parseLoginShellPathOutput(result.stdout);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -170,24 +193,19 @@ export type LoginPathOutcome =
   | { kind: "kept" };
 
 /**
- * The merge rule: adopt the login shell's PATH onto `currentPath` when there
- * is one to adopt — non-empty — and `currentPath` is missing something it
- * says. Anything else is `kept`, `currentPath` untouched: a `loginPath` that
- * failed to resolve, one identical to `currentPath`, or one that only
- * reorders or narrows what `currentPath` already has.
+ * The merge rule: login directories take precedence, and every current
+ * directory remains reachable. The union deduplicates in login-then-current
+ * order, which avoids replacing a dev boot's private bin directory with the
+ * subset a non-interactive shell happens to export.
  */
 export function decideLoginPathAdoption(
   currentPath: string | undefined,
   loginPath: string | null,
 ): LoginPathOutcome {
   if (loginPath === null || loginPath.length === 0) return { kind: "kept" };
-  // Identical is its own case, ahead of the incomplete check: the bare
-  // launchd set is "incomplete" by definition, but a login shell that
-  // resolves to that SAME string changes nothing, and "adopted" would claim
-  // it did.
-  if (loginPath === (currentPath ?? "")) return { kind: "kept" };
-  if (!currentPathIsIncomplete(currentPath, loginPath)) return { kind: "kept" };
-  return { kind: "adopted", path: loginPath, entryCount: entriesOf(loginPath).length };
+  const path = [...new Set([...entriesOf(loginPath), ...entriesOf(currentPath ?? "")])].join(":");
+  if (path === (currentPath ?? "")) return { kind: "kept" };
+  return { kind: "adopted", path, entryCount: entriesOf(path).length };
 }
 
 /** The one line main logs after resolving the outcome. */

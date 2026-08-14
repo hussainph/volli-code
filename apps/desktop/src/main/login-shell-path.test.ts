@@ -9,12 +9,18 @@ import {
   resolveLoginShellPath,
 } from "./login-shell-path";
 
+type ShellResult = { stdout: string; exitCode: number | null; signal: NodeJS.Signals | null };
+
+function successful(stdout: string): ShellResult {
+  return { stdout, exitCode: 0, signal: null };
+}
+
 /** A scripted shell, recording what it was asked to run. */
-function shell(answer: () => Promise<string | null>) {
+function shell(answer: () => Promise<ShellResult | null>) {
   const calls: { file: string; args: readonly string[] }[] = [];
   return {
     calls,
-    runShell: async (file: string, args: readonly string[]): Promise<string | null> => {
+    runShell: async (file: string, args: readonly string[]): Promise<ShellResult | null> => {
       calls.push({ file, args });
       return answer();
     },
@@ -22,26 +28,28 @@ function shell(answer: () => Promise<string | null>) {
 }
 
 describe("parseLoginShellPathOutput", () => {
-  it("reports a clean, single-line PATH as-is", () => {
-    expect(parseLoginShellPathOutput("/opt/homebrew/bin:/usr/bin")).toBe(
+  it("reports the PATH after the probe marker", () => {
+    expect(parseLoginShellPathOutput("__VOLLI_PATH__/opt/homebrew/bin:/usr/bin")).toBe(
       "/opt/homebrew/bin:/usr/bin",
     );
   });
 
   it("takes the PATH from after a profile's own greeting", () => {
-    expect(parseLoginShellPathOutput("Welcome back!\n/opt/homebrew/bin:/usr/bin")).toBe(
-      "/opt/homebrew/bin:/usr/bin",
-    );
+    expect(
+      parseLoginShellPathOutput("Welcome back!\n__VOLLI_PATH__/opt/homebrew/bin:/usr/bin"),
+    ).toBe("/opt/homebrew/bin:/usr/bin");
   });
 
-  it("takes the PATH from after multiple lines of profile chatter", () => {
+  it("uses the final usable marker after xtrace and newline-free profile chatter", () => {
     expect(
-      parseLoginShellPathOutput("Welcome back!\nnvm: using v22\n/opt/homebrew/bin:/usr/bin"),
+      parseLoginShellPathOutput(
+        "Welcome back without a newline__VOLLI_PATH__; printenv PATH\n__VOLLI_PATH__/opt/homebrew/bin:/usr/bin",
+      ),
     ).toBe("/opt/homebrew/bin:/usr/bin");
   });
 
   it("keeps a PATH entry that merely contains a space", () => {
-    expect(parseLoginShellPathOutput("/Applications/Volli Code/bin:/usr/bin")).toBe(
+    expect(parseLoginShellPathOutput("__VOLLI_PATH__/Applications/Volli Code/bin:/usr/bin")).toBe(
       "/Applications/Volli Code/bin:/usr/bin",
     );
   });
@@ -57,11 +65,27 @@ describe("parseLoginShellPathOutput", () => {
   it("reports null for output that is only whitespace", () => {
     expect(parseLoginShellPathOutput("   \n  ")).toBeNull();
   });
+
+  it("reports null when output has no marker", () => {
+    expect(parseLoginShellPathOutput("/opt/homebrew/bin:/usr/bin")).toBeNull();
+  });
+
+  it("reports null when the marked PATH has an empty entry", () => {
+    expect(parseLoginShellPathOutput("__VOLLI_PATH__/opt/homebrew/bin::/usr/bin")).toBeNull();
+  });
+
+  it("reports null when the marked PATH has a relative entry", () => {
+    expect(parseLoginShellPathOutput("__VOLLI_PATH__bin:/usr/bin")).toBeNull();
+  });
+
+  it("reports null when the marked PATH has a non-absolute entry", () => {
+    expect(parseLoginShellPathOutput("__VOLLI_PATH__~/bin:/usr/bin")).toBeNull();
+  });
 });
 
 describe("resolveLoginShellPath", () => {
   it("asks the user's own login shell, non-interactively", async () => {
-    const zsh = shell(async () => "/opt/homebrew/bin:/usr/bin");
+    const zsh = shell(async () => successful("__VOLLI_PATH__/opt/homebrew/bin:/usr/bin"));
 
     const path = await resolveLoginShellPath({
       env: { SHELL: "/bin/zsh" },
@@ -71,11 +95,11 @@ describe("resolveLoginShellPath", () => {
     expect(path).toBe("/opt/homebrew/bin:/usr/bin");
     expect(zsh.calls[0]?.file).toBe("/bin/zsh");
     // -l, never -i: an interactive flag is what can hang on a profile's prompt.
-    expect(zsh.calls[0]?.args).toEqual(["-l", "-c", "printf '%s' \"$PATH\""]);
+    expect(zsh.calls[0]?.args).toEqual(["-l", "-c", "printf __VOLLI_PATH__; printenv PATH"]);
   });
 
   it("falls back to /bin/zsh when SHELL is unset", async () => {
-    const shellDouble = shell(async () => "/usr/bin");
+    const shellDouble = shell(async () => successful("__VOLLI_PATH__/usr/bin"));
 
     await resolveLoginShellPath({ env: {}, runShell: shellDouble.runShell });
 
@@ -89,9 +113,38 @@ describe("resolveLoginShellPath", () => {
   });
 
   it("reports null when the shell printed nothing usable", async () => {
-    const quiet = shell(async () => "");
+    const quiet = shell(async () => successful(""));
 
     expect(await resolveLoginShellPath({ env: {}, runShell: quiet.runShell })).toBeNull();
+  });
+
+  it("reports null when spawning the shell rejects", async () => {
+    await expect(
+      resolveLoginShellPath({
+        env: {},
+        runShell: async () => Promise.reject(new Error("shell not found")),
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("reports null when the shell exits nonzero", async () => {
+    const failed = shell(async () => ({
+      stdout: "__VOLLI_PATH__/opt/homebrew/bin:/usr/bin",
+      exitCode: 1,
+      signal: null,
+    }));
+
+    expect(await resolveLoginShellPath({ env: {}, runShell: failed.runShell })).toBeNull();
+  });
+
+  it("reports null when the shell exits from a signal", async () => {
+    const signaled = shell(async () => ({
+      stdout: "__VOLLI_PATH__/opt/homebrew/bin:/usr/bin",
+      exitCode: null,
+      signal: "SIGTERM",
+    }));
+
+    expect(await resolveLoginShellPath({ env: {}, runShell: signaled.runShell })).toBeNull();
   });
 });
 
@@ -135,11 +188,11 @@ describe("decideLoginPathAdoption", () => {
     expect(decideLoginPathAdoption(BARE_LAUNCHD_PATH, "")).toEqual({ kind: "kept" });
   });
 
-  it("adopts a login PATH that fills in what the bare launchd set is missing", () => {
+  it("unions a login PATH ahead of what launchd handed the app", () => {
     expect(decideLoginPathAdoption(BARE_LAUNCHD_PATH, "/opt/homebrew/bin:/usr/bin:/bin")).toEqual({
       kind: "adopted",
-      path: "/opt/homebrew/bin:/usr/bin:/bin",
-      entryCount: 3,
+      path: "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+      entryCount: 5,
     });
   });
 
@@ -147,9 +200,26 @@ describe("decideLoginPathAdoption", () => {
     expect(decideLoginPathAdoption(BARE_LAUNCHD_PATH, BARE_LAUNCHD_PATH)).toEqual({ kind: "kept" });
   });
 
-  it("keeps a dev boot's already-rich PATH rather than narrowing it to the login shell's", () => {
+  it("puts a login shell's directories ahead of a dev boot without dropping its private bin", () => {
     const rich = "/repo/node_modules/.bin:/opt/homebrew/bin:/usr/bin";
-    expect(decideLoginPathAdoption(rich, "/opt/homebrew/bin:/usr/bin")).toEqual({ kind: "kept" });
+    expect(decideLoginPathAdoption(rich, "/opt/homebrew/bin:/usr/bin")).toEqual({
+      kind: "adopted",
+      path: "/opt/homebrew/bin:/usr/bin:/repo/node_modules/.bin",
+      entryCount: 3,
+    });
+  });
+
+  it("deduplicates repeated directories while preserving login then current order", () => {
+    expect(
+      decideLoginPathAdoption(
+        "/repo/node_modules/.bin:/usr/bin:/repo/node_modules/.bin",
+        "/opt/homebrew/bin:/usr/bin:/opt/homebrew/bin",
+      ),
+    ).toEqual({
+      kind: "adopted",
+      path: "/opt/homebrew/bin:/usr/bin:/repo/node_modules/.bin",
+      entryCount: 3,
+    });
   });
 
   it("adopts when the current PATH is entirely unset", () => {
