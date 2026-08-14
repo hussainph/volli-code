@@ -1,3 +1,5 @@
+import { settleShutdownBeforeDeadline } from "./shutdown-deadline";
+
 /**
  * The quit decision: whether ⌘Q is allowed to destroy work, and how a refusal
  * survives the listeners behind it.
@@ -29,6 +31,17 @@ const MAX_NAMED_FILES = 4;
  * not reported yet has not opened an editor either, so there is nothing to lose.
  */
 let unsavedNames: readonly string[] = [];
+
+interface WindowClosedLifecycle {
+  on(event: "closed", listener: () => void): void;
+}
+
+/** Bounds the renderer's last unsaved report to the lifetime of its window. */
+export function clearUnsavedDocumentsOnWindowClosed(window: WindowClosedLifecycle): void {
+  window.on("closed", () => {
+    unsavedNames = [];
+  });
+}
 
 /**
  * The quit events some gate has refused.
@@ -111,4 +124,41 @@ export function refuseQuit(event: { preventDefault(): void }): void {
  */
 export function quitAlreadyRefused(event: object): boolean {
   return refusedQuits.has(event);
+}
+
+interface AcceptedQuitLifecycle {
+  on(event: "before-quit", listener: (event: { preventDefault(): void }) => void): void;
+  exit(code: number): void;
+}
+
+/** Holds quit and coordinates teardown once every synchronous gate accepts, in any order. */
+export function registerAcceptedQuitCoordinator(options: {
+  lifecycle: AcceptedQuitLifecycle;
+  shutdownNativeSessions(): Promise<void>;
+  shutdownAgentSocket(): Promise<void>;
+  shutdownDeadlineMs?: number;
+  reportFailure(error: unknown): void;
+}): void {
+  let shutdownInFlight = false;
+  options.lifecycle.on("before-quit", (event) => {
+    if (quitAlreadyRefused(event)) return;
+    event.preventDefault();
+    if (shutdownInFlight) return;
+    // This coordinator may register before the synchronous destructive-work
+    // gates so it can cover startup. Hold the quit now, then let every listener
+    // for this event record its verdict before interpreting it as accepted.
+    void Promise.resolve().then(() => {
+      if (quitAlreadyRefused(event) || shutdownInFlight) return;
+      shutdownInFlight = true;
+      void settleShutdownBeforeDeadline({
+        shutdowns: [options.shutdownNativeSessions, options.shutdownAgentSocket],
+        deadlineMs: options.shutdownDeadlineMs,
+        reportFailure: options.reportFailure,
+      }).then(
+        // Re-issuing app.quit() during before-quit is swallowed by Electron.
+        () => options.lifecycle.exit(0),
+        () => options.lifecycle.exit(0),
+      );
+    });
+  });
 }

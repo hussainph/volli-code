@@ -1,13 +1,18 @@
 /**
  * Focused packaged proof for VC-110 live Monaco reconciliation.
  *
- * Proves, through the built Electron app and real filesystem watchers:
+ * Proves ten checks through the built Electron app and real filesystem watchers:
  *   1. A clean open File model adopts an external write in place without
  *      losing focus/cursor/scroll, and the inspected Change row becomes Updated.
  *   1b. An external edit that prepends lines above the caret keeps the caret
  *      with its text (line number shifts by the inserted count, no viewport
  *      jump) — the minimal-edit invariant, distinct from same-line-count #1.
  *   2. No filesystem event opens or focuses a tab.
+ *   2b. A clean model parked behind another tab maps its saved caret/viewport
+ *       through a prepended disk update without making the old baseline
+ *       undoable or saveable.
+ *   2c. A clean File parked behind its same-path Diff maps its saved
+ *       caret/viewport after the mounted Diff positively adopts the prepend.
  *   3. Disjoint human/agent edits merge into one dirty registry model.
  *   4. File and Diff deliberately opened for the same path share that model.
  *   5. A local save echo stays quiet in ticket recency — proved positively by
@@ -28,6 +33,7 @@ import { promisify } from "node:util";
 
 import { createTicketViaBridge } from "./lib/agent-kit.mjs";
 import {
+  assertBuiltRendererLoaded,
   assertProfileIsolated,
   createRunner,
   launch,
@@ -42,9 +48,8 @@ import {
 const execFileAsync = promisify(execFile);
 const TARGET = "src/reconcile.ts";
 const PROJECT = { id: "reconciliation-proj", name: "Monaco Reconciliation", prefix: "MR" };
-const DEFAULT_HARNESS_ID = "claude-code";
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-reconciliation-");
-const { attempt, summarize } = createRunner();
+const { must, summarize } = createRunner();
 
 const baselineLines = Array.from({ length: 80 }, (_, index) => {
   if (index === 0) return 'export const overlap = "baseline";';
@@ -60,7 +65,13 @@ const INITIAL = `${initialLines.join("\n")}\n`;
 const cleanLines = [...initialLines];
 cleanLines[24] = 'export const cleanAgent = "adopted";';
 const CLEAN_DISK = `${cleanLines.join("\n")}\n`;
-const disjointLines = [...cleanLines];
+const PARKED_OLD_LINE = "export const changeSet = 1;";
+const PARKED_DISK_LINE = "export const changeSet = 2;";
+const PARKED_UNDO_CONTROL = "§";
+const parkedLines = [...cleanLines];
+parkedLines[5] = PARKED_DISK_LINE;
+const PARKED_BASE_DISK = `${parkedLines.join("\n")}\n`;
+const disjointLines = [...parkedLines];
 disjointLines[29] = 'export const diskOnly = "agent";';
 const DISJOINT_DISK = `${disjointLines.join("\n")}\n`;
 const HUMAN_MERGED_LINE = 'export const overlap = "human merged";';
@@ -77,11 +88,12 @@ const PREPEND_LINES = Array.from(
   (_, index) => `// prepended banner line ${index + 1}`,
 );
 const PREPEND_DISK = `${PREPEND_LINES.join("\n")}\n${CLEAN_DISK}`;
-const KNOWN_ANCHOR_TEXT = "export const line51 = 51;";
+const PARKED_PREPEND_DISK = `${PREPEND_LINES.join("\n")}\n${PARKED_BASE_DISK}`;
+const KNOWN_ANCHOR_TEXT = "export const line12 = 12;";
 
-// A second, independent file used only by step 5 to prove the watcher
-// pipeline stays alive after a save, rather than proving a negative with a
-// bare timeout.
+// A second, independent file used by step 2b to release every TARGET view and
+// by step 5 to prove the watcher pipeline stays alive after a save, rather
+// than proving a negative with a bare timeout.
 const SECOND_TARGET = "src/sentinel.ts";
 const SENTINEL_BASE = 'export const sentinel = "seen";\n';
 const SENTINEL_EXTERNAL = 'export const sentinel = "changed by watcher";\n';
@@ -163,39 +175,119 @@ async function waitStableFileViewState(page, label) {
   );
 }
 
+/** A bounded quiescence check for commands whose correct result is no mutation. */
+async function waitStableFileDocument(page, label) {
+  let previous = null;
+  let stablePolls = 0;
+  return waitUntil(
+    label,
+    async () => {
+      const state = await readFileState(page);
+      const signature = JSON.stringify({
+        dirty: state.dirty,
+        stale: state.stale,
+        lines: state.lines,
+      });
+      if (signature === previous) stablePolls += 1;
+      else stablePolls = 0;
+      previous = signature;
+      return stablePolls >= 2 ? state : null;
+    },
+    { timeout: 5000, interval: 100 },
+  );
+}
+
+/** Requires the expected disk bytes to stay exact across consecutive polls. */
+async function waitStableDiskText(path, expected, label) {
+  let stablePolls = 0;
+  return waitUntil(
+    label,
+    async () => {
+      const value = await fs.readFile(path, "utf8");
+      if (value !== expected) {
+        stablePolls = 0;
+        return null;
+      }
+      stablePolls += 1;
+      return stablePolls >= 3 ? value : null;
+    },
+    { timeout: 5000, interval: 100 },
+  );
+}
+
 /**
  * Matches SOURCE_MODE_OPTIONS.lineHeight in monaco-file-editor.tsx. The
- * caret's pixel row and the content view-lines share one coordinate space
- * (both render in the content column), so one line's worth of pixel
- * movement is an exact, config-anchored stand-in for "moved down by N
- * lines" without touching the margin/gutter line-numbers column, which
- * renders through a separate per-line grid with a different local origin
- * (its own `top` is not comparable to the content caret's `top`).
+ * caret's `top` is its model-line offset inside `.lines-content`; Monaco puts
+ * the editor's real scroll offset on that exact node as a negative `top`.
+ * Both are config/source-backed coordinates rather than whichever generic
+ * `.monaco-scrollable-element` happens to come first in the subtree.
  */
 const LINE_HEIGHT_PX = 21;
 
 /**
- * Reads the caret's own pixel row (`.cursor`) and the view-line text that
- * shares that row, plus how far the row sits from the top of the scrolled
- * viewport (to catch a visual scroll-jump). Works whether the caret is
- * collapsed or the anchor of a selection.
+ * Reads one visible source line through Monaco's exact editor DOM hierarchy.
+ * The nearby anchor stays in the ordinary viewport, so the direct view-line
+ * whose numeric model-row `top` equals the direct primary caret's `top` must be
+ * present. Counts are returned too: a changed Monaco DOM contract fails loudly
+ * instead of silently selecting an unrelated descendant.
  */
-async function caretLocation(page) {
+async function caretModelState(page) {
   return fileHost(page).evaluate((host) => {
-    const cursor = host.querySelector(".cursor");
-    const scroll = host.querySelector(".monaco-scrollable-element");
-    if (!(cursor instanceof HTMLElement)) return null;
-    const top = Number.parseFloat(cursor.style.top || "0");
-    const scrollTop = scroll instanceof HTMLElement ? scroll.scrollTop : 0;
-    const viewLineEl = Array.from(host.querySelectorAll(".view-lines .view-line")).find(
-      (el) => el instanceof HTMLElement && Number.parseFloat(el.style.top || "NaN") === top,
+    const linesContents = host.querySelectorAll(
+      ".monaco-editor .monaco-scrollable-element.editor-scrollable > .lines-content",
     );
+    const linesContent = linesContents.length === 1 ? linesContents[0] : null;
+    if (!(linesContent instanceof HTMLElement)) {
+      return {
+        ready: false,
+        linesContentCount: linesContents.length,
+        cursorCount: 0,
+        mappedLineCount: 0,
+      };
+    }
+    const cursors = Array.from(
+      linesContent.querySelectorAll(":scope > .cursors-layer > .cursor"),
+    ).filter((candidate) => candidate instanceof HTMLElement);
+    const cursor = cursors.length === 1 ? cursors[0] : null;
+    const top = cursor instanceof HTMLElement ? Number.parseFloat(cursor.style.top) : Number.NaN;
+    const mappedLines = Array.from(
+      linesContent.querySelectorAll(":scope > .view-lines > .view-line"),
+    ).filter(
+      (candidate) =>
+        candidate instanceof HTMLElement && Number.parseFloat(candidate.style.top) === top,
+    );
+    const mappedLine = mappedLines.length === 1 ? mappedLines[0] : null;
     return {
+      ready: cursor !== null && mappedLine !== null && Number.isFinite(top),
+      linesContentCount: linesContents.length,
+      cursorCount: cursors.length,
+      mappedLineCount: mappedLines.length,
       top,
-      scrollTop,
-      text: viewLineEl ? (viewLineEl.textContent ?? "").replace(/\u00a0/g, " ") : null,
+      scrollTop: -Number.parseFloat(linesContent.style.top || "0"),
+      text: (mappedLine?.textContent ?? "").replace(/\u00a0/g, " "),
     };
   });
+}
+
+async function waitCaretModelState(page, label, options = {}) {
+  try {
+    return await waitUntil(
+      label,
+      async () => {
+        const state = await caretModelState(page);
+        return state.ready ? state : null;
+      },
+      options,
+    );
+  } catch (error) {
+    const state = await caretModelState(page);
+    throw new Error(
+      `${label}: Monaco editor DOM contract unavailable (${JSON.stringify(state)}): ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      { cause: error },
+    );
+  }
 }
 
 async function replaceFirstLine(page, text) {
@@ -275,16 +367,38 @@ async function openFileFromRail(aside, path = TARGET, { pin = false } = {}) {
 async function main() {
   const fakeHome = join(scratch, "home");
   await fs.mkdir(fakeHome, { recursive: true });
+  await Promise.all(
+    [".zshenv", ".zprofile", ".zshrc", ".zlogin"].map((name) =>
+      fs.writeFile(join(fakeHome, name), "# isolated Monaco smoke shell\n"),
+    ),
+  );
+  // Seed a bounded launch PATH; login bootstrap may legitimately augment it.
+  const safePath = "/usr/bin:/bin:/usr/sbin:/sbin";
   const app = await launch({
     dbPath,
     userDataDir,
-    extraEnv: { VOLLI_WORKTREE_HOME_DIR: fakeHome },
+    extraEnv: {
+      HOME: fakeHome,
+      PATH: safePath,
+      ZDOTDIR: fakeHome,
+      VOLLI_WORKTREE_HOME_DIR: fakeHome,
+    },
   });
 
   try {
     await assertProfileIsolated(app, userDataDir);
+    const launchIsolation = await app.evaluate(() => ({
+      home: process.env.HOME ?? null,
+      zdotDir: process.env.ZDOTDIR ?? null,
+    }));
+    if (launchIsolation.home !== fakeHome || launchIsolation.zdotDir !== fakeHome) {
+      throw new Error(
+        `smoke launch environment was not isolated: ${JSON.stringify(launchIsolation)}`,
+      );
+    }
     const page = await app.firstWindow();
     await page.waitForLoadState("domcontentloaded");
+    assertBuiltRendererLoaded(page);
     await sleep(600);
 
     const projectPath = await makeGitRepo(scratch, "reconciliation-project-");
@@ -305,22 +419,32 @@ async function main() {
       priority: "medium",
     });
     const createResult = await page.evaluate(
-      ({ workspaceId, cwd, tid, harnessId }) =>
+      ({ workspaceId, cwd, tid }) =>
         window.api.terminal.create({
           workspaceId,
           cwd,
           cols: 80,
           rows: 24,
-          ticket: { ticketId: tid, kickoff: { harnessId, prompt: "smoke" } },
+          ticket: { ticketId: tid },
         }),
       {
         workspaceId: projectId,
         cwd: projectPath,
         tid: ticketId,
-        harnessId: DEFAULT_HARNESS_ID,
       },
     );
     if (!createResult.ok) throw new Error(`terminal.create failed: ${createResult.error}`);
+    if (
+      createResult.session.launchKind !== "shell" ||
+      createResult.session.activeHarnessId !== null
+    ) {
+      throw new Error(
+        `worktree materializer launched an agent: ${JSON.stringify({
+          launchKind: createResult.session.launchKind,
+          activeHarnessId: createResult.session.activeHarnessId,
+        })}`,
+      );
+    }
 
     const ticket = await waitUntil(
       "ticket worktree",
@@ -335,6 +459,11 @@ async function main() {
       { timeout: 30000 },
     );
     const worktreeDir = ticket.worktreePath;
+    if (createResult.session.cwd !== worktreeDir) {
+      throw new Error(
+        `shell session did not materialize the ticket worktree: session=${createResult.session.cwd} ticket=${worktreeDir}`,
+      );
+    }
     const targetPath = join(worktreeDir, TARGET);
     await fs.writeFile(targetPath, INITIAL);
 
@@ -354,7 +483,7 @@ async function main() {
     const changeRow = aside.locator(`[data-testid="ticket-changes-row"][data-path="${TARGET}"]`);
     await waitUntil("reconciliation Change row", async () => (await changeRow.count()) === 1);
 
-    await attempt(
+    await must(
       1,
       "clean external update adopts in place and preserves editor view state",
       async () => {
@@ -398,15 +527,35 @@ async function main() {
     // external edit that changes line COUNT above the caret must move the
     // caret with its text (same content, shifted line number), not leave it
     // pinned to its old absolute line.
-    await attempt(
+    await must(
       "1b",
       "external edit prepending lines above the caret keeps it with its text, not its old line",
       async () => {
-        await findInFile(page, KNOWN_ANCHOR_TEXT);
-        // Find leaves the match selected; collapse to a plain caret (Home
-        // stays on the same line, just moves to column 1).
+        // Stay near the top so both the original and shifted line are inside the
+        // ordinary viewport; this assertion is about caret mapping, not Monaco's
+        // separate find/reveal or far-offscreen virtualization behavior.
+        const anchorLine = fileHost(page)
+          .locator(
+            ".monaco-editor .monaco-scrollable-element.editor-scrollable > " +
+              ".lines-content > .view-lines > .view-line",
+          )
+          .filter({ hasText: KNOWN_ANCHOR_TEXT });
+        await waitUntil(
+          "one visible nearby anchor line",
+          async () => ((await anchorLine.count()) === 1 ? true : null),
+          { timeout: 3000, interval: 50 },
+        );
+        await anchorLine.click();
         await page.keyboard.press("Home");
-        const before = await caretLocation(page);
+        const before = await waitCaretModelState(page, "caret model state before prepended edit", {
+          timeout: 3000,
+          interval: 50,
+        });
+        if (before.text !== KNOWN_ANCHOR_TEXT) {
+          throw new Error(
+            `caret did not reach the nearby anchor before the write: ${JSON.stringify(before)}`,
+          );
+        }
         const expectedTop =
           before?.top != null ? before.top + PREPEND_COUNT * LINE_HEIGHT_PX : null;
 
@@ -415,8 +564,9 @@ async function main() {
         const after = await waitUntil(
           "caret to follow its text after a prepended external edit",
           async () => {
-            const state = await caretLocation(page);
-            return state?.text === KNOWN_ANCHOR_TEXT &&
+            const state = await caretModelState(page);
+            return state.ready &&
+              state.text === KNOWN_ANCHOR_TEXT &&
               expectedTop !== null &&
               state.top != null &&
               Math.abs(state.top - expectedTop) < 1
@@ -442,8 +592,9 @@ async function main() {
         await waitUntil(
           "caret to return to its original line once the prepend is undone",
           async () => {
-            const state = await caretLocation(page);
-            return state?.text === KNOWN_ANCHOR_TEXT &&
+            const state = await caretModelState(page);
+            return state.ready &&
+              state.text === KNOWN_ANCHOR_TEXT &&
               before?.top != null &&
               state.top != null &&
               Math.abs(state.top - before.top) < 1
@@ -464,18 +615,18 @@ async function main() {
 
         return {
           ok:
-            before?.text === KNOWN_ANCHOR_TEXT &&
+            before.text === KNOWN_ANCHOR_TEXT &&
             after?.text === KNOWN_ANCHOR_TEXT &&
             after?.top != null &&
             expectedTop !== null &&
             Math.abs(after.top - expectedTop) < 1 &&
             scrollStable,
-          detail: `text stable=${after?.text === KNOWN_ANCHOR_TEXT} top=${before?.top}→${after?.top} (expected ${expectedTop}, +${PREPEND_COUNT} lines) scroll=${before?.scrollTop}→${after?.scrollTop}`,
+          detail: `mapped line stable=${after?.text === KNOWN_ANCHOR_TEXT} top=${before?.top}→${after?.top} (expected ${expectedTop}, +${PREPEND_COUNT} lines) scroll=${before?.scrollTop}→${after?.scrollTop}`,
         };
       },
     );
 
-    await attempt(
+    await must(
       2,
       "deliberate Diff open clears Updated without duplicate or automatic tabs",
       async () => {
@@ -498,11 +649,339 @@ async function main() {
       },
     );
 
+    await must(
+      "2b",
+      "parked clean File maps caret/viewport through a prepend with no stale undo or save clobber",
+      async () => {
+        // Give the TARGET File a saved position whose text has a clear identity,
+        // then activate an independent File so every TARGET surface unmounts
+        // and its clean registry entry/model is genuinely parked.
+        await openFileFromRail(aside);
+        const anchorLine = fileHost(page)
+          .locator(
+            ".monaco-editor .monaco-scrollable-element.editor-scrollable > " +
+              ".lines-content > .view-lines > .view-line",
+          )
+          .filter({ hasText: KNOWN_ANCHOR_TEXT });
+        await waitUntil(
+          "one visible parked anchor line",
+          async () => ((await anchorLine.count()) === 1 ? true : null),
+          { timeout: 3000, interval: 50 },
+        );
+        await anchorLine.click();
+        await page.keyboard.press("Home");
+        const beforePark = await waitCaretModelState(page, "caret state before parking", {
+          timeout: 3000,
+          interval: 50,
+        });
+        if (beforePark.text !== KNOWN_ANCHOR_TEXT) {
+          throw new Error(`caret missed parked anchor: ${JSON.stringify(beforePark)}`);
+        }
+
+        await openFileFromRail(aside, SECOND_TARGET, { pin: true });
+        const parked = await waitUntil(
+          `${SECOND_TARGET} File tab and editor to be active`,
+          async () => {
+            const tabs = await readTicketTabs(page, ticketId);
+            const activeTab = page.getByRole("tab", { name: "sentinel.ts", exact: true });
+            const file = await readFileState(page);
+            return tabs?.active === `file:${SECOND_TARGET}` &&
+              (await activeTab.getAttribute("aria-selected")) === "true" &&
+              file.lines.includes(SENTINEL_BASE.trim())
+              ? { file, tabs }
+              : null;
+          },
+        );
+
+        await fs.writeFile(targetPath, PARKED_PREPEND_DISK);
+        await waitStableDiskText(
+          targetPath,
+          PARKED_PREPEND_DISK,
+          "parked prepended write to settle on disk",
+        );
+
+        // Reopening reads the new disk revision and reacquires the parked model.
+        // The new bytes are a clean baseline, not an edit the user may undo.
+        await openFileFromRail(aside);
+        const adopted = await waitFileText(page, PARKED_DISK_LINE, false);
+        const reacquiredTabs = await waitUntil(`${TARGET} File tab to be active`, async () => {
+          const tabs = await readTicketTabs(page, ticketId);
+          // File previews carry this marker; the deliberately coexisting Diff
+          // has the same accessible label but no preview marker. Assert both
+          // states so this observes the File tab rather than depending on DOM
+          // order between the two surfaces.
+          const fileTab = page.locator(
+            '[role="tab"][aria-label="reconcile.ts"][data-preview="true"]',
+          );
+          const diffTab = page.locator(
+            '[role="tab"][aria-label="reconcile.ts"]:not([data-preview])',
+          );
+          return tabs?.active === `file:${TARGET}` &&
+            (await fileTab.count()) === 1 &&
+            (await fileTab.getAttribute("aria-selected")) === "true" &&
+            (await diffTab.count()) === 1 &&
+            (await diffTab.getAttribute("aria-selected")) === "false"
+            ? tabs
+            : null;
+        });
+        const expectedTop = beforePark.top + PREPEND_COUNT * LINE_HEIGHT_PX;
+        const expectedScrollTop = beforePark.scrollTop + PREPEND_COUNT * LINE_HEIGHT_PX;
+        const mappedView = await waitUntil(
+          "parked caret and viewport anchor to follow their text through the prepend",
+          async () => {
+            const state = await caretModelState(page);
+            return state.ready &&
+              state.text === KNOWN_ANCHOR_TEXT &&
+              Math.abs(state.top - expectedTop) < 1 &&
+              Math.abs(state.scrollTop - expectedScrollTop) < 1
+              ? state
+              : null;
+          },
+          { timeout: 20000 },
+        );
+        const oldBeforeUndo = adopted.lines.includes(PARKED_OLD_LINE);
+
+        // Positive control: prove Cmd-Z reaches this reacquired Monaco by
+        // undoing one disposable character first. Keep it to one character:
+        // Monaco's language features may split paired punctuation (such as a
+        // block-comment close) into a separate undo element. Only the following
+        // Cmd-Z is expected to be a no-op at the adopted disk baseline.
+        const editor = fileHost(page).locator(".monaco-editor");
+        await editor.click();
+        await page.keyboard.press("Meta+ArrowUp");
+        await page.keyboard.press("Home");
+        await page.keyboard.insertText(PARKED_UNDO_CONTROL);
+        const edited = await waitFileText(page, PARKED_UNDO_CONTROL, true);
+        await page.keyboard.press("Meta+z");
+        const afterControlUndo = await waitUntil(
+          "positive undo control to restore the adopted clean baseline",
+          async () => {
+            const state = await readFileState(page);
+            return state.dirty === "false" &&
+              !state.lines.includes(PARKED_UNDO_CONTROL) &&
+              state.lines.includes(PARKED_DISK_LINE)
+              ? state
+              : null;
+          },
+          { timeout: 5000, interval: 100 },
+        );
+
+        await page.keyboard.press("Meta+z");
+        const afterBaselineUndo = await waitStableFileDocument(
+          page,
+          "parked baseline to remain clean and unchanged after Cmd-Z",
+        );
+
+        await page.keyboard.press("Meta+s");
+        const afterSave = await waitStableFileDocument(
+          page,
+          "parked baseline to remain clean after Cmd-S",
+        );
+        const diskAfterSave = await waitStableDiskText(
+          targetPath,
+          PARKED_PREPEND_DISK,
+          "Cmd-S to leave the adopted disk bytes unchanged",
+        );
+
+        const controlWorked =
+          edited.dirty === "true" &&
+          edited.lines.includes(PARKED_UNDO_CONTROL) &&
+          afterControlUndo.dirty === "false" &&
+          !afterControlUndo.lines.includes(PARKED_UNDO_CONTROL);
+        const baselineUndoWasNoop =
+          afterBaselineUndo.lines === afterControlUndo.lines &&
+          afterBaselineUndo.lines.includes(PARKED_DISK_LINE) &&
+          !afterBaselineUndo.lines.includes(PARKED_OLD_LINE) &&
+          afterBaselineUndo.dirty === "false";
+        const saveKeptDisk =
+          afterSave.lines.includes(PARKED_DISK_LINE) &&
+          afterSave.dirty === "false" &&
+          diskAfterSave === PARKED_PREPEND_DISK;
+        const viewMapped =
+          mappedView.text === KNOWN_ANCHOR_TEXT &&
+          Math.abs(mappedView.top - expectedTop) < 1 &&
+          Math.abs(mappedView.scrollTop - expectedScrollTop) < 1;
+        return {
+          ok:
+            parked.tabs.active === `file:${SECOND_TARGET}` &&
+            reacquiredTabs.active === `file:${TARGET}` &&
+            viewMapped &&
+            !oldBeforeUndo &&
+            controlWorked &&
+            baselineUndoWasNoop &&
+            saveKeptDisk,
+          detail: `parkedActive=${parked.tabs.active} reacquiredActive=${reacquiredTabs.active} viewMapped=${viewMapped} caret=${beforePark.top}→${mappedView.top} (expected ${expectedTop}) scroll=${beforePark.scrollTop}→${mappedView.scrollTop} (expected ${expectedScrollTop}) adopted=${adopted.lines.includes(PARKED_DISK_LINE)} oldBeforeUndo=${oldBeforeUndo} controlWorked=${controlWorked} baselineUndoNoop=${baselineUndoWasNoop} dirtyAfterUndo=${afterBaselineUndo.dirty} saveKeptDisk=${saveKeptDisk} diskExact=${diskAfterSave === PARKED_PREPEND_DISK}`,
+        };
+      },
+    );
+
+    // Restore the same-line baseline expected by the disjoint/conflict steps
+    // below; this reset is an ordinary live clean update, not another parked
+    // adoption under test.
+    await sleep(20);
+    await fs.writeFile(targetPath, PARKED_BASE_DISK);
+    await waitStableDiskText(targetPath, PARKED_BASE_DISK, "parked prepend cleanup on disk");
+    await waitUntil(
+      "parked prepend cleanup in File model",
+      async () => {
+        const state = await readFileState(page);
+        return state.dirty === "false" &&
+          state.lines.includes(PARKED_DISK_LINE) &&
+          !state.lines.includes(PREPEND_LINES[0])
+          ? state
+          : null;
+      },
+      { timeout: 20000 },
+    );
+
+    await must(
+      "2c",
+      "same-path Diff adopts a clean parked update before File restores mapped view state",
+      async () => {
+        // Save a File view against the un-prepended clean baseline, then park
+        // that view behind the already-open Diff for the exact same path.
+        const anchorLine = fileHost(page)
+          .locator(
+            ".monaco-editor .monaco-scrollable-element.editor-scrollable > " +
+              ".lines-content > .view-lines > .view-line",
+          )
+          .filter({ hasText: KNOWN_ANCHOR_TEXT });
+        await waitUntil(
+          "one visible File anchor before same-path Diff",
+          async () => ((await anchorLine.count()) === 1 ? true : null),
+          { timeout: 3000, interval: 50 },
+        );
+        await anchorLine.click();
+        await page.keyboard.press("Home");
+        const beforePark = await waitCaretModelState(
+          page,
+          "caret state before parking behind same-path Diff",
+          { timeout: 3000, interval: 50 },
+        );
+        if (beforePark.text !== KNOWN_ANCHOR_TEXT) {
+          throw new Error(
+            `caret missed File anchor before same-path Diff: ${JSON.stringify(beforePark)}`,
+          );
+        }
+
+        await aside.getByTestId("ticket-rail-tab-changes").click();
+        await changeRow.click();
+        const parked = await waitUntil(
+          "same-path Diff active and ready with File host released",
+          async () => {
+            const tabs = await readTicketTabs(page, ticketId);
+            const diffReady =
+              (await page.locator('[data-monaco-diff-status="ready"]').count()) === 1;
+            const fileHostCount = await fileHost(page).count();
+            return tabs?.active === `diff:${TARGET}` && diffReady && fileHostCount === 0
+              ? { diffReady, fileHostCount, tabs }
+              : null;
+          },
+          { timeout: 20000 },
+        );
+
+        // Monaco only renders the modified Diff viewport. Force it to the top
+        // so the subsequent positive watcher observation sees both the newly
+        // prepended first line and the changed baseline line before File opens.
+        const modifiedDiff = page
+          .locator('[data-monaco-diff-status="ready"]')
+          .locator(".editor.modified .monaco-editor")
+          .first();
+        await modifiedDiff.click();
+        await page.keyboard.press("Meta+ArrowUp");
+        await waitUntil(
+          "modified Diff viewport at the clean baseline top",
+          async () => {
+            const state = await readDiffState(page);
+            return state.ready && state.lines.includes(baselineLines[0]) ? state : null;
+          },
+          { timeout: 5000, interval: 50 },
+        );
+
+        await sleep(20);
+        await fs.writeFile(targetPath, PARKED_PREPEND_DISK);
+        await waitStableDiskText(
+          targetPath,
+          PARKED_PREPEND_DISK,
+          "same-path Diff prepended write to settle on disk",
+        );
+        const diffAdopted = await waitUntil(
+          "clean same-path Diff to visibly adopt both prepended and changed lines",
+          async () => {
+            const state = await readDiffState(page);
+            return state.ready &&
+              state.dirty === "false" &&
+              state.lines.includes(PREPEND_LINES[0]) &&
+              state.lines.includes(PARKED_DISK_LINE)
+              ? state
+              : null;
+          },
+          { timeout: 20000 },
+        );
+
+        // Only after the still-mounted Diff proves the watcher/model update do
+        // we reopen File and inspect its independently saved view state.
+        await openFileFromRail(aside);
+        const adoptedFile = await waitFileText(page, PARKED_DISK_LINE, false);
+        const expectedTop = beforePark.top + PREPEND_COUNT * LINE_HEIGHT_PX;
+        const expectedScrollTop = beforePark.scrollTop + PREPEND_COUNT * LINE_HEIGHT_PX;
+        const mappedView = await waitUntil(
+          "same-path parked File caret and viewport to follow their text",
+          async () => {
+            const state = await caretModelState(page);
+            return state.ready &&
+              state.text === KNOWN_ANCHOR_TEXT &&
+              Math.abs(state.top - expectedTop) < 1 &&
+              Math.abs(state.scrollTop - expectedScrollTop) < 1
+              ? state
+              : null;
+          },
+          { timeout: 20000 },
+        );
+
+        const diffObservedBeforeFile =
+          diffAdopted.dirty === "false" &&
+          diffAdopted.lines.includes(PREPEND_LINES[0]) &&
+          diffAdopted.lines.includes(PARKED_DISK_LINE);
+        const fileMapped =
+          adoptedFile.lines.includes(PARKED_DISK_LINE) &&
+          mappedView.text === KNOWN_ANCHOR_TEXT &&
+          Math.abs(mappedView.top - expectedTop) < 1 &&
+          Math.abs(mappedView.scrollTop - expectedScrollTop) < 1;
+        return {
+          ok:
+            parked.tabs.active === `diff:${TARGET}` &&
+            parked.diffReady &&
+            parked.fileHostCount === 0 &&
+            diffObservedBeforeFile &&
+            fileMapped,
+          detail: `parkedActive=${parked.tabs.active} diffReady=${parked.diffReady} fileHosts=${parked.fileHostCount} diffObservedBeforeFile=${diffObservedBeforeFile} caret=${beforePark.top}→${mappedView.top} (expected ${expectedTop}) scroll=${beforePark.scrollTop}→${mappedView.scrollTop} (expected ${expectedScrollTop})`,
+        };
+      },
+    );
+
+    // Leave the same-line baseline expected by the disjoint/conflict checks.
+    await sleep(20);
+    await fs.writeFile(targetPath, PARKED_BASE_DISK);
+    await waitStableDiskText(targetPath, PARKED_BASE_DISK, "same-path Diff cleanup on disk");
+    await waitUntil(
+      "same-path Diff cleanup in File model",
+      async () => {
+        const state = await readFileState(page);
+        return state.dirty === "false" &&
+          state.lines.includes(PARKED_DISK_LINE) &&
+          !state.lines.includes(PREPEND_LINES[0])
+          ? state
+          : null;
+      },
+      { timeout: 20000 },
+    );
+
     await openFileFromRail(aside);
     await waitFileText(page, 'export const cleanAgent = "adopted";', false);
     await aside.getByTestId("ticket-rail-tab-changes").click();
 
-    await attempt(
+    await must(
       3,
       "disjoint human and agent edits reconcile into one dirty File model",
       async () => {
@@ -526,7 +1005,7 @@ async function main() {
       },
     );
 
-    await attempt(
+    await must(
       4,
       "Diff deliberately opened for the path shares the merged dirty model",
       async () => {
@@ -544,7 +1023,7 @@ async function main() {
     await findInFile(page, HUMAN_MERGED_LINE);
     await aside.getByTestId("ticket-rail-tab-changes").click();
 
-    await attempt(
+    await must(
       5,
       "known local-save echo advances baseline without marking Updated, proved against a live watcher",
       async () => {
@@ -596,7 +1075,7 @@ async function main() {
       },
     );
 
-    await attempt(
+    await must(
       6,
       "overlap preserves exact local and disk versions behind one non-modal affordance",
       async () => {
@@ -635,7 +1114,7 @@ async function main() {
       },
     );
 
-    await attempt(
+    await must(
       7,
       "reopening Diff clears Updated and reproduces the shared conflict result",
       async () => {

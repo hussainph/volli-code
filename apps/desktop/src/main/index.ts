@@ -34,10 +34,12 @@ import type {
 } from "@volli/shared";
 import type { ManagedConflict } from "./harness-install";
 import {
+  clearUnsavedDocumentsOnWindowClosed,
   planUnsavedQuit,
   quitAlreadyRefused,
   quitConfirmDetail,
   recordUnsavedDocuments,
+  registerAcceptedQuitCoordinator,
   refuseQuit,
   unsavedDocumentNames,
 } from "./quit-gate";
@@ -100,7 +102,11 @@ import { registerHarnessIpcHandlers } from "./harness-ipc";
 import { ensureHarnessRuntime, harnessLaunchArgv } from "./harness-runtime";
 import type { RefusedWrapper } from "./harness-runtime";
 import { ensureShellInit } from "./shell-init";
-import { startAgentSocket, type AgentSocketServer } from "./agent-socket";
+import {
+  createAgentSocketLifecycle,
+  registerAgentSocketWillQuit,
+  startAgentSocket,
+} from "./agent-socket";
 import { loginShellPath } from "./login-path";
 import { createLoginPathBootstrap, resolveLoginShellPath } from "./login-shell-path";
 import { piLoginLaunch, verifiedPiCliResource } from "./pi-cli-resource";
@@ -148,7 +154,13 @@ protocol.registerSchemesAsPrivileged([
 app.setName("Volli Code");
 
 const isDev = !app.isPackaged;
-let agentSocket: AgentSocketServer | undefined;
+const agentSocket = createAgentSocketLifecycle({
+  start: startAgentSocket,
+  reportFailure: (error) => {
+    console.error("[volli] failed to close agent socket:", errorMessage(error));
+  },
+});
+const shutdownAgentSocket = agentSocket.shutdown;
 
 // Dev gets its OWN userData directory. dev and packaged otherwise share one
 // (app.setName above unifies them so the SQLite db survives across launches) —
@@ -278,6 +290,7 @@ function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): Brows
       sandbox: true,
     },
   });
+  clearUnsavedDocumentsOnWindowClosed(mainWindow);
 
   mainWindow.on("ready-to-show", () => {
     mainWindow.show();
@@ -633,6 +646,26 @@ app.whenReady().then(async () => {
           startProjectSession: projectSessions?.start,
           attachProjectSession: projectSessions?.attach,
         });
+  // From this point onward the native Session control plane exists. Install
+  // its quit hold before the first later startup await so a Dock/OS quit cannot
+  // reach the socket-only will-quit fallback and strand these resources. The
+  // coordinator waits until the current before-quit dispatch finishes before
+  // reading refusals, so the destructive-work gates registered below still win.
+  registerAcceptedQuitCoordinator({
+    lifecycle: app,
+    shutdownNativeSessions: async () => {
+      const results = await Promise.allSettled([sessionRpc?.close(), sessionRuntime?.close()]);
+      for (const result of results) {
+        if (result.status === "rejected") {
+          console.error("[volli] failed to close native Session RPC:", errorMessage(result.reason));
+        }
+      }
+    },
+    shutdownAgentSocket,
+    reportFailure: (error) => {
+      console.error("[volli] failed to coordinate app shutdown:", errorMessage(error));
+    },
+  });
   // Boot recovery: no PTY and no OpenCode binding survives a relaunch. The
   // durable Session itself intentionally remains open; only the binding ends.
   if (dbHandle.ok && sessionEngine !== null) {
@@ -979,9 +1012,10 @@ app.whenReady().then(async () => {
       recordUnsavedDocuments(args[0]);
     },
   );
-  // Registered FIRST, ahead of the terminal gate and the Session shutdown: a
-  // discarded draft is the only thing on the quit path that cannot be recovered
-  // afterwards, so it is the question worth asking before any other.
+  // Asked ahead of the terminal gate: a discarded draft is the only thing on
+  // the quit path that cannot be recovered afterwards. The accepted-quit
+  // coordinator registered above only holds the event synchronously; it defers
+  // teardown until this gate and the terminal gate have recorded their verdict.
   app.on("before-quit", (event) => {
     if (quitAlreadyRefused(event)) return;
     const names = unsavedDocumentNames();
@@ -1280,7 +1314,7 @@ app.whenReady().then(async () => {
             ok: false,
             error: { code: "DB_UNAVAILABLE", message: dbHandle.error },
           }) as const;
-    agentSocket = await startAgentSocket({
+    await agentSocket.start({
       socketPath: runtimePaths.socketPath,
       execute,
     });
@@ -1387,36 +1421,6 @@ app.whenReady().then(async () => {
       createWindow(ptyManager, currentFirstPaint());
     }
   });
-
-  let nativeSessionShutdownInFlight = false;
-  app.on("before-quit", (event) => {
-    if (nativeSessionShutdownInFlight) return;
-    // A gate ahead of this one refused the quit. Electron still runs every
-    // before-quit listener after a preventDefault, so without this the teardown
-    // below would run and app.exit(0) the process the user just chose to keep —
-    // taking the unsaved draft or the running terminal they cancelled to save.
-    if (quitAlreadyRefused(event)) return;
-    // Electron does not await async before-quit handlers. Hold this quit until
-    // the local Session control plane has released its streams and child.
-    event.preventDefault();
-    nativeSessionShutdownInFlight = true;
-    void Promise.allSettled([sessionRpc?.close(), sessionRuntime?.close()])
-      .then((results) => {
-        for (const result of results) {
-          if (result.status === "rejected") {
-            console.error(
-              "[volli] failed to close native Session RPC:",
-              errorMessage(result.reason),
-            );
-          }
-        }
-      })
-      .finally(() => {
-        // Re-issuing app.quit() during before-quit is swallowed by Electron.
-        // PTY teardown has already run synchronously in its own quit handler.
-        app.exit(0);
-      });
-  });
 });
 
 app.on("window-all-closed", () => {
@@ -1427,9 +1431,13 @@ app.on("window-all-closed", () => {
   }
 });
 
-app.on("before-quit", () => {
-  void agentSocket?.close().catch((error: unknown) => {
-    console.error("[volli] failed to close agent socket:", errorMessage(error));
-  });
-  agentSocket = undefined;
+registerAgentSocketWillQuit({
+  lifecycle: app,
+  shutdownAgentSocket,
+  reportFailure: (error) => {
+    console.error(
+      "[volli] failed to close the agent socket during app shutdown:",
+      errorMessage(error),
+    );
+  },
 });

@@ -1,3 +1,9 @@
+import {
+  findBoundedSequenceDiff,
+  type SequenceEditStep,
+  STANDARD_SEQUENCE_DIFF_BUDGET,
+} from "./bounded-sequence-diff";
+
 /** The three values needed to reconcile an open text model with disk. */
 export interface ReconcileTextInput {
   /** The last content value known to be synchronized with disk. */
@@ -62,20 +68,14 @@ export interface TextEdit {
   replacement: string;
 }
 
-type EditStep =
-  | { kind: "delete"; index: number }
-  | { kind: "insert"; index: number; value: string };
-
 // A 1 MiB file may be almost entirely unrelated after a generated rewrite. The
-// caps keep that case bounded, returning `null` so the public operation can
-// conservatively preserve both values as a conflict instead of guessing.
+// length cap and shared search budget keep that case bounded, returning `null`
+// so reconciliation preserves both values as a conflict instead of guessing.
 const MAX_TEXT_LENGTH = 1024 * 1024;
-const MAX_EDIT_DISTANCE = 1024;
-const MAX_COMPARISONS = 3_000_000;
 
 /**
  * Find a bounded shortest edit script with Myers' O((N + M)D) algorithm, or
- * `null` when the change exceeds the caps above.
+ * `null` when the change exceeds the length cap or shared search budget.
  *
  * The returned edits are non-overlapping, sorted by `start`, and expressed in
  * `baseline` coordinates — the contract `applyEdits` relies on here and Monaco's
@@ -85,96 +85,11 @@ const MAX_COMPARISONS = 3_000_000;
  */
 export function findTextEdits(baseline: string, changed: string): TextEdit[] | null {
   if (baseline.length > MAX_TEXT_LENGTH || changed.length > MAX_TEXT_LENGTH) return null;
-
-  const maximumDistance = Math.min(MAX_EDIT_DISTANCE, baseline.length + changed.length);
-  const offset = maximumDistance + 1;
-  const frontier = new Int32Array(2 * maximumDistance + 3);
-  frontier.fill(-1);
-  frontier[offset + 1] = 0;
-  const traces: Int32Array[] = [];
-  let comparisons = 0;
-
-  for (let distance = 0; distance <= maximumDistance; distance += 1) {
-    for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
-      comparisons += 1;
-      if (comparisons > MAX_COMPARISONS) return null;
-
-      const index = offset + diagonal;
-      const takesInsertion =
-        diagonal === -distance ||
-        (diagonal !== distance && frontier[index - 1] < frontier[index + 1]);
-      let baselineIndex = takesInsertion ? frontier[index + 1] : frontier[index - 1] + 1;
-      let changedIndex = baselineIndex - diagonal;
-
-      while (baselineIndex < baseline.length && changedIndex < changed.length) {
-        comparisons += 1;
-        if (comparisons > MAX_COMPARISONS) return null;
-        if (baseline[baselineIndex] !== changed[changedIndex]) break;
-        baselineIndex += 1;
-        changedIndex += 1;
-      }
-      frontier[index] = baselineIndex;
-
-      if (baselineIndex === baseline.length && changedIndex === changed.length) {
-        traces.push(frontier.slice());
-        return operationsToEdits(baseline, changed, traces, offset);
-      }
-    }
-    traces.push(frontier.slice());
-  }
-  return null;
+  const steps = findBoundedSequenceDiff(baseline, changed, STANDARD_SEQUENCE_DIFF_BUDGET);
+  return steps === null ? null : stepsToEdits(steps);
 }
 
-function operationsToEdits(
-  baseline: string,
-  changed: string,
-  traces: readonly Int32Array[],
-  offset: number,
-): TextEdit[] {
-  let baselineIndex = baseline.length;
-  let changedIndex = changed.length;
-  const reverseSteps: EditStep[] = [];
-
-  for (let distance = traces.length - 1; distance > 0; distance -= 1) {
-    const previous = traces[distance - 1];
-    const diagonal = baselineIndex - changedIndex;
-    const takesInsertion =
-      diagonal === -distance ||
-      (diagonal !== distance && previous[offset + diagonal - 1] < previous[offset + diagonal + 1]);
-    const previousDiagonal = takesInsertion ? diagonal + 1 : diagonal - 1;
-    const previousBaselineIndex = previous[offset + previousDiagonal];
-    const previousChangedIndex = previousBaselineIndex - previousDiagonal;
-    const afterEditBaselineIndex = takesInsertion
-      ? previousBaselineIndex
-      : previousBaselineIndex + 1;
-    const afterEditChangedIndex = takesInsertion ? previousChangedIndex + 1 : previousChangedIndex;
-
-    while (baselineIndex > afterEditBaselineIndex && changedIndex > afterEditChangedIndex) {
-      baselineIndex -= 1;
-      changedIndex -= 1;
-    }
-    reverseSteps.push(
-      takesInsertion
-        ? {
-            kind: "insert",
-            index: previousBaselineIndex,
-            value: changed[previousChangedIndex],
-          }
-        : { kind: "delete", index: previousBaselineIndex },
-    );
-    baselineIndex = previousBaselineIndex;
-    changedIndex = previousChangedIndex;
-  }
-
-  while (baselineIndex > 0 && changedIndex > 0) {
-    baselineIndex -= 1;
-    changedIndex -= 1;
-  }
-
-  return stepsToEdits(reverseSteps.toReversed());
-}
-
-function stepsToEdits(steps: readonly EditStep[]): TextEdit[] {
+function stepsToEdits(steps: readonly SequenceEditStep<string>[]): TextEdit[] {
   const edits: TextEdit[] = [];
   let pending: TextEdit | null = null;
 
