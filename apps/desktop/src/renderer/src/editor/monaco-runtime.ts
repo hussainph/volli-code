@@ -18,7 +18,7 @@ import {
   bindMonacoEditorThemeHost,
   ensureMonacoEditorTheme,
 } from "./monaco-theme";
-import { findTextEdits } from "./text-reconciliation";
+import { findTextEdits, type TextEdit } from "./text-reconciliation";
 import { startUnsavedDocumentReporting } from "./unsaved-report";
 
 export function createLazyInitializer<Value>(
@@ -99,6 +99,90 @@ type ExternalEditModel = Pick<
   "getValue" | "getPositionAt" | "getFullModelRange" | "pushStackElement" | "pushEditOperations"
 >;
 
+function mapOffsetThroughTextEdits(offset: number, edits: readonly TextEdit[]): number {
+  let shift = 0;
+  for (const edit of edits) {
+    if (offset < edit.start) break;
+    const mappedStart = edit.start + shift;
+    if (edit.end === edit.start) {
+      if (offset === edit.start) return mappedStart + edit.replacement.length;
+    } else {
+      if (offset === edit.start) return mappedStart;
+      if (offset < edit.end) {
+        return mappedStart + Math.min(offset - edit.start, edit.replacement.length);
+      }
+      if (offset === edit.end) return mappedStart + edit.replacement.length;
+    }
+    shift += edit.replacement.length - (edit.end - edit.start);
+  }
+  return offset + shift;
+}
+
+function lineStartOffsets(value: string): number[] {
+  const starts = [0];
+  for (let index = value.indexOf("\n"); index !== -1; index = value.indexOf("\n", index + 1)) {
+    starts.push(index + 1);
+  }
+  return starts;
+}
+
+function offsetAtTextPosition(
+  value: string,
+  lineStarts: readonly number[],
+  position: Monaco.IPosition,
+): number {
+  const lineIndex = Math.max(0, Math.min(position.lineNumber - 1, lineStarts.length - 1));
+  const lineStart = lineStarts[lineIndex];
+  const lineEnd =
+    lineStarts[lineIndex + 1] === undefined ? value.length : lineStarts[lineIndex + 1] - 1;
+  return Math.max(lineStart, Math.min(lineStart + position.column - 1, lineEnd));
+}
+
+function positionAtText(
+  value: string,
+  lineStarts: readonly number[],
+  offset: number,
+): Monaco.IPosition {
+  const bounded = Math.max(0, Math.min(offset, value.length));
+  let low = 0;
+  let high = lineStarts.length - 1;
+  while (low < high) {
+    const middle = (low + high + 1) >> 1;
+    if (lineStarts[middle] <= bounded) low = middle;
+    else high = middle - 1;
+  }
+  return { lineNumber: low + 1, column: bounded - lineStarts[low] + 1 };
+}
+
+function mapCodeEditorViewState(
+  oldValue: string,
+  state: Monaco.editor.ICodeEditorViewState,
+  value: string,
+): Monaco.editor.ICodeEditorViewState {
+  const edits = findTextEdits(oldValue, value);
+  if (edits === null) return state;
+  const oldLineStarts = lineStartOffsets(oldValue);
+  const newLineStarts = lineStartOffsets(value);
+  const mapPosition = (position: Monaco.IPosition): Monaco.IPosition =>
+    positionAtText(
+      value,
+      newLineStarts,
+      mapOffsetThroughTextEdits(offsetAtTextPosition(oldValue, oldLineStarts, position), edits),
+    );
+  return {
+    ...state,
+    cursorState: state.cursorState.map((cursor) => ({
+      ...cursor,
+      selectionStart: mapPosition(cursor.selectionStart),
+      position: mapPosition(cursor.position),
+    })),
+    viewState: {
+      ...state.viewState,
+      firstPosition: mapPosition(state.viewState.firstPosition),
+    },
+  };
+}
+
 /**
  * The MINIMAL edit operations that turn the model's current text into `value`,
  * or `null` when the diff exceeded its budget and only a full replace is left.
@@ -147,7 +231,7 @@ export function externalEditOperations(
 export function createShikiBackedModelFactory(
   monaco: MonacoModelHost,
   session: ShikiMonacoBootstrap,
-): RegistryModelFactory<Monaco.editor.ITextModel> {
+): RegistryModelFactory<Monaco.editor.ITextModel, Monaco.editor.ICodeEditorViewState> {
   return {
     createModel({ value, language, uri }) {
       void ensureShikiLanguageBound(session, monaco, language).catch((error: unknown) => {
@@ -169,6 +253,9 @@ export function createShikiBackedModelFactory(
       model.pushStackElement();
       model.pushEditOperations([], operations, () => null);
       model.pushStackElement();
+    },
+    mapViewStateThroughExternalEdit(oldValue, viewState, value) {
+      return mapCodeEditorViewState(oldValue, viewState, value);
     },
   };
 }

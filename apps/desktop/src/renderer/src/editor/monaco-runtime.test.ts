@@ -536,6 +536,198 @@ describe("createShikiBackedModelFactory", () => {
     expect(model.getValue().slice(0, model.caretOffset())).toBe("inserted\nalpha\nbra");
   });
 
+  it("maps a parked caret and viewport anchor through a prepended clean baseline", () => {
+    const oldValue = "first\nanchor\nlast\n";
+    const factory = externalEditFactory();
+    const stored = {
+      cursorState: [
+        {
+          inSelectionMode: true,
+          selectionStart: { lineNumber: 2, column: 1 },
+          position: { lineNumber: 2, column: 4 },
+        },
+      ],
+      viewState: {
+        scrollLeft: 11,
+        firstPosition: { lineNumber: 2, column: 1 },
+        firstPositionDeltaTop: -4,
+      },
+      contributionsState: { find: { searchString: "anchor" } },
+    };
+
+    const mapped = factory.mapViewStateThroughExternalEdit?.(
+      oldValue,
+      stored,
+      "// one\n// two\nfirst\nanchor\nlast\n",
+    );
+
+    expect(mapped).toEqual({
+      cursorState: [
+        {
+          inSelectionMode: true,
+          selectionStart: { lineNumber: 4, column: 1 },
+          position: { lineNumber: 4, column: 4 },
+        },
+      ],
+      viewState: {
+        scrollLeft: 11,
+        firstPosition: { lineNumber: 4, column: 1 },
+        firstPositionDeltaTop: -4,
+      },
+      contributionsState: { find: { searchString: "anchor" } },
+    });
+  });
+
+  it.each([
+    ["replacement start", "abc", "XYZ123", 1, 1],
+    ["equal-length replacement interior", "abc", "XYZ", 2, 2],
+    ["replacement end", "abc", "XYZ123", 4, 7],
+  ] as const)(
+    "maps the %s to its exact relative column",
+    (_case, oldText, newText, column, expected) => {
+      const oldValue = `before\n${oldText}\nafter\n`;
+      const stored = {
+        cursorState: [
+          {
+            inSelectionMode: false,
+            selectionStart: { lineNumber: 2, column },
+            position: { lineNumber: 2, column },
+          },
+        ],
+        viewState: {
+          scrollLeft: 0,
+          firstPosition: { lineNumber: 1, column: 1 },
+          firstPositionDeltaTop: 0,
+        },
+        contributionsState: {},
+      };
+
+      const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.(
+        oldValue,
+        stored,
+        `before\n${newText}\nafter\n`,
+      );
+
+      expect(mapped?.cursorState[0]?.position).toEqual({ lineNumber: 2, column: expected });
+    },
+  );
+
+  it("maps a replacement interior by relative offset clamped to the replacement length", () => {
+    const oldValue = "before\nxxxxx\nafter\n";
+    const stored = {
+      cursorState: [
+        {
+          inSelectionMode: false,
+          selectionStart: { lineNumber: 2, column: 3 },
+          position: { lineNumber: 2, column: 3 },
+        },
+      ],
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 1, column: 1 },
+        firstPositionDeltaTop: 0,
+      },
+      contributionsState: {},
+    };
+
+    const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.(
+      oldValue,
+      stored,
+      "before\nZ\nafter\n",
+    );
+
+    expect(mapped?.cursorState).toEqual([
+      {
+        inSelectionMode: false,
+        selectionStart: { lineNumber: 2, column: 2 },
+        position: { lineNumber: 2, column: 2 },
+      },
+    ]);
+    expect(mapped?.viewState.firstPosition).toEqual({ lineNumber: 1, column: 1 });
+  });
+
+  it("keeps a final-line anchor after an equal-length replacement at its exact column", () => {
+    const stored = {
+      cursorState: [
+        {
+          inSelectionMode: false,
+          selectionStart: { lineNumber: 1, column: 6 },
+          position: { lineNumber: 1, column: 6 },
+        },
+      ],
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 1, column: 6 },
+        firstPositionDeltaTop: 0,
+      },
+      contributionsState: {},
+    };
+
+    const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.(
+      "abc tail",
+      stored,
+      "XYZ tail",
+    );
+
+    expect(mapped?.cursorState[0]?.position).toEqual({ lineNumber: 1, column: 6 });
+  });
+
+  it("maps an anchor at a zero-length prepend after the inserted text", () => {
+    const stored = {
+      cursorState: [
+        {
+          inSelectionMode: false,
+          selectionStart: { lineNumber: 1, column: 1 },
+          position: { lineNumber: 1, column: 1 },
+        },
+      ],
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 1, column: 1 },
+        firstPositionDeltaTop: 0,
+      },
+      contributionsState: {},
+    };
+
+    const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.(
+      "anchor\n",
+      stored,
+      "// prepended\nanchor\n",
+    );
+
+    expect(mapped?.cursorState[0]).toMatchObject({
+      selectionStart: { lineNumber: 2, column: 1 },
+      position: { lineNumber: 2, column: 1 },
+    });
+  });
+
+  it("leaves a parked view state unchanged when an exact edit exceeds the diff budget", () => {
+    const oldValue = "a".repeat(10_000);
+    const stored = {
+      cursorState: [
+        {
+          inSelectionMode: false,
+          selectionStart: { lineNumber: 1, column: 5_000 },
+          position: { lineNumber: 1, column: 5_000 },
+        },
+      ],
+      viewState: {
+        scrollLeft: 0,
+        firstPosition: { lineNumber: 1, column: 1 },
+        firstPositionDeltaTop: 0,
+      },
+      contributionsState: {},
+    };
+
+    const mapped = externalEditFactory().mapViewStateThroughExternalEdit?.(
+      oldValue,
+      stored,
+      "b".repeat(10_000),
+    );
+
+    expect(mapped).toBe(stored);
+  });
+
   it("edits only the changed span rather than replacing the whole model", () => {
     const model = new FakeTextModel("one\ntwo\nthree\n");
 

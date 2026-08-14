@@ -40,7 +40,7 @@ class FakeModel implements RegistryModel {
   }
 }
 
-const factory: RegistryModelFactory<FakeModel> = {
+const factory: RegistryModelFactory<FakeModel, unknown> = {
   createModel: ({ value }) => new FakeModel(value),
   applyExternalEdit: (model, value) => model.setValue(value),
 };

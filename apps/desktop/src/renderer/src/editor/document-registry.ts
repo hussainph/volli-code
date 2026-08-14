@@ -21,10 +21,21 @@ export interface RegistryModel {
   dispose(): void;
 }
 
-export interface RegistryModelFactory<Model extends RegistryModel> {
+export interface RegistryModelFactory<Model extends RegistryModel, ViewState> {
   createModel(input: { value: string; language: string; uri: string }): Model;
   /** Mutate an existing live model without resetting its editor/undo state. */
   applyExternalEdit(model: Model, value: string): void;
+  /**
+   * Carry a serialized, view-owned position through an external edit before a
+   * clean model reset clears its stale undo history. Text inputs keep this
+   * available after the warm model has been evicted. Optional because the
+   * registry itself does not know a ViewState's shape.
+   */
+  mapViewStateThroughExternalEdit?(
+    oldValue: string,
+    viewState: ViewState,
+    value: string,
+  ): ViewState;
 }
 
 export interface DocumentSeed {
@@ -133,7 +144,7 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
   private readonly unsavedListeners = new Set<() => void>();
 
   constructor(
-    private readonly factory: RegistryModelFactory<Model>,
+    private readonly factory: RegistryModelFactory<Model, ViewState>,
     private readonly coldLimit: number = DEFAULT_COLD_DOCUMENT_LIMIT,
     private readonly warmLimit: number = DEFAULT_WARM_DOCUMENT_LIMIT,
   ) {}
@@ -335,15 +346,41 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
 
     entry.applyingBaseline = true;
     try {
+      const oldBaseline = entry.baseline;
+      const model = entry.model;
+      const modelNeedsUpdate = model !== null && model.getValue() !== seed.value;
+      let mappedViewStates: Map<string, ViewState> | null = null;
+      if (
+        oldBaseline !== seed.value &&
+        this.factory.mapViewStateThroughExternalEdit !== undefined
+      ) {
+        mappedViewStates = new Map();
+        for (const [viewId, viewState] of entry.viewStates) {
+          mappedViewStates.set(
+            viewId,
+            this.factory.mapViewStateThroughExternalEdit(
+              oldBaseline,
+              structuredClone(viewState),
+              seed.value,
+            ),
+          );
+        }
+      }
       entry.baseline = seed.value;
       entry.baselineRevision = seed.revision;
       this.setDirty(entry, false);
-      if (entry.model !== null && entry.model.getValue() !== seed.value) {
+      if (modelNeedsUpdate) {
         // This seed is the clean disk baseline, not a user edit. Putting it on
         // Monaco's undo stack lets ⌘Z turn stale bytes into a dirty draft, and a
         // following save can then overwrite the external write. A clean
         // re-seed deliberately resets the old history with the model value.
-        entry.model.setValue(seed.value);
+        model.setValue(seed.value);
+      }
+      if (mappedViewStates !== null) {
+        entry.viewStates.clear();
+        for (const [viewId, viewState] of mappedViewStates) {
+          entry.viewStates.set(viewId, viewState);
+        }
       }
     } finally {
       entry.applyingBaseline = false;

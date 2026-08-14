@@ -62,7 +62,7 @@ class FakeModel implements RegistryModel {
 
 function makeRegistry(coldLimit?: number, warmLimit?: number) {
   const models: FakeModel[] = [];
-  const factory: RegistryModelFactory<FakeModel> = {
+  const factory: RegistryModelFactory<FakeModel, { cursor: number }> = {
     createModel({ value, language, uri }) {
       const model = new FakeModel(value, language, uri);
       models.push(model);
@@ -338,6 +338,91 @@ describe("DocumentRegistry", () => {
     // There was nothing to undo before the tab switch. The agent's newer disk
     // bytes are now the clean baseline, not a user edit that ⌘Z may resurrect.
     expect(reopened.model.canUndo()).toBe(false);
+  });
+
+  it("maps a parked view state through the newer clean baseline before restoring it", () => {
+    const models: FakeModel[] = [];
+    const factory: RegistryModelFactory<FakeModel, { cursor: number }> = {
+      createModel({ value, language, uri }) {
+        const model = new FakeModel(value, language, uri);
+        models.push(model);
+        return model;
+      },
+      applyExternalEdit(model, value) {
+        model.applyEdit(value);
+      },
+      mapViewStateThroughExternalEdit(oldValue, viewState, value) {
+        const insertedLines = value.split("\n").length - oldValue.split("\n").length;
+        return { cursor: viewState.cursor + insertedLines };
+      },
+    };
+    const registry = new DocumentRegistry<FakeModel, { cursor: number }>(factory);
+    const file = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "first\nanchor\n", revision: "r1" },
+      savePolicy: "explicit",
+    });
+    file.release({ cursor: 2 });
+
+    const reopened = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "// one\n// two\nfirst\nanchor\n", revision: "r2" },
+      savePolicy: "explicit",
+    });
+
+    expect(reopened.restoreViewState()).toEqual({ cursor: 4 });
+    expect(reopened.model.getValue()).toBe("// one\n// two\nfirst\nanchor\n");
+    expect(reopened.model.canUndo()).toBe(false);
+    expect(models).toHaveLength(1);
+  });
+
+  it("maps retained view state through a fresh seed after warm model eviction", () => {
+    const models: FakeModel[] = [];
+    const mapViewStateThroughExternalEdit = vi.fn(
+      (oldValue: string, viewState: { cursor: number }, value: string) => {
+        const insertedLines = value.split("\n").length - oldValue.split("\n").length;
+        return { cursor: viewState.cursor + insertedLines };
+      },
+    );
+    const factory: RegistryModelFactory<FakeModel, { cursor: number }> = {
+      createModel({ value, language, uri }) {
+        const model = new FakeModel(value, language, uri);
+        models.push(model);
+        return model;
+      },
+      applyExternalEdit(model, value) {
+        model.applyEdit(value);
+      },
+      mapViewStateThroughExternalEdit,
+    };
+    const registry = new DocumentRegistry<FakeModel, { cursor: number }>(factory, 2, 0);
+    const file = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "first\nanchor\n", revision: "r1" },
+      savePolicy: "explicit",
+    });
+    file.release({ cursor: 2 });
+
+    expect(file.model.dispose).toHaveBeenCalledTimes(1);
+
+    const reopened = registry.acquire({
+      identity: mainIdentity,
+      viewId: "file",
+      seed: { value: "// one\n// two\nfirst\nanchor\n", revision: "r2" },
+      savePolicy: "explicit",
+    });
+
+    expect(reopened.model).not.toBe(file.model);
+    expect(reopened.restoreViewState()).toEqual({ cursor: 4 });
+    expect(mapViewStateThroughExternalEdit).toHaveBeenCalledWith(
+      "first\nanchor\n",
+      { cursor: 2 },
+      "// one\n// two\nfirst\nanchor\n",
+    );
+    expect(models).toHaveLength(2);
   });
 
   it("parks a clean entry even when its view kept no state to remember", () => {
