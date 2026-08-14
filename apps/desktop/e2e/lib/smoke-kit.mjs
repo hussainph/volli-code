@@ -10,7 +10,8 @@
  *                      with `ownsScratch`/cleanup honouring VOLLI_SMOKE_DIR.
  *   • launch()       — launch the BUILT Electron app against a scratch
  *                      VOLLI_DB_PATH + isolated --user-data-dir + worktree home,
- *                      with extra env merged over process.env. Skips the PTY-busy
+ *                      with extra env merged over process.env, while stripping
+ *                      inherited Electron dev-mode switches. Skips the PTY-busy
  *                      close confirm.
  *   • createRunner() — the numbered attempt()/check() runner + summary/exit-code,
  *                      identical semantics to the inline harness the smokes use
@@ -138,25 +139,34 @@ export function worktreeHomeFor(dbPath, extraEnv = {}) {
 }
 
 /**
- * @param {{dbPath:string, userDataDir:string, extraEnv?:Record<string,string>}} opts
+ * Build the environment passed to Electron. Dev-only renderer/runtime switches
+ * are removed after `extraEnv` is merged so no caller can accidentally turn a
+ * built smoke back into a dev-server launch.
+ *
+ * @param {string} dbPath
+ * @param {Record<string,string>} [extraEnv]
  */
-export function launch({ dbPath, userDataDir, extraEnv = {} }) {
-  const worktreeHome = worktreeHomeFor(dbPath, extraEnv);
-  // Cursor / some agent shells set ELECTRON_RUN_AS_NODE=1, which makes the
-  // Electron binary run as plain Node and immediately crash on protocol APIs.
-  // Match scripts/start-electron.mjs and strip it for every smoke launch.
+export function launchEnvFor(dbPath, extraEnv = {}) {
   const env = {
     ...process.env,
     VOLLI_DB_PATH: dbPath,
     VOLLI_SKIP_CLOSE_CONFIRM: "1",
     ...extraEnv,
-    VOLLI_WORKTREE_HOME_DIR: worktreeHome,
+    VOLLI_WORKTREE_HOME_DIR: worktreeHomeFor(dbPath, extraEnv),
   };
+  delete env.ELECTRON_RENDERER_URL;
   delete env.ELECTRON_RUN_AS_NODE;
+  return env;
+}
+
+/**
+ * @param {{dbPath:string, userDataDir:string, extraEnv?:Record<string,string>}} opts
+ */
+export function launch({ dbPath, userDataDir, extraEnv = {} }) {
   return _electron.launch({
     executablePath: ELECTRON,
     args: [APP_DIR, `--user-data-dir=${userDataDir}`],
-    env,
+    env: launchEnvFor(dbPath, extraEnv),
   });
 }
 
@@ -174,6 +184,23 @@ export async function assertProfileIsolated(app, userDataDir) {
   ]);
   if (actual !== expected) {
     throw new Error(`smoke profile is not isolated: expected ${expected}, got ${actual}`);
+  }
+}
+
+const BUILT_RENDERER_ENTRY_URL = "volli-app://bundle/index.html";
+
+/**
+ * Assert the launched main window loaded the built renderer rather than an
+ * inherited Vite dev-server URL. Call after the window reaches DOMContentLoaded.
+ *
+ * @param {import("playwright-core").Page} page
+ */
+export function assertBuiltRendererLoaded(page) {
+  const actual = page.url();
+  if (actual !== BUILT_RENDERER_ENTRY_URL) {
+    throw new Error(
+      `smoke did not load the built renderer: expected ${BUILT_RENDERER_ENTRY_URL}, got ${actual}`,
+    );
   }
 }
 
@@ -244,6 +271,27 @@ export async function waitUntil(label, fn, { timeout = 12000, interval = 150 } =
     ? `last error: ${lastErr.message}`
     : `last value: ${JSON.stringify(lastVal)}`;
   throw new Error(`timed out waiting for ${label} (${tail})`);
+}
+
+/** @param {import("node:child_process").ChildProcess} child */
+export function childHasExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+/**
+ * Wait for Node's ChildProcess exit fields to reflect the actual process exit.
+ * Those fields can briefly lag an OS-level ESRCH/failed kill result.
+ *
+ * @param {import("node:child_process").ChildProcess} child
+ * @param {string} label
+ * @param {{timeout?:number, interval?:number}} [opts]
+ */
+export function waitForChildExit(child, label, opts) {
+  return waitUntil(
+    label,
+    async () => (childHasExited(child) ? { code: child.exitCode, signal: child.signalCode } : null),
+    opts,
+  );
 }
 
 export async function readFileSafe(path) {

@@ -8,6 +8,8 @@
  *      with its text (line number shifts by the inserted count, no viewport
  *      jump) — the minimal-edit invariant, distinct from same-line-count #1.
  *   2. No filesystem event opens or focuses a tab.
+ *   2b. A clean model parked behind another tab adopts newer disk bytes on
+ *       reacquire without making the old baseline undoable or saveable.
  *   3. Disjoint human/agent edits merge into one dirty registry model.
  *   4. File and Diff deliberately opened for the same path share that model.
  *   5. A local save echo stays quiet in ticket recency — proved positively by
@@ -28,6 +30,7 @@ import { promisify } from "node:util";
 
 import { createTicketViaBridge } from "./lib/agent-kit.mjs";
 import {
+  assertBuiltRendererLoaded,
   assertProfileIsolated,
   createRunner,
   launch,
@@ -60,7 +63,13 @@ const INITIAL = `${initialLines.join("\n")}\n`;
 const cleanLines = [...initialLines];
 cleanLines[24] = 'export const cleanAgent = "adopted";';
 const CLEAN_DISK = `${cleanLines.join("\n")}\n`;
-const disjointLines = [...cleanLines];
+const PARKED_OLD_LINE = "export const changeSet = 1;";
+const PARKED_DISK_LINE = "export const changeSet = 2;";
+const PARKED_UNDO_CONTROL = "/* parked undo control */";
+const parkedLines = [...cleanLines];
+parkedLines[5] = PARKED_DISK_LINE;
+const PARKED_DISK = `${parkedLines.join("\n")}\n`;
+const disjointLines = [...parkedLines];
 disjointLines[29] = 'export const diskOnly = "agent";';
 const DISJOINT_DISK = `${disjointLines.join("\n")}\n`;
 const HUMAN_MERGED_LINE = 'export const overlap = "human merged";';
@@ -79,9 +88,9 @@ const PREPEND_LINES = Array.from(
 const PREPEND_DISK = `${PREPEND_LINES.join("\n")}\n${CLEAN_DISK}`;
 const KNOWN_ANCHOR_TEXT = "export const line51 = 51;";
 
-// A second, independent file used only by step 5 to prove the watcher
-// pipeline stays alive after a save, rather than proving a negative with a
-// bare timeout.
+// A second, independent file used by step 2b to release every TARGET view and
+// by step 5 to prove the watcher pipeline stays alive after a save, rather
+// than proving a negative with a bare timeout.
 const SECOND_TARGET = "src/sentinel.ts";
 const SENTINEL_BASE = 'export const sentinel = "seen";\n';
 const SENTINEL_EXTERNAL = 'export const sentinel = "changed by watcher";\n';
@@ -158,6 +167,46 @@ async function waitStableFileViewState(page, label) {
       else stablePolls = 0;
       previous = signature;
       return stablePolls >= 2 ? state : null;
+    },
+    { timeout: 5000, interval: 100 },
+  );
+}
+
+/** A bounded quiescence check for commands whose correct result is no mutation. */
+async function waitStableFileDocument(page, label) {
+  let previous = null;
+  let stablePolls = 0;
+  return waitUntil(
+    label,
+    async () => {
+      const state = await readFileState(page);
+      const signature = JSON.stringify({
+        dirty: state.dirty,
+        stale: state.stale,
+        lines: state.lines,
+      });
+      if (signature === previous) stablePolls += 1;
+      else stablePolls = 0;
+      previous = signature;
+      return stablePolls >= 2 ? state : null;
+    },
+    { timeout: 5000, interval: 100 },
+  );
+}
+
+/** Requires the expected disk bytes to stay exact across consecutive polls. */
+async function waitStableDiskText(path, expected, label) {
+  let stablePolls = 0;
+  return waitUntil(
+    label,
+    async () => {
+      const value = await fs.readFile(path, "utf8");
+      if (value !== expected) {
+        stablePolls = 0;
+        return null;
+      }
+      stablePolls += 1;
+      return stablePolls >= 3 ? value : null;
     },
     { timeout: 5000, interval: 100 },
   );
@@ -285,6 +334,7 @@ async function main() {
     await assertProfileIsolated(app, userDataDir);
     const page = await app.firstWindow();
     await page.waitForLoadState("domcontentloaded");
+    assertBuiltRendererLoaded(page);
     await sleep(600);
 
     const projectPath = await makeGitRepo(scratch, "reconciliation-project-");
@@ -494,6 +544,116 @@ async function main() {
           ok:
             updatedCount === 0 && (tabs.diffs?.filter((path) => path === TARGET).length ?? 0) === 1,
           detail: `active=${tabs.active} diffs=${JSON.stringify(tabs.diffs)} updated=${updatedCount}`,
+        };
+      },
+    );
+
+    await attempt(
+      "2b",
+      "parked clean File adopts newer disk bytes with no stale undo or save clobber",
+      async () => {
+        // A TARGET Diff still owns the same registry lease as a TARGET File.
+        // Activate an independent File so both TARGET surfaces are unmounted
+        // and its clean registry entry/model is genuinely parked.
+        await openFileFromRail(aside, SECOND_TARGET, { pin: true });
+        const parked = await waitUntil(
+          `${SECOND_TARGET} File tab and editor to be active`,
+          async () => {
+            const tabs = await readTicketTabs(page, ticketId);
+            const activeTab = page.getByRole("tab", { name: "sentinel.ts", exact: true });
+            const file = await readFileState(page);
+            return tabs?.active === `file:${SECOND_TARGET}` &&
+              (await activeTab.getAttribute("aria-selected")) === "true" &&
+              file.lines.includes(SENTINEL_BASE.trim())
+              ? { file, tabs }
+              : null;
+          },
+        );
+
+        await fs.writeFile(targetPath, PARKED_DISK);
+        await waitStableDiskText(
+          targetPath,
+          PARKED_DISK,
+          "parked external write to settle on disk",
+        );
+
+        // Reopening reads the new disk revision and reacquires the parked model.
+        // The new bytes are a clean baseline, not an edit the user may undo.
+        await openFileFromRail(aside);
+        const adopted = await waitFileText(page, PARKED_DISK_LINE, false);
+        const reacquiredTabs = await waitUntil(`${TARGET} File tab to be active`, async () => {
+          const tabs = await readTicketTabs(page, ticketId);
+          const activeTab = page.getByRole("tab", { name: "reconcile.ts", exact: true });
+          return tabs?.active === `file:${TARGET}` &&
+            (await activeTab.getAttribute("aria-selected")) === "true"
+            ? tabs
+            : null;
+        });
+        const oldBeforeUndo = adopted.lines.includes(PARKED_OLD_LINE);
+
+        // Positive control: prove Cmd-Z reaches this reacquired Monaco by
+        // undoing one disposable local edit first. Only the following Cmd-Z is
+        // expected to be a no-op at the adopted disk baseline.
+        const editor = fileHost(page).locator(".monaco-editor");
+        await editor.click();
+        await page.keyboard.press("Meta+ArrowUp");
+        await page.keyboard.press("Home");
+        await page.keyboard.insertText(PARKED_UNDO_CONTROL);
+        const edited = await waitFileText(page, PARKED_UNDO_CONTROL, true);
+        await page.keyboard.press("Meta+z");
+        const afterControlUndo = await waitUntil(
+          "positive undo control to restore the adopted clean baseline",
+          async () => {
+            const state = await readFileState(page);
+            return state.dirty === "false" &&
+              !state.lines.includes(PARKED_UNDO_CONTROL) &&
+              state.lines.includes(PARKED_DISK_LINE)
+              ? state
+              : null;
+          },
+          { timeout: 5000, interval: 100 },
+        );
+
+        await page.keyboard.press("Meta+z");
+        const afterBaselineUndo = await waitStableFileDocument(
+          page,
+          "parked baseline to remain clean and unchanged after Cmd-Z",
+        );
+
+        await page.keyboard.press("Meta+s");
+        const afterSave = await waitStableFileDocument(
+          page,
+          "parked baseline to remain clean after Cmd-S",
+        );
+        const diskAfterSave = await waitStableDiskText(
+          targetPath,
+          PARKED_DISK,
+          "Cmd-S to leave the adopted disk bytes unchanged",
+        );
+
+        const controlWorked =
+          edited.dirty === "true" &&
+          edited.lines.includes(PARKED_UNDO_CONTROL) &&
+          afterControlUndo.dirty === "false" &&
+          !afterControlUndo.lines.includes(PARKED_UNDO_CONTROL);
+        const baselineUndoWasNoop =
+          afterBaselineUndo.lines === afterControlUndo.lines &&
+          afterBaselineUndo.lines.includes(PARKED_DISK_LINE) &&
+          !afterBaselineUndo.lines.includes(PARKED_OLD_LINE) &&
+          afterBaselineUndo.dirty === "false";
+        const saveKeptDisk =
+          afterSave.lines.includes(PARKED_DISK_LINE) &&
+          afterSave.dirty === "false" &&
+          diskAfterSave === PARKED_DISK;
+        return {
+          ok:
+            parked.tabs.active === `file:${SECOND_TARGET}` &&
+            reacquiredTabs.active === `file:${TARGET}` &&
+            !oldBeforeUndo &&
+            controlWorked &&
+            baselineUndoWasNoop &&
+            saveKeptDisk,
+          detail: `parkedActive=${parked.tabs.active} reacquiredActive=${reacquiredTabs.active} adopted=${adopted.lines.includes(PARKED_DISK_LINE)} oldBeforeUndo=${oldBeforeUndo} controlWorked=${controlWorked} baselineUndoNoop=${baselineUndoWasNoop} dirtyAfterUndo=${afterBaselineUndo.dirty} saveKeptDisk=${saveKeptDisk} diskExact=${diskAfterSave === PARKED_DISK}`,
         };
       },
     );
