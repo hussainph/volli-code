@@ -28,6 +28,7 @@ import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   type AuthoritySnapshot,
+  type RuntimeAskUserRequest,
   type RuntimeObservation,
   type SessionRuntimeSpec,
 } from "@volli/shared";
@@ -651,6 +652,115 @@ describe("tool mapping", () => {
     ).toEqual(["read", "edit", "write", "bash"]);
 
     await env.cleanup();
+  });
+});
+
+/**
+ * The ask tool as the model actually meets it. Its own behaviour is settled in
+ * `tools.test.ts`; what these cover is the wiring — whether the Session's host
+ * decides that the tool exists, and whether an answer reaches the model.
+ *
+ * Ungated on purpose, which is also the shipping configuration: the ask is not a
+ * coding tool, has no policy written about it, and reaches the rules as an
+ * unmapped name.
+ */
+describe("asking the driver", () => {
+  /** The tool names one Session's model was actually offered, off the provider request. */
+  async function offeredIn(spec: SessionRuntimeSpec): Promise<string[]> {
+    let offered: Context | undefined;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: join(spec.workspacePath, "..", "sessions"),
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, context) => {
+            offered = context;
+            emit.text("Nothing worth asking about.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+    await handle.submitUserMessage("go");
+    await handle.close();
+    return (offered?.tools ?? []).map((tool) => tool.name);
+  }
+
+  it("does not offer the tool to a Session with nowhere to send the question", async () => {
+    const { spec } = fixture();
+
+    // Absent rather than present and failing on use: a model told a tool exists
+    // and then handed an error learns the wrong thing about this Session.
+    expect(await offeredIn({ ...spec, authority: undefined })).toEqual(["read"]);
+  });
+
+  it("offers the tool to a Session that was given a host to ask", async () => {
+    const { spec } = fixture();
+
+    expect(
+      await offeredIn({
+        ...spec,
+        authority: undefined,
+        askUser: async () => ({ optionIds: ["one"], response: null }),
+      }),
+    ).toEqual(["read", "ask_user"]);
+  });
+
+  it("blocks the call on a person and hands the model back what they decided", async () => {
+    const attachment = fixture();
+    const asked: RuntimeAskUserRequest[] = [];
+    let answered: Context | undefined;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("ask_user", {
+              question: "Spike it or migrate the whole thing?",
+              options: [
+                { id: "spike", label: "Spike first" },
+                { id: "migration", label: "Full migration" },
+              ],
+            });
+            emit.finish();
+          },
+          (emit, context) => {
+            answered = context;
+            emit.text("Spiking, then.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession({
+      ...attachment.spec,
+      authority: undefined,
+      askUser: async (request) => {
+        asked.push(request);
+        return { optionIds: ["spike"], response: "and time-box it to a day" };
+      },
+    });
+
+    await handle.submitUserMessage("Plan the work.");
+    await handle.close();
+
+    // The question names the call that raised it, so a surface can show it
+    // against the activity row rather than at the foot of the transcript.
+    expect(asked).toEqual([
+      {
+        toolCallId: "tc-0",
+        question: "Spike it or migrate the whole thing?",
+        options: [
+          { id: "spike", label: "Spike first" },
+          { id: "migration", label: "Full migration" },
+        ],
+        multiple: undefined,
+        allowOther: undefined,
+      },
+    ]);
+    const serialized = JSON.stringify(answered?.messages);
+    expect(serialized).toContain("Chose: spike");
+    expect(serialized).toContain("and time-box it to a day");
   });
 });
 

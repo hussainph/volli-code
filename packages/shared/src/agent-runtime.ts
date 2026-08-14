@@ -284,6 +284,48 @@ export function askChoice(
   return chosen.includes(SESSION_ESCALATION_STOP_ID) ? "stop" : "refuse";
 }
 
+/** One answer the model thought worth offering. */
+export interface RuntimeAskUserOption {
+  /** The model's own id, returned verbatim in the answer it reads back. */
+  id: string;
+  label: string;
+  description?: string;
+}
+
+/**
+ * One question the model decided to put to the person driving the Session.
+ *
+ * A separate port from {@link RuntimeAskRequest}, and separate for a reason that
+ * survives their similar shapes: an escalation is the runtime's own policy
+ * stopping a call and asking whether to stand aside, so its options are Volli's
+ * fixed vocabulary and its answer is a verdict — `allow`, `refuse`, `stop` —
+ * that the runtime then enforces. This question is the model's own, its options
+ * are whatever the model thought worth offering, and its answer is simply the
+ * tool's result. One port serving both would have to decide which of the two
+ * readings an answer takes, and the two readings disagree about every id: an
+ * option a model happened to label `reject` is not a refusal of anything.
+ */
+export interface RuntimeAskUserRequest {
+  /** The runtime's own id for the asking call, so the question can be shown against it. */
+  toolCallId: string;
+  /** What the model wants to know, in its own words. */
+  question: string;
+  /** Absent or empty means the model wants prose rather than a choice. */
+  options?: readonly RuntimeAskUserOption[];
+  /** Whether more than one option may be chosen. Absent reads as one. */
+  multiple?: boolean;
+  /**
+   * Whether a person may answer in their own words instead of choosing.
+   *
+   * Absent reads as true, and the default is the point: the model wrote the
+   * options, so a person must be able to say the thing it did not think of. Only
+   * an explicit `false` closes that door, and only a question that already
+   * offers something to choose between can close it — a question with no options
+   * and no free text asks for an answer that cannot be given.
+   */
+  allowOther?: boolean;
+}
+
 /** Everything the Agent Runtime needs to start one Session, whatever its Role. */
 export interface SessionRuntimeSpec {
   identity: RuntimeSessionIdentity;
@@ -358,6 +400,30 @@ export interface SessionRuntimeSpec {
    * mid-wait loses the question while the runtime is still blocked on it.
    */
   ask?: (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>;
+  /**
+   * Let the model ask a person, and block its call until they answer.
+   *
+   * Beside {@link ask} rather than inside it, because the two are different acts
+   * that happen to wait the same way — see {@link RuntimeAskUserRequest}. Its
+   * absence is what decides whether the model is offered the tool at all: a
+   * Session with no host to ask is not given a way to ask, rather than given one
+   * that fails on use.
+   *
+   * Every word of {@link ask}'s bargain holds here too. There is no timeout;
+   * `signal` is the only notice the host gets that the question it is showing
+   * has been abandoned and must be withdrawn; a rejection means the host could
+   * not obtain an answer at all, and reaches the model as a failed tool call
+   * rather than as an answer nobody gave.
+   *
+   * What comes back is the person's decision as the ledger holds it — their own
+   * option ids and their own words — and not a reading of it. Nothing between
+   * here and the model is entitled to interpret an answer the model itself
+   * phrased the question for.
+   */
+  askUser?: (
+    request: RuntimeAskUserRequest,
+    signal: AbortSignal,
+  ) => Promise<SessionInteractionResolution>;
   /** Resolves only after the observation reaches its required consumer boundary. */
   observer: (observation: RuntimeObservation) => Promise<void>;
 }
