@@ -34,6 +34,7 @@ import {
   isSafeRelPath,
   isValidNewArtifactName,
   projectArtifactsDir,
+  projectCommandsDir,
   VOLLI_ARTIFACTS_REL_DIR,
   VOLLI_GITIGNORE_CONTENT,
   volliDir,
@@ -56,6 +57,8 @@ import type {
   FileWriteInput,
   FileWriteResult,
   IndexedFile,
+  PromptTemplateIndexInput,
+  PromptTemplateIndexResult,
   Result,
   RevealResult,
   VolliIpcEvent,
@@ -66,6 +69,7 @@ import { getTicketRow } from "./db/tickets-repo";
 import type { TicketRow } from "./db/tickets-repo";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
+import { loadPromptTemplates } from "./prompt-templates";
 
 const execFileAsync = promisify(execFile);
 
@@ -1080,6 +1084,16 @@ export interface FileIpcWatchManagers {
   dirs: DirWatchManager;
 }
 
+/** What this surface needs that the db cannot tell it. */
+export interface FileIpcOptions {
+  /**
+   * `<userData>/commands` — the global tier of the composer's `/` picker.
+   * Injected rather than resolved here because `index.ts` is the one module
+   * that may call `app.getPath("userData")`.
+   */
+  globalCommandsDir: string;
+}
+
 /**
  * Registers every `volli:file-*` / `volli:dir-*` / `volli:artifact-create`
  * handler through the
@@ -1092,7 +1106,10 @@ export interface FileIpcWatchManagers {
  * as `registerDataIpcHandlers`. Returns both watch managers; watchers are
  * otherwise self-cleaning on window `destroyed`/explicit unwatch.
  */
-export function registerFileIpcHandlers(handle: DbHandle): FileIpcWatchManagers {
+export function registerFileIpcHandlers(
+  handle: DbHandle,
+  options: FileIpcOptions,
+): FileIpcWatchManagers {
   const manager = new FileWatchManager();
   const dirManager = new DirWatchManager();
 
@@ -1191,6 +1208,23 @@ export function registerFileIpcHandlers(handle: DbHandle): FileIpcWatchManagers 
     "volli:dir-unwatch": (input: DirPathInput, sender: WebContents): Result => {
       dirManager.unwatch(sender, input.projectId, input.relPath);
       return { ok: true };
+    },
+
+    // The `/` picker's supply. Project-keyed like the file index and for the
+    // same reason: `.volli` is self-gitignored, so keying a ticket session's
+    // commands to its worktree would hide exactly the templates the project
+    // author wrote (see `projectCommandsDir`).
+    "volli:prompt-templates": async (
+      input: PromptTemplateIndexInput,
+    ): Promise<PromptTemplateIndexResult> => {
+      const project = resolveProjectPath(db, input.projectId);
+      if (!project.ok) return project;
+      const loaded = await loadPromptTemplates({
+        projectCommandsDir: projectCommandsDir(project.projectPath),
+        globalCommandsDir: options.globalCommandsDir,
+      });
+      if (!loaded.ok) return loaded;
+      return { ok: true, templates: [...loaded.templates] };
     },
   };
 

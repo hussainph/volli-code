@@ -1108,14 +1108,18 @@ function setupDbAndHandlers(projectPath: string = makeGitRepoDir()): {
   projectId: string;
   ticketId: string;
   projectPath: string;
+  globalCommandsDir: string;
 } {
   const ctx = openTestDb();
   const project = testProject({ path: projectPath });
   insertProject(ctx.db, project);
   const ticket = testTicket(project.id, { ticketNumber: 7 });
   insertTicket(ctx.db, ticket);
-  registerFileIpcHandlers({ ok: true, db: ctx.db });
-  return { ctx, projectId: project.id, ticketId: ticket.id, projectPath };
+  // A real path inside a collected temp dir, so the global tier is genuinely
+  // absent rather than accidentally pointing at someone's userData.
+  const globalCommandsDir = join(makeTempProjectDir(), "commands");
+  registerFileIpcHandlers({ ok: true, db: ctx.db }, { globalCommandsDir });
+  return { ctx, projectId: project.id, ticketId: ticket.id, projectPath, globalCommandsDir };
 }
 
 function invoke<T>(channel: VolliIpcChannel, sender: unknown, ...args: unknown[]): T {
@@ -1610,6 +1614,7 @@ describe("registerFileIpcHandlers", () => {
     "volli:file-unwatch",
     "volli:dir-watch",
     "volli:dir-unwatch",
+    "volli:prompt-templates",
   ] satisfies VolliIpcChannel[])("rejects a malformed %s payload", async (channel) => {
     const setup = setupDbAndHandlers();
     ctx = setup.ctx;
@@ -1622,6 +1627,54 @@ describe("registerFileIpcHandlers", () => {
     ctx = setup.ctx;
     const result = await invoke<{ ok: boolean; error?: string }>(
       "volli:file-index",
+      {},
+      { projectId: "nope" },
+    );
+    expect(result).toEqual({ ok: false, error: "Unknown project" });
+  });
+
+  it("answers prompt-templates with both tiers, the project's name winning", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    mkdirSync(join(setup.projectPath, ".volli", "commands"), { recursive: true });
+    writeFileSync(
+      join(setup.projectPath, ".volli", "commands", "review.md"),
+      "---\ndescription: Project review\n---\nReview $1.\n",
+      "utf8",
+    );
+    mkdirSync(setup.globalCommandsDir, { recursive: true });
+    writeFileSync(join(setup.globalCommandsDir, "review.md"), "Global review body\n", "utf8");
+    writeFileSync(join(setup.globalCommandsDir, "ship.md"), "Ship it.\n", "utf8");
+
+    const result = await invoke<{ ok: boolean; templates?: { name: string; content: string }[] }>(
+      "volli:prompt-templates",
+      {},
+      { projectId: setup.projectId },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.templates?.map((entry) => entry.name)).toEqual(["review", "ship"]);
+    expect(result.templates?.find((entry) => entry.name === "review")?.content).toBe("Review $1.");
+  });
+
+  it("answers prompt-templates with an empty list when neither directory exists", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+
+    const result = await invoke<{ ok: boolean; templates?: unknown[] }>(
+      "volli:prompt-templates",
+      {},
+      { projectId: setup.projectId },
+    );
+
+    expect(result).toEqual({ ok: true, templates: [] });
+  });
+
+  it("rejects prompt-templates for an unknown project", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const result = await invoke<{ ok: boolean; error?: string }>(
+      "volli:prompt-templates",
       {},
       { projectId: "nope" },
     );
@@ -1641,7 +1694,7 @@ describe("registerFileIpcHandlers", () => {
 
   it("degrades every channel to a typed error when the db failed to open", async () => {
     handlers.clear();
-    registerFileIpcHandlers({ ok: false, error: "disk full" });
+    registerFileIpcHandlers({ ok: false, error: "disk full" }, { globalCommandsDir: "/nowhere" });
     const result = await invoke<{ ok: boolean; error?: string }>(
       "volli:file-index",
       {},

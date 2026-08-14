@@ -18,7 +18,8 @@ directories:
 # compiles every renderer dep into dist/. What the packaged main process
 # require()s from node_modules at runtime is therefore a tiny closed set:
 #   @trpc/server, better-sqlite3 (-> bindings -> file-uri-to-path), node-pty
-# (node-pty via a lazy `import("node-pty")`). The extglob negation below drops
+# (node-pty via a lazy `import("node-pty")`), yaml (prompt-template
+# frontmatter). The extglob negation below drops
 # the other ~500 collected packages (~400 MB: monaco, mermaid, icon packs, AI
 # SDK providers — all renderer-only or already bundled). KEEP IN SYNC with the
 # bare `require(`/`import(` specifiers in dist-electron/*.cjs: a new external
@@ -28,7 +29,7 @@ files:
   - dist/**
   - dist-electron/**
   - "!dist-electron/*.map"
-  - "!node_modules/!(@trpc|better-sqlite3|bindings|file-uri-to-path|node-pty)/**"
+  - "!node_modules/!(@trpc|better-sqlite3|bindings|file-uri-to-path|node-pty|yaml)/**"
   - "!node_modules/@trpc/!(server)/**"
   # Dev-only artifacts inside kept modules: deps/ is better-sqlite3's vendored
   # SQLite source, prebuilds/ is the Node-ABI cache that cache-node-sqlite.mjs

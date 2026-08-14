@@ -6,6 +6,7 @@ import {
   VOLLI_TICKET_ENV,
   agentSessionEnv,
   projectArtifactsDir,
+  projectCommandsDir,
   projectSessionEnv,
   sessionAttachmentsDir,
   ticketSessionEnv,
@@ -31,6 +32,16 @@ describe("volliDir", () => {
 describe("projectArtifactsDir", () => {
   it("nests artifacts under the project's .volli dir", () => {
     expect(projectArtifactsDir("/Users/dev/project")).toBe("/Users/dev/project/.volli/artifacts");
+  });
+});
+
+describe("projectCommandsDir", () => {
+  it("nests commands under the project's .volli dir", () => {
+    expect(projectCommandsDir("/Users/dev/project")).toBe("/Users/dev/project/.volli/commands");
+  });
+
+  it("is main-repo-keyed, so a trailing slash resolves to the same directory", () => {
+    expect(projectCommandsDir("/Users/dev/project/")).toBe("/Users/dev/project/.volli/commands");
   });
 });
 

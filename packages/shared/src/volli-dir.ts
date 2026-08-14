@@ -34,6 +34,22 @@ export function projectArtifactsDir(projectPath: string): string {
 }
 
 /**
+ * The project's prompt-template directory: `<volliDir>/commands`, holding the
+ * `.md` files the composer's `/` picker lists.
+ *
+ * MAIN-repo-keyed like {@link projectArtifactsDir}, and for the same reason
+ * rather than by analogy: `.volli` is self-gitignored, so a ticket's worktree
+ * gets an empty one. Keying a ticket session's commands to its worktree would
+ * mean the templates the project author wrote are exactly the ones a ticket
+ * session cannot see. These are authored project assets, not per-session
+ * materialized state — {@link sessionAttachmentsDir} remains the one
+ * session-local exception.
+ */
+export function projectCommandsDir(projectPath: string): string {
+  return `${volliDir(projectPath)}/commands`;
+}
+
+/**
  * The SESSION-local materialized-attachments directory: `<rootPath>/.volli/attachments`
  * (CONCEPT decision #19). `rootPath` is the session's own checkout root — the
  * ticket's worktree when it has one, the main checkout for a worktree-opt-out
