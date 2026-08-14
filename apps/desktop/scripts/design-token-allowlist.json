@@ -1,5 +1,5 @@
 {
-  "note": "Recorded exceptions to check-design-tokens.mjs. An entry excuses one rule on the lines of one file whose text contains `contains`. Every entry needs a reason, and an entry that stops matching FAILS the check — retiring these is part of finishing the sweep that made them unnecessary.",
+  "note": "Recorded exceptions to check-design-tokens.mjs. An entry excuses one rule on the lines of one file whose text contains `contains`. Every entry needs a reason, and an entry that stops matching FAILS the check \u2014 retiring these is part of finishing the sweep that made them unnecessary.",
   "entries": [
     {
       "path": "apps/desktop/src/components/ai-elements/chat-markdown.tsx",
@@ -41,7 +41,7 @@
       "path": "apps/desktop/src/renderer/src/components/board/priority-indicator.tsx",
       "rule": "radius-arbitrary",
       "contains": "w-[2px] rounded-[1px]",
-      "reason": "The app's only 1px radius, on a 2px-wide priority bar — a hairline softening rather than a ladder rung. Decision [R] folds it to `rounded-none`; that is a visual call for the Phase 2 radius sweep. Retires with that sweep."
+      "reason": "The app's only 1px radius, on a 2px-wide priority bar \u2014 a hairline softening rather than a ladder rung. Decision [R] folds it to `rounded-none`; that is a visual call for the Phase 2 radius sweep. Retires with that sweep."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/chat/activity-ui.tsx",
@@ -59,7 +59,7 @@
       "path": "apps/desktop/src/renderer/src/components/chrome-bar.tsx",
       "rule": "radius-bare",
       "contains": "shrink-0 rounded border border-border/70",
-      "reason": "The ⌘K hint's <kbd> chip. Phase 2 radius sweep (decision [R]), and the chrome band itself is under a pending 40px→36px feel-check, so the radius call belongs with that review rather than ahead of it. Retires with that sweep."
+      "reason": "The \u2318K hint's <kbd> chip. Phase 2 radius sweep (decision [R]), and the chrome band itself is under a pending 40px\u219236px feel-check, so the radius call belongs with that review rather than ahead of it. Retires with that sweep."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/files/file-tab-strip.tsx",
@@ -83,7 +83,7 @@
       "path": "apps/desktop/src/renderer/src/components/rail/add-project-tile.tsx",
       "rule": "radius-arbitrary",
       "contains": "justify-center rounded-[10px] bg-muted",
-      "reason": "`rounded-[10px]` is a literal restatement of the old `--radius`. Decision [R] flips the base to 12px and puts project tiles on the control rung, which moves the corner — a visual change for the Phase 2 radius sweep and its screenshot diff. Retires with that sweep."
+      "reason": "`rounded-[10px]` is a literal restatement of the old `--radius`. Decision [R] flips the base to 12px and puts project tiles on the control rung, which moves the corner \u2014 a visual change for the Phase 2 radius sweep and its screenshot diff. Retires with that sweep."
     },
     {
       "path": "apps/desktop/src/renderer/src/components/rail/add-project-tile.tsx",
@@ -120,12 +120,6 @@
       "rule": "focus-ring-loud",
       "contains": "focus-visible:ring-[3px] focus-visible:ring-ring/50",
       "reason": "Decision [F], one of the six feature files still on the 3px halo. Swept with the others in the Phase 2 focus pass; retires with that sweep."
-    },
-    {
-      "path": "apps/desktop/src/renderer/src/components/ui/tooltip.tsx",
-      "rule": "radius-arbitrary",
-      "contains": "rotate-45 rounded-[2px]",
-      "reason": "The tooltip arrow's 2px corner. Decision [T] removes tooltip arrows entirely, so this literal disappears with the element rather than being migrated to a rung. Retires with the overlay PR that removes the arrow."
     }
   ]
 }
