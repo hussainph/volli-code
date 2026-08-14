@@ -64,8 +64,8 @@ than duplicating them under a second name:
 |---|---|---|---|---|
 | label | `text-label` | 11px / 16px | +0.05em | UPPERCASE section labels, badges, field labels, monogram chips |
 | meta | `text-xs` | 12px / 16px | 0 | timestamps, counts, event lines, hints |
-| ui | `text-ui` | 13px / 20px | 0 | dense UI text: board cards/columns, list rows (BOARD-UI's "13px medium"), buttons |
-| body | `text-sm` | 14px / 20px | 0 | prose, inputs, comments, menus |
+| ui | `text-ui` | 13px / 20px | 0 | dense UI text: board cards/columns, list rows (BOARD-UI's "13px medium"), buttons, menus |
+| body | `text-sm` | 14px / 20px | 0 | prose, inputs, comments |
 | heading | `text-heading` | 18px / 26px | −0.01em | dialog titles, page/section headers |
 | title | `text-title` | 24px / 30px | −0.02em | the ticket title; the largest text in the app |
 
