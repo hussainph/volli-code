@@ -462,22 +462,11 @@ export interface SessionBlockerInput {
   catalogError: string | null;
   /** This Session's model against the catalog — see {@link sessionModelStanding}. */
   sessionModel: SessionModelStanding | null;
-  /**
-   * Whether this Session has a manual terminal companion beside it — which only
-   * a Ticket Session does.
-   *
-   * It decides the whole auth/configuration handoff, not just the Terminal
-   * button: signing in is provider-owned and happens in that terminal, so the
-   * exact-run Retry only means anything where the sign-in it follows can
-   * actually happen. A project chat has neither and is sent to Settings.
-   */
-  terminalAvailable: boolean;
 }
 
 export interface SessionBlockerActs {
   recover(): void;
   retryRuntime(): void;
-  openTerminal(): void;
   openSettings(): void;
 }
 
@@ -529,7 +518,6 @@ export function sessionBlocker(
 ): SessionBlockerState | null {
   const retry: SessionBlockerAction = { label: "Retry", act: acts.recover };
   const retryRuntime: SessionBlockerAction = { label: "Retry", act: acts.retryRuntime };
-  const terminal: SessionBlockerAction = { label: "Open Terminal", act: acts.openTerminal };
   const settings: SessionBlockerAction = { label: "Settings", act: acts.openSettings };
   if (input.sessionError !== null) {
     return { message: input.sessionError, detail: null, tone: "error", action: retry };
@@ -547,7 +535,7 @@ export function sessionBlocker(
           message: `Sign-in required for ${sessionModel.providerLabel}`,
           detail: null,
           tone: "error",
-          action: signInDestination(input.terminalAvailable, terminal, settings),
+          action: settings,
         }
       : {
           // No action, because the two this row could offer are both wrong.
@@ -565,14 +553,7 @@ export function sessionBlocker(
   if (attention) {
     return asked && answeredByCard(attention.kind)
       ? null
-      : attentionBlocker(
-          attention,
-          retry,
-          retryRuntime,
-          terminal,
-          settings,
-          input.terminalAvailable,
-        );
+      : attentionBlocker(attention, retry, retryRuntime, settings);
   }
   // Only a catalog that has actually answered can say a person configured
   // nothing; `loading` looks identical from here and is not a blocked state.
@@ -604,44 +585,34 @@ function answeredByCard(kind: SessionAttention["kind"]): boolean {
 }
 
 /**
- * Where you go to sign a provider in — one answer, wherever the fact came from.
+ * A provider-owned recovery: where to fix it, and the exact retry of the run it
+ * broke, beside it.
  *
- * A signed-out provider reaches this surface twice: as the harness's own
+ * A signed-out provider reaches this surface twice — as the harness's own
  * `auth_required` after a run died, and as the Session's pinned model reading
- * unavailable in a catalog that has answered. They are the same fact, so they
- * cannot lead two different ways. Sign-in is provider-owned and happens in the
- * manual Ticket terminal where one exists; a project chat has none, and
- * Settings → Accounts runs the same external sign-in for it.
- */
-function signInDestination(
-  terminalAvailable: boolean,
-  terminal: SessionBlockerAction,
-  settings: SessionBlockerAction,
-): SessionBlockerAction {
-  return terminalAvailable ? terminal : settings;
-}
-
-/**
- * A provider-owned recovery: where to fix it, and — only once a run has
- * actually failed — the exact retry of that run beside it.
+ * unavailable in a catalog that has answered — and both lead to the same place,
+ * because there is now only one place. Sign-in used to fork on whether a manual
+ * Ticket terminal existed to hand off to; it happens inside Settings now, so a
+ * project chat and a Ticket chat get the same answer and neither is sent to a
+ * terminal to finish a Settings task.
+ *
+ * That is also why Retry is unconditional here. It used to be withheld from a
+ * project chat, on the honest ground that retrying a run whose sign-in could
+ * not be reached was offering a button that could not work. The sign-in is
+ * reachable from both now, so the run is retryable from both.
  */
 function providerRecovery(input: {
   message: string;
   detail: string | null;
-  terminalAvailable: boolean;
-  terminal: SessionBlockerAction;
   settings: SessionBlockerAction;
   retryRuntime: SessionBlockerAction;
 }): SessionBlockerState {
-  const action = signInDestination(input.terminalAvailable, input.terminal, input.settings);
   return {
     message: input.message,
     detail: input.detail,
     tone: "error",
-    action,
-    // A Retry of the failed run only means anything after the sign-in it
-    // follows can actually happen, which is the terminal handoff.
-    ...(input.terminalAvailable ? { secondaryAction: input.retryRuntime } : {}),
+    action: input.settings,
+    secondaryAction: input.retryRuntime,
   };
 }
 
@@ -655,11 +626,11 @@ function providerRecovery(input: {
  *
  * Which kinds earn a button, and why the rest do not:
  *
- * - **Terminal + Retry** — Pi auth/configuration recovery uses an existing
- *   manual Ticket terminal for provider-owned sign-in, then retries the exact
- *   failed run without submitting the user's message again. Where there is no
- *   such terminal — a project chat — the pair collapses to Settings rather than
- *   to a Retry of a run nothing has fixed yet.
+ * - **Settings + Retry** — Pi auth/configuration recovery sends you to Model
+ *   Access, where signing in now happens, and then retries the exact failed run
+ *   without submitting the user's message again. Both halves are offered to
+ *   every Session: the sign-in no longer depends on a manual Ticket terminal
+ *   being there to hand off to, so neither does the Retry that follows it.
  * - **Retry** — `transport_retrying`, `adapter_disconnected` and `rate_limited`.
  *   The first two are a connection to re-establish, which is exactly what
  *   `recover` does. A rate limit gets one because the wait is the whole fix; the
@@ -681,27 +652,16 @@ function attentionBlocker(
   attention: SessionAttention,
   retry: SessionBlockerAction,
   retryRuntime: SessionBlockerAction,
-  terminal: SessionBlockerAction,
   settings: SessionBlockerAction,
-  terminalAvailable: boolean,
 ): SessionBlockerState {
   const detail = attention.detail;
   switch (attention.kind) {
     case "auth_required":
-      return providerRecovery({
-        message: "Sign-in required",
-        detail,
-        terminalAvailable,
-        terminal,
-        settings,
-        retryRuntime,
-      });
+      return providerRecovery({ message: "Sign-in required", detail, settings, retryRuntime });
     case "configuration_invalid":
       return providerRecovery({
         message: "Configuration invalid",
         detail,
-        terminalAvailable,
-        terminal,
         settings,
         retryRuntime,
       });

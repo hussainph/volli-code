@@ -13,6 +13,7 @@ import type { HarnessAdapter, HarnessEvent } from "./harness/types";
 import type { DirEntry } from "./fs-entries";
 import type { Label } from "./label";
 import type { LegacyProject } from "./legacy-import";
+import type { ModelAccessSignInType } from "./model-access-sign-in";
 import type { Project } from "./project-identity";
 import type { PromptTemplate } from "./prompt-template";
 import type { HarnessEventOrder, SessionListingRow } from "./session";
@@ -717,6 +718,59 @@ export interface VolliThemeIpcContract {
 export type ThemeIpcChannel = keyof VolliThemeIpcContract;
 
 /**
+ * One provider sign-in, conducted inside the app.
+ *
+ * Its own surface rather than a Session RPC namespace, and the reason is the
+ * one argument on it that is a credential. Every Session RPC procedure is
+ * wrapped by a diagnostic-recording middleware whose ring buffer a lab
+ * subscription can tap; routing an API key through the one component built to
+ * write things down would put the secret and the log tap on the same wire, and
+ * "never logged" is the property this channel exists to keep. Nothing on these
+ * four channels is recorded, and there is no resume cursor and no replay: an
+ * attempt lives as long as the window that started it.
+ *
+ * Cancellable from both ends. The renderer cancels through
+ * `volli:model-access-sign-in-cancel`; main abandons the attempt when the
+ * window that owns it goes away, because a flow parked on a prompt nobody can
+ * answer would otherwise hold a provider's one attempt slot until quit.
+ */
+export interface VolliModelAccessIpcContract {
+  /**
+   * Starts an attempt and answers with the id every later message carries.
+   *
+   * The method is the caller's, not a default: a provider may offer both an API
+   * key and a subscription, they are different accounts, and picking for the
+   * user would silently sign them in to the wrong one.
+   */
+  "volli:model-access-sign-in-begin": {
+    args: [providerId: string, type: ModelAccessSignInType];
+    result: ModelAccessSignInBeginResult;
+  };
+  /**
+   * Answers the step an attempt is parked on.
+   *
+   * `value` is the one inbound secret in the app. It crosses once, is handed
+   * straight to the provider's flow, and is never stored by anything on this
+   * side of the call, never echoed back, and never included in an error string.
+   * An answer naming a prompt that is no longer pending is refused rather than
+   * applied to whatever is pending now.
+   */
+  "volli:model-access-sign-in-respond": {
+    args: [attemptId: string, promptId: string, value: string];
+    result: Result;
+  };
+  /** Abandons an attempt; the parked prompt rejects and the flow unwinds. */
+  "volli:model-access-sign-in-cancel": { args: [attemptId: string]; result: Result };
+  /** Deletes this profile's stored credential for a provider. Ambient sources are untouched. */
+  "volli:model-access-sign-out": { args: [providerId: string]; result: Result };
+}
+
+export type ModelAccessIpcChannel = keyof VolliModelAccessIpcContract;
+
+/** The attempt id every later message about one sign-in is correlated by. */
+export type ModelAccessSignInBeginResult = Result<{ attemptId: string }>;
+
+/**
  * Type-only entries for every remaining invoke channel — these live outside
  * `src/main/data-ipc.ts`/`volli-fs.ts` (in `src/main/ipc.ts`/`pty.ts`/
  * `ghostty-config.ts`) and have no runtime descriptor table yet, but are
@@ -804,6 +858,7 @@ export interface VolliInvokeContract
     VolliFileIpcContract,
     VolliHarnessIpcContract,
     VolliThemeIpcContract,
+    VolliModelAccessIpcContract,
     VolliSessionRpcIpcContract,
     VolliSystemIpcContract {}
 
@@ -873,7 +928,15 @@ export type VolliIpcEvent =
   // Ordered frames for one live Session RPC subscription — see
   // {@link SessionRpcIpcEvent}. Every subscription shares this channel and is
   // told apart by the id main acknowledged the request with.
-  | "volli:session-rpc-event";
+  | "volli:session-rpc-event"
+  // Everything main has to say about one in-app provider sign-in — see
+  // {@link ModelAccessSignInUpdate}. ONE channel for prompts, withdrawals,
+  // events and the verdict, because the order across those kinds is the
+  // meaning: an OAuth flow asks for a code, then withdraws the question when
+  // the browser callback wins the race, and a renderer that saw those two
+  // swapped would leave a dead input box waiting for a code nothing consumes.
+  // Sent to the window that began the attempt, never broadcast.
+  | "volli:model-access-sign-in";
 
 /** Direction of a `volli:ui-zoom-command` event: step in/out one rung, or reset. */
 export type UiZoomCommand = "in" | "out" | "reset";

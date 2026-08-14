@@ -153,7 +153,9 @@ describe("the Session's own model, against the catalog", () => {
       state: "authentication-required",
       accountLabel: null,
       billingSource: "unknown",
-      recovery: { kind: "external-sign-in" },
+      recovery: { kind: "sign-in" },
+      signIn: [],
+      hasStoredCredential: false,
     },
   ];
 
@@ -189,7 +191,6 @@ const NO_OP = () => undefined;
 const ACTS: SessionBlockerActs = {
   recover: NO_OP,
   retryRuntime: NO_OP,
-  openTerminal: NO_OP,
   openSettings: NO_OP,
 };
 
@@ -200,7 +201,6 @@ function blockerInput(overrides: Partial<SessionBlockerInput> = {}): SessionBloc
     catalogState: "ready",
     catalogError: null,
     sessionModel: { providerLabel: "OpenAI Codex", state: "available" },
-    terminalAvailable: false,
     ...overrides,
   };
 }
@@ -269,47 +269,32 @@ describe("sessionBlocker", () => {
     );
   });
 
-  it("offers an existing manual terminal companion plus an honest runtime retry", () => {
-    expect(
-      sessionBlocker(
-        { ...raised(attention("auth_required")), terminalAvailable: true },
-        ACTS,
-        false,
-      ),
-    ).toMatchObject({
-      action: { label: "Open Terminal" },
-      secondaryAction: { label: "Retry" },
-    });
-  });
-
-  it("offers the existing terminal and retry for invalid Pi configuration", () => {
-    expect(
-      sessionBlocker(
-        { ...raised(attention("configuration_invalid")), terminalAvailable: true },
-        ACTS,
-        false,
-      ),
-    ).toMatchObject({
-      action: { label: "Open Terminal" },
-      secondaryAction: { label: "Retry" },
-    });
-  });
-
-  it("sends a Session with no terminal beside it to Settings, not to a bare Retry", () => {
-    // Signing in is provider-owned and happens in that terminal. Without one,
-    // retrying the exact failed run repeats a failure nothing has addressed.
+  it("sends both provider-owned recoveries to Settings with the failed run's retry beside it", () => {
+    // Signing in happens inside Settings now, so the pair no longer forks on
+    // whether a manual Ticket terminal exists to hand off to.
     expect(sessionBlocker(raised(attention("auth_required")), ACTS, false)).toEqual({
       message: "Sign-in required",
       detail: null,
       tone: "error",
       action: { label: "Settings", act: NO_OP },
+      secondaryAction: { label: "Retry", act: NO_OP },
     });
     expect(sessionBlocker(raised(attention("configuration_invalid")), ACTS, false)).toEqual({
       message: "Configuration invalid",
       detail: null,
       tone: "error",
       action: { label: "Settings", act: NO_OP },
+      secondaryAction: { label: "Retry", act: NO_OP },
     });
+  });
+
+  it("offers a project chat the same retry a Ticket chat gets", () => {
+    // The old rule withheld it from a Session with no terminal, on the honest
+    // ground that retrying a run whose sign-in could not be reached was a
+    // button that could not work. Both can reach the sign-in now.
+    const projectChat = sessionBlocker(raised(attention("auth_required")), ACTS, false);
+
+    expect(projectChat?.secondaryAction).toEqual({ label: "Retry", act: NO_OP });
   });
 
   it("says the Session's own model needs sign-in before a message is spent on it", () => {
@@ -340,17 +325,10 @@ describe("sessionBlocker", () => {
       },
     };
 
-    expect(
-      sessionBlocker(blockerInput({ ...pinned, terminalAvailable: true }), ACTS, false)?.action
-        ?.label,
-    ).toBe("Open Terminal");
-    expect(
-      sessionBlocker(
-        { ...raised(attention("auth_required")), terminalAvailable: true },
-        ACTS,
-        false,
-      )?.action?.label,
-    ).toBe("Open Terminal");
+    expect(sessionBlocker(blockerInput(pinned), ACTS, false)?.action?.label).toBe("Settings");
+    expect(sessionBlocker(raised(attention("auth_required")), ACTS, false)?.action?.label).toBe(
+      "Settings",
+    );
   });
 
   // Settings writes the app DEFAULT, copied into a Session at birth and never

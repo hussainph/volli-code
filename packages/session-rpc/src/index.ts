@@ -296,7 +296,20 @@ const modelAccessSnapshotSchema = z.object({
           "ambient",
           "unknown",
         ]),
-        recovery: z.union([z.object({ kind: z.enum(["external-sign-in", "retry"]) }), z.null()]),
+        recovery: z.union([z.object({ kind: z.enum(["sign-in", "retry"]) }), z.null()]),
+        // The provider's own wording for each method it offers, carried rather
+        // than re-derived: "Sign in with SuperGrok or X Premium" names which
+        // subscription is about to be billed, and no label this edge could
+        // invent would. `displayLabel` trims it under the same policy as every
+        // other upstream string here.
+        signIn: z.array(
+          z.object({
+            type: z.enum(["api-key", "oauth"]),
+            label: displayLabel,
+            isSubscription: z.boolean(),
+          }),
+        ),
+        hasStoredCredential: z.boolean(),
       })
       .transform((provider) => ({ ...provider, label: usableLabel(provider.label, provider.id) })),
   ),

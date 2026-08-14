@@ -189,6 +189,17 @@ interface UiState {
   railWidth: number;
   uiScale: number;
   settingsOpen: boolean;
+  /**
+   * Which category Settings should open on, or null for its own default.
+   *
+   * Session-only beside `settingsOpen`, and read once per opening: the shell
+   * takes it as an INITIAL category and owns the selection from there, so
+   * navigating inside Settings never writes back here. Set by a surface that
+   * already knows where it is sending someone — the chat blocker naming a
+   * provider that needs signing in knows the answer is Model Access, and making
+   * the user land on General and go find it would be withholding it.
+   */
+  settingsCategory: string | null;
   /** Session-only — never persisted; see module doc. */
   newTicketOpen: boolean;
   /** Project/workspace switcher rail hidden? Persisted app-wide (see module doc). */
@@ -214,7 +225,7 @@ interface UiState {
   setRailWidth(width: number): void;
   stepUiScale(delta: 1 | -1): void;
   resetUiScale(): void;
-  setSettingsOpen(open: boolean): void;
+  setSettingsOpen(open: boolean, category?: string): void;
   setNewTicketOpen(open: boolean): void;
   toggleWorkspaceRailHidden(): void;
   setWorkspaceRailHidden(hidden: boolean): void;
@@ -279,6 +290,7 @@ export function createUiStore(storage?: StateStorage) {
         railWidth: RAIL_DEFAULT_WIDTH,
         uiScale: UI_SCALE_DEFAULT,
         settingsOpen: false,
+        settingsCategory: null,
         newTicketOpen: false,
         workspaceRailHidden: false,
         sidebarPinned: true,
@@ -291,7 +303,8 @@ export function createUiStore(storage?: StateStorage) {
         setRailWidth: (width) => set({ railWidth: clampRailWidth(width) }),
         stepUiScale: (delta) => set((state) => ({ uiScale: steppedScale(state.uiScale, delta) })),
         resetUiScale: () => set({ uiScale: UI_SCALE_DEFAULT }),
-        setSettingsOpen: (open) => set({ settingsOpen: open }),
+        setSettingsOpen: (open, category) =>
+          set({ settingsOpen: open, settingsCategory: category ?? null }),
         setNewTicketOpen: (open) => set({ newTicketOpen: open }),
         toggleWorkspaceRailHidden: () =>
           set((state) => ({ workspaceRailHidden: !state.workspaceRailHidden })),

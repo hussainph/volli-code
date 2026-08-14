@@ -4,11 +4,11 @@ import * as React from "react";
 import type {
   ModelAccessModel,
   ModelAccessProvider,
-  ModelAccessRecovery,
   ModelSelection,
   ReasoningLevel,
 } from "@volli/shared";
 
+import { ModelAccessAccounts } from "@renderer/components/pages/model-access-accounts";
 import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -29,7 +29,6 @@ export function ModelAccessSettings() {
   const [selection, setSelection] = React.useState<ModelSelection | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
-  const [recoveringProviderId, setRecoveringProviderId] = React.useState<string | null>(null);
 
   const load = React.useCallback(
     async (refresh = false) => {
@@ -73,20 +72,16 @@ export function ModelAccessSettings() {
     }
   }
 
-  async function recover(provider: ModelAccessProvider): Promise<void> {
-    if (provider.recovery === null || recoveringProviderId !== null) return;
-    if (provider.recovery.kind === "retry") {
-      await load(true);
-      return;
-    }
-    setRecoveringProviderId(provider.id);
-    try {
-      await client!.openExternalSignIn();
-    } catch (error) {
-      toastError(`Couldn't open Model Access: ${errorMessage(error)}`);
-    } finally {
-      setRecoveringProviderId(null);
-    }
+  /**
+   * The `retry` half of recovery, and all that is left here.
+   *
+   * Signing in used to be the other half and used to belong to this component,
+   * because it was one call that opened a terminal and was done. It is now a
+   * conversation with its own steps and its own cancellation, so it belongs to
+   * the row that shows it — see `model-access-accounts.tsx`.
+   */
+  async function retry(): Promise<void> {
+    await load(true);
   }
 
   return (
@@ -167,43 +162,10 @@ export function ModelAccessSettings() {
       <ModelAccessAccounts
         providers={providers}
         loading={loading}
-        recoveringProviderId={recoveringProviderId}
-        onRecover={recover}
+        onRecover={() => void retry()}
+        onChanged={() => load(true)}
       />
     </>
-  );
-}
-
-export function ModelAccessAccounts({
-  providers,
-  loading,
-  recoveringProviderId,
-  onRecover,
-}: {
-  providers: readonly ModelAccessProvider[];
-  loading: boolean;
-  recoveringProviderId: string | null;
-  onRecover(provider: ModelAccessProvider): void | Promise<void>;
-}) {
-  if (providers.length === 0) return null;
-  return (
-    <SettingsSection title="Accounts">
-      {providers.map((provider) => (
-        <SettingsRow key={provider.id} label={provider.label}>
-          <span className="text-xs text-muted-foreground">{providerAccessLabel(provider)}</span>
-          {provider.recovery === null ? null : (
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={loading || recoveringProviderId !== null}
-              onClick={() => void onRecover(provider)}
-            >
-              {providerRecoveryActionLabel(provider.recovery)}
-            </Button>
-          )}
-        </SettingsRow>
-      ))}
-    </SettingsSection>
   );
 }
 
@@ -265,25 +227,6 @@ export function modelOptionLabel(
 ): string {
   const provider = providers.find((candidate) => candidate.id === model.providerId);
   return `${model.label} · ${provider?.label ?? model.providerId}`;
-}
-
-export function providerAccessLabel(provider: ModelAccessProvider): string {
-  const access =
-    provider.state === "authentication-required"
-      ? "Sign in required"
-      : provider.state === "unavailable"
-        ? "Unavailable"
-        : (provider.accountLabel ?? "Available");
-  const billing = provider.billingSource
-    .split("-")
-    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
-    .join(" ");
-  return `${access} · ${billing}`;
-}
-
-export function providerRecoveryActionLabel(recovery: ModelAccessRecovery | null): string | null {
-  if (recovery === null) return null;
-  return recovery.kind === "external-sign-in" ? "Sign in" : "Retry";
 }
 
 function modelKey(model: Pick<ModelAccessModel, "providerId" | "modelId">): string {

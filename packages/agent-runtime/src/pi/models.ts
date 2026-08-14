@@ -99,8 +99,34 @@ function expandTilde(path: string): string {
  * dynamic path is never taken. Bun is its origin, not its requirement.
  */
 export function piOwnedModels(options: PiCredentialOptions = {}): Models {
+  return piOwnedModelAccess(options).models;
+}
+
+/**
+ * The provider collection and the store behind it, as one value.
+ *
+ * They are separable in Pi's types and inseparable in fact: `Models` hides its
+ * store, so a caller handed only the collection can ask whether a provider
+ * resolves auth but not whether *this profile* stored anything — and those are
+ * different questions. A provider reading `ANTHROPIC_API_KEY` out of the
+ * environment answers yes to the first and no to the second, and only the
+ * second decides whether there is anything to sign out of.
+ *
+ * Returning the pair also keeps the singleton honest. Two collections would
+ * mean two credential stores, two write chains and two catalog caches over one
+ * file — safe, because the file lock is cross-process and already survives the
+ * `pi` CLI writing alongside us, but pointless. Sign-in and execution share one.
+ */
+export function piOwnedModelAccess(options: PiCredentialOptions = {}): PiModelAccess {
   registerBunOAuthFlows();
-  return builtinModels({ credentials: new PiFileCredentialStore(piAuthFilePath(options)) });
+  const credentials = new PiFileCredentialStore(piAuthFilePath(options));
+  return { models: builtinModels({ credentials }), credentials };
+}
+
+/** Pi's providers, and the credential store they read and write through. */
+export interface PiModelAccess {
+  models: Models;
+  credentials: CredentialStore;
 }
 
 /**

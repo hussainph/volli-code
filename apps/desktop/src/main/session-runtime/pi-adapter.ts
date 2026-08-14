@@ -194,6 +194,13 @@ export interface PiAdapterOptions {
   /** Injectable Pi model collection, for deterministic tests and host-owned credentials. */
   models?: PiRuntimeHostOptions["models"];
   /**
+   * The credential store behind {@link PiAdapterOptions.models}. Main passes the
+   * pair so Model Access can tell a provider configured from a stored
+   * credential apart from one reading an ambient environment variable — the
+   * question that decides whether signing out has anything to remove.
+   */
+  credentials?: PiRuntimeHostOptions["credentials"];
+  /**
    * Injectable execution environment factory. Defaults to Pi's own
    * `piExecutionEnv`; main supplies one that prepends Volli's CLI bin dir
    * onto a Session's `PATH`, so `volli` resolves inside a structured turn's
@@ -268,6 +275,7 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
   const runtime = create({
     sessionDataDir: options.sessionDataDir,
     ...(options.models === undefined ? {} : { models: options.models }),
+    ...(options.credentials === undefined ? {} : { credentials: options.credentials }),
     ...(options.executionEnvFactory === undefined
       ? {}
       : { executionEnvFactory: options.executionEnvFactory }),

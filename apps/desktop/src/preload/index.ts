@@ -48,6 +48,9 @@ import type {
   LegacyImportRequest,
   LegacyImportResult,
   ListDirectoryResult,
+  ModelAccessSignInBeginResult,
+  ModelAccessSignInType,
+  ModelAccessSignInUpdate,
   PickFolderResult,
   ProjectCreateInput,
   ProjectCreateResult,
@@ -428,6 +431,48 @@ const api = {
     /** Ends one subscription: fire-and-forget, since the frames stopping is the answer. */
     cancel: (subscriptionId: string): void => {
       send("volli:session-rpc-cancel" satisfies typeof SESSION_RPC_CANCEL_CHANNEL, subscriptionId);
+    },
+  },
+  /**
+   * In-app provider sign-in. Its own door rather than a Session RPC namespace,
+   * because one argument here is an API key: every RPC procedure is wrapped by
+   * a diagnostic recorder with a live subscription tap on it, and a secret and
+   * a log tap do not belong on one wire. Nothing on these four channels is
+   * recorded, and an attempt lives no longer than the window that began it.
+   */
+  modelAccess: {
+    /** Starts one attempt; the id it answers with is on every later message about it. */
+    beginSignIn: (
+      providerId: string,
+      type: ModelAccessSignInType,
+    ): Promise<ModelAccessSignInBeginResult> =>
+      invoke("volli:model-access-sign-in-begin", providerId, type),
+    /**
+     * Answers the step an attempt is parked on — the one inbound secret in the
+     * app, and one-way: main hands it to the provider's flow and it is never
+     * read back out, echoed, or put in an error string. `promptId` is what
+     * keeps a late answer off the next question.
+     */
+    respondToPrompt: (attemptId: string, promptId: string, value: string): Promise<Result> =>
+      invoke("volli:model-access-sign-in-respond", attemptId, promptId, value),
+    /** Abandons an attempt; the parked prompt rejects and the flow unwinds. */
+    cancelSignIn: (attemptId: string): Promise<Result> =>
+      invoke("volli:model-access-sign-in-cancel", attemptId),
+    /** Deletes this profile's stored credential. Ambient environment sources are untouched. */
+    signOut: (providerId: string): Promise<Result> =>
+      invoke("volli:model-access-sign-out", providerId),
+    /**
+     * Subscribes to the frames of EVERY live attempt; returns the unsubscribe
+     * function. One listener rather than one per attempt, for the same reason
+     * the Session RPC door has one: main mints the id, so a prompt can arrive
+     * before the renderer knows what to call it.
+     */
+    onSignInUpdate: (callback: (update: ModelAccessSignInUpdate) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: ModelAccessSignInUpdate) =>
+        callback(payload);
+      const channel = "volli:model-access-sign-in" satisfies VolliIpcEvent;
+      ipcRenderer.on(channel, listener);
+      return () => ipcRenderer.removeListener(channel, listener);
     },
   },
   labels: {

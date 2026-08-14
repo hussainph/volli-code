@@ -80,7 +80,6 @@ import {
   type SessionBlockerActs,
   type SessionBlockerState,
 } from "@renderer/components/chat/chat-plane-model";
-import { createModelAccessTerminal } from "@renderer/components/sessions/session-create";
 import {
   SessionComposer,
   type ComposerModel,
@@ -148,7 +147,6 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
     submit,
   } = controller;
   const slice = controller.session;
-  const ticketId = slice?.projection?.session.ticketId ?? null;
 
   // The half-typed message is part of the Session, not this view: it has to
   // survive both a tab switch (this component unmounts) and a relaunch, so it
@@ -475,13 +473,13 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
       // A failed initial Pi attach has no live binding to continue; Retry is a
       // fresh attach there. Once Pi is live, it is the exact failed run.
       retryRuntime: () => void (liveExecutorId === null ? recover() : retryRuntime()),
-      openTerminal: () => {
-        if (ticketId === null) return;
-        void createModelAccessTerminal({ kind: "ticket", projectId, ticketId });
-      },
-      openSettings: () => setSettingsOpen(true),
+      // Straight to the category Model Access lives in. The blocker names a
+      // provider that needs signing in, and landing on General would make the
+      // user go find it — a short trip, but one this row already knows the
+      // answer to.
+      openSettings: () => setSettingsOpen(true, "agent"),
     }),
-    [liveExecutorId, projectId, recover, retryRuntime, setSettingsOpen, ticketId],
+    [liveExecutorId, recover, retryRuntime, setSettingsOpen],
   );
   const blocker = sessionBlocker(
     {
@@ -490,7 +488,6 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
       catalogState,
       catalogError,
       sessionModel,
-      terminalAvailable: ticketId !== null,
     },
     blockerActs,
     interactions.length > 0,
