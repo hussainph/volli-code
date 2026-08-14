@@ -35,7 +35,16 @@ function DialogOverlay({
         // toward the ink, which IS the light). Only the weight is mode-specific:
         // half-black over the light canvas blacks the gradient out entirely,
         // which is the one thing the canvas exists to show.
-        "fixed inset-0 z-50 bg-black/30 motion-reduce:animate-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0 dark:bg-black/50",
+        //
+        // `duration-200 ease-out` is DialogContent's, to the millisecond: the
+        // scrim and the panel are one gesture, and a scrim on the 150ms
+        // `tw-animate-css` default finished 50ms early, leaving the panel to
+        // arrive onto a background that had already stopped moving.
+        //
+        // `animate-none!` is important on purpose — the reduced-motion gate
+        // loses to `data-[state=open]:animate-in` without it; the full argument
+        // is on MENU_SURFACE_FADE in `ui/menu-classes.ts`.
+        "fixed inset-0 z-50 bg-black/30 duration-200 ease-out motion-reduce:animate-none! data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0 dark:bg-black/50",
         className,
       )}
       {...props}
@@ -57,7 +66,9 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-1/2 gap-3 rounded-container border border-border bg-background p-4 shadow-lg duration-200 motion-reduce:animate-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
+          // A modal is not anchored to a trigger, so it keeps the centered
+          // origin and only the duration/curve are shared with the scrim.
+          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-1/2 gap-3 rounded-container border border-border bg-background p-4 shadow-lg duration-200 ease-out motion-reduce:animate-none! data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
           className,
         )}
         {...props}

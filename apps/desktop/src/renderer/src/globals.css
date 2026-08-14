@@ -269,6 +269,14 @@
   --color-sidebar-veil: var(--sidebar-veil);
   --color-sidebar-accent-veil: var(--sidebar-accent-veil);
   --color-sidebar-border-veil: var(--sidebar-border-veil);
+  /* The UI ease-out — entrances, exits, press feedback, every overlay. It
+   * deliberately takes Tailwind's OWN `--ease-out` key rather than a new name:
+   * a second strong-ease-out token sitting beside the weak built-in is the
+   * drift it exists to end, and overriding the key moves every `ease-out` in
+   * the app onto one curve at once. Stock's cubic-bezier(0, 0, 0.2, 1) barely
+   * leaves the line; this one leaves fast and settles long, which is what makes
+   * a 150ms overlay read as already-there rather than as arriving. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   /* macOS-feel motion: fast start, long gentle settle (the iOS sheet curve).
    * Used for structural transitions like the sidebar collapse. */
   --ease-swift: cubic-bezier(0.32, 0.72, 0, 1);

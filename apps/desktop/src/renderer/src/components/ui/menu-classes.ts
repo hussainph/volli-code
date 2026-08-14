@@ -28,9 +28,38 @@ export const MENU_SURFACE =
  */
 export const MENU_SURFACE_PAD = "p-1";
 
-/** Open and close, shared by every menu surface. */
-export const MENU_SURFACE_MOTION =
-  "motion-reduce:animate-none data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95";
+/**
+ * The half of the open/close every menu surface can always run: the keyframe
+ * pair, the fade, the curve, and the reduced-motion gate.
+ *
+ * `animate-none!` carries the `!` because without it the gate is decoration.
+ * `data-[state=open]:animate-in` compiles to
+ * `.data-\[state\=open\]\:animate-in[data-state=open]` — a class AND an
+ * attribute, (0,2,0) — while a `motion-reduce:` utility is one class inside a
+ * media query, (0,1,0), and a media query contributes no specificity of its
+ * own. The gate lost on every overlay in the app, regardless of source order.
+ * Stacking the state variant onto the gate to match the attribute back only
+ * draws the fight to a tie that Tailwind's variant ordering then settles for
+ * us; `!important` is the one mechanism that cannot lose, which is why the gate
+ * is spelled as an override rather than as a preference.
+ */
+export const MENU_SURFACE_FADE =
+  "ease-out motion-reduce:animate-none! data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0";
+
+/**
+ * The half that needs a real anchor: the zoom out of the trigger and the slide
+ * away from it. Both read what the popper publishes — `data-side` and the
+ * content transform origin — so a surface positioned any other way must NOT
+ * take this. With no origin the zoom falls back to `50% 50%` and the surface
+ * grows from its own middle while attached to something else. `ui/select.tsx`
+ * is the one surface in this family that can be positioned another way, and so
+ * composes the two halves itself instead of taking {@link MENU_SURFACE_MOTION}.
+ */
+export const MENU_SURFACE_ANCHORED =
+  "data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95";
+
+/** Open and close, shared by every trigger-anchored menu surface. */
+export const MENU_SURFACE_MOTION = `${MENU_SURFACE_FADE} ${MENU_SURFACE_ANCHORED}`;
 
 /**
  * The 28px row: a 20px `text-ui` line box plus `py-1`, 8px of side padding, a

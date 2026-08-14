@@ -10,7 +10,18 @@ const buttonVariants = cva(
   // pixels of half-strength ember around a 20px icon button is more ink than the
   // button. Text fields answer focus differently and carry no ring at all
   // (`ui/field-classes.ts`).
-  "inline-flex shrink-0 items-center justify-center gap-2 rounded-full text-sm font-medium whitespace-nowrap transition-[color,background-color,border-color,box-shadow,opacity,transform] duration-150 ease-out outline-none active:scale-[0.97] motion-reduce:transform-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/45 disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  //
+  // THE PRESS: `scale` is in the transition list and naming `transform` is not
+  // enough. Tailwind v4 compiles `scale-*` to the standalone `scale` property,
+  // not to a transform function — `.active\:scale-\[0\.97\]:active{scale:.97}`
+  // — so a list naming only `transform` transitions a property the press never
+  // touches, and the depress SNAPS with the declared 150ms doing nothing. The
+  // reduced-motion fallback is `scale-100` for the same reason: `transform:
+  // none` cannot cancel a `scale` declaration. `!` because the gate is one
+  // class inside a media query, (0,1,0), against `:active`'s (0,1,1) — the
+  // longer version of that argument is on MENU_SURFACE_FADE in
+  // `ui/menu-classes.ts`.
+  "inline-flex shrink-0 items-center justify-center gap-2 rounded-full text-sm font-medium whitespace-nowrap transition-[color,background-color,border-color,box-shadow,opacity,transform,scale] duration-150 ease-out outline-none active:scale-[0.97] motion-reduce:scale-100! focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/45 disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {

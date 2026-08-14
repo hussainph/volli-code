@@ -134,7 +134,9 @@ function FileTab({
             }
           }}
           className={cn(
-            "group relative flex h-8 shrink-0 items-center gap-1.5 rounded-t-lg pr-1 pl-3 text-sm outline-none transition-[color,background-color,box-shadow,transform] duration-150 ease-out active:scale-[0.97] motion-reduce:transform-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+            // `scale` is in the transition list and `scale-100!` is the
+            // reduced-motion cancel — see the press note in `ui/button.tsx`.
+            "group relative flex h-8 shrink-0 items-center gap-1.5 rounded-t-lg pr-1 pl-3 text-sm outline-none transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out active:scale-[0.97] motion-reduce:scale-100! focus-visible:ring-[3px] focus-visible:ring-ring/50",
             active
               ? // -mb-px lets the tab's fill cover the strip's bottom border, so
                 // it reads as physically joined to the editor plane below.

@@ -62,7 +62,10 @@ function CollapsedColumnTarget({
       }}
       className={cn(
         "flex items-center justify-between rounded-md border border-border/60 px-3 py-2 text-left text-xs text-muted-foreground outline-none",
-        "transition-[color,background-color,border-color,box-shadow,opacity,transform] duration-150 ease-out",
+        // `scale` is named because the `starting:` entrance below sets it, and
+        // v4 compiles `scale-*` to the standalone property — a list naming only
+        // `transform` faded the pill in at full size. See `ui/button.tsx`.
+        "transition-[color,background-color,border-color,box-shadow,opacity,transform,scale] duration-150 ease-out",
         "hover:border-border hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
         animateEnter && "starting:scale-[0.98] starting:opacity-0 motion-reduce:starting:scale-100",
         // While any card is mid-drag every pill brightens into an affordance…
