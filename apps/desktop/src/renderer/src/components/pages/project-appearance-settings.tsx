@@ -102,14 +102,17 @@ export function ProjectAppearanceSettings({ project }: { project: Project }) {
     // long as it stays open, with nothing to press.
     return (
       <SettingsSection title={project.name}>
-        <InheritNote>Loading this project&rsquo;s appearance…</InheritNote>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void useThemeStore.getState().hydrate(projectScope(project))}
-        >
-          Retry
-        </Button>
+        {/* A note and a button are not a row, so nothing else spaces them. */}
+        <div className="flex flex-col items-start gap-2">
+          <InheritNote>Loading this project&rsquo;s appearance…</InheritNote>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void useThemeStore.getState().hydrate(projectScope(project))}
+          >
+            Retry
+          </Button>
+        </div>
       </SettingsSection>
     );
   }
@@ -196,7 +199,7 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
         </div>
       ) : (
         <>
-          <div className="pb-4">
+          <div className="pb-2">
             <ThemeOriginPill emphasized>Set by this project</ThemeOriginPill>
           </div>
           <CanvasEditor scope={scope} canvas={choice.canvas} resolved={resolved} />

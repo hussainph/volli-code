@@ -316,7 +316,7 @@ function SignInPanel({
   return (
     <div
       data-testid={testId}
-      className="mb-4 flex flex-col gap-4 rounded-md border border-border bg-background/30 p-4"
+      className="mb-2 flex flex-col gap-2 rounded-md border border-border bg-background/30 p-2"
     >
       {event !== null ? <SignInEventView event={event} /> : null}
       {failure !== null ? (

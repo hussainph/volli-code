@@ -160,7 +160,7 @@ function AppThemeSection() {
     <SettingsSection title="App theme" icon={PaletteIcon}>
       <CanvasEditor scope={GLOBAL_SCOPE} canvas={canvas} resolved={resolved} />
       {shadowed ? (
-        <p data-testid="appearance-canvas-shadowed" className="pt-4">
+        <p data-testid="appearance-canvas-shadowed" className="pt-2">
           <ThemeOriginPill emphasized={false}>Workspace override</ThemeOriginPill>
         </p>
       ) : null}

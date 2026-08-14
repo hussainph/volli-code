@@ -1047,7 +1047,7 @@ export function CanvasEditor({
 
   return (
     <>
-      <div className="flex flex-col gap-4 pb-4">
+      <div className="flex flex-col gap-4 pb-2">
         <GradientPad
           canvas={live}
           resolved={resolved}
@@ -1100,7 +1100,7 @@ export function CanvasEditor({
         </span>
       </SettingsRow>
 
-      <div className="border-t border-border/50 pt-4">
+      <div className="border-t border-border/50 pt-2">
         <ContrastReport
           report={report}
           eased={eased}

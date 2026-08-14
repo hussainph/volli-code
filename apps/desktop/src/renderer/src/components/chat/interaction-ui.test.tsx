@@ -341,6 +341,40 @@ describe("the ask-user card", () => {
   });
 });
 
+/**
+ * A permission whose options declare no refusal of their own, which is what
+ * makes the words a redirection and stands the box open on the verdict card —
+ * the one shape in which both cards draw a text box at once.
+ */
+function noteOpenPermission(): SessionInteraction {
+  const options = PERMISSION_OPTIONS.slice(0, 2);
+  return {
+    id: "permission:p2",
+    attachmentId: "attach-1",
+    kind: "permission",
+    title: "rm -rf node_modules",
+    detail: "bash",
+    options,
+    multiple: false,
+    prompts: [
+      {
+        id: "prompt:0",
+        label: "rm -rf node_modules",
+        detail: "bash",
+        options,
+        multiple: false,
+        custom: false,
+      },
+    ],
+    native: { id: "perm-2", detail: null },
+  };
+}
+
+/** Every text box's class list in a rendered card, in document order. */
+function boxes(html: string): string[] {
+  return [...html.matchAll(/<textarea[^>]*class="([^"]*)"/g)].map(([, classes]) => classes ?? "");
+}
+
 /** The markup of the one row carrying this label, out of the list it sits in. */
 function optionRow(html: string, label: string): string {
   const row = html.split("<label").find((fragment) => fragment.includes(`>${label}</span>`));
@@ -384,6 +418,24 @@ describe("the two cards as one family", () => {
     // Same row, same type step: only the colour moved.
     expect(once.includes("py-2")).toBe(always.includes("py-2"));
     expect(once.includes("text-ui font-medium")).toBe(always.includes("text-ui font-medium"));
+  });
+
+  it("leaves the only border to the card, on every box either card opens", () => {
+    // One border per surface. A field drawing its own edge inside a bordered
+    // card is two frames around one thing, and it read as a foreign control in
+    // a card whose rows are washes rather than boxes. What says a box takes
+    // words is its placeholder and the caret — the composer's own answer.
+    const cases: readonly (readonly [string, string])[] = [
+      ["the lone answer", drawn(ask([askPrompt({ options: [], custom: true })]))],
+      ["the box beside the options", drawn(ask([askPrompt({ custom: true })]))],
+      ["the verdict card's words", drawn(noteOpenPermission())],
+    ];
+    for (const [what, html] of cases) {
+      const drawnBoxes = boxes(html);
+      expect([what, drawnBoxes.length]).toEqual([what, 1]);
+      expect([what, drawnBoxes[0]?.includes("border-0")]).toEqual([what, true]);
+      expect([what, drawnBoxes[0]?.includes("shadow-raised")]).toEqual([what, false]);
+    }
   });
 
   it("marks every verdict as one press, and an opaque answer as not", () => {
