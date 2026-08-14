@@ -10,7 +10,7 @@ export function PageHeader({ className, ...props }: React.ComponentProps<"header
   return (
     <header
       className={cn(
-        "flex min-w-0 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 px-gutter py-3",
+        "flex min-w-0 shrink-0 flex-wrap items-center gap-x-4 gap-y-2 px-gutter py-4",
         className,
       )}
       {...props}

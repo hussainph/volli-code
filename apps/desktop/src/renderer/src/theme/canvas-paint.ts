@@ -79,6 +79,12 @@ const SHADOW_VARIABLES = {
   card: "--shadow-card",
   overlay: "--shadow-overlay",
 } as const;
+/**
+ * The overlay wash every dialog, sheet and palette scrims with — the shadow's
+ * own ink spread over the whole window rather than pooled under one edge, which
+ * is why it is solved beside the tiers above rather than authored anywhere.
+ */
+const SCRIM_VARIABLE = "--scrim";
 
 /**
  * Every custom property the canvas pipeline writes.
@@ -98,6 +104,7 @@ export const CANVAS_TOKEN_NAMES = [
   ...LIFT_VARIABLES,
   LABEL_VARIABLE,
   ...Object.values(SHADOW_VARIABLES),
+  SCRIM_VARIABLE,
 ] as const;
 
 export type CanvasTokenName = (typeof CANVAS_TOKEN_NAMES)[number];
@@ -170,6 +177,7 @@ export function deriveCanvasPaint(
       "--shadow-raised": elevation.shadows.raised,
       "--shadow-card": elevation.shadows.card,
       "--shadow-overlay": elevation.shadows.overlay,
+      [SCRIM_VARIABLE]: elevation.scrim,
     },
   };
 }

@@ -206,7 +206,7 @@ function ProviderAccount({
   return (
     <>
       <SettingsRow label={provider.label} testId={`account-${provider.id}`}>
-        <span className="text-xs text-muted-foreground">{providerAccessLabel(provider)}</span>
+        <span className="text-ui text-muted-foreground">{providerAccessLabel(provider)}</span>
         {session !== null ? (
           <Button size="sm" variant="ghost" onClick={() => void cancel()}>
             Cancel
@@ -316,12 +316,12 @@ function SignInPanel({
   return (
     <div
       data-testid={testId}
-      className="mb-4 flex flex-col gap-3 rounded-md border border-border bg-background/40 p-3"
+      className="mb-4 flex flex-col gap-4 rounded-md border border-border bg-background/30 p-4"
     >
       {event !== null ? <SignInEventView event={event} /> : null}
       {failure !== null ? (
-        <div className="flex items-start justify-between gap-3">
-          <p className="text-xs leading-5 text-destructive">{failure}</p>
+        <div className="flex items-start justify-between gap-4">
+          <p className="text-ui leading-5 text-destructive">{failure}</p>
           <Button size="sm" variant="ghost" onClick={onDismissFailure}>
             Dismiss
           </Button>
@@ -357,8 +357,8 @@ function SignInPromptView({
 
   if (prompt.kind === "select") {
     return (
-      <div className="flex flex-col gap-1.5">
-        <label className="text-xs font-medium" htmlFor={inputId}>
+      <div className="flex flex-col gap-1">
+        <label className="text-ui font-medium" htmlFor={inputId}>
           {prompt.message}
         </label>
         <Select disabled={answering} onValueChange={onAnswer}>
@@ -382,13 +382,13 @@ function SignInPromptView({
   const secret = prompt.kind === "secret";
   return (
     <form
-      className="flex flex-col gap-1.5"
+      className="flex flex-col gap-1"
       onSubmit={(submit) => {
         submit.preventDefault();
         if (value.length > 0 && !answering) onAnswer(value);
       }}
     >
-      <label className="text-xs font-medium" htmlFor={inputId}>
+      <label className="text-ui font-medium" htmlFor={inputId}>
         {prompt.message}
       </label>
       <div className="flex items-center gap-2">
@@ -422,7 +422,7 @@ function SignInEventView({ event }: { event: ModelAccessSignInEvent }) {
     case "info":
       return (
         <div className="flex flex-col gap-2">
-          <p className="text-xs leading-5 text-muted-foreground">{event.message}</p>
+          <p className="text-ui leading-5 text-muted-foreground">{event.message}</p>
           {event.links.map((link) => (
             <ExternalLinkButton key={link.url} url={link.url} label={link.label ?? "Open"} />
           ))}
@@ -432,7 +432,7 @@ function SignInEventView({ event }: { event: ModelAccessSignInEvent }) {
       return (
         <div className="flex flex-col gap-2">
           {event.instructions === null ? null : (
-            <p className="text-xs leading-5 text-muted-foreground">{event.instructions}</p>
+            <p className="text-ui leading-5 text-muted-foreground">{event.instructions}</p>
           )}
           <ExternalLinkButton url={event.url} label="Open sign-in page" />
         </div>
@@ -464,7 +464,7 @@ function DeviceCode({ code }: { code: string }) {
 
   return (
     <div className="flex items-center gap-2">
-      <code className="rounded-md border border-border bg-muted/40 px-2 py-1 font-mono text-sm tracking-[0.2em] tabular-nums">
+      <code className="rounded-md border border-border bg-muted/30 px-2 py-1 font-mono text-sm tracking-[0.2em] tabular-nums">
         {code}
       </code>
       <Button
@@ -514,7 +514,7 @@ function ExternalLinkButton({ url, label }: { url: string; label: string }) {
 
 function Waiting({ message }: { message?: string }) {
   return (
-    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+    <div className="flex items-center gap-2 text-ui text-muted-foreground">
       <Spinner className="size-3.5" />
       {message === undefined ? null : <span>{message}</span>}
     </div>

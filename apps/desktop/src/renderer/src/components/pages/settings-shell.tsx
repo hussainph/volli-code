@@ -48,7 +48,7 @@ export function SettingsShell({
     <div className="flex min-h-0 flex-1">
       <nav
         aria-label={`${title} categories`}
-        className="flex w-52 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border p-3"
+        className="flex w-52 shrink-0 flex-col gap-1 overflow-y-auto border-r border-border p-4"
       >
         <p className="px-2 pb-2 pt-1 text-label uppercase text-muted-foreground">{title}</p>
         {categories.map(({ key, label, icon: Icon }) => {
@@ -60,7 +60,7 @@ export function SettingsShell({
               aria-current={isActive ? "page" : undefined}
               onClick={() => setActiveKey(key)}
               className={cn(
-                "flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui transition-colors",
+                "flex items-center gap-2 rounded-md px-2 py-1 text-left text-ui transition-colors",
                 isActive
                   ? "bg-accent text-foreground"
                   : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
@@ -75,7 +75,7 @@ export function SettingsShell({
 
       <div className="min-w-0 flex-1 overflow-y-auto">
         {active ? (
-          <div className="mx-auto w-full max-w-2xl px-8 py-7">
+          <div className="mx-auto w-full max-w-2xl px-8 py-6">
             <SettingsPaneHeader title={active.label} description={active.description} />
             <div className="flex flex-col gap-6">{active.content}</div>
           </div>
@@ -121,9 +121,9 @@ export function SettingsSection({
 }) {
   const hasHeader = title !== undefined || description !== undefined || action !== undefined;
   return (
-    <section className="rounded-lg border border-border bg-card/50 p-5">
+    <section className="rounded-lg border border-border bg-card/50 p-4">
       {hasHeader ? (
-        <div className="mb-4 flex items-start justify-between gap-3">
+        <div className="mb-4 flex items-start justify-between gap-4">
           <div className="min-w-0">
             {title ? (
               <div className="flex items-center gap-2">
@@ -134,7 +134,7 @@ export function SettingsSection({
             {description ? (
               <p
                 className={cn(
-                  "text-xs leading-5 text-muted-foreground",
+                  "text-ui leading-5 text-muted-foreground",
                   title ? "mt-1" : undefined,
                 )}
               >
@@ -164,7 +164,7 @@ export function SettingsSection({
  * section looks the same.
  */
 export function InheritNote({ children }: { children: ReactNode }) {
-  return <p className="text-xs leading-5 text-muted-foreground">{children}</p>;
+  return <p className="text-ui leading-5 text-muted-foreground">{children}</p>;
 }
 
 /**
@@ -198,7 +198,7 @@ export function SettingsRow({
     <div
       data-testid={testId}
       className={cn(
-        "flex justify-between gap-6 border-t border-border/60 py-4 first:border-t-0 first:pt-0 last:pb-0",
+        "flex justify-between gap-6 border-t border-border/50 py-4 first:border-t-0 first:pt-0 last:pb-0",
         align === "center" ? "items-center" : "items-start",
       )}
     >
@@ -207,7 +207,7 @@ export function SettingsRow({
           {label}
         </label>
         {description ? (
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">{description}</p>
+          <p className="mt-1 text-ui leading-5 text-muted-foreground">{description}</p>
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-2">{children}</div>

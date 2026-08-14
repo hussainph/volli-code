@@ -16,9 +16,9 @@ export function DiffStub({
       className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-gutter py-8 text-center"
     >
       <p className="text-ui font-medium text-foreground">{stubReason}</p>
-      <p className="text-xs text-muted-foreground">{baseNameOf(path)}</p>
+      <p className="text-ui text-muted-foreground">{baseNameOf(path)}</p>
       {previousPath !== null ? (
-        <p className="text-xs text-muted-foreground/70">← {previousPath}</p>
+        <p className="text-ui text-muted-foreground/70">← {previousPath}</p>
       ) : null}
     </div>
   );

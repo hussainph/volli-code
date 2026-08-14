@@ -45,7 +45,7 @@ export function ComposerFooter({
     <div className="flex items-center gap-2">
       <ComposerFileAttach fileIndex={fileIndex} onInsert={onInsertRef} />
 
-      <label className="flex items-center gap-2 text-xs text-muted-foreground">
+      <label className="flex items-center gap-2 text-ui text-muted-foreground">
         <Switch
           aria-label="Create more"
           checked={createMore}

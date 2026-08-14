@@ -94,11 +94,11 @@ class MarkdownBoundary extends React.Component<BoundaryProps, BoundaryState> {
               data-language={segment.language ?? undefined}
             >
               {segment.language ? (
-                <div className="px-3 pt-2 font-mono text-muted-foreground text-xs lowercase">
+                <div className="px-4 pt-2 font-mono text-muted-foreground text-ui lowercase">
                   {segment.language}
                 </div>
               ) : null}
-              <pre className="m-0 overflow-x-auto p-3 font-mono text-foreground text-sm">
+              <pre className="m-0 overflow-x-auto p-4 font-mono text-foreground text-sm">
                 <code>{segment.text}</code>
               </pre>
             </div>

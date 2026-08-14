@@ -69,7 +69,7 @@ export const ReasoningLine = React.memo(
     // the same reason — the clock does not move because the label got longer.
     <div
       className={cn(
-        "flex min-w-0 flex-1 items-center gap-1.5 py-0.5 text-xs text-muted-foreground",
+        "flex min-w-0 flex-1 items-center gap-1 py-1 text-ui text-muted-foreground",
         className,
       )}
     >
@@ -159,7 +159,7 @@ export type ReasoningBodyProps = {
 };
 
 export const ReasoningBody = React.memo(({ children, className }: ReasoningBodyProps) => (
-  <div className={cn("text-xs leading-5 text-muted-foreground", className)}>
+  <div className={cn("text-ui leading-5 text-muted-foreground", className)}>
     <Streamdown
       plugins={streamdownPlugins}
       animated={immediateStreamingAnimation}

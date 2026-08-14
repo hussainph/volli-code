@@ -47,7 +47,7 @@ function SelectTrigger({
       data-slot="select-trigger"
       data-size={size}
       className={cn(
-        "flex w-fit items-center justify-between gap-2 rounded-control border border-border bg-transparent px-3 text-ui whitespace-nowrap shadow-raised transition-[color,border-color,box-shadow] outline-none disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground data-[size=default]:h-7 data-[size=sm]:h-6 *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-2 dark:bg-border/30 dark:hover:bg-border/50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&_svg:not([class*='text-'])]:text-muted-foreground",
+        "flex w-fit items-center justify-between gap-2 rounded-control border border-border bg-transparent px-4 text-ui whitespace-nowrap shadow-raised transition-[color,border-color,box-shadow] outline-none disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground data-[size=default]:h-7 data-[size=sm]:h-6 *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-2 dark:bg-border/30 dark:hover:bg-border/50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&_svg:not([class*='text-'])]:text-muted-foreground",
         // No caret speaks for a closed trigger, so unlike the text fields it
         // keeps the keyboard ring — button.tsx's quiet recipe, not a field one.
         "focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/45",

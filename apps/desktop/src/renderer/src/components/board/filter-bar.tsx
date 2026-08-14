@@ -78,7 +78,7 @@ export function FilterBar({ projectId, tickets, filter, className }: FilterBarPr
       {isFilterActive(filter) ? (
         <Button
           variant="ghost"
-          className="h-7 px-2 text-xs text-muted-foreground"
+          className="h-7 px-2 text-ui text-muted-foreground"
           onClick={() => useBoardStore.getState().clearFilter(projectId)}
         >
           <XIcon className="size-3" />

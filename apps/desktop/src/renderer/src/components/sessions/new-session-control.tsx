@@ -153,7 +153,7 @@ export function NewSessionControl({
             // the same (0,1,1), and Tailwind emits the arbitrary value last —
             // so the plain cancel lost, and each half depressed inside the
             // wrapper that was already depressing.
-            className="rounded-r-none pr-1.5 active:scale-100! disabled:opacity-100"
+            className="rounded-r-none pr-1 active:scale-100! disabled:opacity-100"
           >
             {/* Outline, the baseline. The Button's own size rule draws this at
                 14px in `strip`/`empty`, above CLAUDE.md's ≤12px small-size tier

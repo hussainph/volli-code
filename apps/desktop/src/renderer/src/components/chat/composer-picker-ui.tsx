@@ -108,7 +108,7 @@ export function ComposerPicker({
             aria-label={MODE_HEADING[state.mode]}
           >
             <PromptInputCommandList className="max-h-64">
-              <PromptInputCommandEmpty className="px-3 py-4 text-left text-sm text-muted-foreground">
+              <PromptInputCommandEmpty className="px-4 py-4 text-left text-sm text-muted-foreground">
                 No match
               </PromptInputCommandEmpty>
               <PromptInputCommandGroup heading={MODE_HEADING[state.mode]}>
@@ -122,7 +122,7 @@ export function ComposerPicker({
                     <RowIcon row={row} />
                     <span className="min-w-0 shrink-0 truncate text-foreground">{row.label}</span>
                     {row.detail ? (
-                      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                      <span className="min-w-0 flex-1 truncate text-ui text-muted-foreground">
                         {row.detail}
                       </span>
                     ) : null}

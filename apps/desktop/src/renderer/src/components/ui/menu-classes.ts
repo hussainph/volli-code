@@ -89,15 +89,18 @@ export const MENU_ROW_OPEN = "data-[state=open]:bg-accent data-[state=open]:text
 
 /** The destructive row, and its glyph, which the muted-icon rule must not claim. */
 export const MENU_ROW_DESTRUCTIVE =
-  "data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive dark:data-[variant=destructive]:focus:bg-destructive/20 data-[variant=destructive]:*:[svg]:text-destructive!";
+  "data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive dark:data-[variant=destructive]:focus:bg-destructive/30 data-[variant=destructive]:*:[svg]:text-destructive!";
 
 /**
  * Rows that can carry a selection mark reserve the column on the RIGHT rather
  * than stock shadcn's leading `pl-8`: these menus put their own icons up front,
- * and an empty check column ahead of them read as dead space. 28px clears the
- * 14px mark at its 8px inset with room to spare.
+ * and an empty check column ahead of them read as dead space. 24px is the
+ * spacing ladder's rung above the mark's own extent — {@link MENU_INDICATOR} is
+ * 14px at an 8px inset, so it reaches 22px in from the edge and the label stops
+ * 2px clear of it. Anything that widens the mark or moves its inset has to
+ * re-check this number; there is no rung between 24 and 16 to fall back to.
  */
-export const MENU_ROW_INDICATED = "pr-7";
+export const MENU_ROW_INDICATED = "pr-6";
 
 /** The box the selection mark is centred in, at the row's trailing edge. */
 export const MENU_INDICATOR =
@@ -131,7 +134,7 @@ export const MENU_LABEL_CMDK =
  * worse with rows of different width stacked. Latin chords absorb it; the ⌥⌘
  * glyph runs this app actually ships (⌘D, ⇧⌘D, ⌘T, ⌥⌘T) do not.
  */
-export const MENU_SHORTCUT = "ml-auto text-xs text-muted-foreground";
+export const MENU_SHORTCUT = "ml-auto text-ui text-muted-foreground";
 
 /** Hairline, bled back out through the surface's 4px padding to both walls. */
 export const MENU_SEPARATOR = "-mx-1 my-1 h-px bg-border";

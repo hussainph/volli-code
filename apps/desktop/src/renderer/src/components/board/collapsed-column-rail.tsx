@@ -25,7 +25,7 @@ export function CollapsedColumnRail({
   if (statuses.length === 0) return null;
 
   return (
-    <div className="flex w-44 flex-none cursor-default flex-col gap-1.5">
+    <div className="flex w-44 flex-none cursor-default flex-col gap-1">
       <span className="text-label uppercase text-muted-foreground/70">Empty</span>
       {statuses.map((status) => (
         <CollapsedColumnTarget
@@ -61,7 +61,7 @@ function CollapsedColumnTarget({
         if (!dragActive) onExpand(status);
       }}
       className={cn(
-        "flex items-center justify-between rounded-md border border-border/60 px-3 py-2 text-left text-xs text-muted-foreground outline-none",
+        "flex items-center justify-between rounded-md border border-border/50 px-4 py-2 text-left text-ui text-muted-foreground outline-none",
         // `scale` is named because the `starting:` entrance below sets it, and
         // v4 compiles `scale-*` to the standalone property — a list naming only
         // `transform` faded the pill in at full size. See `ui/button.tsx`.
@@ -69,9 +69,9 @@ function CollapsedColumnTarget({
         "hover:border-border hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
         animateEnter && "starting:scale-[0.98] starting:opacity-0 motion-reduce:starting:scale-100",
         // While any card is mid-drag every pill brightens into an affordance…
-        dragActive && "border-border text-foreground/80",
+        dragActive && "border-border text-foreground/70",
         // …and the hovered one lights up as the drop target.
-        isOver && "border-transparent bg-accent ring-1 ring-primary/60",
+        isOver && "border-transparent bg-accent ring-1 ring-primary/50",
       )}
     >
       <span>{TICKET_STATUS_LABELS[status]}</span>

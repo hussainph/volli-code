@@ -13,13 +13,19 @@ import { cn } from "@renderer/lib/utils";
  * theme color (it identifies a project, so it must not move when the theme
  * does). The ink is therefore solved against that fill, not against the page,
  * and reads identically in both modes.
+ *
+ * `rounded-sm` (8px) rather than the control rung the 36px rail tile takes: at
+ * 20px square the control rung's 12px exceeds half the side, so CSS clamps both
+ * corners to 10px and the chip renders as a CIRCLE — a different shape family
+ * from the tile it is the small twin of. 8px on 20px is the same corner-to-side
+ * proportion as 12px on 36px, so the two read as one object at two sizes.
  */
 export function ProjectMonogram({ project, className }: { project: Project; className?: string }) {
   return (
     <span
       aria-hidden
       className={cn(
-        "flex size-5 shrink-0 items-center justify-center rounded-[5px] text-label font-semibold tracking-normal text-white",
+        "flex size-5 shrink-0 items-center justify-center rounded-sm text-label font-semibold tracking-normal text-white",
         className,
       )}
       style={{ backgroundColor: projectColor(project.colorIndex) }}

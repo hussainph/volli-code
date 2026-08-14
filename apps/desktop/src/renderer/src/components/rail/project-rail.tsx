@@ -75,7 +75,7 @@ export const ProjectRail = React.memo(function ProjectRail() {
         onDragCancel={handleDragEnd}
       >
         <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
-          <div className="flex min-h-0 flex-1 flex-col items-center gap-3 overflow-y-auto px-2 pt-4 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="flex min-h-0 flex-1 flex-col items-center gap-4 overflow-y-auto px-2 pt-4 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {projects.map((project, index) => (
               <ProjectTile
                 key={project.id}
@@ -87,7 +87,7 @@ export const ProjectRail = React.memo(function ProjectRail() {
           </div>
         </SortableContext>
       </DndContext>
-      <div className="flex shrink-0 justify-center pt-2 pb-3">
+      <div className="flex shrink-0 justify-center pt-2 pb-4">
         <AddProjectTile />
       </div>
     </div>

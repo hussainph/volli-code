@@ -288,22 +288,22 @@ function DirtyWorktreesList() {
       description="Uncommitted work left behind by removed tickets. Never deleted automatically."
       action={refreshAction}
     >
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-1">
         {state.status === "loading" ? (
-          <p className="text-xs text-muted-foreground">Checking…</p>
+          <p className="text-ui text-muted-foreground">Checking…</p>
         ) : dirty.length === 0 ? (
-          <p className="text-xs text-muted-foreground">No orphaned worktrees.</p>
+          <p className="text-ui text-muted-foreground">No orphaned worktrees.</p>
         ) : (
           dirty.map((orphan) => (
             <div
               key={orphan.path}
-              className="flex items-center justify-between gap-3 rounded-md border border-border/60 bg-background/40 px-3 py-2"
+              className="flex items-center justify-between gap-4 rounded-md border border-border/50 bg-background/30 px-4 py-2"
             >
               <div className="min-w-0">
-                <p className="truncate font-mono text-xs text-foreground" title={orphan.path}>
+                <p className="truncate font-mono text-ui text-foreground" title={orphan.path}>
                   {truncateMiddle(orphan.path)}
                 </p>
-                <p className="mt-0.5 text-xs text-muted-foreground">{orphan.reason}</p>
+                <p className="mt-1 text-ui text-muted-foreground">{orphan.reason}</p>
               </div>
               <div className="flex shrink-0 items-center gap-1">
                 <Button

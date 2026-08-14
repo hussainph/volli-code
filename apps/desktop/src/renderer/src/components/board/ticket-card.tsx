@@ -65,7 +65,9 @@ export function TicketCardContent({
         // (`board.tsx`). This shadow used to be applied from a hand-maintained
         // `article.bg-card` selector in globals.css, which is exactly why the
         // three overlays that selector forgot were wearing stock black.
-        "flex flex-col gap-1.5 rounded-lg border bg-card px-3 py-2.5 shadow-raised cursor-default select-none transition-[border-color] duration-150 ease-out",
+        // px-3, not the ladder's 4: a dense card trades air for content, and at
+        // px-4 real titles truncate a word earlier. Recorded spacing exception.
+        "flex flex-col gap-1 rounded-lg border bg-card px-3 py-2 shadow-raised cursor-default select-none transition-[border-color] duration-150 ease-out",
         // Selection colors the card's own border: a ring draws OUTSIDE the box
         // and the column scroller clips its top edge on the first card.
         selected ? "border-primary/70" : "border-border hover:border-border-strong",
@@ -73,7 +75,7 @@ export function TicketCardContent({
     >
       <div className="flex items-center justify-between gap-2">
         <span className="font-mono text-label text-muted-foreground">{displayId}</span>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1">
           <ArchiveReadyBadge ticket={ticket} />
           <PriorityIndicator priority={ticket.priority} />
         </div>
@@ -82,7 +84,7 @@ export function TicketCardContent({
         {ticket.title}
       </p>
       {ticket.labels.length > 0 ? (
-        <div className="flex flex-wrap gap-1 pt-0.5">
+        <div className="flex flex-wrap gap-1 pt-1">
           {ticket.labels.map((label) => (
             <TagChip key={label} tag={label} color={resolveLabelColor(projectLabels, label)} />
           ))}

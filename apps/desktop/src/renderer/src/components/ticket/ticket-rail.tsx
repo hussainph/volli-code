@@ -113,14 +113,14 @@ function TicketRailTabs({
   return (
     <div
       className={cn(
-        "sticky top-0 z-20 shrink-0 bg-sidebar/80 pt-3 pb-3 backdrop-blur-xl",
+        "sticky top-0 z-20 shrink-0 bg-sidebar/70 pt-4 pb-4 backdrop-blur-xl",
         RAIL_PANEL_INSET,
       )}
     >
       <div
         role="tablist"
         aria-label="Ticket rail pages"
-        className="mx-auto flex h-10 w-40 items-center gap-0.5 rounded-full border border-sidebar-border bg-background/75 p-1 shadow-raised"
+        className="mx-auto flex h-10 w-40 items-center gap-1 rounded-full border border-sidebar-border bg-background/70 p-1 shadow-raised"
       >
         {modes.map((key, index) => {
           const Icon = MODE_ICONS[key];
@@ -150,13 +150,13 @@ function TicketRailTabs({
               }}
               onKeyDown={(event) => onKeyDown(event, index)}
               className={cn(
-                "relative flex h-8 items-center justify-center gap-1.5 overflow-hidden rounded-full text-ui outline-none",
+                "relative flex h-8 items-center justify-center gap-1 overflow-hidden rounded-full text-ui outline-none",
                 active ? "w-[84px]" : "w-8",
                 // `scale-100!` is the press's reduced-motion cancel: dropping
                 // the transition below only made the depress instant, it never
                 // removed it, and `transform-none` could not have — see the
                 // press note in `ui/button.tsx`.
-                "focus-visible:ring-2 focus-visible:ring-ring/50 active:scale-[0.97] motion-reduce:scale-100!",
+                "focus-visible:ring-2 focus-visible:ring-ring/45 active:scale-[0.97] motion-reduce:scale-100!",
                 !reducedMotion &&
                   "transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out",
                 active

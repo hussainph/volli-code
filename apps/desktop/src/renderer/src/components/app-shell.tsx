@@ -564,7 +564,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
             <div
               className={cn(
                 "absolute inset-y-2 left-[2px] w-[2px] rounded-full transition-colors duration-150",
-                reveal.arming ? "bg-foreground/35" : "bg-foreground/12",
+                reveal.arming ? "bg-foreground/30" : "bg-foreground/10",
               )}
             />
           </div>

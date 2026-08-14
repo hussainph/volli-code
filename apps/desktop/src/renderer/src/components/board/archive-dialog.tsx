@@ -67,12 +67,12 @@ export function ArchiveRow({
     <li className="flex items-center gap-2 rounded-md px-2 py-2 hover:bg-accent/50">
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="shrink-0 font-mono text-xs text-muted-foreground">
+          <span className="shrink-0 font-mono text-ui text-muted-foreground">
             {displayTicketId(project.ticketPrefix, ticket.ticketNumber)}
           </span>
           <span className="truncate text-sm">{ticket.title}</span>
         </div>
-        <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
+        <div className="mt-1 flex flex-wrap items-center gap-x-1 gap-y-1 text-ui text-muted-foreground">
           <span>{TICKET_STATUS_LABELS[ticket.status]}</span>
           <span aria-hidden>·</span>
           <span>Archived {formatArchivedAt(ticket.archivedAt)}</span>
@@ -157,7 +157,7 @@ function ArchiveList({ project }: { project: Project }) {
           genuinely empty. Distinguishing them avoids flashing "empty" before
           the first read lands. */}
       {loadFailed && archived === undefined ? (
-        <div className="flex flex-col items-center gap-3 py-10 text-center text-muted-foreground">
+        <div className="flex flex-col items-center gap-4 py-8 text-center text-muted-foreground">
           <p className="text-sm">Couldn’t load the archive.</p>
           <Button variant="outline" size="xs" onClick={load}>
             Retry
@@ -166,7 +166,7 @@ function ArchiveList({ project }: { project: Project }) {
       ) : archived === undefined ? (
         <p className="py-8 text-center text-sm text-muted-foreground">Loading…</p>
       ) : archived.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 py-10 text-center text-muted-foreground">
+        <div className="flex flex-col items-center gap-2 py-8 text-center text-muted-foreground">
           <ArchiveIcon className="size-6" />
           <p className="text-sm">No archived tickets.</p>
         </div>

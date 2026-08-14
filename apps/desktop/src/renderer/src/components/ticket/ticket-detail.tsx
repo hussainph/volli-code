@@ -965,7 +965,7 @@ export function TicketDetail({
             <div
               className={cn(
                 "relative flex min-h-0 flex-1 flex-col",
-                activeTab.kind === "body" && "mt-3",
+                activeTab.kind === "body" && "mt-4",
               )}
             >
               {activeTab.kind === "body" ? (

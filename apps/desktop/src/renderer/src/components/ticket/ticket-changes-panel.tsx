@@ -112,7 +112,7 @@ function ChangesTitle({ count }: { count: number }) {
   return (
     <>
       <p className="text-ui font-medium">Diffs</p>
-      <span className="rounded-full bg-accent px-1.5 font-mono text-label text-muted-foreground">
+      <span className="rounded-full bg-accent px-1 font-mono text-label text-muted-foreground">
         {count}
       </span>
     </>
@@ -167,7 +167,7 @@ export function TicketChangesList({
     return (
       <div
         data-testid="ticket-changes-error"
-        className={cn("flex min-h-0 flex-1 flex-col py-5", RAIL_PANEL_INSET)}
+        className={cn("flex min-h-0 flex-1 flex-col py-4", RAIL_PANEL_INSET)}
         role="alert"
       >
         <p className="text-ui text-destructive">{error}</p>
@@ -183,14 +183,14 @@ export function TicketChangesList({
       <div
         data-testid="ticket-changes-empty"
         className={cn(
-          "flex items-start gap-2.5 rounded-lg border border-sidebar-border/70 bg-background/35 p-3",
+          "flex items-start gap-2 rounded-lg border border-sidebar-border/70 bg-background/30 p-4",
           RAIL_PANEL_MARGIN,
         )}
       >
-        <CheckCircleIcon className="mt-0.5 size-4 shrink-0 text-positive" weight="fill" />
+        <CheckCircleIcon className="mt-1 size-4 shrink-0 text-positive" weight="fill" />
         <div>
           <p className="text-ui font-medium">No changes vs base</p>
-          <p className="mt-0.5 text-xs text-muted-foreground">The branch is up to date.</p>
+          <p className="mt-1 text-ui text-muted-foreground">The branch is up to date.</p>
         </div>
       </div>
     );
@@ -212,7 +212,7 @@ export function TicketChangesList({
             <div
               className={cn(
                 "group relative w-full rounded-lg text-left",
-                focused ? "bg-accent/80" : "hover:bg-accent/55",
+                focused ? "bg-accent/70" : "hover:bg-accent/50",
               )}
             >
               <button
@@ -222,11 +222,11 @@ export function TicketChangesList({
                 data-focused={focused ? "true" : undefined}
                 aria-label={`${row.statusLabel}: ${row.path}`}
                 onClick={() => onSelectRow(row.path)}
-                className="grid min-h-[52px] w-full grid-cols-[16px_minmax(0,1fr)_72px] items-center gap-x-2 px-2.5 py-[7px] text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                className="grid min-h-[52px] w-full grid-cols-[16px_minmax(0,1fr)_72px] items-center gap-x-2 px-2 py-[7px] text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/45"
               >
                 <StatusIcon className={cn("size-4 shrink-0", status.ink)} weight="bold" />
                 <span className="min-w-0">
-                  <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="flex min-w-0 items-center gap-1">
                     <span className="truncate text-ui font-medium">{row.filename}</span>
                     {row.updatedLabel !== undefined && row.updatedDescription !== undefined ? (
                       <span
@@ -250,11 +250,11 @@ export function TicketChangesList({
                       {row.statusLabel}
                     </span>
                   </span>
-                  <span className="block truncate text-xs text-muted-foreground/75">
+                  <span className="block truncate text-ui text-muted-foreground/70">
                     {row.renameFrom !== null ? `← ${row.renameFrom}` : row.parentPath}
                   </span>
                 </span>
-                <span className="flex w-[72px] shrink-0 justify-end gap-1 font-mono text-xs tabular-nums">
+                <span className="flex w-[72px] shrink-0 justify-end gap-1 font-mono text-ui tabular-nums">
                   {row.binary ? (
                     <span className="text-muted-foreground">Binary</span>
                   ) : row.insertions === null || row.deletions === null ? null : (
@@ -271,7 +271,7 @@ export function TicketChangesList({
               <RailRowActions
                 path={row.path}
                 onOpen={onSelectRow}
-                className="absolute top-[5px] right-20 z-10 rounded-md bg-accent/95 px-0.5 shadow-raised"
+                className="absolute top-[5px] right-20 z-10 rounded-md bg-accent/90 px-1 shadow-raised"
               />
             </div>
           </li>
@@ -281,7 +281,7 @@ export function TicketChangesList({
         <li
           data-testid="ticket-changes-truncated"
           data-hidden-count={hiddenCount}
-          className="px-2.5 py-1.5 text-xs text-muted-foreground/80"
+          className="px-2 py-1 text-ui text-muted-foreground/70"
           role="presentation"
         >
           {hiddenCount.toLocaleString()} more {hiddenCount === 1 ? "file" : "files"} not shown
@@ -446,7 +446,7 @@ export function TicketChangesPanel({
         className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-4 py-8 text-center"
       >
         <p className="text-ui font-medium text-muted-foreground">No worktree yet</p>
-        <p className="text-xs text-muted-foreground/80">Move this ticket to Doing to start one</p>
+        <p className="text-ui text-muted-foreground/70">Move this ticket to Doing to start one</p>
       </div>
     );
   }
@@ -461,7 +461,7 @@ export function TicketChangesPanel({
 
   return (
     <div data-testid="ticket-changes-panel" className="flex min-h-0 flex-1 flex-col">
-      <header className={cn("flex shrink-0 flex-col gap-2 pt-1 pb-3", RAIL_PANEL_INSET)}>
+      <header className={cn("flex shrink-0 flex-col gap-2 pt-1 pb-4", RAIL_PANEL_INSET)}>
         {/* Nothing to refine or total up on a clean branch, so the header
             keeps only its name and its zero — the controls would be three
             no-ops over an empty list. */}

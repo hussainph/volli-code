@@ -84,7 +84,7 @@ function EventLine({ event, muted = false }: { event: TicketEvent; muted?: boole
   return (
     <div
       className={cn(
-        "flex items-center gap-2 px-1 text-xs",
+        "flex items-center gap-2 px-1 text-ui",
         muted ? "text-muted-foreground/70" : "text-muted-foreground",
       )}
     >
@@ -98,7 +98,7 @@ function EventLine({ event, muted = false }: { event: TicketEvent; muted?: boole
 /** The expanded bunch: the whole run, threaded, as de-emphasised one-liners. */
 function BunchEventList({ events }: { events: readonly TicketEvent[] }) {
   return (
-    <ul className="mt-1 ml-2 flex flex-col gap-1 border-l border-border/70 pl-2.5">
+    <ul className="mt-1 ml-2 flex flex-col gap-1 border-l border-border/70 pl-2">
       {events.map((event) => (
         <li key={event.id}>
           <EventLine event={event} muted />
@@ -130,7 +130,7 @@ function BunchRow({
   const hidden = events.length - 1;
   return (
     <li className="flex flex-col">
-      <div className="flex items-center gap-2 px-1 text-xs text-muted-foreground">
+      <div className="flex items-center gap-2 px-1 text-ui text-muted-foreground">
         <Icon className="size-3.5 shrink-0" />
         <span className="min-w-0 truncate">{sentence}</span>
         {hidden > 0 ? (
@@ -138,7 +138,7 @@ function BunchRow({
             type="button"
             onClick={() => setExpanded((value) => !value)}
             aria-expanded={expanded}
-            className="flex shrink-0 items-center gap-0.5 rounded-sm text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+            className="flex shrink-0 items-center gap-1 rounded-sm text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
           >
             {expanded ? "less" : `+${hidden} more`}
             <CaretDownIcon
@@ -160,7 +160,7 @@ function AuthorChip({ actor }: { actor: string }) {
     <span
       className={cn(
         "inline-flex size-5 shrink-0 items-center justify-center rounded-full text-label font-semibold",
-        isAgentActor(actor) ? "bg-primary/15 text-primary" : "bg-accent text-foreground",
+        isAgentActor(actor) ? "bg-primary/10 text-primary" : "bg-accent text-foreground",
       )}
       aria-hidden
     >
@@ -205,21 +205,21 @@ function CommentBlock({ comment, onChanged }: { comment: TicketComment; onChange
   return (
     <li
       className={cn(
-        "rounded-lg border border-border bg-card px-3 py-2.5",
+        "rounded-lg border border-border bg-card px-4 py-2",
         optimistic && "opacity-60",
       )}
     >
       <div className="flex items-center gap-2">
         <AuthorChip actor={comment.actor} />
-        <span className="text-xs font-medium text-foreground">
+        <span className="text-ui font-medium text-foreground">
           {commentAuthorLabel(comment.actor)}
         </span>
-        <span className="text-xs text-muted-foreground">
+        <span className="text-ui text-muted-foreground">
           {relativeTime(comment.createdAt)}
           {comment.updatedAt > comment.createdAt ? " · edited" : ""}
         </span>
         {isUser && !editing && !optimistic ? (
-          <div className="ml-auto flex items-center gap-0.5">
+          <div className="ml-auto flex items-center gap-1">
             <Button
               variant="ghost"
               size="icon-xs"
@@ -270,7 +270,7 @@ function CommentBlock({ comment, onChanged }: { comment: TicketComment; onChange
                 setEditing(false);
               }
             }}
-            className="min-h-16 w-full resize-none rounded-md border border-border bg-transparent px-2.5 py-1.5 font-mono text-sm text-foreground outline-none [field-sizing:content] focus-visible:border-ring"
+            className="min-h-16 w-full resize-none rounded-md border border-border bg-transparent px-2 py-1 font-mono text-sm text-foreground outline-none [field-sizing:content] focus-visible:border-ring"
           />
           <div className="flex justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>
@@ -282,7 +282,7 @@ function CommentBlock({ comment, onChanged }: { comment: TicketComment; onChange
           </div>
         </div>
       ) : (
-        <div className="mt-1.5">
+        <div className="mt-1">
           <Markdown source={comment.body} />
         </div>
       )}
@@ -310,7 +310,7 @@ function Composer({ onSubmit }: { onSubmit: (body: string) => Promise<boolean> }
   }
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-border bg-card px-3 py-2.5">
+    <div className="flex flex-col gap-2 rounded-lg border border-border bg-card px-4 py-2">
       <textarea
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
@@ -322,7 +322,7 @@ function Composer({ onSubmit }: { onSubmit: (body: string) => Promise<boolean> }
         }}
         placeholder="Add a comment…"
         aria-label="Add a comment"
-        className="min-h-16 w-full resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/60 [field-sizing:content]"
+        className="min-h-16 w-full resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/50 [field-sizing:content]"
       />
       <div className="flex justify-end">
         <Button
@@ -334,7 +334,7 @@ function Composer({ onSubmit }: { onSubmit: (body: string) => Promise<boolean> }
           Comment
           {/* Same shortcut-chip treatment as the workspace picker's tooltip
               (project-tile.tsx), tinted for the ember primary surface. */}
-          <kbd className="rounded-sm bg-primary-foreground/15 px-1.5 py-0.5 text-label font-normal text-primary-foreground/80">
+          <kbd className="rounded-sm bg-primary-foreground/10 px-1 py-1 text-label font-normal text-primary-foreground/70">
             ⌘↵
           </kbd>
         </Button>
@@ -465,7 +465,7 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
       {loaded && feed.length === 0 ? (
         <p className="px-1 text-sm text-muted-foreground">No activity yet.</p>
       ) : (
-        <ul className="flex flex-col gap-2.5">
+        <ul className="flex flex-col gap-2">
           {feed.map((item) =>
             item.kind === "bunch" ? (
               <BunchRow key={item.id} label={item.label} at={item.at} events={item.events} />

@@ -187,6 +187,14 @@ export function ActiveBandRow({
             which is how this band could paint a Session amber while the ticket
             strip painted the same one with the accent. The row states the STATE
             and `ui/status-dot.tsx` owns what colour that is. */}
+        {/* THE TWO HALF-STEPS HERE ARE DELIBERATE, and they are the recorded
+            exception to the 0/4/8/16/24 spacing collapse. `mt-1.5` is optical
+            alignment — it drops the dot onto the title's cap height, which is a
+            measurement of the type, not a rung of the rhythm. `gap-0.5` is what
+            binds the title to its meta line: at 4px the pair spaces the same as
+            the gap BETWEEN rows and the two lines stop reading as one entity,
+            which is the whole shape of this band. Screenshot-verified against
+            the collapse; anything that moves them has to look at the band. */}
         <StatusDot state={needsYou ? "waiting" : working ? "working" : "idle"} className="mt-1.5" />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           {working ? (
@@ -253,7 +261,7 @@ export function PreviousBandRow({
         // `px-2` is gone rather than kept: the button's own `p-2` is already
         // 8px, so the override was a no-op that read like a deliberate
         // difference from the Active row above it.
-        className={cn("h-6 gap-1.5 text-xs text-muted-foreground", row.cleaned && "opacity-80")}
+        className={cn("h-6 gap-1.5 text-ui text-muted-foreground", row.cleaned && "opacity-80")}
       >
         {/* No `session-row-dim` here: this band is uniformly muted, with no
             dim/promote pairing to join — and that class also names the Active
