@@ -74,11 +74,12 @@ export function useHarnessListings(): readonly HarnessListing[] {
 /**
  * The master list, as one row of pills above the detail it selects.
  *
- * Above rather than beside: a settings pane is one 608px reading column, and it
- * already sits behind Settings' own category rail. A second vertical rail in
- * front of that is two rails deep to reach one card, and it spends the column's
- * width on chrome rather than on the command a launch resolves. Above, the
- * selector costs one row and the detail keeps the full width.
+ * Above rather than beside: a settings pane is one reading column (the app's
+ * `max-w-content` measure inside its gutter), and it already sits behind
+ * Settings' own category rail. A second vertical rail in front of that is two
+ * rails deep to reach one card, and it spends the column's width on chrome
+ * rather than on the command a launch resolves. Above, the selector costs one
+ * row and the detail keeps the full width.
  *
  * Every harness is listed, including the ones with nothing to configure. A list
  * pruned to the configurable one would quietly claim this host can launch
@@ -94,10 +95,13 @@ export function HarnessSelector({
   onSelect(harnessId: string): void;
 }) {
   return (
+    // The track wears the same fill as the sections below it and no frame, for
+    // the same reason they dropped theirs: this pane already sits inside the
+    // app shell's framed card.
     <div
       role="group"
       aria-label="Harnesses"
-      className="flex w-fit flex-wrap gap-1 rounded-lg border border-border bg-card/50 p-1"
+      className="flex w-fit flex-wrap gap-1 rounded-lg bg-card p-1"
     >
       {listings.map((listing) => {
         const isActive = listing.id === activeId;
