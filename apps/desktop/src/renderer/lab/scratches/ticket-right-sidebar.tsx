@@ -104,25 +104,10 @@ const CHANGES: readonly ChangeRow[] = [
   },
 ];
 
-const CHANGE_STATUS: Record<
-  ChangeRow["status"],
-  { icon: PhosphorIcon; iconClass: string; labelClass: string }
-> = {
-  Modified: {
-    icon: GitDiffIcon,
-    iconClass: "text-amber-600 dark:text-amber-400",
-    labelClass: "text-amber-900 dark:text-amber-400",
-  },
-  Added: {
-    icon: PlusIcon,
-    iconClass: "text-emerald-600 dark:text-emerald-400",
-    labelClass: "text-emerald-900 dark:text-emerald-400",
-  },
-  Renamed: {
-    icon: ArrowRightIcon,
-    iconClass: "text-sky-600 dark:text-sky-400",
-    labelClass: "text-sky-900 dark:text-sky-400",
-  },
+const CHANGE_STATUS: Record<ChangeRow["status"], { icon: PhosphorIcon; ink: string }> = {
+  Modified: { icon: GitDiffIcon, ink: "text-attention" },
+  Added: { icon: PlusIcon, ink: "text-positive" },
+  Renamed: { icon: ArrowRightIcon, ink: "text-info" },
 };
 
 const FILES = [
@@ -315,8 +300,8 @@ function DiffTotals({ compact = false }: { compact?: boolean }) {
         compact ? "text-xs" : "text-ui",
       )}
     >
-      <span className="text-emerald-900 dark:text-emerald-400">+281</span>
-      <span className="text-red-900 dark:text-red-400">−166</span>
+      <span className="text-positive">+281</span>
+      <span className="text-destructive">−166</span>
     </span>
   );
 }
@@ -547,7 +532,7 @@ function EnvironmentSummary({
           <GitDiffIcon className="size-4 shrink-0 text-muted-foreground" />
           <span className="truncate text-ui font-medium">{clean ? "No changes" : "4 changes"}</span>
         </span>
-        {clean ? <CheckCircleIcon className="text-emerald-500" /> : <DiffTotals compact />}
+        {clean ? <CheckCircleIcon className="text-positive" /> : <DiffTotals compact />}
       </button>
       <RepositoryPopover noWorktree={noWorktree}>
         <button
@@ -610,9 +595,9 @@ function EnvironmentSummary({
 
 function SessionRows({ variant, narrow }: { variant: Variant; narrow: boolean }) {
   const rows = [
-    { title: "Right sidebar redesign", detail: "Waiting for you", tone: "bg-amber-500" },
-    { title: "Architecture audit", detail: "Working", tone: "bg-emerald-500" },
-    { title: "Previous implementation", detail: "18m ago", tone: "bg-muted-foreground/35" },
+    { title: "Right sidebar redesign", detail: "Waiting for you", tone: "bg-attention" },
+    { title: "Architecture audit", detail: "Working", tone: "bg-positive" },
+    { title: "Previous implementation", detail: "18m ago", tone: "bg-muted-foreground/30" },
   ];
   return (
     <section
@@ -779,7 +764,7 @@ function ChangesPanel({
             narrow ? "mx-3" : "mx-4",
           )}
         >
-          <CheckCircleIcon className="mt-0.5 size-4 shrink-0 text-emerald-500" weight="fill" />
+          <CheckCircleIcon className="mt-0.5 size-4 shrink-0 text-positive" weight="fill" />
           <div>
             <p className="text-ui font-medium">No changes vs main</p>
             <p className="mt-0.5 text-xs text-muted-foreground">The branch is up to date.</p>
@@ -856,14 +841,14 @@ function ChangesPanel({
                   }}
                   className="grid min-h-[52px] w-full grid-cols-[16px_minmax(0,1fr)_72px] items-center gap-x-2 px-2.5 py-[7px] text-left outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/50"
                 >
-                  <StatusIcon className={cn("size-4 shrink-0", status.iconClass)} weight="bold" />
+                  <StatusIcon className={cn("size-4 shrink-0", status.ink)} weight="bold" />
                   <span className="min-w-0">
                     <span className="flex min-w-0 items-center gap-1.5">
                       <span className="truncate text-ui font-medium">{filename}</span>
                       <span
                         className={cn(
                           "shrink-0 text-label font-medium transition-opacity duration-100 group-hover:opacity-0 group-focus-within:opacity-0",
-                          status.labelClass,
+                          status.ink,
                           narrow && "sr-only",
                         )}
                       >
@@ -875,12 +860,8 @@ function ChangesPanel({
                     </span>
                   </span>
                   <span className="flex w-[72px] shrink-0 justify-end gap-1 font-mono text-xs tabular-nums">
-                    <span className="font-medium text-emerald-900 dark:text-emerald-400">
-                      +{row.additions}
-                    </span>
-                    <span className="font-medium text-red-900 dark:text-red-400">
-                      −{row.deletions}
-                    </span>
+                    <span className="font-medium text-positive">+{row.additions}</span>
+                    <span className="font-medium text-destructive">−{row.deletions}</span>
                   </span>
                 </button>
                 <RowActions
@@ -1343,7 +1324,7 @@ export default function TicketRightSidebarScratch() {
             />
             {activity !== null ? (
               <div className="absolute right-3 bottom-3 left-3 flex items-center gap-2 rounded-lg border border-sidebar-border bg-background/95 px-3 py-2 text-xs shadow-lg">
-                <CheckCircleIcon className="text-emerald-500" weight="fill" />
+                <CheckCircleIcon className="text-positive" weight="fill" />
                 <span className="min-w-0 flex-1 truncate">{activity}</span>
                 <button type="button" onClick={() => setActivity(null)} aria-label="Dismiss">
                   ×

@@ -99,6 +99,53 @@ const LADDER: readonly { tokens: readonly ThemeTokenName[]; L: number; k: number
 const DESTRUCTIVE = { L: 0.6256, C: 0.1933, h: 23.026 } as const;
 
 /**
+ * The three status semantics, frozen at hue and NOTHING ELSE — the difference
+ * from {@link DESTRUCTIVE} above, and the whole point of the family.
+ *
+ * These are today's Tailwind anchors decomposed in OKLCH: the `-500` rung of
+ * emerald, amber and sky, because `bg-emerald-500` is the dot the app has been
+ * drawing and a dot is what carries a status colour's identity. Hue is the only
+ * thing taken from them. It is also the only thing that MEANS anything —
+ * green/amber/blue read as working/waiting/moved by convention, and a status
+ * family that followed the canvas's seed would be three colours saying nothing.
+ *
+ * Everything else is solved, which is what `-500` could never be. A status
+ * colour is painted as a dot on a rail AND read as a label in a panel, in two
+ * appearances, on whatever canvas the user armed — and one authored hex cannot
+ * be right in more than one of those. That is exactly why every site swept in
+ * this change carried a hand-written `dark:` twin.
+ */
+const STATUS_HUES = { positive: 162.48, attention: 70.08, info: 237.32 } as const;
+
+/**
+ * The chroma every status token asks for. Gamut mapping takes back whatever a
+ * hue cannot hold at the lightness it lands on, so the ask is a ceiling shared
+ * by three hues rather than three hand-tuned saturations — sRGB's blue simply
+ * cannot be as vivid as its green at equal contrast, and pretending otherwise
+ * is how one status colour ends up shouting over its peers.
+ *
+ * 0.16 because it is roughly where green and amber top out near the lightnesses
+ * {@link STATUS_LC} solves to, so the ask binds on hue rather than on taste.
+ */
+const STATUS_CHROMA = 0.16;
+
+/**
+ * The contrast every status token is solved to, and the reason the family is
+ * perceptually matched rather than merely similar.
+ *
+ * Above {@link MUTED_LC}: a status label that read quieter than the secondary
+ * copy beside it would be a signal losing to its own caption. Below
+ * {@link BODY_LC}: it is a dot and a short label, not prose.
+ *
+ * Measured on `--card` for {@link solveStatusTokens}'s callers, for
+ * `--muted-foreground`'s reason — status ink lives a rung down, in panels and
+ * rails, and the card is the harder of the two surfaces in BOTH appearances
+ * (it is the darker rung in light and the lighter one in dark), so a floor met
+ * there is met on `--background` too.
+ */
+const STATUS_LC = 65;
+
+/**
  * Every contrast floor this generator solves to, restated as data.
  *
  * The numbers are the constants above, not a second set: a table that could
@@ -116,6 +163,13 @@ export const THEME_CONTRAST_FLOORS = [
   { text: "--sidebar-foreground", surface: "--sidebar", floor: SIDEBAR_LC, what: "Sidebar nav" },
   { text: "--primary-text", surface: "--background", floor: MUTED_LC, what: "Accent as text" },
   { text: "--primary-foreground", surface: "--primary", floor: MUTED_LC, what: "Button label" },
+  // The status family, on the rung it is actually painted on. These are the
+  // only entries whose floor the *canvas* layer has to re-meet rather than
+  // inherit — `solveStatusTokens` runs again per ladder — so the sweep over
+  // every authorable canvas is what proves the re-solve happened at all.
+  { text: "--positive", surface: "--card", floor: STATUS_LC, what: "Positive status" },
+  { text: "--attention", surface: "--card", floor: STATUS_LC, what: "Attention status" },
+  { text: "--info", surface: "--card", floor: STATUS_LC, what: "Info status" },
 ] as const satisfies readonly {
   text: ThemeTokenName;
   surface: ThemeTokenName;
@@ -232,6 +286,64 @@ export function solveLightnessOrCeiling(
 }
 
 /**
+ * The status family: three fills and the label each one carries.
+ *
+ * `--destructive` has exactly this shape — a semantic and its foreground — and
+ * this is deliberately no wider. A status colour has one job and does not need
+ * a muted tier: the sites that want a quiet version already wash the token
+ * (`bg-positive/10`) the way the rest of the app washes every other colour.
+ */
+export type StatusTokens = Pick<
+  ThemeTokens,
+  | "--positive"
+  | "--positive-foreground"
+  | "--attention"
+  | "--attention-foreground"
+  | "--info"
+  | "--info-foreground"
+>;
+
+/**
+ * The status family solved against the surface it is painted on.
+ *
+ * A second entry point rather than a slice of {@link generateThemeTokens}'s
+ * output for the same reason {@link generateAccentTokens} is one: the canvas
+ * layer moves the very surface these are measured against, so it has to ask
+ * again with its OWN card rather than inherit an answer solved on the shipped
+ * ladder's. `--destructive` can be carried across verbatim because it is
+ * frozen; nothing solved can be.
+ *
+ * Each label is {@link pickAccentLabel}'s verdict — whichever of white or a
+ * near-black tint of the status hue reads better ON the fill. Unlike the accent
+ * pair there is no repair step, and there is no room for one: the fill's
+ * lightness is already spoken for by {@link STATUS_LC}, so the only axis
+ * `solveAccentPair` has to trade is the one axis a status colour cannot give up.
+ * The two candidates straddle every lightness a status fill can take, so the
+ * better of them is legible by construction.
+ */
+export function solveStatusTokens(surface: string): StatusTokens {
+  const solve = (hue: number) => {
+    const fill = oklchToHex(
+      solveLightnessOrCeiling(STATUS_LC, STATUS_CHROMA, hue, surface),
+      STATUS_CHROMA,
+      hue,
+    );
+    return { fill, label: pickAccentLabel(fill, hue).hex };
+  };
+  const positive = solve(STATUS_HUES.positive);
+  const attention = solve(STATUS_HUES.attention);
+  const info = solve(STATUS_HUES.info);
+  return {
+    "--positive": positive.fill,
+    "--positive-foreground": positive.label,
+    "--attention": attention.fill,
+    "--attention-foreground": attention.label,
+    "--info": info.fill,
+    "--info-foreground": info.label,
+  };
+}
+
+/**
  * Generates the complete token set from an authored theme.
  *
  * Pure and deterministic: the same definition always yields the same hexes,
@@ -304,9 +416,13 @@ export function generateThemeTokens(theme: ThemeDefinition): ThemeTokens {
 
   const tokens: ThemeTokens = {
     ...ladder,
-    // 8. Hue-locked semantics — these ignore the seed entirely.
+    // 8. Hue-locked semantics — these ignore the seed entirely. The red is
+    // frozen outright; the three status hues keep only their hue and are solved
+    // onto the card, so they follow the ladder's lightness without following
+    // its colour.
     "--destructive": oklchToHex(DESTRUCTIVE.L, DESTRUCTIVE.C, DESTRUCTIVE.h),
     "--destructive-foreground": "#ffffff",
+    ...solveStatusTokens(ladder["--card"]!),
 
     "--foreground": foreground,
     "--muted-foreground": mutedForeground,

@@ -95,9 +95,15 @@ describe("TicketSessionsPanel rows", () => {
 
   it("reports a chat Session's own activity, in the terminal rows' vocabulary", () => {
     // `ChatSessionRecord.activity` is a subset of `SessionActivityState`, so one
-    // status column serves both kinds — amber for an agent that is blocked on
-    // you, the same tone the sidebar's Active band paints.
-    expect(panel()).toContain("bg-amber-500");
+    // status column serves both kinds — the attention tone for an agent that is
+    // blocked on you, the same one the sidebar's Active band and the ticket tab
+    // strip paint, because all three now ask `ui/status-dot.tsx`.
+    //
+    // Asserted on the STATE rather than on `bg-attention`: the class is
+    // `StatusDot`'s business and this panel's job is to hand it the right state.
+    // A test that matched the class would fail the day the dot is restyled and
+    // pass the day this panel starts reporting the wrong state.
+    expect(panel()).toContain('data-state="waiting"');
   });
 
   it("draws History as a sibling section, never the old rail's drawer", () => {

@@ -17,6 +17,7 @@ import {
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import { Input } from "@renderer/components/ui/input";
+import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import {
   buildTicketChatSessionRows,
@@ -55,22 +56,6 @@ const STATUS_LABEL: Record<TicketSessionStatus, string> = {
   setup: "Setup",
 };
 
-/** The dot's tone per status — the sidebar's ACTIVE SESSIONS vocabulary, so one
- * agent waiting on you paints the same amber on both surfaces. `setup` (the
- * worktree's `setting-up` ensure phase) borrows `working`'s green rather than
- * inventing a colour for a state that is working. */
-const STATUS_TONE: Record<TicketSessionStatus, string> = {
-  working: "bg-emerald-500",
-  setup: "bg-emerald-500",
-  waiting: "bg-amber-500",
-  idle: "bg-muted-foreground/50",
-  parked: "bg-muted-foreground/35",
-  exited: "bg-muted-foreground/25",
-};
-
-/** A row that has stopped: one tone for every past session, live or not. */
-const PAST_TONE = "bg-muted-foreground/35";
-
 /** Sessions and History are the same block twice — one shape, one inset, no seam. */
 const SECTION = cn("flex flex-col gap-1 pt-5", RAIL_PANEL_INSET);
 
@@ -93,11 +78,17 @@ function SectionHeading({ label, children }: { label: string; children?: React.R
  * row says what it is doing and a past one says when it stopped, in the same
  * two-part shape either way — which is what lets the column be read down rather
  * than row by row. Pill chrome read too loud in the 300px rail.
+ *
+ * The dot takes the STATE, not a colour. This panel used to hold its own
+ * status→tone map and the tab strip held a second one that disagreed with it
+ * about the same Session — `ui/status-dot.tsx` is now the only place either
+ * question is answered. A history row is `exited` by definition, which is why
+ * the old `PAST_TONE` constant is gone rather than replaced.
  */
-function RowStatus({ tone, children }: { tone: string; children: React.ReactNode }) {
+function RowStatus({ state, children }: { state: StatusDotState; children: React.ReactNode }) {
   return (
     <span className="flex shrink-0 items-center gap-1.5 text-label text-muted-foreground">
-      <span className={cn("size-1.5 rounded-full", tone)} />
+      <StatusDot state={state} />
       {children}
     </span>
   );
@@ -258,11 +249,9 @@ function SessionList({
               // anything.
               trailing={
                 variant === "current" ? (
-                  <RowStatus tone={STATUS_TONE[record.activity]}>
-                    {STATUS_LABEL[record.activity]}
-                  </RowStatus>
+                  <RowStatus state={record.activity}>{STATUS_LABEL[record.activity]}</RowStatus>
                 ) : (
-                  <RowStatus tone={PAST_TONE}>{relativeTime(record.lastActivityAt, now)}</RowStatus>
+                  <RowStatus state="exited">{relativeTime(record.lastActivityAt, now)}</RowStatus>
                 )
               }
               editing={editingId === sessionId}
@@ -284,9 +273,9 @@ function SessionList({
             title={title}
             trailing={
               variant === "current" ? (
-                <RowStatus tone={STATUS_TONE[status]}>{STATUS_LABEL[status]}</RowStatus>
+                <RowStatus state={status}>{STATUS_LABEL[status]}</RowStatus>
               ) : (
-                <RowStatus tone={PAST_TONE}>
+                <RowStatus state="exited">
                   {relativeTime(record.endedAt ?? record.createdAt, now)}
                 </RowStatus>
               )

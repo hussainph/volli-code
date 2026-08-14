@@ -86,46 +86,25 @@ export function toChangeListRow(file: ChangeSetFile, recency: ChangeRecencyState
  * `deleted` takes the removal mark in the deletions' own red, `untracked`
  * shares `added`'s green because both are "this file is new" (the status word
  * beside it is what separates staged from not), and `conflicted` is the one
- * failure among them, so it takes the warning glyph and the destructive ink.
+ * failure among them, so it takes the warning glyph.
+ *
+ * ONE ink per status, where this was a `{iconClass, labelClass}` pair. The pair
+ * only ever encoded a light-mode shade step (`-600` glyph, `-900` label) that
+ * dark mode collapsed anyway — six statuses × two fields × two appearances of
+ * hand-written Tailwind, saying what the canvas now solves once. The glyph and
+ * its label are one object; they were never two decisions.
  *
  * `bold`, not `fill`: at 16px a status mark sits beside an 11px label, which is
  * the size tier where regular draws lighter than its own text (CLAUDE.md).
  * Filling them would make five different drawings rather than one heavier set.
  */
-const CHANGE_STATUS: Record<
-  ChangeSetFileStatus,
-  { icon: PhosphorIcon; iconClass: string; labelClass: string }
-> = {
-  modified: {
-    icon: GitDiffIcon,
-    iconClass: "text-amber-600 dark:text-amber-400",
-    labelClass: "text-amber-900 dark:text-amber-400",
-  },
-  added: {
-    icon: PlusIcon,
-    iconClass: "text-emerald-600 dark:text-emerald-400",
-    labelClass: "text-emerald-900 dark:text-emerald-400",
-  },
-  untracked: {
-    icon: PlusIcon,
-    iconClass: "text-emerald-600 dark:text-emerald-400",
-    labelClass: "text-emerald-900 dark:text-emerald-400",
-  },
-  renamed: {
-    icon: ArrowRightIcon,
-    iconClass: "text-sky-600 dark:text-sky-400",
-    labelClass: "text-sky-900 dark:text-sky-400",
-  },
-  deleted: {
-    icon: MinusIcon,
-    iconClass: "text-red-600 dark:text-red-400",
-    labelClass: "text-red-900 dark:text-red-400",
-  },
-  conflicted: {
-    icon: WarningIcon,
-    iconClass: "text-destructive",
-    labelClass: "text-destructive",
-  },
+const CHANGE_STATUS: Record<ChangeSetFileStatus, { icon: PhosphorIcon; ink: string }> = {
+  modified: { icon: GitDiffIcon, ink: "text-attention" },
+  added: { icon: PlusIcon, ink: "text-positive" },
+  untracked: { icon: PlusIcon, ink: "text-positive" },
+  renamed: { icon: ArrowRightIcon, ink: "text-info" },
+  deleted: { icon: MinusIcon, ink: "text-destructive" },
+  conflicted: { icon: WarningIcon, ink: "text-destructive" },
 };
 
 /** The page's name and its count — the one line both the empty and full list wear. */
@@ -208,7 +187,7 @@ export function TicketChangesList({
           RAIL_PANEL_MARGIN,
         )}
       >
-        <CheckCircleIcon className="mt-0.5 size-4 shrink-0 text-emerald-500" weight="fill" />
+        <CheckCircleIcon className="mt-0.5 size-4 shrink-0 text-positive" weight="fill" />
         <div>
           <p className="text-ui font-medium">No changes vs base</p>
           <p className="mt-0.5 text-xs text-muted-foreground">The branch is up to date.</p>
@@ -245,7 +224,7 @@ export function TicketChangesList({
                 onClick={() => onSelectRow(row.path)}
                 className="grid min-h-[52px] w-full grid-cols-[16px_minmax(0,1fr)_72px] items-center gap-x-2 px-2.5 py-[7px] text-left outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/50"
               >
-                <StatusIcon className={cn("size-4 shrink-0", status.iconClass)} weight="bold" />
+                <StatusIcon className={cn("size-4 shrink-0", status.ink)} weight="bold" />
                 <span className="min-w-0">
                   <span className="flex min-w-0 items-center gap-1.5">
                     <span className="truncate text-ui font-medium">{row.filename}</span>
@@ -265,7 +244,7 @@ export function TicketChangesList({
                       className={cn(
                         "shrink-0 text-label font-medium transition-opacity duration-100 group-focus-within:opacity-0 group-hover:opacity-0 motion-reduce:transition-none",
                         "group-data-[narrow=true]/rail:sr-only",
-                        status.labelClass,
+                        status.ink,
                       )}
                     >
                       {row.statusLabel}
@@ -280,12 +259,8 @@ export function TicketChangesList({
                     <span className="text-muted-foreground">Binary</span>
                   ) : row.insertions === null || row.deletions === null ? null : (
                     <>
-                      <span className="font-medium text-emerald-900 dark:text-emerald-400">
-                        +{row.insertions}
-                      </span>
-                      <span className="font-medium text-red-900 dark:text-red-400">
-                        −{row.deletions}
-                      </span>
+                      <span className="font-medium text-positive">+{row.insertions}</span>
+                      <span className="font-medium text-destructive">−{row.deletions}</span>
                     </>
                   )}
                 </span>

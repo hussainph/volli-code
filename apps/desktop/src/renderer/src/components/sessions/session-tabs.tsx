@@ -10,7 +10,7 @@ import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { InlineRename } from "@renderer/components/sessions/inline-rename";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
 import { runOnLivePanes, terminalTabState } from "@renderer/components/sessions/terminal-tab-state";
-import { TAB_STATUS_CLASS, type TicketTabStatus } from "@renderer/components/ticket/ticket-tabs";
+import type { TicketTabStatus } from "@renderer/components/ticket/ticket-tabs";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -18,6 +18,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
+import { StatusDot } from "@renderer/components/ui/status-dot";
 import { cn } from "@renderer/lib/utils";
 import { useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
 
@@ -460,10 +461,7 @@ function ChatTab({
           onActivate={onSelect}
           leading={
             <>
-              <span
-                aria-hidden
-                className={cn("size-1.5 shrink-0 rounded-full", TAB_STATUS_CLASS[status])}
-              />
+              <StatusDot state={status} />
               {/* Bold, not filled: the dot beside it is already a solid object,
                   and two in a 12px row is one too many. Same treatment as the
                   sidebar's kind glyph — at this size regular draws lighter than

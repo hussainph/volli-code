@@ -37,6 +37,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
+import { StatusDot } from "@renderer/components/ui/status-dot";
 import { cn } from "@renderer/lib/utils";
 import { useSessionsStore } from "@renderer/stores/sessions";
 
@@ -91,17 +92,6 @@ export type TicketTabKind = "body" | "session" | "file" | "diff" | "chat";
  * PTY, a chat tab off its resident slice's lifecycle.
  */
 export type TicketTabStatus = "idle" | "starting" | "ready" | "working" | "error";
-
-/** One vocabulary for a Session's dot, shared with the scratch strip (`session-tabs.tsx`). */
-export const TAB_STATUS_CLASS: Record<TicketTabStatus, string> = {
-  // The halo only rides `working`, so a live turn is legible from the strip
-  // without the resting states competing for the same attention.
-  working: "bg-primary shadow-[0_0_0_3px_color-mix(in_oklab,var(--primary)_18%,transparent)]",
-  ready: "bg-primary",
-  error: "bg-destructive",
-  starting: "bg-muted-foreground",
-  idle: "bg-muted-foreground",
-};
 
 /** Whether a ticket-strip tab of this kind shows a close affordance. */
 export function isClosableTicketTab(kind: TicketTabKind): boolean {
@@ -311,10 +301,7 @@ function TicketTab({
       )}
     >
       {tab.status !== undefined ? (
-        <span
-          aria-hidden
-          className={cn("mr-1.5 size-2 shrink-0 rounded-full", TAB_STATUS_CLASS[tab.status])}
-        />
+        <StatusDot state={tab.status} size="md" className="mr-1.5" />
       ) : terminal !== null ? (
         // A terminal tab's liveness, in the SAME leading slot and at the same
         // size as a chat tab's dot, so the column reads as liveness whatever the

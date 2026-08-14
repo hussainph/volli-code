@@ -27,6 +27,7 @@ import {
   generateAccentTokens,
   generateThemeTokens,
   solveLightnessOrCeiling,
+  solveStatusTokens,
   type AccentTokens,
 } from "../generate";
 import type { ThemeTokens } from "../tokens";
@@ -122,6 +123,11 @@ function solveCopy(
  * path unchanged: `--primary` and `--primary-foreground` are a solved PAIR whose
  * floor is measured on the button itself, so the button holds whatever page it
  * sits on.
+ *
+ * The three status semantics are hue-locked too and still cannot be carried
+ * across: they are SOLVED against the card, and this path's card is the one
+ * thing that is not the dark path's. Copying them here is precisely the
+ * hand-written `dark:` twin, moved into the generator.
  */
 function lightTokens(
   canvas: Canvas,
@@ -141,6 +147,7 @@ function lightTokens(
     ...accent,
     "--destructive": dark["--destructive"],
     "--destructive-foreground": dark["--destructive-foreground"],
+    ...solveStatusTokens(ladder["--card"]),
   };
 }
 
@@ -152,6 +159,10 @@ function lightTokens(
  * What the ladder does NOT touch: the hue-locked `--destructive` family, carried
  * over by the spread below, and the accent family, which the spread replaces
  * wholesale with the one solved off the canvas's own chroma.
+ *
+ * The status family is re-solved rather than carried, even here where the mode
+ * matches: `dark` holds them solved against the SHIPPED ladder's card, and the
+ * whole job of `buildDarkLadder` is to move that card toward the canvas.
  */
 function darkTokens(
   canvas: Canvas,
@@ -171,6 +182,7 @@ function darkTokens(
     ...ladder,
     ...accent,
     ...solveCopy(ladder, "dark", ink, hexToOklch(accent["--primary"])),
+    ...solveStatusTokens(ladder["--card"]),
   };
 }
 
