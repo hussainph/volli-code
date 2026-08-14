@@ -25,11 +25,23 @@
  * whole prompt into the box. The file rows include several same-named files and
  * two artifacts, which is where the second column earns its place.
  *
- * The toggle mounts an interaction card in the slot. The picker must stay shut
- * while it is up: one thing parks above the composer at a time.
+ * The two request buttons mount a card in the slot — and pressing the other one
+ * while a card is up replaces it, which is the case the stack's presence mode
+ * has to be judged on. The picker must stay shut while a card is up: one thing
+ * parks above the composer at a time.
+ *
+ * **Watch the composer, not the card.** Nothing here may move it: opening or
+ * closing either picker, switching `/` to `@`, and every card arrival, exit and
+ * replacement all grow or shrink the box *above* a bottom-anchored input. If the
+ * composer slides, something in its ancestry took a `layout` prop.
  */
 import * as React from "react";
-import type { IndexedFile, PromptTemplate, SessionInteraction } from "@volli/shared";
+import {
+  promptId,
+  type IndexedFile,
+  type PromptTemplate,
+  type SessionInteraction,
+} from "@volli/shared";
 
 import {
   SessionComposer,
@@ -103,7 +115,60 @@ const QUESTION: SessionInteraction = {
   native: { id: "n1", detail: null },
 };
 
-/** Enough transcript that the bottom of the feed is always off-screen. */
+/**
+ * A second request, so the slot can be watched being *replaced* rather than only
+ * filled and emptied. Deliberately a different height from the first: a swap
+ * that changes the card's size is where a stack's presence mode shows its hand.
+ *
+ * Two prompts, so answering the first steps the carousel — the card's own
+ * internal `layout` stage, which tweens the frame's height as the steps pass
+ * each other. That one is allowed to animate, and this is where it proves it
+ * animates the card and nothing outside it.
+ */
+const PERMISSION: SessionInteraction = {
+  id: "q2",
+  attachmentId: "a2",
+  kind: "permission",
+  title: "Run `pnpm build` in the worktree?",
+  detail: "Writes to apps/desktop/out and packages/*/dist.",
+  options: [
+    { id: "once", label: "Allow once", description: null },
+    { id: "always", label: "Always allow pnpm build", description: "For this project" },
+    { id: "deny", label: "Deny", description: null },
+  ],
+  multiple: false,
+  prompts: [
+    {
+      id: promptId(0),
+      label: "Run `pnpm build` in the worktree?",
+      detail: "Writes to apps/desktop/out and packages/*/dist.",
+      options: [
+        { id: "once", label: "Allow once", description: null },
+        { id: "always", label: "Always allow pnpm build", description: "For this project" },
+        { id: "deny", label: "Deny", description: null },
+      ],
+      multiple: false,
+      custom: false,
+    },
+    {
+      // Taller than the first on purpose: the frame has something to tween to.
+      id: promptId(1),
+      label: "And push the branch when it succeeds?",
+      detail: null,
+      options: [
+        { id: "push", label: "Push to origin", description: "volli/VC-12-composer-stack" },
+        { id: "pr", label: "Push and open a pull request", description: null },
+        { id: "hold", label: "Hold", description: "Leave the commits local" },
+        { id: "deny", label: "Deny", description: null },
+      ],
+      multiple: false,
+      custom: true,
+    },
+  ],
+  native: { id: "n2", detail: null },
+};
+
+/** Enough transcript to scroll, with the last line where a card would cover it. */
 const FEED = [
   "Walk me through how the composer decides what to complete.",
   "It reads the caret, not the keystroke. `/` only counts at offset 0; `@` counts at any ref boundary.",
@@ -155,14 +220,22 @@ export default function ComposerPickerScratch() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
-        <Button
-          type="button"
-          size="sm"
-          variant={interaction ? "default" : "outline"}
-          onClick={() => setInteraction((current) => (current ? null : QUESTION))}
-        >
-          {interaction ? "Withdraw question" : "Raise a question"}
-        </Button>
+        {[QUESTION, PERMISSION].map((request) => (
+          <Button
+            key={request.id}
+            type="button"
+            size="sm"
+            variant={interaction?.id === request.id ? "default" : "outline"}
+            // Pressing the other one while a card is up replaces the request
+            // rather than emptying the slot — the swap the stack's presence
+            // mode is actually chosen on.
+            onClick={() =>
+              setInteraction((current) => (current?.id === request.id ? null : request))
+            }
+          >
+            {request.kind === "permission" ? "Permission" : "Question"}
+          </Button>
+        ))}
         <Button type="button" size="sm" variant="outline" onClick={() => seed("/")}>
           Seed /
         </Button>
@@ -174,7 +247,10 @@ export default function ComposerPickerScratch() {
       {/* `chat-plane.tsx`'s shape, reproduced: a scroller that clears the
           measured bottom mount, and the mount itself pinned to the bottom. */}
       <div
-        className="relative flex h-[32rem] min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-background"
+        // Tall enough that the last message is still on screen with the tallest
+        // card up — otherwise the clearance this scratch exists to show happens
+        // entirely above the fold and it can only be measured, not seen.
+        className="relative flex h-[44rem] min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-background"
         style={{ "--composer-height": `${composerHeight.height}px` } as React.CSSProperties}
       >
         <div ref={feedRef} className="min-h-0 flex-1 overflow-y-auto">
@@ -183,6 +259,7 @@ export default function ComposerPickerScratch() {
               {FEED.map((line, index) => (
                 <p
                   key={line}
+                  data-last-message={index === FEED.length - 1 ? "" : undefined}
                   className={
                     index % 2 === 0
                       ? "text-sm text-foreground"
