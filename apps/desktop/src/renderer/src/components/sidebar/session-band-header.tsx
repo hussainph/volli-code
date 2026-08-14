@@ -112,8 +112,8 @@ export function SessionBandFilterMenu({
           // The tint is the sighted half of the same fact.
           style={{ marginRight: -FILTER_GLYPH_NUDGE }}
           className={cn(
-            "flex size-5 items-center justify-center rounded-sm ring-sidebar-ring outline-hidden transition-colors hover:bg-sidebar-accent-veil hover:text-sidebar-accent-foreground focus-visible:ring-2",
-            narrowed ? "text-sidebar-accent-foreground" : "text-muted-foreground",
+            "flex size-5 items-center justify-center rounded-sm ring-ring outline-hidden transition-colors hover:bg-sidebar-accent-veil hover:text-foreground focus-visible:ring-2",
+            narrowed ? "text-foreground" : "text-muted-foreground",
           )}
         >
           {/* `bold` OVERRIDES the audit, which records `regular` for this site

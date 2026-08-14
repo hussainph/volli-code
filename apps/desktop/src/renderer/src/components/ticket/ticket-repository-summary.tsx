@@ -992,12 +992,12 @@ export function TicketRepositorySummary({
     // invalid value the browser drops, so the card that was reviewed and
     // approved is flat in BOTH appearances (verified in the lab, computed
     // `box-shadow: none` under `.light`). Border plus surface is the whole
-    // frame. To add the lift the scratch intended, this wants
-    // `shadow-[0_1px_2px_var(--shadow-ink)/6%,…]` and a real token, not a
-    // revival of the broken string.
+    // frame. The lift the scratch intended is `shadow-[var(--shadow-raised)]` —
+    // one of the three solved tiers, tinted to the canvas in both appearances —
+    // and adding it is a visual call, not a revival of the broken string.
     <section
       data-testid="ticket-repository-summary"
-      className="mx-4 overflow-hidden rounded-xl border border-sidebar-border/70 bg-background/55 group-data-[narrow=true]/rail:mx-3 dark:bg-sidebar-accent/45"
+      className="mx-4 overflow-hidden rounded-xl border border-sidebar-border/70 bg-background/55 group-data-[narrow=true]/rail:mx-3 dark:bg-accent/45"
     >
       <button
         type="button"
@@ -1006,7 +1006,7 @@ export function TicketRepositorySummary({
         title={changeSetSummary ?? undefined}
         aria-busy={loadingChanges || undefined}
         aria-label={`${loadingChanges ? "Reading changes" : changesLabel}, show Diffs`}
-        className={cn(ROW, "pt-3 pb-2.5 hover:bg-sidebar-accent/45")}
+        className={cn(ROW, "pt-3 pb-2.5 hover:bg-accent/45")}
       >
         <GitDiffIcon className="size-4 shrink-0 text-muted-foreground" />
         {/* One flex child either way, so the label lands where the bar was
@@ -1017,7 +1017,7 @@ export function TicketRepositorySummary({
             <span
               aria-hidden
               data-testid="ticket-repository-changes-loading"
-              className="my-[3px] block h-3.5 w-24 animate-pulse rounded bg-sidebar-accent/70 motion-reduce:animate-none"
+              className="my-[3px] block h-3.5 w-24 animate-pulse rounded bg-accent/70 motion-reduce:animate-none"
             />
           ) : (
             <span className="block truncate text-ui font-medium">{changesLabel}</span>
@@ -1042,7 +1042,7 @@ export function TicketRepositorySummary({
             }
             className={cn(
               ROW,
-              "min-h-8 border-t border-sidebar-border/70 py-2.5 hover:bg-sidebar-accent/45",
+              "min-h-8 border-t border-sidebar-border/70 py-2.5 hover:bg-accent/45",
             )}
           >
             <GitBranchIcon className="size-4 shrink-0 text-muted-foreground" />

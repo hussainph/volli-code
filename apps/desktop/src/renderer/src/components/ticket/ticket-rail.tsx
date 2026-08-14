@@ -156,12 +156,12 @@ function TicketRailTabs({
                 // the transition below only made the depress instant, it never
                 // removed it, and `transform-none` could not have — see the
                 // press note in `ui/button.tsx`.
-                "focus-visible:ring-2 focus-visible:ring-sidebar-ring/50 active:scale-[0.97] motion-reduce:scale-100!",
+                "focus-visible:ring-2 focus-visible:ring-ring/50 active:scale-[0.97] motion-reduce:scale-100!",
                 !reducedMotion &&
                   "transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out",
                 active
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-xs"
-                  : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground",
+                  ? "bg-accent text-foreground shadow-xs"
+                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
               )}
             >
               <motion.span layout="position" className="flex shrink-0 items-center">

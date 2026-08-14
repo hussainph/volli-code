@@ -47,16 +47,12 @@ describe("the ember golden", () => {
     "--accent": "#28201d",
     "--sidebar": "#1b1412",
     "--foreground": "#ebe3df",
-    "--card-foreground": "#ebe3df",
     "--popover-foreground": "#ebe3df",
     "--secondary-foreground": "#ebe3df",
     "--muted-foreground": "#b9b0ad",
     "--accent-foreground": "#ebe3df",
     "--sidebar-foreground": "#d3cbc7",
-    "--sidebar-accent": "#28201d",
-    "--sidebar-accent-foreground": "#ebe3df",
     "--border": "#2d2421",
-    "--border-hover": "#3b312d",
     "--border-strong": "#423834",
     "--input": "#2d2421",
     "--sidebar-border": "#29211d",
@@ -64,9 +60,6 @@ describe("the ember golden", () => {
     "--primary-foreground": "#ffffff",
     "--primary-text": "#ff966c",
     "--ring": "#e8652a",
-    "--sidebar-primary": "#e8652a",
-    "--sidebar-primary-foreground": "#ffffff",
-    "--sidebar-ring": "#e8652a",
     "--destructive": "#e5484d",
     "--destructive-foreground": "#ffffff",
     "--positive": "#27d496",
@@ -159,13 +152,7 @@ describe("the generator's guarantees, over 360 hues × 5 chromas", () => {
     // Asserted in ΔL and never in APCA: APCA low-clips below Lc ~10, so it
     // returns a flat 0 for every border/background pair and cannot tell a
     // visible edge from an invisible one.
-    const borders = [
-      "--border",
-      "--input",
-      "--border-hover",
-      "--border-strong",
-      "--sidebar-border",
-    ] as const;
+    const borders = ["--border", "--input", "--border-strong", "--sidebar-border"] as const;
     for (const { seed, tokens } of sweep) {
       const backgroundL = hexToOklch(tokens["--background"]).L;
       for (const border of borders) {
@@ -192,7 +179,7 @@ describe("the generator's guarantees, over 360 hues × 5 chromas", () => {
     // minimum 0.0517 at seed #71886b. Moving the ladder to fix that would
     // repaint every shipped theme, so it stays as authored and stays asserted
     // against --background, where it clears comfortably.
-    const borders = ["--border", "--input", "--border-hover", "--border-strong"] as const;
+    const borders = ["--border", "--input", "--border-strong"] as const;
     for (const { seed, tokens } of sweep) {
       const cardL = hexToOklch(tokens["--card"]).L;
       for (const border of borders) {
@@ -216,7 +203,6 @@ describe("the generator's guarantees, over 360 hues × 5 chromas", () => {
       ["--accent", 0.252],
       ["--sidebar-border", 0.255],
       ["--border", 0.269],
-      ["--border-hover", 0.321],
       ["--border-strong", 0.349],
     ];
     for (const { seed, tokens } of sweep) {
@@ -403,7 +389,6 @@ describe("the ladder's monotonicity", () => {
     "--accent",
     "--sidebar-border",
     "--border",
-    "--border-hover",
     "--border-strong",
   ] as const;
 
@@ -444,10 +429,8 @@ describe("the ladder's monotonicity", () => {
       "--secondary",
       "--muted",
       "--accent",
-      "--sidebar-accent",
       "--border",
       "--input",
-      "--border-hover",
       "--border-strong",
       "--sidebar-border",
     ] as const;
@@ -602,13 +585,13 @@ describe("overrides", () => {
   });
 
   it("does not follow an aliased token", () => {
-    // --card-foreground is generated as a copy of --foreground, but
+    // --accent-foreground is generated as a copy of --foreground, but
     // overriding one must not silently move the other.
     const tokens = generateThemeTokens({
       ...DEFAULT_THEME,
       overrides: { "--foreground": "#1a1a1a" },
     });
-    expect(tokens["--card-foreground"]).toBe("#ebe3df");
+    expect(tokens["--accent-foreground"]).toBe("#ebe3df");
   });
 });
 

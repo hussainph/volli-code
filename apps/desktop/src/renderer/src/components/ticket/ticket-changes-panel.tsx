@@ -112,7 +112,7 @@ function ChangesTitle({ count }: { count: number }) {
   return (
     <>
       <p className="text-ui font-medium">Diffs</p>
-      <span className="rounded-full bg-sidebar-accent px-1.5 font-mono text-label text-muted-foreground">
+      <span className="rounded-full bg-accent px-1.5 font-mono text-label text-muted-foreground">
         {count}
       </span>
     </>
@@ -212,7 +212,7 @@ export function TicketChangesList({
             <div
               className={cn(
                 "group relative w-full rounded-lg text-left",
-                focused ? "bg-sidebar-accent/80" : "hover:bg-sidebar-accent/55",
+                focused ? "bg-accent/80" : "hover:bg-accent/55",
               )}
             >
               <button
@@ -222,7 +222,7 @@ export function TicketChangesList({
                 data-focused={focused ? "true" : undefined}
                 aria-label={`${row.statusLabel}: ${row.path}`}
                 onClick={() => onSelectRow(row.path)}
-                className="grid min-h-[52px] w-full grid-cols-[16px_minmax(0,1fr)_72px] items-center gap-x-2 px-2.5 py-[7px] text-left outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/50"
+                className="grid min-h-[52px] w-full grid-cols-[16px_minmax(0,1fr)_72px] items-center gap-x-2 px-2.5 py-[7px] text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
               >
                 <StatusIcon className={cn("size-4 shrink-0", status.ink)} weight="bold" />
                 <span className="min-w-0">
@@ -271,7 +271,7 @@ export function TicketChangesList({
               <RailRowActions
                 path={row.path}
                 onOpen={onSelectRow}
-                className="absolute top-[5px] right-20 z-10 rounded-md bg-sidebar-accent/95 px-0.5 shadow-xs"
+                className="absolute top-[5px] right-20 z-10 rounded-md bg-accent/95 px-0.5 shadow-xs"
               />
             </div>
           </li>

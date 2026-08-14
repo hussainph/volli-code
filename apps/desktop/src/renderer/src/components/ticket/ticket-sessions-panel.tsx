@@ -175,7 +175,7 @@ function SessionRow({
       <button
         type="button"
         onClick={onActivate}
-        className={cn(shell, "text-left hover:border-sidebar-border hover:bg-sidebar-accent/60")}
+        className={cn(shell, "text-left hover:border-sidebar-border hover:bg-accent/60")}
       >
         {content}
       </button>
@@ -518,7 +518,7 @@ export function TicketSessionsPanel({
           <SectionHeading label="History">
             {/* The Diffs page's own count pill, not the retired drawer's bare
                 number beside a caret — one shape for "how many are in here". */}
-            <span className="rounded-full bg-sidebar-accent px-1.5 font-mono text-label text-muted-foreground">
+            <span className="rounded-full bg-accent px-1.5 font-mono text-label text-muted-foreground">
               {history.length}
             </span>
           </SectionHeading>

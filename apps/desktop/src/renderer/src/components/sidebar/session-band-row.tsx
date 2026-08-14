@@ -181,7 +181,7 @@ export function ActiveBandRow({
         onClick={onSelect}
         // Two lines at the tighter padding: long titles stay readable and the
         // band stops out-massing the board it sits beside.
-        className="h-auto min-h-9 items-start gap-2 py-1 [&:hover_.session-row-dim]:text-sidebar-accent-foreground [&[data-active=true]_.session-row-dim]:text-sidebar-accent-foreground"
+        className="h-auto min-h-9 items-start gap-2 py-1 [&:hover_.session-row-dim]:text-foreground [&[data-active=true]_.session-row-dim]:text-foreground"
       >
         {/* The third copy of the status→tone map was written out right here,
             which is how this band could paint a Session amber while the ticket

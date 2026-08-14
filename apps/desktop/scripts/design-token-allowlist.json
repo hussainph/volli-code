@@ -1,0 +1,131 @@
+{
+  "note": "Recorded exceptions to check-design-tokens.mjs. An entry excuses one rule on the lines of one file whose text contains `contains`. Every entry needs a reason, and an entry that stops matching FAILS the check — retiring these is part of finishing the sweep that made them unnecessary.",
+  "entries": [
+    {
+      "path": "apps/desktop/src/components/ai-elements/chat-markdown.tsx",
+      "rule": "radius-bare",
+      "contains": "items-center rounded border border-border bg-muted px-1.5",
+      "reason": "Inline-code chip in the vendored ai-elements markdown renderer. Decision [A] folds ai-elements into ui/ in Phase 4; the radius lands on a rung as part of the Phase 2 radius sweep (decision [R]) rather than in this token-infra change. Retires with that sweep."
+    },
+    {
+      "path": "apps/desktop/src/components/ai-elements/chat-markdown.tsx",
+      "rule": "radius-bare",
+      "contains": "items-center rounded border border-border bg-muted px-2",
+      "reason": "The block-level twin of the inline-code chip above, same file and same disposition: Phase 2 radius sweep, Phase 4 fold into ui/. Retires with the radius sweep."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/board/board-header.tsx",
+      "rule": "focus-ring-loud",
+      "contains": "focus-visible:ring-[3px] focus-visible:ring-ring/50",
+      "reason": "Decision [F]: the one focus recipe is `ring-2 ring-ring/45`, encoded at ui/field-classes.ts. This is one of the six feature files still carrying shadcn's 3px halo on a non-text control; all six are swept together in the Phase 2 focus pass so the change is one reviewable diff. Retires with that sweep."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/board/new-ticket/composer-breadcrumb.tsx",
+      "rule": "focus-ring-loud",
+      "contains": "focus-visible:ring-[3px] focus-visible:ring-ring/50",
+      "reason": "Decision [F], one of the six feature files still on the 3px halo. Swept with the others in the Phase 2 focus pass; retires with that sweep."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/board/new-ticket/composer-labels.tsx",
+      "rule": "focus-ring-loud",
+      "contains": "focus-visible:ring-[3px] focus-visible:ring-ring/50",
+      "reason": "Decision [F], one of the six feature files still on the 3px halo. Swept with the others in the Phase 2 focus pass; retires with that sweep."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/board/new-ticket/project-monogram.tsx",
+      "rule": "radius-arbitrary",
+      "contains": "justify-center rounded-[5px]",
+      "reason": "The only 5px literal outside input-group. Decision [R] puts a 20px monogram on the control rung; the move is a visual change that ships with the Phase 2 radius sweep and its screenshot diff, not with this infra change. Retires with that sweep."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/board/priority-indicator.tsx",
+      "rule": "radius-arbitrary",
+      "contains": "w-[2px] rounded-[1px]",
+      "reason": "The app's only 1px radius, on a 2px-wide priority bar — a hairline softening rather than a ladder rung. Decision [R] folds it to `rounded-none`; that is a visual call for the Phase 2 radius sweep. Retires with that sweep."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/activity-ui.tsx",
+      "rule": "radius-bare",
+      "contains": "shrink-0 rounded outline-none",
+      "reason": "Focus-target radius on an activity row's expander. Phase 2 radius sweep (decision [R]); retires with that sweep."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/activity-ui.tsx",
+      "rule": "radius-bare",
+      "contains": "truncate rounded font-mono",
+      "reason": "Focus-target radius on an inline file-path link. Phase 2 radius sweep (decision [R]); retires with that sweep."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chrome-bar.tsx",
+      "rule": "radius-bare",
+      "contains": "shrink-0 rounded border border-border/70",
+      "reason": "The ⌘K hint's <kbd> chip. Phase 2 radius sweep (decision [R]), and the chrome band itself is under a pending 40px→36px feel-check, so the radius call belongs with that review rather than ahead of it. Retires with that sweep."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/files/file-tab-strip.tsx",
+      "rule": "focus-ring-loud",
+      "contains": "focus-visible:ring-[3px] focus-visible:ring-ring/50",
+      "reason": "Decision [F], one of the six feature files still on the 3px halo. Swept with the others in the Phase 2 focus pass; retires with that sweep."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/pages/configure-page.tsx",
+      "rule": "radius-bare",
+      "contains": "rounded bg-muted px-1 py-0.5 font-mono",
+      "reason": "Four inline-code chips in the worktree-exclusion copy, all the same shape. Phase 2 radius sweep (decision [R]) puts them on the control rung with every other inline-code chip. Retires with that sweep."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/pages/harness-picker.tsx",
+      "rule": "radius-bare",
+      "contains": "rounded border border-border/60 bg-muted/40",
+      "reason": "Inline-code chip in the harness picker. Phase 2 radius sweep (decision [R]); retires with that sweep."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/rail/add-project-tile.tsx",
+      "rule": "radius-arbitrary",
+      "contains": "justify-center rounded-[10px] bg-muted",
+      "reason": "`rounded-[10px]` is a literal restatement of the old `--radius`. Decision [R] flips the base to 12px and puts project tiles on the control rung, which moves the corner — a visual change for the Phase 2 radius sweep and its screenshot diff. Retires with that sweep."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/rail/add-project-tile.tsx",
+      "rule": "radius-arbitrary",
+      "contains": "inset-0 rounded-[10px] bg-foreground/8",
+      "reason": "The hover wash overlaying the tile above; its corner must track the tile's exactly, so the two move together in the Phase 2 radius sweep. Retires with that sweep."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/rail/project-tile.tsx",
+      "rule": "radius-arbitrary",
+      "contains": "justify-center rounded-[10px] text-sm",
+      "reason": "The project tile itself, on the same literal 10px as the add-tile beside it. Decision [R] moves both to the control rung in the Phase 2 radius sweep. Retires with that sweep."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/rail/project-tile.tsx",
+      "rule": "radius-arbitrary",
+      "contains": "inset-0 rounded-[10px] bg-foreground/8",
+      "reason": "The hover wash overlaying the tile above; its corner must track the tile's exactly, so the two move together in the Phase 2 radius sweep. Retires with that sweep."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/sessions/session-tabs.tsx",
+      "rule": "focus-ring-loud",
+      "contains": "focus-visible:ring-[3px] focus-visible:ring-ring/50",
+      "reason": "Decision [F], one of the six feature files still on the 3px halo. Swept with the others in the Phase 2 focus pass; retires with that sweep."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ticket/ticket-repository-summary.tsx",
+      "rule": "radius-bare",
+      "contains": "animate-pulse rounded",
+      "reason": "Skeleton placeholder bar. Phase 2 radius sweep (decision [R]); retires with that sweep."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ticket/ticket-tabs.tsx",
+      "rule": "focus-ring-loud",
+      "contains": "focus-visible:ring-[3px] focus-visible:ring-ring/50",
+      "reason": "Decision [F], one of the six feature files still on the 3px halo. Swept with the others in the Phase 2 focus pass; retires with that sweep."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ui/tooltip.tsx",
+      "rule": "radius-arbitrary",
+      "contains": "rotate-45 rounded-[2px]",
+      "reason": "The tooltip arrow's 2px corner. Decision [T] removes tooltip arrows entirely, so this literal disappears with the element rather than being migrated to a rung. Retires with the overlay PR that removes the arrow."
+    }
+  ]
+}

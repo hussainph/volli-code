@@ -85,7 +85,6 @@ const LADDER: readonly { tokens: readonly ThemeTokenName[]; L: number; k: number
   { tokens: ["--accent"], L: 0.252, k: 1.3 },
   { tokens: ["--sidebar-border"], L: 0.255, k: 1.4 },
   { tokens: ["--border", "--input"], L: 0.269, k: 1.4 },
-  { tokens: ["--border-hover"], L: 0.321, k: 1.5 },
   { tokens: ["--border-strong"], L: 0.349, k: 1.5 },
 ];
 
@@ -431,20 +430,24 @@ export function generateThemeTokens(theme: ThemeDefinition): ThemeTokens {
     "--primary-foreground": primaryForeground,
     "--primary-text": primaryText,
 
-    // Aliases. Each mirrors a relationship authored in globals.css today:
-    // the sidebar panel is a card, its hover state is the accent surface, and
-    // every "…-foreground on a neutral surface" collapses to one value.
+    // Aliases: names that resolve to a value another name already carries. The
+    // sidebar panel is a card, and every "…-foreground on a neutral surface"
+    // collapses to one value.
+    //
+    // The list is shorter than the relationships are, deliberately. The solver
+    // stays general — it *could* drive a card's ink away from `--foreground` for
+    // a canvas with an unusual card lightness — but a name emitted here is a
+    // name the renderer writes onto the DOM, the e2e smoke asserts, and a
+    // component picks between. Six spellings of one hex do not make that choice
+    // richer, they make it arbitrary, so the sidebar's accent rungs and the
+    // card's ink now say `--accent`, `--primary` and `--foreground` at the point
+    // of use. A future canvas that needs a divergent card ink gets the token
+    // back, with the evidence that it diverged.
     "--sidebar": sidebar,
-    "--sidebar-accent": ladder["--accent"]!,
-    "--card-foreground": foreground,
     "--popover-foreground": foreground,
     "--secondary-foreground": foreground,
     "--accent-foreground": foreground,
-    "--sidebar-accent-foreground": foreground,
     "--ring": primary,
-    "--sidebar-primary": primary,
-    "--sidebar-ring": primary,
-    "--sidebar-primary-foreground": primaryForeground,
   };
 
   // 9. Overrides land last — after generation and after every floor above —
@@ -455,23 +458,15 @@ export function generateThemeTokens(theme: ThemeDefinition): ThemeTokens {
 }
 
 /**
- * The accent family and nothing else: `--primary`, its label, and the four
- * aliases of the two.
+ * The accent family and nothing else: `--primary`, its label, and the one
+ * surviving alias of the two.
  *
  * `--primary-text` is deliberately NOT a member. It is the accent solved as
  * *copy*, which means solved against the surface it is read on — `--background`
  * here, `--card` in the canvas layer — so it belongs to whoever knows that
  * surface, and a value in this record would be one solved against neither.
  */
-export type AccentTokens = Pick<
-  ThemeTokens,
-  | "--primary"
-  | "--primary-foreground"
-  | "--ring"
-  | "--sidebar-primary"
-  | "--sidebar-primary-foreground"
-  | "--sidebar-ring"
->;
+export type AccentTokens = Pick<ThemeTokens, "--primary" | "--primary-foreground" | "--ring">;
 
 /**
  * Step 6–7 on its own: a seed hex in, the accent family out, at the seed's
@@ -502,9 +497,6 @@ export function generateAccentTokens(seed: string): AccentTokens {
     "--primary": primary,
     "--primary-foreground": primaryForeground,
     "--ring": primary,
-    "--sidebar-primary": primary,
-    "--sidebar-primary-foreground": primaryForeground,
-    "--sidebar-ring": primary,
   };
 }
 

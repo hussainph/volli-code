@@ -84,7 +84,7 @@ function FileRow({
   const primary = kind === "reference" ? label : filename;
   const Icon = ROW_ICONS[kind];
   return (
-    <div className="group flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-sidebar-accent/55">
+    <div className="group flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-accent/55">
       <button
         type="button"
         data-testid="ticket-files-row"
@@ -92,7 +92,7 @@ function FileRow({
         data-kind={kind}
         onClick={onActivate}
         onDoubleClick={onPin}
-        className="flex min-w-0 flex-1 items-center gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/50"
+        className="flex min-w-0 flex-1 items-center gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
       >
         <Icon className="size-4 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1">

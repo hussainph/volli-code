@@ -204,7 +204,7 @@ function ActiveLabelTabs({
               "mx-auto rounded-full border border-sidebar-border bg-background/75 shadow-sm",
               modes.length === 3 ? "w-40" : "w-[194px]",
             ),
-          variant === "toolbar" && "w-full justify-between rounded-lg bg-sidebar-accent/70",
+          variant === "toolbar" && "w-full justify-between rounded-lg bg-accent/70",
           variant === "linear" &&
             cn("mx-auto rounded-full bg-background/35", modes.length === 3 ? "w-40" : "w-[194px]"),
         )}
@@ -240,12 +240,12 @@ function ActiveLabelTabs({
               className={cn(
                 "relative flex h-8 items-center justify-center gap-1.5 overflow-hidden rounded-full text-ui outline-none",
                 variant === "toolbar" ? "min-w-8 flex-1 px-2" : active ? "w-[84px]" : "w-8",
-                "focus-visible:ring-2 focus-visible:ring-sidebar-ring/50 active:scale-[0.97]",
+                "focus-visible:ring-2 focus-visible:ring-ring/50 active:scale-[0.97]",
                 !reducedMotion &&
                   "transition-[color,background-color,box-shadow,transform] duration-150 [transition-timing-function:cubic-bezier(0.23,1,0.32,1)]",
                 active
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-xs"
-                  : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground",
+                  ? "bg-accent text-foreground shadow-xs"
+                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
               )}
             >
               <motion.span layout="position" className="flex shrink-0 items-center">
@@ -469,10 +469,7 @@ function ScenarioState({
     return (
       <div className="flex flex-col gap-2 p-3" aria-label={`Loading ${kind}`}>
         {["w-4/5", "w-3/5", "w-full"].map((width) => (
-          <div
-            key={width}
-            className={cn("h-8 animate-pulse rounded-md bg-sidebar-accent/70", width)}
-          />
+          <div key={width} className={cn("h-8 animate-pulse rounded-md bg-accent/70", width)} />
         ))}
       </div>
     );
@@ -526,7 +523,7 @@ function EnvironmentSummary({
         type="button"
         onClick={onShowChanges}
         aria-label={clean ? "No changes, show Diffs" : "4 changes, show Diffs"}
-        className="group grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-[14px] pt-3 pb-2.5 text-left hover:bg-sidebar-accent/45"
+        className="group grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-[14px] pt-3 pb-2.5 text-left hover:bg-accent/45"
       >
         <span className="flex min-w-0 items-center gap-2">
           <GitDiffIcon className="size-4 shrink-0 text-muted-foreground" />
@@ -540,7 +537,7 @@ function EnvironmentSummary({
           aria-label={
             noWorktree ? "Project branch main" : "Branch from main to ui/right-sidebar-fixes"
           }
-          className="flex min-h-8 w-full items-center gap-2 border-t border-sidebar-border/70 px-[14px] py-2.5 text-left hover:bg-sidebar-accent/45"
+          className="flex min-h-8 w-full items-center gap-2 border-t border-sidebar-border/70 px-[14px] py-2.5 text-left hover:bg-accent/45"
         >
           <GitBranchIcon className="size-4 shrink-0 text-muted-foreground" />
           {noWorktree ? null : (
@@ -579,7 +576,7 @@ function EnvironmentSummary({
       // channel-triplet shaped.
       <section
         className={cn(
-          "overflow-hidden rounded-xl border border-sidebar-border/70 bg-background/55 shadow-[var(--shadow-raised)] dark:bg-sidebar-accent/45 dark:shadow-none",
+          "overflow-hidden rounded-xl border border-sidebar-border/70 bg-background/55 shadow-[var(--shadow-raised)] dark:bg-accent/45 dark:shadow-none",
           narrow ? "mx-3" : "mx-4",
         )}
       >
@@ -619,7 +616,7 @@ function SessionRows({ variant, narrow }: { variant: Variant; narrow: boolean })
           key={row.title}
           type="button"
           className={cn(
-            "flex w-full items-center gap-2 px-2 py-2 text-left hover:bg-sidebar-accent/60",
+            "flex w-full items-center gap-2 px-2 py-2 text-left hover:bg-accent/60",
             variant === "calm" &&
               "rounded-lg border border-transparent hover:border-sidebar-border",
             variant === "linear" && index > 0 && "border-t border-sidebar-border/70",
@@ -754,7 +751,7 @@ function ChangesPanel({
           className={cn("flex min-h-7 items-center gap-1 pt-1 pb-3", narrow ? "px-3" : "px-4")}
         >
           <p className="text-ui font-medium">Diffs</p>
-          <span className="rounded-full bg-sidebar-accent px-1.5 font-mono text-label text-muted-foreground">
+          <span className="rounded-full bg-accent px-1.5 font-mono text-label text-muted-foreground">
             0
           </span>
         </header>
@@ -779,7 +776,7 @@ function ChangesPanel({
       <header className={cn("flex shrink-0 flex-col gap-2 pt-1 pb-3", narrow ? "px-3" : "px-4")}>
         <div className="flex min-h-7 items-center gap-1">
           <p className="text-ui font-medium">Diffs</p>
-          <span className="rounded-full bg-sidebar-accent px-1.5 font-mono text-label text-muted-foreground">
+          <span className="rounded-full bg-accent px-1.5 font-mono text-label text-muted-foreground">
             4
           </span>
           <Hint label="Refresh changes">
@@ -829,7 +826,7 @@ function ChangesPanel({
                 className={cn(
                   "group relative w-full text-left",
                   variant === "calm" ? "rounded-lg" : "border-b border-sidebar-border/70",
-                  active ? "bg-sidebar-accent/80" : "hover:bg-sidebar-accent/55",
+                  active ? "bg-accent/80" : "hover:bg-accent/55",
                 )}
               >
                 <button
@@ -839,7 +836,7 @@ function ChangesPanel({
                     setSelected(row.path);
                     onOpen(row.path);
                   }}
-                  className="grid min-h-[52px] w-full grid-cols-[16px_minmax(0,1fr)_72px] items-center gap-x-2 px-2.5 py-[7px] text-left outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/50"
+                  className="grid min-h-[52px] w-full grid-cols-[16px_minmax(0,1fr)_72px] items-center gap-x-2 px-2.5 py-[7px] text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
                 >
                   <StatusIcon className={cn("size-4 shrink-0", status.ink)} weight="bold" />
                   <span className="min-w-0">
@@ -867,7 +864,7 @@ function ChangesPanel({
                 <RowActions
                   path={row.path}
                   onOpen={onOpen}
-                  className="absolute top-[5px] right-20 z-10 rounded-md bg-sidebar-accent/95 px-0.5 shadow-xs"
+                  className="absolute top-[5px] right-20 z-10 rounded-md bg-accent/95 px-0.5 shadow-xs"
                 />
               </div>
             </li>
@@ -928,14 +925,14 @@ function FilesPanel({
             <li key={row.path}>
               <div
                 className={cn(
-                  "group flex w-full items-center gap-2 px-2 py-2 text-left hover:bg-sidebar-accent/55",
+                  "group flex w-full items-center gap-2 px-2 py-2 text-left hover:bg-accent/55",
                   variant === "calm" ? "rounded-lg" : "border-b border-sidebar-border/70",
                 )}
               >
                 <button
                   type="button"
                   onClick={() => onPreview(row.path)}
-                  className="flex min-w-0 flex-1 items-center gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring/50"
+                  className="flex min-w-0 flex-1 items-center gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
                 >
                   <Icon className="size-4 shrink-0 text-muted-foreground" weight="fill" />
                   <span className="min-w-0 flex-1">
@@ -981,7 +978,7 @@ function ChoicePopover({
         <button
           type="button"
           aria-label={`${label}: ${value}`}
-          className="flex h-6 items-center gap-2 rounded-full border border-sidebar-border bg-background/40 px-2 text-xs hover:bg-sidebar-accent/60"
+          className="flex h-6 items-center gap-2 rounded-full border border-sidebar-border bg-background/40 px-2 text-xs hover:bg-accent/60"
         >
           <Icon className="size-4 text-muted-foreground" />
           <span>{value}</span>
@@ -1035,7 +1032,7 @@ function PropertiesSection({ narrow = false }: { narrow?: boolean }) {
           key={label}
           type="button"
           onClick={() => setLabels((current) => current.filter((item) => item !== label))}
-          className="flex h-6 items-center gap-2 rounded-full border border-sidebar-border bg-background/40 px-2 text-xs hover:bg-sidebar-accent/60"
+          className="flex h-6 items-center gap-2 rounded-full border border-sidebar-border bg-background/40 px-2 text-xs hover:bg-accent/60"
         >
           <span
             className={cn(
