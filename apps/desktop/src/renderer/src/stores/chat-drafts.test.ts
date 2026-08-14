@@ -176,6 +176,28 @@ describe("beginQueuedSteer", () => {
       }),
     );
   });
+
+  it("marks an existing held target sending without restating its neighbors", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().holdMessage("s1", { id: "q1", text: "old target" });
+    store.getState().holdMessage("s1", { id: "q2", text: "old neighbor" });
+    store.getState().markHeld("s1", "q1", "unsent");
+    store.getState().markHeld("s1", "q2", "queued");
+
+    store.getState().beginQueuedSteer(
+      "s1",
+      [
+        { id: "q1", text: "latest target" },
+        { id: "q2", text: "latest neighbor" },
+      ],
+      "q1",
+    );
+
+    expect(store.getState().drafts.s1?.held).toEqual([
+      { id: "q1", text: "latest target", state: "sending" },
+      { id: "q2", text: "latest neighbor", state: "queued" },
+    ]);
+  });
 });
 
 describe("markHeld", () => {
