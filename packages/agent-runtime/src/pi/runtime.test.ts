@@ -3500,6 +3500,38 @@ describe("auto-retrying a dropped transport", () => {
     ]);
   });
 
+  it("abandons the wait when the attachment's signal aborts", async () => {
+    const controller = new AbortController();
+    const { spec, observations, sessionDataDir } = fixture({ signal: controller.signal });
+    const waiting = Promise.withResolvers<void>();
+    let calls = 0;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      retryBackoffMs: () => {
+        waiting.resolve();
+        return 30_000;
+      },
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            calls += 1;
+            emit.fail(DROPPED_SOCKET);
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+    const delivery = handle.submitUserMessage("go");
+    await waiting.promise;
+
+    controller.abort();
+    await delivery;
+
+    expect(calls).toBe(1);
+    expect(kinds(observations)).toEqual(["attachment:started", "turn:started", "turn:interrupted"]);
+    await handle.close();
+  });
+
   it("queues a follow-up typed during the wait against the same live turn", async () => {
     const { spec, observations, sessionDataDir } = fixture();
     const waiting = Promise.withResolvers<void>();
