@@ -430,7 +430,7 @@ function SummonModeStrip({
  */
 function SummonedCard({ mode, onClose }: { mode: TicketRailMode; onClose(): void }) {
   return (
-    <div className="absolute top-3 right-3 z-20 w-80 overflow-hidden rounded-xl border border-border bg-popover/90 shadow-lg backdrop-blur-xl">
+    <div className="absolute top-3 right-3 z-20 w-80 overflow-hidden rounded-xl border border-border bg-popover/90 shadow-overlay backdrop-blur-xl">
       <div className="flex items-center justify-between border-b border-sidebar-border px-4 py-2">
         <span className="text-label font-medium text-muted-foreground uppercase">
           {TICKET_RAIL_MODE_LABELS[mode]}
@@ -594,7 +594,7 @@ function VariantPicker({
       <p className="rounded-full bg-background/80 px-3 py-0.5 text-label text-muted-foreground backdrop-blur">
         {caption}
       </p>
-      <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-border bg-background/90 p-1 shadow-lg backdrop-blur">
+      <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-border bg-background/90 p-1 shadow-overlay backdrop-blur">
         {VARIANTS.map((entry) => (
           <button
             key={entry.key}

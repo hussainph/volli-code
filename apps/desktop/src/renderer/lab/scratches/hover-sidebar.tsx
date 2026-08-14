@@ -794,7 +794,7 @@ export default function HoverSidebarScratch() {
             // (the framed seam). Floating, the seam's selector does not match
             // and the card becomes a whole card again — four corners, its own
             // left border, standing free on the canvas.
-            !pinned && "m-2 rounded-xl shadow-[var(--shadow-card)]",
+            !pinned && "m-2 rounded-xl shadow-card",
           )}
         >
           <MainContent />
@@ -836,7 +836,7 @@ export default function HoverSidebarScratch() {
                   // inner would be overruled in every mode. The lift then
                   // composites over this glass, which is the correct order
                   // anyway: material first, tier on top.
-                  "overflow-hidden rounded-xl border border-border bg-sidebar/90 shadow-[var(--shadow-overlay)] backdrop-blur-2xl",
+                  "overflow-hidden rounded-xl border border-border bg-sidebar/90 shadow-overlay backdrop-blur-2xl",
                   reveal.visible
                     ? "translate-x-0"
                     : // Reduced motion: the surface arrives where it will rest
@@ -964,7 +964,7 @@ function LabControls({
   onExitGraceMs(value: number): void;
 }) {
   return (
-    <div className="fixed bottom-3 left-1/2 z-[9999] flex -translate-x-1/2 items-center gap-3 rounded-full border border-border bg-background/90 px-3 py-1.5 shadow-lg backdrop-blur">
+    <div className="fixed bottom-3 left-1/2 z-[9999] flex -translate-x-1/2 items-center gap-3 rounded-full border border-border bg-background/90 px-3 py-1.5 shadow-overlay backdrop-blur">
       <Segmented
         options={[
           { value: "sliver", label: "Sliver" },

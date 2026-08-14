@@ -274,8 +274,13 @@ function TabShell({
         // `scale` is in the transition list and `scale-100!` is the
         // reduced-motion cancel — see the press note in `ui/button.tsx`.
         "group flex h-7 shrink-0 items-center gap-1.5 rounded-md pr-1 pl-2.5 text-xs outline-none transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out active:scale-[0.97] motion-reduce:scale-100! focus-visible:ring-[3px] focus-visible:ring-ring/50",
+        // The halo is what makes an active tab read as a tab — its fill alone
+        // is one rung off the strip's. Carried here rather than by the
+        // `[role="tab"][aria-selected="true"]` rule globals.css used to hold:
+        // a shadow you cannot see in the component is a shadow nobody can tell
+        // is live, which is how three overlays ended up wearing stock black.
         active
-          ? "bg-accent text-foreground"
+          ? "bg-accent text-foreground shadow-raised"
           : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
       )}
     >

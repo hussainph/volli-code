@@ -507,7 +507,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               // A mark, and nothing else. What blocks typing sits on the
               // composer, where the typing is.
               <ConversationEmptyState className="min-h-80">
-                <div className="flex size-10 items-center justify-center rounded-xl border border-border bg-card shadow-[var(--shadow-raised)]">
+                <div className="flex size-10 items-center justify-center rounded-xl border border-border bg-card shadow-raised">
                   <CodeIcon className="size-5 text-muted-foreground" />
                 </div>
               </ConversationEmptyState>
@@ -539,7 +539,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               transcript never gets one — the empty state is taller than the
               plane, so the scroller is legitimately not at its bottom. */}
           {messages.length > 0 ? (
-            <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-[var(--shadow-raised)] backdrop-blur-md dark:bg-background/70 dark:hover:bg-muted/70" />
+            <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-raised backdrop-blur-md dark:bg-background/70 dark:hover:bg-muted/70" />
           ) : null}
         </Conversation>
       </FileMentionProvider>
@@ -676,7 +676,7 @@ function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
   return (
     <div
       className={cn(
-        "mb-2 flex items-center gap-2 rounded-lg border bg-card px-3 py-1.5 text-xs shadow-[var(--shadow-raised)]",
+        "mb-2 flex items-center gap-2 rounded-lg border bg-card px-3 py-1.5 text-xs shadow-raised",
         blocker.tone === "error" ? "border-destructive/40" : "border-border",
       )}
     >

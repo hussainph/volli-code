@@ -51,13 +51,16 @@ function TooltipContent({
           // The CONTROL rung, not the container one every other overlay takes.
           // A tooltip is a label, not a surface — it holds one line, never
           // contains anything, and at 28px tall the container's 20 would clamp
-          // to a stadium and read as a toast.
+          // to a stadium and read as a toast. Its ELEVATION is the overlay tier
+          // all the same: rung and lift answer different questions, and this
+          // thing portals to the body and floats over the whole window exactly
+          // like every other member of that tier.
           //
           // `animate-none!` is important on purpose: the reduced-motion gate
           // loses the specificity fight with `data-[state=closed]:animate-out`
           // without it. The full argument is on MENU_SURFACE_FADE in
           // `ui/menu-classes.ts`, which every overlay in this folder follows.
-          "z-50 w-fit origin-(--radix-tooltip-content-transform-origin) animate-in rounded-control bg-foreground px-3 py-1.5 text-xs text-balance text-background ease-out fade-in-0 zoom-in-95 motion-reduce:animate-none! data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
+          "z-50 w-fit origin-(--radix-tooltip-content-transform-origin) animate-in rounded-control bg-foreground px-3 py-1.5 text-xs text-balance text-background shadow-overlay ease-out fade-in-0 zoom-in-95 motion-reduce:animate-none! data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
           className,
         )}
         {...props}

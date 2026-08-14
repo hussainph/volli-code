@@ -789,7 +789,7 @@ function EffortSegment({
           className={cn(
             "rounded-full px-2 py-0.5 text-xs transition-colors duration-150 ease-swift",
             variant === value
-              ? "bg-background text-foreground shadow-[var(--shadow-raised)]"
+              ? "bg-background text-foreground shadow-raised"
               : "text-muted-foreground hover:text-foreground",
           )}
         >

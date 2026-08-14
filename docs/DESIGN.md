@@ -50,9 +50,22 @@ which is now the backdrop the card floats on.
 ## Composer stack
 
 The Session composer and anything parked on it (ask-user questions; later, plans and subagent
-activity) share one shell: `rounded-2xl`, hairline `border-border`, `bg-card`, raised shadow
-(`COMPOSER_STACK_SHELL` in `chat/composer-stack.ts`). Overlays stack **above** the composer and
-never replace it — the input stays so a follow-up can be typed while a question or a run is live.
+activity) share one shell: `rounded-container`, hairline `border-border`, `bg-card`,
+`shadow-raised` (`COMPOSER_STACK_SHELL` in `chat/composer-stack.ts`). Overlays stack **above** the
+composer and never replace it — the input stays so a follow-up can be typed while a question or a
+run is live.
+
+## Elevation — three tiers
+
+One shadow per role, generated from the canvas so the halo is tinted to the window rather than
+neutral black. Stock `shadow-xs`…`shadow-2xl` are banned by
+`apps/desktop/scripts/check-design-tokens.mjs`; `shadow-none` stays legal as a reset.
+
+| Utility | Role |
+| --- | --- |
+| `shadow-raised` | On a surface: controls, fields, chips, the active tab in a strip, a board card in its column |
+| `shadow-card` | A pane or a sheet of paper: the floating/inset sidebar, a tile dragged off the board |
+| `shadow-overlay` | Portals to the body and floats over the whole window: menus, select, popover, hover card, dialogs, sheet, tooltip, the ⌘K palette |
 
 ## Type scale — six steps
 

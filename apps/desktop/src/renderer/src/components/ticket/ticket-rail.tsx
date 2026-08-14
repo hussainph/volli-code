@@ -120,7 +120,7 @@ function TicketRailTabs({
       <div
         role="tablist"
         aria-label="Ticket rail pages"
-        className="mx-auto flex h-10 w-40 items-center gap-0.5 rounded-full border border-sidebar-border bg-background/75 p-1 shadow-sm"
+        className="mx-auto flex h-10 w-40 items-center gap-0.5 rounded-full border border-sidebar-border bg-background/75 p-1 shadow-raised"
       >
         {modes.map((key, index) => {
           const Icon = MODE_ICONS[key];
@@ -160,7 +160,7 @@ function TicketRailTabs({
                 !reducedMotion &&
                   "transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out",
                 active
-                  ? "bg-accent text-foreground shadow-xs"
+                  ? "bg-accent text-foreground shadow-raised"
                   : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
               )}
             >

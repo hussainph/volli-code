@@ -29,15 +29,21 @@ const buttonVariants = cva(
         // `--destructive-foreground`, not a literal white: the destructive red
         // is hue-locked, but the ink that reads on it is solved rather than
         // assumed, so the label follows whatever actually lands on that fill.
-        // The two `dark:` steps stay — a full-strength red and a 20% ring are
-        // both louder against a dark canvas than a light one, which is a real
-        // difference between the modes rather than a leftover from dark-only.
+        //
+        // FULL STRENGTH IN BOTH MODES. `dark:bg-destructive/60` used to sit
+        // here to quiet a red that was frozen at #e5484d and therefore too
+        // loud against a dark canvas. The fill is solved per appearance now —
+        // pale on dark paper, deep on light — so the mode is already accounted
+        // for in the colour, and a 60% wash would only break the one guarantee
+        // the solve makes: the label is solved against THIS fill, not against
+        // a diluted version of it. The ring keeps its `dark:` step, because a
+        // halo is not a surface anything is read on.
         destructive:
-          "bg-destructive text-destructive-foreground hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:bg-destructive/60 dark:focus-visible:ring-destructive/40",
+          "bg-destructive text-destructive-foreground hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40",
         outline:
-          "border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
-        secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        ghost: "hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
+          "border bg-background shadow-raised hover:bg-accent hover:text-foreground dark:border-border dark:bg-border/30 dark:hover:bg-border/50",
+        secondary: "bg-muted text-foreground hover:bg-muted/80",
+        ghost: "hover:bg-accent hover:text-foreground dark:hover:bg-accent/50",
         // --primary-text, not --primary: a link variant is read, not clicked
         // as a colored area, so it takes the accent's body-copy lightness.
         link: "text-primary-text underline-offset-4 hover:underline",

@@ -21,7 +21,7 @@
  * because nothing but the note connected them. Now one command writes both, and
  * `terminal/appearance.test.ts` fails if either drifts.
  *
- * WHAT IT WRITES. Everything between the BEGIN/END markers in both files: the 31
+ * WHAT IT WRITES. Everything between the BEGIN/END markers in both files: the 25
  * app tokens (`generateThemeTokens` → the canvas ladder), the 3 veils solved
  * from them, and the 10 canvas properties (`CANVAS_TOKEN_NAMES` in
  * `renderer/src/theme/canvas-paint.ts`) — the gradient, the on-canvas ink
@@ -127,8 +127,13 @@ const NOTES = {
     "   its lightness is what makes it work as a fill. Fills and icons take\n" +
     "   `--primary`; anything you read takes this.",
   "--destructive":
-    "Hue-locked: the semantic escape list never follows the canvas, or a red\n" +
-    "   canvas would make “delete” indistinguishable from “primary”.",
+    "The hue-locked family: green/amber/blue/red mean working, waiting, moved\n" +
+    "   and gone by convention, so their HUE never follows the canvas — a red\n" +
+    "   canvas would otherwise make “delete” indistinguishable from “primary”.\n" +
+    "   Everything else about them is solved against the card at APCA Lc 65, so\n" +
+    "   all four read at one weight in either appearance, and each label is\n" +
+    "   whichever of white or a near-black tint of its own hue wins on the fill\n" +
+    "   — which is why they flip polarity between the two blocks.",
   "--rail": "Two-tier sidebar depth: rail darkest, panel between rail and content.",
   "--sidebar-veil":
     "Veils (#74). The canvas paints the whole window behind the chrome, so the\n" +

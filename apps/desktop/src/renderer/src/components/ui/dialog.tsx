@@ -68,14 +68,14 @@ function DialogContent({
         className={cn(
           // A modal is not anchored to a trigger, so it keeps the centered
           // origin and only the duration/curve are shared with the scrim.
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-1/2 gap-3 rounded-container border border-border bg-background p-4 shadow-lg duration-200 ease-out motion-reduce:animate-none! data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
+          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-1/2 gap-3 rounded-container border border-border bg-background p-4 shadow-overlay duration-200 ease-out motion-reduce:animate-none! data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
           className,
         )}
         {...props}
       >
         {children}
         {showCloseButton && (
-          <DialogPrimitive.Close className="absolute top-4 right-4 rounded-full opacity-70 transition-opacity outline-none hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/45 disabled:pointer-events-none data-[state=open]:bg-secondary">
+          <DialogPrimitive.Close className="absolute top-4 right-4 rounded-full opacity-70 transition-opacity outline-none hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/45 disabled:pointer-events-none data-[state=open]:bg-muted">
             <XIcon weight="bold" className="size-4" />
             <span className="sr-only">Close</span>
           </DialogPrimitive.Close>

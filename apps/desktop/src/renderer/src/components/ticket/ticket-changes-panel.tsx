@@ -271,7 +271,7 @@ export function TicketChangesList({
               <RailRowActions
                 path={row.path}
                 onOpen={onSelectRow}
-                className="absolute top-[5px] right-20 z-10 rounded-md bg-accent/95 px-0.5 shadow-xs"
+                className="absolute top-[5px] right-20 z-10 rounded-md bg-accent/95 px-0.5 shadow-raised"
               />
             </div>
           </li>

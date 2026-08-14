@@ -1,7 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react";
+import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { CaretUpIcon } from "@phosphor-icons/react/dist/csr/CaretUp";
+import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
 import { Select as SelectPrimitive } from "radix-ui";
 
 import { cn } from "@renderer/lib/utils";
@@ -45,7 +47,7 @@ function SelectTrigger({
       data-slot="select-trigger"
       data-size={size}
       className={cn(
-        "flex w-fit items-center justify-between gap-2 rounded-control border border-input bg-transparent px-3 text-ui whitespace-nowrap shadow-xs transition-[color,border-color,box-shadow] outline-none disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground data-[size=default]:h-7 data-[size=sm]:h-6 *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-2 dark:bg-input/30 dark:hover:bg-input/50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&_svg:not([class*='text-'])]:text-muted-foreground",
+        "flex w-fit items-center justify-between gap-2 rounded-control border border-border bg-transparent px-3 text-ui whitespace-nowrap shadow-raised transition-[color,border-color,box-shadow] outline-none disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground data-[size=default]:h-7 data-[size=sm]:h-6 *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-2 dark:bg-border/30 dark:hover:bg-border/50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&_svg:not([class*='text-'])]:text-muted-foreground",
         // No caret speaks for a closed trigger, so unlike the text fields it
         // keeps the keyboard ring — button.tsx's quiet recipe, not a field one.
         "focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/45",
@@ -56,7 +58,7 @@ function SelectTrigger({
     >
       {children}
       <SelectPrimitive.Icon asChild>
-        <ChevronDownIcon className="size-3.5 opacity-50" />
+        <CaretDownIcon className="size-3.5 opacity-50" />
       </SelectPrimitive.Icon>
     </SelectPrimitive.Trigger>
   );
@@ -144,7 +146,7 @@ function SelectItem({
           the ItemText's span, which only stays last while the indicator leads. */}
       <span data-slot="select-item-indicator" className={MENU_INDICATOR}>
         <SelectPrimitive.ItemIndicator>
-          <CheckIcon className={MENU_INDICATOR_MARK} />
+          <CheckIcon weight="bold" className={MENU_INDICATOR_MARK} />
         </SelectPrimitive.ItemIndicator>
       </span>
       <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
@@ -175,7 +177,7 @@ function SelectScrollUpButton({
       className={cn("flex cursor-default items-center justify-center py-1", className)}
       {...props}
     >
-      <ChevronUpIcon className="size-4" />
+      <CaretUpIcon className="size-4" />
     </SelectPrimitive.ScrollUpButton>
   );
 }
@@ -190,7 +192,7 @@ function SelectScrollDownButton({
       className={cn("flex cursor-default items-center justify-center py-1", className)}
       {...props}
     >
-      <ChevronDownIcon className="size-4" />
+      <CaretDownIcon className="size-4" />
     </SelectPrimitive.ScrollDownButton>
   );
 }

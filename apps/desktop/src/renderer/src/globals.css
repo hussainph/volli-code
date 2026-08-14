@@ -47,19 +47,14 @@
   --background: #1c1310;
   --card: #211815;
   --popover: #251b18;
-  --secondary: #271d1a;
   --muted: #271d1a;
   --accent: #2d2220;
   --sidebar: #211815;
   --foreground: #e8e4e2;
-  --popover-foreground: #e8e4e2;
-  --secondary-foreground: #e8e4e2;
   --muted-foreground: #bdbab8;
-  --accent-foreground: #e8e4e2;
   --sidebar-foreground: #d0cdcb;
   --border: #312623;
   --border-strong: #423632;
-  --input: #312623;
   --sidebar-border: #2d241f;
   /* The accent, derived from the canvas's primary stop on the SAME vibrancy
    curve the gradient rides — a near-neutral wash still yields near-neutral
@@ -78,10 +73,15 @@
    `--primary`; anything you read takes this. */
   --primary-text: #fc9a74;
   --ring: #d37550;
-  /* Hue-locked: the semantic escape list never follows the canvas, or a red
-   canvas would make “delete” indistinguishable from “primary”. */
-  --destructive: #e5484d;
-  --destructive-foreground: #ffffff;
+  /* The hue-locked family: green/amber/blue/red mean working, waiting, moved
+   and gone by convention, so their HUE never follows the canvas — a red
+   canvas would otherwise make “delete” indistinguishable from “primary”.
+   Everything else about them is solved against the card at APCA Lc 65, so
+   all four read at one weight in either appearance, and each label is
+   whichever of white or a near-black tint of its own hue wins on the fill
+   — which is why they flip polarity between the two blocks. */
+  --destructive: #ffa49f;
+  --destructive-foreground: #290b0b;
   --positive: #27d496;
   --positive-foreground: #001c10;
   --attention: #ffaa2f;
@@ -135,19 +135,14 @@
   --background: #fdded2;
   --card: #f4d4c8;
   --popover: #f7d8cc;
-  --secondary: #eacabd;
   --muted: #eacabd;
   --accent: #dab9ad;
   --sidebar: #e2c3b7;
   --foreground: #120906;
-  --popover-foreground: #120906;
-  --secondary-foreground: #120906;
   --muted-foreground: #514541;
-  --accent-foreground: #120906;
   --sidebar-foreground: #080302;
   --border: #d8b6a9;
   --border-strong: #d5b2a5;
-  --input: #d8b6a9;
   --sidebar-border: #ddbbad;
   /* The accent, derived from the canvas's primary stop on the SAME vibrancy
    curve the gradient rides — a near-neutral wash still yields near-neutral
@@ -166,9 +161,14 @@
    `--primary`; anything you read takes this. */
   --primary-text: #9c441e;
   --ring: #d37550;
-  /* Hue-locked: the semantic escape list never follows the canvas, or a red
-   canvas would make “delete” indistinguishable from “primary”. */
-  --destructive: #e5484d;
+  /* The hue-locked family: green/amber/blue/red mean working, waiting, moved
+   and gone by convention, so their HUE never follows the canvas — a red
+   canvas would otherwise make “delete” indistinguishable from “primary”.
+   Everything else about them is solved against the card at APCA Lc 65, so
+   all four read at one weight in either appearance, and each label is
+   whichever of white or a near-black tint of its own hue wins on the fill
+   — which is why they flip polarity between the two blocks. */
+  --destructive: #9b1e28;
   --destructive-foreground: #ffffff;
   --positive: #005f40;
   --positive-foreground: #ffffff;
@@ -219,16 +219,12 @@
   --color-foreground: var(--foreground);
   --color-card: var(--card);
   --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary-text: var(--primary-text);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-positive: var(--positive);
@@ -239,7 +235,6 @@
   --color-info-foreground: var(--info-foreground);
   --color-border: var(--border);
   --color-border-strong: var(--border-strong);
-  --color-input: var(--input);
   --color-ring: var(--ring);
   --color-rail: var(--rail);
   --color-sidebar: var(--sidebar);
@@ -248,6 +243,28 @@
   --color-sidebar-veil: var(--sidebar-veil);
   --color-sidebar-accent-veil: var(--sidebar-accent-veil);
   --color-sidebar-border-veil: var(--sidebar-border-veil);
+  /* The three elevation tiers, as `shadow-raised` / `shadow-card` /
+   * `shadow-overlay`. Every surface that lifts takes one of them by ROLE — a
+   * control or an active tab is raised, a card or a panel is a card, anything
+   * that portals to the body and floats over the whole window is an overlay —
+   * and the stock `shadow-xs…2xl` rungs are banned by
+   * `scripts/check-design-tokens.mjs`, because they are untinted black
+   * (`rgb(0 0 0 / …)`) on a canvas whose own shadows are warm.
+   *
+   * THE SELF-REFERENCE IS DELIBERATE AND SAFE, and it is worth stating because
+   * it looks like a cycle. Tailwind's box-shadow namespace IS `--shadow-*`, so
+   * a utility named `shadow-raised` can only come from a theme key spelled
+   * `--shadow-raised` — the same name the generated block above declares. The
+   * theme's copy lands inside `@layer theme`; the generated block is unlayered,
+   * and unlayered declarations beat every layer regardless of source order. So
+   * the generated value always wins the cascade and nothing ever evaluates
+   * `var(--shadow-raised)` against itself. What `inline` buys is that the
+   * UTILITY reads `var(--shadow-raised)` directly rather than through a second
+   * theme variable, which is what lets one class follow the live canvas as it
+   * repaints. */
+  --shadow-raised: var(--shadow-raised);
+  --shadow-card: var(--shadow-card);
+  --shadow-overlay: var(--shadow-overlay);
   /* The UI ease-out — entrances, exits, press feedback, every overlay. It
    * deliberately takes Tailwind's OWN `--ease-out` key rather than a new name:
    * a second strong-ease-out token sitting beside the weak built-in is the
@@ -779,26 +796,6 @@
  * still has to read the real 60. */
 [data-volli-shell="framed"] [data-workspace-rail] {
   padding-left: min(var(--shell-inset), var(--rail-width));
-}
-
-/* Raised-on-a-surface: the active tab in every strip, and the board's cards.
- * A tab reads as a tab because of the halo under it, not because of its fill. */
-[role="tab"][aria-selected="true"],
-article.bg-card {
-  box-shadow: var(--shadow-raised);
-}
-
-/* Everything that portals to the body and floats over the whole window. */
-[data-slot="popover-content"],
-[data-slot="dropdown-menu-content"],
-[data-slot="dropdown-menu-sub-content"],
-[data-slot="context-menu-content"],
-[data-slot="context-menu-sub-content"],
-[data-slot="dialog-content"],
-[data-slot="alert-dialog-content"],
-[data-slot="sheet-content"],
-[data-slot="tooltip-content"] {
-  box-shadow: var(--shadow-overlay);
 }
 
 /* The micro-label tier.

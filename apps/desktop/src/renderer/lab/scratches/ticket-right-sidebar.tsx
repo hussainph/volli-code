@@ -201,7 +201,7 @@ function ActiveLabelTabs({
           "flex h-10 items-center gap-0.5 p-1",
           variant === "calm" &&
             cn(
-              "mx-auto rounded-full border border-sidebar-border bg-background/75 shadow-sm",
+              "mx-auto rounded-full border border-sidebar-border bg-background/75 shadow-raised",
               modes.length === 3 ? "w-40" : "w-[194px]",
             ),
           variant === "toolbar" && "w-full justify-between rounded-lg bg-accent/70",
@@ -244,7 +244,7 @@ function ActiveLabelTabs({
                 !reducedMotion &&
                   "transition-[color,background-color,box-shadow,transform] duration-150 [transition-timing-function:cubic-bezier(0.23,1,0.32,1)]",
                 active
-                  ? "bg-accent text-foreground shadow-xs"
+                  ? "bg-accent text-foreground shadow-raised"
                   : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
               )}
             >
@@ -354,7 +354,7 @@ function CommitDialog({ onComplete }: { onComplete(message: string): void }) {
         <Button
           size="sm"
           variant="outline"
-          className="min-w-0 border-sidebar-border bg-background/35 px-2.5 text-xs shadow-xs"
+          className="min-w-0 border-sidebar-border bg-background/35 px-2.5 text-xs shadow-raised"
         >
           <GitCommitIcon />
           <span>Publish</span>
@@ -417,7 +417,7 @@ function PublishControl({
               <Button
                 size="icon-sm"
                 variant="outline"
-                className="border-sidebar-border bg-background/35 shadow-xs"
+                className="border-sidebar-border bg-background/35 shadow-raised"
                 aria-label="More repository actions"
               >
                 <DotsThreeIcon weight="bold" />
@@ -447,7 +447,7 @@ function PublishControl({
           size="sm"
           variant="outline"
           aria-label="Compare branch with main on GitHub"
-          className="border-sidebar-border bg-background/35 px-2.5 text-xs shadow-xs"
+          className="border-sidebar-border bg-background/35 px-2.5 text-xs shadow-raised"
           onClick={onCompare}
         >
           {narrow ? null : <GithubLogoIcon weight="fill" />}
@@ -576,7 +576,7 @@ function EnvironmentSummary({
       // channel-triplet shaped.
       <section
         className={cn(
-          "overflow-hidden rounded-xl border border-sidebar-border/70 bg-background/55 shadow-[var(--shadow-raised)] dark:bg-accent/45 dark:shadow-none",
+          "overflow-hidden rounded-xl border border-sidebar-border/70 bg-background/55 shadow-raised dark:bg-accent/45 dark:shadow-none",
           narrow ? "mx-3" : "mx-4",
         )}
       >
@@ -864,7 +864,7 @@ function ChangesPanel({
                 <RowActions
                   path={row.path}
                   onOpen={onOpen}
-                  className="absolute top-[5px] right-20 z-10 rounded-md bg-accent/95 px-0.5 shadow-xs"
+                  className="absolute top-[5px] right-20 z-10 rounded-md bg-accent/95 px-0.5 shadow-raised"
                 />
               </div>
             </li>
@@ -1211,7 +1211,7 @@ function ControlDeck({
   onHomeLabel(value: "Now" | "Sessions"): void;
 }) {
   return (
-    <div className="fixed bottom-14 left-3 z-[100] flex max-w-[calc(100vw-24px)] flex-wrap items-center gap-2 rounded-xl border border-border bg-background/95 p-2 text-xs shadow-lg backdrop-blur-xl">
+    <div className="fixed bottom-14 left-3 z-[100] flex max-w-[calc(100vw-24px)] flex-wrap items-center gap-2 rounded-xl border border-border bg-background/95 p-2 text-xs shadow-overlay backdrop-blur-xl">
       <select
         aria-label="Prototype scenario"
         value={scenario}
@@ -1297,7 +1297,7 @@ export default function TicketRightSidebarScratch() {
   return (
     <TooltipProvider delayDuration={400} skipDelayDuration={200}>
       <div className="h-svh w-full overflow-hidden bg-rail p-2 text-foreground">
-        <div className="flex h-full overflow-hidden rounded-xl border border-border bg-background shadow-xl">
+        <div className="flex h-full overflow-hidden rounded-xl border border-border bg-background shadow-card">
           <WorkbenchMock activeSurface={activeSurface} />
           <aside
             className="relative flex shrink-0 flex-col border-l border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-200 ease-out"
@@ -1320,7 +1320,7 @@ export default function TicketRightSidebarScratch() {
               }}
             />
             {activity !== null ? (
-              <div className="absolute right-3 bottom-3 left-3 flex items-center gap-2 rounded-lg border border-sidebar-border bg-background/95 px-3 py-2 text-xs shadow-lg">
+              <div className="absolute right-3 bottom-3 left-3 flex items-center gap-2 rounded-lg border border-sidebar-border bg-background/95 px-3 py-2 text-xs shadow-overlay">
                 <CheckCircleIcon className="text-positive" weight="fill" />
                 <span className="min-w-0 flex-1 truncate">{activity}</span>
                 <button type="button" onClick={() => setActivity(null)} aria-label="Dismiss">

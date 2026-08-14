@@ -71,7 +71,7 @@ function EmptyProjectsState() {
       className="empty-projects-canvas relative flex flex-1 items-center justify-center overflow-hidden px-6"
     >
       <div className="relative z-10 flex max-w-sm flex-col items-center text-center">
-        <div className="mb-5 flex size-11 items-center justify-center rounded-xl border border-border bg-card/70 shadow-sm">
+        <div className="mb-5 flex size-11 items-center justify-center rounded-xl border border-border bg-card/70 shadow-raised">
           <FolderPlusIcon className="size-5 text-muted-foreground" />
         </div>
         <h1 className="text-title font-semibold">Add your first project</h1>

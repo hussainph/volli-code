@@ -336,11 +336,11 @@ export const Board = React.memo(function Board({
                 // solved per mode (a near-black in dark, a warm brown against the
                 // light canvas), and a card being dragged is a card — the same
                 // tier the board's cards already sit at, one step further off.
-                <div className="cursor-grabbing overflow-hidden rounded-md bg-card shadow-[var(--shadow-card)]">
+                <div className="cursor-grabbing overflow-hidden rounded-md bg-card shadow-card">
                   <TicketRowContent ticket={drag.ticket} ticketPrefix={ticketPrefix} />
                 </div>
               ) : (
-                <div className="scale-[1.03] cursor-grabbing rounded-lg shadow-[var(--shadow-card)]">
+                <div className="scale-[1.03] cursor-grabbing rounded-lg shadow-card">
                   <TicketCardContent ticket={drag.ticket} ticketPrefix={ticketPrefix} />
                 </div>
               )

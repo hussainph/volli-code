@@ -58,7 +58,14 @@ export function TicketCardContent({
   return (
     <article
       className={cn(
-        "flex flex-col gap-1.5 rounded-lg border bg-card px-3 py-2.5 cursor-default select-none transition-[border-color] duration-150 ease-out",
+        // `shadow-raised` and not `shadow-card`: the tier names an elevation,
+        // not a component noun. A board card is a tile lying ON its column, the
+        // same lift an active tab takes; `shadow-card` is the deeper halo the
+        // detached drag preview wears while the tile is off the board
+        // (`board.tsx`). This shadow used to be applied from a hand-maintained
+        // `article.bg-card` selector in globals.css, which is exactly why the
+        // three overlays that selector forgot were wearing stock black.
+        "flex flex-col gap-1.5 rounded-lg border bg-card px-3 py-2.5 shadow-raised cursor-default select-none transition-[border-color] duration-150 ease-out",
         // Selection colors the card's own border: a ring draws OUTSIDE the box
         // and the column scroller clips its top edge on the first card.
         selected ? "border-primary/70" : "border-border hover:border-border-strong",

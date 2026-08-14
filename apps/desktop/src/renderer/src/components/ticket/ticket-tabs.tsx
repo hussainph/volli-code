@@ -298,7 +298,10 @@ function TicketTab({
           ? // -mb-px pulls the active tab 1px past the strip's bottom border so
             // its content-colored fill covers that seam — the tab reads as
             // physically connected to the content plane below (no dividing line).
-            "-mb-px bg-background text-foreground"
+            // `shadow-raised` is the halo that says "active", carried here
+            // rather than by the `[role="tab"][aria-selected="true"]` rule
+            // globals.css used to hold.
+            "-mb-px bg-background text-foreground shadow-raised"
           : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
       )}
     >
