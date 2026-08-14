@@ -94,7 +94,14 @@ const MIN_VISUAL_SLEEP_REMAINING_MS = 50_000;
 const MIN_ACTIVE_SLEEP_REMAINING_MS = 40_000;
 const MIN_PRECLICK_SLEEP_REMAINING_MS = 30_000;
 const MIN_COMPLETED_SLEEP_MS = 55_000;
-const VULNERABLE_LOCATOR_TIMEOUT_MS = 2_000;
+// 8s, up from 2s (#233): the q2 choreography snaps reads right after a
+// viewport resize, and the composer has only grown since this budget was
+// sized (#234's card family, #235's picker stack) — four straight failures,
+// quiet machine included, all inside this slice while the UI in the failure
+// screenshots was healthy. The 60s sleep barrier leaves ~50s of slack, so a
+// wider read budget spends slack, not correctness: every barrier guard
+// (MIN_*_SLEEP_REMAINING_MS) still holds unchanged.
+const VULNERABLE_LOCATOR_TIMEOUT_MS = 8_000;
 const NORMAL_LOCATOR_TIMEOUT_MS = 30_000;
 const CLOSE_APP_SAFETY_MARGIN_MS = 2_000;
 const Q2_CLOSE_RESERVE_MS = CLOSE_APP_BOUNDED_MAX_MS + CLOSE_APP_SAFETY_MARGIN_MS;
@@ -199,7 +206,34 @@ async function waitForComposerState(
   );
 }
 
+/**
+ * One geometry snapshot is a lie often enough to have failed this smoke on a
+ * quiet machine: the composer mount sits inside motion wrappers, and a read
+ * taken right after `setViewportSize` can land mid-FLIP, when
+ * `getBoundingClientRect` reports the transform's transient position as
+ * off-viewport (`fits:false` with `overflow:0` — a box that is nowhere yet).
+ * So the assertion is "the geometry SETTLES into fitting within the budget",
+ * polled, with the last read thrown on timeout; the invariant itself is
+ * unchanged.
+ */
 async function assertComposerGeometry(page, label, menu = null, { timeout } = {}) {
+  const budget = timeout ?? NORMAL_LOCATOR_TIMEOUT_MS;
+  const deadline = Date.now() + budget;
+  let last = null;
+  for (;;) {
+    try {
+      return await readComposerGeometryOnce(page, label, menu, {
+        timeout: Math.max(250, deadline - Date.now()),
+      });
+    } catch (error) {
+      last = error;
+      if (Date.now() >= deadline) throw last;
+      await sleep(120);
+    }
+  }
+}
+
+async function readComposerGeometryOnce(page, label, menu, { timeout } = {}) {
   const locatorOptions = timeout === undefined ? undefined : { timeout };
   const [composer, menuBox] = await Promise.all([
     messageBox(page).evaluate(
@@ -1049,6 +1083,38 @@ async function main() {
               `shots=${q2.normalShot},${q2.narrowShot}`,
           };
         } catch (error) {
+          // One fast census before anything slow (#233): four straight
+          // failures said only "timeout", which cannot distinguish a missing
+          // button from a hidden one from a hung renderer. Race-guarded,
+          // because a renderer that cannot answer in 3s IS the diagnosis.
+          const census = await Promise.race([
+            page
+              .evaluate((label) => {
+                const rows = document.querySelectorAll(
+                  '[role="group"][aria-label^="Queued message:"]',
+                );
+                const byAttr = document.querySelectorAll(`[aria-label=${JSON.stringify(label)}]`);
+                const first = byAttr[0] ?? null;
+                const rect = first?.getBoundingClientRect() ?? null;
+                return {
+                  rows: rows.length,
+                  byAttr: byAttr.length,
+                  display: first ? getComputedStyle(first).display : null,
+                  visibility: first ? getComputedStyle(first).visibility : null,
+                  rect: rect
+                    ? {
+                        x: Math.round(rect.x),
+                        y: Math.round(rect.y),
+                        w: rect.width,
+                        h: rect.height,
+                      }
+                    : null,
+                };
+              }, `Queued message actions: ${QUEUED_TEXT.q2}`)
+              .catch((censusError) => ({ censusError: String(censusError) })),
+            sleep(3000).then(() => ({ censusError: "census hung >3s (renderer unresponsive)" })),
+          ]);
+          console.log(`  q2 failure census: ${JSON.stringify(census)}`);
           // This must be the first slow action after a manipulation failure.
           // A queued row cannot drain while screenshots/logs are collected.
           await abortMainBeforeEvidence(page, "composer-overlay-failed");
