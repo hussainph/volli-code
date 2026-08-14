@@ -338,9 +338,11 @@ function DecisionCard({
         <HandPalmIcon aria-hidden className="mt-1 size-4 shrink-0 text-primary" weight="fill" />
         <div className="min-w-0 flex-1">
           {/* The ask, at the size the ask-user card asks at. What is being
-              authorized is the largest thing on the card in both places — the
-              two are one family and the reader is doing the same kind of work. */}
-          <p className="text-heading text-balance text-foreground">{interaction.title}</p>
+              authorized leads the card in both places — the two are one family
+              and the reader is doing the same kind of work. Weight leads it
+              rather than size: the heading rung is a page's headline, and a
+              card that interrupts a transcript for one sentence is not one. */}
+          <p className="text-sm font-medium text-balance text-foreground">{interaction.title}</p>
           {/* The object of the decision, not a caption on it. This is the
               command or the path being authorized, and at the foot mount it is
               the only place the subject appears at all — truncated to one
@@ -808,7 +810,7 @@ function QuestionStep({
       {/* A paragraph carrying the group's name, not a heading: the card sits
           inside a transcript with an outline of its own, and the request's
           identity is already on the form and in the live region. */}
-      <p id={headingId} className="text-heading text-balance text-foreground">
+      <p id={headingId} className="text-sm font-medium text-balance text-foreground">
         {step.heading}
       </p>
       {interaction.detail ? (
@@ -938,8 +940,8 @@ function QuestionStep({
           className={cn(
             "flex min-w-0 items-start gap-2 rounded-lg",
             // Beside options it is the last row of the same list, and it wears
-            // the row's own padding and number. Alone it is the answer, and a
-            // field is what an answer is typed into.
+            // the row's own padding and number. Alone it is the answer itself,
+            // and stands clear of the ask above it.
             alone ? "mt-4" : "-mx-2 mt-1 px-2 py-2",
           )}
         >
@@ -979,10 +981,16 @@ function QuestionStep({
               onAdvance();
             }}
             className={cn(
-              "min-h-9 resize-none text-ui md:text-ui shadow-none",
-              alone
-                ? "rounded-md"
-                : "min-h-6 rounded-none border-0 bg-transparent px-0 py-0 focus-visible:ring-0 dark:bg-transparent",
+              // No edge of its own, in either place. The card already draws
+              // one, and a bordered box inside a bordered card is two frames
+              // around one thing — which is also what made the box beside the
+              // options the odd row out in a list nothing else is fenced in.
+              // What says a box can be typed into is the placeholder and the
+              // caret, the same two things that say it in the composer.
+              "min-h-9 resize-none border-0 bg-transparent px-0 text-ui shadow-none md:text-ui dark:bg-transparent",
+              // Beside options it is one row of their list and wears the row's
+              // rhythm; alone it is the answer and keeps the field's own floor.
+              !alone && "min-h-6 py-0",
               wordsDropped && "opacity-50",
             )}
           />
@@ -1206,7 +1214,7 @@ function InteractionQuestionFields({
               {/* The native input still owns the group: its `name`, its arrow
                   keys, its label association. Only the drawing moves out here,
                   onto a disc the size of the ask-user card's numeral — a 14px
-                  system radio beside an 18px ask read as a different component
+                  system radio read as a different component beside those rows
                   rather than as the same one asking a different question. */}
               <input
                 type={prompt.multiple ? "checkbox" : "radio"}
@@ -1288,7 +1296,12 @@ function InteractionQuestionFields({
             }
           }}
           className={cn(
-            "mt-2 min-h-9 resize-none rounded-md text-ui shadow-none md:text-ui",
+            // Borderless for the reason the ask-user card's box is: one border
+            // per surface, and this one stands inside the card's. `px-0` is
+            // half of that rather than a separate opinion — the box opens where
+            // the control it replaced stood, on the option marks' own left
+            // edge, so revealing it no longer shifts the words 16px right.
+            "mt-2 min-h-9 resize-none border-0 bg-transparent px-0 text-ui shadow-none md:text-ui dark:bg-transparent",
             wordsDropped && "opacity-50",
           )}
         />

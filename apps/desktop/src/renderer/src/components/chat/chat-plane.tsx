@@ -502,7 +502,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
           {/* The bottom padding clears the composer plus the h-16 gradient over
               it, with enough left that the last line lands on clean background
               rather than inside the fade. */}
-          <ConversationContent className="gap-6 px-0 pt-8 pb-[calc(var(--composer-height)+12rem)]">
+          <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
             {messages.length === 0 ? (
               // A mark, and nothing else. What blocks typing sits on the
               // composer, where the typing is.
