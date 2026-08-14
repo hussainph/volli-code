@@ -43,7 +43,7 @@ import { piExecutionEnv } from "./execution-env";
 import { inspectPiModelAccess } from "./model-access";
 import { piOwnedModels } from "./models";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
-import { createPiTools } from "./tools";
+import { createAskUserTool, createPiTools } from "./tools";
 import { attentionReasonFor, classifyAssistantMessage, recoveryRefFor } from "./transcript";
 
 export interface PiRuntimeHostOptions {
@@ -522,6 +522,11 @@ async function attachSession(
     toolEnv = await host.executionEnvFactory(spec.workspacePath);
     const ownedToolEnv = toolEnv;
     const tools = createPiTools(spec.tools, ownedToolEnv);
+    // Offered only to a Session with somewhere to send the question, for the
+    // reason the gate below is built only for a Session with a policy: a tool
+    // that is absent cannot be called, where one wired to nothing would be
+    // called and then fail, and the model would learn that from the failure.
+    if (spec.askUser !== undefined) tools.push(createAskUserTool(spec.askUser, spec.signal));
 
     let turnId = randomUUID();
     let failure: RuntimeFailure | undefined;

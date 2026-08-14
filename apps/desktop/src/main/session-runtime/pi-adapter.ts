@@ -49,6 +49,14 @@
  *    absent is durability: the question, the answer and the withdrawal are all
  *    Session facts, and this file emits observations for the Engine to write
  *    rather than writing any of them itself.
+ *
+ *    Two kinds of question take that path, parked in two maps under two frozen
+ *    prefixes. An escalation is the runtime's own policy asking whether to stand
+ *    aside, and its answer is read back through `askChoice` as a verdict; the
+ *    model's own question ({@link PiBinding.#askUser}) carries the model's
+ *    options and hands the answer back untouched, because reading it would mean
+ *    deciding what one of the model's own ids meant. One prefix serving both
+ *    would let either answer end the other's wait.
  */
 
 import { createPiAgentRuntime, type PiRuntimeHostOptions } from "@volli/agent-runtime";
@@ -67,6 +75,7 @@ import { NativeAttachmentError } from "@volli/session-engine";
 import {
   askChoice,
   askOffer,
+  DEFAULT_INTERACTION_PROMPT_ID,
   errorMessage,
   type AgentRuntime,
   type DeliveryOutcome,
@@ -74,9 +83,12 @@ import {
   type ModelSelectionOutcome,
   type RuntimeAskChoice,
   type RuntimeAskRequest,
+  type RuntimeAskUserRequest,
   type RuntimeAttachmentHandle,
   type RuntimeObservation,
   type RuntimeRecoveryRef,
+  type SessionInteractionOption,
+  type SessionInteractionResolution,
   type SessionNativeDetail,
   type SessionNativeReference,
   type SessionRuntimeSpec,
@@ -340,6 +352,24 @@ function askInteractionId(toolCallId: string): string {
 }
 
 /**
+ * The interaction id one `ask_user` call is asked under.
+ *
+ * Durable on the same terms as {@link askInteractionId}, and a second derivation
+ * rather than a widening of it: the `ask-user:` segment is frozen the moment it
+ * ships, because `pi:interaction:<attachmentId>:<id>:opened` is re-derived from
+ * live data on every relaunch and deduped by exact string match.
+ *
+ * Separate from `ask:` for a reason that outlives the ids. Both derive from a
+ * tool call id, and the two questions are answered differently — an escalation's
+ * option ids are read as a verdict, a model's are handed back untouched — so one
+ * shared prefix would not collide loudly, it would let either answer settle the
+ * other's wait.
+ */
+function askUserInteractionId(toolCallId: string): string {
+  return `ask-user:${toolCallId}`;
+}
+
+/**
  * What the question says, in the two shapes an escalation arrives in.
  *
  * A refusal a person may overrule is a question about this one call; a refusal
@@ -356,11 +386,32 @@ function askTitle(request: RuntimeAskRequest): string {
     : `Blocked this ${request.tool} call`;
 }
 
+/**
+ * What an answer meets when nothing is waiting for it, said once because both
+ * ends of the resolve path can reach it: the question was never this
+ * attachment's, or it stopped being anyone's while the answer was in flight.
+ */
+const UNKNOWN_INTERACTION =
+  "Nothing is waiting on this question: it was answered already, it was withdrawn, or it was asked by an earlier attachment.";
+
 /** One question in front of a person, and everything needed to stop asking it. */
 interface ParkedAsk {
   /** The request as the runtime made it; an answer is read back against it. */
   request: RuntimeAskRequest;
   settle: PromiseWithResolvers<RuntimeAskChoice>;
+  /** Drops this question's listener from the runtime's withdrawal signal. */
+  forget: () => void;
+}
+
+/**
+ * One of the model's own questions, parked the same way and answered differently.
+ *
+ * It keeps no request. An escalation holds one because `askChoice` reads the
+ * answer back against it; there is nothing to read back against here, and
+ * keeping the request anyway would be an invitation to start.
+ */
+interface ParkedAskUser {
+  settle: PromiseWithResolvers<SessionInteractionResolution>;
   /** Drops this question's listener from the runtime's withdrawal signal. */
   forget: () => void;
 }
@@ -382,6 +433,8 @@ class PiBinding implements BindingHandle {
   readonly #abort = new AbortController();
   /** Questions the runtime is parked on, by the interaction id they were asked under. */
   readonly #asked = new Map<string, ParkedAsk>();
+  /** The model's own questions, kept apart because their answers are read differently. */
+  readonly #askedUser = new Map<string, ParkedAskUser>();
   #handle: RuntimeAttachmentHandle | null = null;
   #native: SessionNativeReference = { id: null, detail: null };
   /**
@@ -439,6 +492,10 @@ class PiBinding implements BindingHandle {
       signal: this.#abort.signal,
       observer: (observation) => this.#observe(observation),
       ask: (request, signal) => this.#ask(request, signal),
+      // Always wired, which is what puts the ask tool in front of the model: a
+      // desktop Session always has somewhere to put a question, because the
+      // chat surface asking it is the same surface that started the turn.
+      askUser: (request, signal) => this.#askUser(request, signal),
     };
   }
 
@@ -509,20 +566,53 @@ class PiBinding implements BindingHandle {
           return this.#unknown(command.commandId, error);
         }
       case "interaction.resolve": {
-        const parked = this.#take(command.interaction.id);
-        if (parked === undefined) {
+        // Looked up WITHOUT claiming, because the answer has to be a Session
+        // fact before the question stops waiting — see the emit below.
+        if (!this.#awaiting(command.interaction.id)) {
+          return this.#rejected(command.commandId, "PI_INTERACTION_UNKNOWN", UNKNOWN_INTERACTION);
+        }
+        // The answer is announced from here, and it has to be: the Session
+        // Engine writes `interaction.resolved` from THIS observation and from
+        // nowhere else. The delivery receipt this returns is a receipt, not a
+        // fact — `projectSession` folds it into `receipts` and never looks at
+        // its `result` — so a Session whose adapter stayed silent would settle
+        // the parked call, resume the turn, and leave the question active
+        // forever: a card that cannot be cleared, `sessionAwaitsUser()` stuck
+        // true, and every later question hidden behind it.
+        //
+        // Emitted BEFORE the ask is settled, mirroring {@link PiBinding.#ask},
+        // which refuses to park on a question the Session could not record. The
+        // same bargain read the other way: an answer the Session could not
+        // record must not be reported as delivered, because the turn would
+        // resume on a decision history has no account of.
+        try {
+          await this.#observe({
+            kind: "interaction",
+            state: "resolved",
+            occurredAt: this.#now(),
+            interactionId: command.interaction.id,
+            resolution: command.resolution,
+          });
+        } catch (error) {
+          // Nothing was claimed, so the question is still parked and still
+          // active: the card stays answerable and pressing it again retries.
+          // That recoverable state is the whole reason the claim happens after
+          // the emit — claiming first would leave the ask unparked AND
+          // unrecorded, and the retry would meet PI_INTERACTION_UNKNOWN with the
+          // turn blocked behind a card nothing can ever answer.
           return this.#rejected(
             command.commandId,
-            "PI_INTERACTION_UNKNOWN",
-            "Nothing is waiting on this question: it was answered already, it was withdrawn, or it was asked by an earlier attachment.",
+            "PI_INTERACTION_NOT_RECORDED",
+            `This answer could not be recorded, so it was not delivered. Try again: ${errorMessage(error)}`,
           );
         }
-        // No `interaction.resolved` observation from here. The Session Engine
-        // writes that fact itself from the receipt this returns, so announcing
-        // it as well would record one answer twice — and the reading it takes,
-        // `askChoice`, is the runtime's private reading of a decision the ledger
-        // already holds in the person's own option ids.
-        parked.settle.resolve(askChoice(parked.request, command.resolution.optionIds));
+        // Lost the claim while the fact was committing — a withdrawal or a
+        // release got here first. History keeps the resolution, which is true:
+        // a person did answer. What is no longer true is that the runtime is
+        // waiting for it, so this reports a decision that reached nobody.
+        if (!this.#settleAnswer(command.interaction.id, command.resolution)) {
+          return this.#rejected(command.commandId, "PI_INTERACTION_UNKNOWN", UNKNOWN_INTERACTION);
+        }
         return this.#accepted(command.commandId);
       }
     }
@@ -583,10 +673,12 @@ class PiBinding implements BindingHandle {
   async release(_reason: ReleaseReason): Promise<void> {
     if (this.#releasing) return;
     this.#releasing = true;
-    // Iterated live rather than over a snapshot: an escalation that slipped in
+    // Iterated live rather than over a snapshot: a question that slipped in
     // between two awaits here is one this loop still has to withdraw, and a
     // question the map no longer holds is one something else already ended.
-    for (const interactionId of this.#asked.keys()) await this.#withdraw(interactionId, true);
+    for (const asked of [this.#asked, this.#askedUser]) {
+      for (const interactionId of asked.keys()) await this.#withdraw(interactionId, true);
+    }
     this.#released = true;
     this.#abort.abort();
     await this.#handle?.close();
@@ -686,6 +778,114 @@ class PiBinding implements BindingHandle {
   }
 
   /**
+   * Put one of the model's own questions to a person, and wait for their answer.
+   *
+   * Everything {@link PiBinding.#ask} says about the wait holds here: no timeout,
+   * `signal` is the only notice that the turn stopped waiting, and the `opened`
+   * emit is awaited with its failure left to propagate, because parking on a
+   * question nobody was shown blocks the turn on an answer that cannot arrive.
+   * A rejection reaches the model as a failed tool call, which is what actually
+   * happened to it.
+   *
+   * The options are the model's rather than Volli's: whatever it offered, mapped
+   * onto the ledger's own option shape and not checked against any vocabulary —
+   * an id that reads like a refusal is one of the model's answers and refuses
+   * nothing.
+   *
+   * Whether a person may say something the model did not list is what `prompts`
+   * is here to record, and every question this opens declares one — options or
+   * not. The default admits free text: a person asked to choose between two
+   * things the model imagined must be able to say a third, so `custom` is true
+   * unless the model closed it with `allowOther: false`. `custom` lives on a
+   * prompt and nowhere else, so a question that left `prompts` off would be
+   * durably saying the opposite — and history, not the card, is what a later
+   * reader has to go on. The flat `options` and `multiple` stay beside it: a
+   * reader that predates prompts still sees the choice, and only loses the part
+   * it could not have rendered anyway.
+   */
+  async #askUser(
+    request: RuntimeAskUserRequest,
+    signal: AbortSignal,
+  ): Promise<SessionInteractionResolution> {
+    const interactionId = askUserInteractionId(request.toolCallId);
+    const options: SessionInteractionOption[] = (request.options ?? []).map((option) => ({
+      id: option.id,
+      label: option.label,
+      description: option.description ?? null,
+    }));
+    const multiple = request.multiple === true;
+    // A closed question with nothing to choose between asks for an answer that
+    // cannot be given, so the model's `false` is overruled exactly there rather
+    // than opening a card no press can ever satisfy.
+    const custom = options.length === 0 || request.allowOther !== false;
+    await this.#observe({
+      kind: "interaction",
+      state: "opened",
+      occurredAt: this.#now(),
+      interaction: {
+        id: interactionId,
+        kind: "question",
+        title: request.question,
+        detail: null,
+        options,
+        multiple,
+        prompts: [
+          {
+            id: DEFAULT_INTERACTION_PROMPT_ID,
+            label: request.question,
+            detail: null,
+            options,
+            multiple,
+            custom,
+          },
+        ],
+        native: this.#native,
+      },
+    });
+    const withdraw = (): void => {
+      void this.#withdraw(interactionId, true);
+    };
+    const parked: ParkedAskUser = {
+      settle: Promise.withResolvers<SessionInteractionResolution>(),
+      forget: () => signal.removeEventListener("abort", withdraw),
+    };
+    this.#askedUser.set(interactionId, parked);
+    // Read rather than trusted to the listener, for the reason spelled out in
+    // {@link PiBinding.#ask}: a signal that aborted while the `opened` fact was
+    // committing will never fire again.
+    if (signal.aborted) withdraw();
+    else signal.addEventListener("abort", withdraw, { once: true });
+    return parked.settle.promise;
+  }
+
+  /** Whether either kind of question is still waiting under this id. */
+  #awaiting(interactionId: string): boolean {
+    return this.#asked.has(interactionId) || this.#askedUser.has(interactionId);
+  }
+
+  /**
+   * Hand one answer to whichever kind of question was waiting for it.
+   *
+   * The two readings are the whole reason this is one function and not a shared
+   * one: an escalation's option ids are the runtime's private evidence for a
+   * verdict, and the model's are the model's own, handed back exactly as a
+   * person chose them. False means nothing was still waiting.
+   */
+  #settleAnswer(interactionId: string, resolution: SessionInteractionResolution): boolean {
+    const parkedUser = this.#takeUser(interactionId);
+    if (parkedUser !== undefined) {
+      parkedUser.settle.resolve(resolution);
+      return true;
+    }
+    const parked = this.#take(interactionId);
+    if (parked === undefined) return false;
+    // `askChoice` is the runtime's own private reading of a decision the ledger
+    // already holds in the person's own option ids.
+    parked.settle.resolve(askChoice(parked.request, resolution.optionIds));
+    return true;
+  }
+
+  /**
    * Claim a parked question, so that exactly one path can end it.
    *
    * The map delete is the dedupe, and everything that ends an ask goes through
@@ -705,6 +905,15 @@ class PiBinding implements BindingHandle {
     return parked;
   }
 
+  /** The same claim over the model's own questions. */
+  #takeUser(interactionId: string): ParkedAskUser | undefined {
+    const parked = this.#askedUser.get(interactionId);
+    if (parked === undefined) return undefined;
+    this.#askedUser.delete(interactionId);
+    parked.forget();
+    return parked;
+  }
+
   /**
    * Stop asking one question, telling the Session unless it already knows.
    *
@@ -715,7 +924,10 @@ class PiBinding implements BindingHandle {
    * an answer" and lets its own refusal stand, which is what actually happened.
    */
   async #withdraw(interactionId: string, announce: boolean): Promise<void> {
-    const parked = this.#take(interactionId);
+    // Either map, one claim: the Engine cancels an interaction by id and has no
+    // reason to know which kind of question it was, and only one of the two can
+    // be holding any id.
+    const parked = this.#take(interactionId) ?? this.#takeUser(interactionId);
     if (parked === undefined) return;
     try {
       if (announce) {
