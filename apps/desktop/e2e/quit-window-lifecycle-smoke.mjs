@@ -61,7 +61,7 @@ if (process.platform !== "darwin") {
 
 const execFileAsync = promisify(execFile);
 const { scratch, userDataDir, dbPath, cleanup } = await makeShortScratch("life");
-const { attempt, results, summarize } = createRunner();
+const { attempt, must, summarize } = createRunner();
 const socketPath = socketPathFor(userDataDir);
 const firstDialogRecord = join(scratch, "quit-dialogs.json");
 const secondDialogRecord = join(scratch, "window-dialogs.json");
@@ -84,14 +84,6 @@ const WINDOW_READY_TIMEOUT_MS = 15000;
 const NATURAL_EXIT_RACE_TIMEOUT_MS = 500;
 const FORCE_EXIT_TIMEOUT_MS = 4000;
 const DIAGNOSTIC_LOG_TAIL_CHARS = 6000;
-
-async function must(n, label, operation) {
-  const resultIndex = results.length;
-  await attempt(n, label, operation);
-  if (results[resultIndex]?.ok !== true) {
-    throw new Error(`required check ${n} failed; refusing dependent lifecycle actions`);
-  }
-}
 
 async function boundedOperation(label, operation, timeout = MAIN_EVALUATE_TIMEOUT_MS) {
   let timeoutId = null;
@@ -528,8 +520,9 @@ async function main() {
       );
       const editor = await readMonacoState(firstPage);
       const call = calls[0];
+      const childAlive = !childHasExited(firstRun.child);
       const ok =
-        firstRun.child.exitCode === null &&
+        childAlive &&
         windows === 1 &&
         editor.dirty === "true" &&
         call?.message === "Quit Volli?" &&
@@ -539,7 +532,7 @@ async function main() {
         call?.detail?.includes("lifecycle.ts");
       return {
         ok,
-        detail: `alive=${firstRun.child.exitCode === null} windows=${windows} dirty=${editor.dirty} prompt=${JSON.stringify(call?.message)} response=${call?.response} namesFile=${call?.detail?.includes("lifecycle.ts")}`,
+        detail: `alive=${childAlive} windows=${windows} dirty=${editor.dirty} prompt=${JSON.stringify(call?.message)} response=${call?.response} namesFile=${call?.detail?.includes("lifecycle.ts")}`,
       };
     });
 

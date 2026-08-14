@@ -1,7 +1,7 @@
 /**
  * Focused packaged proof for VC-110 live Monaco reconciliation.
  *
- * Proves, through the built Electron app and real filesystem watchers:
+ * Proves ten checks through the built Electron app and real filesystem watchers:
  *   1. A clean open File model adopts an external write in place without
  *      losing focus/cursor/scroll, and the inspected Change row becomes Updated.
  *   1b. An external edit that prepends lines above the caret keeps the caret
@@ -11,6 +11,8 @@
  *   2b. A clean model parked behind another tab maps its saved caret/viewport
  *       through a prepended disk update without making the old baseline
  *       undoable or saveable.
+ *   2c. A clean File parked behind its same-path Diff maps its saved
+ *       caret/viewport after the mounted Diff positively adopts the prepend.
  *   3. Disjoint human/agent edits merge into one dirty registry model.
  *   4. File and Diff deliberately opened for the same path share that model.
  *   5. A local save echo stays quiet in ticket recency — proved positively by
@@ -47,15 +49,7 @@ const execFileAsync = promisify(execFile);
 const TARGET = "src/reconcile.ts";
 const PROJECT = { id: "reconciliation-proj", name: "Monaco Reconciliation", prefix: "MR" };
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-reconciliation-");
-const { attempt, results, summarize } = createRunner();
-
-async function must(n, label, operation) {
-  const resultIndex = results.length;
-  await attempt(n, label, operation);
-  if (results[resultIndex]?.ok !== true) {
-    throw new Error(`required check ${n} failed; refusing dependent reconciliation actions`);
-  }
-}
+const { must, summarize } = createRunner();
 
 const baselineLines = Array.from({ length: 80 }, (_, index) => {
   if (index === 0) return 'export const overlap = "baseline";';
@@ -829,6 +823,149 @@ async function main() {
     await waitStableDiskText(targetPath, PARKED_BASE_DISK, "parked prepend cleanup on disk");
     await waitUntil(
       "parked prepend cleanup in File model",
+      async () => {
+        const state = await readFileState(page);
+        return state.dirty === "false" &&
+          state.lines.includes(PARKED_DISK_LINE) &&
+          !state.lines.includes(PREPEND_LINES[0])
+          ? state
+          : null;
+      },
+      { timeout: 20000 },
+    );
+
+    await must(
+      "2c",
+      "same-path Diff adopts a clean parked update before File restores mapped view state",
+      async () => {
+        // Save a File view against the un-prepended clean baseline, then park
+        // that view behind the already-open Diff for the exact same path.
+        const anchorLine = fileHost(page)
+          .locator(
+            ".monaco-editor .monaco-scrollable-element.editor-scrollable > " +
+              ".lines-content > .view-lines > .view-line",
+          )
+          .filter({ hasText: KNOWN_ANCHOR_TEXT });
+        await waitUntil(
+          "one visible File anchor before same-path Diff",
+          async () => ((await anchorLine.count()) === 1 ? true : null),
+          { timeout: 3000, interval: 50 },
+        );
+        await anchorLine.click();
+        await page.keyboard.press("Home");
+        const beforePark = await waitCaretModelState(
+          page,
+          "caret state before parking behind same-path Diff",
+          { timeout: 3000, interval: 50 },
+        );
+        if (beforePark.text !== KNOWN_ANCHOR_TEXT) {
+          throw new Error(
+            `caret missed File anchor before same-path Diff: ${JSON.stringify(beforePark)}`,
+          );
+        }
+
+        await aside.getByTestId("ticket-rail-tab-changes").click();
+        await changeRow.click();
+        const parked = await waitUntil(
+          "same-path Diff active and ready with File host released",
+          async () => {
+            const tabs = await readTicketTabs(page, ticketId);
+            const diffReady =
+              (await page.locator('[data-monaco-diff-status="ready"]').count()) === 1;
+            const fileHostCount = await fileHost(page).count();
+            return tabs?.active === `diff:${TARGET}` && diffReady && fileHostCount === 0
+              ? { diffReady, fileHostCount, tabs }
+              : null;
+          },
+          { timeout: 20000 },
+        );
+
+        // Monaco only renders the modified Diff viewport. Force it to the top
+        // so the subsequent positive watcher observation sees both the newly
+        // prepended first line and the changed baseline line before File opens.
+        const modifiedDiff = page
+          .locator('[data-monaco-diff-status="ready"]')
+          .locator(".editor.modified .monaco-editor")
+          .first();
+        await modifiedDiff.click();
+        await page.keyboard.press("Meta+ArrowUp");
+        await waitUntil(
+          "modified Diff viewport at the clean baseline top",
+          async () => {
+            const state = await readDiffState(page);
+            return state.ready && state.lines.includes(baselineLines[0]) ? state : null;
+          },
+          { timeout: 5000, interval: 50 },
+        );
+
+        await sleep(20);
+        await fs.writeFile(targetPath, PARKED_PREPEND_DISK);
+        await waitStableDiskText(
+          targetPath,
+          PARKED_PREPEND_DISK,
+          "same-path Diff prepended write to settle on disk",
+        );
+        const diffAdopted = await waitUntil(
+          "clean same-path Diff to visibly adopt both prepended and changed lines",
+          async () => {
+            const state = await readDiffState(page);
+            return state.ready &&
+              state.dirty === "false" &&
+              state.lines.includes(PREPEND_LINES[0]) &&
+              state.lines.includes(PARKED_DISK_LINE)
+              ? state
+              : null;
+          },
+          { timeout: 20000 },
+        );
+
+        // Only after the still-mounted Diff proves the watcher/model update do
+        // we reopen File and inspect its independently saved view state.
+        await openFileFromRail(aside);
+        const adoptedFile = await waitFileText(page, PARKED_DISK_LINE, false);
+        const expectedTop = beforePark.top + PREPEND_COUNT * LINE_HEIGHT_PX;
+        const expectedScrollTop = beforePark.scrollTop + PREPEND_COUNT * LINE_HEIGHT_PX;
+        const mappedView = await waitUntil(
+          "same-path parked File caret and viewport to follow their text",
+          async () => {
+            const state = await caretModelState(page);
+            return state.ready &&
+              state.text === KNOWN_ANCHOR_TEXT &&
+              Math.abs(state.top - expectedTop) < 1 &&
+              Math.abs(state.scrollTop - expectedScrollTop) < 1
+              ? state
+              : null;
+          },
+          { timeout: 20000 },
+        );
+
+        const diffObservedBeforeFile =
+          diffAdopted.dirty === "false" &&
+          diffAdopted.lines.includes(PREPEND_LINES[0]) &&
+          diffAdopted.lines.includes(PARKED_DISK_LINE);
+        const fileMapped =
+          adoptedFile.lines.includes(PARKED_DISK_LINE) &&
+          mappedView.text === KNOWN_ANCHOR_TEXT &&
+          Math.abs(mappedView.top - expectedTop) < 1 &&
+          Math.abs(mappedView.scrollTop - expectedScrollTop) < 1;
+        return {
+          ok:
+            parked.tabs.active === `diff:${TARGET}` &&
+            parked.diffReady &&
+            parked.fileHostCount === 0 &&
+            diffObservedBeforeFile &&
+            fileMapped,
+          detail: `parkedActive=${parked.tabs.active} diffReady=${parked.diffReady} fileHosts=${parked.fileHostCount} diffObservedBeforeFile=${diffObservedBeforeFile} caret=${beforePark.top}→${mappedView.top} (expected ${expectedTop}) scroll=${beforePark.scrollTop}→${mappedView.scrollTop} (expected ${expectedScrollTop})`,
+        };
+      },
+    );
+
+    // Leave the same-line baseline expected by the disjoint/conflict checks.
+    await sleep(20);
+    await fs.writeFile(targetPath, PARKED_BASE_DISK);
+    await waitStableDiskText(targetPath, PARKED_BASE_DISK, "same-path Diff cleanup on disk");
+    await waitUntil(
+      "same-path Diff cleanup in File model",
       async () => {
         const state = await readFileState(page);
         return state.dirty === "false" &&
