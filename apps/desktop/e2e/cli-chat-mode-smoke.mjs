@@ -27,6 +27,7 @@ import os from "node:os";
 import { join } from "node:path";
 
 import { makeShortScratch } from "./lib/agent-kit.mjs";
+import { inspectDoctorPathEvidence } from "./lib/cli-chat-mode-doctor-evidence.mjs";
 import {
   activeTabLabel,
   assistantReplyTexts,
@@ -318,7 +319,7 @@ async function main() {
     // are the kit's to own, and what the budget was measured against.
     await attempt(
       8,
-      "the turn settles with `volli doctor` output pasted back — not a command-not-found miss",
+      "the turn settles with successful PATH and scratch-shim evidence from `volli doctor`",
       async () => {
         const settled = await waitForSettledReply(page, { since: submittedAt }).catch(
           async (error) => {
@@ -332,13 +333,18 @@ async function main() {
         // that stopped existing the moment the prompt landed.
         chatTabLabel = await activeTabLabel(page, TICKET_TAB_STRIP);
         const reply = settled.texts.join("\n");
-        // Doctor's own check titles/marks (see `packages/shared/src/doctor.ts`)
-        // are the evidence the shell command actually ran `volli doctor` rather
-        // than the model inventing prose, or the shell reporting it missing.
-        const hasDoctorEvidence = /checks?\b/i.test(reply) && /[✓✗!]/.test(reply);
+        // Require the two exact successful checks that prove this structured
+        // Session put its own scratch-profile shim first. A generic report,
+        // warning/failure, or another Volli profile's global shim is not proof.
+        const expectedShimPath = await fs.realpath(join(userDataDir, "bin", "volli"));
+        const { pathPositionOk, cliShimOk } = inspectDoctorPathEvidence(reply, expectedShimPath);
         const notFound = /command not found|not recognized|no such file or directory/i.test(reply);
         const ok =
-          settled.texts.length > 0 && chatTabLabel !== null && hasDoctorEvidence && !notFound;
+          settled.texts.length > 0 &&
+          chatTabLabel !== null &&
+          pathPositionOk &&
+          cliShimOk &&
+          !notFound;
         if (!ok) {
           await captureFailureEvidence(page, mainStdout, mainStderr, "doctor-reply-unusable");
         }
@@ -346,7 +352,8 @@ async function main() {
           ok,
           detail:
             `turn=${(settled.elapsedMs / 1000).toFixed(1)}s replies=${settled.texts.length} ` +
-            `tab=${chatTabLabel} hasDoctorEvidence=${hasDoctorEvidence} notFound=${notFound}\n` +
+            `tab=${chatTabLabel} pathPositionOk=${pathPositionOk} cliShimOk=${cliShimOk} ` +
+            `notFound=${notFound} expectedShim=${expectedShimPath}\n` +
             `--- full reply ---\n${reply}`,
         };
       },
