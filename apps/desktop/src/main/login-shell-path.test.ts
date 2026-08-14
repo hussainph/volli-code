@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   BARE_LAUNCHD_PATH,
+  createLoginPathBootstrap,
   currentPathIsIncomplete,
   decideLoginPathAdoption,
   loginPathLogLine,
@@ -240,5 +241,58 @@ describe("loginPathLogLine", () => {
 
   it("says kept when nothing changed", () => {
     expect(loginPathLogLine({ kind: "kept" })).toBe("[volli] PATH kept");
+  });
+});
+
+describe("createLoginPathBootstrap", () => {
+  it("starts probing immediately but shares one deferred apply", async () => {
+    let resolveProbe: ((path: string | null) => void) | undefined;
+    let probeCount = 0;
+    const mutations: string[] = [];
+    const logs: string[] = [];
+    const bootstrap = createLoginPathBootstrap({
+      binDir: "/profile/bin",
+      readCurrentPath: () => BARE_LAUNCHD_PATH,
+      writePath: (path) => mutations.push(path),
+      resolveLoginPath: () => {
+        probeCount += 1;
+        return new Promise((resolve) => {
+          resolveProbe = resolve;
+        });
+      },
+      log: (line) => logs.push(line),
+    });
+
+    expect(probeCount).toBe(1);
+    expect(mutations).toEqual([]);
+    expect(logs).toEqual([]);
+
+    const firstApply = bootstrap.apply();
+    const secondApply = bootstrap.apply();
+    expect(secondApply).toBe(firstApply);
+
+    resolveProbe?.("/opt/homebrew/bin:/usr/bin:/bin");
+    await firstApply;
+
+    expect(mutations).toEqual(["/profile/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"]);
+    expect(logs).toEqual(["[volli] PATH adopted from login shell (5 entries)"]);
+  });
+
+  it("keeps a failed probe while deduplicating and re-prepending the profile bin", async () => {
+    const mutations: string[] = [];
+    const logs: string[] = [];
+    const bootstrap = createLoginPathBootstrap({
+      binDir: "/profile/bin",
+      readCurrentPath: () => "/usr/bin:/profile/bin:/bin:/profile/bin",
+      writePath: (path) => mutations.push(path),
+      resolveLoginPath: async () => Promise.reject(new Error("profile failed")),
+      log: (line) => logs.push(line),
+    });
+
+    await expect(bootstrap.apply()).resolves.toEqual({ kind: "kept" });
+    await bootstrap.apply();
+
+    expect(mutations).toEqual(["/profile/bin:/usr/bin:/bin"]);
+    expect(logs).toEqual(["[volli] PATH kept"]);
   });
 });

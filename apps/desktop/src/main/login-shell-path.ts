@@ -24,10 +24,10 @@
  * merely incomplete.
  *
  * Failure is `null`, never a thrown error and never a latched cache: a
- * profile that times out once costs this one attempt, and the current PATH
- * is left exactly as it was. There is no retry inside this module because
- * main calls it exactly once per launch, unlike `login-path.ts`'s repeated
- * detection callers.
+ * profile that times out once costs this one attempt. The boot coordinator
+ * then preserves every current PATH entry while still moving Volli's own bin
+ * to the front. There is no retry inside this module because main calls it
+ * exactly once per launch, unlike `login-path.ts`'s repeated detection callers.
  */
 import { spawn } from "node:child_process";
 import { isAbsolute } from "node:path";
@@ -137,8 +137,8 @@ export function parseLoginShellPathOutput(stdout: string): string | null {
 
 /**
  * Asks the user's login shell for its exported PATH, once. `null` on any
- * failure, timeout, or empty output — and on `null` the caller changes
- * nothing, which is what makes probing a real profile at boot safe to ship.
+ * failure, timeout, or empty output. A `null` result never replaces the
+ * current PATH with profile data that could not be verified.
  */
 export async function resolveLoginShellPath(
   deps: LoginShellPathDeps = processDeps(),
@@ -213,4 +213,49 @@ export function loginPathLogLine(outcome: LoginPathOutcome): string {
   return outcome.kind === "adopted"
     ? `[volli] PATH adopted from login shell (${outcome.entryCount} entries)`
     : "[volli] PATH kept";
+}
+
+export interface LoginPathBootstrapDeps {
+  binDir: string;
+  readCurrentPath(): string | undefined;
+  writePath(path: string): void;
+  resolveLoginPath(): Promise<string | null>;
+  log(line: string): void;
+}
+
+export interface LoginPathBootstrap {
+  /** Applies the already-started probe exactly once. Every caller gets this same promise. */
+  apply(): Promise<LoginPathOutcome>;
+}
+
+/**
+ * Starts the login-shell probe now, but defers every observable effect until
+ * {@link LoginPathBootstrap.apply}. Main can therefore overlap the slow shell
+ * with boot without putting an await, PATH mutation, or PATH log ahead of the
+ * first window. The first post-load callback and every Pi execution env share
+ * the one memoized apply promise.
+ */
+export function createLoginPathBootstrap(deps: LoginPathBootstrapDeps): LoginPathBootstrap {
+  let probeAttempt: Promise<string | null>;
+  try {
+    probeAttempt = Promise.resolve(deps.resolveLoginPath()).catch(() => null);
+  } catch {
+    probeAttempt = Promise.resolve(null);
+  }
+
+  let applyAttempt: Promise<LoginPathOutcome> | undefined;
+  return {
+    apply: () => {
+      applyAttempt ??= probeAttempt.then((loginPath) => {
+        const currentPath = deps.readCurrentPath();
+        const outcome = decideLoginPathAdoption(currentPath, loginPath);
+        const mergedPath = outcome.kind === "adopted" ? outcome.path : (currentPath ?? "");
+        const path = [...new Set([deps.binDir, ...entriesOf(mergedPath)])].join(":");
+        deps.writePath(path);
+        deps.log(loginPathLogLine(outcome));
+        return outcome;
+      });
+      return applyAttempt;
+    },
+  };
 }

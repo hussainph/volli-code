@@ -102,11 +102,7 @@ import type { RefusedWrapper } from "./harness-runtime";
 import { ensureShellInit } from "./shell-init";
 import { startAgentSocket, type AgentSocketServer } from "./agent-socket";
 import { loginShellPath } from "./login-path";
-import {
-  decideLoginPathAdoption,
-  loginPathLogLine,
-  resolveLoginShellPath,
-} from "./login-shell-path";
+import { createLoginPathBootstrap, resolveLoginShellPath } from "./login-shell-path";
 import { piLoginLaunch, verifiedPiCliResource } from "./pi-cli-resource";
 import {
   detectHarnesses,
@@ -393,9 +389,9 @@ app.whenReady().then(async () => {
   // launchd's bare PATH, and the only fix is asking the user's own login
   // shell what it would have exported. That costs a shell spawn (~4s worst
   // case) — started now so it runs alongside the db open, migrations and IPC
-  // registration below rather than in front of them, and awaited just
-  // before the Pi runtime host is constructed, which is the first thing
-  // that needs the answer.
+  // registration below rather than in front of them. Its result is observed
+  // only after the first window loads, or by a Pi execution environment that
+  // genuinely needs it first.
   const loginShellPathAttempt = resolveLoginShellPath();
   protocol.handle(PACKAGED_RENDERER_SCHEME, (request) => {
     const assetPath = resolvePackagedRendererAsset(request.url, PACKAGED_RENDERER_ROOT);
@@ -495,20 +491,18 @@ app.whenReady().then(async () => {
     resourcesPath: process.resourcesPath,
     isPackaged: app.isPackaged,
   });
-  // The shell spawn started at the top of whenReady has had the whole boot
-  // sequence above to finish; this is the first thing that needs its answer.
-  // Adopts the login shell's PATH onto this process's own only when the
-  // current one is missing something it says — never merely because the
-  // login shell resolved a different string (see `decideLoginPathAdoption`).
-  const loginPathOutcome = decideLoginPathAdoption(process.env.PATH, await loginShellPathAttempt);
-  if (loginPathOutcome.kind === "adopted") process.env.PATH = loginPathOutcome.path;
-  console.info(loginPathLogLine(loginPathOutcome));
-  // Same prepend a spawned PTY already gets from agentSessionEnv/ticketSessionEnv.
-  // Structured sessions also get this via `pathPrefixes` on the execution env;
-  // putting it on the host PATH as well means anything that inherits main's
-  // PATH (a Pi bash `inheritEnv: true` that slipped past the override, a
-  // helper spawn) still finds this profile's shim before `/usr/local/bin`.
-  process.env.PATH = [runtimePaths.binDir, process.env.PATH ?? ""].filter(Boolean).join(":");
+  // The shell probe began at the top of whenReady, but observing its result is
+  // deferred until after the first window loads (or until a Pi execution env
+  // genuinely needs it first). Both paths share this one memoized apply.
+  const loginPathBootstrap = createLoginPathBootstrap({
+    binDir: runtimePaths.binDir,
+    readCurrentPath: () => process.env.PATH,
+    writePath: (path) => {
+      process.env.PATH = path;
+    },
+    resolveLoginPath: () => loginShellPathAttempt,
+    log: (line) => console.info(line),
+  });
   // The Pi-backed Agent Runtime is the structured product's one target
   // executor, for Ticket Sessions and ticketless project chats alike. Model
   // access and selection come from this Pi host.
@@ -520,8 +514,10 @@ app.whenReady().then(async () => {
         // `/usr/local/bin` symlink — the same recovery a spawned PTY gets
         // from `agentSessionEnv`/`ticketSessionEnv` prepending this same
         // directory (`harness-runtime.ts`).
-        executionEnvFactory: (workspacePath) =>
-          piExecutionEnv(workspacePath, { pathPrefixes: [runtimePaths.binDir] }),
+        executionEnvFactory: async (workspacePath) => {
+          await loginPathBootstrap.apply();
+          return piExecutionEnv(workspacePath, { pathPrefixes: [runtimePaths.binDir] });
+        },
         // The runtime needs the Role a Session runs under and the Ticket it
         // implies, which a directory cannot say. The generated Brief is
         // recorded once before the first runtime construction; every later
@@ -999,6 +995,14 @@ app.whenReady().then(async () => {
   const ptyManager = registerTerminalIpcHandlers(dbHandle, agentRuntime, sessionEngine);
   ptyManagerRef = ptyManager;
   const mainWindow = createWindow(ptyManager, currentFirstPaint());
+  mainWindow.webContents.once("did-finish-load", () => {
+    // The probe converts shell failure to a kept outcome. Keep an explicit
+    // rejection handler here too so an unexpected mutation/logging failure
+    // can never become an unhandled rejection from this fire-and-forget path.
+    void loginPathBootstrap.apply().catch((error) => {
+      console.error("[volli] failed to apply login PATH:", errorMessage(error));
+    });
+  });
 
   // Startup orphan sweep (worktree-support §7): prunes stale git metadata and
   // removes clean orphaned worktree dirs (branches retained); dirty orphans are
