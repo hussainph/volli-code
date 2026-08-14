@@ -45,6 +45,7 @@ import {
   makeGitRepo,
   pathExists,
   readMonacoState,
+  readSeededProjects,
   seedProjects,
   waitForChildExit,
   waitUntil,
@@ -60,7 +61,7 @@ if (process.platform !== "darwin") {
 
 const execFileAsync = promisify(execFile);
 const { scratch, userDataDir, dbPath, cleanup } = await makeShortScratch("life");
-const { attempt, summarize } = createRunner();
+const { attempt, results, summarize } = createRunner();
 const socketPath = socketPathFor(userDataDir);
 const firstDialogRecord = join(scratch, "quit-dialogs.json");
 const secondDialogRecord = join(scratch, "window-dialogs.json");
@@ -78,8 +79,19 @@ const SECOND_DRAFT = "// WINDOW-CLOSE-DRAFT";
 const MAIN_EVALUATE_TIMEOUT_MS = 4000;
 const CLEANUP_QUIT_TIMEOUT_MS = 8000;
 const CLEANUP_CLOSE_TIMEOUT_MS = 4000;
+const PLAYWRIGHT_CLOSE_TIMEOUT_MS = 4000;
+const WINDOW_READY_TIMEOUT_MS = 15000;
 const NATURAL_EXIT_RACE_TIMEOUT_MS = 500;
 const FORCE_EXIT_TIMEOUT_MS = 4000;
+const DIAGNOSTIC_LOG_TAIL_CHARS = 6000;
+
+async function must(n, label, operation) {
+  const resultIndex = results.length;
+  await attempt(n, label, operation);
+  if (results[resultIndex]?.ok !== true) {
+    throw new Error(`required check ${n} failed; refusing dependent lifecycle actions`);
+  }
+}
 
 async function boundedOperation(label, operation, timeout = MAIN_EVALUATE_TIMEOUT_MS) {
   let timeoutId = null;
@@ -94,6 +106,93 @@ async function boundedOperation(label, operation, timeout = MAIN_EVALUATE_TIMEOU
   } finally {
     if (timeoutId !== null) clearTimeout(timeoutId);
   }
+}
+
+function captureElectronApplication(app, label) {
+  const child = app.process();
+  const run = {
+    app,
+    child,
+    closed: false,
+    closePromise: null,
+    label,
+    stderr: [],
+    stdout: [],
+  };
+  child.stdout?.on("data", (chunk) => run.stdout.push(chunk.toString()));
+  child.stderr?.on("data", (chunk) => run.stderr.push(chunk.toString()));
+  run.closePromise = new Promise((resolve) => {
+    app.once("close", () => {
+      run.closed = true;
+      resolve();
+    });
+  });
+  return run;
+}
+
+function diagnosticLogTail(chunks) {
+  const body = chunks.join("").trim();
+  return body.length > DIAGNOSTIC_LOG_TAIL_CHARS ? body.slice(-DIAGNOSTIC_LOG_TAIL_CHARS) : body;
+}
+
+function electronRunDiagnostics(run) {
+  const { child } = run;
+  return (
+    `label=${JSON.stringify(run.label)} pid=${child.pid ?? "unknown"} ` +
+    `exit=${child.exitCode ?? (childHasExited(child) ? "null" : "alive")} ` +
+    `signal=${child.signalCode ?? "none"} ` +
+    `stdout=${JSON.stringify(diagnosticLogTail(run.stdout))} ` +
+    `stderr=${JSON.stringify(diagnosticLogTail(run.stderr))}`
+  );
+}
+
+async function waitForPlaywrightClose(run, label, timeout = PLAYWRIGHT_CLOSE_TIMEOUT_MS) {
+  if (run.closed) return;
+  await boundedOperation(
+    `${label} Playwright close acknowledgement`,
+    () => run.closePromise,
+    timeout,
+  );
+}
+
+async function waitForReadyWindowOrExit(run, label, timeout = WINDOW_READY_TIMEOUT_MS) {
+  let childCloseListener = null;
+  let timeoutId = null;
+  const ready = run.app
+    .firstWindow({ timeout })
+    .then(async (page) => {
+      await page.waitForLoadState("domcontentloaded", { timeout });
+      return { kind: "ready", page };
+    })
+    .catch((error) => ({ error, kind: "readiness-error" }));
+  const exited = new Promise((resolve) => {
+    if (childHasExited(run.child)) {
+      resolve({ kind: "exit" });
+      return;
+    }
+    childCloseListener = () => resolve({ kind: "exit" });
+    run.child.once("close", childCloseListener);
+  });
+  const timedOut = new Promise((resolve) => {
+    timeoutId = setTimeout(() => resolve({ kind: "timeout" }), timeout);
+  });
+
+  const outcome = await Promise.race([ready, exited, timedOut]);
+  if (timeoutId !== null) clearTimeout(timeoutId);
+  if (childCloseListener !== null) run.child.off("close", childCloseListener);
+  if (outcome.kind === "ready") return outcome.page;
+
+  const diagnostic = electronRunDiagnostics(run);
+  if (outcome.kind === "exit") {
+    throw new Error(`${label} exited before its first window became ready: ${diagnostic}`);
+  }
+  if (outcome.kind === "readiness-error") {
+    throw new Error(
+      `${label} failed before its first window became ready: ${formatFailure(outcome.error)}; ${diagnostic}`,
+      { cause: outcome.error },
+    );
+  }
+  throw new Error(`${label} did not become ready within ${timeout}ms: ${diagnostic}`);
 }
 
 function navButton(page, label) {
@@ -169,6 +268,23 @@ async function dirtyDocument(page, projectPath, marker) {
   return { state, onDisk };
 }
 
+async function waitForSeededProjectReady(page, projectPath) {
+  const { byName } = await readSeededProjects(page);
+  const project = byName[PROJECT.name];
+  if (!project || project.path !== projectPath) {
+    throw new Error(`seeded project missing after import: ${PROJECT.name}`);
+  }
+
+  await waitUntil("seeded project selection", async () => {
+    const sidebar = page.locator('[data-sidebar-presentation="expanded"]');
+    const selectedName = sidebar.getByText(PROJECT.name, { exact: true });
+    const files = navButton(page, "Files");
+    return (await selectedName.count()) === 1 && (await files.isVisible().catch(() => false))
+      ? true
+      : null;
+  });
+}
+
 /**
  * Replaces Electron's synchronous native prompt in main and records every call
  * outside the process. `fallbackResponse` is intentionally explicit: launch
@@ -223,36 +339,51 @@ async function waitForIdentify(cwd) {
   );
 }
 
-async function waitForProcessExit(app, label, timeout = 15000) {
-  return waitForChildExit(app.process(), label, { timeout });
+async function waitForProcessExit(run, label, timeout = 15000) {
+  return waitForChildExit(run.child, label, { timeout });
 }
 
-async function quitAndWait(app, label, timeout = 15000) {
+async function quitAndWait(run, label, timeout = 15000) {
   const request = boundedOperation(
     `${label} quit request`,
-    () => app.evaluate(({ app: electronApp }) => electronApp.quit()),
+    () => run.app.evaluate(({ app: electronApp }) => electronApp.quit()),
     Math.min(timeout, MAIN_EVALUATE_TIMEOUT_MS),
   ).catch(() => undefined);
-  const exit = await waitForProcessExit(app, label, timeout);
+  const exit = await waitForProcessExit(run, label, timeout);
   await request;
+  await waitForPlaywrightClose(run, label);
   return exit;
 }
 
-async function closeScratchApp(app) {
-  if (app === null) return;
-  const child = app.process();
+async function closeScratchApp(run) {
+  if (run === null) return;
+  const { app, child } = run;
   if (childHasExited(child)) return;
   const pid = child.pid;
   const gracefulFailures = [];
 
   try {
     await boundedOperation("scratch dialog cleanup patch", () =>
-      app.evaluate(() => {
+      app.evaluate(({ dialog }) => {
         const state = globalThis.volliQuitWindowLifecycleSmokeDialogPatch;
         if (state) {
           state.responses = [];
           state.fallbackResponse = 0;
+          return;
         }
+
+        dialog.showMessageBoxSync = (...args) => {
+          const options = args.at(-1);
+          const buttons = Array.isArray(options?.buttons) ? options.buttons : [];
+          const discard = buttons.findIndex(
+            (button) => button === "Discard and Quit" || button === "Discard and Close",
+          );
+          return discard >= 0
+            ? discard
+            : typeof options?.cancelId === "number"
+              ? options.cancelId
+              : 0;
+        };
       }),
     );
   } catch (error) {
@@ -261,7 +392,7 @@ async function closeScratchApp(app) {
 
   if (!childHasExited(child)) {
     try {
-      await quitAndWait(app, "scratch Electron cleanup", CLEANUP_QUIT_TIMEOUT_MS);
+      await quitAndWait(run, "scratch Electron cleanup", CLEANUP_QUIT_TIMEOUT_MS);
     } catch (error) {
       gracefulFailures.push(error);
     }
@@ -332,6 +463,13 @@ async function closeScratchApps(apps) {
   }
 }
 
+function formatFailure(error) {
+  if (error instanceof AggregateError) {
+    return `${error.message}: ${error.errors.map(formatFailure).join("; ")}`;
+  }
+  return error?.stack ?? error?.message ?? String(error);
+}
+
 async function main() {
   const projectPath = await makeGitRepo(scratch, "quit-lifecycle-project-");
   await fs.mkdir(join(projectPath, "src"), { recursive: true });
@@ -351,17 +489,19 @@ async function main() {
       VOLLI_SKIP_CLOSE_CONFIRM: "0",
     },
   });
-  let secondApp = null;
+  const firstRun = captureElectronApplication(firstApp, "first Electron launch");
+  let secondRun = null;
 
+  let bodyError = null;
   try {
     await assertProfileIsolated(firstApp, userDataDir);
-    const firstPage = await firstApp.firstWindow();
-    await firstPage.waitForLoadState("domcontentloaded");
+    const firstPage = await waitForReadyWindowOrExit(firstRun, "first Electron launch");
     assertBuiltRendererLoaded(firstPage);
-    await seedProjects(firstPage, [{ ...PROJECT, path: projectPath }], { reloadWaitMs: 0 });
+    await seedProjects(firstPage, [{ ...PROJECT, path: projectPath }]);
+    await waitForSeededProjectReady(firstPage, projectPath);
     await installDialogPatch(firstApp, firstDialogRecord, [1, 0], 0);
 
-    await attempt(1, "real Project Files Monaco holds a dirty draft only in memory", async () => {
+    await must(1, "real Project Files Monaco holds a dirty draft only in memory", async () => {
       const { state, onDisk } = await dirtyDocument(firstPage, projectPath, FIRST_DRAFT);
       const ok =
         state.status === "ready" &&
@@ -375,7 +515,7 @@ async function main() {
       };
     });
 
-    await attempt(2, "Cancel on app.quit keeps the dirty app and its window alive", async () => {
+    await must(2, "Cancel on app.quit keeps the dirty app and its window alive", async () => {
       await boundedOperation("Cancel app.quit request", () =>
         firstApp.evaluate(({ app: electronApp }) => electronApp.quit()),
       );
@@ -389,7 +529,7 @@ async function main() {
       const editor = await readMonacoState(firstPage);
       const call = calls[0];
       const ok =
-        firstApp.process().exitCode === null &&
+        firstRun.child.exitCode === null &&
         windows === 1 &&
         editor.dirty === "true" &&
         call?.message === "Quit Volli?" &&
@@ -399,11 +539,11 @@ async function main() {
         call?.detail?.includes("lifecycle.ts");
       return {
         ok,
-        detail: `alive=${firstApp.process().exitCode === null} windows=${windows} dirty=${editor.dirty} prompt=${JSON.stringify(call?.message)} response=${call?.response} namesFile=${call?.detail?.includes("lifecycle.ts")}`,
+        detail: `alive=${firstRun.child.exitCode === null} windows=${windows} dirty=${editor.dirty} prompt=${JSON.stringify(call?.message)} response=${call?.response} namesFile=${call?.detail?.includes("lifecycle.ts")}`,
       };
     });
 
-    await attempt(3, "cancelled quit preserves the raw CLI socket identify surface", async () => {
+    await must(3, "cancelled quit preserves the raw CLI socket identify surface", async () => {
       const response = await waitForIdentify(projectPath);
       const ok =
         response?.v === 1 &&
@@ -416,9 +556,9 @@ async function main() {
       };
     });
 
-    await attempt(4, "Discard on app.quit exits with its socket removed", async () => {
+    await must(4, "Discard on app.quit exits with its socket removed", async () => {
       const dirtyBefore = (await readMonacoState(firstPage)).dirty;
-      const exit = await quitAndWait(firstApp, "accepted quit process exit");
+      const exit = await quitAndWait(firstRun, "accepted quit process exit");
       const socketGone = await waitUntil(
         "accepted quit socket removal",
         async () => (!(await pathExists(socketPath)) ? true : null),
@@ -444,25 +584,34 @@ async function main() {
       };
     });
 
-    if (firstApp.process().exitCode === null) {
+    if (!childHasExited(firstRun.child)) {
       throw new Error("first Electron process remained alive; refusing a conflicting relaunch");
     }
 
-    secondApp = await launch({
-      dbPath,
-      userDataDir,
-      extraEnv: {
-        VOLLI_AGENT_CONSENT_CHOICE: "defer",
-        VOLLI_SKIP_CLOSE_CONFIRM: "0",
-      },
-    });
+    let secondApp;
+    try {
+      secondApp = await launch({
+        dbPath,
+        userDataDir,
+        extraEnv: {
+          VOLLI_AGENT_CONSENT_CHOICE: "defer",
+          VOLLI_SKIP_CLOSE_CONFIRM: "0",
+        },
+      });
+    } catch (error) {
+      throw new Error(
+        `second Electron launch failed before Playwright returned an application handle: ${formatFailure(error)}`,
+        { cause: error },
+      );
+    }
+    secondRun = captureElectronApplication(secondApp, "second Electron launch");
+    const secondPage = await waitForReadyWindowOrExit(secondRun, "second Electron launch");
     await assertProfileIsolated(secondApp, userDataDir);
-    const secondPage = await secondApp.firstWindow();
-    await secondPage.waitForLoadState("domcontentloaded");
     assertBuiltRendererLoaded(secondPage);
+    await waitForSeededProjectReady(secondPage, projectPath);
     await installDialogPatch(secondApp, secondDialogRecord, [0], 1);
 
-    await attempt(5, "the same isolated profile relaunches and answers identify", async () => {
+    await must(5, "the same isolated profile relaunches and answers identify", async () => {
       const response = await waitForIdentify(projectPath);
       const onDisk = await fs.readFile(join(projectPath, TARGET), "utf8");
       const ok =
@@ -475,7 +624,7 @@ async function main() {
       };
     });
 
-    await attempt(6, "relaunch can dirty the same real editor document", async () => {
+    await must(6, "relaunch can dirty the same real editor document", async () => {
       const { state, onDisk } = await dirtyDocument(secondPage, projectPath, SECOND_DRAFT);
       const ok =
         state.dirty === "true" &&
@@ -525,7 +674,8 @@ async function main() {
         let exit = null;
         let exitError = null;
         try {
-          exit = await waitForProcessExit(secondApp, "post-reactivation quit process exit", 12000);
+          exit = await waitForProcessExit(secondRun, "post-reactivation quit process exit", 12000);
+          await waitForPlaywrightClose(secondRun, "post-reactivation quit process exit");
         } catch (error) {
           exitError = error;
         }
@@ -568,9 +718,25 @@ async function main() {
         };
       },
     );
-  } finally {
-    await closeScratchApps([secondApp, firstApp]);
+  } catch (error) {
+    bodyError = error;
   }
+
+  let cleanupError = null;
+  try {
+    await closeScratchApps([secondRun, firstRun]);
+  } catch (error) {
+    cleanupError = error;
+  }
+
+  if (bodyError !== null && cleanupError !== null) {
+    throw new AggregateError(
+      [bodyError, cleanupError],
+      "lifecycle smoke body and cleanup both failed",
+    );
+  }
+  if (bodyError !== null) throw bodyError;
+  if (cleanupError !== null) throw cleanupError;
 
   return summarize();
 }
@@ -579,7 +745,10 @@ let code = 1;
 try {
   code = await main();
 } catch (error) {
-  console.error("\nSMOKE ABORTED:", error?.stack ?? error);
+  console.error(
+    "\nSMOKE ABORTED:",
+    error instanceof AggregateError ? formatFailure(error) : (error?.stack ?? error),
+  );
   code = 1;
 } finally {
   await cleanup();
