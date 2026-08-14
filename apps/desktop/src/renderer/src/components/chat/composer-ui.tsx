@@ -61,6 +61,7 @@ import {
   activePickerRow,
   applyPickerRow,
   composerPicker,
+  composerPickerToken,
   movePickerActive,
   type ComposerPickerDismissal,
   type ComposerPickerRow,
@@ -418,10 +419,14 @@ function ComposerTextarea({
         caret.trackCaret(event.currentTarget);
         onValueChange(event.currentTarget.value);
       }}
-      // Clicks and caret-moving keys both land here, which is what keeps the
-      // picker honest about where the caret actually is rather than where the
-      // last keystroke left it.
+      // Both, and both are needed. `onSelect` covers what the mouse does —
+      // clicking into an existing `@path`, dragging a selection. `onKeyUp`
+      // covers the caret keys, which React's synthetic select event did NOT
+      // reliably report here: ←/→/Home/End moved the caret with the picker
+      // none the wiser, so clicking back into a ref opened the list and
+      // arrowing back into one did not.
       onSelect={(event) => caret.trackCaret(event.currentTarget)}
+      onKeyUp={(event) => caret.trackCaret(event.currentTarget)}
       onKeyDown={(event) => {
         // A modified ⏎ is an explicit send; the picker never takes it.
         if (!event.metaKey && !event.ctrlKey && caret.handleKeyDown(event)) return;
@@ -507,6 +512,15 @@ function useComposerPicker(input: {
     node.setSelectionRange(at, at);
   });
 
+  // A dismissal outlives its token only if nothing retires it, and the caret
+  // leaving is what retires it. Without this, clearing the box and typing a
+  // fresh message whose `@` lands at the same offset would silently inherit an
+  // Escape from the message before it.
+  const inToken = composerPickerToken({ text: value, caret }) !== null;
+  React.useEffect(() => {
+    if (!inToken) setDismissed(null);
+  }, [inToken]);
+
   const state = composerPicker({
     text: value,
     caret,
@@ -514,7 +528,7 @@ function useComposerPicker(input: {
     files,
     ready,
     interactionOpen,
-    dismissed,
+    dismissed: inToken ? dismissed : null,
   });
 
   // The open EDGE, not every render: `refresh()` is cache-gated, but calling it

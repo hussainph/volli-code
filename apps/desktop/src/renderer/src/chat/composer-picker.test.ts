@@ -6,6 +6,7 @@ import {
   applyPickerRow,
   commandTokenAt,
   composerPicker,
+  composerPickerToken,
   movePickerActive,
   rankCommandCompletions,
   type ComposerPickerRow,
@@ -218,6 +219,32 @@ describe("the gates that keep a picker shut", () => {
 
   it("treats an explicit null dismissal as no dismissal", () => {
     expect(composerPicker({ ...base, dismissed: null })).not.toBeNull();
+  });
+});
+
+describe("composerPickerToken", () => {
+  it("names the command token under the caret without ranking anything", () => {
+    expect(composerPickerToken({ text: "/rev", caret: 4 })).toEqual({
+      mode: "command",
+      from: 0,
+      to: 4,
+      query: "rev",
+    });
+  });
+
+  it("names the file token under the caret", () => {
+    expect(composerPickerToken({ text: "look at @src/ap", caret: 15 })).toEqual({
+      mode: "file",
+      from: 8,
+      to: 15,
+      query: "src/ap",
+    });
+  });
+
+  it("is null once the caret leaves the token — which is what retires a dismissal", () => {
+    expect(composerPickerToken({ text: "look at @src/ap ", caret: 16 })).toBeNull();
+    expect(composerPickerToken({ text: "/review args", caret: 10 })).toBeNull();
+    expect(composerPickerToken({ text: "plain prose", caret: 5 })).toBeNull();
   });
 });
 

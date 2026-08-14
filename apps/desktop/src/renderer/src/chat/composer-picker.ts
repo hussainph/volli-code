@@ -121,10 +121,43 @@ function commandMatchTier(query: string, template: PromptTemplate): number | nul
   return null;
 }
 
-/** The token Escape closed. Held until the caret is in a different one. */
+/** A trigger token under the caret, before anything is ranked against it. */
+export interface ComposerPickerToken {
+  readonly mode: ComposerPickerMode;
+  readonly from: number;
+  readonly to: number;
+  readonly query: string;
+}
+
+/** The token Escape closed. Held only while the caret stays inside it. */
 export interface ComposerPickerDismissal {
   readonly mode: ComposerPickerMode;
   readonly from: number;
+}
+
+/**
+ * The trigger token under this caret, or null — the cheap half of
+ * {@link composerPicker}, with no ranking done.
+ *
+ * `/` is checked first and wins outright: at offset 0 there is no `@` token to
+ * be in, so the two can never both be live, and checking in a fixed order
+ * removes the question of what would happen if they were.
+ *
+ * Exported because a dismissal is scoped to a token, and the only honest way to
+ * know a dismissal has expired is to notice the caret is no longer in one.
+ * Keying that on the token's *position* alone would be wrong in a way that is
+ * easy to miss: clear the box, type a new sentence whose `@` happens to land at
+ * the same offset, and the old dismissal would silently swallow the new picker.
+ */
+export function composerPickerToken(input: {
+  text: string;
+  caret: number;
+}): ComposerPickerToken | null {
+  const command = commandTokenAt({ text: input.text, offset: input.caret });
+  if (command !== null) return { mode: "command", ...command };
+  const file = fileRefTokenAt({ text: input.text, offset: input.caret });
+  if (file === null) return null;
+  return { mode: "file", from: file.from, to: file.to, query: file.query };
 }
 
 /**
@@ -138,9 +171,10 @@ export interface ComposerPickerDismissal {
  *    time, and a pending question outranks a list you can reopen by typing.
  *  - **dismissed** — Escape must mean something durable. Without this, Escape
  *    would close the list and the next keystroke would reopen it on the same
- *    token, which reads as the picker refusing to go away. It is keyed on where
- *    the token *starts*, so a later `@` in the same message opens normally
- *    while the one you dismissed stays shut however much more you type into it.
+ *    token, which reads as the picker refusing to go away. A dismissal is
+ *    scoped to the token it was taken on and expires when the caret leaves it;
+ *    the caller drops it the moment {@link composerPickerToken} answers null,
+ *    which is why this only has to compare the token it was given.
  */
 export function composerPicker(input: {
   text: string;
@@ -154,47 +188,23 @@ export function composerPicker(input: {
   dismissed?: ComposerPickerDismissal | null;
 }): ComposerPickerState | null {
   if (input.ready === false || input.interactionOpen === true) return null;
-  const open = pickerForCaret(input);
-  if (open === null) return null;
+  const token = composerPickerToken(input);
+  if (token === null) return null;
   const dismissed = input.dismissed ?? null;
-  if (dismissed !== null && dismissed.mode === open.mode && dismissed.from === open.from)
+  if (dismissed !== null && dismissed.mode === token.mode && dismissed.from === token.from)
     return null;
-  return open;
-}
-
-/**
- * The picker this caret opens, before any of the gates above.
- *
- * `/` is checked first and wins outright: at offset 0 there is no `@` token to
- * be in, so the two can never both be live, and checking in a fixed order
- * removes the question of what would happen if they were.
- */
-function pickerForCaret(input: {
-  text: string;
-  caret: number;
-  templates: readonly PromptTemplate[];
-  files: readonly IndexedFile[];
-}): ComposerPickerState | null {
-  const command = commandTokenAt({ text: input.text, offset: input.caret });
-  if (command !== null) {
+  if (token.mode === "command") {
     return {
-      mode: "command",
-      ...command,
-      rows: rankCommandCompletions({ query: command.query, templates: input.templates }),
+      ...token,
+      rows: rankCommandCompletions({ query: token.query, templates: input.templates }),
     };
   }
-
-  const file = fileRefTokenAt({ text: input.text, offset: input.caret });
-  if (file === null) return null;
   return {
-    mode: "file",
-    from: file.from,
-    to: file.to,
-    query: file.query,
+    ...token,
     // "Create artifact" is deliberately dropped: it is an intent that writes a
     // file, and the composer has nowhere to open the result. The `@` picker in
     // the editor — which does — keeps it.
-    rows: rankFileRefCompletions({ query: file.query, index: input.files })
+    rows: rankFileRefCompletions({ query: token.query, index: input.files })
       .filter((completion) => completion.kind === "file")
       .map((completion) => ({
         kind: "file" as const,
