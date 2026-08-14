@@ -47,6 +47,13 @@ reads as an object with edges instead of an edge-to-edge slab. This amends the e
 chrome-band treatment (decision #31); the chrome bar and workspace rail still form the dark "L",
 which is now the backdrop the card floats on.
 
+## Composer stack
+
+The Session composer and anything parked on it (ask-user questions; later, plans and subagent
+activity) share one shell: `rounded-2xl`, hairline `border-border`, `bg-card`, raised shadow
+(`COMPOSER_STACK_SHELL` in `chat/composer-stack.ts`). Overlays stack **above** the composer and
+never replace it — the input stays so a follow-up can be typed while a question or a run is live.
+
 ## Type scale — six steps
 
 Named font-size tokens carry their paired line-height (and tracking where the size demands it),

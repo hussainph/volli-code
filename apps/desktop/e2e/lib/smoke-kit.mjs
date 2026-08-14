@@ -260,6 +260,211 @@ export function createRunner() {
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+export const CLOSE_APP_BOUNDED_DEFAULTS = Object.freeze({
+  closeGraceMs: 2500,
+  termGraceMs: 1500,
+  killGraceMs: 1500,
+  naturalExitRaceMs: 500,
+});
+
+/**
+ * The longest default close path: close timeout, a resolved-without-exit race,
+ * then TERM and KILL.
+ */
+export const CLOSE_APP_BOUNDED_MAX_MS =
+  CLOSE_APP_BOUNDED_DEFAULTS.closeGraceMs +
+  CLOSE_APP_BOUNDED_DEFAULTS.naturalExitRaceMs +
+  CLOSE_APP_BOUNDED_DEFAULTS.termGraceMs +
+  CLOSE_APP_BOUNDED_DEFAULTS.killGraceMs;
+
+/** @typedef {number | ReturnType<typeof setTimeout>} DeadlineTimerHandle */
+
+/**
+ * Build one absolute operation budget. `run()` is the aggregate watchdog;
+ * `timeout()` derives shorter per-action locator clamps from the same expiry.
+ * The injectable clock keeps the race deterministic under node:test.
+ *
+ * @param {{label:string, expiresAt:number, timeoutCeilingMs?:number,
+ *          clock?:{now?:()=>number,
+ *                  setTimeout?:(callback:()=>void, delay:number)=>DeadlineTimerHandle,
+ *                  clearTimeout?:(timer:DeadlineTimerHandle)=>void}}} options
+ */
+export function createDeadline({
+  label,
+  expiresAt,
+  timeoutCeilingMs = 2000,
+  clock: clockOverrides = {},
+}) {
+  const clock = {
+    now: clockOverrides.now ?? Date.now,
+    setTimeout: clockOverrides.setTimeout ?? setTimeout,
+    clearTimeout: clockOverrides.clearTimeout ?? clearTimeout,
+  };
+  const remaining = (actionLabel) => {
+    const remainingMs = expiresAt - clock.now();
+    if (remainingMs <= 0) {
+      throw new Error(`${label} deadline expired${actionLabel ? ` during ${actionLabel}` : ""}`);
+    }
+    return remainingMs;
+  };
+  return Object.freeze({
+    label,
+    expiresAt,
+    timeout(actionLabel, ceiling = timeoutCeilingMs) {
+      return Math.min(ceiling, remaining(actionLabel));
+    },
+    async run(operation) {
+      const remainingMs = remaining();
+      let timer;
+      try {
+        return await Promise.race([
+          Promise.resolve().then(operation),
+          new Promise((_, reject) => {
+            timer = clock.setTimeout(
+              () => reject(new Error(`${label} deadline expired`)),
+              remainingMs,
+            );
+          }),
+        ]);
+      } finally {
+        if (timer !== undefined) clock.clearTimeout(timer);
+      }
+    },
+  });
+}
+
+/**
+ * Summarize lifecycle frames while preserving their runtime turn identity.
+ * Exactly-once means one started id, one matching completed id, and no
+ * interruption — counts alone cannot correlate two different turns.
+ *
+ * @param {{event?:{payload?:{kind?:string,turnId?:unknown}}}[]} frames
+ */
+export function summarizeTurnFrames(frames) {
+  const idsFor = (kind) =>
+    frames
+      .filter((frame) => frame.event?.payload?.kind === kind)
+      .map((frame) =>
+        typeof frame.event.payload.turnId === "string" ? frame.event.payload.turnId : null,
+      );
+  const startedIds = idsFor("turn.started");
+  const completedIds = idsFor("turn.completed");
+  const interruptedIds = idsFor("turn.interrupted");
+  return {
+    startedIds,
+    completedIds,
+    interruptedIds,
+    exactlyOneCompletedTurn:
+      startedIds.length === 1 &&
+      completedIds.length === 1 &&
+      interruptedIds.length === 0 &&
+      startedIds[0] !== null &&
+      startedIds[0] === completedIds[0],
+  };
+}
+
+/**
+ * Close Electron within bounded grace periods and return how the tracked main
+ * child exited. Every successful return is backed by observed ChildProcess exit
+ * fields; an unverified live child throws instead of being mistaken for cleanup.
+ *
+ * Signals target only `app.process()`'s exact child, never a process group. This
+ * proves the Electron main child is gone, not that an already-reparented helper
+ * also exited; graceful Electron shutdown remains the helper cleanup path.
+ */
+export async function closeAppBounded(app, options = {}) {
+  const { closeGraceMs, termGraceMs, killGraceMs, naturalExitRaceMs } = {
+    ...CLOSE_APP_BOUNDED_DEFAULTS,
+    ...options,
+  };
+  let child;
+  try {
+    child = app.process();
+  } catch (error) {
+    throw new Error("cannot inspect Electron main child before bounded close", { cause: error });
+  }
+
+  const pid = child.pid ?? "unknown";
+  const closeFailures = [];
+  const result = (kind, exit) => ({ kind, pid, exit, closeFailures: [...closeFailures] });
+  const observedExit = () => ({ code: child.exitCode, signal: child.signalCode });
+  const waitForExit = async (label, timeout) => {
+    try {
+      // A failed kill gets a deliberately short natural-exit grace. Poll it
+      // more often than that grace or an exit can happen during the first
+      // sleep and be mistaken for an ignored signal.
+      return await waitForChildExit(child, label, {
+        timeout,
+        interval: Math.max(1, Math.min(20, Math.floor(timeout / 4))),
+      });
+    } catch {
+      return null;
+    }
+  };
+  const signalAndWait = async (signal, graceMs) => {
+    let sent = false;
+    let error = null;
+    try {
+      sent = child.kill(signal);
+    } catch (cause) {
+      error = cause;
+    }
+    if (childHasExited(child)) return { sent, error, exit: observedExit() };
+    const exit = await waitForExit(
+      `${sent ? signal : "natural"} Electron pid ${pid} exit`,
+      sent ? graceMs : naturalExitRaceMs,
+    );
+    return { sent, error, exit };
+  };
+  if (childHasExited(child)) return result("already-exited", observedExit());
+
+  let closeTimer;
+  const closeAttempt = await Promise.race([
+    app.close().then(
+      () => ({ status: "resolved" }),
+      (error) => ({ status: "rejected", error }),
+    ),
+    new Promise((resolve) => {
+      closeTimer = setTimeout(() => resolve({ status: "timed-out" }), closeGraceMs);
+    }),
+  ]);
+  clearTimeout(closeTimer);
+
+  if (closeAttempt.status === "resolved") {
+    const exit = await waitForExit(`graceful Electron pid ${pid} exit`, naturalExitRaceMs);
+    if (exit) return result("graceful", exit);
+    closeFailures.push("app.close resolved without observed exit");
+  } else if (closeAttempt.status === "rejected") {
+    closeFailures.push(`app.close rejected: ${closeAttempt.error?.message ?? closeAttempt.error}`);
+  } else {
+    closeFailures.push(`app.close timed out after ${closeGraceMs}ms`);
+  }
+
+  if (childHasExited(child)) return result("natural-after-close", observedExit());
+
+  const term = await signalAndWait("SIGTERM", termGraceMs);
+  if (term.exit) return result(term.sent ? "sigterm" : "natural-after-close", term.exit);
+  closeFailures.push(
+    term.error
+      ? `SIGTERM failed: ${term.error?.message ?? term.error}`
+      : term.sent
+        ? `SIGTERM exit timed out after ${termGraceMs}ms`
+        : "SIGTERM was not delivered to the live child",
+  );
+
+  const kill = await signalAndWait("SIGKILL", killGraceMs);
+  if (kill.exit) return result(kill.sent ? "sigkill" : "natural-after-sigterm", kill.exit);
+  const message =
+    kill.error?.code === "ESRCH"
+      ? `Electron pid ${pid} remained live after SIGKILL reported ESRCH`
+      : kill.error
+        ? `failed to SIGKILL Electron pid ${pid}`
+        : kill.sent
+          ? `Electron pid ${pid} remained live after SIGKILL`
+          : `SIGKILL was not delivered to live Electron pid ${pid}`;
+  throw new Error(message, kill.error ? { cause: kill.error } : undefined);
+}
+
 /**
  * Poll `fn` until it returns a truthy value (returned to the caller) or the
  * timeout elapses (throws with `label` + the last value/error). The one waiting
@@ -591,7 +796,7 @@ export const PI_TURN_BUDGET_MS = 180_000;
 
 /** The Stop control, on screen for exactly as long as a turn is running. */
 export function stopButton(page) {
-  return page.getByRole("button", { name: "Stop", exact: true });
+  return page.getByRole("button", { name: "Stop turn", exact: true });
 }
 
 /**

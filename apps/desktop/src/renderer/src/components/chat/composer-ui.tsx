@@ -13,20 +13,22 @@
  *  2. **Delivery is session state, not a control.** Idle, ⏎ sends. While a turn
  *     is live the submit glyph becomes Queue, ⏎ queues, ⌘⏎ steers without
  *     interrupting, and ⌫ on an empty box takes the newest queued message back.
- *     Stop appears beside submit only while there is something to stop.
+ *     Stop turn appears beside submit only while there is something to stop.
  *
  * Fully controlled: it owns no session state, so the fixture gallery can put it
  * in any of its four states without a running adapter.
  */
 import * as React from "react";
 import {
+  ArrowBendUpLeftIcon,
   ArrowUpIcon,
   CaretUpDownIcon,
   CheckIcon,
+  DotsThreeIcon,
   PencilSimpleIcon,
   QueueIcon,
   SquareIcon,
-  XIcon,
+  TrashIcon,
 } from "@phosphor-icons/react";
 
 import {
@@ -44,6 +46,7 @@ import {
   PromptInputTextarea,
   PromptInputTools,
 } from "@ai-elements/prompt-input";
+import { COMPOSER_STACK_SHELL } from "@renderer/chat/composer-stack";
 import {
   composerIntent,
   takeQueued,
@@ -52,6 +55,12 @@ import {
   type QueuedMessage,
 } from "@renderer/chat/session-model";
 import { Button } from "@renderer/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@renderer/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { cn } from "@renderer/lib/utils";
 
@@ -60,6 +69,8 @@ export interface SessionComposerProps {
   onValueChange(value: string): void;
   /** Lets a decision elsewhere in the Session hand the cursor back to the reader. */
   textareaRef?: React.Ref<HTMLTextAreaElement>;
+  /** A row action removed its focused control; hand focus to the persistent input. */
+  onComposerFocusRequest?(): void;
   models: readonly ComposerModel[];
   selection: ComposerModelSelection;
   /** The Session's provider as the catalog names it — see {@link modelPillLabel}. */
@@ -67,12 +78,14 @@ export interface SessionComposerProps {
   onSelectionChange(next: ComposerModelSelection): void;
   /** Model policy is immutable during an active turn. */
   modelChoiceDisabled?: boolean;
-  /** A turn is live: submit becomes Queue and Stop joins it. */
+  /** A turn is live: submit becomes Queue and Stop turn joins it. */
   working: boolean;
   /** Something is attached and a model is chosen. False makes the box inert. */
   ready: boolean;
   queued: readonly QueuedMessage[];
-  onQueuedChange(next: readonly QueuedMessage[]): void;
+  /** `false` means resident delivery already owns the row; leave its UI untouched. */
+  onQueuedChange(next: readonly QueuedMessage[]): boolean | void;
+  onSteerQueued(id: string): void;
   onSubmit(text: string, intent: ComposerIntent): void;
   onStop(): void;
   className?: string;
@@ -82,6 +95,7 @@ export function SessionComposer({
   value,
   onValueChange,
   textareaRef,
+  onComposerFocusRequest,
   models,
   selection,
   selectionProviderLabel,
@@ -91,11 +105,16 @@ export function SessionComposer({
   ready,
   queued,
   onQueuedChange,
+  onSteerQueued,
   onSubmit,
   onStop,
   className,
 }: SessionComposerProps) {
   const canSubmit = ready && value.trim().length > 0;
+  // The menu's own event callbacks share this render. Keeping the selected id
+  // in their closure lets close distinguish Edit from an ordinary dismissal
+  // without adding component state to a fully controlled composer.
+  let editedQueueId: string | null = null;
 
   const send = (intent: ComposerIntent) => {
     if (!canSubmit) return;
@@ -105,45 +124,89 @@ export function SessionComposer({
   const editQueued = (id: string) => {
     const taken = takeQueued(queued, id);
     if (!taken) return;
-    onQueuedChange(taken.queue);
+    editedQueueId = id;
+    if (onQueuedChange(taken.queue) === false) return;
     // Prepending keeps whatever is already typed rather than trading one draft
     // for another — unqueue must never be a way to lose a sentence.
     onValueChange(value.trim().length > 0 ? `${taken.text}\n${value}` : taken.text);
+    onComposerFocusRequest?.();
   };
 
   return (
     <PromptInput
       className={cn(
-        "pointer-events-auto border-border bg-card shadow-[var(--shadow-raised)]",
+        "pointer-events-auto overflow-hidden transition-[color,box-shadow] has-[[data-slot=input-group-control]:focus-visible]:border-ring has-[[data-slot=input-group-control]:focus-visible]:ring-[3px] has-[[data-slot=input-group-control]:focus-visible]:ring-ring/50",
+        COMPOSER_STACK_SHELL,
         className,
       )}
       onSubmit={() => send(composerIntent({ working, steer: false }))}
     >
       {queued.length > 0 ? (
         <PromptInputHeader className="flex-col items-stretch gap-0.5 border-b border-border/70">
-          {queued.map((entry, index) => (
-            <div key={entry.id} className="group flex min-w-0 items-center gap-2 text-xs">
-              <span className="shrink-0 tabular-nums text-muted-foreground">{index + 1}</span>
+          {queued.map((entry) => (
+            <div
+              key={entry.id}
+              role="group"
+              aria-label={`Queued message: ${entry.text}`}
+              className="flex min-w-0 items-center gap-1 text-xs"
+            >
               <span className="min-w-0 flex-1 truncate text-muted-foreground">{entry.text}</span>
-              <span className="flex shrink-0 items-center opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+              <span className="flex shrink-0 items-center gap-0.5">
+                {working ? (
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="ghost"
+                    aria-label={`Steer queued message: ${entry.text}`}
+                    onClick={() => {
+                      onSteerQueued(entry.id);
+                      onComposerFocusRequest?.();
+                    }}
+                  >
+                    <ArrowBendUpLeftIcon className="size-3" />
+                    Steer
+                  </Button>
+                ) : null}
                 <Button
                   type="button"
                   size="icon-xs"
                   variant="ghost"
-                  aria-label="Edit queued message"
-                  onClick={() => editQueued(entry.id)}
+                  aria-label={`Remove queued message: ${entry.text}`}
+                  onClick={() => {
+                    if (onQueuedChange(queued.filter((item) => item.id !== entry.id)) === false)
+                      return;
+                    onComposerFocusRequest?.();
+                  }}
                 >
-                  <PencilSimpleIcon className="size-3" />
+                  <TrashIcon className="size-3" />
                 </Button>
-                <Button
-                  type="button"
-                  size="icon-xs"
-                  variant="ghost"
-                  aria-label="Remove queued message"
-                  onClick={() => onQueuedChange(queued.filter((item) => item.id !== entry.id))}
-                >
-                  <XIcon className="size-3" />
-                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-label={`Queued message actions: ${entry.text}`}
+                    >
+                      <DotsThreeIcon className="size-3" weight="bold" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    align="end"
+                    onCloseAutoFocus={(event) => {
+                      if (editedQueueId !== entry.id) return;
+                      editedQueueId = null;
+                      // Edit removes the trigger. Radix must not restore focus
+                      // to that vanished node after we focused the composer.
+                      event.preventDefault();
+                    }}
+                  >
+                    <DropdownMenuItem density="compact" onSelect={() => editQueued(entry.id)}>
+                      <PencilSimpleIcon weight="fill" />
+                      Edit message
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </span>
             </div>
           ))}
@@ -177,7 +240,7 @@ export function SessionComposer({
               event.preventDefault();
               const taken = unqueueLast(queued);
               if (!taken) return;
-              onQueuedChange(taken.queue);
+              if (onQueuedChange(taken.queue) === false) return;
               onValueChange(taken.text);
             }
           }}
@@ -196,7 +259,13 @@ export function SessionComposer({
         </PromptInputTools>
         <div className="ml-auto flex shrink-0 items-center gap-1">
           {working ? (
-            <Button type="button" variant="ghost" size="icon-sm" aria-label="Stop" onClick={onStop}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Stop turn"
+              onClick={onStop}
+            >
               {/* One of the few glyphs that keeps its fill: a stop square MEANS
                   solid the way a play triangle does, and hollow it reads as a
                   checkbox. It is also the exception rather than the category —

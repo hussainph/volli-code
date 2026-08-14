@@ -38,7 +38,11 @@ import {
   type ComposerModel,
   type ComposerModelSelection,
 } from "@renderer/components/chat/composer-ui";
-import { InteractionCard, InteractionReceiptLine } from "@renderer/components/chat/interaction-ui";
+import {
+  ComposerInteractionStack,
+  InteractionCard,
+  InteractionReceiptLine,
+} from "@renderer/components/chat/interaction-ui";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Button } from "@renderer/components/ui/button";
 
@@ -613,12 +617,31 @@ export default function ChatActivityScratch() {
         <InteractionCard interaction={PERMISSION} onResolve={() => undefined} />
       </Section>
 
-      <Section label="Interaction · at the foot, with no call to hang it on">
-        <InteractionCard
+      <Section label="Interaction · stacked on the composer">
+        <ComposerInteractionStack
           interaction={QUESTION}
           onResolve={() => undefined}
-          onStop={() => undefined}
-        />
+          onWithdraw={() => undefined}
+        >
+          <SessionComposer
+            value=""
+            onValueChange={() => undefined}
+            models={MODELS}
+            selection={{
+              providerId: "anthropic",
+              modelId: "claude-sonnet-4-5",
+              reasoningLevel: "high",
+            }}
+            onSelectionChange={() => undefined}
+            working={false}
+            ready
+            queued={[]}
+            onQueuedChange={() => undefined}
+            onSteerQueued={() => undefined}
+            onSubmit={() => undefined}
+            onStop={() => undefined}
+          />
+        </ComposerInteractionStack>
       </Section>
 
       <Section label="Interaction · receipts">
@@ -647,6 +670,7 @@ export default function ChatActivityScratch() {
         <AttentionReceipt part={DENIED_ROW} />
       </Section>
 
+      <QueuedRowWidths />
       <ComposerStates />
     </ContentColumn>
   );
@@ -665,6 +689,45 @@ function Section({ label, children }: React.PropsWithChildren<{ label: string }>
 
 const COMPOSER_STATES = ["idle", "working", "queued", "approval"] as const;
 type ComposerStateName = (typeof COMPOSER_STATES)[number];
+
+function QueuedRowWidths() {
+  return (
+    <Section label="Queue row · overflow menu at normal and narrow widths">
+      <div className="flex flex-col gap-4">
+        <QueuedRowWidth label="Normal" id="queued-normal" />
+        <div className="w-full max-w-sm">
+          <QueuedRowWidth label="Narrow" id="queued-narrow" />
+        </div>
+      </div>
+    </Section>
+  );
+}
+
+function QueuedRowWidth({ label, id }: { label: string; id: string }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-label uppercase text-muted-foreground">{label}</span>
+      <SessionComposer
+        value=""
+        onValueChange={() => undefined}
+        models={MODELS}
+        selection={{
+          providerId: "anthropic",
+          modelId: "claude-sonnet-4-5",
+          reasoningLevel: "high",
+        }}
+        onSelectionChange={() => undefined}
+        working
+        ready
+        queued={[{ id, text: "also add a test for the empty-name branch" }]}
+        onQueuedChange={() => undefined}
+        onSteerQueued={() => undefined}
+        onSubmit={() => undefined}
+        onStop={() => undefined}
+      />
+    </div>
+  );
+}
 
 /**
  * The composer is fully controlled, so its four states are four prop sets
@@ -702,36 +765,38 @@ function ComposerStates() {
         ))}
       </div>
 
-      {/* The card replaces the composer rather than sitting above it: while an
-          interaction is pending the turn cannot proceed, so there is nothing to
-          type. Both are drawn here so the swap is reviewable. */}
-      {state === "approval" ? (
-        <InteractionCard interaction={PERMISSION} onResolve={() => undefined} />
-      ) : null}
-
-      <SessionComposer
-        value={value}
-        onValueChange={setValue}
-        models={MODELS}
-        selection={selection}
-        onSelectionChange={setSelection}
-        working={working}
-        ready
-        // Whatever is actually in the queue, in every state that can hold one.
-        // Gating this on the two toggles that *start* with a queued message made
-        // the fixture lie about its own behavior: queueing from Working cleared
-        // the draft and showed nothing, which is the one bug this gallery exists
-        // to catch. Idle is the only state with no queue, because there is no
-        // turn to queue behind.
-        queued={state === "idle" ? [] : queued}
-        onQueuedChange={setQueued}
-        onSubmit={(text, intent) => {
-          setValue("");
-          if (intent !== "queue") return;
-          setQueued((current) => enqueueMessage(current, { id: `q-${Date.now()}`, text }));
-        }}
-        onStop={() => setState("idle")}
-      />
+      <ComposerInteractionStack
+        interaction={state === "approval" ? PERMISSION : null}
+        onResolve={() => setState("idle")}
+        onWithdraw={() => setState("idle")}
+      >
+        <SessionComposer
+          value={value}
+          onValueChange={setValue}
+          models={MODELS}
+          selection={selection}
+          onSelectionChange={setSelection}
+          working={working}
+          ready
+          // Whatever is actually in the queue, in every state that can hold one.
+          // Gating this on the two toggles that *start* with a queued message made
+          // the fixture lie about its own behavior: queueing from Working cleared
+          // the draft and showed nothing, which is the one bug this gallery exists
+          // to catch. Idle is the only state with no queue, because there is no
+          // turn to queue behind.
+          queued={state === "idle" ? [] : queued}
+          onQueuedChange={setQueued}
+          onSteerQueued={(id) =>
+            setQueued((current) => current.filter((message) => message.id !== id))
+          }
+          onSubmit={(text, intent) => {
+            setValue("");
+            if (intent !== "queue") return;
+            setQueued((current) => enqueueMessage(current, { id: `q-${Date.now()}`, text }));
+          }}
+          onStop={() => setState("idle")}
+        />
+      </ComposerInteractionStack>
     </section>
   );
 }

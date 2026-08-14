@@ -1049,16 +1049,18 @@ describe("submit", () => {
   it("keeps model policy out of message commands", async () => {
     const { client, rpc, sessionId } = await ready();
 
-    await expect(client.submit("  ship it  ", "steer")).resolves.toBe("delivered");
+    await expect(client.submit({ id: "queued-1", text: "  ship it  " }, "steer")).resolves.toBe(
+      "delivered",
+    );
 
     expect(rpc.submissions()).toEqual([
       {
-        commandId: expect.any(String),
+        commandId: "queued-1",
         sessionId,
         command: {
           kind: "message.submit",
           message: {
-            id: expect.any(String),
+            id: "queued-1",
             role: "user",
             parts: [{ type: "text", text: "ship it" }],
           },
@@ -1070,6 +1072,38 @@ describe("submit", () => {
       "delivery",
       "kind",
       "message",
+    ]);
+  });
+
+  it("replays one ambiguous delivery with the same message and command identity", async () => {
+    let attempts = 0;
+    const { client, rpc } = await ready((fake) => {
+      fake.answer = () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("reply lost after acceptance");
+        return ACCEPTED;
+      };
+    });
+    const message = { id: "held-steer-1", text: "redirect now" };
+
+    await expect(client.submit(message, "steer")).resolves.toBe("refused");
+    await expect(client.submit(message, "steer")).resolves.toBe("delivered");
+
+    expect(rpc.submissions()).toEqual([
+      expect.objectContaining({
+        commandId: "held-steer-1",
+        command: expect.objectContaining({
+          delivery: "steer",
+          message: expect.objectContaining({ id: "held-steer-1" }),
+        }),
+      }),
+      expect.objectContaining({
+        commandId: "held-steer-1",
+        command: expect.objectContaining({
+          delivery: "steer",
+          message: expect.objectContaining({ id: "held-steer-1" }),
+        }),
+      }),
     ]);
   });
 
@@ -1086,7 +1120,7 @@ describe("submit", () => {
       };
     });
 
-    await expect(client.submit("go", "queue")).resolves.toBe("delivered");
+    await expect(client.submit({ id: "m1", text: "go" }, "queue")).resolves.toBe("delivered");
 
     expect(rpc.submissions()[0]!.command).not.toHaveProperty("model");
     expect(rpc.submissions()[0]!.command).not.toHaveProperty("variant");
@@ -1096,7 +1130,7 @@ describe("submit", () => {
   it("marks the Session working once the harness took it", async () => {
     const { client, slice } = await ready();
 
-    await client.submit("go", "queue");
+    await client.submit({ id: "m1", text: "go" }, "queue");
 
     expect(slice()!.lifecycle).toBe("working");
   });
@@ -1104,14 +1138,14 @@ describe("submit", () => {
   it("refuses blank text", async () => {
     const { client, rpc } = await ready();
 
-    await expect(client.submit("   ", "queue")).resolves.toBe("refused");
+    await expect(client.submit({ id: "m1", text: "   " }, "queue")).resolves.toBe("refused");
     expect(rpc.submissions()).toHaveLength(0);
   });
 
   it("refuses while there is nowhere to deliver", async () => {
     const { client, rpc } = await adopted();
 
-    await expect(client.submit("go", "queue")).resolves.toBe("refused");
+    await expect(client.submit({ id: "m1", text: "go" }, "queue")).resolves.toBe("refused");
     expect(rpc.submissions()).toHaveLength(0);
   });
 
@@ -1119,7 +1153,7 @@ describe("submit", () => {
     const { client, store, sessionId, rpc } = await ready();
     store.getState().closeChatSession(sessionId);
 
-    await expect(client.submit("go", "queue")).resolves.toBe("refused");
+    await expect(client.submit({ id: "m1", text: "go" }, "queue")).resolves.toBe("refused");
     expect(rpc.submissions()).toHaveLength(0);
   });
 
@@ -1132,7 +1166,7 @@ describe("submit", () => {
       fake.answer = (request) => (request.command.kind === "message.submit" ? REFUSED : ACCEPTED);
     });
 
-    await expect(client.submit("go", "queue")).resolves.toBe("recorded");
+    await expect(client.submit({ id: "m1", text: "go" }, "queue")).resolves.toBe("recorded");
     expect(slice()!.sessionError).toBe("Message not delivered: Pi is unavailable");
   });
 
@@ -1143,7 +1177,7 @@ describe("submit", () => {
       };
     });
 
-    await expect(client.submit("go", "queue")).resolves.toBe("refused");
+    await expect(client.submit({ id: "m1", text: "go" }, "queue")).resolves.toBe("refused");
     expect(slice()!.sessionError).toBe("Message not delivered: socket hang up");
   });
 });
@@ -1166,7 +1200,9 @@ describe("auto-title on delivery", () => {
     const renameMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
 
-    await expect(client.submit("Fix the parser\nmore detail", "steer")).resolves.toBe("delivered");
+    await expect(
+      client.submit({ id: "m1", text: "Fix the parser\nmore detail" }, "steer"),
+    ).resolves.toBe("delivered");
     await settle();
 
     expect(renameMock).toHaveBeenCalledWith({ sessionId, title: "Fix the parser" });
@@ -1200,7 +1236,9 @@ describe("auto-title on delivery", () => {
     const renameMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
 
-    await expect(client.submit("Fix the parser", "steer")).resolves.toBe("delivered");
+    await expect(client.submit({ id: "m1", text: "Fix the parser" }, "steer")).resolves.toBe(
+      "delivered",
+    );
     await settle();
 
     expect(renameMock).not.toHaveBeenCalled();
@@ -1212,7 +1250,9 @@ describe("auto-title on delivery", () => {
     const renameMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
 
-    await expect(client.submit("Fix the parser", "steer")).resolves.toBe("delivered");
+    await expect(client.submit({ id: "m1", text: "Fix the parser" }, "steer")).resolves.toBe(
+      "delivered",
+    );
     await settle();
 
     expect(renameMock).not.toHaveBeenCalled();
@@ -1224,7 +1264,7 @@ describe("auto-title on delivery", () => {
     const renameMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
 
-    await expect(client.submit("   ", "steer")).resolves.toBe("refused");
+    await expect(client.submit({ id: "m1", text: "   " }, "steer")).resolves.toBe("refused");
 
     expect(renameMock).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
@@ -1235,7 +1275,9 @@ describe("auto-title on delivery", () => {
     const renameMock = vi.fn().mockRejectedValue(new Error("ipc down"));
     vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
 
-    await expect(client.submit("Fix the parser", "steer")).resolves.toBe("delivered");
+    await expect(client.submit({ id: "m1", text: "Fix the parser" }, "steer")).resolves.toBe(
+      "delivered",
+    );
     await settle();
 
     expect(renameMock).toHaveBeenCalled();
@@ -1387,6 +1429,28 @@ describe("the queued message", () => {
     expect(rpc.submissions()).toHaveLength(1);
   });
 
+  it("does not let an explicit steer claim the row resident drain is submitting", async () => {
+    const gate = deferred();
+    const { client, rpc, store, sessionId, slice } = await pending((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.answer = async () => {
+        await gate.promise;
+        return ACCEPTED;
+      };
+    });
+
+    store.getState().enqueue(sessionId, { id: "q1", text: "once" });
+    await settle();
+
+    expect(rpc.submissions()).toHaveLength(1);
+    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q1"]);
+    expect(client.claimQueued("q1")).toBe(false);
+
+    gate.release();
+    await settle();
+    expect(slice()!.queue).toEqual([]);
+  });
+
   it("stops when the Session closes mid-release", async () => {
     const gate = deferred();
     const { rpc, store, sessionId } = await pending((fake) => {
@@ -1421,6 +1485,39 @@ describe("the queued message", () => {
     expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q2"]);
   });
 
+  it("keeps the current queue row recoverable when transport fails before recording", async () => {
+    let attempts = 0;
+    const { rpc, store, sessionId, slice } = await pending((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.answer = () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("socket hang up");
+        return ACCEPTED;
+      };
+    });
+
+    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
+    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
+    await settle();
+
+    expect(rpc.submissions()).toHaveLength(1);
+    expect(rpc.submissions()[0]).toMatchObject({
+      commandId: "q1",
+      command: { message: { id: "q1" }, delivery: "queue" },
+    });
+    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q1", "q2"]);
+
+    store.getState().settle(sessionId, null);
+    await settle();
+
+    expect(rpc.submissions()).toHaveLength(2);
+    expect(rpc.submissions()[1]).toMatchObject({
+      commandId: "q1",
+      command: { message: { id: "q1" }, delivery: "queue" },
+    });
+    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q2"]);
+  });
+
   it("releases the next one when the turn it started completes", async () => {
     const { rpc, scheduler, store, sessionId, stream } = await pending((fake) => {
       fake.snapshotProjection = projectionFor("attach-1");
@@ -1439,6 +1536,94 @@ describe("the queued message", () => {
     await settle();
 
     expect(rpc.submissions()).toHaveLength(2);
+  });
+
+  it("does not auto-release a queued message while an explicit steer owns it", async () => {
+    const { client, rpc, scheduler, store, sessionId, slice, stream } = await pending((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+    });
+    stream().send("1", frameOf(1, "turn.started"));
+    scheduler.paint();
+    await settle();
+    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
+    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
+    expect(rpc.submissions()).toHaveLength(0);
+
+    expect(client.claimQueued("q2")).toBe(true);
+    stream().send("2", frameOf(2, "turn.completed"));
+    scheduler.paint();
+    await settle();
+
+    expect(rpc.submissions()).toHaveLength(0);
+    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q1", "q2"]);
+    client.releaseQueuedClaim("q2");
+    await settle();
+    expect(rpc.submissions()).toHaveLength(1);
+    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q2"]);
+  });
+
+  it("resumes earlier neighbors when a claimed target vanished before consumption", async () => {
+    const { client, rpc, scheduler, store, sessionId, stream } = await pending((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+    });
+    stream().send("1", frameOf(1, "turn.started"));
+    scheduler.paint();
+    await settle();
+    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
+    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
+    expect(client.claimQueued("q2")).toBe(true);
+    store.getState().dequeue(sessionId, "q2");
+    stream().send("2", frameOf(2, "turn.completed"));
+    scheduler.paint();
+    await settle();
+
+    expect(client.dequeueClaimed("q2")).toBe(false);
+    client.releaseQueuedClaim("q2");
+    await settle();
+
+    expect(rpc.submissions()).toHaveLength(1);
+    expect(rpc.submissions()[0]!.command).toMatchObject({
+      message: { parts: [{ type: "text", text: "first" }] },
+    });
+  });
+
+  it("consumes exactly one claimed row and rejects missing or duplicate claims", async () => {
+    const { client, scheduler, store, sessionId, slice, stream } = await pending((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+    });
+    stream().send("1", frameOf(1, "turn.started"));
+    scheduler.paint();
+    await settle();
+    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
+
+    expect(client.claimQueued("missing")).toBe(false);
+    expect(client.claimQueued("q1")).toBe(true);
+    expect(client.claimQueued("q1")).toBe(false);
+    expect(client.dequeueClaimed("missing")).toBe(false);
+    expect(client.dequeueClaimed("q1")).toBe(true);
+    expect(slice()!.queue).toEqual([]);
+    client.releaseQueuedClaim("q1");
+  });
+
+  it("refuses queue claims after the owning surface closes", async () => {
+    const { client, scheduler, store, sessionId, stream } = await pending((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+    });
+    stream().send("1", frameOf(1, "turn.started"));
+    scheduler.paint();
+    await settle();
+    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
+    expect(client.claimQueued("q1")).toBe(true);
+
+    store.getState().closeChatSession(sessionId);
+
+    expect(client.claimQueued("q1")).toBe(false);
+    expect(client.dequeueClaimed("q1")).toBe(false);
+    client.releaseQueuedClaim("q1");
   });
 
   it("releases the next one when the whole turn arrived in a single fold", async () => {

@@ -5,7 +5,12 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 // A fresh module instance per test file run gets a fresh `cache` Map — reset
 // it explicitly between tests instead, since the module is only imported once.
-import { appStateStorage, flushPendingAppState, seedAppStateCache } from "./app-state-storage";
+import {
+  appStateStorage,
+  flushPendingAppState,
+  flushPendingAppStateKey,
+  seedAppStateCache,
+} from "./app-state-storage";
 
 const setMock = vi.fn<(key: string, value: string) => Promise<{ ok: boolean; error?: string }>>();
 
@@ -15,8 +20,9 @@ const setMock = vi.fn<(key: string, value: string) => Promise<{ ok: boolean; err
 // `.then/.catch` microtasks the write's result runs through.
 const DEBOUNCE_MS = 200;
 const settle = () => vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+const TEST_KEYS = ["volli:ui", "volli:workspace", "volli:projects-ui", "volli:chat-drafts"];
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.useFakeTimers();
   vi.clearAllMocks();
   setMock.mockResolvedValue({ ok: true });
@@ -25,10 +31,11 @@ beforeEach(() => {
   // cache, then drain the debounced writes that cleanup just scheduled (flush
   // empties the pending map so none linger into the test) and reset their mock
   // calls, so each test starts from a clean slate.
-  for (const key of ["volli:ui", "volli:workspace", "volli:projects-ui"]) {
+  for (const key of TEST_KEYS) {
     appStateStorage.removeItem(key);
   }
   flushPendingAppState();
+  await Promise.all(TEST_KEYS.map((key) => flushPendingAppStateKey(key)));
   vi.clearAllTimers();
   vi.clearAllMocks();
 });
@@ -74,11 +81,11 @@ describe("setItem", () => {
     expect(setMock).toHaveBeenCalledWith("volli:ui", '{"sidebarWidth":302}');
   });
 
-  it("toasts on a typed write failure", async () => {
+  it("returns false and toasts on a typed write failure", async () => {
     setMock.mockResolvedValue({ ok: false, error: "disk full" });
 
     appStateStorage.setItem("volli:ui", "{}");
-    await settle();
+    await expect(flushPendingAppStateKey("volli:ui")).resolves.toBe(false);
 
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(`Couldn't save "volli:ui": disk full`, {
       duration: 8000,
@@ -86,11 +93,11 @@ describe("setItem", () => {
     });
   });
 
-  it("toasts when the bridge call rejects outright", async () => {
+  it("returns false and toasts when the bridge call rejects outright", async () => {
     setMock.mockRejectedValue(new Error("ipc gone"));
 
     appStateStorage.setItem("volli:ui", "{}");
-    await settle();
+    await expect(flushPendingAppStateKey("volli:ui")).resolves.toBe(false);
 
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(`Couldn't save "volli:ui": ipc gone`, {
       duration: 8000,
@@ -112,6 +119,36 @@ describe("flushPendingAppState", () => {
     // Advancing past the debounce must NOT re-send the already-flushed writes.
     await settle();
     expect(setMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("flushPendingAppStateKey", () => {
+  it("does not claim durability when the key has no scheduled write", async () => {
+    await expect(flushPendingAppStateKey("volli:not-scheduled")).resolves.toBe(false);
+    expect(setMock).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges the latest value only after main has durably accepted it", async () => {
+    let acknowledge!: (result: { ok: true }) => void;
+    setMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          acknowledge = resolve;
+        }),
+    );
+    appStateStorage.setItem("volli:chat-drafts", '{"held":["q1"]}');
+
+    const durable = flushPendingAppStateKey("volli:chat-drafts");
+    let settled = false;
+    void durable.then(() => {
+      settled = true;
+    });
+    await vi.waitFor(() => expect(setMock).toHaveBeenCalledTimes(1));
+
+    expect(setMock).toHaveBeenCalledWith("volli:chat-drafts", '{"held":["q1"]}');
+    expect(settled).toBe(false);
+    acknowledge({ ok: true });
+    await expect(durable).resolves.toBe(true);
   });
 });
 

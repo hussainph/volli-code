@@ -152,6 +152,200 @@ export function messageRoute(intent: ComposerIntent, deliverable: boolean): Mess
   return intent !== "queue" && deliverable ? "send" : "hold";
 }
 
+export type HeldDispatchOutcome = "delivered" | "recorded" | "refused" | "held";
+
+export interface HeldDispatchActs {
+  /** Makes the only renderer-independent copy durable before delivery begins. */
+  persist(): Promise<boolean>;
+  deliver(): Promise<HeldDispatchOutcome>;
+  /** Persists the final ownership state before the dispatch is allowed to settle. */
+  finish(outcome: HeldDispatchOutcome): Promise<void>;
+}
+
+/**
+ * Owns the persist-before-delivery rule for fresh composer typing. The plane
+ * supplies storage and Session adapters; this module keeps their ordering from
+ * becoming a view lifecycle detail.
+ */
+export async function dispatchHeldMessage(acts: HeldDispatchActs): Promise<HeldDispatchOutcome> {
+  if (!(await acts.persist())) {
+    await acts.finish("refused");
+    return "refused";
+  }
+  let outcome: HeldDispatchOutcome;
+  try {
+    outcome = await acts.deliver();
+  } catch {
+    await acts.finish("refused");
+    return "refused";
+  }
+  await acts.finish(outcome);
+  return outcome;
+}
+
+export interface QueuedMutationActs {
+  queueBacked: boolean;
+  claim(): boolean;
+  consumeClaim(): boolean;
+  releaseClaim(): void;
+  dropHeld(): void;
+}
+
+/** Refuses Edit/Delete while resident delivery owns the same queue identity. */
+export function coordinateQueuedMutation(acts: QueuedMutationActs): boolean {
+  if (acts.queueBacked) {
+    if (!acts.claim()) return false;
+    if (!acts.consumeClaim()) {
+      acts.releaseClaim();
+      return false;
+    }
+  }
+  acts.dropHeld();
+  return true;
+}
+
+export interface QueuedSteerActs {
+  /** One synchronous reading of both resident sources and current liveness. */
+  read(): {
+    held: readonly HeldMessage[];
+    queue: readonly QueuedMessage[];
+    steerable: boolean;
+  };
+  /**
+   * Claims the resident queue, persists the visible order, revalidates
+   * liveness, and only then consumes the target. Every non-started result has
+   * restored its source state and waited for that persistence attempt.
+   */
+  start(visible: readonly QueuedMessage[], targetId: string): Promise<QueuedSteerStart>;
+  submit(message: QueuedMessage, delivery: "steer"): Promise<QueuedSteerDelivery>;
+  /** Waits for held cleanup or refusal persistence before settling. */
+  finish(id: string, outcome: QueuedSteerDelivery): Promise<void>;
+}
+
+export type QueuedSteerDelivery = "delivered" | "recorded" | "refused";
+export type QueuedSteerOutcome = QueuedSteerDelivery | "held" | "stale";
+export type QueuedSteerStart =
+  | "started"
+  | Exclude<QueuedSteerOutcome, QueuedSteerDelivery>
+  | "refused";
+
+/** The held state an aborted steer must restore without corrupting its source. */
+export function steerRollbackState(
+  queueBacked: boolean,
+  heldState: HeldMessage["state"] | undefined,
+): HeldMessage["state"] {
+  return queueBacked ? "queued" : (heldState ?? "unsent");
+}
+
+/** True only while the exact turn targeted before an async durability wait remains active. */
+export function steerTurnIsCurrent(
+  targetedTurnEpoch: number | undefined,
+  current: { turnEpoch: number; working: boolean; deliverable: boolean } | undefined,
+): boolean {
+  return (
+    targetedTurnEpoch !== undefined &&
+    current !== undefined &&
+    current.turnEpoch === targetedTurnEpoch &&
+    current.working &&
+    current.deliverable
+  );
+}
+
+export interface QueuedSteerStartActs {
+  queueBacked: boolean;
+  claim(): boolean;
+  persist(): Promise<boolean>;
+  current(): { turnEpoch: number; working: boolean; deliverable: boolean } | undefined;
+  consumeClaim(): boolean;
+  restore(): Promise<void>;
+  releaseClaim(): void;
+}
+
+/**
+ * Owns the async gap between a queue click and its durable held copy. A queue
+ * claim freezes resident release until this either consumes the selected row or
+ * restores its source state; held-only retries take the same path without one.
+ */
+export async function coordinateQueuedSteerStart(
+  targetedTurnEpoch: number | undefined,
+  acts: QueuedSteerStartActs,
+): Promise<QueuedSteerStart> {
+  let claimActive = false;
+  if (acts.queueBacked) {
+    if (!acts.claim()) return "stale";
+    claimActive = true;
+  }
+
+  let restored = false;
+  const restore = async (): Promise<void> => {
+    if (restored) return;
+    restored = true;
+    await acts.restore();
+  };
+
+  try {
+    if (!(await acts.persist())) {
+      await restore();
+      return "refused";
+    }
+    if (!steerTurnIsCurrent(targetedTurnEpoch, acts.current())) {
+      await restore();
+      return "held";
+    }
+    if (acts.queueBacked && !acts.consumeClaim()) {
+      await restore();
+      return "stale";
+    }
+    claimActive = false;
+    return "started";
+  } catch (error) {
+    await restore();
+    throw error;
+  } finally {
+    if (claimActive) acts.releaseClaim();
+  }
+}
+
+/**
+ * Moves one existing strip row into the active turn without changing its id.
+ *
+ * A queue-only row gains its durable held copy before dequeue. An unsent
+ * held-only row already has one. A held `queued` row whose release queue entry
+ * vanished is stale: the resident client may already own it, so steering it
+ * again would risk a duplicate turn.
+ */
+export async function steerQueuedMessage(
+  id: string,
+  inFlight: Set<string>,
+  acts: QueuedSteerActs,
+): Promise<QueuedSteerOutcome> {
+  if (inFlight.has(id)) return "stale";
+  const snapshot = acts.read();
+  const held = snapshot.held.find((entry) => entry.id === id);
+  const queued = snapshot.queue.find((entry) => entry.id === id);
+  if (held?.state === "sending" || (held?.state === "queued" && queued === undefined)) {
+    return "stale";
+  }
+  const message = held === undefined ? queued : { id: held.id, text: held.text };
+  if (message === undefined) return "stale";
+  // A click cannot improve a queue while the Session cannot steer. In
+  // particular, never manufacture a release-queue copy for a held-only row:
+  // the resident client observes enqueue synchronously and can drain that copy
+  // before this transition marks the held source as queued.
+  if (!snapshot.steerable) return "held";
+
+  inFlight.add(id);
+  try {
+    const started = await acts.start(heldStrip(snapshot.held, snapshot.queue), id);
+    if (started !== "started") return started;
+    const outcome = await acts.submit(message, "steer");
+    await acts.finish(id, outcome);
+    return outcome;
+  } finally {
+    inFlight.delete(id);
+  }
+}
+
 /**
  * Every message this Session is holding for you, in one strip.
  *
@@ -169,16 +363,32 @@ export function messageRoute(intent: ComposerIntent, deliverable: boolean): Mess
 export function heldStrip(
   held: readonly HeldMessage[],
   queue: readonly QueuedMessage[],
+  durableMessageIds: ReadonlySet<string> = new Set(),
+  snapshotReconciled = true,
 ): readonly QueuedMessage[] {
+  // Cold adoption seeds an empty transcript and null projection before its
+  // snapshot arrives. A persisted, already-accepted row must not expose Edit
+  // or Remove in that interval: either action can mint a new identity before
+  // the durable message with the old one is available to reconcile it.
+  if (!snapshotReconciled) return [];
   const rows: QueuedMessage[] = [];
   const drawn = new Set<string>();
   for (const entry of held) {
-    if (entry.state === "sending") continue;
-    rows.push({ id: entry.id, text: entry.text });
+    // Sending still owns this id even though it owns no row. If the queue has
+    // not observed the start transition yet, drawing its copy would flash the
+    // target back into the strip and invite a second click.
     drawn.add(entry.id);
+    if (entry.state === "sending" || durableMessageIds.has(entry.id)) continue;
+    rows.push({ id: entry.id, text: entry.text });
   }
-  for (const entry of queue) if (!drawn.has(entry.id)) rows.push(entry);
+  for (const entry of queue)
+    if (!drawn.has(entry.id) && !durableMessageIds.has(entry.id)) rows.push(entry);
   return rows;
+}
+
+/** Cold adoption is not reconciled until its first projection snapshot exists. */
+export function hasReconciledSessionSnapshot(projection: unknown): boolean {
+  return projection !== null && projection !== undefined;
 }
 
 /**
@@ -189,16 +399,21 @@ export function heldStrip(
  * names it, the release either delivered it or the person removed the row —
  * both are answers, and neither leaves this surface holding the words.
  *
- * Only `queued` is read. `sending` has a round trip still open on it, and
- * `unsent` is a message the queue never had.
+ * A matching durable transcript id wins for every state: it proves the same
+ * stable message identity crossed the Session seam before a renderer died.
+ * Otherwise only `queued` is inferred from queue disappearance; `sending` and
+ * `unsent` still need an explicit durable match.
  */
 export function settledHeldIds(
   held: readonly HeldMessage[],
   queue: readonly QueuedMessage[],
+  durableMessageIds: ReadonlySet<string> = new Set(),
 ): readonly string[] {
   const live = new Set(queue.map((entry) => entry.id));
   return held.flatMap((entry) =>
-    entry.state === "queued" && !live.has(entry.id) ? [entry.id] : [],
+    durableMessageIds.has(entry.id) || (entry.state === "queued" && !live.has(entry.id))
+      ? [entry.id]
+      : [],
   );
 }
 

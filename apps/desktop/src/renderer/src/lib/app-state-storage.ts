@@ -29,16 +29,16 @@ export function seedAppStateCache(entries: Record<string, string>): void {
   }
 }
 
-/** Fire-and-forget write-through; toasts on either a typed failure or a rejected IPC call. */
-function persist(key: string, value: string, failureVerb: string): void {
-  window.api.appState
-    .set(key, value)
-    .then((result) => {
-      if (!result.ok) toastError(`Couldn't ${failureVerb} "${key}": ${result.error}`);
-    })
-    .catch((error: unknown) => {
-      toastError(`Couldn't ${failureVerb} "${key}": ${errorMessage(error)}`);
-    });
+/** Writes through to main and reports whether SQLite acknowledged the value. */
+async function persist(key: string, value: string, failureVerb: string): Promise<boolean> {
+  try {
+    const result = await window.api.appState.set(key, value);
+    if (result.ok) return true;
+    toastError(`Couldn't ${failureVerb} "${key}": ${result.error}`);
+  } catch (error: unknown) {
+    toastError(`Couldn't ${failureVerb} "${key}": ${errorMessage(error)}`);
+  }
+  return false;
 }
 
 /**
@@ -57,13 +57,31 @@ interface PendingWrite {
   timer: ReturnType<typeof setTimeout>;
 }
 const pendingWrites = new Map<string, PendingWrite>();
+const writesInFlight = new Map<string, Promise<boolean>>();
+
+/**
+ * Serializes writes to one key, so an older bridge call can never settle after
+ * and overwrite a value whose durability a caller already observed.
+ */
+function persistInOrder(key: string, value: string, failureVerb: string): Promise<boolean> {
+  const previous = writesInFlight.get(key);
+  const write =
+    previous === undefined
+      ? persist(key, value, failureVerb)
+      : previous.then(() => persist(key, value, failureVerb));
+  writesInFlight.set(key, write);
+  void write.then(() => {
+    if (writesInFlight.get(key) === write) writesInFlight.delete(key);
+  });
+  return write;
+}
 
 function persistDebounced(key: string, value: string, failureVerb: string): void {
   const existing = pendingWrites.get(key);
   if (existing !== undefined) clearTimeout(existing.timer);
   const timer = setTimeout(() => {
     pendingWrites.delete(key);
-    persist(key, value, failureVerb);
+    void persistInOrder(key, value, failureVerb);
   }, PERSIST_DEBOUNCE_MS);
   pendingWrites.set(key, { value, failureVerb, timer });
 }
@@ -79,9 +97,25 @@ function persistDebounced(key: string, value: string, failureVerb: string): void
 export function flushPendingAppState(): void {
   for (const [key, pending] of pendingWrites) {
     clearTimeout(pending.timer);
-    persist(key, pending.value, pending.failureVerb);
+    void persistInOrder(key, pending.value, pending.failureVerb);
   }
   pendingWrites.clear();
+}
+
+/**
+ * Flushes one key and resolves only when main has acknowledged every write to
+ * it that was scheduled before this call. This is the durability barrier for
+ * user intent that must survive before its renderer-only source is released;
+ * a key with no scheduled write returns `false` rather than inventing an ack.
+ */
+export function flushPendingAppStateKey(key: string): Promise<boolean> {
+  const pending = pendingWrites.get(key);
+  if (pending !== undefined) {
+    clearTimeout(pending.timer);
+    pendingWrites.delete(key);
+    return persistInOrder(key, pending.value, pending.failureVerb);
+  }
+  return writesInFlight.get(key) ?? Promise.resolve(false);
 }
 
 // Renderer-only module: flush pending prefs before the window tears down so a

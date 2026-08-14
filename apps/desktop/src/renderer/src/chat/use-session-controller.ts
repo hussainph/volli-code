@@ -27,7 +27,13 @@ export interface SessionController {
   selectModel(selection: ModelSelection): Promise<boolean>;
   enqueue(message: QueuedMessage): void;
   dequeue(id: string): void;
-  submit(text: string, delivery: ChatMessageDelivery): Promise<MessageDelivery>;
+  /** Freezes resident queue release while an explicit steer becomes durable. */
+  claimQueued(id: string): boolean;
+  /** Resumes ordinary ordered release after an explicit steer aborts. */
+  releaseQueuedClaim(id: string): void;
+  /** Consumes the claimed row immediately before explicit submission. */
+  dequeueClaimed(id: string): boolean;
+  submit(message: QueuedMessage, delivery: ChatMessageDelivery): Promise<MessageDelivery>;
   interrupt(): Promise<boolean>;
   resolveInteraction(
     interactionId: string,
@@ -68,10 +74,15 @@ function bind(sessionId: string, store: ChatSessionsStore): Omit<SessionControll
     dequeue: (id) => {
       store.getState().dequeue(sessionId, id);
     },
+    claimQueued: (id) => getChatClient(sessionId)?.claimQueued(id) ?? false,
+    releaseQueuedClaim: (id) => {
+      getChatClient(sessionId)?.releaseQueuedClaim(id);
+    },
+    dequeueClaimed: (id) => getChatClient(sessionId)?.dequeueClaimed(id) ?? false,
     // A lookup that misses is a Session this surface no longer has: nothing was
     // sent and nothing is durable, which is exactly `refused`.
-    submit: (text, delivery) =>
-      getChatClient(sessionId)?.submit(text, delivery) ?? Promise.resolve("refused" as const),
+    submit: (message, delivery) =>
+      getChatClient(sessionId)?.submit(message, delivery) ?? Promise.resolve("refused" as const),
     interrupt: () => getChatClient(sessionId)?.interrupt() ?? refused,
     resolveInteraction: (interactionId, resolution) =>
       getChatClient(sessionId)?.resolveInteraction(interactionId, resolution) ?? refused,
