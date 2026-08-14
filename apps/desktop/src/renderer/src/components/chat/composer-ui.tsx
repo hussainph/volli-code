@@ -44,6 +44,7 @@ import {
   PromptInputTextarea,
   PromptInputTools,
 } from "@ai-elements/prompt-input";
+import { COMPOSER_STACK_SHELL } from "@renderer/chat/composer-stack";
 import {
   composerIntent,
   takeQueued,
@@ -113,10 +114,7 @@ export function SessionComposer({
 
   return (
     <PromptInput
-      className={cn(
-        "pointer-events-auto border-border bg-card shadow-[var(--shadow-raised)]",
-        className,
-      )}
+      className={cn("pointer-events-auto overflow-hidden", COMPOSER_STACK_SHELL, className)}
       onSubmit={() => send(composerIntent({ working, steer: false }))}
     >
       {queued.length > 0 ? (

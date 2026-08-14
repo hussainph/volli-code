@@ -111,4 +111,11 @@ describe("the card's controls", () => {
     expect(html).toContain(">Note</button>");
     expect(html).not.toContain("What to do instead");
   });
+
+  it("shares the composer stack's rounded shell", () => {
+    const html = renderToStaticMarkup(
+      <InteractionCard interaction={asked()} onResolve={() => undefined} />,
+    );
+    expect(html).toContain("rounded-2xl");
+  });
 });

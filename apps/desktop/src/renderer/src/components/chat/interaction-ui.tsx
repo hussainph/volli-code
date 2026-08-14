@@ -10,11 +10,11 @@
  *    belongs where it happened, beside the command and its detail. The composer
  *    stays: the turn is blocked, but the reader's place in the conversation is
  *    not, and the card is not standing in the composer's slot.
- *  - **At the foot**, in the composer's slot, for an interaction no row can
- *    hold — a question, or a permission the harness raised with no call. There
- *    is nothing to type while it waits, so the composer and the plan dock stand
- *    down and the card takes the whole surface. Stop rides along, because that
- *    is the exit the composer took with it.
+ *  - **At the foot**, stacked *above* the composer, for an interaction no row
+ *    can hold — a question, or a permission the harness raised with no call.
+ *    The composer stays: a follow-up can still be typed (or queued) while the
+ *    card waits. Stop rides the card as well as the composer, because
+ *    withdrawing the question is not the same act as interrupting the turn.
  *
  * The old approval card took a `DynamicToolUIPart` and drew three hardcoded
  * buttons, so an option a harness declared could never reach the screen and an
@@ -76,6 +76,7 @@ import {
   type InteractionQuestion,
   type InteractionSubmission,
 } from "@renderer/chat/interaction";
+import { COMPOSER_STACK_SHELL } from "@renderer/chat/composer-stack";
 import { Button } from "@renderer/components/ui/button";
 import { Textarea } from "@renderer/components/ui/textarea";
 import { cn } from "@renderer/lib/utils";
@@ -158,9 +159,9 @@ export function InteractionCard({
   const submittable = submission !== null && !resolving;
   const own = React.useRef<HTMLFormElement>(null);
 
-  // The composer this replaced held the focus. Taking it here keeps the
-  // keyboard on the one thing that can move the turn forward instead of
-  // dropping it on the document body when the composer unmounts.
+  // The composer stays mounted under this card. Taking focus here still
+  // keeps the keyboard on the thing that can move the turn forward — the
+  // question — instead of leaving it in the textarea behind.
   //
   // On the first answerable control, not on the form. Focusing the form left
   // the caret on a `tabIndex={-1}` element, so the first keystroke after the
@@ -221,8 +222,8 @@ export function InteractionCard({
         // Escape ends the turn; it never dismisses the question, which outlives
         // the turn and leaves the projection only when it is answered or
         // withdrawn. So it does exactly what Stop does, and only where this card
-        // has a Stop — at the foot, where the composer stood down and took its
-        // own exit with it.
+        // has a Stop — at the foot, where withdrawing the question is its own
+        // exit next to the composer that still owns interrupt.
         //
         // Where there is none, the key is left to bubble. Swallowing it there
         // meant a card on a row absorbed the one gesture that interrupts from
@@ -238,7 +239,8 @@ export function InteractionCard({
         if (!resolving) onStop();
       }}
       className={cn(
-        "pointer-events-auto rounded-xl border border-primary/40 bg-card shadow-[var(--shadow-raised)] outline-none",
+        "pointer-events-auto overflow-hidden outline-none",
+        COMPOSER_STACK_SHELL,
         className,
       )}
     >

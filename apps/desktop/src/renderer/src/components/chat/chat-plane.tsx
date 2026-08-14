@@ -441,44 +441,41 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               failure most worth seeing here is the decision that never reached
               the harness, which leaves the card looking answerable. */}
           {blocker ? <SessionBlocker blocker={blocker} /> : null}
-          {/* One bordered thing in the slot, and only for an interaction no row
-              can hold. While one stands here the turn cannot proceed, so the
-              composer and the dock stand down; the plan stays in the rail. A
-              card on a *row* displaces none of this. */}
-          {pending ? (
-            <InteractionCard
-              // Keyed so a second question opening behind the first mounts its
-              // own draft rather than inheriting another one's answers.
-              key={pending.id}
-              interaction={pending}
-              resolving={resolving.has(pending.id)}
-              autoFocus
-              className="mb-2"
-              onResolve={(submission) => answer(pending.id, submission)}
-              // Stop ends the turn; the question outlives it. Cancelling is what
-              // gives the composer back.
-              onStop={() => withdraw(pending.id)}
-            />
-          ) : (
-            <>
-              <SessionComposer
-                value={input}
-                onValueChange={onInputChange}
-                textareaRef={textareaRef}
-                models={composerModels}
-                selection={selection}
-                selectionProviderLabel={sessionModel?.providerLabel}
-                onSelectionChange={changeModel}
-                modelChoiceDisabled={working}
-                working={working}
-                ready={composable}
-                queued={strip}
-                onQueuedChange={onQueuedChange}
-                onSubmit={send}
-                onStop={() => void interrupt()}
+          {/* Overlay on the composer, never in its place. Ask-user cards (and
+              later plans / subagent activity) stack above the input so a
+              follow-up can still be typed while the card waits. */}
+          <div className="flex flex-col gap-2">
+            {pending ? (
+              <InteractionCard
+                // Keyed so a second question opening behind the first mounts its
+                // own draft rather than inheriting another one's answers.
+                key={pending.id}
+                interaction={pending}
+                resolving={resolving.has(pending.id)}
+                autoFocus
+                onResolve={(submission) => answer(pending.id, submission)}
+                // Stop on the card withdraws the question. The composer still
+                // owns interrupt for the turn.
+                onStop={() => withdraw(pending.id)}
               />
-            </>
-          )}
+            ) : null}
+            <SessionComposer
+              value={input}
+              onValueChange={onInputChange}
+              textareaRef={textareaRef}
+              models={composerModels}
+              selection={selection}
+              selectionProviderLabel={sessionModel?.providerLabel}
+              onSelectionChange={changeModel}
+              modelChoiceDisabled={working}
+              working={working}
+              ready={composable}
+              queued={strip}
+              onQueuedChange={onQueuedChange}
+              onSubmit={send}
+              onStop={() => void interrupt()}
+            />
+          </div>
         </ContentColumn>
       </div>
     </div>

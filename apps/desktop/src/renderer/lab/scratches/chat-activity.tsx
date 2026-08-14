@@ -613,12 +613,31 @@ export default function ChatActivityScratch() {
         <InteractionCard interaction={PERMISSION} onResolve={() => undefined} />
       </Section>
 
-      <Section label="Interaction · at the foot, with no call to hang it on">
-        <InteractionCard
-          interaction={QUESTION}
-          onResolve={() => undefined}
-          onStop={() => undefined}
-        />
+      <Section label="Interaction · stacked on the composer">
+        <div className="flex flex-col gap-2">
+          <InteractionCard
+            interaction={QUESTION}
+            onResolve={() => undefined}
+            onStop={() => undefined}
+          />
+          <SessionComposer
+            value=""
+            onValueChange={() => undefined}
+            models={MODELS}
+            selection={{
+              providerId: "anthropic",
+              modelId: "claude-sonnet-4-5",
+              reasoningLevel: "high",
+            }}
+            onSelectionChange={() => undefined}
+            working={false}
+            ready
+            queued={[]}
+            onQueuedChange={() => undefined}
+            onSubmit={() => undefined}
+            onStop={() => undefined}
+          />
+        </div>
       </Section>
 
       <Section label="Interaction · receipts">
@@ -702,36 +721,35 @@ function ComposerStates() {
         ))}
       </div>
 
-      {/* The card replaces the composer rather than sitting above it: while an
-          interaction is pending the turn cannot proceed, so there is nothing to
-          type. Both are drawn here so the swap is reviewable. */}
-      {state === "approval" ? (
-        <InteractionCard interaction={PERMISSION} onResolve={() => undefined} />
-      ) : null}
+      <div className="flex flex-col gap-2">
+        {state === "approval" ? (
+          <InteractionCard interaction={PERMISSION} onResolve={() => undefined} />
+        ) : null}
 
-      <SessionComposer
-        value={value}
-        onValueChange={setValue}
-        models={MODELS}
-        selection={selection}
-        onSelectionChange={setSelection}
-        working={working}
-        ready
-        // Whatever is actually in the queue, in every state that can hold one.
-        // Gating this on the two toggles that *start* with a queued message made
-        // the fixture lie about its own behavior: queueing from Working cleared
-        // the draft and showed nothing, which is the one bug this gallery exists
-        // to catch. Idle is the only state with no queue, because there is no
-        // turn to queue behind.
-        queued={state === "idle" ? [] : queued}
-        onQueuedChange={setQueued}
-        onSubmit={(text, intent) => {
-          setValue("");
-          if (intent !== "queue") return;
-          setQueued((current) => enqueueMessage(current, { id: `q-${Date.now()}`, text }));
-        }}
-        onStop={() => setState("idle")}
-      />
+        <SessionComposer
+          value={value}
+          onValueChange={setValue}
+          models={MODELS}
+          selection={selection}
+          onSelectionChange={setSelection}
+          working={working}
+          ready
+          // Whatever is actually in the queue, in every state that can hold one.
+          // Gating this on the two toggles that *start* with a queued message made
+          // the fixture lie about its own behavior: queueing from Working cleared
+          // the draft and showed nothing, which is the one bug this gallery exists
+          // to catch. Idle is the only state with no queue, because there is no
+          // turn to queue behind.
+          queued={state === "idle" ? [] : queued}
+          onQueuedChange={setQueued}
+          onSubmit={(text, intent) => {
+            setValue("");
+            if (intent !== "queue") return;
+            setQueued((current) => enqueueMessage(current, { id: `q-${Date.now()}`, text }));
+          }}
+          onStop={() => setState("idle")}
+        />
+      </div>
     </section>
   );
 }
