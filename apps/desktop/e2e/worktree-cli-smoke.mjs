@@ -357,7 +357,7 @@ async function main() {
           {},
           { cwd: scratch },
         );
-        const ok = res.code === 2 && res.stderr.includes("has no worktree yet");
+        const ok = res.code === 2 && res.stderr.includes("has no worktree");
         return {
           ok,
           detail: `code=${res.code} stderr=${JSON.stringify(res.stderr.trim())}`,

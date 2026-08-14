@@ -6,12 +6,12 @@
  * file's header for the full ticket-chat/model/credential setup this shares);
  * the only things that differ are: a SHORT scratch root (`makeShortScratch`,
  * not `makeScratch` — the CLI's own socket has to actually bind under the
- * sun_path limit, which this probe's whole point depends on), the shim's
- * `<userData>/bin` prepended onto the launched app's PATH (mirrors the
- * `/usr/local/bin` a real installed machine has — see the module's own
- * comment at `PREPENDED_PATH` below), the one prompt asking the agent to run
- * `volli doctor`, and the check-8 assertion reading the reply for doctor
- * evidence instead of a short sentence.
+ * sun_path limit, which this probe's whole point depends on), a Finder/Dock
+ * launch's BARE PATH (no `/usr/local/bin`, no homebrew — see `BARE_PATH`
+ * below), the one prompt asking the agent to run `volli doctor`, and the
+ * check-8 assertion reading the reply for doctor evidence instead of a short
+ * sentence. If `volli` still resolves inside that turn, the structured
+ * session recovered its CLI the same way a spawned PTY already did.
  *
  * ONE real turn, billed to a ChatGPT subscription — never loop turns.
  *
@@ -27,6 +27,7 @@ import os from "node:os";
 import { join } from "node:path";
 
 import { makeShortScratch } from "./lib/agent-kit.mjs";
+import { inspectDoctorPathEvidence } from "./lib/cli-chat-mode-doctor-evidence.mjs";
 import {
   activeTabLabel,
   assistantReplyTexts,
@@ -79,19 +80,17 @@ const worktreesRoot = join(scratch, "worktree-home");
 const { attempt, summarize } = createRunner();
 
 /**
- * This scratch profile's shim bin dir, prepended onto the launched app's own
- * PATH. A structured Pi Session's shell tool inherits the HOST Electron
- * process's PATH unfiltered (`piExecutionEnv` → `unsandboxedEnvironment`,
- * `packages/agent-runtime/src/pi/execution-env.ts`) — it does NOT get the
- * `<userData>/bin`-first prepend a spawned PTY session gets
- * (`agentSessionEnv`/`ticketSessionEnv`), so `volli` only resolves inside a
- * chat turn's shell if the ELECTRON PROCESS's own PATH already carries a
- * directory holding it. On a real installed machine that directory is
- * `/usr/local/bin` (the one-time consent symlink); this scratch profile has no
- * such symlink, so its equivalent — this profile's own `<userData>/bin` — is
- * prepended here to stand in for it.
+ * launchd's Finder/Dock PATH — `/usr/bin:/bin:/usr/sbin:/sbin` and nothing
+ * else. Proven by `bare-path-env-smoke.mjs`. This probe used to cheat by
+ * prepending `<userData>/bin` onto the *Electron process* PATH so `volli`
+ * resolved even though a structured Session never got the PTY prepend. That
+ * hid the real Finder-launch bug. The app under test now prepends the shim
+ * dir itself (`piExecutionEnv` `pathPrefixes`) and adopts the login shell's
+ * PATH at boot, so this launch is allowed to look like a Dock click. SHELL
+ * stays inherited: a real launchd boot still sets it, and `resolveShell`
+ * needs it.
  */
-const PREPENDED_PATH = `${join(userDataDir, "bin")}:${process.env.PATH ?? ""}`;
+const BARE_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
 
 const EVIDENCE_DIR = process.argv[2] ?? join(os.tmpdir(), "volli-cli-chat-mode-evidence");
 
@@ -165,7 +164,7 @@ async function main() {
     extraEnv: {
       HOME: fakeHome,
       VOLLI_WORKTREE_HOME_DIR: worktreesRoot,
-      PATH: PREPENDED_PATH,
+      PATH: BARE_PATH,
       // Pre-answers the first-boot "Install the Volli CLI and agent skills?"
       // dialog (the other CLI smokes all do this) — this run spends its one
       // real, billed turn on the chat-mode assertion, not on a native sheet
@@ -320,7 +319,7 @@ async function main() {
     // are the kit's to own, and what the budget was measured against.
     await attempt(
       8,
-      "the turn settles with `volli doctor` output pasted back — not a command-not-found miss",
+      "the turn settles with successful PATH and scratch-shim evidence from `volli doctor`",
       async () => {
         const settled = await waitForSettledReply(page, { since: submittedAt }).catch(
           async (error) => {
@@ -334,16 +333,27 @@ async function main() {
         // that stopped existing the moment the prompt landed.
         chatTabLabel = await activeTabLabel(page, TICKET_TAB_STRIP);
         const reply = settled.texts.join("\n");
-        // Doctor's own check titles/marks (see `packages/shared/src/doctor.ts`)
-        // are the evidence the shell command actually ran `volli doctor` rather
-        // than the model inventing prose, or the shell reporting it missing.
-        const hasDoctorEvidence = /checks?\b/i.test(reply) && /[✓✗!]/.test(reply);
+        // Require the two exact successful checks that prove this structured
+        // Session put its own scratch-profile shim first. A generic report,
+        // warning/failure, or another Volli profile's global shim is not proof.
+        const expectedShimPath = await fs.realpath(join(userDataDir, "bin", "volli"));
+        const { pathPositionOk, cliShimOk } = inspectDoctorPathEvidence(reply, expectedShimPath);
         const notFound = /command not found|not recognized|no such file or directory/i.test(reply);
+        const ok =
+          settled.texts.length > 0 &&
+          chatTabLabel !== null &&
+          pathPositionOk &&
+          cliShimOk &&
+          !notFound;
+        if (!ok) {
+          await captureFailureEvidence(page, mainStdout, mainStderr, "doctor-reply-unusable");
+        }
         return {
-          ok: settled.texts.length > 0 && chatTabLabel !== null && hasDoctorEvidence && !notFound,
+          ok,
           detail:
             `turn=${(settled.elapsedMs / 1000).toFixed(1)}s replies=${settled.texts.length} ` +
-            `tab=${chatTabLabel} hasDoctorEvidence=${hasDoctorEvidence} notFound=${notFound}\n` +
+            `tab=${chatTabLabel} pathPositionOk=${pathPositionOk} cliShimOk=${cliShimOk} ` +
+            `notFound=${notFound} expectedShim=${expectedShimPath}\n` +
             `--- full reply ---\n${reply}`,
         };
       },
@@ -357,7 +367,11 @@ async function main() {
     const app2 = await launch({
       dbPath,
       userDataDir,
-      extraEnv: { HOME: fakeHome, VOLLI_WORKTREE_HOME_DIR: worktreesRoot },
+      extraEnv: {
+        HOME: fakeHome,
+        VOLLI_WORKTREE_HOME_DIR: worktreesRoot,
+        PATH: BARE_PATH,
+      },
     });
     const relaunchStdout = [];
     const relaunchStderr = [];

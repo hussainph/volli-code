@@ -287,6 +287,12 @@ function cancelled(occurredAt: number, interactionId = ASK_INTERACTION_ID): Runt
   };
 }
 
+const unusedExecutionEnvFactory: NonNullable<
+  PiAdapterOptions["executionEnvFactory"]
+> = async () => {
+  throw new Error("never called by this test");
+};
+
 describe("Pi native adapter identity", () => {
   it("declares the one adapter id and the pinned runtime identity", () => {
     const { adapter } = composition();
@@ -385,6 +391,35 @@ describe("Pi native adapter attach", () => {
 
     expect(adapter.id).toBe(PI_ADAPTER_ID);
     expect(seen).toEqual([{ sessionDataDir: "/data/pi-sessions", models }]);
+  });
+
+  it("passes the injected execution environment factory to the runtime factory", async () => {
+    const seen: unknown[] = [];
+    createPiNativeAdapter({
+      sessionDataDir: "/data/pi-sessions",
+      resolveRuntimeContext: async () => context,
+      executionEnvFactory: unusedExecutionEnvFactory,
+      createRuntime: (options) => {
+        seen.push(options.executionEnvFactory);
+        return new FakeRuntime();
+      },
+    });
+
+    expect(seen).toEqual([unusedExecutionEnvFactory]);
+  });
+
+  it("leaves the runtime factory's own default execution environment untouched when none is injected", async () => {
+    const seen: unknown[] = [];
+    createPiNativeAdapter({
+      sessionDataDir: "/data/pi-sessions",
+      resolveRuntimeContext: async () => context,
+      createRuntime: (options) => {
+        seen.push(options.executionEnvFactory);
+        return new FakeRuntime();
+      },
+    });
+
+    expect(seen).toEqual([undefined]);
   });
 
   it("starts a ticketless project Session in the project root under the project Role", async () => {

@@ -12,6 +12,7 @@ import {
 } from "electron";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -60,7 +61,7 @@ import {
   writeDefaultModelSelection,
 } from "./session-runtime/model-access-preferences";
 import { registerSessionRpcIpcHandlers } from "./session-rpc-ipc";
-import { piAuthFilePath } from "@volli/agent-runtime";
+import { piAuthFilePath, piExecutionEnv } from "@volli/agent-runtime";
 import { listRegisteredHarnesses } from "./db/harness-registry-repo";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
@@ -101,6 +102,7 @@ import type { RefusedWrapper } from "./harness-runtime";
 import { ensureShellInit } from "./shell-init";
 import { startAgentSocket, type AgentSocketServer } from "./agent-socket";
 import { loginShellPath } from "./login-path";
+import { createLoginPathBootstrap, resolveLoginShellPath } from "./login-shell-path";
 import { piLoginLaunch, verifiedPiCliResource } from "./pi-cli-resource";
 import {
   detectHarnesses,
@@ -383,6 +385,14 @@ function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): Brows
 
 app.whenReady().then(async () => {
   if (!ownsAppProfile) return;
+  // Started here, awaited nowhere near here: a Finder/Dock launch hands main
+  // launchd's bare PATH, and the only fix is asking the user's own login
+  // shell what it would have exported. That costs a shell spawn (~4s worst
+  // case) — started now so it runs alongside the db open, migrations and IPC
+  // registration below rather than in front of them. Its result is observed
+  // only after the first window loads, or by a Pi execution environment that
+  // genuinely needs it first.
+  const loginShellPathAttempt = resolveLoginShellPath();
   protocol.handle(PACKAGED_RENDERER_SCHEME, (request) => {
     const assetPath = resolvePackagedRendererAsset(request.url, PACKAGED_RENDERER_ROOT);
     if (assetPath === null) {
@@ -470,12 +480,44 @@ app.whenReady().then(async () => {
     console.error("[volli] failed to open database:", dbHandle.error);
   }
   const sessionEngine = dbHandle.ok ? createDesktopSessionEngine(dbHandle.db) : null;
+  // Pure path joins off userData — safe to resolve well ahead of the window
+  // it eventually feeds (registerTerminalIpcHandlers, further below). Moved
+  // up from there so the CLI's bin dir is already known here, for the
+  // execution environment factory below.
+  const runtimePaths = volliRuntimePaths({
+    userDataPath: app.getPath("userData"),
+    appPath: app.getAppPath(),
+    mainProcessDir: __dirname,
+    resourcesPath: process.resourcesPath,
+    isPackaged: app.isPackaged,
+  });
+  // The shell probe began at the top of whenReady, but observing its result is
+  // deferred until after the first window loads (or until a Pi execution env
+  // genuinely needs it first). Both paths share this one memoized apply.
+  const loginPathBootstrap = createLoginPathBootstrap({
+    binDir: runtimePaths.binDir,
+    readCurrentPath: () => process.env.PATH,
+    writePath: (path) => {
+      process.env.PATH = path;
+    },
+    resolveLoginPath: () => loginShellPathAttempt,
+    log: (line) => console.info(line),
+  });
   // The Pi-backed Agent Runtime is the structured product's one target
   // executor, for Ticket Sessions and ticketless project chats alike. Model
   // access and selection come from this Pi host.
   const piRuntimeHost = dbHandle.ok
     ? createPiRuntimeHost({
         sessionDataDir: join(app.getPath("userData"), "pi-sessions"),
+        // Makes `volli` and every detected toolchain resolve inside a
+        // structured Session's shell tool with or without the consented
+        // `/usr/local/bin` symlink — the same recovery a spawned PTY gets
+        // from `agentSessionEnv`/`ticketSessionEnv` prepending this same
+        // directory (`harness-runtime.ts`).
+        executionEnvFactory: async (workspacePath) => {
+          await loginPathBootstrap.apply();
+          return piExecutionEnv(workspacePath, { pathPrefixes: [runtimePaths.binDir] });
+        },
         // The runtime needs the Role a Session runs under and the Ticket it
         // implies, which a directory cannot say. The generated Brief is
         // recorded once before the first runtime construction; every later
@@ -800,13 +842,6 @@ app.whenReady().then(async () => {
   // before-quit teardown (kills all PTYs, gated on busy sessions); needs the
   // db, so it registers here. The returned manager feeds each window's own
   // destructive-close gate.
-  const runtimePaths = volliRuntimePaths({
-    userDataPath: app.getPath("userData"),
-    appPath: app.getAppPath(),
-    mainProcessDir: __dirname,
-    resourcesPath: process.resourcesPath,
-    isPackaged: app.isPackaged,
-  });
   // Create the window first so first paint isn't blocked on shim generation or
   // the socket bind; both start right after, still awaited inside whenReady with
   // the same failure semantics (logged, non-fatal). registerTerminalIpcHandlers
@@ -960,6 +995,14 @@ app.whenReady().then(async () => {
   const ptyManager = registerTerminalIpcHandlers(dbHandle, agentRuntime, sessionEngine);
   ptyManagerRef = ptyManager;
   const mainWindow = createWindow(ptyManager, currentFirstPaint());
+  mainWindow.webContents.once("did-finish-load", () => {
+    // The probe converts shell failure to a kept outcome. Keep an explicit
+    // rejection handler here too so an unexpected mutation/logging failure
+    // can never become an unhandled rejection from this fire-and-forget path.
+    void loginPathBootstrap.apply().catch((error) => {
+      console.error("[volli] failed to apply login PATH:", errorMessage(error));
+    });
+  });
 
   // Startup orphan sweep (worktree-support §7): prunes stale git metadata and
   // removes clean orphaned worktree dirs (branches retained); dirty orphans are
@@ -1209,7 +1252,13 @@ app.whenReady().then(async () => {
             })),
             shellInitDir: agentRuntime.shellEnv?.["ZDOTDIR"] ?? null,
             shellInitPresent: existsSync(join(runtimePaths.zdotDir, ".zlogin")),
-            shimPath,
+            // Resolved through the real filesystem: `volli doctor` compares this
+            // byte-for-byte against what a CLI process's own PATH walk found,
+            // which follows the `/usr/local/bin/volli` symlink main installs (or
+            // a scratch profile's `/tmp` vs `/private/tmp` on macOS) to whatever
+            // it actually points at. An unresolved comparison would call a
+            // correct install "another Volli install owns the link".
+            shimPath: await realpath(shimPath).catch(() => shimPath),
             liveSessionIds: ptyManager.liveSessionIds(),
             reporting: dbHandle.ok
               ? listRegisteredHarnesses(dbHandle.db).map((record) => ({
@@ -1257,6 +1306,7 @@ app.whenReady().then(async () => {
       // claiming reporting that isn't happening.
       try {
         await regenerateHarnessRuntime();
+        console.info("[volli] harness runtime ready");
       } catch (error) {
         console.error("[volli] failed to generate harness wrappers:", errorMessage(error));
       }

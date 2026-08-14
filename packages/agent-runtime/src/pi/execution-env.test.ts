@@ -9,9 +9,12 @@ function workspace(): string {
 }
 
 /** Restores exactly what the host had, including a name it did not set at all. */
-function hostVariables(values: Record<string, string>): () => void {
+function hostVariables(values: Record<string, string | undefined>): () => void {
   const previous = new Map(Object.keys(values).map((name) => [name, process.env[name]]));
-  Object.assign(process.env, values);
+  for (const [name, value] of Object.entries(values)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
   return () => {
     for (const [name, value] of previous) {
       if (value === undefined) delete process.env[name];
@@ -77,6 +80,98 @@ describe("piExecutionEnv", () => {
       await env.cleanup();
     }
   });
+
+  // A Finder/Dock launch of main inherits launchd's bare PATH
+  // (/usr/bin:/bin:/usr/sbin:/sbin), which has never had `volli`'s own shim
+  // dir on it. `pathPrefixes` is how a caller — main, handing in the CLI's
+  // bin dir — puts something in front of that PATH before a command ever
+  // sees it.
+  it("prepends the given path prefixes onto the sanitized PATH", async () => {
+    const env = await piExecutionEnv(workspace(), { pathPrefixes: ["/volli/bin"] });
+    try {
+      await expect(env.exec("printenv PATH")).resolves.toEqual({
+        ok: true,
+        value: { stdout: `/volli/bin:${process.env.PATH}\n`, stderr: "", exitCode: 0 },
+      });
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("prepends multiple prefixes in order, skipping empty entries", async () => {
+    const env = await piExecutionEnv(workspace(), {
+      pathPrefixes: ["/volli/bin", "", "/another/bin"],
+    });
+    try {
+      await expect(env.exec("printenv PATH")).resolves.toEqual({
+        ok: true,
+        value: {
+          stdout: `/volli/bin:/another/bin:${process.env.PATH}\n`,
+          stderr: "",
+          exitCode: 0,
+        },
+      });
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("does not duplicate a prefix already at the front of PATH", async () => {
+    const originalPath = process.env.PATH;
+    const restore = hostVariables({ PATH: `/volli/bin:${originalPath}` });
+    const env = await piExecutionEnv(workspace(), { pathPrefixes: ["/volli/bin"] });
+    try {
+      await expect(env.exec("printenv PATH")).resolves.toEqual({
+        ok: true,
+        value: { stdout: `/volli/bin:${originalPath}\n`, stderr: "", exitCode: 0 },
+      });
+    } finally {
+      restore();
+      await env.cleanup();
+    }
+  });
+
+  it("still prepends onto a caller-supplied PATH rather than letting it wipe the prefixes", async () => {
+    const env = await piExecutionEnv(workspace(), { pathPrefixes: ["/volli/bin"] });
+    try {
+      // A real, minimal PATH — proving the override REPLACES the sanitized
+      // default, while the session's prefixes still land in front. Without
+      // that, a caller-supplied PATH would hide `<userData>/bin` and `volli`
+      // would resolve to another install's shim.
+      await expect(env.exec("printenv PATH", { env: { PATH: "/usr/bin:/bin" } })).resolves.toEqual({
+        ok: true,
+        value: { stdout: "/volli/bin:/usr/bin:/bin\n", stderr: "", exitCode: 0 },
+      });
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("puts prefixes into a caller-supplied empty PATH", async () => {
+    const env = await piExecutionEnv(workspace(), { pathPrefixes: ["/volli/bin"] });
+    try {
+      await expect(env.exec("/usr/bin/printenv PATH", { env: { PATH: "" } })).resolves.toEqual({
+        ok: true,
+        value: { stdout: "/volli/bin\n", stderr: "", exitCode: 0 },
+      });
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it("gives a command an empty PATH when neither host nor caller supplies one", async () => {
+    const restore = hostVariables({ PATH: undefined });
+    const env = await piExecutionEnv(workspace());
+    try {
+      await expect(env.exec("/usr/bin/printenv PATH")).resolves.toEqual({
+        ok: true,
+        value: { stdout: "\n", stderr: "", exitCode: 0 },
+      });
+    } finally {
+      restore();
+      await env.cleanup();
+    }
+  });
 });
 
 describe("scopedEnvironment", () => {
@@ -92,5 +187,9 @@ describe("scopedEnvironment", () => {
         GITHUB_TOKEN: "host-secret",
       }),
     ).toEqual({ PATH: "/usr/local/bin:/bin", LANG: "C.UTF-8" });
+  });
+
+  it("uses the system PATH fallback when the host supplies no PATH", () => {
+    expect(scopedEnvironment({})).toEqual({ PATH: "/usr/bin:/bin:/usr/sbin:/sbin" });
   });
 });

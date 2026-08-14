@@ -120,6 +120,26 @@ async function commandsToResolve(
 }
 
 /**
+ * `path` as the filesystem actually resolves it, for a value that is about to
+ * be compared byte-for-byte against main's own idea of the same file
+ * (`volliCheck`, `packages/shared/src/doctor.ts`): a symlink followed (the
+ * global `/usr/local/bin/volli` link main installs points AT the shim rather
+ * than BEING it, so an unresolved comparison reads a correct install as
+ * "another install owns the link"), and on macOS `/tmp` normalized to
+ * `/private/tmp` the same way. `null` stays `null` — nothing to resolve — and
+ * a path `realpath` cannot follow is reported exactly as found, since a stale
+ * entry unresolvable here is still worth comparing as-is rather than losing
+ * silently.
+ */
+async function canonicalPath(
+  path: string | null,
+  environment: DoctorEnvironment,
+): Promise<string | null> {
+  if (path === null) return null;
+  return (await environment.realPathOf(path)) ?? path;
+}
+
+/**
  * What this process can see, packaged for the socket. The session id rides in
  * the request context main already builds, so it is deliberately absent here.
  */
@@ -137,7 +157,7 @@ export async function observeEnvironment(
     pathEntries,
     zdotDir: environment.env["ZDOTDIR"] ?? null,
     resolved,
-    volliPath,
+    volliPath: await canonicalPath(volliPath, environment),
   };
 }
 

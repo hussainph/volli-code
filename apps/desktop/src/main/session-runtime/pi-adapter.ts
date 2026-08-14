@@ -181,6 +181,13 @@ export interface PiAdapterOptions {
   resolveRuntimeContext: (sessionId: string) => Promise<PiRuntimeContext | null>;
   /** Injectable Pi model collection, for deterministic tests and host-owned credentials. */
   models?: PiRuntimeHostOptions["models"];
+  /**
+   * Injectable execution environment factory. Defaults to Pi's own
+   * `piExecutionEnv`; main supplies one that prepends Volli's CLI bin dir
+   * onto a Session's `PATH`, so `volli` resolves inside a structured turn's
+   * shell tool with or without the consented `/usr/local/bin` symlink.
+   */
+  executionEnvFactory?: PiRuntimeHostOptions["executionEnvFactory"];
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */
   createRuntime?: (options: PiRuntimeHostOptions) => AgentRuntime;
   now?: () => number;
@@ -249,6 +256,9 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
   const runtime = create({
     sessionDataDir: options.sessionDataDir,
     ...(options.models === undefined ? {} : { models: options.models }),
+    ...(options.executionEnvFactory === undefined
+      ? {}
+      : { executionEnvFactory: options.executionEnvFactory }),
   });
 
   return {
