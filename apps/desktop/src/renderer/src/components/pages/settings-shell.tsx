@@ -1,6 +1,7 @@
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { useState, type ReactNode } from "react";
 
+import { ContentColumn } from "@renderer/components/layout/content-column";
 import { cn } from "@renderer/lib/utils";
 
 /** One selectable category in a settings surface: its rail row plus the pane it renders. */
@@ -75,10 +76,13 @@ export function SettingsShell({
 
       <div className="min-w-0 flex-1 overflow-y-auto">
         {active ? (
-          <div className="mx-auto w-full max-w-2xl px-8 py-6">
+          // Tier A: a settings pane is a reading surface, so it takes the app's
+          // canonical measure and page gutter rather than a width and an inset
+          // of its own (docs/DESIGN.md).
+          <ContentColumn className="py-4">
             <SettingsPaneHeader title={active.label} description={active.description} />
-            <div className="flex flex-col gap-6">{active.content}</div>
-          </div>
+            <div className="flex flex-col gap-4">{active.content}</div>
+          </ContentColumn>
         ) : null}
       </div>
     </div>
@@ -94,7 +98,7 @@ export function SettingsPaneHeader({
   description?: ReactNode;
 }) {
   return (
-    <header className="mb-6">
+    <header className="mb-4">
       <h1 className="text-heading font-semibold">{title}</h1>
       {description ? <p className="mt-1 text-sm text-muted-foreground">{description}</p> : null}
     </header>
@@ -105,6 +109,18 @@ export function SettingsPaneHeader({
  * A labeled card grouping related settings rows: an optional heading (with an
  * optional leading icon and a right-aligned `action`), an optional description,
  * and the rows themselves.
+ *
+ * The **fill alone** carries the grouping — no frame. This card already sits
+ * inside the app shell's framed content card, and a border here made every pane
+ * a box inside a box. `bg-card` at full strength rather than `/50` for the same
+ * reason the border went: at half strength the card/background delta is ~2 in
+ * each channel, so a section without its frame would have stopped reading as a
+ * surface at all.
+ *
+ * The inset is asymmetric on purpose: 16px horizontal is the component rung
+ * every other row-bearing surface uses, and 8px vertical is the same step the
+ * rows inside space themselves by — so every vertical gap in a section, edge to
+ * header to row to row, is one 8px step.
  */
 export function SettingsSection({
   title,
@@ -121,9 +137,9 @@ export function SettingsSection({
 }) {
   const hasHeader = title !== undefined || description !== undefined || action !== undefined;
   return (
-    <section className="rounded-lg border border-border bg-card/50 p-4">
+    <section className="rounded-lg bg-card px-4 py-2">
       {hasHeader ? (
-        <div className="mb-4 flex items-start justify-between gap-4">
+        <div className="mb-2 flex items-start justify-between gap-4">
           <div className="min-w-0">
             {title ? (
               <div className="flex items-center gap-2">
@@ -198,7 +214,7 @@ export function SettingsRow({
     <div
       data-testid={testId}
       className={cn(
-        "flex justify-between gap-6 border-t border-border/50 py-4 first:border-t-0 first:pt-0 last:pb-0",
+        "flex justify-between gap-4 border-t border-border/50 py-2 first:border-t-0 first:pt-0 last:pb-0",
         align === "center" ? "items-center" : "items-start",
       )}
     >

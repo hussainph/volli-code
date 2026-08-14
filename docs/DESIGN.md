@@ -15,7 +15,7 @@ filling every pixel (the Linear lesson — maximal width reads as noise, not as 
 Every surface declares which tier it is; the tiers may not be mixed ad hoc.
 
 - **Tier A — reading surfaces.** Prose-like content someone reads or writes: the Ticket Body tab
-  (title, description, activity, composer), Settings when it's built, empty states. These center on
+  (title, description, activity, composer), the Settings and Configure panes, empty states. These center on
   the canonical measure via `<ContentColumn>`; surrounding whitespace is the point.
 - **Tier B — workbench surfaces.** Content that genuinely earns width: the kanban board, list
   view, artifacts viewer, terminals. These stay fluid edge-to-edge but align their horizontal edges
