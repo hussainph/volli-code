@@ -755,6 +755,7 @@ describe("asking the driver", () => {
           { id: "migration", label: "Full migration" },
         ],
         multiple: undefined,
+        allowOther: undefined,
       },
     ]);
     const serialized = JSON.stringify(answered?.messages);

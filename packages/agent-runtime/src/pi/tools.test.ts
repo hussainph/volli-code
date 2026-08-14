@@ -68,7 +68,12 @@ describe("ask_user tool", () => {
     const tool = createAskUserTool(async () => CHOSE_ONE);
 
     expect(tool.parameters.required).toEqual(["question"]);
-    expect(Object.keys(tool.parameters.properties)).toEqual(["question", "options", "multiple"]);
+    expect(Object.keys(tool.parameters.properties)).toEqual([
+      "question",
+      "options",
+      "multiple",
+      "allowOther",
+    ]);
   });
 
   it("puts the model's own question, options and multiplicity to the host unread", async () => {
@@ -84,6 +89,7 @@ describe("ask_user tool", () => {
           { id: "migration", label: "Full migration", description: "Two more days" },
         ],
         multiple: true,
+        allowOther: false,
       },
       new AbortController().signal,
     );
@@ -96,6 +102,10 @@ describe("ask_user tool", () => {
         { id: "migration", label: "Full migration", description: "Two more days" },
       ],
       multiple: true,
+      // Carried rather than read: whether a person may say something the model
+      // did not list is the host's to honour, and its default is not this
+      // layer's to invent.
+      allowOther: false,
     });
     expect(resultText(result)).toBe("Chose: spike");
   });
@@ -111,6 +121,7 @@ describe("ask_user tool", () => {
       question: "What should the page be called?",
       options: undefined,
       multiple: undefined,
+      allowOther: undefined,
     });
     expect(resultText(result)).toBe("Call it Sessions.");
   });

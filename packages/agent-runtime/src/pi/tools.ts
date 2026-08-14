@@ -103,6 +103,12 @@ const askUserSchema = Type.Object({
   multiple: Type.Optional(
     Type.Boolean({ description: "Whether more than one option may be chosen. Defaults to false." }),
   ),
+  allowOther: Type.Optional(
+    Type.Boolean({
+      description:
+        "Whether the person may answer in their own words instead of choosing. Defaults to true; set false only when a listed option is genuinely required.",
+    }),
+  ),
 });
 
 /** Ask a person and block until they answer, exactly as the Session spec supplies it. */
@@ -173,6 +179,7 @@ export function createAskUserTool(
             question: params.question,
             options: params.options,
             multiple: params.multiple,
+            allowOther: params.allowOther,
           },
           withdrawn.signal,
         );

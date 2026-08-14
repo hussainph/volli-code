@@ -787,13 +787,21 @@ class PiBinding implements BindingHandle {
    * A rejection reaches the model as a failed tool call, which is what actually
    * happened to it.
    *
-   * Two things are the model's rather than Volli's. The options are whatever it
-   * offered, mapped onto the ledger's own option shape and not checked against
-   * any vocabulary — an id that reads like a refusal is one of the model's
-   * answers and refuses nothing. And when it offered none, the card has to say
-   * so in the one place that can: `custom` lives on a prompt, so a free-text
-   * question declares the single prompt that an option-bearing one deliberately
-   * omits, and only that case writes `prompts` at all.
+   * The options are the model's rather than Volli's: whatever it offered, mapped
+   * onto the ledger's own option shape and not checked against any vocabulary —
+   * an id that reads like a refusal is one of the model's answers and refuses
+   * nothing.
+   *
+   * Whether a person may say something the model did not list is what `prompts`
+   * is here to record, and every question this opens declares one — options or
+   * not. The default admits free text: a person asked to choose between two
+   * things the model imagined must be able to say a third, so `custom` is true
+   * unless the model closed it with `allowOther: false`. `custom` lives on a
+   * prompt and nowhere else, so a question that left `prompts` off would be
+   * durably saying the opposite — and history, not the card, is what a later
+   * reader has to go on. The flat `options` and `multiple` stay beside it: a
+   * reader that predates prompts still sees the choice, and only loses the part
+   * it could not have rendered anyway.
    */
   async #askUser(
     request: RuntimeAskUserRequest,
@@ -806,6 +814,10 @@ class PiBinding implements BindingHandle {
       description: option.description ?? null,
     }));
     const multiple = request.multiple === true;
+    // A closed question with nothing to choose between asks for an answer that
+    // cannot be given, so the model's `false` is overruled exactly there rather
+    // than opening a card no press can ever satisfy.
+    const custom = options.length === 0 || request.allowOther !== false;
     await this.#observe({
       kind: "interaction",
       state: "opened",
@@ -817,20 +829,16 @@ class PiBinding implements BindingHandle {
         detail: null,
         options,
         multiple,
-        ...(options.length === 0
-          ? {
-              prompts: [
-                {
-                  id: DEFAULT_INTERACTION_PROMPT_ID,
-                  label: request.question,
-                  detail: null,
-                  options,
-                  multiple,
-                  custom: true,
-                },
-              ],
-            }
-          : {}),
+        prompts: [
+          {
+            id: DEFAULT_INTERACTION_PROMPT_ID,
+            label: request.question,
+            detail: null,
+            options,
+            multiple,
+            custom,
+          },
+        ],
         native: this.#native,
       },
     });

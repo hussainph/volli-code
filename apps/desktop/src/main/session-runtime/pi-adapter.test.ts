@@ -1271,6 +1271,24 @@ describe("Pi native adapter model questions", () => {
             { id: "migration", label: "Full migration", description: "Two more days" },
           ],
           multiple: true,
+          // Declared even though the flat fields above already say the same
+          // choice, because one thing has no flat home and it is the one the
+          // model does not get the last word on: a person choosing between two
+          // things it imagined must be able to say a third. `custom` lives on a
+          // prompt, so a question without prompts would durably say otherwise.
+          prompts: [
+            {
+              id: "prompt:0",
+              label: ASK_USER_QUESTION,
+              detail: null,
+              options: [
+                { id: "spike", label: "Spike first", description: null },
+                { id: "migration", label: "Full migration", description: "Two more days" },
+              ],
+              multiple: true,
+              custom: true,
+            },
+          ],
           native: binding.native,
         },
       },
@@ -1302,9 +1320,6 @@ describe("Pi native adapter model questions", () => {
       interaction: {
         options: [],
         multiple: false,
-        // The one thing the flat fields cannot say. `custom` lives on a prompt
-        // and nowhere else, so a question with nothing to choose between has to
-        // declare the prompt that an option-bearing one deliberately omits.
         prompts: [
           {
             id: "prompt:0",
@@ -1316,6 +1331,36 @@ describe("Pi native adapter model questions", () => {
           },
         ],
       },
+    });
+  });
+
+  it("lets the model close the free-text answer when a listed option is required", async () => {
+    const { runtime, sink } = await attached();
+
+    void askUser(runtime, {
+      options: [{ id: "spike", label: "Spike first" }],
+      allowOther: false,
+    });
+    await flush();
+
+    expect(sink.observations[0]).toMatchObject({
+      state: "opened",
+      interaction: { prompts: [{ custom: false }] },
+    });
+  });
+
+  it("keeps free text open on a question with nothing to choose between", async () => {
+    const { runtime, sink } = await attached();
+
+    // The model's `false` is overruled here and only here: a closed question
+    // offering nothing asks for an answer no press can give, so the card would
+    // be one nobody could ever get past.
+    void askUser(runtime, { allowOther: false });
+    await flush();
+
+    expect(sink.observations[0]).toMatchObject({
+      state: "opened",
+      interaction: { options: [], prompts: [{ custom: true }] },
     });
   });
 

@@ -314,6 +314,16 @@ export interface RuntimeAskUserRequest {
   options?: readonly RuntimeAskUserOption[];
   /** Whether more than one option may be chosen. Absent reads as one. */
   multiple?: boolean;
+  /**
+   * Whether a person may answer in their own words instead of choosing.
+   *
+   * Absent reads as true, and the default is the point: the model wrote the
+   * options, so a person must be able to say the thing it did not think of. Only
+   * an explicit `false` closes that door, and only a question that already
+   * offers something to choose between can close it — a question with no options
+   * and no free text asks for an answer that cannot be given.
+   */
+  allowOther?: boolean;
 }
 
 /** Everything the Agent Runtime needs to start one Session, whatever its Role. */
