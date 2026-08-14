@@ -42,7 +42,13 @@ function rawRoundTrip(socketPath: string, line: string): Promise<AgentResponse> 
       response += chunk;
     });
     socket.on("error", reject);
-    socket.on("end", () => resolve(JSON.parse(response.trim()) as AgentResponse));
+    socket.on("end", () => {
+      try {
+        resolve(JSON.parse(response.trim()) as AgentResponse);
+      } catch (error) {
+        reject(error);
+      }
+    });
   });
 }
 
@@ -417,6 +423,98 @@ describe("agent socket", () => {
     ).resolves.toEqual({ v: 1, ok: true, data: { delayed: true } });
   });
 
+  it("drains an accepted execution and flushes its reply before shutdown settles", async () => {
+    ctx = openTestDb();
+    const socketPath = join(dirname(ctx.dbPath), "volli.sock");
+    let markExecuteStarted!: () => void;
+    const executeStarted = new Promise<void>((resolve) => {
+      markExecuteStarted = resolve;
+    });
+    let finishExecute!: (response: AgentResponse) => void;
+    const execution = new Promise<AgentResponse>((resolve) => {
+      finishExecute = resolve;
+    });
+    server = await startAgentSocket({
+      socketPath,
+      requestTimeoutMs: 1_000,
+      execute: () => {
+        markExecuteStarted();
+        return execution;
+      },
+    });
+    const responsePromise = roundTrip(socketPath, {
+      v: 1,
+      cmd: "identify",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: {} },
+    }).then(
+      (response) => ({ ok: true as const, response }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    await executeStarted;
+
+    let shutdownSettled = false;
+    const shutdownPromise = server.close().then(() => {
+      shutdownSettled = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const settledBeforeExecution = shutdownSettled;
+    finishExecute({ v: 1, ok: true, data: { receipt: "persisted" } });
+
+    const response = await responsePromise;
+    await shutdownPromise;
+    server = undefined;
+    expect(settledBeforeExecution).toBe(false);
+    expect(response).toEqual({
+      ok: true,
+      response: { v: 1, ok: true, data: { receipt: "persisted" } },
+    });
+  });
+
+  it("closes a flushed response connection without waiting for the peer to half-close", async () => {
+    ctx = openTestDb();
+    const socketPath = join(dirname(ctx.dbPath), "volli.sock");
+    server = await startAgentSocket({
+      socketPath,
+      requestTimeoutMs: 1_000,
+      execute: async () => ({ v: 1, ok: true, data: { receipt: "persisted" } }),
+    });
+    const client = connect({ path: socketPath, allowHalfOpen: true });
+    let response = "";
+    client.setEncoding("utf8");
+    client.on("data", (chunk: string) => {
+      response += chunk;
+    });
+    await once(client, "connect");
+    client.write(
+      `${JSON.stringify({
+        v: 1,
+        cmd: "identify",
+        args: {},
+        ctx: { cwd: "/repo/volli", env: {} },
+      } satisfies AgentRequest)}\n`,
+    );
+    await once(client, "end");
+
+    const closePromise = server.close();
+    const outcome = await Promise.race([
+      closePromise.then(() => "closed" as const),
+      new Promise<"timed-out">((resolve) => {
+        setTimeout(() => resolve("timed-out"), 200);
+      }),
+    ]);
+
+    client.destroy();
+    await closePromise;
+    server = undefined;
+    expect(JSON.parse(response.trim())).toEqual({
+      v: 1,
+      ok: true,
+      data: { receipt: "persisted" },
+    });
+    expect(outcome).toBe("closed");
+  });
+
   it("refuses to replace a live agent socket and leaves its owner reachable", async () => {
     ctx = openTestDb();
     const socketPath = join(dirname(ctx.dbPath), "volli.sock");
@@ -498,7 +596,32 @@ describe("agent socket", () => {
     });
   });
 
-  it("force-closes a live client so shutdown cannot wait without bound", async () => {
+  it("closes an idle client without waiting for the shutdown deadline", async () => {
+    ctx = openTestDb();
+    const socketPath = join(dirname(ctx.dbPath), "volli.sock");
+    server = await startAgentSocket({
+      socketPath,
+      requestTimeoutMs: 1_000,
+      execute: async () => ({ v: 1, ok: true, data: {} }),
+    });
+    const client = connect(socketPath);
+    await once(client, "connect");
+
+    const closePromise = server.close();
+    const outcome = await Promise.race([
+      closePromise.then(() => "closed" as const),
+      new Promise<"timed-out">((resolve) => {
+        setTimeout(() => resolve("timed-out"), 200);
+      }),
+    ]);
+
+    client.destroy();
+    await closePromise;
+    server = undefined;
+    expect(outcome).toBe("closed");
+  });
+
+  it("force-closes a hung accepted execution at the shutdown deadline", async () => {
     ctx = openTestDb();
     const socketPath = join(dirname(ctx.dbPath), "volli.sock");
     let markExecuteStarted: (() => void) | undefined;
@@ -507,6 +630,7 @@ describe("agent socket", () => {
     });
     server = await startAgentSocket({
       socketPath,
+      requestTimeoutMs: 20,
       execute: () => {
         markExecuteStarted?.();
         return new Promise<AgentResponse>(() => undefined);
