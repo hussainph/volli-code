@@ -27,6 +27,7 @@ import {
   type ActivityKind,
   type ActivityOutcome,
   type SessionInteraction,
+  type SessionInteractionPrompt,
 } from "@volli/shared";
 import type { DynamicToolUIPart, ReasoningUIPart } from "ai";
 
@@ -531,6 +532,153 @@ const QUESTION: SessionInteraction = {
   native: { id: "q-1", detail: null },
 };
 
+/* ------------------------------------------------------------- ask-user */
+
+/**
+ * The four shapes an ask-user question arrives in.
+ *
+ * Not variants of one card: each drives a different half of the flow — the box
+ * that is the whole answer, the row that answers on the click, the rows that
+ * accumulate behind a control, and the walk with a counter over it. Every id
+ * here is harness-shaped (`question:<index>:<encoded>`) on purpose: none of them
+ * can read as a declared refusal, which is what puts these on the ask-user card
+ * rather than the verdict one.
+ */
+function ask(
+  id: string,
+  headline: string,
+  prompts: readonly SessionInteractionPrompt[],
+): SessionInteraction {
+  return {
+    id: `question:${id}`,
+    attachmentId: "attach-1",
+    kind: "question",
+    title: headline,
+    detail: null,
+    options: prompts.flatMap((prompt) => prompt.options),
+    multiple: prompts.some((prompt) => prompt.multiple),
+    prompts,
+    native: { id, detail: null },
+  };
+}
+
+const FREE_TEXT_ASK = ask("ask-free", "What should the release note say?", [
+  {
+    id: "prompt:0",
+    label: "What should the release note say?",
+    detail: null,
+    options: [],
+    multiple: false,
+    custom: true,
+  },
+]);
+
+/** Options only: no `custom`, so the harness asked for one of these three. */
+const SINGLE_SELECT_ASK = ask("ask-one", "Which branch should this land on?", [
+  {
+    id: "prompt:0",
+    label: "Which branch should this land on?",
+    detail: null,
+    options: [
+      { id: "question:0:bWFpbg", label: "main", description: "ships on the next tag" },
+      { id: "question:0:cmVsZWFzZQ", label: "release", description: "cuts a patch today" },
+      { id: "question:0:bmV4dA", label: "next", description: "waits for the migration" },
+    ],
+    multiple: false,
+    custom: false,
+  },
+]);
+
+const MULTI_SELECT_ASK = ask("ask-many", "What should I update along the way?", [
+  {
+    id: "prompt:0",
+    label: "What should I update along the way?",
+    detail: null,
+    options: [
+      { id: "question:0:dGVzdHM", label: "Tests", description: "run the suite after each step" },
+      { id: "question:0:bG9ja2ZpbGU", label: "Lockfile", description: "regenerate on the way out" },
+      { id: "question:0:ZG9jcw", label: "Docs", description: "the migration page only" },
+      {
+        id: "question:0:Y2hhbmdlbG9n",
+        label: "Changelog",
+        description: "one line under Unreleased",
+      },
+    ],
+    multiple: true,
+    custom: true,
+  },
+]);
+
+/**
+ * The walk, and two switches inside it. Question two's descriptions are long
+ * enough that trailing them after the title would wrap, so its rows stack — and
+ * it declares `custom`, so the box is there beside them where question one, which
+ * asked for one of two branches and nothing else, has none.
+ */
+const STEPPED_ASK = ask("ask-walk", "Before I start the migration", [
+  {
+    id: "prompt:0",
+    label: "Which branch should this land on?",
+    detail: null,
+    options: [
+      { id: "question:0:bWFpbg", label: "main", description: "ships on the next tag" },
+      { id: "question:0:cmVsZWFzZQ", label: "release", description: "cuts a patch today" },
+    ],
+    multiple: false,
+    custom: false,
+  },
+  {
+    id: "prompt:1",
+    label: "How should the old rows be migrated?",
+    detail: null,
+    options: [
+      {
+        id: "question:1:aW4tcGxhY2U",
+        label: "In place",
+        description:
+          "Rewrite each row as it is read, so the table is never copied and the migration cannot run out of disk. The window between the two shapes is one row wide.",
+      },
+      {
+        id: "question:1:c2hhZG93",
+        label: "Shadow table",
+        description:
+          "Build the new shape beside the old one and swap at the end. Twice the disk, but every step is reversible until the swap lands.",
+      },
+      {
+        id: "question:1:bGF6eQ",
+        label: "Lazily",
+        description:
+          "Leave the old rows alone and convert on first read. Nothing blocks the release; the two shapes coexist for as long as the tail takes.",
+      },
+    ],
+    multiple: false,
+    custom: false,
+  },
+  {
+    id: "prompt:2",
+    label: "What should I update along the way?",
+    detail: null,
+    options: [
+      { id: "question:2:dGVzdHM", label: "Tests", description: "run the suite after each step" },
+      { id: "question:2:ZG9jcw", label: "Docs", description: "the migration page only" },
+      {
+        id: "question:2:Y2hhbmdlbG9n",
+        label: "Changelog",
+        description: "one line under Unreleased",
+      },
+    ],
+    multiple: true,
+    custom: true,
+  },
+]);
+
+const ASKS = [
+  { name: "free text", interaction: FREE_TEXT_ASK },
+  { name: "single", interaction: SINGLE_SELECT_ASK },
+  { name: "multi", interaction: MULTI_SELECT_ASK },
+  { name: "stepped", interaction: STEPPED_ASK },
+] as const;
+
 // Signed-in models only, because that is the whole of what the pill is ever
 // handed — the plane filters the catalog before it gets here.
 const MODELS: ComposerModel[] = [
@@ -670,6 +818,7 @@ export default function ChatActivityScratch() {
         <AttentionReceipt part={DENIED_ROW} />
       </Section>
 
+      <AskUserStates />
       <QueuedRowWidths />
       <ComposerStates />
     </ContentColumn>
@@ -681,6 +830,90 @@ function Section({ label, children }: React.PropsWithChildren<{ label: string }>
     <section className="flex flex-col gap-1">
       <h2 className="mb-1 text-label uppercase text-muted-foreground">{label}</h2>
       {children}
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ ask-user */
+
+/**
+ * The ask-user card in its real mount: stacked on a composer that stays live
+ * through every step. Answer it and the resolution lands in the readout under
+ * it, which is the only place a fixture can show what the harness would get.
+ *
+ * Fully live — click a row, arrow through them, press a numeral, type in the
+ * box, Skip, come back. What it is *for* is the two things static markup cannot
+ * catch: where focus lands when a step arrives, and whether the height tween
+ * under a mounted composer reads as motion or as a jump.
+ */
+function AskUserStates() {
+  const [shape, setShape] = React.useState<(typeof ASKS)[number]["name"]>("stepped");
+  const [answered, setAnswered] = React.useState<string | null>(null);
+  const [value, setValue] = React.useState("");
+  const asked = ASKS.find((entry) => entry.name === shape) ?? ASKS[0];
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex items-center gap-1">
+        <h2 className="mr-2 text-label uppercase text-muted-foreground">Ask</h2>
+        {ASKS.map((entry) => (
+          <Button
+            key={entry.name}
+            size="xs"
+            variant={shape === entry.name ? "secondary" : "ghost"}
+            onClick={() => {
+              setShape(entry.name);
+              setAnswered(null);
+            }}
+          >
+            {entry.name}
+          </Button>
+        ))}
+      </div>
+
+      <ComposerInteractionStack
+        interaction={answered === null ? asked.interaction : null}
+        onResolve={(_id, submission) => {
+          setAnswered(
+            JSON.stringify(
+              { resolution: submission.resolution, message: submission.message },
+              null,
+              1,
+            ),
+          );
+        }}
+        onWithdraw={() => setAnswered("withdrawn")}
+      >
+        <SessionComposer
+          value={value}
+          onValueChange={setValue}
+          models={MODELS}
+          selection={{
+            providerId: "anthropic",
+            modelId: "claude-sonnet-4-5",
+            reasoningLevel: "high",
+          }}
+          onSelectionChange={() => undefined}
+          working={false}
+          ready
+          queued={[]}
+          onQueuedChange={() => undefined}
+          onSteerQueued={() => undefined}
+          onSubmit={() => setValue("")}
+          onStop={() => undefined}
+        />
+      </ComposerInteractionStack>
+
+      {answered === null ? null : (
+        <div className="flex items-start gap-2">
+          <pre className="min-w-0 flex-1 overflow-x-auto rounded-md border border-border bg-muted/40 p-2 font-mono text-xs whitespace-pre-wrap text-foreground">
+            {answered}
+          </pre>
+          <Button size="xs" variant="ghost" onClick={() => setAnswered(null)}>
+            Ask again
+          </Button>
+        </div>
+      )}
     </section>
   );
 }

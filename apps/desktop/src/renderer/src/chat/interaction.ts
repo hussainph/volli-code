@@ -577,6 +577,234 @@ export function interactionCarousel(
   };
 }
 
+/* ------------------------------------------------------------ the step flow */
+
+/**
+ * Whether this request is *answered* rather than *decided*.
+ *
+ * `kind` alone does not separate them. A sandbox escalation is stored as a
+ * question — it asks whether to keep going — but what it offers is a pair of
+ * verdicts with a declared no among them, which is the permission's shape and
+ * wants the permission's card: every option in view at once, weighted, with the
+ * box behind the refusal.
+ *
+ * An ask-user question is the other thing. Its option ids are the harness's own
+ * encoded values, none of which can mean no ({@link needsOwnRefusal}), so there
+ * is no verdict to weight and nothing to read the list against — only answers,
+ * one question at a time.
+ */
+export function isAskUserInteraction(interaction: SessionInteraction): boolean {
+  return interaction.kind === "question" && needsOwnRefusal(interaction);
+}
+
+/**
+ * Whether the ask-user card's box stands open beside the options.
+ *
+ * {@link promptFieldOpen} answers this for a card of verdicts, where the words
+ * are a redirection and the only question is how much of the card an empty box
+ * costs before anyone wants it. Here the harness has already answered it. A
+ * question that accepts free text declares `custom` — which is the ordinary
+ * case, and the shape a runtime writes by default — and one that does not is a
+ * model that asked for a listed choice. An "Other" row under that offers an
+ * answer the reply cannot carry: `answers` is an array of *selected* values and
+ * a prompt without `custom` has no slot for words, so they would be typed,
+ * accepted, and dropped on the way out.
+ *
+ * That is not the same as gating the refusal. Saying "none of these work" is
+ * never a harness capability — it is the card's own out-of-band control
+ * ({@link needsOwnRefusal}), and it is on every ask-user card whether or not
+ * there is a box beside the options.
+ *
+ * Options are the floor rather than `custom`: a prompt with neither is a
+ * question with nothing to answer it, and the box is the only thing that could
+ * have been meant.
+ */
+export function askFieldOpen(prompt: SessionInteractionPrompt): boolean {
+  return prompt.custom || prompt.options.length === 0;
+}
+
+/**
+ * How one option row is set.
+ *
+ * `inline` trails the description after the title on one line, which is the
+ * denser reading and the one a two- or three-word gloss wants. `stacked` puts
+ * it under the title, for descriptions long enough that inline would wrap — a
+ * wrapped trailer re-indents under the title's *first* character and stops
+ * reading as a caption on it.
+ *
+ * A judgement about the whole list rather than the row: one stacked row beside
+ * three inline ones is a list at two rhythms, and the eye reads the odd one as
+ * more important rather than as longer.
+ */
+export type InteractionRowLayout = "inline" | "stacked";
+
+/**
+ * Roughly what one option row fits on a line, in characters.
+ *
+ * An estimate, and it can only be one: the real answer needs a measured box,
+ * and the card is drawn at the composer's width in a column whose margins
+ * move. At `text-ui` (13px) in the 720px reading measure, a row less its chip
+ * and padding holds something near ninety characters — this sits under that,
+ * so the switch happens a little before the wrap rather than a line after it.
+ */
+const ROW_INLINE_CAPACITY = 72;
+
+export function promptRowLayout(prompt: SessionInteractionPrompt): InteractionRowLayout {
+  const wraps = prompt.options.some(
+    (option) =>
+      option.description !== null &&
+      option.label.length + option.description.length + 1 > ROW_INLINE_CAPACITY,
+  );
+  return wraps ? "stacked" : "inline";
+}
+
+/**
+ * The first question with nothing to send, or `-1` where every one has
+ * something.
+ *
+ * Submit is atomic ({@link canSubmitInteraction}), so a reader who stepped past
+ * a question and answered the rest presses a control that cannot fire. This is
+ * what the card takes them back to instead of leaving the press silent.
+ */
+export function firstUnansweredPrompt(
+  interaction: SessionInteraction,
+  draft: InteractionDraft,
+): number {
+  return readInteractionPrompts(interaction).findIndex(
+    (prompt) => !isPromptAnswered(prompt, draft),
+  );
+}
+
+/**
+ * What this question is still waiting for, as the two words a blocked press
+ * gets back.
+ *
+ * The only validation a question has: `isPromptAnswered` takes a declared
+ * option, or free text where the harness declared `custom`. There is nothing
+ * else to check, so there is nothing else to say — and naming the act the
+ * control names ("Choose", "Answer") keeps the message and the button the same
+ * sentence rather than two.
+ */
+export function promptRequirement(prompt: SessionInteractionPrompt): string {
+  return prompt.options.length > 0 ? "Choose an option" : "Write an answer";
+}
+
+/**
+ * One question of a stepped request, and everything the card draws around it.
+ *
+ * The carousel above reports a position a reader moves through freely. This is
+ * the same walk with a direction: a question answers and the flow *advances*,
+ * which is what the ask-user surface is — so what belongs here and not there is
+ * whether there is a step left to take (`skippable`), and what the control that
+ * takes it should say.
+ *
+ * **Skipping is movement, never an answer.** A resolution carries one `answers`
+ * array and {@link canSubmitInteraction} holds the card until every question
+ * has something, so there is no partial resolution to send and nothing durable
+ * a skip could write. It steps forward and leaves the question unanswered, and
+ * the last question has nowhere to step to — which is why `skippable` is
+ * exactly "there is a next one" rather than a property of the question itself.
+ */
+export interface InteractionStep {
+  /** Clamped, so a stale index from a card that shrank cannot land off the end. */
+  index: number;
+  count: number;
+  question: InteractionQuestion;
+  /** What stands over the options: the question, or the request where it is the only one. */
+  heading: string;
+  first: boolean;
+  last: boolean;
+  /** Per question, in prompt order — what the counter marks and Submit waits on. */
+  answered: readonly boolean[];
+  skippable: boolean;
+  /**
+   * What the control that moves the flow on says, or null where the click on a
+   * row is already the whole step and a second press would ask for it twice.
+   */
+  advanceLabel: string | null;
+  layout: InteractionRowLayout;
+}
+
+export function interactionStep(
+  interaction: SessionInteraction,
+  draft: InteractionDraft,
+  index: number,
+): InteractionStep | null {
+  const questions = interactionQuestions(interaction);
+  const at = Math.min(Math.max(Math.trunc(index), 0), questions.length - 1);
+  const asked = questions[at];
+  if (!asked) return null;
+  const { prompt } = asked;
+  const last = at === questions.length - 1;
+  // Words that only a following message can carry refuse the whole request, so
+  // they are sendable from any step rather than at the end of a walk whose
+  // remaining questions they have already contradicted.
+  const sendable = last || interactionRedirected(interaction, draft);
+  const written = promptDraft(draft, prompt.id).response.trim().length > 0;
+  return {
+    index: at,
+    count: questions.length,
+    question: asked,
+    heading: asked.label ?? interaction.title,
+    first: at === 0,
+    last,
+    answered: questions.map((entry) => isPromptAnswered(entry.prompt, draft)),
+    skippable: !last,
+    advanceLabel: sendable
+      ? // Names the act and then the verdict, the same control the card has
+        // always ended on — "Send" once a redirection is what would travel.
+        interactionSubmitLabel(interaction, draft)
+      : // A single choice with nothing typed beside it is answered by the click
+        // that chooses it; anything else — several answers, or words that need
+        // a deliberate commit — waits for a control of its own.
+        !prompt.multiple && prompt.options.length > 0 && !written
+        ? null
+        : "Next",
+    layout: promptRowLayout(prompt),
+  };
+}
+
+/**
+ * What one press of the control that moves the flow on does.
+ *
+ * A press is never only "go to the next question": on the last one it is the
+ * submit, a redirection makes it the submit from anywhere, and a card that was
+ * stepped past cannot submit at all. All four readings are the same rule, so
+ * they are one function rather than a chain of conditions in a handler — which
+ * is also what makes the walk testable without mounting it.
+ */
+export type InteractionAdvance =
+  /** Nothing to send yet. `at` is the question that owes it, which is not always the one in view. */
+  | { kind: "blocked"; at: number; requirement: string }
+  | { kind: "step"; at: number }
+  | { kind: "send"; submission: InteractionSubmission };
+
+export function interactionAdvance(
+  interaction: SessionInteraction,
+  draft: InteractionDraft,
+  index: number,
+): InteractionAdvance | null {
+  const step = interactionStep(interaction, draft, index);
+  if (step === null) return null;
+  const { prompt } = step.question;
+  // A redirection refuses the whole request, so it outranks both the question
+  // in view and the walk it was going to finish.
+  const redirected = interactionRedirected(interaction, draft);
+  if (!redirected && !isPromptAnswered(prompt, draft))
+    return { kind: "blocked", at: step.index, requirement: promptRequirement(prompt) };
+  if (!redirected && !step.last) return { kind: "step", at: step.index + 1 };
+  const submission = interactionSubmission(interaction, draft);
+  if (submission !== null) return { kind: "send", submission };
+  // The end of the walk, with nothing to send: a question was stepped past and
+  // Submit is atomic. Name it, and say where it is — a press that cannot fire
+  // has to leave the reader somewhere they can act.
+  const stuck = firstUnansweredPrompt(interaction, draft);
+  const asked = readInteractionPrompts(interaction)[stuck];
+  /* v8 ignore next -- unreachable: a redirection always submits, so this branch is the last question with nothing to send, and that is exactly what makes `firstUnansweredPrompt` find one. */
+  if (!asked) return null;
+  return { kind: "blocked", at: stuck, requirement: promptRequirement(asked) };
+}
+
 /* -------------------------------------------------------------- where it draws */
 
 /**
