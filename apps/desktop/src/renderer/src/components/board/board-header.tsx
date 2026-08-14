@@ -113,8 +113,10 @@ function ViewToggle({ projectId }: { projectId: string }) {
       onClick={() => setBoardView(projectId, value)}
       className={cn(
         // Button-primitive idiom (ui/button.tsx): press/focus feedback for a
-        // hand-rolled control, segmented look unchanged at rest.
-        "flex size-6 items-center justify-center rounded-md text-muted-foreground outline-none transition-[color,transform,box-shadow] duration-150 ease-out hover:text-foreground active:scale-[0.97] motion-reduce:transform-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+        // hand-rolled control, segmented look unchanged at rest. `scale` is
+        // named in the transition list and cancelled by `scale-100!` under
+        // reduced motion for the reason spelled out there.
+        "flex size-6 items-center justify-center rounded-md text-muted-foreground outline-none transition-[color,transform,scale,box-shadow] duration-150 ease-out hover:text-foreground active:scale-[0.97] motion-reduce:scale-100! focus-visible:ring-[3px] focus-visible:ring-ring/50",
         view === value && "bg-accent text-foreground",
       )}
     >

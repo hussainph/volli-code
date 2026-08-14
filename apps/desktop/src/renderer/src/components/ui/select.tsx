@@ -15,7 +15,8 @@ import {
   MENU_ROW_STATE,
   MENU_SEPARATOR,
   MENU_SURFACE,
-  MENU_SURFACE_MOTION,
+  MENU_SURFACE_ANCHORED,
+  MENU_SURFACE_FADE,
   MENU_SURFACE_PAD,
 } from "@renderer/components/ui/menu-classes";
 
@@ -74,10 +75,22 @@ function SelectContent({
         data-slot="select-content"
         className={cn(
           MENU_SURFACE,
-          MENU_SURFACE_MOTION,
-          "relative max-h-(--radix-select-content-available-height) origin-(--radix-select-content-transform-origin) overflow-x-hidden overflow-y-auto",
+          MENU_SURFACE_FADE,
+          "relative overflow-x-hidden overflow-y-auto",
+          // Everything below the fade is popper-only, and not as a style
+          // choice: `SelectItemAlignedPosition` publishes NONE of it. It sets
+          // no `data-side`, and both `--radix-select-content-transform-origin`
+          // and `--radix-select-content-available-height` are written by
+          // `SelectPopperPosition` alone. Applied unconditionally, the origin
+          // resolves to an undefined var, is invalid at computed-value time,
+          // and silently falls back to `50% 50%` — an item-aligned select that
+          // zooms out of its own middle while sitting on the trigger. The
+          // height clamp fails the same way (item-aligned carries an inline
+          // `maxHeight` instead). Item-aligned therefore fades and does not
+          // zoom: the honest motion for a surface with no published anchor.
           position === "popper" &&
-            "data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
+            "max-h-(--radix-select-content-available-height) origin-(--radix-select-content-transform-origin) data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
+          position === "popper" && MENU_SURFACE_ANCHORED,
           className,
         )}
         position={position}

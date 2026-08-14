@@ -64,9 +64,12 @@ export function BoardColumn({
         // background reads as a pan surface.
         "flex min-h-0 max-h-[85%] w-72 flex-none cursor-default flex-col rounded-lg bg-muted/40",
         // Layout snaps (no width tween — transform/opacity only); the newly
-        // expanded column plays a short ease-out enter instead.
+        // expanded column plays a short ease-out enter instead. `scale` is
+        // named alongside `transform` because v4 compiles `scale-*` to the
+        // standalone property, and without it the column faded in at full size
+        // while the 0.98 it starts from snapped away. See `ui/button.tsx`.
         animateEnter &&
-          "transition-[opacity,transform] duration-200 ease-out starting:scale-[0.98] starting:opacity-0 motion-reduce:starting:scale-100",
+          "transition-[opacity,transform,scale] duration-200 ease-out starting:scale-[0.98] starting:opacity-0 motion-reduce:starting:scale-100",
       )}
     >
       <div className="flex items-center gap-2 px-3 pt-2.5 pb-2">

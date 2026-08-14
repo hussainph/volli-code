@@ -85,10 +85,13 @@ export function TicketCardContent({
   );
 }
 
-// Sibling shift while a drag reorders the column: Linear-crisp, a strong
-// ease-out well under 300ms (dnd-kit's 250ms default reads floaty). Shared by
-// the board card and the list row so the two views' drag feel stays one value.
-export const SORT_TRANSITION = { duration: 180, easing: "cubic-bezier(0.23, 1, 0.32, 1)" };
+// Sibling shift while a drag reorders the column: Linear-crisp, well under
+// 300ms (dnd-kit's 250ms default reads floaty). Shared by the board card and
+// the list row so the two views' drag feel stays one value. The curve is
+// `--ease-out` by reference, not by re-typing it: this used to be the literal
+// that the token was later minted from, and a second copy is how a token
+// silently stops being one.
+export const SORT_TRANSITION = { duration: 180, easing: "var(--ease-out)" };
 
 /**
  * Sortable + context-menu wrapper shared by the board card and the list row:

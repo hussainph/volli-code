@@ -65,7 +65,7 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
                     // `text-white` is ink on the PROJECT's own color, not on
                     // the page — `PROJECT_COLORS` is identity, not theme, so it
                     // holds still across a mode flip and so does the ink on it.
-                    "group/tile relative flex size-9 items-center justify-center rounded-[10px] text-sm font-semibold text-white transition-transform duration-100 ease-out active:scale-[0.96]",
+                    "group/tile relative flex size-9 items-center justify-center rounded-[10px] text-sm font-semibold text-white transition-transform duration-100 ease-out active:scale-[0.96] motion-reduce:scale-100!",
                     // `ring-offset-transparent`, NOT `ring-offset-rail` (#74):
                     // the rail gave up its fill to sit on the canvas, so an
                     // offset painted in `--rail` would punch an opaque dark

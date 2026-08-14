@@ -12,7 +12,7 @@ export function AddProjectTile() {
         <button
           type="button"
           onClick={() => void pickAndAdd()}
-          className="app-region-no-drag group/tile relative flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-muted transition-transform duration-100 ease-out active:scale-[0.96]"
+          className="app-region-no-drag group/tile relative flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-muted transition-transform duration-100 ease-out active:scale-[0.96] motion-reduce:scale-100!"
         >
           <PlusIcon weight="bold" className="size-[15px] text-muted-foreground" />
           <span
