@@ -89,6 +89,12 @@
    canvas would make “delete” indistinguishable from “primary”. */
   --destructive: #e5484d;
   --destructive-foreground: #ffffff;
+  --positive: #27d496;
+  --positive-foreground: #001c10;
+  --attention: #ffaa2f;
+  --attention-foreground: #221200;
+  --info: #65c6ff;
+  --info-foreground: #001827;
   --radius: 0.625rem;
   /* Veils (#74). The canvas paints the whole window behind the chrome, so the
    sidebar cannot keep an opaque fill — but it is a LIGHTER rung than the
@@ -178,6 +184,12 @@
    canvas would make “delete” indistinguishable from “primary”. */
   --destructive: #e5484d;
   --destructive-foreground: #ffffff;
+  --positive: #005f40;
+  --positive-foreground: #ffffff;
+  --attention: #764900;
+  --attention-foreground: #ffffff;
+  --info: #005880;
+  --info-foreground: #ffffff;
   --radius: 0.625rem;
   /* Veils (#74). The canvas paints the whole window behind the chrome, so the
    sidebar cannot keep an opaque fill — but it is a LIGHTER rung than the
@@ -234,6 +246,12 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-positive: var(--positive);
+  --color-positive-foreground: var(--positive-foreground);
+  --color-attention: var(--attention);
+  --color-attention-foreground: var(--attention-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
   --color-border: var(--border);
   --color-border-hover: var(--border-hover);
   --color-border-strong: var(--border-strong);

@@ -14,7 +14,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { apcaLc, hexToOklch, isHexColor, oklchToHex } from "../color";
-import { THEME_CONTRAST_FLOORS } from "../generate";
+import { solveStatusTokens, THEME_CONTRAST_FLOORS } from "../generate";
 import { THEME_TOKEN_NAMES, type ThemeTokenName } from "../tokens";
 import { deriveCanvasTokens, deriveLabelInk, windowBackground } from "./derive";
 import { copyFloors } from "./floors";
@@ -362,6 +362,66 @@ describe("deriveCanvasTokens", () => {
       expect({ at, hairline: strong - hover < 0.01 }).toEqual({ at, hairline: true });
     }
   });
+
+  it("re-solves the status family per appearance, where it carries --destructive across", () => {
+    // The whole claim behind deleting 36 `dark:` twins: one token name is
+    // correct on paper AND in the dark because the two appearances derive two
+    // different colours for it, not because a call site wrote both by hand.
+    //
+    // `--destructive` is the control. It is hue-locked the same way and it is
+    // deliberately identical across the flip, because it is frozen outright
+    // rather than solved — which is also why it is the one status-adjacent
+    // colour a light surface makes no brighter.
+    const STATUS = ["--positive", "--attention", "--info"] as const;
+    for (const { hex, vibrancy } of everyCase().filter((one) => one.resolved === "dark")) {
+      const dark = deriveCanvasTokens(canvasOf(hex, vibrancy), "dark");
+      const light = deriveCanvasTokens(canvasOf(hex, vibrancy), "light");
+      const at = `${hex} @ v${vibrancy}`;
+      for (const token of STATUS) {
+        expect({ at, token, flips: dark[token] !== light[token] }).toEqual({
+          at,
+          token,
+          flips: true,
+        });
+        // And the light one is the DARKER ink, not merely a different hex —
+        // the polarity flip the twins were hand-writing.
+        expect({ at, token, darkerOnPaper: true }).toEqual({
+          at,
+          token,
+          darkerOnPaper: hexToOklch(light[token]).L < hexToOklch(dark[token]).L,
+        });
+      }
+      expect(light["--destructive"]).toBe(dark["--destructive"]);
+    }
+  });
+
+  it("solves the status family against the canvas's OWN card, not the shipped ladder's", () => {
+    // Stated as an identity rather than as a difference, and that is the point.
+    // `darkTokens` spreads `generateThemeTokens`'s output — which already
+    // carries a status family, solved on the SHIPPED ladder's card — and then
+    // moves the ladder toward the canvas. A carried value would still be a
+    // green, still clear its floor, and still be wrong for the card the window
+    // is now painting; in dark it would be wrong by a single 8-bit step, which
+    // is exactly the size of mistake no spot-check ever catches.
+    //
+    // So the assertion is that the emitted colour IS the solve of the emitted
+    // card. Delete either `solveStatusTokens` call in `derive.ts` and this
+    // fails on the first canvas whose card differs from the default's.
+    for (const { hex, vibrancy, resolved } of everyCase()) {
+      const tokens = deriveCanvasTokens(canvasOf(hex, vibrancy), resolved);
+      const at = `${hex} @ v${vibrancy} ${resolved}`;
+      const expected = solveStatusTokens(tokens["--card"]);
+      expect({ at, positive: tokens["--positive"] }).toEqual({
+        at,
+        positive: expected["--positive"],
+      });
+      expect({ at, attention: tokens["--attention"] }).toEqual({
+        at,
+        attention: expected["--attention"],
+      });
+      expect({ at, info: tokens["--info"] }).toEqual({ at, info: expected["--info"] });
+    }
+  });
 });
 
 /**
@@ -477,6 +537,12 @@ describe("the accent", () => {
         "--sidebar-border": "#2d241f",
         "--destructive": "#e5484d",
         "--destructive-foreground": "#ffffff",
+        "--positive": "#27d496",
+        "--positive-foreground": "#001c10",
+        "--attention": "#ffaa2f",
+        "--attention-foreground": "#221200",
+        "--info": "#65c6ff",
+        "--info-foreground": "#001827",
       },
       light: {
         "--rail": "#edd1c6",
@@ -503,6 +569,12 @@ describe("the accent", () => {
         "--sidebar-border": "#ddbbad",
         "--destructive": "#e5484d",
         "--destructive-foreground": "#ffffff",
+        "--positive": "#005f40",
+        "--positive-foreground": "#ffffff",
+        "--attention": "#764900",
+        "--attention-foreground": "#ffffff",
+        "--info": "#005880",
+        "--info-foreground": "#ffffff",
       },
     };
     for (const resolved of MODES) {

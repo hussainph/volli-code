@@ -29,6 +29,7 @@ import type {
   SessionRowKind,
 } from "@renderer/components/sidebar/active-session-listing";
 import { SidebarMenuButton, SidebarMenuItem } from "@renderer/components/ui/sidebar";
+import { StatusDot } from "@renderer/components/ui/status-dot";
 import { compactAge } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
 
@@ -182,13 +183,11 @@ export function ActiveBandRow({
         // band stops out-massing the board it sits beside.
         className="h-auto min-h-9 items-start gap-2 py-1 [&:hover_.session-row-dim]:text-sidebar-accent-foreground [&[data-active=true]_.session-row-dim]:text-sidebar-accent-foreground"
       >
-        <span
-          aria-hidden
-          className={cn(
-            "mt-1.5 size-1.5 shrink-0 rounded-full",
-            needsYou ? "bg-amber-500" : working ? "bg-emerald-500" : "bg-muted-foreground/40",
-          )}
-        />
+        {/* The third copy of the status→tone map was written out right here,
+            which is how this band could paint a Session amber while the ticket
+            strip painted the same one with the accent. The row states the STATE
+            and `ui/status-dot.tsx` owns what colour that is. */}
+        <StatusDot state={needsYou ? "waiting" : working ? "working" : "idle"} className="mt-1.5" />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           {working ? (
             <span className="session-row-dim session-title-sweep text-ui">

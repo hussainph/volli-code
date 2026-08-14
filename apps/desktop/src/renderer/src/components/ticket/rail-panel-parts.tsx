@@ -31,15 +31,20 @@ export const RAIL_PANEL_MARGIN = "mx-4 group-data-[narrow=true]/rail:mx-3";
 
 /**
  * Insertions and deletions as one pair — the repository card's changes row, the
- * Diffs header, and the commit gate all wear it. Raw palette colors rather than
- * theme tokens, the same exception the session status dots already take: added
- * and removed are a fixed, universally-read pair, not a canvas-derived surface.
+ * Diffs header, and the commit gate all wear it.
+ *
+ * On the canvas's own semantics now, not raw palette. The old exception —
+ * "added and removed are a fixed, universally-read pair, not a canvas-derived
+ * surface" — had the first half right and drew the wrong conclusion from it:
+ * `--positive` is hue-locked precisely so that green stays green on a cool
+ * workspace, which is what makes the pair readable AND themed instead of one
+ * or the other.
  */
 export function DiffTotals({ diff }: { diff: DiffStat }) {
   return (
     <span className="flex shrink-0 items-center gap-1.5 font-mono text-xs font-medium tabular-nums">
-      <span className="text-emerald-900 dark:text-emerald-400">+{diff.insertions}</span>
-      <span className="text-red-900 dark:text-red-400">−{diff.deletions}</span>
+      <span className="text-positive">+{diff.insertions}</span>
+      <span className="text-destructive">−{diff.deletions}</span>
     </span>
   );
 }

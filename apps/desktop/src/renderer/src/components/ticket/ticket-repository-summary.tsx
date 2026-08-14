@@ -1024,7 +1024,7 @@ export function TicketRepositorySummary({
           )}
         </span>
         {diff === null ? null : fileCount === 0 ? (
-          <CheckCircleIcon className="shrink-0 text-emerald-500" />
+          <CheckCircleIcon className="shrink-0 text-positive" />
         ) : (
           <DiffTotals diff={diff} />
         )}

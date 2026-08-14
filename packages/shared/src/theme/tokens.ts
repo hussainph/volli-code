@@ -60,6 +60,12 @@ export const THEME_TOKEN_NAMES = [
   // Hue-locked semantics (never follow the seed).
   "--destructive",
   "--destructive-foreground",
+  "--positive",
+  "--positive-foreground",
+  "--attention",
+  "--attention-foreground",
+  "--info",
+  "--info-foreground",
 ] as const;
 
 /** One themeable color custom-property name. */
@@ -76,10 +82,23 @@ export type ThemeTokens = Record<ThemeTokenName, string>;
  * Tokens whose hue is frozen regardless of the seed. Without this the
  * "destructive" red follows a red seed into indistinguishability from
  * `--primary`, and a green seed makes it read as success.
+ *
+ * The same argument holds for the three status semantics, and holds harder:
+ * "working", "waiting" and "renamed" are only legible as green, amber and blue
+ * BECAUSE those hues are conventional, so a status family that followed the
+ * canvas would be a status family that says nothing. Hue is the meaning here;
+ * lightness and chroma are still the canvas's to move (see `generate.ts`'s
+ * `solveStatusTokens`), which is what keeps them readable on any of them.
  */
 export const HUE_LOCKED_TOKENS: readonly ThemeTokenName[] = [
   "--destructive",
   "--destructive-foreground",
+  "--positive",
+  "--positive-foreground",
+  "--attention",
+  "--attention-foreground",
+  "--info",
+  "--info-foreground",
 ];
 
 /** Whether `value` names a themeable color token. */

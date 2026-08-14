@@ -8,9 +8,15 @@ import {
   pickAccentLabel,
   solveLightnessForContrast,
   solveLightnessOrCeiling,
+  solveStatusTokens,
   THEME_CONTRAST_FLOORS,
 } from "./generate";
-import { THEME_TOKEN_NAMES, type ThemeTokens } from "./tokens";
+import {
+  HUE_LOCKED_TOKENS,
+  THEME_TOKEN_NAMES,
+  type ThemeTokenName,
+  type ThemeTokens,
+} from "./tokens";
 
 describe("generateThemeTokens", () => {
   it("emits exactly the themeable token set", () => {
@@ -63,6 +69,12 @@ describe("the ember golden", () => {
     "--sidebar-ring": "#e8652a",
     "--destructive": "#e5484d",
     "--destructive-foreground": "#ffffff",
+    "--positive": "#27d496",
+    "--positive-foreground": "#001c10",
+    "--attention": "#fea92e",
+    "--attention-foreground": "#221200",
+    "--info": "#62c5ff",
+    "--info-foreground": "#001827",
   };
 
   it("reproduces the shipped ember theme", () => {
@@ -483,8 +495,11 @@ describe("the clamps", () => {
     // token comes back a true grey (r == g == b), `--primary` included.
     const tokens = generateThemeTokens(themeFor("#808080"));
     for (const [name, hex] of Object.entries(tokens)) {
-      // --destructive is hue-locked and ignores the seed by design (step 8).
-      if (name.startsWith("--destructive")) continue;
+      // The hue-locked semantics ignore the seed by design (step 8) — they are
+      // the one family a grey seed does not grey out. Asked of the registry
+      // rather than matched by name, so a semantic added to the escape list
+      // does not need this test edited to keep telling the truth.
+      if (HUE_LOCKED_TOKENS.includes(name as ThemeTokenName)) continue;
       expect(hex.slice(1, 3), name).toBe(hex.slice(3, 5));
       expect(hex.slice(3, 5), name).toBe(hex.slice(5, 7));
     }
@@ -794,5 +809,119 @@ describe("the accent repair path", () => {
     // Darker than the ideal, and only barely — about one 8-bit step.
     expect(repaired.L).toBeLessThan(0.661);
     expect(0.661 - repaired.L).toBeLessThan(0.01);
+  });
+});
+
+describe("the status family", () => {
+  // The three hues, restated here rather than imported: a test that reads the
+  // constant it is checking cannot notice the constant moving, and "green means
+  // working" is exactly the kind of fact that must break loudly when edited.
+  const HUES = { "--positive": 162.48, "--attention": 70.08, "--info": 237.32 };
+  const FILLS = ["--positive", "--attention", "--info"] as const;
+
+  /**
+   * Cards a ladder can actually produce: both ends of the shipped canvas, and
+   * both extremes of the space. A mid-grey belongs in the ceiling test below
+   * and nowhere else — Lc 65 is physically out of reach there, so what comes
+   * back is the clamp rather than a solved colour.
+   */
+  const SURFACES = ["#1b1412", "#f4d4c8", "#0a0a0a", "#ffffff"];
+
+  it("emits the six names and nothing else, as paintable hexes", () => {
+    for (const surface of SURFACES) {
+      const status = solveStatusTokens(surface);
+      expect(Object.keys(status).toSorted()).toEqual(
+        FILLS.flatMap((fill) => [fill, `${fill}-foreground`]).toSorted(),
+      );
+      for (const [name, hex] of Object.entries(status)) {
+        expect(hex, `${name} on ${surface}`).toMatch(/^#[0-9a-f]{6}$/);
+      }
+    }
+  });
+
+  it("keeps each hue locked, whatever surface it is solved against", () => {
+    // The solve moves lightness and gamut mapping takes chroma; neither may
+    // touch hue, because hue is the only part of a status colour that MEANS
+    // anything. A degree of slack for the 8-bit round trip.
+    for (const surface of SURFACES) {
+      const status = solveStatusTokens(surface);
+      for (const fill of FILLS) {
+        expect(hexToOklch(status[fill]).h, `${fill} on ${surface}`).toBeCloseTo(HUES[fill], 0);
+      }
+    }
+  });
+
+  it("lands all three at one contrast, so no status colour shouts over its peers", () => {
+    // The point of solving them rather than authoring them. Today's raw palette
+    // put emerald-500 at Lc 52, sky-500 at 48 and amber-500 at 60 on the same
+    // dark card — a 12-point spread that reads as amber being more urgent than
+    // it is. Solved, the spread is a rounding error.
+    for (const surface of ["#1b1412", "#211815", "#f4d4c8", "#fdded2"]) {
+      const status = solveStatusTokens(surface);
+      const scores = FILLS.map((fill) => apcaLc(status[fill], surface));
+      expect(Math.max(...scores) - Math.min(...scores), `spread on ${surface}`).toBeLessThan(1);
+      for (const [index, score] of scores.entries()) {
+        expect(score, `${FILLS[index]} on ${surface}`).toBeGreaterThanOrEqual(60);
+      }
+    }
+  });
+
+  it("flips its labels with the fill, both directions", () => {
+    // `pickAccentLabel`'s two branches, reached by the two appearances of the
+    // shipped canvas alone. Dark solves the fills bright, where a near-black
+    // tint of the status hue wins; light solves them deep, where white does.
+    // A single authored `--positive-foreground` could only be right in one.
+    const onDark = solveStatusTokens("#211815");
+    const onLight = solveStatusTokens("#f4d4c8");
+    for (const fill of FILLS) {
+      const label = `${fill}-foreground` as const;
+      expect(hexToOklch(onDark[label]).L, `${label} on a dark card`).toBeLessThan(0.35);
+      expect(onLight[label], `${label} on a light card`).toBe("#ffffff");
+      expect(apcaLc(onDark[label], onDark[fill]), label).toBeGreaterThanOrEqual(60);
+      expect(apcaLc(onLight[label], onLight[fill]), label).toBeGreaterThanOrEqual(60);
+    }
+  });
+
+  it("clamps to the ceiling instead of throwing where Lc 65 is out of reach", () => {
+    // A mid-grey surface no status hue can clear the floor on. The generator's
+    // ladder never produces one, but a canvas is the user's to author and the
+    // status solve runs against whatever card it implies — so this path is the
+    // difference between a washed-out dot and a blank window.
+    const status = solveStatusTokens("#7a7a7a");
+    for (const fill of FILLS) {
+      expect(status[fill]).toMatch(/^#[0-9a-f]{6}$/);
+      expect(apcaLc(status[fill], "#7a7a7a"), fill).toBeGreaterThan(0);
+    }
+  });
+
+  it("follows the surface it is given rather than a surface it assumes", () => {
+    // The reason this is a second entry point rather than a slice of
+    // `generateThemeTokens`'s output: two different cards must yield two
+    // different families, or the canvas layer's re-solve is decoration.
+    expect(solveStatusTokens("#1b1412")["--positive"]).not.toBe(
+      solveStatusTokens("#f4d4c8")["--positive"],
+    );
+  });
+
+  it("keeps its hue off the seed and its contrast on the floor, for every seed", () => {
+    // Hue-locked means hue-locked: a green seed must not make "waiting" green,
+    // and 360 hues is what says so.
+    //
+    // Deliberately NOT byte-equality across the sweep, which is the assertion
+    // this test wants to make and cannot. The seed moves `--card`'s own chroma,
+    // the status family is solved against that card, and an 8-bit step in the
+    // surface moves the answer by an 8-bit step (`#27d496` → `#27d396` at seed
+    // #e70075). Pinning the hex would therefore be pinning the wrong invariant:
+    // what must not follow the seed is the HUE, and what must not drift with it
+    // is the contrast. The colour tracking its own surface is the feature.
+    for (const { seed, tokens } of sweep) {
+      for (const fill of FILLS) {
+        expect(hexToOklch(tokens[fill]).h, `${fill} for seed ${seed}`).toBeCloseTo(HUES[fill], 0);
+        expect(
+          apcaLc(tokens[fill], tokens["--card"]),
+          `${fill} on --card for seed ${seed}`,
+        ).toBeGreaterThanOrEqual(60);
+      }
+    }
   });
 });
