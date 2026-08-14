@@ -1,6 +1,12 @@
 import type * as Monaco from "monaco-editor";
 
 import {
+  findBoundedSequenceDiff,
+  type SequenceDiffBudget,
+  type SequenceEditStep,
+  STANDARD_SEQUENCE_DIFF_BUDGET,
+} from "./bounded-sequence-diff";
+import {
   DEFAULT_EDITOR_THEME_ID,
   editorThemeImporterFor,
   resolveEditorThemeId,
@@ -18,7 +24,7 @@ import {
   bindMonacoEditorThemeHost,
   ensureMonacoEditorTheme,
 } from "./monaco-theme";
-import { findTextEdits } from "./text-reconciliation";
+import { findTextEdits, type TextEdit } from "./text-reconciliation";
 import { startUnsavedDocumentReporting } from "./unsaved-report";
 
 export function createLazyInitializer<Value>(
@@ -99,6 +105,268 @@ type ExternalEditModel = Pick<
   "getValue" | "getPositionAt" | "getFullModelRange" | "pushStackElement" | "pushEditOperations"
 >;
 
+function mapOffsetThroughTextEdits(offset: number, edits: readonly TextEdit[]): number {
+  let shift = 0;
+  for (const edit of edits) {
+    if (offset < edit.start) break;
+    const mappedStart = edit.start + shift;
+    if (edit.end === edit.start) {
+      if (offset === edit.start) return mappedStart + edit.replacement.length;
+    } else {
+      if (offset === edit.start) return mappedStart;
+      if (offset < edit.end) {
+        return mappedStart + Math.min(offset - edit.start, edit.replacement.length);
+      }
+      if (offset === edit.end) return mappedStart + edit.replacement.length;
+    }
+    shift += edit.replacement.length - (edit.end - edit.start);
+  }
+  return offset + shift;
+}
+
+function matchedLineIndexes(
+  steps: readonly SequenceEditStep<number>[],
+  oldLength: number,
+  newLength: number,
+): Map<number, number> {
+  const matches = new Map<number, number>();
+  let oldIndex = 0;
+  let newIndex = 0;
+  for (const step of steps) {
+    while (oldIndex < step.index) {
+      matches.set(oldIndex, newIndex);
+      oldIndex += 1;
+      newIndex += 1;
+    }
+    if (step.kind === "delete") oldIndex += 1;
+    else newIndex += 1;
+  }
+  while (oldIndex < oldLength && newIndex < newLength) {
+    matches.set(oldIndex, newIndex);
+    oldIndex += 1;
+    newIndex += 1;
+  }
+  return matches;
+}
+
+function lineOccurrences(tokens: readonly number[]): Map<number, number[]> {
+  const occurrences = new Map<number, number[]>();
+  tokens.forEach((token, index) => {
+    const indexes = occurrences.get(token);
+    if (indexes === undefined) occurrences.set(token, [index]);
+    else indexes.push(index);
+  });
+  return occurrences;
+}
+
+interface LinePlan {
+  lineMatches: ReadonlyMap<number, number>;
+  oldLines: readonly string[];
+  newLines: readonly string[];
+}
+
+/** Avoid allocating or diffing pathological newline-dense external writes. */
+export const MAX_VIEW_STATE_LOGICAL_LINES = 20_000;
+
+function exceedsViewStateLogicalLineCap(value: string): boolean {
+  let newlineIndex = -1;
+  for (let lineCount = 1; lineCount <= MAX_VIEW_STATE_LOGICAL_LINES; lineCount += 1) {
+    newlineIndex = value.indexOf("\n", newlineIndex + 1);
+    if (newlineIndex === -1) return false;
+  }
+  return true;
+}
+
+/**
+ * Plan how logical lines travel through one bounded external edit.
+ *
+ * Forward and reverse shortest scripts reveal the two deterministic edges of
+ * duplicate ambiguity. A duplicate inserted before the first stable context is
+ * right-aligned; one appended after the last stable context is left-aligned.
+ * Disagreement between stable anchors is deliberately not treated as identity.
+ * Globally unique moved lines and equal-cardinality duplicates can still travel
+ * directly. Truly indistinguishable duplicates have no hidden identity; their
+ * occurrence order is only a deterministic convention.
+ */
+function linePlan(
+  oldValue: string,
+  value: string,
+  lineDiffBudget: SequenceDiffBudget,
+): LinePlan | null {
+  if (exceedsViewStateLogicalLineCap(oldValue) || exceedsViewStateLogicalLineCap(value))
+    return null;
+  const oldLines = logicalLines(oldValue);
+  const newLines = logicalLines(value);
+  const tokenIds = new Map<string, number>();
+  let nextTokenId = 0;
+  const intern = (line: string): number => {
+    const existing = tokenIds.get(line);
+    if (existing !== undefined) return existing;
+    const id = nextTokenId;
+    nextTokenId += 1;
+    tokenIds.set(line, id);
+    return id;
+  };
+  const oldTokens = oldLines.map(intern);
+  const newTokens = newLines.map(intern);
+  const forwardSteps = findBoundedSequenceDiff(oldTokens, newTokens, lineDiffBudget);
+  if (forwardSteps === null) return null;
+  const reversedOldLines = oldTokens.toReversed();
+  const reversedNewLines = newTokens.toReversed();
+  const reverseSteps = findBoundedSequenceDiff(reversedOldLines, reversedNewLines, lineDiffBudget);
+  if (reverseSteps === null) return null;
+
+  const reversedMatches = matchedLineIndexes(
+    reverseSteps,
+    reversedOldLines.length,
+    reversedNewLines.length,
+  );
+  const reverseMatches = new Map<number, number>();
+  for (const [reversedOldIndex, reversedNewIndex] of reversedMatches) {
+    reverseMatches.set(
+      oldTokens.length - reversedOldIndex - 1,
+      newTokens.length - reversedNewIndex - 1,
+    );
+  }
+
+  const forwardMatches = matchedLineIndexes(forwardSteps, oldTokens.length, newTokens.length);
+  const agreedOldIndexes = [...forwardMatches].flatMap(([oldIndex, newIndex]) =>
+    reverseMatches.get(oldIndex) === newIndex ? [oldIndex] : [],
+  );
+  const firstAgreed = agreedOldIndexes[0];
+  const lastAgreed = agreedOldIndexes.at(-1);
+  const lineMatches = new Map<number, number>();
+  for (let oldIndex = 0; oldIndex < oldTokens.length; oldIndex += 1) {
+    const forward = forwardMatches.get(oldIndex);
+    const reverse = reverseMatches.get(oldIndex);
+    if (forward !== undefined && forward === reverse) lineMatches.set(oldIndex, forward);
+    else if (firstAgreed !== undefined && oldIndex < firstAgreed && reverse !== undefined) {
+      lineMatches.set(oldIndex, reverse);
+    } else if (lastAgreed !== undefined && oldIndex > lastAgreed && forward !== undefined) {
+      lineMatches.set(oldIndex, forward);
+    } else if (firstAgreed === undefined && forward !== undefined) {
+      lineMatches.set(oldIndex, forward);
+    }
+  }
+
+  pairChangedLineRuns(lineMatches, new Map(lineMatches), oldTokens.length, newTokens.length);
+
+  const oldOccurrences = lineOccurrences(oldTokens);
+  const newOccurrences = lineOccurrences(newTokens);
+  for (const [token, oldIndexes] of oldOccurrences) {
+    const newIndexes = newOccurrences.get(token);
+    if (newIndexes === undefined || oldIndexes.length !== newIndexes.length) continue;
+    oldIndexes.forEach((oldIndex, occurrence) => {
+      lineMatches.set(oldIndex, newIndexes[occurrence]);
+    });
+  }
+
+  return { lineMatches, oldLines, newLines };
+}
+
+function logicalLines(value: string): string[] {
+  return value.split("\n").map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
+}
+
+function pairChangedLineRuns(
+  lineMatches: Map<number, number>,
+  stableMatches: ReadonlyMap<number, number>,
+  oldLength: number,
+  newLength: number,
+): void {
+  const anchors = [
+    [-1, -1],
+    ...[...stableMatches.entries()].toSorted(([left], [right]) => left - right),
+    [oldLength, newLength],
+  ] as const;
+  for (let anchorIndex = 1; anchorIndex < anchors.length; anchorIndex += 1) {
+    const [previousOld, previousNew] = anchors[anchorIndex - 1];
+    const [nextOld, nextNew] = anchors[anchorIndex];
+    const oldCount = nextOld - previousOld - 1;
+    const newCount = nextNew - previousNew - 1;
+    if (oldCount <= 0) continue;
+    const prefixRun = previousOld === -1;
+    const suffixRun = nextOld === oldLength;
+    if (!prefixRun && !suffixRun && oldCount !== newCount) continue;
+    if (newCount <= 0) {
+      const boundary = nextNew < newLength ? nextNew : Math.max(0, previousNew);
+      for (let offset = 1; offset <= oldCount; offset += 1) {
+        lineMatches.set(previousOld + offset, boundary);
+      }
+      continue;
+    }
+    const pairCount = Math.min(oldCount, newCount);
+    for (let offset = 0; offset < pairCount; offset += 1) {
+      const oldIndex = prefixRun ? nextOld - pairCount + offset : previousOld + 1 + offset;
+      const newIndex = prefixRun ? nextNew - pairCount + offset : previousNew + 1 + offset;
+      lineMatches.set(oldIndex, newIndex);
+    }
+  }
+}
+
+function mapColumn(oldLine: string, newLine: string, column: number): number | null {
+  if (oldLine === newLine) return Math.max(1, Math.min(column, newLine.length + 1));
+  const edits = findTextEdits(oldLine, newLine);
+  if (edits === null) return null;
+  const oldOffset = Math.max(0, Math.min(column - 1, oldLine.length));
+  return mapOffsetThroughTextEdits(oldOffset, edits) + 1;
+}
+
+function comparePositions(left: Monaco.IPosition, right: Monaco.IPosition): number {
+  return left.lineNumber === right.lineNumber
+    ? left.column - right.column
+    : left.lineNumber - right.lineNumber;
+}
+
+export interface MonacoViewStateMappingOptions {
+  /** One shared bound applied independently to forward and reverse line alignment. */
+  readonly lineDiffBudget?: SequenceDiffBudget;
+}
+
+export function mapCodeEditorViewState(
+  oldValue: string,
+  state: Monaco.editor.ICodeEditorViewState,
+  value: string,
+  options: MonacoViewStateMappingOptions = {},
+): Monaco.editor.ICodeEditorViewState {
+  if (oldValue === value) return state;
+  const plan = linePlan(oldValue, value, options.lineDiffBudget ?? STANDARD_SEQUENCE_DIFF_BUDGET);
+  if (plan === null) return state;
+  const mapPosition = (position: Monaco.IPosition): Monaco.IPosition | null => {
+    const oldLineIndex = Math.max(0, Math.min(position.lineNumber - 1, plan.oldLines.length - 1));
+    const newLineIndex = plan.lineMatches.get(oldLineIndex);
+    if (newLineIndex === undefined) return null;
+    const column = mapColumn(
+      plan.oldLines[oldLineIndex]!,
+      plan.newLines[newLineIndex]!,
+      position.column,
+    );
+    return column === null ? null : { lineNumber: newLineIndex + 1, column };
+  };
+
+  const firstPosition = mapPosition(state.viewState.firstPosition);
+  if (firstPosition === null) return state;
+  const cursorState: typeof state.cursorState = [];
+  for (const cursor of state.cursorState) {
+    const selectionStart = mapPosition(cursor.selectionStart);
+    const position = mapPosition(cursor.position);
+    if (selectionStart === null || position === null) return state;
+    const oldOrder = comparePositions(cursor.selectionStart, cursor.position);
+    const selectionStartLineShift = selectionStart.lineNumber - cursor.selectionStart.lineNumber;
+    const positionLineShift = position.lineNumber - cursor.position.lineNumber;
+    if (oldOrder !== 0 && selectionStartLineShift !== positionLineShift) return state;
+    cursorState.push({ ...cursor, selectionStart, position });
+  }
+  return {
+    ...state,
+    cursorState,
+    viewState: {
+      ...state.viewState,
+      firstPosition,
+    },
+  };
+}
+
 /**
  * The MINIMAL edit operations that turn the model's current text into `value`,
  * or `null` when the diff exceeded its budget and only a full replace is left.
@@ -147,7 +415,7 @@ export function externalEditOperations(
 export function createShikiBackedModelFactory(
   monaco: MonacoModelHost,
   session: ShikiMonacoBootstrap,
-): RegistryModelFactory<Monaco.editor.ITextModel> {
+): RegistryModelFactory<Monaco.editor.ITextModel, Monaco.editor.ICodeEditorViewState> {
   return {
     createModel({ value, language, uri }) {
       void ensureShikiLanguageBound(session, monaco, language).catch((error: unknown) => {
@@ -169,6 +437,9 @@ export function createShikiBackedModelFactory(
       model.pushStackElement();
       model.pushEditOperations([], operations, () => null);
       model.pushStackElement();
+    },
+    mapViewStateThroughExternalEdit(oldValue, viewState, value) {
+      return mapCodeEditorViewState(oldValue, viewState, value);
     },
   };
 }

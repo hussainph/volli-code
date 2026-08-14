@@ -1,6 +1,19 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { reconcileText } from "./text-reconciliation";
+import { findTextEdits, reconcileText } from "./text-reconciliation";
+
+describe("findTextEdits", () => {
+  it("returns no edits for identical empty text", () => {
+    expect(findTextEdits("", "")).toEqual([]);
+  });
+
+  it("refuses either input once it exceeds the text length cap", () => {
+    const oversized = "x".repeat(1024 * 1024 + 1);
+
+    expect(findTextEdits(oversized, "")).toBeNull();
+    expect(findTextEdits("", oversized)).toBeNull();
+  });
+});
 
 describe("reconcileText", () => {
   it("adopts disk text when the Monaco value is still the synchronized baseline", () => {
@@ -191,8 +204,8 @@ describe("reconcileText", () => {
     });
   });
 
-  // MAX_EDIT_DISTANCE is 1024 edit steps. A pure append of N characters costs
-  // exactly N, so these two pin the boundary from either side.
+  // The standard budget allows 1,024 edit steps. A pure append of N characters
+  // costs exactly N, so these two pin the boundary from either side.
   it("still merges a change sitting exactly on the maximum edit distance", () => {
     const baseline = "head\ntail\n";
 

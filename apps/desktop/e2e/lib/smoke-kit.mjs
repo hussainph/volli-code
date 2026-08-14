@@ -13,9 +13,10 @@
  *                      with extra env merged over process.env, while stripping
  *                      inherited Electron dev-mode switches. Skips the PTY-busy
  *                      close confirm.
- *   • createRunner() — the numbered attempt()/check() runner + summary/exit-code,
- *                      identical semantics to the inline harness the smokes use
- *                      (a failed check never aborts the run).
+ *   • createRunner() — the numbered attempt()/check()/must() runner +
+ *                      summary/exit-code,
+ *                      attempt/check failures remain non-aborting; must prints
+ *                      the summary and stops dependent actions.
  *   • waitUntil()/sleep()/readFileSafe()/pathExists() — polling helpers; probes
  *                      poll for conditions, they never bare-sleep for a state.
  *   • makeGitRepo()  — `git init` + an initial commit in a temp dir, so the
@@ -208,12 +209,14 @@ export function assertBuiltRendererLoaded(page) {
 
 /**
  * The attempt()/check() harness the smokes share: each numbered check records a
- * PASS/FAIL line and never throws (a thrown body fails just that check). Call
- * `summarize()` at the end for the roll-up line + process exit code.
+ * PASS/FAIL line and never throws (a thrown body fails just that check). `must()`
+ * adds fail-fast sequencing for dependent actions and prints the roll-up before
+ * throwing. Call `summarize()` at the end for the normal roll-up + exit code.
  *
  * @returns {{results:{n:number|string, ok:boolean}[],
  *            check:(n:any,label:string,ok:boolean,detail?:string)=>void,
  *            attempt:(n:any,label:string,fn:()=>Promise<{ok:boolean,detail?:string}>)=>Promise<void>,
+ *            must:(n:any,label:string,fn:()=>Promise<{ok:boolean,detail?:string}>)=>Promise<void>,
  *            summarize:()=>number}}
  */
 export function createRunner() {
@@ -242,7 +245,15 @@ export function createRunner() {
     );
     return failures.length === 0 ? 0 : 1;
   }
-  return { results, check, attempt, summarize };
+  async function must(n, label, fn) {
+    const resultIndex = results.length;
+    await attempt(n, label, fn);
+    if (results[resultIndex]?.ok === true) return;
+
+    summarize();
+    throw new Error(`required check ${n} failed; refusing dependent smoke actions`);
+  }
+  return { results, check, attempt, must, summarize };
 }
 
 // ---- polling helpers -------------------------------------------------------

@@ -42,7 +42,13 @@ function rawRoundTrip(socketPath: string, line: string): Promise<AgentResponse> 
       response += chunk;
     });
     socket.on("error", reject);
-    socket.on("end", () => resolve(JSON.parse(response.trim()) as AgentResponse));
+    socket.on("end", () => {
+      try {
+        resolve(JSON.parse(response.trim()) as AgentResponse);
+      } catch (error) {
+        reject(error);
+      }
+    });
   });
 }
 
@@ -308,6 +314,7 @@ describe("agent socket", () => {
         exit,
       },
       shutdownAgentSocket: agentSocket.shutdown,
+      reportFailure: vi.fn(),
     });
 
     const event = { preventDefault: vi.fn() };
@@ -319,6 +326,87 @@ describe("agent socket", () => {
     await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
     finishClose?.();
     await vi.waitFor(() => expect(exit).toHaveBeenCalledExactlyOnceWith(0));
+  });
+
+  it("forces one will-quit after the shutdown deadline and observes a late rejection", async () => {
+    vi.useFakeTimers();
+    try {
+      const handlers = new Map<string, (event: { preventDefault(): void }) => void>();
+      let failShutdown!: (error: unknown) => void;
+      const shutdownAgentSocket = vi.fn(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            failShutdown = reject;
+          }),
+      );
+      const reportFailure = vi.fn();
+      const exit = vi.fn();
+      registerAgentSocketWillQuit({
+        lifecycle: {
+          on(event, listener) {
+            handlers.set(event, listener);
+          },
+          exit,
+        },
+        shutdownAgentSocket,
+        shutdownDeadlineMs: 25,
+        reportFailure,
+      });
+
+      const first = { preventDefault: vi.fn() };
+      const repeated = { preventDefault: vi.fn() };
+      handlers.get("will-quit")?.(first);
+      handlers.get("will-quit")?.(repeated);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(first.preventDefault).toHaveBeenCalledExactlyOnceWith();
+      expect(repeated.preventDefault).toHaveBeenCalledExactlyOnceWith();
+      expect(shutdownAgentSocket).toHaveBeenCalledTimes(1);
+      expect(exit).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(reportFailure).toHaveBeenCalledExactlyOnceWith(
+        new Error("Application shutdown did not settle within 25ms."),
+      );
+      expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+
+      failShutdown(new Error("late socket failure"));
+      await vi.advanceTimersByTimeAsync(0);
+      handlers.get("will-quit")?.({ preventDefault: vi.fn() });
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(reportFailure).toHaveBeenNthCalledWith(2, new Error("late socket failure"));
+      expect(reportFailure).toHaveBeenCalledTimes(2);
+      expect(exit).toHaveBeenCalledTimes(1);
+      expect(shutdownAgentSocket).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports a will-quit shutdown rejection before exiting", async () => {
+    const handlers = new Map<string, (event: { preventDefault(): void }) => void>();
+    const failure = new Error("socket shutdown rejected");
+    const reportFailure = vi.fn();
+    const exit = vi.fn();
+    registerAgentSocketWillQuit({
+      lifecycle: {
+        on(event, listener) {
+          handlers.set(event, listener);
+        },
+        exit,
+      },
+      shutdownAgentSocket: () => Promise.reject(failure),
+      reportFailure,
+    });
+
+    const event = { preventDefault: vi.fn() };
+    handlers.get("will-quit")?.(event);
+
+    await vi.waitFor(() => expect(exit).toHaveBeenCalledExactlyOnceWith(0));
+    expect(event.preventDefault).toHaveBeenCalledExactlyOnceWith();
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith(failure);
   });
 
   it("serves a real create-move-comment-board round trip on a private Unix socket", async () => {
@@ -417,6 +505,98 @@ describe("agent socket", () => {
     ).resolves.toEqual({ v: 1, ok: true, data: { delayed: true } });
   });
 
+  it("drains an accepted execution and flushes its reply before shutdown settles", async () => {
+    ctx = openTestDb();
+    const socketPath = join(dirname(ctx.dbPath), "volli.sock");
+    let markExecuteStarted!: () => void;
+    const executeStarted = new Promise<void>((resolve) => {
+      markExecuteStarted = resolve;
+    });
+    let finishExecute!: (response: AgentResponse) => void;
+    const execution = new Promise<AgentResponse>((resolve) => {
+      finishExecute = resolve;
+    });
+    server = await startAgentSocket({
+      socketPath,
+      requestTimeoutMs: 1_000,
+      execute: () => {
+        markExecuteStarted();
+        return execution;
+      },
+    });
+    const responsePromise = roundTrip(socketPath, {
+      v: 1,
+      cmd: "identify",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: {} },
+    }).then(
+      (response) => ({ ok: true as const, response }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    await executeStarted;
+
+    let shutdownSettled = false;
+    const shutdownPromise = server.close().then(() => {
+      shutdownSettled = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const settledBeforeExecution = shutdownSettled;
+    finishExecute({ v: 1, ok: true, data: { receipt: "persisted" } });
+
+    const response = await responsePromise;
+    await shutdownPromise;
+    server = undefined;
+    expect(settledBeforeExecution).toBe(false);
+    expect(response).toEqual({
+      ok: true,
+      response: { v: 1, ok: true, data: { receipt: "persisted" } },
+    });
+  });
+
+  it("closes a flushed response connection without waiting for the peer to half-close", async () => {
+    ctx = openTestDb();
+    const socketPath = join(dirname(ctx.dbPath), "volli.sock");
+    server = await startAgentSocket({
+      socketPath,
+      requestTimeoutMs: 1_000,
+      execute: async () => ({ v: 1, ok: true, data: { receipt: "persisted" } }),
+    });
+    const client = connect({ path: socketPath, allowHalfOpen: true });
+    let response = "";
+    client.setEncoding("utf8");
+    client.on("data", (chunk: string) => {
+      response += chunk;
+    });
+    await once(client, "connect");
+    client.write(
+      `${JSON.stringify({
+        v: 1,
+        cmd: "identify",
+        args: {},
+        ctx: { cwd: "/repo/volli", env: {} },
+      } satisfies AgentRequest)}\n`,
+    );
+    await once(client, "end");
+
+    const closePromise = server.close();
+    const outcome = await Promise.race([
+      closePromise.then(() => "closed" as const),
+      new Promise<"timed-out">((resolve) => {
+        setTimeout(() => resolve("timed-out"), 200);
+      }),
+    ]);
+
+    client.destroy();
+    await closePromise;
+    server = undefined;
+    expect(JSON.parse(response.trim())).toEqual({
+      v: 1,
+      ok: true,
+      data: { receipt: "persisted" },
+    });
+    expect(outcome).toBe("closed");
+  });
+
   it("refuses to replace a live agent socket and leaves its owner reachable", async () => {
     ctx = openTestDb();
     const socketPath = join(dirname(ctx.dbPath), "volli.sock");
@@ -498,7 +678,32 @@ describe("agent socket", () => {
     });
   });
 
-  it("force-closes a live client so shutdown cannot wait without bound", async () => {
+  it("closes an idle client without waiting for the shutdown deadline", async () => {
+    ctx = openTestDb();
+    const socketPath = join(dirname(ctx.dbPath), "volli.sock");
+    server = await startAgentSocket({
+      socketPath,
+      requestTimeoutMs: 1_000,
+      execute: async () => ({ v: 1, ok: true, data: {} }),
+    });
+    const client = connect(socketPath);
+    await once(client, "connect");
+
+    const closePromise = server.close();
+    const outcome = await Promise.race([
+      closePromise.then(() => "closed" as const),
+      new Promise<"timed-out">((resolve) => {
+        setTimeout(() => resolve("timed-out"), 200);
+      }),
+    ]);
+
+    client.destroy();
+    await closePromise;
+    server = undefined;
+    expect(outcome).toBe("closed");
+  });
+
+  it("force-closes a hung accepted execution at the shutdown deadline", async () => {
     ctx = openTestDb();
     const socketPath = join(dirname(ctx.dbPath), "volli.sock");
     let markExecuteStarted: (() => void) | undefined;
@@ -507,6 +712,7 @@ describe("agent socket", () => {
     });
     server = await startAgentSocket({
       socketPath,
+      requestTimeoutMs: 20,
       execute: () => {
         markExecuteStarted?.();
         return new Promise<AgentResponse>(() => undefined);
