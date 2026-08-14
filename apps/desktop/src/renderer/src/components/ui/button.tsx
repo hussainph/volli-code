@@ -21,7 +21,7 @@ const buttonVariants = cva(
   // class inside a media query, (0,1,0), against `:active`'s (0,1,1) — the
   // longer version of that argument is on MENU_SURFACE_FADE in
   // `ui/menu-classes.ts`.
-  "inline-flex shrink-0 items-center justify-center gap-2 rounded-full text-sm font-medium whitespace-nowrap transition-[color,background-color,border-color,box-shadow,opacity,transform,scale] duration-150 ease-out outline-none active:scale-[0.97] motion-reduce:scale-100! focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/45 disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "inline-flex shrink-0 items-center justify-center gap-2 rounded-full text-sm font-medium whitespace-nowrap transition-[color,background-color,border-color,box-shadow,opacity,transform,scale] duration-150 ease-out outline-none active:scale-[0.97] motion-reduce:scale-100! focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/45 disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/30 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
@@ -36,13 +36,18 @@ const buttonVariants = cva(
         // pale on dark paper, deep on light — so the mode is already accounted
         // for in the colour, and a 60% wash would only break the one guarantee
         // the solve makes: the label is solved against THIS fill, not against
-        // a diluted version of it. The ring keeps its `dark:` step, because a
-        // halo is not a surface anything is read on.
+        // a diluted version of it. The ring's `dark:` step is gone for the same
+        // reason one collapse later: it was 20% in light and 40% in dark, and
+        // both land on the alpha ladder's quiet rung (30) — so the fork was a
+        // hand-written mode difference stacked on a fill the generator already
+        // solves per mode, which is exactly the double-counting the two-block
+        // rule exists to stop. It comes back the day a canvas gives evidence
+        // that one rung cannot serve both appearances, and not before.
         destructive:
-          "bg-destructive text-destructive-foreground hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40",
+          "bg-destructive text-destructive-foreground hover:bg-destructive/90 focus-visible:ring-destructive/30",
         outline:
           "border bg-background shadow-raised hover:bg-accent hover:text-foreground dark:border-border dark:bg-border/30 dark:hover:bg-border/50",
-        secondary: "bg-muted text-foreground hover:bg-muted/80",
+        secondary: "bg-muted text-foreground hover:bg-muted/70",
         ghost: "hover:bg-accent hover:text-foreground dark:hover:bg-accent/50",
         // --primary-text, not --primary: a link variant is read, not clicked
         // as a colored area, so it takes the accent's body-copy lightness.
@@ -50,9 +55,19 @@ const buttonVariants = cva(
       },
       // Pill scale (DESIGN.md): the h-7 rounded-full chip is the app's control
       // idiom — default matches it; sm/xs step down, lg is the ceiling.
+      //
+      // THE HORIZONTAL INSETS ARE THE RECORDED EXCEPTION to the 0/4/8/16/24
+      // spacing collapse, and the reason is arithmetic rather than taste. This
+      // is a FOUR-rung ladder (20/24/28/32px tall) and its insets have to rank
+      // with it; the collapsed ladder offers exactly two candidates in range, 8
+      // and 16, so four rungs land on two values. Run mechanically it produced
+      // a 24px-tall pill wearing 16px of side padding, and `has-[>svg]:px-4`
+      // beside `px-4` — an icon-compensation variant that compensates by
+      // nothing, which is worse than either keeping the step or deleting it.
+      // A control's inset is a function of its own height, not of page rhythm.
       size: {
         default: "h-7 px-3.5 text-ui has-[>svg]:px-3",
-        xs: "h-5 gap-1 px-2.5 text-xs has-[>svg]:px-2 [&_svg:not([class*='size-'])]:size-3",
+        xs: "h-5 gap-1 px-2.5 text-ui has-[>svg]:px-2 [&_svg:not([class*='size-'])]:size-3",
         sm: "h-6 gap-1.5 px-3 text-ui has-[>svg]:px-2.5 [&_svg:not([class*='size-'])]:size-3.5",
         lg: "h-8 px-4 has-[>svg]:px-3.5",
         icon: "size-7",

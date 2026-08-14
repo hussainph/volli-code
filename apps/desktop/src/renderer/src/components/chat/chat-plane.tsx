@@ -539,7 +539,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               transcript never gets one — the empty state is taller than the
               plane, so the scroller is legitimately not at its bottom. */}
           {messages.length > 0 ? (
-            <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-raised backdrop-blur-md dark:bg-background/70 dark:hover:bg-muted/70" />
+            <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-raised backdrop-blur-md dark:hover:bg-muted/70" />
           ) : null}
         </Conversation>
       </FileMentionProvider>
@@ -549,7 +549,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
           transcript ends where the composer begins. */}
       <div
         ref={composerHeight.ref}
-        className="pointer-events-none absolute inset-x-0 bottom-0 bg-background pb-5"
+        className="pointer-events-none absolute inset-x-0 bottom-0 bg-background pb-4"
       >
         <ContentColumn>
           {/* Above whatever the slot holds, card included. A card answers the
@@ -676,8 +676,8 @@ function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
   return (
     <div
       className={cn(
-        "mb-2 flex items-center gap-2 rounded-lg border bg-card px-3 py-1.5 text-xs shadow-raised",
-        blocker.tone === "error" ? "border-destructive/40" : "border-border",
+        "mb-2 flex items-center gap-2 rounded-lg border bg-card px-4 py-1 text-ui shadow-raised",
+        blocker.tone === "error" ? "border-destructive/30" : "border-border",
       )}
     >
       {/* A wait is not a failure: a rate limit or a reconnect wearing the
@@ -735,7 +735,7 @@ function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
  * which kinds happen to be adjacent. Rows *inside* a bundle have their own,
  * tighter rhythm — that is the only other spacing value in the transcript.
  */
-const SEGMENT_GAP = "space-y-3";
+const SEGMENT_GAP = "space-y-4";
 
 /**
  * And the same value between messages, because a harness splits one reply into a
@@ -743,7 +743,7 @@ const SEGMENT_GAP = "space-y-3";
  * 12px between two others purely on where the stream was cut — a seam the reader
  * cannot see and must not feel.
  */
-const MESSAGE_GAP = "flex flex-col gap-3";
+const MESSAGE_GAP = "flex flex-col gap-4";
 
 export interface TurnContext {
   onOpenFile(path: string): void;
@@ -818,7 +818,7 @@ export const ChatTurn = React.memo(function ChatTurn({
 
   return (
     <Message from={role} className="max-w-full">
-      <MessageContent className="gap-0 group-[.is-user]:rounded-xl group-[.is-user]:bg-muted group-[.is-user]:px-3.5 group-[.is-user]:py-2.5">
+      <MessageContent className="gap-0 group-[.is-user]:rounded-xl group-[.is-user]:bg-muted group-[.is-user]:px-4 group-[.is-user]:py-2">
         <div className={SEGMENT_GAP}>
           {segments
             ? segments.map((segment) => (
@@ -867,7 +867,7 @@ function renderSegment(
 function GatedCall({ part, context }: { part: DynamicToolUIPart; context: TurnContext }) {
   const interaction = interactionForApproval(context.open, approvalId(part));
   return (
-    <div className="space-y-0.5">
+    <div className="space-y-1">
       <ToolRow part={part} onOpenFile={context.onOpenFile} />
       {interaction ? (
         <InteractionCard

@@ -134,13 +134,17 @@ export const HIDDEN_CLASS = "volli-md-hidden";
 
 /**
  * Line-box growth for the line classes whose text is bigger than the editor's
- * font size. Only h1–h3 need it: h4 renders at the body size and h5/h6 below it,
- * so the default line box already fits them.
+ * font size. Only h1–h2 need it now that the heading sizes ride the app's type
+ * scale: h3 renders at the body step and h4–h6 below it, so the default line box
+ * already fits them.
+ *
+ * The numbers are the editor's own line height (24px for 14px text) scaled to
+ * keep one ratio the stylesheet has always implied — a heading's line box is
+ * ~2.03× its font size. h1 is 24px → 2.05; h2 is 18px → 1.5.
  */
 const LINE_HEIGHT_MULTIPLIERS: Readonly<Record<string, number>> = {
-  "volli-md-h1": 1.9,
-  "volli-md-h2": 1.6,
-  "volli-md-h3": 1.35,
+  "volli-md-h1": 2.05,
+  "volli-md-h2": 1.5,
 };
 
 /**

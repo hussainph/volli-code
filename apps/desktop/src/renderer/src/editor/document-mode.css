@@ -13,17 +13,24 @@
  * `.mtk1` token colours and lose on source order. The extra ancestor class wins
  * the cascade without a single `!important`.
  *
- * Sizes follow docs/DESIGN.md: the body step (14px / `text-sm`) is the document
- * measure, and headings scale in `em` off it, matching typeset.css — the
- * rendered-markdown stylesheet this surface is the editable twin of. Anything
- * that changes a LINE's height is duplicated as a `lineHeight` multiplier in
+ * Sizes are docs/DESIGN.md's rungs by name (`--text-*`, globals.css `@theme`):
+ * the body step is the document measure and every heading takes a step of the
+ * app's scale rather than an `em` multiple of the body, matching typeset.css —
+ * the rendered-markdown stylesheet this surface is the editable twin of. The two
+ * files answer every level identically, which is the point: the same document
+ * must not resize when it flips between editing and rendered. Anything that
+ * changes a LINE's height is duplicated as a `lineHeight` multiplier in
  * document-decorations.ts, because Monaco lays lines out itself and cannot read
  * a stylesheet to find out.
  */
 
 .volli-document-mode {
-  /* The one place the document's own type size is named; `::before` glyphs on
-     zero-width spans need an explicit size to escape their parent's collapse. */
+  /* The document's own type size, for `::before` glyphs on zero-width spans,
+     which need an explicit size to escape their parent's collapse. A literal
+     rather than `var(--text-sm)` because Monaco takes its font size as a JS
+     NUMBER (`DOCUMENT_FONT_SIZE`, editor/document-mode.ts) and cannot read a
+     custom property — this is the CSS half of that pair and the two must agree.
+     Both are the body step, 14px. */
   --volli-doc-font-size: 14px;
 }
 
@@ -128,20 +135,22 @@
   color: var(--foreground);
 }
 .volli-document-mode .volli-md-h1 {
-  font-size: 1.6em;
+  font-size: var(--text-title);
 }
 .volli-document-mode .volli-md-h2 {
-  font-size: 1.35em;
+  font-size: var(--text-heading);
 }
+/* Body size, heading weight — the run-in heading. There is no rung between 14
+   and 18, and a document does not get one the app has not earned. */
 .volli-document-mode .volli-md-h3 {
-  font-size: 1.15em;
+  font-size: var(--text-sm);
 }
 .volli-document-mode .volli-md-h4 {
-  font-size: 1em;
+  font-size: var(--text-ui);
 }
 .volli-document-mode .volli-md-h5,
 .volli-document-mode .volli-md-h6 {
-  font-size: 0.9em;
+  font-size: var(--text-ui);
   color: var(--muted-foreground);
 }
 
@@ -160,7 +169,7 @@
 }
 .volli-document-mode .volli-md-code {
   font-family: var(--font-mono);
-  font-size: 0.9em;
+  font-size: var(--text-ui);
   padding: 0.1em 0.3em;
   border-radius: var(--radius-sm);
   background: var(--muted);
@@ -214,7 +223,10 @@
 }
 .volli-document-mode .volli-md-checkbox-on::before {
   content: "✓";
-  font-size: calc(var(--volli-doc-font-size) * 0.72);
+  /* The label step — the scale's smallest rung, and the glyph inside a ~12px box
+     rather than a size of its own. It used to be `--volli-doc-font-size * 0.72`
+     = 10.08px, a thirteenth font size below every rung the app has. */
+  font-size: var(--text-label);
   color: var(--primary-foreground);
   background: var(--primary);
   border-color: var(--primary);
@@ -229,7 +241,7 @@
 
 .volli-document-mode .volli-md-fence {
   font-family: var(--font-mono);
-  font-size: 0.9em;
+  font-size: var(--text-ui);
   background: var(--card);
 }
 .volli-document-mode .volli-md-fence-open {

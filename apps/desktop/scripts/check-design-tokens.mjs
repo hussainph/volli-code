@@ -86,10 +86,21 @@ const RULES = [
   },
   {
     id: "type-text-base",
-    // 16px, and the six-step scale has no such rung. It survived only behind a
+    // 16px, and the five-step scale has no such rung. It survived only behind a
     // `md:` fallback that a 940px minimum window can never reach.
     summary: "text-base is off the type scale",
     match: (base) => base === "text-base",
+  },
+  {
+    id: "type-text-xs",
+    // 12px, folded into `text-ui` (13px). It was never a rung of its own: three
+    // named steps inside a 2px band — label 11, meta 12, ui 13 — carried 71% of
+    // the app's sizing decisions, which is three names for one size rather than
+    // a hierarchy the eye can read. `text-ui` is the single UI size now, and
+    // `text-label` (11px, caps tracking) is the only rung below it. Stock, so
+    // deleting a `@theme` key could not remove it — only a ban can.
+    summary: "text-xs folded into text-ui — the single UI size",
+    match: (base) => base === "text-xs",
   },
   {
     id: "status-raw-palette",
@@ -163,18 +174,50 @@ function baseUtility(token) {
 const CLASS_TOKEN = /^[A-Za-z0-9_\-:./[\]()%,=&<>!*+#@~^$|{}]+$/;
 
 /**
+ * A token with the CONTENTS of every bracketed group removed, brackets kept.
+ *
+ * The charset test below has to run on this rather than on the raw token,
+ * because an arbitrary value is a hole in the class grammar where any character
+ * may legally appear — `[&_svg:not([class*='size-'])]:size-3` carries two
+ * apostrophes and is a perfectly ordinary Tailwind class. Testing it raw
+ * disqualified the whole literal, and with it every other token in the same
+ * string: `ui/button.tsx`, `ui/select.tsx` and `ui/menu-classes.ts` — the three
+ * class lists the most surfaces in the app inherit from — were invisible to
+ * every rule here. Prose keeps failing the test for the reason it always did:
+ * "the composer stack's rounded shell" has its apostrophe OUTSIDE any bracket,
+ * so it survives this strip untouched and still fails the charset.
+ */
+function outsideBrackets(token) {
+  let depth = 0;
+  let kept = "";
+  for (const character of token) {
+    if (character === "[") {
+      depth += 1;
+      if (depth === 1) kept += character;
+    } else if (character === "]") {
+      if (depth === 1) kept += character;
+      depth = Math.max(0, depth - 1);
+    } else if (depth === 0) {
+      kept += character;
+    }
+  }
+  return kept;
+}
+
+/**
  * Whether a string literal is a class list rather than prose.
  *
  * Two signals, and both are about shape rather than vocabulary. Every token
- * must be built from the class charset — which an apostrophe is not, so
- * "shares the composer stack's rounded shell" is out on the first test. And at
- * least one token must show utility shape (a `-`, a variant `:`, an opacity `/`
- * or an arbitrary `[`) — which rules out the all-lowercase prose that survives
- * the charset test. A single-token literal is exempt from the second signal,
- * because `className="rounded"` is exactly the escape this guard is for.
+ * must be built from the class charset OUTSIDE its arbitrary values (see
+ * {@link outsideBrackets}) — which an apostrophe is not, so "shares the composer
+ * stack's rounded shell" is out on the first test. And at least one token must
+ * show utility shape (a `-`, a variant `:`, an opacity `/` or an arbitrary `[`)
+ * — which rules out the all-lowercase prose that survives the charset test. A
+ * single-token literal is exempt from the second signal, because
+ * `className="rounded"` is exactly the escape this guard is for.
  */
 function isClassList(tokens) {
-  if (!tokens.every((token) => CLASS_TOKEN.test(token))) return false;
+  if (!tokens.every((token) => CLASS_TOKEN.test(outsideBrackets(token)))) return false;
   if (tokens.length === 1) return true;
   return tokens.some((token) => /[-:/[]/.test(token));
 }
@@ -371,6 +414,12 @@ function selfTest() {
     ['"rounded"', ["radius-bare"]],
     ['"hover:rounded bg-card"', ["radius-bare"]],
     ['"text-base md:text-sm"', ["type-text-base"]],
+    ['"gap-1 text-xs"', ["type-text-xs"]],
+    ['"group-hover:text-xs"', ["type-text-xs"]],
+    // An arbitrary value may contain an apostrophe, and one used to hide every
+    // other token in the same literal from every rule.
+    ["\"h-5 px-2.5 text-xs [&_svg:not([class*='size-'])]:size-3\"", ["type-text-xs"]],
+    ["\"rounded-2xl [&_svg:not([class*='size-'])]:size-3\"", ["radius-stock-2xl"]],
     ['"text-emerald-400 gap-1"', ["status-raw-palette"]],
     ['"dark:bg-amber-500/70 gap-1"', ["status-raw-palette"]],
     ['"text-sky-900 gap-1"', ["status-raw-palette"]],
@@ -384,7 +433,7 @@ function selfTest() {
     ['"rounded-full rounded-none rounded-sm rounded-md rounded-lg rounded-xl"', []],
     ['"rounded-control rounded-container rounded-row"', []],
     ['"rounded-t-lg rounded-r-none"', []],
-    ['"text-label text-xs text-ui text-sm text-heading text-title"', []],
+    ['"text-label text-ui text-sm text-heading text-title"', []],
     ['"ring-2 ring-1 ring-ring/45"', []],
     ['"bg-positive text-attention-foreground border-info"', []],
     ['"shadow-raised shadow-card shadow-overlay shadow-none"', []],

@@ -97,7 +97,7 @@
   --sidebar-veil: rgb(123 105 111 / 0.1);
   --sidebar-accent-veil: rgb(153 124 131 / 0.1);
   --sidebar-border-veil: rgb(153 144 121 / 0.1);
-  /* THE CANVAS ITSELF, and the nine values derived alongside it
+  /* THE CANVAS ITSELF, and the ten values derived alongside it
    (`CANVAS_TOKEN_NAMES`, renderer/src/theme/canvas-paint.ts). The gradient
    is a `background` value, grain layer included, so the window can paint
    itself before any JS runs. */
@@ -123,6 +123,10 @@
   --shadow-raised: 0 1px 2px 0px rgb(2 0 0 / 0.09), 0 2px 7px -1px rgb(2 0 0 / 0.135);
   --shadow-card: 0 1px 3px 0px rgb(2 0 0 / 0.075), 0 10px 30px -6px rgb(2 0 0 / 0.18);
   --shadow-overlay: 0 2px 6px -2px rgb(2 0 0 / 0.105), 0 16px 44px -8px rgb(2 0 0 / 0.24);
+  /* The overlay wash (dialogs, sheets, the palette): the shadow's own ink
+   spread over the whole window instead of pooled under one edge, so it
+   dims the canvas in the canvas's own hue rather than in neutral black. */
+  --scrim: rgb(2 0 0 / 0.5);
 }
 
 /* Later in the file at equal specificity (0,2,0) to `:root.dark` and higher
@@ -185,7 +189,7 @@
   --sidebar-veil: rgb(127 69 48 / 0.1);
   --sidebar-accent-veil: rgb(146 95 83 / 0.1);
   --sidebar-border-veil: rgb(176 115 83 / 0.1);
-  /* THE CANVAS ITSELF, and the nine values derived alongside it
+  /* THE CANVAS ITSELF, and the ten values derived alongside it
    (`CANVAS_TOKEN_NAMES`, renderer/src/theme/canvas-paint.ts). The gradient
    is a `background` value, grain layer included, so the window can paint
    itself before any JS runs. */
@@ -211,6 +215,10 @@
   --shadow-raised: 0 1px 2px 0px rgb(72 42 30 / 0.09), 0 2px 7px -1px rgb(72 42 30 / 0.135);
   --shadow-card: 0 1px 3px 0px rgb(72 42 30 / 0.075), 0 10px 30px -6px rgb(72 42 30 / 0.18);
   --shadow-overlay: 0 2px 6px -2px rgb(72 42 30 / 0.105), 0 16px 44px -8px rgb(72 42 30 / 0.24);
+  /* The overlay wash (dialogs, sheets, the palette): the shadow's own ink
+   spread over the whole window instead of pooled under one edge, so it
+   dims the canvas in the canvas's own hue rather than in neutral black. */
+  --scrim: rgb(72 42 30 / 0.3);
 }
 /* GENERATED THEME TOKENS — END */
 
@@ -265,6 +273,11 @@
   --shadow-raised: var(--shadow-raised);
   --shadow-card: var(--shadow-card);
   --shadow-overlay: var(--shadow-overlay);
+  /* The overlay wash, as `bg-scrim`. Solved beside the tiers above and for the
+   * same reason: a scrim is the window's shadow spread over everything, so it
+   * follows the canvas instead of being a neutral `bg-black/N` that a warm
+   * gradient turns to dirt and a paper appearance wears as a bruise. */
+  --color-scrim: var(--scrim);
   /* The UI ease-out — entrances, exits, press feedback, every overlay. It
    * deliberately takes Tailwind's OWN `--ease-out` key rather than a new name:
    * a second strong-ease-out token sitting beside the weak built-in is the
@@ -292,11 +305,39 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
-  /* Type scale (docs/DESIGN.md) — six steps: label 11 · meta 12 (= text-xs) ·
-   * ui 13 · body 14 (= text-sm) · heading 18 · title 24. Named tokens below
-   * cover the steps Tailwind's stock scale lacks; meta/body ride on the stock
-   * utilities. Each step carries its paired line-height (and tracking where
-   * the size demands it) so components never pick these per-surface. */
+  /* Layout language (docs/DESIGN.md): the canonical reading measure (Tier A
+   * surfaces center on it via <ContentColumn>) and the unified page gutter
+   * every surface aligns its edges to. */
+  --container-content: 45rem;
+  --spacing-gutter: 1.5rem;
+}
+
+/*
+ * Type scale (docs/DESIGN.md) — five steps: label 11 · ui 13 · body 14
+ * (= text-sm) · heading 18 · title 24. Named tokens below cover the steps
+ * Tailwind's stock scale lacks; body rides on the stock utility. Each step
+ * carries its paired line-height (and tracking where the size demands it) so
+ * components never pick these per-surface.
+ *
+ * NOT `inline`, and that is the whole reason this is its own block. `@theme
+ * inline` compiles a step's VALUE into each utility and never emits the custom
+ * property, so `var(--text-heading)` resolved to nothing in a hand-authored
+ * stylesheet — which is why `typeset.css` and `editor/document-mode.css` grew
+ * their own `em` ladders and near-missed this one at every rung (a ticket <h2>
+ * at 18.9px beside a dialog title at 18). Plain `@theme` emits the properties,
+ * so those two files read the scale instead of restating it. Nothing here is
+ * themeable or canvas-derived, so the indirection `inline` exists to avoid
+ * costs nothing.
+ *
+ * THERE IS NO 12px RUNG. `text-xs` was a sixth step wedged between label (11)
+ * and ui (13); those three carried 71% of the app's sizing decisions inside a
+ * 2px band, which is three names for one size rather than a hierarchy. It is
+ * folded into `text-ui` and banned by `scripts/check-design-tokens.mjs` —
+ * banned rather than deleted, because it is a stock Tailwind utility that no
+ * missing `@theme` key can take out of reach. Below 13px the only rung is
+ * `text-label`, and it is a TREATMENT (caps, +0.05em) rather than a size.
+ */
+@theme {
   --text-label: 0.6875rem;
   --text-label--line-height: 1rem;
   --text-label--letter-spacing: 0.05em;
@@ -308,11 +349,6 @@
   --text-title: 1.5rem;
   --text-title--line-height: 1.875rem;
   --text-title--letter-spacing: -0.02em;
-  /* Layout language (docs/DESIGN.md): the canonical reading measure (Tier A
-   * surfaces center on it via <ContentColumn>) and the unified page gutter
-   * every surface aligns its edges to. */
-  --container-content: 45rem;
-  --spacing-gutter: 1.5rem;
 }
 
 @layer base {

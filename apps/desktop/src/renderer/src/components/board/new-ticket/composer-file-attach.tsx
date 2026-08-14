@@ -73,7 +73,7 @@ export function ComposerFileAttach({
         />
         <div className="max-h-64 overflow-y-auto">
           {results.length === 0 ? (
-            <div className="px-2 py-2 text-xs text-muted-foreground">No matching files</div>
+            <div className="px-2 py-2 text-ui text-muted-foreground">No matching files</div>
           ) : (
             results.map(({ file }) => (
               <button
@@ -83,10 +83,10 @@ export function ComposerFileAttach({
                   onInsert(file.relPath);
                   setOpen(false);
                 }}
-                className="flex w-full items-baseline gap-2 rounded-sm px-2 py-1.5 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent"
+                className="flex w-full items-baseline gap-2 rounded-sm px-2 py-1 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent"
               >
                 <span className="truncate text-foreground">{baseNameOf(file.relPath)}</span>
-                <span className="ml-auto truncate text-xs text-muted-foreground">
+                <span className="ml-auto truncate text-ui text-muted-foreground">
                   {dirNameOf(file.relPath)}
                 </span>
               </button>

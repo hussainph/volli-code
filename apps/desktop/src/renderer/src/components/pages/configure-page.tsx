@@ -207,14 +207,15 @@ export function ConfigureWorktreesSection() {
 function CopySetInfo() {
   return (
     <SettingsSection title="Copied files" icon={TreeStructureIcon}>
-      <p className="text-xs leading-5 text-muted-foreground">
-        By default: <code className="rounded bg-muted px-1 py-0.5 font-mono">.env*</code> and{" "}
-        <code className="rounded bg-muted px-1 py-0.5 font-mono">.claude/settings.local.json</code>.
+      <p className="text-ui leading-5 text-muted-foreground">
+        By default: <code className="rounded-sm bg-muted px-1 py-1 font-mono">.env*</code> and{" "}
+        <code className="rounded-sm bg-muted px-1 py-1 font-mono">.claude/settings.local.json</code>
+        .
       </p>
-      <p className="mt-2 text-xs leading-5 text-muted-foreground">
-        Add a <code className="rounded bg-muted px-1 py-0.5 font-mono">.worktreeinclude</code> at
+      <p className="mt-2 text-ui leading-5 text-muted-foreground">
+        Add a <code className="rounded-sm bg-muted px-1 py-1 font-mono">.worktreeinclude</code> at
         the repo root to change the set. Gitignore syntax;{" "}
-        <code className="rounded bg-muted px-1 py-0.5 font-mono">!</code> negates.
+        <code className="rounded-sm bg-muted px-1 py-1 font-mono">!</code> negates.
       </p>
     </SettingsSection>
   );

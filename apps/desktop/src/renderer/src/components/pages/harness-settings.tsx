@@ -22,7 +22,7 @@ export function HarnessSettings() {
   const active = activeHarness(listings, selectedId);
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
       <HarnessSelector listings={listings} activeId={active?.id ?? null} onSelect={setSelectedId} />
       {active ? <HarnessIdentitySection listing={active} /> : null}
     </div>

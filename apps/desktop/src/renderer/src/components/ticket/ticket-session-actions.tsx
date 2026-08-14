@@ -21,7 +21,7 @@ export function TicketSessionActions({
   onNewTerminal(): void;
 }) {
   return (
-    <div className={cn("flex shrink-0 items-center gap-0.5", className)}>
+    <div className={cn("flex shrink-0 items-center gap-1", className)}>
       <Button
         type="button"
         size="icon-xs"

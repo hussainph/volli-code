@@ -189,6 +189,18 @@ export const ARC_TUNING = {
       { y: 2, blur: 6, spread: -2, alpha: 0.14 },
       { y: 16, blur: 44, spread: -8, alpha: 0.32 },
     ],
+    /**
+     * The overlay wash (`--scrim`), at the shadow color above and deliberately
+     * NOT scaled by strength — see `CanvasElevation.scrim`.
+     *
+     * Two numbers rather than one because a scrim works by removing luminance
+     * and the modes have different amounts to remove: over the light canvas a
+     * third is plainly felt, while over a dark one the ink and the page are
+     * already close and the same third barely registers. Both sit on the app's
+     * four-step alpha ladder (10 / 30 / 50 / 70), which is exactly what the three
+     * hand-tuned literals they replace — 30, 35 and 55 — did not.
+     */
+    scrim: { light: 0.3, dark: 0.5 },
   },
 
   /**

@@ -142,7 +142,7 @@ const NOTES = {
     "   at 10% over the surface named beside it, composites to the opaque token\n" +
     "   above byte-exactly.",
   "--canvas":
-    "THE CANVAS ITSELF, and the nine values derived alongside it\n" +
+    "THE CANVAS ITSELF, and the ten values derived alongside it\n" +
     "   (`CANVAS_TOKEN_NAMES`, renderer/src/theme/canvas-paint.ts). The gradient\n" +
     "   is a `background` value, grain layer included, so the window can paint\n" +
     "   itself before any JS runs.",
@@ -157,6 +157,10 @@ const NOTES = {
     "   uniform — so it is `transparent` by design, not by omission.",
   "--label-ink": "The card's micro-label tier, between body and secondary.",
   "--shadow-raised": "The three shadow tiers: raised on a surface, the card, and overlays.",
+  "--scrim":
+    "The overlay wash (dialogs, sheets, the palette): the shadow's own ink\n" +
+    "   spread over the whole window instead of pooled under one edge, so it\n" +
+    "   dims the canvas in the canvas's own hue rather than in neutral black.",
 };
 
 /**

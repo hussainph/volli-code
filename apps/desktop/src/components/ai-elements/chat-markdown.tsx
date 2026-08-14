@@ -61,7 +61,7 @@ export const chatMarkdownComponents: Components = {
   kbd: ({ className, children, ...props }) => (
     <kbd
       className={cn(
-        "mx-0.5 inline-flex min-h-5 items-center rounded border border-border bg-muted px-1.5 font-mono text-[0.8em] text-foreground",
+        "mx-1 inline-flex min-h-5 items-center rounded-sm border border-border bg-muted px-1 font-mono text-[0.8em] text-foreground",
         className,
       )}
       {...props}
@@ -72,7 +72,7 @@ export const chatMarkdownComponents: Components = {
   img: ({ className, src, alt, ...props }) => {
     if (!isAllowedImageSrc(typeof src === "string" ? src : undefined)) {
       return (
-        <span className="inline-flex items-center rounded border border-border bg-muted px-2 py-1 text-xs text-muted-foreground">
+        <span className="inline-flex items-center rounded-sm border border-border bg-muted px-2 py-1 text-ui text-muted-foreground">
           Image blocked (local/data only)
         </span>
       );
@@ -95,7 +95,7 @@ export const chatMarkdownComponents: Components = {
     return (
       <ul
         className={cn(
-          isTaskList ? "list-none space-y-1 pl-1" : "list-disc list-outside space-y-1 pl-5",
+          isTaskList ? "list-none space-y-1 pl-1" : "list-disc list-outside space-y-1 pl-4",
           className,
         )}
         {...props}
@@ -149,7 +149,7 @@ export const chatMarkdownComponents: Components = {
       <section
         className={cn(
           isFootnotes &&
-            "mt-6 border-t border-border pt-3 text-xs text-muted-foreground [&>ol]:list-decimal [&>ol]:pl-5",
+            "mt-6 border-t border-border pt-4 text-ui text-muted-foreground [&>ol]:list-decimal [&>ol]:pl-4",
           className,
         )}
         {...props}
@@ -167,7 +167,7 @@ export const chatMarkdownComponents: Components = {
  * treatment, so the two can no longer be confused for each other.
  */
 const FILE_MENTION_CLASS =
-  "font-mono text-[0.9em] text-foreground underline decoration-dotted decoration-muted-foreground/60 underline-offset-[3px]";
+  "font-mono text-[0.9em] text-foreground underline decoration-dotted decoration-muted-foreground/50 underline-offset-[3px]";
 
 function FileMentionCode({
   path,

@@ -34,7 +34,7 @@ function CommandInput({
     // One height for the row and the field inside it. Stock shipped a 40px
     // input inside a 36px wrapper — the field was taller than the box clipping
     // it, so its own padding decided where the text sat.
-    <div data-slot="command-input-wrapper" className="flex h-8 items-center gap-2 border-b px-3">
+    <div data-slot="command-input-wrapper" className="flex h-8 items-center gap-2 border-b px-4">
       <MagnifyingGlassIcon className="size-3.5 shrink-0 opacity-50" />
       <CommandPrimitive.Input
         data-slot="command-input"

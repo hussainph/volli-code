@@ -655,10 +655,10 @@ export function FileView({
   );
 
   if (state.status === "loading") {
-    return <p className="px-gutter py-4 text-xs text-muted-foreground">Loading…</p>;
+    return <p className="px-gutter py-4 text-ui text-muted-foreground">Loading…</p>;
   }
   if (state.status === "error") {
-    return <p className="px-gutter py-4 text-xs text-destructive">{state.error}</p>;
+    return <p className="px-gutter py-4 text-ui text-destructive">{state.error}</p>;
   }
 
   // The document surface → Tier A reading measure; source mode and everything
@@ -727,7 +727,7 @@ export function FileView({
       <div className="flex min-h-0 flex-1 flex-col gap-2 px-gutter py-4">
         {liveError !== null && <LiveReconciliationAffordance kind="error" message={liveError} />}
         {state.truncated && (
-          <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          <div className="flex items-center justify-between gap-4 rounded-md border border-border bg-muted/30 px-4 py-2 text-ui text-muted-foreground">
             <span>Showing the first 1 MiB. Reveal in Finder for the whole file.</span>
             {revealButton}
           </div>
@@ -769,7 +769,7 @@ export function FileView({
 
   // binary
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-3 py-16 text-center">
+    <div className="flex flex-1 flex-col items-center justify-center gap-4 py-16 text-center">
       <FolderOpenIcon className="size-6 text-muted-foreground" />
       <p className="text-sm text-muted-foreground">{name} can&apos;t be previewed here.</p>
       <Button size="sm" variant="secondary" onClick={() => void handleReveal()}>

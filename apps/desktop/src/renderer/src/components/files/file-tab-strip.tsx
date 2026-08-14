@@ -136,7 +136,7 @@ function FileTab({
           className={cn(
             // `scale` is in the transition list and `scale-100!` is the
             // reduced-motion cancel — see the press note in `ui/button.tsx`.
-            "group relative flex h-8 shrink-0 items-center gap-1.5 rounded-t-lg pr-1 pl-3 text-sm outline-none transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out active:scale-[0.97] motion-reduce:scale-100! focus-visible:ring-[3px] focus-visible:ring-ring/50",
+            "group relative flex h-8 shrink-0 items-center gap-1 rounded-t-lg pr-1 pl-4 text-sm outline-none transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out active:scale-[0.97] motion-reduce:scale-100! focus-visible:ring-2 focus-visible:ring-ring/45",
             active
               ? // -mb-px lets the tab's fill cover the strip's bottom border, so
                 // it reads as physically joined to the editor plane below.
@@ -148,7 +148,7 @@ function FileTab({
           {hint !== null ? (
             <span
               data-testid="file-tab-hint"
-              className="max-w-28 shrink-0 truncate text-xs text-muted-foreground"
+              className="max-w-28 shrink-0 truncate text-ui text-muted-foreground"
             >
               {hint}
             </span>
@@ -164,7 +164,7 @@ function FileTab({
               onClose();
             }}
             className={cn(
-              "group/close ml-0.5 flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none transition-opacity hover:bg-border hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50",
+              "group/close ml-1 flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none transition-opacity hover:bg-border hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/45",
               // A dirty tab's control is always present (it IS the unsaved dot);
               // a clean tab's × stays out of the way until the tab is pointed at.
               dirty
@@ -227,10 +227,10 @@ export function FileTabStrip({
   return (
     <div
       data-testid="file-tab-strip"
-      className="flex shrink-0 items-end border-b border-border bg-rail pt-1.5"
+      className="flex shrink-0 items-end border-b border-border bg-rail pt-1"
     >
       <div className="flex min-w-0 flex-1 items-end overflow-x-auto px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        <div role="tablist" aria-orientation="horizontal" className="flex items-end gap-0.5">
+        <div role="tablist" aria-orientation="horizontal" className="flex items-end gap-1">
           {tabs.map((tab, index) => {
             const label = labels[index] ?? { name: tab.relPath, hint: null };
             return (

@@ -133,7 +133,7 @@ export function ComposerChips({
   branch: ComposerBranchRowProps;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div className="flex flex-wrap items-center gap-1">
       <StatusChip status={status} onChange={onStatusChange} />
       <PriorityChip priority={priority} onChange={onPriorityChange} />
       <ComposerLabels projectId={projectId} value={labels} onChange={onLabelsChange} />

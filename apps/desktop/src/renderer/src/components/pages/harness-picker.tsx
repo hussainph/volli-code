@@ -108,7 +108,7 @@ export function HarnessSelector({
             aria-current={isActive ? true : undefined}
             onClick={() => onSelect(listing.id)}
             className={cn(
-              "h-7 rounded-md px-3 text-ui transition-colors",
+              "h-7 rounded-md px-4 text-ui transition-colors",
               isActive
                 ? "bg-accent text-foreground"
                 : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
@@ -141,7 +141,7 @@ export function HarnessIdentitySection({ listing }: { listing: HarnessListing })
       action={<OriginChip origin={listing.origin} />}
     >
       <SettingsRow label="Command">
-        <code className="rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-xs text-foreground">
+        <code className="rounded-sm border border-border/50 bg-muted/30 px-1 py-1 font-mono text-ui text-foreground">
           {listing.command}
         </code>
       </SettingsRow>
@@ -152,7 +152,7 @@ export function HarnessIdentitySection({ listing }: { listing: HarnessListing })
 /** Built-in or registered, stated where the harness's other identity facts are. */
 function OriginChip({ origin }: { origin: HarnessOrigin }) {
   return (
-    <span className="rounded-full border border-border px-2 py-0.5 text-label uppercase text-muted-foreground">
+    <span className="rounded-full border border-border px-2 py-1 text-label uppercase text-muted-foreground">
       {origin === "built-in" ? "Built-in" : "Registered"}
     </span>
   );

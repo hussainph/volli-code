@@ -46,7 +46,7 @@ export function ChromeBar() {
       {/* No fill (#74): the band was already painted in the backdrop's own
           token, so it has nothing of its own to give up — it now sits on the
           canvas layer like the rail does. The ⌘K pill keeps its own material
-          (`bg-foreground/6`), which was already written as a material over a
+          (`bg-foreground/10`), which was already written as a material over a
           fill rather than as a fill of its own. */}
       <div className="app-region-drag relative flex h-10 shrink-0 items-center">
         {/* Clears the traffic lights (start x:10, group renders ≈60px wide,
@@ -141,7 +141,7 @@ function TerminalFocusBreadcrumb() {
       aria-live="polite"
       // top-[21px], not top-1/2: same 1px correction as the ⌘K pill — the
       // trailing focus toggle carries translate-y-px to meet the traffic lights.
-      className="pointer-events-none absolute left-1/2 top-[21px] flex max-w-[45vw] -translate-x-1/2 -translate-y-1/2 items-center gap-2 text-xs text-muted-foreground"
+      className="pointer-events-none absolute left-1/2 top-[21px] flex max-w-[45vw] -translate-x-1/2 -translate-y-1/2 items-center gap-2 text-ui text-muted-foreground"
     >
       <span className="max-w-[40%] shrink-0 truncate font-medium text-foreground">
         {ownerLabel}
@@ -291,7 +291,14 @@ function CommandPaletteTrigger({ onClick }: { onClick(): void }) {
       // so it is a wash of the ink: `--foreground` runs toward white in dark and
       // toward black in light, which is the direction a material has to move in
       // each mode. A literal white lightens a light canvas and disappears.
-      className="app-region-no-drag absolute left-1/2 top-[21px] flex h-[26px] w-[380px] max-w-[40vw] -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-md border border-border/60 bg-foreground/6 px-2 text-left text-ui text-muted-foreground transition-colors hover:border-border hover:bg-foreground/8 focus-visible:border-ring/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/40"
+      //
+      // THE HOVER IS THE EDGE, not the fill. The wash used to step 6% → 8% on
+      // hover, two rungs of a twenty-step alpha ladder that has since collapsed
+      // to four — and on this ladder the next rung up from the wash (30%) is a
+      // grey patch on the band, not a hover. The border was already doing the
+      // work (`border-border/50` → `border-border`); the fill now holds still at
+      // the one wash rung and lets it.
+      className="app-region-no-drag absolute left-1/2 top-[21px] flex h-[26px] w-[380px] max-w-[40vw] -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-md border border-border/50 bg-foreground/10 px-2 text-left text-ui text-muted-foreground transition-colors hover:border-border focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45"
     >
       <MagnifyingGlassIcon className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate">Search tickets and sessions</span>
@@ -299,7 +306,7 @@ function CommandPaletteTrigger({ onClick }: { onClick(): void }) {
           toward the canvas floor. `--background` is near-black in dark (what
           the literal used to be) and near-white in light, which is what a key
           cap looks like on a light chrome. */}
-      <kbd className="shrink-0 rounded border border-border/70 bg-background/10 px-1.5 py-px font-sans text-label leading-none text-muted-foreground">
+      <kbd className="shrink-0 rounded-sm border border-border/70 bg-background/10 px-1 py-px font-sans text-label leading-none text-muted-foreground">
         ⌘K
       </kbd>
       <CaretDownIcon aria-hidden className="size-3 shrink-0" weight="bold" />

@@ -57,7 +57,7 @@ const STATUS_LABEL: Record<TicketSessionStatus, string> = {
 };
 
 /** Sessions and History are the same block twice — one shape, one inset, no seam. */
-const SECTION = cn("flex flex-col gap-1 pt-5", RAIL_PANEL_INSET);
+const SECTION = cn("flex flex-col gap-1 pt-4", RAIL_PANEL_INSET);
 
 /**
  * A section's title line: the uppercase label at the left, whatever the block
@@ -66,7 +66,7 @@ const SECTION = cn("flex flex-col gap-1 pt-5", RAIL_PANEL_INSET);
  */
 function SectionHeading({ label, children }: { label: string; children?: React.ReactNode }) {
   return (
-    <div className="mb-1.5 flex items-center justify-between gap-2 px-2">
+    <div className="mb-1 flex items-center justify-between gap-2 px-2">
       <h2 className="text-label font-medium text-muted-foreground uppercase">{label}</h2>
       {children}
     </div>
@@ -87,7 +87,7 @@ function SectionHeading({ label, children }: { label: string; children?: React.R
  */
 function RowStatus({ state, children }: { state: StatusDotState; children: React.ReactNode }) {
   return (
-    <span className="flex shrink-0 items-center gap-1.5 text-label text-muted-foreground">
+    <span className="flex shrink-0 items-center gap-1 text-label text-muted-foreground">
       <StatusDot state={state} />
       {children}
     </span>
@@ -175,7 +175,7 @@ function SessionRow({
       <button
         type="button"
         onClick={onActivate}
-        className={cn(shell, "text-left hover:border-sidebar-border hover:bg-accent/60")}
+        className={cn(shell, "text-left hover:border-sidebar-border hover:bg-accent/50")}
       >
         {content}
       </button>
@@ -506,7 +506,7 @@ export function TicketSessionsPanel({
           // Nothing to read, so the block is the sentence alone: the header's
           // own control is 20px above it, and a second copy of the same act
           // inside the empty frame would be the same offer twice in one glance.
-          <p className="rounded-lg border border-dashed border-sidebar-border py-5 text-center text-xs text-muted-foreground">
+          <p className="rounded-lg border border-dashed border-sidebar-border py-4 text-center text-ui text-muted-foreground">
             No active sessions
           </p>
         ) : (
@@ -518,14 +518,14 @@ export function TicketSessionsPanel({
           <SectionHeading label="History">
             {/* The Diffs page's own count pill, not the retired drawer's bare
                 number beside a caret — one shape for "how many are in here". */}
-            <span className="rounded-full bg-accent px-1.5 font-mono text-label text-muted-foreground">
+            <span className="rounded-full bg-accent px-1 font-mono text-label text-muted-foreground">
               {history.length}
             </span>
           </SectionHeading>
           {/* Past four rows the column stops being scannable, so the filter
               appears — in flow, like everything else in the stack. */}
           {history.length > 4 ? (
-            <div className="relative mb-1.5">
+            <div className="relative mb-1">
               <MagnifyingGlassIcon
                 aria-hidden
                 className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
@@ -536,14 +536,14 @@ export function TicketSessionsPanel({
                 onChange={(event) => setHistoryQuery(event.target.value)}
                 aria-label="Search session history"
                 placeholder="Search history…"
-                className="h-8 pl-8 text-xs md:text-xs"
+                className="h-8 pl-8 text-ui md:text-ui"
               />
             </div>
           ) : null}
           {filteredHistory.length > 0 ? (
             <SessionList rows={filteredHistory} variant="history" now={now} {...listProps} />
           ) : (
-            <p className="rounded-lg border border-dashed border-sidebar-border py-4 text-center text-xs text-muted-foreground">
+            <p className="rounded-lg border border-dashed border-sidebar-border py-4 text-center text-ui text-muted-foreground">
               No matching sessions
             </p>
           )}

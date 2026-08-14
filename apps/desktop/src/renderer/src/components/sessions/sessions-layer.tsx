@@ -489,7 +489,7 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
           )}
 
           {selected && emptySurface && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center">
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-center">
               {/* Chat, not a terminal: the control below starts a chat, and the
                   glyph crowning an empty state has to name the thing the button
                   does. */}

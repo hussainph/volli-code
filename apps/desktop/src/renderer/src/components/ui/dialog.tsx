@@ -30,11 +30,16 @@ function DialogOverlay({
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       className={cn(
-        // A scrim dims, in both modes — black here is not a dark-mode
-        // assumption, and no token darkens under light (every ladder rung moves
-        // toward the ink, which IS the light). Only the weight is mode-specific:
-        // half-black over the light canvas blacks the gradient out entirely,
-        // which is the one thing the canvas exists to show.
+        // A scrim dims, in both modes, and `--scrim` is the one token that says
+        // so — solved beside the shadow tiers, in the canvas's own hue at the
+        // mode's shadow lightness, 30% in light and 50% in dark. Those two
+        // weights are exactly the literals this used to carry
+        // (`bg-black/30 dark:bg-black/50`); what moved is the COLOR, from a
+        // neutral black that desaturated the warm gradient under it — dirt
+        // rather than an absence of light — to one the canvas itself produces.
+        // The weights still differ by mode because half of anything over the
+        // light canvas blacks the gradient out entirely, which is the one thing
+        // the canvas exists to show.
         //
         // `duration-200 ease-out` is DialogContent's, to the millisecond: the
         // scrim and the panel are one gesture, and a scrim on the 150ms
@@ -44,7 +49,7 @@ function DialogOverlay({
         // `animate-none!` is important on purpose — the reduced-motion gate
         // loses to `data-[state=open]:animate-in` without it; the full argument
         // is on MENU_SURFACE_FADE in `ui/menu-classes.ts`.
-        "fixed inset-0 z-50 bg-black/30 duration-200 ease-out motion-reduce:animate-none! data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0 dark:bg-black/50",
+        "fixed inset-0 z-50 bg-scrim duration-200 ease-out motion-reduce:animate-none! data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
         className,
       )}
       {...props}
@@ -68,7 +73,7 @@ function DialogContent({
         className={cn(
           // A modal is not anchored to a trigger, so it keeps the centered
           // origin and only the duration/curve are shared with the scrim.
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-1/2 gap-3 rounded-container border border-border bg-background p-4 shadow-overlay duration-200 ease-out motion-reduce:animate-none! data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
+          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-1/2 gap-4 rounded-container border border-border bg-background p-4 shadow-overlay duration-200 ease-out motion-reduce:animate-none! data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
           className,
         )}
         {...props}
@@ -89,7 +94,7 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="dialog-header"
-      className={cn("flex flex-col gap-1.5 text-center sm:text-left", className)}
+      className={cn("flex flex-col gap-1 text-center sm:text-left", className)}
       {...props}
     />
   );

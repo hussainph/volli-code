@@ -11,7 +11,7 @@ export function DiffPresentationToggle({
   return (
     <div
       data-testid="ticket-diff-presentation"
-      className="flex shrink-0 items-center gap-1 border-b border-border px-gutter py-1.5"
+      className="flex shrink-0 items-center gap-1 border-b border-border px-gutter py-1"
     >
       <Button
         size="sm"

@@ -15,13 +15,31 @@
  * Vertical rhythm uses the "flow" pattern: adjacent flow elements are spaced by
  * `--typeset-flow` via the owl selector, so paragraphs, lists, and blocks share
  * one rhythm knob.
+ *
+ * SIZES ARE THE APP'S RUNGS, NOT `em` MULTIPLES OF THEM. Every font-size below
+ * names a step from the scale in globals.css (`@theme`, docs/DESIGN.md). It used
+ * to derive each heading as an `em` multiple of the body step — 1.35em, 1.6em —
+ * which near-missed the app at every rung: a rendered <h2> in a ticket was
+ * 18.9px while a dialog title beside it was 18, an <h1> 22.4 against the title
+ * step's 24, and inline code 12.6 against a UI step of 13. Six sizes, none of
+ * them the app's, which is what made markdown read as a different product on
+ * the same page. Only the RATIOS are still local (`--typeset-leading`, the flow,
+ * the heading leading): those are this document's rhythm, not the app's scale.
+ *
+ * Six markdown levels do not fit five rungs, and the mapping does not invent a
+ * sixth. h1 and h2 take the two steps above body; h3 takes body itself and is a
+ * heading by weight and tracking rather than by size (the run-in convention);
+ * h4 and below drop to the UI step, where h5/h6 separate by color exactly as
+ * they always have.
  */
 
 .typeset {
   --typeset-font-body: var(--font-sans);
   --typeset-font-heading: var(--font-sans);
   --typeset-font-mono: var(--font-mono);
-  --typeset-size: 0.875rem;
+  /* The body step (14px). Named rather than restated so the document measure
+     cannot drift from the app's prose size. */
+  --typeset-size: var(--text-sm);
   --typeset-leading: 1.7;
   --typeset-flow: 1em;
 
@@ -75,20 +93,22 @@
 }
 
 .typeset h1 {
-  font-size: 1.6em;
+  font-size: var(--text-title);
 }
 .typeset h2 {
-  font-size: 1.35em;
+  font-size: var(--text-heading);
 }
+/* Body size, heading weight — the run-in heading. There is no rung between 14
+   and 18, and a document does not get one the app has not earned. */
 .typeset h3 {
-  font-size: 1.15em;
+  font-size: var(--text-sm);
 }
 .typeset h4 {
-  font-size: 1em;
+  font-size: var(--text-ui);
 }
 .typeset h5,
 .typeset h6 {
-  font-size: 0.9em;
+  font-size: var(--text-ui);
   color: var(--muted-foreground);
 }
 
@@ -149,9 +169,13 @@
   vertical-align: middle;
 }
 
+/* The UI step, fixed rather than 0.9em of context — this is the same object as
+   the inline-code chip the app paints in JSX (`text-ui`, `rounded-sm`,
+   `bg-muted`, hairline), so it is the same size wherever it appears, heading
+   included. */
 .typeset code {
   font-family: var(--typeset-font-mono);
-  font-size: 0.9em;
+  font-size: var(--text-ui);
   padding: 0.1em 0.35em;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -160,7 +184,7 @@
 
 .typeset pre {
   font-family: var(--typeset-font-mono);
-  font-size: 0.9em;
+  font-size: var(--text-ui);
   line-height: 1.6;
   padding: 0.9em 1em;
   border: 1px solid var(--border);
@@ -199,7 +223,8 @@
   max-width: 100%;
   overflow-x: auto;
   border-collapse: collapse;
-  font-size: 0.95em;
+  /* A table is dense UI inside prose, so it takes the UI step. */
+  font-size: var(--text-ui);
 }
 .typeset th,
 .typeset td {

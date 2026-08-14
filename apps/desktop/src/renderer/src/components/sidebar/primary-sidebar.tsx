@@ -59,11 +59,11 @@ export function PrimarySidebar() {
       >
         {/* ChromeBar above owns the traffic lights and the drag region — this
             is now a plain panel header. */}
-        <SidebarHeader className="px-4 py-3">
+        <SidebarHeader className="px-4 py-4">
           {selected ? (
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold">{selected.name}</div>
-              <div className="text-xs text-muted-foreground">{selected.ticketPrefix}</div>
+              <div className="text-ui text-muted-foreground">{selected.ticketPrefix}</div>
             </div>
           ) : (
             <div className="text-sm font-medium text-sidebar-foreground">Projects</div>

@@ -160,7 +160,7 @@ function AppThemeSection() {
     <SettingsSection title="App theme" icon={PaletteIcon}>
       <CanvasEditor scope={GLOBAL_SCOPE} canvas={canvas} resolved={resolved} />
       {shadowed ? (
-        <p data-testid="appearance-canvas-shadowed" className="pt-3">
+        <p data-testid="appearance-canvas-shadowed" className="pt-4">
           <ThemeOriginPill emphasized={false}>Workspace override</ThemeOriginPill>
         </p>
       ) : null}
@@ -196,7 +196,7 @@ function AppearanceModeSection() {
 /** Provenance chip for the Editor theme row, plus reset when explicitly pinned. */
 function EditorThemeOriginBadge({ display }: { display: EditorThemeDisplay }) {
   return (
-    <span className="flex items-center gap-1.5">
+    <span className="flex items-center gap-1">
       <ThemeOriginPill emphasized={display.source !== "automatic"}>
         {display.sourceLabel}
       </ThemeOriginPill>
@@ -285,7 +285,7 @@ async function writeOverlay(edits: Record<string, string | null>): Promise<boole
 /** The origin label plus, when something set the key, its one-click revert. */
 function OriginBadge({ row }: { row: TerminalSettingRow }) {
   return (
-    <span className="flex items-center gap-1.5">
+    <span className="flex items-center gap-1">
       <ThemeOriginPill emphasized={row.source === "volli-global" || row.source === "volli-project"}>
         {row.sourceLabel}
       </ThemeOriginPill>
