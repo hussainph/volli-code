@@ -15,7 +15,6 @@ interface InspectableProps {
   "aria-label"?: string;
   children?: React.ReactNode;
   className?: string;
-  density?: "default" | "compact";
   onClick?(): void;
   onCloseAutoFocus?(event: { preventDefault(): void }): void;
   onSelect?(): void;
@@ -114,7 +113,6 @@ describe("the queued message row", () => {
 
     expect(edits).toHaveLength(1);
     expect(renderToStaticMarkup(<>{edit?.props.children}</>)).toContain("Edit message");
-    expect(edit?.props.density).toBe("compact");
     // Dismissing a menu with its trigger intact keeps Radix's normal restore.
     menu?.props.onCloseAutoFocus?.({ preventDefault: () => (restorePrevented = true) });
     expect(restorePrevented).toBe(false);

@@ -256,7 +256,7 @@ export function SessionComposer({
                         event.preventDefault();
                       }}
                     >
-                      <DropdownMenuItem density="compact" onSelect={() => editQueued(entry.id)}>
+                      <DropdownMenuItem onSelect={() => editQueued(entry.id)}>
                         <PencilSimpleIcon weight="fill" />
                         Edit message
                       </DropdownMenuItem>
