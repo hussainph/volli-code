@@ -129,7 +129,7 @@ interface AcceptedQuitLifecycle {
   exit(code: number): void;
 }
 
-/** Coordinates the asynchronous teardown after every cancellable quit gate has accepted. */
+/** Holds quit and coordinates teardown once every synchronous gate accepts, in any order. */
 export function registerAcceptedQuitCoordinator(options: {
   lifecycle: AcceptedQuitLifecycle;
   shutdownNativeSessions(): Promise<void>;
@@ -141,20 +141,26 @@ export function registerAcceptedQuitCoordinator(options: {
     if (quitAlreadyRefused(event)) return;
     event.preventDefault();
     if (shutdownInFlight) return;
-    shutdownInFlight = true;
-    const shutdowns = [
-      Promise.resolve().then(() => options.shutdownNativeSessions()),
-      Promise.resolve().then(() => options.shutdownAgentSocket()),
-    ];
-    void Promise.allSettled(shutdowns)
-      .then((results) => {
-        for (const result of results) {
-          if (result.status === "rejected") options.reportFailure(result.reason);
-        }
-      })
-      .finally(
-        // Re-issuing app.quit() during before-quit is swallowed by Electron.
-        () => options.lifecycle.exit(0),
-      );
+    // This coordinator may register before the synchronous destructive-work
+    // gates so it can cover startup. Hold the quit now, then let every listener
+    // for this event record its verdict before interpreting it as accepted.
+    void Promise.resolve().then(() => {
+      if (quitAlreadyRefused(event) || shutdownInFlight) return;
+      shutdownInFlight = true;
+      const shutdowns = [
+        Promise.resolve().then(() => options.shutdownNativeSessions()),
+        Promise.resolve().then(() => options.shutdownAgentSocket()),
+      ];
+      void Promise.allSettled(shutdowns)
+        .then((results) => {
+          for (const result of results) {
+            if (result.status === "rejected") options.reportFailure(result.reason);
+          }
+        })
+        .finally(
+          // Re-issuing app.quit() during before-quit is swallowed by Electron.
+          () => options.lifecycle.exit(0),
+        );
+    });
   });
 }

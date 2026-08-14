@@ -285,4 +285,34 @@ describe("registerAcceptedQuitCoordinator", () => {
     expect(shutdownAgentSocket).not.toHaveBeenCalled();
     expect(exit).not.toHaveBeenCalled();
   });
+
+  it("lets a later destructive-work gate cancel before shutdown starts", async () => {
+    type QuitEvent = { preventDefault(): void };
+    const handlers: Array<(event: QuitEvent) => void> = [];
+    const shutdownNativeSessions = vi.fn(() => Promise.resolve());
+    const shutdownAgentSocket = vi.fn(() => Promise.resolve());
+    const exit = vi.fn();
+    const lifecycle = {
+      on(_event: "before-quit", listener: (event: QuitEvent) => void) {
+        handlers.push(listener);
+      },
+      exit,
+    };
+    registerAcceptedQuitCoordinator({
+      lifecycle,
+      shutdownNativeSessions,
+      shutdownAgentSocket,
+      reportFailure: vi.fn(),
+    });
+    lifecycle.on("before-quit", (event) => refuseQuit(event));
+
+    const event = { preventDefault: vi.fn() };
+    for (const handler of handlers) handler(event);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(shutdownNativeSessions).not.toHaveBeenCalled();
+    expect(shutdownAgentSocket).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+  });
 });
