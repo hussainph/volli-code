@@ -18,6 +18,7 @@ import {
 import {
   getSupportedThinkingLevels,
   type AssistantMessage,
+  type CredentialStore,
   type Models,
   type UserMessage,
 } from "@earendil-works/pi-ai";
@@ -40,8 +41,8 @@ import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
 import { mapPiActivity } from "./activity";
 import { AuthorityEscalation } from "./escalation";
 import { piExecutionEnv } from "./execution-env";
-import { inspectPiModelAccess } from "./model-access";
-import { piOwnedModels } from "./models";
+import { inspectPiModelAccess, type PiModelAccessSource } from "./model-access";
+import { piOwnedModelAccess } from "./models";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
 import { createAskUserTool, createPiTools } from "./tools";
 import { attentionReasonFor, classifyAssistantMessage, recoveryRefFor } from "./transcript";
@@ -50,11 +51,22 @@ export interface PiRuntimeHostOptions {
   /** Directory that owns every attachment's Pi JSONL recovery sidecar. */
   sessionDataDir: string;
   /**
-   * Injectable Pi model collection, for deterministic tests that script the
-   * provider call. Omitted in the product: Pi owns provider credentials and
-   * refresh behavior, and {@link piOwnedModels} is what reaches them.
+   * The Pi model collection this host runs on.
+   *
+   * Injected by deterministic tests that script the provider call, and injected
+   * in the product too since in-app sign-in arrived: main builds the pair with
+   * {@link piOwnedModelAccess} and hands the same collection to the runtime and
+   * to the login service, so a credential written by one is a credential the
+   * other is already holding the store for. Omitted, this builds its own.
    */
   models?: Models;
+  /**
+   * The credential store behind {@link PiRuntimeHostOptions.models}, when the
+   * caller has one. Only Model Access reads it, and only to ask which providers
+   * this profile stored something for. A scripted `models` normally comes with
+   * no store, which reads as "cannot tell" rather than as an empty profile.
+   */
+  credentials?: CredentialStore;
   /** Host clock for runtime observations; injectable for deterministic tests. */
   now?: () => number;
   /**
@@ -71,8 +83,24 @@ export interface PiRuntimeHostOptions {
 interface PiRuntimeHost {
   sessionDataDir: string;
   models: Models;
+  credentials: CredentialStore | null;
   now: () => number;
   executionEnvFactory: (workspacePath: string) => Promise<ExecutionEnv>;
+}
+
+/**
+ * The collection and its store, or the pair this process owns.
+ *
+ * Written as one branch on `models` rather than two independent `??` defaults
+ * on purpose: falling back per field would build a real {@link
+ * PiFileCredentialStore} — pointed at the developer's own `auth.json` — the
+ * moment a test scripted a collection without one, and a unit test that reads a
+ * person's credentials is a unit test that has already gone wrong.
+ */
+function resolveModelAccess(options: PiRuntimeHostOptions): PiModelAccessSource {
+  const models = options.models;
+  if (models === undefined) return piOwnedModelAccess();
+  return { models, credentials: options.credentials ?? null };
 }
 
 /**
@@ -83,14 +111,17 @@ interface PiRuntimeHost {
  * fresh store per attach would serialize nothing.
  */
 export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntime {
+  const access = resolveModelAccess(options);
   const host: PiRuntimeHost = {
     sessionDataDir: options.sessionDataDir,
-    models: options.models ?? piOwnedModels(),
+    models: access.models,
+    credentials: access.credentials,
     now: options.now ?? Date.now,
     executionEnvFactory: options.executionEnvFactory ?? piExecutionEnv,
   };
   return {
-    inspectModelAccess: (input) => inspectPiModelAccess(host.models, host.now, input),
+    inspectModelAccess: (input) =>
+      inspectPiModelAccess({ models: host.models, credentials: host.credentials }, host.now, input),
     startSession: (spec) => attachSession(host, spec),
   };
 }

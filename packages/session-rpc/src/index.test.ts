@@ -665,6 +665,8 @@ describe("Session tRPC router", () => {
               accountLabel: "OAuth",
               billingSource: "ambient" as const,
               recovery: null,
+              signIn: [],
+              hasStoredCredential: false,
               runtime: { credential: "provider-secret" },
             },
           ],
@@ -694,9 +696,11 @@ describe("Session tRPC router", () => {
     expect(Object.keys(access.providers[0]!).toSorted()).toEqual([
       "accountLabel",
       "billingSource",
+      "hasStoredCredential",
       "id",
       "label",
       "recovery",
+      "signIn",
       "state",
     ]);
     expect(Object.keys(access.models[0]!).toSorted()).toEqual([
@@ -706,7 +710,12 @@ describe("Session tRPC router", () => {
       "reasoningLevels",
       "state",
     ]);
-    expect(JSON.stringify(access)).not.toMatch(/adapter|profile|credential|token/i);
+    // `hasStoredCredential` is itself a legitimate field name (not a leak) —
+    // strip it before checking that no other adapter/profile/credential/token
+    // shaped secret survived parsing.
+    expect(JSON.stringify(access).replaceAll('"hasStoredCredential"', "")).not.toMatch(
+      /adapter|profile|credential|token/i,
+    );
   });
 
   it("sanitizes a whitespace-padded catalog label instead of rejecting the whole snapshot", async () => {
@@ -731,6 +740,8 @@ describe("Session tRPC router", () => {
             accountLabel: "OAuth",
             billingSource: "ambient" as const,
             recovery: null,
+            signIn: [],
+            hasStoredCredential: false,
           },
         ],
         models: [
@@ -771,6 +782,8 @@ describe("Session tRPC router", () => {
             accountLabel: null,
             billingSource: "ambient" as const,
             recovery: null,
+            signIn: [],
+            hasStoredCredential: false,
           },
           {
             id: "anthropic",
@@ -779,6 +792,8 @@ describe("Session tRPC router", () => {
             accountLabel: null,
             billingSource: "api-key" as const,
             recovery: null,
+            signIn: [],
+            hasStoredCredential: false,
           },
         ],
         models: [

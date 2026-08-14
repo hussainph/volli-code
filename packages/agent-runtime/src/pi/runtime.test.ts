@@ -20,6 +20,7 @@ import {
   ModelsError,
   type AssistantMessage,
   type Context,
+  type CredentialStore,
   type Model,
   type Models,
   type ToolCall,
@@ -324,6 +325,11 @@ describe("model access", () => {
     const runtime = createPiAgentRuntime({
       sessionDataDir: "/runtime-owned/sessions",
       models,
+      // The store is passed alongside the collection, which is the only way
+      // `hasStoredCredential` can be answered: `Models` hides its store, so a
+      // host handed only the collection can see that a provider resolves auth
+      // but not that THIS profile is what stored it.
+      credentials,
       now: () => 42,
     });
 
@@ -339,6 +345,8 @@ describe("model access", () => {
           accountLabel: null,
           billingSource: "subscription",
           recovery: null,
+          signIn: [{ type: "oauth", label: "OpenAI (ChatGPT Plus/Pro)", isSubscription: true }],
+          hasStoredCredential: true,
         },
         {
           id: "anthropic",
@@ -346,7 +354,9 @@ describe("model access", () => {
           state: "authentication-required",
           accountLabel: null,
           billingSource: "unknown",
-          recovery: { kind: "external-sign-in" },
+          recovery: { kind: "sign-in" },
+          signIn: [],
+          hasStoredCredential: false,
         },
       ],
       models: [
@@ -367,6 +377,40 @@ describe("model access", () => {
       ],
     });
     expect(JSON.stringify(access)).not.toMatch(/access-secret|refresh-secret|authorization/i);
+  });
+
+  it("reports no stored credential rather than failing the page when the store cannot be read", async () => {
+    // The store answers one question — is there something here to sign out of —
+    // and the page's other answers stay true without it. Going dark over a
+    // failed read would take the provider list and the catalog down with it.
+    const faux = fauxProvider({ provider: "groq", models: [{ id: "model" }] });
+    const models = createModels({ credentials: new InMemoryCredentialStore() });
+    models.setProvider({
+      ...faux.provider,
+      name: "Groq",
+      auth: { apiKey: { name: "Groq API key", resolve: async () => undefined } },
+    });
+    const unreadable: CredentialStore = {
+      read: async () => undefined,
+      list: () => Promise.reject(new Error("auth.json is unreadable")),
+      modify: async () => undefined,
+      delete: async () => undefined,
+    };
+
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+      credentials: unreadable,
+      now: () => 42,
+    });
+
+    // Carries the caller's signal into the store read as well: cancelling an
+    // inspection has to reach every await it is made of, not most of them.
+    const access = await runtime.inspectModelAccess({ signal: new AbortController().signal });
+
+    expect(access.providers).toEqual([
+      expect.objectContaining({ id: "groq", hasStoredCredential: false }),
+    ]);
   });
 
   it("isolates provider authentication failures without exposing their details", async () => {
@@ -405,6 +449,8 @@ describe("model access", () => {
           accountLabel: null,
           billingSource: "unknown",
           recovery: { kind: "retry" },
+          signIn: [],
+          hasStoredCredential: false,
         },
       ],
       models: [
@@ -558,6 +604,8 @@ describe("model access", () => {
         accountLabel: null,
         billingSource: "unknown",
         recovery: { kind: "retry" },
+        signIn: [],
+        hasStoredCredential: false,
       },
     ]);
     expect(access.models[0]?.state).toBe("unavailable");
@@ -610,7 +658,7 @@ describe("model access", () => {
     expect(getAvailable).toHaveBeenCalledWith("sign-in", { signal: controller.signal });
     expect(access.providers[0]).toMatchObject({
       state: "authentication-required",
-      recovery: { kind: "external-sign-in" },
+      recovery: { kind: "sign-in" },
     });
     expect(access.models[0]?.state).toBe("authentication-required");
 
@@ -637,7 +685,7 @@ describe("model access", () => {
 
     const access = await runtime.inspectModelAccess({ refresh: true });
 
-    expect(access.providers[0]?.recovery).toEqual({ kind: "external-sign-in" });
+    expect(access.providers[0]?.recovery).toEqual({ kind: "sign-in" });
     expect(JSON.stringify(access)).not.toContain("oauth-refresh-secret");
   });
 });

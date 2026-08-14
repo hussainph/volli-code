@@ -6,6 +6,8 @@ import {
   FILE_IPC,
   HARNESS_CHANNELS,
   HARNESS_IPC,
+  MODEL_ACCESS_CHANNELS,
+  MODEL_ACCESS_IPC,
   THEME_CHANNELS,
   THEME_IPC,
 } from "./ipc-descriptors";
@@ -1671,6 +1673,94 @@ describe("THEME_IPC descriptor table", () => {
       expect(THEME_CHANNELS).toContain("volli:theme-canvas-set-project");
       expect(THEME_CHANNELS).toContain("volli:theme-appearance-set-project");
       expect(THEME_CHANNELS).toContain("volli:theme-first-paint-set");
+    });
+  });
+});
+
+describe("MODEL_ACCESS_IPC descriptor table", () => {
+  describe("volli:model-access-sign-in-begin", () => {
+    const { guard, invalidError } = MODEL_ACCESS_IPC["volli:model-access-sign-in-begin"];
+
+    it("accepts each method a provider can offer", () => {
+      expect(guard(["anthropic", "api-key"])).toBe(true);
+      expect(guard(["anthropic", "oauth"])).toBe(true);
+    });
+
+    it("rejects a method Volli has no vocabulary for", () => {
+      // Pi's own spelling, which is deliberately NOT this boundary's spelling.
+      expect(guard(["anthropic", "api_key"])).toBe(false);
+      expect(guard(["anthropic", ""])).toBe(false);
+    });
+
+    it("rejects a missing or empty provider id", () => {
+      expect(guard(["", "api-key"])).toBe(false);
+      expect(guard([null, "api-key"])).toBe(false);
+      expect(guard(["anthropic"])).toBe(false);
+      expect(guard(["anthropic", "api-key", "extra"])).toBe(false);
+    });
+
+    it("names the request and never an argument", () => {
+      expect(invalidError).toBe("Invalid sign-in request");
+    });
+  });
+
+  describe("volli:model-access-sign-in-respond", () => {
+    const { guard, invalidError } = MODEL_ACCESS_IPC["volli:model-access-sign-in-respond"];
+
+    it("accepts an answer addressed to one step of one attempt", () => {
+      expect(guard(["attempt-1", "prompt-1", "sk-live-0123456789"])).toBe(true);
+    });
+
+    it("accepts an empty answer, because a provider decides what its steps accept", () => {
+      // The value is unconstrained beyond being a string on purpose: a length
+      // or charset rule invented here would reject the next credential format
+      // a provider ships.
+      expect(guard(["attempt-1", "prompt-1", ""])).toBe(true);
+    });
+
+    it("refuses an answer that names no attempt or no step", () => {
+      expect(guard(["", "prompt-1", "value"])).toBe(false);
+      expect(guard(["attempt-1", "", "value"])).toBe(false);
+      expect(guard(["attempt-1", "prompt-1"])).toBe(false);
+      expect(guard(["attempt-1", "prompt-1", 42])).toBe(false);
+    });
+
+    it("says nothing about the value it rejected", () => {
+      // The one request surface an argument can be a credential on: a message
+      // shaped by what it rejected would be a message describing a secret.
+      expect(invalidError).toBe("Invalid sign-in answer");
+    });
+  });
+
+  describe("volli:model-access-sign-in-cancel", () => {
+    const { guard } = MODEL_ACCESS_IPC["volli:model-access-sign-in-cancel"];
+
+    it("accepts one attempt id and nothing else", () => {
+      expect(guard(["attempt-1"])).toBe(true);
+      expect(guard([""])).toBe(false);
+      expect(guard([])).toBe(false);
+      expect(guard(["attempt-1", "attempt-2"])).toBe(false);
+    });
+  });
+
+  describe("volli:model-access-sign-out", () => {
+    const { guard, invalidError } = MODEL_ACCESS_IPC["volli:model-access-sign-out"];
+
+    it("accepts one provider id and nothing else", () => {
+      expect(guard(["groq"])).toBe(true);
+      expect(guard([""])).toBe(false);
+      expect(guard([{ providerId: "groq" }])).toBe(false);
+      expect(guard([])).toBe(false);
+    });
+
+    it("names the request", () => {
+      expect(invalidError).toBe("Invalid sign-out request");
+    });
+  });
+
+  describe("MODEL_ACCESS_CHANNELS derivation", () => {
+    it("derives the channel list from the table rather than repeating it", () => {
+      expect(MODEL_ACCESS_CHANNELS).toEqual(Object.keys(MODEL_ACCESS_IPC));
     });
   });
 });

@@ -178,16 +178,25 @@ export function SettingsRow({
   description,
   htmlFor,
   align = "center",
+  testId,
   children,
 }: {
   label: string;
   description?: ReactNode;
   htmlFor?: string;
   align?: "center" | "start";
+  /**
+   * Addresses one row when its label cannot. Model Access lists forty provider
+   * rows of identical shape, and a probe that reached one of them by filtering
+   * the DOM for its label text would be matching the section, the row and the
+   * label all at once.
+   */
+  testId?: string;
   children: ReactNode;
 }) {
   return (
     <div
+      data-testid={testId}
       className={cn(
         "flex justify-between gap-6 border-t border-border/60 py-4 first:border-t-0 first:pt-0 last:pb-0",
         align === "center" ? "items-center" : "items-start",

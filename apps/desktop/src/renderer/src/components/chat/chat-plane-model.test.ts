@@ -153,7 +153,9 @@ describe("the Session's own model, against the catalog", () => {
       state: "authentication-required",
       accountLabel: null,
       billingSource: "unknown",
-      recovery: { kind: "external-sign-in" },
+      recovery: { kind: "sign-in" },
+      signIn: [],
+      hasStoredCredential: false,
     },
   ];
 

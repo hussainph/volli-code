@@ -9,6 +9,7 @@ import type {
   FileIpcChannel,
   HarnessIpcChannel,
   IpcArgs,
+  ModelAccessIpcChannel,
   ThemeIpcChannel,
   VolliInvokeContract,
 } from "./ipc";
@@ -786,3 +787,55 @@ export const HARNESS_IPC: { readonly [C in HarnessIpcChannel]: IpcRequestDescrip
 
 /** Every channel the harness-trust surface owns, derived — never hand-synced. */
 export const HARNESS_CHANNELS = Object.keys(HARNESS_IPC) as readonly HarnessIpcChannel[];
+
+// ---- model-access sign-in descriptor table --------------------------------
+// The one request surface an argument can be a credential on, so the guards
+// below are written to the letter of what they may say. `invalidError` never
+// interpolates an argument and never counts characters: "Invalid sign-in
+// answer" is the whole vocabulary a rejected `respond` gets, because a message
+// shaped by the value it rejected is a message that describes a secret. The
+// value is deliberately unconstrained apart from being a string — a provider
+// decides what a valid key looks like, this package cannot, and a length or
+// charset rule invented here would reject a legitimate credential format the
+// next provider ships.
+
+function isSignInType(value: unknown): boolean {
+  return value === "api-key" || value === "oauth";
+}
+
+function isIdArgument(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0;
+}
+
+export const MODEL_ACCESS_IPC: {
+  readonly [C in ModelAccessIpcChannel]: IpcRequestDescriptor<C>;
+} = {
+  "volli:model-access-sign-in-begin": {
+    guard: (args): args is IpcArgs<"volli:model-access-sign-in-begin"> =>
+      args.length === 2 && isIdArgument(args[0]) && isSignInType(args[1]),
+    invalidError: "Invalid sign-in request",
+  },
+  "volli:model-access-sign-in-respond": {
+    guard: (args): args is IpcArgs<"volli:model-access-sign-in-respond"> =>
+      args.length === 3 &&
+      isIdArgument(args[0]) &&
+      isIdArgument(args[1]) &&
+      typeof args[2] === "string",
+    invalidError: "Invalid sign-in answer",
+  },
+  "volli:model-access-sign-in-cancel": {
+    guard: (args): args is IpcArgs<"volli:model-access-sign-in-cancel"> =>
+      args.length === 1 && isIdArgument(args[0]),
+    invalidError: "Invalid sign-in request",
+  },
+  "volli:model-access-sign-out": {
+    guard: (args): args is IpcArgs<"volli:model-access-sign-out"> =>
+      args.length === 1 && isIdArgument(args[0]),
+    invalidError: "Invalid sign-out request",
+  },
+};
+
+/** Every channel the in-app sign-in surface owns, derived — never hand-synced. */
+export const MODEL_ACCESS_CHANNELS = Object.keys(
+  MODEL_ACCESS_IPC,
+) as readonly ModelAccessIpcChannel[];

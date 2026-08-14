@@ -1,35 +1,78 @@
 import * as React from "react";
+import type { ModelAccessSignInType, ModelAccessSignInUpdate, Result } from "@volli/shared";
 
-import { createModelAccessTerminal } from "@renderer/components/sessions/session-create";
-import { useSelectedProject } from "@renderer/hooks/use-selected-project";
-import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model-access-client";
+import {
+  ModelAccessProvider,
+  type ModelAccessClient,
+  type ModelAccessSignInSession,
+} from "@renderer/lib/model-access-client";
+import {
+  claimSignInUpdates,
+  listenForSignInUpdates,
+} from "@renderer/lib/model-access-sign-in-channel";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
-import { toastError } from "@renderer/lib/toast";
-import { scratchScope } from "@renderer/stores/sessions";
 
+/**
+ * Model Access over the two doors it actually has.
+ *
+ * Reads go over Session RPC, which already owns the snapshot and its zod
+ * schema. Sign-in does not, and the split is deliberate rather than historical:
+ * every RPC procedure is wrapped by a diagnostic recorder whose ring buffer a
+ * lab subscription can tap, and one argument of a sign-in is an API key. The
+ * dedicated `api.modelAccess` channels record nothing.
+ */
 export function DesktopModelAccessProvider({ children }: React.PropsWithChildren) {
-  const project = useSelectedProject();
   const client = React.useMemo<ModelAccessClient>(() => {
     const rpc = sessionRpcClient();
     return {
       inspect: (input) => rpc.modelAccess.inspect.query(input),
       defaultSelection: () => rpc.modelAccess.defaultSelection.query(),
       setDefault: (selection) => rpc.modelAccess.setDefault.mutate(selection),
-      openExternalSignIn: async () => {
-        if (project === null) {
-          toastError("Select a project before opening Model Access.");
-          return false;
-        }
-        return openProjectModelAccess(project.id);
+      beginSignIn: (providerId, type, onUpdate) => beginSignIn(providerId, type, onUpdate),
+      signOut: async (providerId) => {
+        expect(await window.api.modelAccess.signOut(providerId));
       },
     };
-  }, [project]);
+  }, []);
   return <ModelAccessProvider client={client}>{children}</ModelAccessProvider>;
 }
 
-export async function openProjectModelAccess(
-  projectId: string,
-  openTerminal: typeof createModelAccessTerminal = createModelAccessTerminal,
-): Promise<boolean> {
-  return (await openTerminal(scratchScope(projectId))) !== null;
+/**
+ * Subscribes, then starts — never the other way round.
+ *
+ * {@link listenForSignInUpdates} runs before the `invoke` because main answers
+ * an api-key login by prompting inside the same synchronous stretch that
+ * handles this call, so the first prompt is queued to this process before the
+ * id it belongs to is. Claiming after the await is still correct: the channel
+ * holds what arrived early and replays it in order.
+ */
+async function beginSignIn(
+  providerId: string,
+  type: ModelAccessSignInType,
+  onUpdate: (update: ModelAccessSignInUpdate) => void,
+): Promise<ModelAccessSignInSession> {
+  listenForSignInUpdates();
+  const started = await window.api.modelAccess.beginSignIn(providerId, type);
+  if (!started.ok) throw new Error(started.error);
+  const { attemptId } = started;
+  const release = claimSignInUpdates(attemptId, (update) => {
+    onUpdate(update);
+    // A settled attempt has nothing more to say, and leaving the route in
+    // place would hold the row's closure for the life of the renderer.
+    if (update.kind === "settled") release();
+  });
+  return {
+    attemptId,
+    respond: async (promptId, value) => {
+      expect(await window.api.modelAccess.respondToPrompt(attemptId, promptId, value));
+    },
+    cancel: async () => {
+      expect(await window.api.modelAccess.cancelSignIn(attemptId));
+    },
+  };
+}
+
+/** Turns the IPC surface's `Result` into the rejection every caller here already handles. */
+function expect(result: Result): void {
+  if (!result.ok) throw new Error(result.error);
 }

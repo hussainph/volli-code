@@ -16,6 +16,7 @@
 
 import type { ActivityDescriptor } from "./session-activity";
 import type { AuthorityDenialCause, AuthoritySnapshot, CodingToolId } from "./authority";
+import type { ModelAccessSignInMethod } from "./model-access-sign-in";
 import {
   SESSION_ESCALATION_OPTIONS,
   SESSION_ESCALATION_STOP_ID,
@@ -60,9 +61,19 @@ export type ModelAccessBillingSource =
   | "ambient"
   | "unknown";
 
-/** Product recovery vocabulary. Runtime-native login detail stays behind the host seam. */
+/**
+ * Product recovery vocabulary. Runtime-native login detail stays behind the host seam.
+ *
+ * `sign-in` was `external-sign-in` while signing in meant leaving for a
+ * terminal running a bundled CLI. It happens in the app now, so the word came
+ * off: the distinction that still earns its keep is sign-in versus retry — a
+ * provider with no credential needs a person, a provider whose refresh failed
+ * needs another attempt — and nothing here is external any more. The kind is
+ * derived live on every inspect and never written down, so renaming it changes
+ * no stored row.
+ */
 export interface ModelAccessRecovery {
-  kind: "external-sign-in" | "retry";
+  kind: "sign-in" | "retry";
 }
 
 /** One provider account as the renderer may see it. Never contains credentials. */
@@ -73,6 +84,26 @@ export interface ModelAccessProvider {
   accountLabel: string | null;
   billingSource: ModelAccessBillingSource;
   recovery: ModelAccessRecovery | null;
+  /**
+   * The ways this provider can be signed in to, in the provider's own words.
+   *
+   * Up to two, and which one a person wants is not derivable: Anthropic takes
+   * an API key or a Claude Pro/Max subscription, and those are different
+   * accounts with different bills. Empty means no interactive sign-in exists —
+   * a provider configured only from ambient environment variables — and a row
+   * with none offers no button rather than a button that cannot work.
+   */
+  signIn: readonly ModelAccessSignInMethod[];
+  /**
+   * Whether a credential for this provider is stored in the profile.
+   *
+   * Not the same question as {@link ModelAccessState}, and the gap is the
+   * reason it is asked separately: a provider reading its key from an ambient
+   * environment variable is `available` with nothing stored, and offering to
+   * sign that one out would promise a change that removing no file can make.
+   * Signing out acts on the stored credential and only ever on that.
+   */
+  hasStoredCredential: boolean;
 }
 
 /** One model the runtime knows, qualified by current account availability. */

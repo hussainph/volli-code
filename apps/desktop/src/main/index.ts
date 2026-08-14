@@ -54,6 +54,8 @@ import { createDesktopSessionEngine } from "./session-control";
 import { createDesktopSessionRuntime } from "./session-runtime";
 import { closeStaleAttachments } from "./session-runtime/boot-recovery";
 import { sessionRootThreadId } from "@volli/session-engine";
+import { registerModelAccessIpcHandlers } from "./model-access/ipc";
+import { ModelAccessSignInService } from "./model-access/sign-in-service";
 import { createPiRuntimeHost } from "./session-runtime/pi-adapter";
 import { createTicketSessions } from "./session-runtime/ticket-sessions";
 import { createProjectSessions } from "./session-runtime/project-sessions";
@@ -63,7 +65,7 @@ import {
   writeDefaultModelSelection,
 } from "./session-runtime/model-access-preferences";
 import { registerSessionRpcIpcHandlers } from "./session-rpc-ipc";
-import { piAuthFilePath, piExecutionEnv } from "@volli/agent-runtime";
+import { piAuthFilePath, piExecutionEnv, piOwnedModelAccess, piSignIn } from "@volli/agent-runtime";
 import { listRegisteredHarnesses } from "./db/harness-registry-repo";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
@@ -519,80 +521,90 @@ app.whenReady().then(async () => {
   // The Pi-backed Agent Runtime is the structured product's one target
   // executor, for Ticket Sessions and ticketless project chats alike. Model
   // access and selection come from this Pi host.
-  const piRuntimeHost = dbHandle.ok
-    ? createPiRuntimeHost({
-        sessionDataDir: join(app.getPath("userData"), "pi-sessions"),
-        // Makes `volli` and every detected toolchain resolve inside a
-        // structured Session's shell tool with or without the consented
-        // `/usr/local/bin` symlink — the same recovery a spawned PTY gets
-        // from `agentSessionEnv`/`ticketSessionEnv` prepending this same
-        // directory (`harness-runtime.ts`).
-        executionEnvFactory: async (workspacePath) => {
-          await loginPathBootstrap.apply();
-          return piExecutionEnv(workspacePath, { pathPrefixes: [runtimePaths.binDir] });
-        },
-        // The runtime needs the Role a Session runs under and the Ticket it
-        // implies, which a directory cannot say. The generated Brief is
-        // recorded once before the first runtime construction; every later
-        // attach reuses those exact bytes.
-        resolveRuntimeContext: async (sessionId) => {
-          if (sessionEngine === null) return null;
-          const projection = await sessionEngine.getSession({ sessionId });
-          const attaching = projection?.session;
-          if (!attaching || projection.modelSelection === null) return null;
-          const project = getProjectById(dbHandle.db, attaching.projectId);
-          if (!project) return null;
-          const provenance = {
-            source: { kind: "system", id: "pi-runtime", detail: null },
-            venue: { id: "local", kind: "local" },
-          } as const;
-          const shared = {
-            projectId: project.id,
-            rootThreadId: sessionRootThreadId(sessionId),
-            model: projection.modelSelection,
-          };
-          // A ticketless Session is a Role, not a Ticket lookup that failed:
-          // it briefs on the project root it already runs in.
-          if (attaching.ticketId === null) {
+  // Pi's providers and the credential store behind them, built once here so
+  // signing in and running a Session share one collection. Two would be two
+  // write chains over one `auth.json` — safe, since the store's lock is
+  // cross-process and already survives the `pi` CLI writing alongside us, but
+  // it would also mean a credential written by the login flow sat behind a
+  // catalog the runtime had no reason to re-read.
+  const piModelAccess = dbHandle.ok ? piOwnedModelAccess() : null;
+  const piRuntimeHost =
+    dbHandle.ok && piModelAccess !== null
+      ? createPiRuntimeHost({
+          sessionDataDir: join(app.getPath("userData"), "pi-sessions"),
+          models: piModelAccess.models,
+          credentials: piModelAccess.credentials,
+          // Makes `volli` and every detected toolchain resolve inside a
+          // structured Session's shell tool with or without the consented
+          // `/usr/local/bin` symlink — the same recovery a spawned PTY gets
+          // from `agentSessionEnv`/`ticketSessionEnv` prepending this same
+          // directory (`harness-runtime.ts`).
+          executionEnvFactory: async (workspacePath) => {
+            await loginPathBootstrap.apply();
+            return piExecutionEnv(workspacePath, { pathPrefixes: [runtimePaths.binDir] });
+          },
+          // The runtime needs the Role a Session runs under and the Ticket it
+          // implies, which a directory cannot say. The generated Brief is
+          // recorded once before the first runtime construction; every later
+          // attach reuses those exact bytes.
+          resolveRuntimeContext: async (sessionId) => {
+            if (sessionEngine === null) return null;
+            const projection = await sessionEngine.getSession({ sessionId });
+            const attaching = projection?.session;
+            if (!attaching || projection.modelSelection === null) return null;
+            const project = getProjectById(dbHandle.db, attaching.projectId);
+            if (!project) return null;
+            const provenance = {
+              source: { kind: "system", id: "pi-runtime", detail: null },
+              venue: { id: "local", kind: "local" },
+            } as const;
+            const shared = {
+              projectId: project.id,
+              rootThreadId: sessionRootThreadId(sessionId),
+              model: projection.modelSelection,
+            };
+            // A ticketless Session is a Role, not a Ticket lookup that failed:
+            // it briefs on the project root it already runs in.
+            if (attaching.ticketId === null) {
+              const brief = await sessionEngine.getOrRecordSessionInput({
+                sessionId,
+                input: { kind: "runtime-brief", text: composeProjectBrief({ project }) },
+                provenance,
+              });
+              return {
+                ...shared,
+                role: "project",
+                ticketId: null,
+                brief: brief.text,
+                location: "main-checkout",
+              };
+            }
+            const ticket = getTicket(dbHandle.db, attaching.ticketId);
+            if (!ticket || ticket.projectId !== project.id) return null;
             const brief = await sessionEngine.getOrRecordSessionInput({
               sessionId,
-              input: { kind: "runtime-brief", text: composeProjectBrief({ project }) },
+              input: {
+                kind: "runtime-brief",
+                text: composeTicketBrief({
+                  project,
+                  ticket,
+                  attachments: listAttachments(dbHandle.db, ticket.id),
+                }),
+              },
               provenance,
             });
             return {
               ...shared,
-              role: "project",
-              ticketId: null,
+              role: "ticket",
+              ticketId: ticket.id,
               brief: brief.text,
-              location: "main-checkout",
+              // The same predicate `location.ts` binds the directory on: a Ticket
+              // that never took a worktree runs in the project's Main checkout.
+              location: ticket.usesWorktree ? "worktree" : "main-checkout",
             };
-          }
-          const ticket = getTicket(dbHandle.db, attaching.ticketId);
-          if (!ticket || ticket.projectId !== project.id) return null;
-          const brief = await sessionEngine.getOrRecordSessionInput({
-            sessionId,
-            input: {
-              kind: "runtime-brief",
-              text: composeTicketBrief({
-                project,
-                ticket,
-                attachments: listAttachments(dbHandle.db, ticket.id),
-              }),
-            },
-            provenance,
-          });
-          return {
-            ...shared,
-            role: "ticket",
-            ticketId: ticket.id,
-            brief: brief.text,
-            // The same predicate `location.ts` binds the directory on: a Ticket
-            // that never took a worktree runs in the project's Main checkout.
-            location: ticket.usesWorktree ? "worktree" : "main-checkout",
-          };
-        },
-      })
-    : null;
+          },
+        })
+      : null;
   const sessionRuntime =
     dbHandle.ok && sessionEngine !== null && piRuntimeHost !== null
       ? createDesktopSessionRuntime({
@@ -646,6 +658,15 @@ app.whenReady().then(async () => {
           startProjectSession: projectSessions?.start,
           attachProjectSession: projectSessions?.attach,
         });
+  // Signing in is a Model Access task, not a Session one, so it gets its own
+  // surface rather than a Session RPC namespace — see the contract in
+  // `@volli/shared`'s VolliModelAccessIpcContract for why a channel that can
+  // carry an API key stays off the instrumented, log-tapped one.
+  registerModelAccessIpcHandlers(
+    piModelAccess === null
+      ? null
+      : new ModelAccessSignInService({ pi: piSignIn(piModelAccess.models) }),
+  );
   // From this point onward the native Session control plane exists. Install
   // its quit hold before the first later startup await so a Dock/OS quit cannot
   // reach the socket-only will-quit fallback and strand these resources. The
