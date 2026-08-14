@@ -331,7 +331,6 @@ export class PtyManager {
       this.attachmentsRootPath,
       this.wrapperFor,
       this.adapterFor,
-      this.agentRuntime?.modelAccessTerminal ?? null,
     );
     if (!resolved.ok) return resolved;
     const scope = resolved.scope;
@@ -1146,8 +1145,6 @@ function foregroundProcess(session: Session): string | null {
 export interface AgentRuntimeEnvironment {
   socketPath: string;
   binDir: string;
-  /** Fixed main-owned launch for the bundled Pi credential terminal. */
-  modelAccessTerminal?: import("./scope").ModelAccessTerminalLaunch;
   /**
    * What the wrappers in `binDir` READ at run time: `VOLLI_HARNESS_ARGV_<SLUG>`,
    * one namespaced variable per harness. Nothing a HARNESS reads is here — a

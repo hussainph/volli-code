@@ -61,7 +61,6 @@ export function terminalCreateRequest(
   placement: "tab" | "split",
   kickoff?: SessionKickoff,
   resume?: SessionResume,
-  purpose?: "model-access",
 ) {
   return {
     workspaceId: scope.projectId,
@@ -69,12 +68,10 @@ export function terminalCreateRequest(
     cols: INITIAL_COLS,
     rows: INITIAL_ROWS,
     placement,
-    ...(scope.kind === "scratch" && purpose ? { purpose } : {}),
     ...(scope.kind === "ticket"
       ? {
           ticket: {
             ticketId: scope.ticketId,
-            ...(purpose ? { purpose } : {}),
             ...(kickoff ? { kickoff } : {}),
             ...(resume ? { resume } : {}),
           },
@@ -180,12 +177,11 @@ async function bootSession(
   land: (sessionId: string, launch: SessionLaunch) => boolean,
   kickoff?: SessionKickoff,
   resume?: SessionResume,
-  purpose?: "model-access",
 ): Promise<string | null> {
   return underOwnerGuard(scope, terminalStarting, async (project) => {
     try {
       const result = await window.api.terminal.create(
-        terminalCreateRequest(scope, project.path, placement, kickoff, resume, purpose),
+        terminalCreateRequest(scope, project.path, placement, kickoff, resume),
       );
       if (!result.ok) {
         toastError(`Couldn't ${verb}: ${result.error}`);
@@ -230,22 +226,6 @@ export async function createTerminalSession(
       return true;
     },
     kickoff,
-  );
-}
-
-/** Open the main-owned bundled Pi CLI so the user can run `/login`. */
-export async function createModelAccessTerminal(scope: SessionScope): Promise<string | null> {
-  return bootSession(
-    scope,
-    "tab",
-    "open Model Access",
-    (sessionId, launch) => {
-      useSessionsStore.getState().addSession(scope, sessionId, launch);
-      return true;
-    },
-    undefined,
-    undefined,
-    "model-access",
   );
 }
 

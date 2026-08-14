@@ -3,7 +3,8 @@
 **Status:** Part I slices 1–4 shipped, except slice 4's second half — the drawer
 above the composer — and the five other items its checklist names. Part II
 candidates 3 and 1 shipped (1 as #205 → #206 → #207); 2, 5 and 6 remain, in the
-order below. Part III decision complete, not started — all four slices.
+order below. Part III shipped — slices 1–3 as #239, slice 4 as the deletion that
+followed it.
 
 **Date:** 2026-08-11
 
@@ -611,7 +612,11 @@ transport-agnostic and can travel, while 129 raw Electron channels and their
 2047-line contract sit inside `@volli/shared` — the one package such a client
 would import for domain types.
 
-## Part III — In-app Model Access sign-in
+## Part III — In-app Model Access sign-in — shipped
+
+**Shipped 2026-08-14.** Slices 1–3 landed as #239; slice 4 deleted the bundle
+right after. The account below is the reasoning that produced that outcome, so
+"What is true today" describes the state Part III started from, not the code.
 
 ### Product decision
 
@@ -729,7 +734,8 @@ since after this it is not external.
    cancellation from both ends.
 3. Model Access Settings sign-in and sign-out over the four prompt kinds and four
    event kinds.
-4. Delete the bundle and everything listed above.
+4. Delete the bundle and everything listed above. The `resources/` directory went
+   with it — the bundle was its only tenant.
 
 ### Testing and evidence
 
@@ -763,11 +769,9 @@ since after this it is not external.
   a record to tune against and a consequence to tuning: changing them now changes
   how often a person is interrupted, which it did not before.
 - Packaging: an App-Sandboxed build cannot nest `sandbox-exec`, so distribution
-  strategy and Part I's boundary are the same decision. Part III removes the
-  *other* packaging hazard (the `codesign`/`treeSha256` gate), so doing it first
-  leaves packaging with one problem instead of two.
-- Whether any shipped provider's `device_code` or `manual_code` flow resists an
-  in-app expression. That answer gates Part III slice 4, not the whole part.
+  strategy and Part I's boundary are the same decision. Part III already removed
+  the *other* packaging hazard (the `codesign`/`treeSha256` gate), so packaging
+  now has one problem instead of two.
 
 ## Research record
 

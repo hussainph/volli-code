@@ -65,7 +65,7 @@ import {
   writeDefaultModelSelection,
 } from "./session-runtime/model-access-preferences";
 import { registerSessionRpcIpcHandlers } from "./session-rpc-ipc";
-import { piAuthFilePath, piExecutionEnv, piOwnedModelAccess, piSignIn } from "@volli/agent-runtime";
+import { piExecutionEnv, piOwnedModelAccess, piSignIn } from "@volli/agent-runtime";
 import { listRegisteredHarnesses } from "./db/harness-registry-repo";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
@@ -111,7 +111,6 @@ import {
 } from "./agent-socket";
 import { loginShellPath } from "./login-path";
 import { createLoginPathBootstrap, resolveLoginShellPath } from "./login-shell-path";
-import { piLoginLaunch, verifiedPiCliResource } from "./pi-cli-resource";
 import {
   detectHarnesses,
   installHarnessSkills,
@@ -911,23 +910,6 @@ app.whenReady().then(async () => {
     socketPath: runtimePaths.socketPath,
     binDir: runtimePaths.binDir,
   };
-  try {
-    const bundledPiPath = await verifiedPiCliResource({
-      platform: process.platform,
-      arch: process.arch,
-      appPath: app.getAppPath(),
-      resourcesPath: process.resourcesPath,
-      isPackaged: app.isPackaged,
-    });
-    if (bundledPiPath !== null) {
-      agentRuntime.modelAccessTerminal = piLoginLaunch({
-        binaryPath: bundledPiPath,
-        authFilePath: piAuthFilePath(),
-      });
-    }
-  } catch (error) {
-    console.warn(`[volli] bundled Pi CLI is unavailable: ${errorMessage(error)}`);
-  }
   /** Wrappers refused this launch because the name would shadow a system tool. */
   let harnessRuntimeRefused: RefusedWrapper[] = [];
 

@@ -19,12 +19,6 @@ export interface CreateTerminalSessionRequest {
   /** App-owned layout intent. Omitted callers predate split metadata and land as a tab. */
   placement?: "tab" | "split";
   /**
-   * Project-scoped manual provider sign-in; main chooses the executable and
-   * launch policy. Ignored when `ticket` is present, because the ticket intent
-   * owns that launch.
-   */
-  purpose?: "model-access";
-  /**
    * When present, the session is ticket-scoped: main resolves the ticket and
    * its project from the db (never trusting anything else from the renderer),
    * runs the PTY at the project root with `VOLLI_TICKET`/`VOLLI_ARTIFACTS_DIR`
@@ -46,11 +40,6 @@ export interface CreateTerminalSessionRequest {
    */
   ticket?: {
     ticketId: string;
-    /**
-     * Ticket-scoped manual provider sign-in terminal; main chooses the
-     * executable and flags. This takes precedence over the top-level purpose.
-     */
-    purpose?: "model-access";
     kickoff?: { harnessId: HarnessId; prompt: string };
     resume?: { sessionId: string };
   };

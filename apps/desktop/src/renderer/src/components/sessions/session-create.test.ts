@@ -175,36 +175,24 @@ describe("bootChatSession", () => {
 });
 
 describe("terminalCreateRequest", () => {
-  it("sends only model-access intent and Ticket identity for the sign-in terminal", () => {
-    expect(
-      terminalCreateRequest(SCOPE, PROJECT.path, "tab", undefined, undefined, "model-access"),
-    ).toEqual({
+  it("sends Ticket identity alone when a ticket scope carries no kickoff or resume", () => {
+    expect(terminalCreateRequest(SCOPE, PROJECT.path, "tab")).toEqual({
       workspaceId: PROJECT.id,
       cwd: PROJECT.path,
       cols: 80,
       rows: 24,
       placement: "tab",
-      ticket: { ticketId: "t1", purpose: "model-access" },
+      ticket: { ticketId: "t1" },
     });
   });
 
-  it("sends project-scoped model-access intent without inventing a Ticket", () => {
-    expect(
-      terminalCreateRequest(
-        scratchScope(PROJECT.id),
-        PROJECT.path,
-        "tab",
-        undefined,
-        undefined,
-        "model-access",
-      ),
-    ).toEqual({
+  it("invents no Ticket for a scratch scope", () => {
+    expect(terminalCreateRequest(scratchScope(PROJECT.id), PROJECT.path, "tab")).toEqual({
       workspaceId: PROJECT.id,
       cwd: PROJECT.path,
       cols: 80,
       rows: 24,
       placement: "tab",
-      purpose: "model-access",
     });
   });
 });
