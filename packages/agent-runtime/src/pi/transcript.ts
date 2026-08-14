@@ -30,6 +30,15 @@ const PREFIXED_SECRET = /\b(?:sk|pk|ghp|gho|xox[a-z])[-_][A-Za-z0-9_-]+/gi;
 const AUTH_SIGNAL =
   /(api[ _-]?key|auth|credential|unauthorized|forbidden|login|sign[ _-]?in|not configured|401|403)/i;
 const CONTEXT_SIGNAL = /(context (?:length|limit|window)|too many tokens|maximum tokens)/i;
+/**
+ * How a connection that died mid-stream reads once the provider has rethrown
+ * it. Deliberately narrower than pi-ai's own retry predicate: everything else a
+ * model can fail with — a spent quota, a refused key, a payload it would build
+ * the same way again — is answered by a person, and re-sending it just spends
+ * another turn arriving at the same sentence.
+ */
+const TRANSPORT_SIGNAL =
+  /(websocket|econnreset|etimedout|econnrefused|socket hang up|fetch failed|network|stream closed before)/i;
 
 const ATTENTION_REASON: Record<RuntimeFailure["reason"], AttentionObservation["reason"]> = {
   auth: "auth",
@@ -61,6 +70,17 @@ export function attentionReasonFor(failure: RuntimeFailure): AttentionObservatio
 export function classifyDiagnostic(sanitized: string): RuntimeFailure["reason"] {
   if (CONTEXT_SIGNAL.test(sanitized)) return "context";
   return AUTH_SIGNAL.test(sanitized) ? "auth" : "model";
+}
+
+/**
+ * Whether the run died of its transport rather than of anything about itself.
+ *
+ * The reason gate is load-bearing, not decoration: a socket the provider closed
+ * over credentials carries both signals, and {@link classifyDiagnostic} has
+ * already settled that argument in auth's favour by the time this reads it.
+ */
+export function isTransientTransportFailure(failure: RuntimeFailure): boolean {
+  return failure.reason === "model" && TRANSPORT_SIGNAL.test(failure.message);
 }
 
 /** Readable text for anything thrown across the Pi boundary. */

@@ -1,10 +1,12 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { RuntimeFailure } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 import {
   attentionReasonFor,
   classifyAssistantMessage,
   classifyDiagnostic,
   errorText,
+  isTransientTransportFailure,
   recoveryRefFor,
   sanitizeDiagnostic,
 } from "./transcript";
@@ -77,6 +79,53 @@ describe("classifyDiagnostic", () => {
   it("recognises provider context-window failures", () => {
     expect(classifyDiagnostic("maximum context length exceeded")).toBe("context");
     expect(classifyDiagnostic("too many tokens for this context window")).toBe("context");
+  });
+});
+
+/** Classified the way a live failure reaches it, so the reason gate is real. */
+function failureFor(message: string): RuntimeFailure {
+  const sanitized = sanitizeDiagnostic(message);
+  return { reason: classifyDiagnostic(sanitized), message: sanitized };
+}
+
+describe("isTransientTransportFailure", () => {
+  it.each([
+    "WebSocket error",
+    "WebSocket closed 1006",
+    "WebSocket closed",
+    "WebSocket connect timeout after 30000ms",
+    "WebSocket stream closed before response.completed",
+    "read ECONNRESET",
+    "connect ETIMEDOUT 10.0.0.1:443",
+    "connect ECONNREFUSED 127.0.0.1:443",
+    "socket hang up",
+    "fetch failed",
+    "Network error while reading the response",
+  ])("retries a dropped connection: %s", (message) => {
+    expect(isTransientTransportFailure(failureFor(message))).toBe(true);
+  });
+
+  it.each([
+    "malformed provider payload",
+    "The model run failed.",
+    "429 Too Many Requests",
+    "You exceeded your current quota",
+    "maximum context length exceeded",
+    "No API key found for anthropic",
+  ])("leaves a failure only the user can answer alone: %s", (message) => {
+    expect(isTransientTransportFailure(failureFor(message))).toBe(false);
+  });
+
+  it("does not retry a socket the provider closed over credentials", () => {
+    const failure = failureFor("WebSocket closed 4001 unauthorized");
+    expect(failure.reason).toBe("auth");
+    expect(isTransientTransportFailure(failure)).toBe(false);
+  });
+
+  it("does not retry a run that was asked to stop", () => {
+    expect(isTransientTransportFailure({ reason: "aborted", message: "WebSocket closed" })).toBe(
+      false,
+    );
   });
 });
 

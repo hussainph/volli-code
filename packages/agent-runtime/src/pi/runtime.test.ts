@@ -35,7 +35,7 @@ import {
 import { describe, expect, it, vi } from "vite-plus/test";
 import { ScopedExecutionEnv } from "./scoped-execution-env";
 import { createPiTools } from "./tools";
-import { createPiAgentRuntime } from "./runtime";
+import { autoRetryDelayMs, createPiAgentRuntime } from "./runtime";
 
 const MODEL_ID = "claude-haiku-4-5";
 const PROVIDER_ID = "anthropic";
@@ -180,6 +180,23 @@ function haltOnAbort(delta: string, onStreaming: () => void): ScriptStep {
   };
 }
 
+/** How a dropped provider websocket reads by the time Pi has rethrown it. */
+const DROPPED_SOCKET = "WebSocket closed 1006";
+
+/** The backoff schedule is proved on its own; a turn under test never spends it. */
+const instantBackoff = (): number => 0;
+
+function drops(count: number): ScriptStep[] {
+  return Array.from({ length: count }, () => (emit: EmitApi) => emit.fail(DROPPED_SOCKET));
+}
+
+function settles(text: string): ScriptStep {
+  return (emit) => {
+    emit.text(text);
+    emit.finish();
+  };
+}
+
 // --- fixtures --------------------------------------------------------------
 
 interface Attachment {
@@ -249,6 +266,16 @@ function kinds(observations: RuntimeObservation[]): string[] {
       ? `${observation.kind}:${observation.state}`
       : observation.kind,
   );
+}
+
+function settledTexts(observations: RuntimeObservation[]): string[] {
+  return observations.flatMap((observation) =>
+    observation.kind === "message-settled" ? [observation.message.text] : [],
+  );
+}
+
+function attentions(observations: RuntimeObservation[]): RuntimeObservation[] {
+  return observations.filter((observation) => observation.kind === "attention");
 }
 
 function jsonlFiles(root: string): string[] {
@@ -3317,5 +3344,232 @@ describe("startSession", () => {
       }),
     ]);
     await handle.close();
+  });
+});
+
+describe("auto-retrying a dropped transport", () => {
+  it("resumes the same turn in place when the socket drops mid-stream", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(scriptedStream([...drops(1), settles("recovered")])),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await expect(handle.submitUserMessage("go")).resolves.toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+    });
+
+    expect(kinds(observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "delta",
+      "message-settled",
+      "turn:completed",
+    ]);
+    await handle.close();
+  });
+
+  it("gives up after ten attempts and says how many it spent", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const attempts: number[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      retryBackoffMs: (attempt) => {
+        attempts.push(attempt);
+        return 0;
+      },
+      models: modelsWithStream(scriptedStream(drops(11))),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await handle.submitUserMessage("go");
+
+    expect(attempts).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(kinds(observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "attention",
+      "turn:interrupted",
+    ]);
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({
+        state: "raised",
+        reason: "runtime-failure",
+        message: `${DROPPED_SOCKET} (after 10 retries)`,
+      }),
+    ]);
+    await handle.close();
+  });
+
+  it("hands the turn after an exhausted one a fresh retry budget", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(scriptedStream([...drops(12), settles("recovered")])),
+    });
+    const handle = await runtime.startSession(spec);
+    await handle.submitUserMessage("go");
+    expect(attentions(observations)).toHaveLength(1);
+
+    await expect(handle.retry()).resolves.toEqual({ kind: "delivered", delivery: "retry" });
+
+    expect(kinds(observations).filter((kind) => kind === "turn:started")).toHaveLength(2);
+    expect(kinds(observations).at(-1)).toBe("turn:completed");
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({ state: "raised", reason: "runtime-failure" }),
+      expect.objectContaining({ state: "cleared", reason: "runtime-failure" }),
+    ]);
+    await handle.close();
+  });
+
+  it("leaves a failure the user has to answer to the user", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    let calls = 0;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            calls += 1;
+            emit.fail("malformed provider payload");
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await handle.submitUserMessage("go");
+
+    expect(calls).toBe(1);
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({ reason: "runtime-failure", message: "malformed provider payload" }),
+    ]);
+    await handle.close();
+  });
+
+  it("abandons the wait when the turn is interrupted", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const waiting = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      retryBackoffMs: () => {
+        waiting.resolve();
+        return 30_000;
+      },
+      models: modelsWithStream(scriptedStream(drops(1))),
+    });
+    const handle = await runtime.startSession(spec);
+    const delivery = handle.submitUserMessage("go");
+    await waiting.promise;
+
+    await handle.interrupt();
+    await delivery;
+
+    expect(kinds(observations)).toEqual(["attachment:started", "turn:started", "turn:interrupted"]);
+    await handle.close();
+  });
+
+  it("abandons the wait when the attachment closes", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const waiting = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      retryBackoffMs: () => {
+        waiting.resolve();
+        return 30_000;
+      },
+      models: modelsWithStream(scriptedStream(drops(1))),
+    });
+    const handle = await runtime.startSession(spec);
+    const delivery = handle.submitUserMessage("go");
+    await waiting.promise;
+
+    await handle.close();
+    await delivery;
+
+    expect(kinds(observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "turn:interrupted",
+      "attachment:closed",
+    ]);
+  });
+
+  it("abandons the wait when the attachment's signal aborts", async () => {
+    const controller = new AbortController();
+    const { spec, observations, sessionDataDir } = fixture({ signal: controller.signal });
+    const waiting = Promise.withResolvers<void>();
+    let calls = 0;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      retryBackoffMs: () => {
+        waiting.resolve();
+        return 30_000;
+      },
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            calls += 1;
+            emit.fail(DROPPED_SOCKET);
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+    const delivery = handle.submitUserMessage("go");
+    await waiting.promise;
+
+    controller.abort();
+    await delivery;
+
+    expect(calls).toBe(1);
+    expect(kinds(observations)).toEqual(["attachment:started", "turn:started", "turn:interrupted"]);
+    await handle.close();
+  });
+
+  it("queues a follow-up typed during the wait against the same live turn", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const waiting = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      retryBackoffMs: () => {
+        waiting.resolve();
+        return 1;
+      },
+      models: modelsWithStream(
+        scriptedStream([...drops(1), settles("resumed"), settles("and the follow-up")]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+    const delivery = handle.submitUserMessage("go");
+    await waiting.promise;
+
+    await expect(
+      handle.submitUserMessage("also this", "queue", "command-follow-up"),
+    ).resolves.toEqual({ kind: "delivered", delivery: "queue" });
+    await delivery;
+
+    expect(kinds(observations).filter((kind) => kind === "turn:started")).toHaveLength(1);
+    expect(settledTexts(observations)).toEqual(["resumed", "and the follow-up"]);
+    expect((await handle.reconcile(null)).receipts).toEqual([
+      expect.objectContaining({ commandId: "command-follow-up" }),
+    ]);
+    await handle.close();
+  });
+});
+
+describe("autoRetryDelayMs", () => {
+  it("doubles the wait up to a ceiling, jittered", () => {
+    expect(autoRetryDelayMs(0)).toBeGreaterThanOrEqual(500);
+    expect(autoRetryDelayMs(0)).toBeLessThan(600);
+    expect(autoRetryDelayMs(3)).toBeGreaterThanOrEqual(4000);
+    expect(autoRetryDelayMs(3)).toBeLessThan(4100);
+    expect(autoRetryDelayMs(9)).toBeGreaterThanOrEqual(8000);
+    expect(autoRetryDelayMs(9)).toBeLessThan(8100);
   });
 });

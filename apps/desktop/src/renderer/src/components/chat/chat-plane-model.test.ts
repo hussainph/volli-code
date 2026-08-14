@@ -488,10 +488,33 @@ describe("sessionBlocker", () => {
       ["Disconnected", "Retry"],
       ["Context limit reached", null],
       ["Turn interrupted", null],
-      ["Session stopped", null],
+      ["Session stopped", "Retry"],
       ["Waiting for an answer", null],
       ["Waiting for approval", null],
     ]);
+  });
+
+  it("retries the run itself once the runtime has stopped retrying for you", () => {
+    const acted: string[] = [];
+    const acts: SessionBlockerActs = {
+      ...ACTS,
+      recover: () => acted.push("recover"),
+      retryRuntime: () => acted.push("retryRuntime"),
+    };
+    const blocker = sessionBlocker(
+      raised(attention("adapter_unrecoverable", "WebSocket closed 1006 (after 10 retries)")),
+      acts,
+      false,
+    );
+
+    expect(blocker).toMatchObject({
+      message: "Session stopped",
+      detail: "WebSocket closed 1006 (after 10 retries)",
+      tone: "error",
+      action: { label: "Retry" },
+    });
+    blocker?.action?.act();
+    expect(acted).toEqual(["retryRuntime"]);
   });
 
   it("names the provider's own time where it sent one, and invents none where it did not", () => {
