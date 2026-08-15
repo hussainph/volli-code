@@ -567,16 +567,6 @@ describe("volli:terminal-create", () => {
         ticket: { ticketId: "t", resume: { sessionId: 7 } },
       },
     ],
-    [
-      "an unknown terminal purpose",
-      {
-        workspaceId: "w",
-        cwd: "/x",
-        cols: 80,
-        rows: 24,
-        ticket: { ticketId: "t", purpose: "provider-shell" },
-      },
-    ],
   ])("rejects %s request without spawning", async (_label, req) => {
     const result = await invokeCreate(makeWebContents(), req);
     expect(result).toEqual({ ok: false, error: "Invalid terminal request" });

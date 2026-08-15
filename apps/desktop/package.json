@@ -13,7 +13,6 @@
     "test": "vp test run",
     "start": "node scripts/start-electron.mjs",
     "ensure:electron": "node -e \"console.log(require('electron'))\"",
-    "prepare:pi-cli": "node scripts/prepare-pi-cli.mjs",
     "test:coverage": "vp test run --coverage",
     "rebuild:native": "electron-rebuild -f -w node-pty,better-sqlite3",
     "dist": "vp run build && electron-builder"

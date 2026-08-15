@@ -135,7 +135,6 @@ function isOptionalTicket(
   const candidate = value as Record<string, unknown>;
   return (
     typeof candidate["ticketId"] === "string" &&
-    (candidate["purpose"] === undefined || candidate["purpose"] === "model-access") &&
     isOptionalKickoff(candidate["kickoff"], launchable) &&
     isOptionalResume(candidate["resume"])
   );
@@ -152,7 +151,6 @@ function isCreateRequest(
     typeof candidate["cwd"] === "string" &&
     typeof candidate["cols"] === "number" &&
     typeof candidate["rows"] === "number" &&
-    (candidate["purpose"] === undefined || candidate["purpose"] === "model-access") &&
     isOptionalTicket(candidate["ticket"], launchable)
   );
 }
