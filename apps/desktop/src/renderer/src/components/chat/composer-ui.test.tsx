@@ -382,6 +382,12 @@ describe("what a composed message actually sends", () => {
     expect(submitComposer({ value: "/ship", promptTemplates: TEMPLATES })).toBe("Ship it.");
   });
 
+  it("expands a command staged mid-draft, keeping the prose around it", () => {
+    expect(submitComposer({ value: "please /review src/app.ts", promptTemplates: TEMPLATES })).toBe(
+      "please Review src/app.ts closely.",
+    );
+  });
+
   it("sends an unknown command as written rather than losing the message", () => {
     expect(submitComposer({ value: "/nope please", promptTemplates: TEMPLATES })).toBe(
       "/nope please",

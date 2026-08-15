@@ -171,7 +171,7 @@ const PERMISSION: SessionInteraction = {
 /** Enough transcript to scroll, with the last line where a card would cover it. */
 const FEED = [
   "Walk me through how the composer decides what to complete.",
-  "It reads the caret, not the keystroke. `/` only counts at offset 0; `@` counts at any ref boundary.",
+  "It reads the caret, not the keystroke. `/` counts at a word boundary; `@` counts at any ref boundary.",
   "And when the list is open, who owns Enter?",
   "The list does, but only while it is open — the textarea keeps focus throughout and forwards the key.",
   "What happens to a message that starts with a command the project does not define?",
