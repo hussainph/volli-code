@@ -1,9 +1,11 @@
 # Agent authority, rebuilt on two axes
 
-This supersedes the Part I product decision in
-`docs/plans/authority-and-runtime-shape.md`. That document's account of what
-shipped remains accurate and is worth reading first; what it got wrong is the
-conclusion it drew from it.
+This is the authority plan. It replaced the Part I product decision in
+`docs/plans/authority-and-runtime-shape.md`, which has since been retired — what
+that document got wrong was the conclusion it drew from the sandbox, not its
+account of what shipped. The mechanism it recorded is summarised under "What this
+supersedes" below; its Part II and Part III work moved to tickets VC-18 through
+VC-21.
 
 ## Status
 
@@ -239,3 +241,21 @@ The open work items at the end of Part I are re-scoped by this: the escalation
 smoke trips the policy with symlinks pointing outside the tree, which is exactly
 the read rule slice 1 changes, so that test needs a different trip mechanism
 before slice 1 lands.
+
+## Research record
+
+Carried from the retired plan, which held the sources for this line of work.
+
+- <https://claude.com/blog/auto-mode-default-in-claude-code> — the default-mode
+  change, its approval-rate reasoning, the classifier's categories and the
+  fallback thresholds. `docs/research/claude-code-auto-mode-semantics.md` holds
+  the full semantics, including why the 93% and 97% approval figures are both
+  real and five months apart.
+- `czottmann/pi-automode` at `bd82e29e` — evaluated and rejected as a
+  dependency; its deterministic layer is the vendoring candidate.
+- Claude Code permission modes, `PreToolUse` hooks and `canUseTool`; the
+  Apache-2.0 `@anthropic-ai/sandbox-runtime`, already a direct dependency.
+- OpenAI Codex CLI — `SandboxPolicy` × `AskForApproval`, and protected metadata
+  paths carved from writable roots.
+- Goose, Aider and OpenHands — respectively the granularity failure mode, the
+  dirty-work pre-image commit, and model-self-reported risk.
