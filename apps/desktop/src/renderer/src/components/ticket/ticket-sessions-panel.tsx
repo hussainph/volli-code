@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useShallow } from "zustand/react/shallow";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
@@ -31,9 +32,14 @@ import {
   filterSessionHistory,
   groupSessionRows,
   mergeSessionRailRows,
+  nextSessionRailAgeChangeAt,
+  nextTicketSessionStatusChangeAt,
+  sessionRailRowStampAt,
+  ticketOutputStamps,
   type SessionRailRow,
   type TicketSessionStatus,
 } from "@renderer/components/ticket/session-history";
+import { delayUntil } from "@renderer/lib/boundary-timer";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
@@ -221,6 +227,11 @@ function SessionList({
   rows: readonly SessionRailRow[];
   /** Current rows trail with live status; history rows trail with when they ended. */
   variant: "current" | "history";
+  /**
+   * The clock the History variant's relative stamps are read against. A current
+   * row prints no stamp, so for that variant this is unread — the panel hands
+   * the age clock to both rather than branching on which one is on screen.
+   */
   now: number;
   ticketId: string;
   editingId: string | null;
@@ -253,7 +264,9 @@ function SessionList({
                 variant === "current" ? (
                   <RowStatus state={record.activity}>{STATUS_LABEL[record.activity]}</RowStatus>
                 ) : (
-                  <RowStatus state="exited">{relativeTime(record.lastActivityAt, now)}</RowStatus>
+                  <RowStatus state="exited">
+                    {relativeTime(sessionRailRowStampAt(entry), now)}
+                  </RowStatus>
                 )
               }
               editing={editingId === sessionId}
@@ -278,7 +291,7 @@ function SessionList({
                 <RowStatus state={status}>{STATUS_LABEL[status]}</RowStatus>
               ) : (
                 <RowStatus state="exited">
-                  {relativeTime(record.endedAt ?? record.createdAt, now)}
+                  {relativeTime(sessionRailRowStampAt(entry), now)}
                 </RowStatus>
               )
             }
@@ -347,7 +360,6 @@ export function TicketSessionsPanel({
   onActivateChat(sessionId: string): void;
 }) {
   const liveTabs = useSessionsStore((state) => state.byOwner[ticketId]?.tabs);
-  const lastOutputAt = useSessionsStore((state) => state.lastOutputAt);
   const parkState = useSessionsStore((state) => state.parkState);
   // The sidebar's session bands read this exact map for their own attention
   // rows; reading it here is what keeps the two surfaces from answering "is the
@@ -369,7 +381,20 @@ export function TicketSessionsPanel({
   const rows = useTicketSessionRecordsStore((state) => state.byTicket[ticketId] ?? NO_ROWS);
   const records = rows.flatMap((row) => (row.kind === "terminal" ? [row.record] : []));
   const chatSessions = rows.flatMap((row) => (row.kind === "chat" ? [row.record] : []));
-  const [now, setNow] = React.useState(() => Date.now());
+  // Narrowed to the stamps THIS ticket's rows can name — see `ticketOutputStamps`.
+  const lastOutputAt = useSessionsStore(
+    useShallow((state) => ticketOutputStamps({ lastOutputAt: state.lastOutputAt, rows })),
+  );
+  // The clock the STATUS column is read against, advanced only on the instant a
+  // status can change on its own (the working→idle window closing). Between
+  // boundaries it is deliberately behind the wall clock, and no row is
+  // re-derived for the difference, because no row can move in that gap.
+  const [activityNow, setActivityNow] = React.useState(() => Date.now());
+  // The clock History's relative stamps are read against — a separate one, for
+  // the reason the sidebar keeps two: a roster of week-old rows changes its
+  // ages about once a day, and making that share a clock with a live session's
+  // ten-second window would wake it every ten seconds forever.
+  const [ageNow, setAgeNow] = React.useState(() => Date.now());
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [historyQuery, setHistoryQuery] = React.useState("");
 
@@ -384,7 +409,6 @@ export function TicketSessionsPanel({
         .join("/"),
     )
     .join(",");
-  const hasLive = tabs.length > 0;
 
   const refresh = React.useCallback(
     () => useTicketSessionRecordsStore.getState().refresh(ticketId),
@@ -394,13 +418,6 @@ export function TicketSessionsPanel({
   React.useEffect(() => {
     void refresh();
   }, [refresh, liveSignature]);
-
-  // Tick while any live session exists so working → idle flips honestly.
-  React.useEffect(() => {
-    if (!hasLive) return;
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [hasLive]);
 
   // Renaming the root pane of a live tab goes through the shared optimistic-
   // persist path (so its tab strip updates too); a non-root live pane or an
@@ -449,15 +466,16 @@ export function TicketSessionsPanel({
     );
   };
 
-  const terminalRows = buildTicketSessionRows({
+  const rowsInput = {
     records,
     tabs,
     lastOutputAt,
     parkState,
     harness,
     settingUp: worktreePhase === "setting-up",
-    now,
-  });
+    now: activityNow,
+  };
+  const terminalRows = buildTicketSessionRows(rowsInput);
   const { current: terminalCurrent, history: terminalHistory } = groupSessionRows(terminalRows);
   // A chat Session's only lifecycle fact is whether its attachment is still
   // open, which is the same current/history line `groupSessionRows` draws.
@@ -471,6 +489,38 @@ export function TicketSessionsPanel({
     filterSessionHistory(terminalHistory, historyQuery),
     filterChatSessionHistory(chatHistory, historyQuery),
   );
+
+  /**
+   * NOTHING HERE POLLS. Two clocks, each waiting on an instant a pure function
+   * named: the status column on the working→idle window closing, History's ages
+   * on the soonest stamp that stops reading the way it does now. What they
+   * replace is one `setInterval` that woke every second for as long as the
+   * ticket had a live session and re-derived every row — the whole roster, both
+   * sections, the merge and the sort — to discover, sixty times a minute, that
+   * nothing had changed.
+   *
+   * Both are re-armed on every render from the value they were last given; if a
+   * boundary does not move after firing, the dependency does not change and the
+   * timer is not re-armed, which is what keeps them from spinning.
+   */
+  const statusBoundaryAt = nextTicketSessionStatusChangeAt(rowsInput);
+  React.useEffect(() => {
+    if (statusBoundaryAt === null) return;
+    const timer = window.setTimeout(() => setActivityNow(Date.now()), delayUntil(statusBoundaryAt));
+    return () => window.clearTimeout(timer);
+  }, [statusBoundaryAt]);
+
+  // Over the rows the FILTER leaves on screen, not the whole of History: an age
+  // nobody is looking at has no boundary worth waking for. `ageNow` is a
+  // dependency as well as an input — a boundary computed against a clock that
+  // is deliberately behind can land in the past, and keying the effect on the
+  // boundary alone would then recompute the same instant and arm nothing.
+  const ageBoundaryAt = nextSessionRailAgeChangeAt(filteredHistory, ageNow);
+  React.useEffect(() => {
+    if (ageBoundaryAt === null) return;
+    const timer = window.setTimeout(() => setAgeNow(Date.now()), delayUntil(ageBoundaryAt));
+    return () => window.clearTimeout(timer);
+  }, [ageBoundaryAt, ageNow]);
 
   const listProps = {
     ticketId,
@@ -510,7 +560,7 @@ export function TicketSessionsPanel({
           // inside the empty frame would be the same offer twice in one glance.
           <p className={SESSION_SECTION_EMPTY}>No active sessions</p>
         ) : (
-          <SessionList rows={current} variant="current" now={now} {...listProps} />
+          <SessionList rows={current} variant="current" now={ageNow} {...listProps} />
         )}
       </section>
       {history.length > 0 ? (
@@ -537,7 +587,7 @@ export function TicketSessionsPanel({
             </div>
           ) : null}
           {filteredHistory.length > 0 ? (
-            <SessionList rows={filteredHistory} variant="history" now={now} {...listProps} />
+            <SessionList rows={filteredHistory} variant="history" now={ageNow} {...listProps} />
           ) : (
             <p className={SESSION_SECTION_EMPTY}>No matching sessions</p>
           )}

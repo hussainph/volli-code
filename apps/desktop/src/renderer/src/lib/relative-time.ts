@@ -114,6 +114,11 @@ function bucketEnd(diff: number, unit: number): number {
  * which {@link compactAge} omits inside the current calendar year and prints
  * outside it, so the next change is the turn of the year.
  *
+ * It answers for {@link relativeTime} as well, and callers on both formatters
+ * rely on that: `compactAge` shortens two of the ladder's strings and neither
+ * of them moves a bucket, so the instant either one starts reading differently
+ * is the same instant.
+ *
  * Always strictly after `now`, a future stamp included, so a caller arming a
  * timer on it can never spin.
  */

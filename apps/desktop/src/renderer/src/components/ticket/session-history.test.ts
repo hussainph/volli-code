@@ -18,11 +18,16 @@ import {
   groupSessionRows,
   latestResumableSession,
   mergeSessionRailRows,
+  nextSessionRailAgeChangeAt,
+  nextTicketSessionStatusChangeAt,
+  sessionRailRowStampAt,
   sessionSourceLabel,
+  ticketOutputStamps,
+  type SessionRailRow,
   type TicketSessionRow,
   type TicketSessionRowsInput,
 } from "./session-history";
-import { ticketScope, type SessionTab } from "../../stores/sessions";
+import { WORKING_WINDOW_MS, ticketScope, type SessionTab } from "../../stores/sessions";
 
 function terminalRow(session: SessionRecord): SessionListingRow {
   return { kind: "terminal", record: session };
@@ -528,5 +533,142 @@ describe("mergeSessionRailRows", () => {
       { kind: "terminal", row: terminalOld },
     ]);
     expect(mergeSessionRailRows([], chatRows)).toEqual([{ kind: "chat", row: chatRows[0] }]);
+  });
+});
+
+describe("ticketOutputStamps", () => {
+  it("keeps only the stamps this ticket's terminal records can be read by", () => {
+    expect(
+      ticketOutputStamps({
+        lastOutputAt: { s1: 10, s3: 30, "another-ticket": 40 },
+        rows: [
+          terminalRow(record({ id: "s1" })),
+          { kind: "chat", record: chatRecord({ sessionId: "s2" }) },
+          terminalRow(record({ id: "s3" })),
+        ],
+      }),
+    ).toEqual({ s1: 10, s3: 30 });
+  });
+
+  it("omits a record with no stamp rather than mapping it to undefined", () => {
+    // The point of the projection is that an unchanged key set shallow-compares
+    // equal; a present-but-undefined key is a key, and it would still compare
+    // equal — but it would also make `lastOutputAt[id] ?? null` and
+    // `id in lastOutputAt` disagree for a pane that has simply never printed.
+    const stamps = ticketOutputStamps({
+      lastOutputAt: {},
+      rows: [terminalRow(record({ id: "quiet" }))],
+    });
+
+    expect(stamps).toEqual({});
+    expect(Object.keys(stamps)).toEqual([]);
+  });
+});
+
+describe("nextTicketSessionStatusChangeAt", () => {
+  const printedAt = 900_000;
+
+  it("waits for the instant a working row goes quiet", () => {
+    expect(
+      nextTicketSessionStatusChangeAt(
+        rowsInput({ lastOutputAt: { s1: printedAt }, now: printedAt + 1 }),
+      ),
+    ).toBe(printedAt + WORKING_WINDOW_MS + 1);
+  });
+
+  it("has no boundary once the window has already closed", () => {
+    // The row reads `idle` and stays `idle` until new output moves the stamp,
+    // which is an input change and not a clock one.
+    expect(nextTicketSessionStatusChangeAt(rowsInput({ lastOutputAt: { s1: printedAt } }))).toBe(
+      null,
+    );
+  });
+
+  it("has no boundary for a pane that has never printed", () => {
+    expect(nextTicketSessionStatusChangeAt(rowsInput())).toBe(null);
+  });
+
+  it("has no boundary for a record with no live pane", () => {
+    expect(
+      nextTicketSessionStatusChangeAt(
+        rowsInput({ tabs: [], lastOutputAt: { s1: printedAt }, now: printedAt + 1 }),
+      ),
+    ).toBe(null);
+  });
+
+  it("has no boundary for a pane that has exited", () => {
+    // `exited` outranks every other rung, so that row's word is permanent.
+    expect(
+      nextTicketSessionStatusChangeAt(
+        rowsInput({
+          tabs: [tab({ sessionId: "s1", layout: { kind: "pane", sessionId: "s1", exitCode: 0 } })],
+          lastOutputAt: { s1: printedAt },
+          now: printedAt + 1,
+        }),
+      ),
+    ).toBe(null);
+  });
+
+  it("takes the soonest window across every live pane", () => {
+    const input = rowsInput({
+      records: [record({ id: "mid" }), record({ id: "soonest" }), record({ id: "latest" })],
+      tabs: [
+        tab({ sessionId: "mid" }),
+        tab({ sessionId: "soonest" }),
+        tab({ sessionId: "latest" }),
+      ],
+      lastOutputAt: { mid: printedAt, soonest: printedAt - 500, latest: printedAt + 500 },
+      now: printedAt + 1,
+    });
+
+    expect(nextTicketSessionStatusChangeAt(input)).toBe(printedAt - 500 + WORKING_WINDOW_MS + 1);
+  });
+});
+
+describe("sessionRailRowStampAt", () => {
+  it("dates a chat row by when it last said anything", () => {
+    const rows = buildTicketChatSessionRows([chatRecord({ lastActivityAt: 4242 })]);
+
+    expect(sessionRailRowStampAt({ kind: "chat", row: rows[0] })).toBe(4242);
+  });
+
+  it("dates a terminal row by when it ended", () => {
+    expect(
+      sessionRailRowStampAt({
+        kind: "terminal",
+        row: row({ record: record({ createdAt: 10, endedAt: 900 }) }),
+      }),
+    ).toBe(900);
+  });
+
+  it("falls back to creation for a record that never got an end stamp", () => {
+    expect(
+      sessionRailRowStampAt({
+        kind: "terminal",
+        row: row({ record: record({ createdAt: 10, endedAt: null }) }),
+      }),
+    ).toBe(10);
+  });
+});
+
+describe("nextSessionRailAgeChangeAt", () => {
+  const now = 1_000_000;
+  // "just now" for another 15s; the minute bucket it sits in closes later.
+  const fresh: SessionRailRow = {
+    kind: "terminal",
+    row: row({ record: record({ id: "fresh", endedAt: now - 30_000 }) }),
+  };
+  const older: SessionRailRow = {
+    kind: "terminal",
+    row: row({ record: record({ id: "older", endedAt: now - 90_000 }) }),
+  };
+
+  it("is null when nothing is on screen to age", () => {
+    expect(nextSessionRailAgeChangeAt([], now)).toBe(null);
+  });
+
+  it("takes the soonest instant any visible stamp reads differently, in either order", () => {
+    expect(nextSessionRailAgeChangeAt([fresh, older], now)).toBe(now - 30_000 + 45_000);
+    expect(nextSessionRailAgeChangeAt([older, fresh], now)).toBe(now - 30_000 + 45_000);
   });
 });

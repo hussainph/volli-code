@@ -5,6 +5,7 @@ import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
+import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { useCallback, useEffect, useState } from "react";
 import { errorMessage, type DirtyWorktreeOrphan } from "@volli/shared";
 
@@ -30,6 +31,8 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
+import { Notice } from "@renderer/components/ui/notice";
+import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { toastError } from "@renderer/lib/toast";
 
 /**
@@ -196,7 +199,14 @@ function WorktreesSettings() {
 type OrphansState =
   | { status: "loading" }
   | { status: "loaded"; dirty: DirtyWorktreeOrphan[] }
-  | { status: "error" };
+  /**
+   * Carries its own reason: the pane reports the failure now, so nothing else
+   * has to. `rescan` is the read that failed, so Retry can be exactly "do that
+   * again" — retrying a failed refresh with the cached report would answer a
+   * question the user didn't ask, and retrying the mount read with a rescan
+   * would run the destructive sweep they didn't ask for either.
+   */
+  | { status: "error"; message: string; rescan: boolean };
 
 /** Truncates a long path to `start…end`, keeping enough of both ends to stay identifiable. */
 function truncateMiddle(value: string, max = 56): string {
@@ -230,25 +240,35 @@ function DirtyWorktreesList() {
   const [pendingDelete, setPendingDelete] = useState<DirtyWorktreeOrphan | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  const load = useCallback(async (rescan: boolean) => {
-    setState({ status: "loading" });
-    try {
-      const result = await window.api.worktree.orphans(rescan ? { rescan: true } : {});
-      if (!result.ok) {
-        toastError(`Couldn't check orphaned worktrees: ${result.error}`);
-        setState({ status: "error" });
-        return;
+  // The read is re-entrant — mount, the refresh button, and a delete's re-sweep
+  // all call it, and a slow first sweep can still be in flight when the second
+  // starts. Token-guarded so the answer that lands is the one asked for last
+  // (hooks/use-latest-async.ts), rather than whichever `orphans()` resolved last.
+  const orphansFetch = useLatestAsync();
+  const load = useCallback(
+    async (rescan: boolean) => {
+      const token = orphansFetch.claim();
+      setState({ status: "loading" });
+      try {
+        const result = await window.api.worktree.orphans(rescan ? { rescan: true } : {});
+        if (!orphansFetch.isCurrent(token)) return;
+        if (!result.ok) {
+          setState({ status: "error", message: result.error, rescan });
+          return;
+        }
+        setState({ status: "loaded", dirty: result.dirty });
+      } catch (error) {
+        if (orphansFetch.isCurrent(token))
+          setState({ status: "error", message: errorMessage(error), rescan });
       }
-      setState({ status: "loaded", dirty: result.dirty });
-    } catch (error) {
-      toastError(`Couldn't check orphaned worktrees: ${errorMessage(error)}`);
-      setState({ status: "error" });
-    }
-  }, []);
+    },
+    [orphansFetch],
+  );
 
   useEffect(() => {
     void load(false);
-  }, [load]);
+    return () => orphansFetch.invalidate();
+  }, [load, orphansFetch]);
 
   async function confirmDelete(): Promise<void> {
     if (!pendingDelete || deleting) return;
@@ -292,6 +312,27 @@ function DirtyWorktreesList() {
       <div className="flex flex-col gap-1">
         {state.status === "loading" ? (
           <p className={EMPTY_INLINE}>Checking…</p>
+        ) : state.status === "error" ? (
+          // A read that FAILED and a read that found nothing are not the same
+          // answer, and until this branch existed they drew the same pixels:
+          // the pane said "No orphaned worktrees." — the one sentence that
+          // makes leftover work safe to forget about — while the only sign
+          // anything had gone wrong was a toast already halfway gone. The
+          // recovery has to be here for the same reason: a failure whose Retry
+          // lives in a dismissed toast is a failure with no way back.
+          <Notice
+            announce
+            tone="error"
+            icon={WarningIcon}
+            title="Couldn't check orphaned worktrees"
+            detail={state.message}
+            actions={
+              <Button size="xs" variant="outline" onClick={() => void load(state.rescan)}>
+                <ArrowsClockwiseIcon />
+                Retry
+              </Button>
+            }
+          />
         ) : dirty.length === 0 ? (
           <p className={EMPTY_INLINE}>No orphaned worktrees.</p>
         ) : (
