@@ -40,6 +40,7 @@ import type { ActivityKind } from "@volli/shared";
 import type { DynamicToolUIPart, ReasoningUIPart } from "ai";
 import * as React from "react";
 
+import { useStopFollowing } from "@renderer/components/ui/ai-elements/conversation";
 import { ReasoningBody, useElapsed } from "@renderer/components/ui/ai-elements/reasoning";
 import {
   bundleNeedsAttention,
@@ -188,9 +189,14 @@ const ROW_FOCUSABLE = "focus-visible:ring-1 focus-visible:ring-ring";
  */
 function useRowToggle(expandable: boolean) {
   const [open, setOpen] = React.useState(false);
+  const stopFollowing = useStopFollowing();
   const toggle = () => {
     if (hasTextSelection() || !expandable) return;
-    setOpen((value) => !value);
+    // Opening grows the transcript above the reader's eye, so the autoscroll
+    // must not chase it — see {@link useStopFollowing}. Only on the way open:
+    // collapsing shrinks the column back and re-attaches on its own.
+    if (!open) stopFollowing();
+    setOpen(!open);
   };
   /** The row shell, for the pointer only. It carries no role: it holds controls. */
   return { open, toggle, rowProps: { onClick: toggle } };
@@ -675,6 +681,10 @@ export const ActivityBundle = React.memo(
     const summary = React.useMemo(() => bundleSummary(rows), [rows]);
     const open = userOpen ?? bundleNeedsAttention(rows);
     const { ref, clipped } = useClipped<HTMLDivElement>(rows.length);
+    // Wired to the click and not to `open`, which is derived: a bundle that
+    // opens itself because a row inside it failed is not a reader reaching for
+    // anything, and must not detach them from a live stream.
+    const stopFollowing = useStopFollowing();
 
     const list = (
       <div className="space-y-1">
@@ -690,6 +700,7 @@ export const ActivityBundle = React.memo(
 
     const toggle = () => {
       if (hasTextSelection()) return;
+      if (!open) stopFollowing();
       setUserOpen(!open);
     };
 

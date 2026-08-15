@@ -568,14 +568,25 @@ function ComposerTextarea({
       // and this is the surface's primary input.
       aria-label="Message"
       placeholder="Ask, plan, or implement…"
-      // One control tall, and the padding sized for the old floor goes with
-      // it. `field-sizing-content` grows the box from the first keystroke, so
-      // a four-line floor was reserving three lines nobody had typed. The
-      // vendored `py-4` was what filled that 64px box out; left alone it would
-      // hold the box at 52px whatever the floor said, so `py-2` — 8px, one
-      // line, 8px — is the pair of the 36px floor rather than a second opinion
-      // about it.
-      className="min-h-9 py-2 text-sm"
+      // FOUR LINES AT REST: 8 + (4 × 20) + 8 = 96px, which is `min-h-24`
+      // against `text-sm`'s 20px leading and the `py-2` below.
+      //
+      // This floor was 36px — one line — on the reasoning that
+      // `field-sizing-content` grows the box from the first keystroke, so
+      // reserving lines nobody had typed was space spent on nothing. True
+      // about the pixels and wrong about the box. An input's resting size is
+      // the sentence it says it wants, and one line asks for one line: it
+      // reads as a search field, and it makes the first thought you have here
+      // scroll before the second one arrives. What gets typed into this is a
+      // paragraph — ask, plan, or implement — so the floor is the paragraph,
+      // and growth past four lines is the exception the auto-grow is for.
+      //
+      // `py-2` STAYS, and now for its own reason rather than as the pair of a
+      // 36px floor: the vendored `py-4` is sized for a box whose whole height
+      // is padding plus one line, and at four lines that lid and floor are
+      // simply a wide margin above and below a block of text. 8px keeps the
+      // first line clear of the top edge without framing the paragraph.
+      className="min-h-24 py-2 text-sm"
       onChange={(event) => {
         caret.trackCaret(event.currentTarget);
         onValueChange(event.currentTarget.value);
