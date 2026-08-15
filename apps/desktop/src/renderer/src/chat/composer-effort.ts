@@ -174,6 +174,56 @@ export function readEffortPointer(offsetX: number, track: EffortTrack): EffortRe
   };
 }
 
+/**
+ * The vibrancy ramp's two ends, as a multiplier on the accent's own CHROMA.
+ *
+ * The floor is a heavily desaturated ember — warm grey rather than grey, so a
+ * low-effort wash still reads as the accent's family and never as a disabled
+ * control. The ceiling is the accent at full strength, exactly as the canvas
+ * derived it. Nothing in between is a colour anyone authored: the whole ramp is
+ * one token seen at seven saturations.
+ *
+ * WHY CHROMA AND NOT ALPHA. The obvious ramp is opacity — 50 up to 90 on the
+ * alpha ladder — and it was built first and measured, and it fails. Both of
+ * this pill's labels sit ON the wash at the top stop, and pushing more ember
+ * under them moves the two appearances in OPPOSITE directions: light ink over a
+ * strengthening mid-tone loses contrast while dark ink gains it. Measured, at
+ * `--primary` 90%: the value label reads 2.90:1 in dark against 6.33:1 in
+ * light, so the alpha ramp is a WCAG AA failure in exactly one appearance and
+ * comfortable in the other.
+ *
+ * A chroma ramp has no such cost, and the reason is structural rather than
+ * lucky. `oklch(from … l calc(c * K) h)` holds L and H fixed and moves only C,
+ * so every rung of the ramp has the SAME perceptual lightness — and contrast is
+ * a lightness relationship. Measured across the whole ramp the value label
+ * moves 4.63 → 4.78 in dark and 8.01 → 7.76 in light: a quarter of a point,
+ * where the alpha ramp cost nearly two. The eye still reads a warm grey turning
+ * into full ember, which is what "more vibrant" actually means.
+ */
+export const EFFORT_CHROMA_FLOOR = 0.3;
+export const EFFORT_CHROMA_CEILING = 1;
+
+/**
+ * How saturated the wash is at a given stop, as a multiplier on the accent's
+ * chroma.
+ *
+ * Effort's meaning is magnitude, and until now the only thing carrying that was
+ * position: at four stops the difference between `low` and `medium` was 33% of
+ * a track. Colour is the second channel and the one read without measuring —
+ * the wash at `max` is a different *substance* from the wash at `minimal`, not
+ * merely a longer one.
+ *
+ * Interpolated rather than stepped, because a ramp that lands on three values
+ * across seven stops leaves four pairs of adjacent stops looking identical, and
+ * "adjacent stops look the same" is the complaint the redesign started from.
+ */
+export function effortChroma(index: number, stops: number): number {
+  const last = stops - 1;
+  if (last <= 0) return EFFORT_CHROMA_CEILING;
+  const travel = Math.min(last, Math.max(0, index)) / last;
+  return EFFORT_CHROMA_FLOOR + (EFFORT_CHROMA_CEILING - EFFORT_CHROMA_FLOOR) * travel;
+}
+
 /** Where a stop sits along the track, as a percentage of its width. */
 export function effortStopPercent(index: number, stops: number): number {
   const last = stops - 1;

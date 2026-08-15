@@ -3,6 +3,9 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   EFFORT_DEAD_ZONE,
   EFFORT_STRETCH_LIMIT,
+  EFFORT_CHROMA_CEILING,
+  EFFORT_CHROMA_FLOOR,
+  effortChroma,
   effortIndex,
   effortLabel,
   effortStopPercent,
@@ -144,6 +147,34 @@ describe("where the pointer is on the track", () => {
       stretch: 0,
       scaleX: 1,
     });
+  });
+});
+
+describe("how vibrant the wash is", () => {
+  it("starts desaturated, ends at the accent as the canvas derived it", () => {
+    expect(effortChroma(0, 5)).toBe(EFFORT_CHROMA_FLOOR);
+    expect(effortChroma(4, 5)).toBe(EFFORT_CHROMA_CEILING);
+  });
+
+  it("climbs on every single stop, so no two neighbours look alike", () => {
+    // The whole point: three shared values across seven stops would leave four
+    // adjacent pairs indistinguishable, which is the complaint being answered.
+    const seven = [0, 1, 2, 3, 4, 5, 6].map((at) => effortChroma(at, 7));
+
+    for (let at = 1; at < seven.length; at += 1) {
+      expect(seven[at]).toBeGreaterThan(seven[at - 1] ?? 0);
+    }
+  });
+
+  it("never leaves the ramp, whatever index it is handed", () => {
+    expect(effortChroma(-4, 5)).toBe(EFFORT_CHROMA_FLOOR);
+    expect(effortChroma(99, 5)).toBe(EFFORT_CHROMA_CEILING);
+  });
+
+  it("gives a single-stop set the full accent rather than the floor", () => {
+    // One stop is not a ramp: there is nothing to be less vibrant *than*, and a
+    // lone control drawn at the dimmest end would read as disabled.
+    expect(effortChroma(0, 1)).toBe(EFFORT_CHROMA_CEILING);
   });
 });
 

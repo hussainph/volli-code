@@ -307,10 +307,28 @@ export function SessionComposer({
             Radix popover portals its content out of this form, so opening the
             model list moves focus off the composer entirely and the row would
             dim under the hand that opened it. The trigger stays here and stays
-            marked open, which is the fact worth reading. */}
+            marked open, which is the fact worth reading.
+
+            AND THE DIM IS THE DIVIDER. There was a `border-t border-border/70`
+            here and it is the line the composer is better without. Measured,
+            it sat at 47.1% of a 77.65px shell — within three points of dead
+            centre — which is a rule declaring two co-equal halves over a box
+            whose top half is one line of a message and whose bottom half is our
+            furniture. A divider's job is to separate things of DIFFERENT kinds,
+            and this pair already differs by the loudest channel a UI has: the
+            row below is at 70% ink while the row above is at 100%. Drawing a
+            hairline as well says the same thing twice and asserts the wrong
+            thing once. ChatGPT and claude.ai both draw no line here.
+
+            Its padding went with it, and not by accident: `[.border-t]:pt-2`
+            existed to clear the rule, so removing the class removes the 8px lid
+            in the same stroke and the footer falls back to the 4px one
+            {@link PromptInputFooter} settles. The seam is 12px of air now — the
+            body's own 8px floor plus that 4px — against 8px at the card's outer
+            edges, so the widest space in the box is the one between the two
+            bands. That is what a lineless composer needs to be true. */}
         <PromptInputFooter
           className={cn(
-            "border-t border-border/70",
             "opacity-70 transition-opacity duration-200 ease-out",
             "group-focus-within/composer:opacity-100 has-[[data-state=open]]:opacity-100",
             "motion-reduce:transition-none!",
@@ -322,7 +340,25 @@ export function SessionComposer({
               the only one with anything to lose, where an effort word is three
               to ten characters and truncating it would leave "Extra hi…". Two
               pills where there was one is what made this matter — the row
-              stopped having 400px of slack the moment effort joined it. */}
+              stopped having 400px of slack the moment effort joined it.
+
+              EVERY CONTROL IN THIS ROW IS THE LADDER'S 20px RUNG, one step
+              below the 24px it used to wear, and one row's worth of comments
+              is where that decision belongs rather than at each of the four
+              call sites. It is the other half of the answer to a footer that
+              outweighed its own subject. Both bands carried 16px of padding,
+              so the CONTENT decided which one won: a 24px control row came to
+              40.54px against a 20px message line's 36px, and the chrome ended
+              up 12.6% taller than the thing it serves and 52% of a 77.65px
+              shell. At 20px the band is 32px, the message is the taller object
+              by 4px, and the composer collapses to 69px.
+
+              A rung, not a shrink. `xs` is the bottom of the app's own four
+              rung pill ladder (20/24/28/32) and it is what the queued rows
+              already wear; the composer's resting chrome has no business
+              standing taller than the sentence being written into it. What
+              does NOT step down is the hierarchy inside the row — submit is
+              still the only filled object in it, and fill outranks 4px. */}
           <PromptInputTools className="min-w-0 flex-1">
             <ModelPill
               models={models}
@@ -352,7 +388,7 @@ export function SessionComposer({
               <Button
                 type="button"
                 variant="ghost"
-                size="icon-sm"
+                size="icon-xs"
                 aria-label="Stop turn"
                 onClick={onStop}
               >
@@ -360,18 +396,25 @@ export function SessionComposer({
                   solid the way a play triangle does, and hollow it reads as a
                   checkbox. It is also the exception rather than the category —
                   it only exists while a turn is running. */}
-                <SquareIcon className="size-3.5" weight="fill" />
+                <SquareIcon className="size-3" weight="fill" />
               </Button>
             ) : null}
             <PromptInputSubmit
               status="ready"
+              size="icon-xs"
               disabled={!canSubmit}
               aria-label={working ? "Queue" : "Send"}
             >
+              {/* 12px, and therefore both `bold`. The house rule is that
+                  `bold`'s flat 1.50x is the small-size tier — at ≤12px regular
+                  draws lighter than the label beside it — and coverage is
+                  scale-invariant, so nothing about a smaller button can be
+                  answered by a bigger glyph. Queue was outline at 14px and had
+                  no reason to change until the button did. */}
               {working ? (
-                <QueueIcon className="size-3.5" />
+                <QueueIcon className="size-3" weight="bold" />
               ) : (
-                <ArrowUpIcon className="size-3.5" weight="bold" />
+                <ArrowUpIcon className="size-3" weight="bold" />
               )}
             </PromptInputSubmit>
           </div>
@@ -774,7 +817,7 @@ function ModelPill({
       <PopoverTrigger asChild>
         <Button
           type="button"
-          size="sm"
+          size="xs"
           variant="ghost"
           disabled={disabled || models.length === 0}
           // `shrink` against `Button`'s own `shrink-0`: this is the row's give.
@@ -783,7 +826,7 @@ function ModelPill({
           <span className="min-w-0 truncate">
             {modelPillLabel(models, selection, selectionProviderLabel)}
           </span>
-          <CaretUpDownIcon className="size-3 shrink-0" />
+          <CaretUpDownIcon className="size-3 shrink-0" weight="bold" />
         </Button>
       </PopoverTrigger>
       {/* `w-72`, down from `w-80`: the extra 32px existed to hold the effort
