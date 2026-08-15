@@ -32,7 +32,7 @@ import {
 } from "@volli/shared";
 
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
-import { TicketLabelEditor } from "@renderer/components/ticket/ticket-label-editor";
+import { LabelEditorCore } from "@renderer/components/ticket/label-editor-core";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -130,7 +130,11 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
         <PriorityPill projectId={projectId} ticket={ticket} />
       </div>
       <div aria-label="Labels" className="flex min-h-6 flex-wrap items-center gap-1">
-        <TicketLabelEditor projectId={projectId} ticket={ticket} />
+        <LabelEditorCore
+          projectId={projectId}
+          value={ticket.labels}
+          onChange={(next) => void useBoardStore.getState().setLabels(ticket.id, next)}
+        />
       </div>
     </section>
   );
