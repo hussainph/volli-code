@@ -5,7 +5,8 @@
  * lifecycle means, when a queued message leaves, which recovery a failure
  * earns — belongs to the resident client and the store, both of which outlive
  * every view and are tested without one. What is left here is the binding: the
- * slice a component re-renders on, and actions addressed to one Session id.
+ * fields a component re-renders on — one subscription each, see
+ * {@link SessionView} — and actions addressed to one Session id.
  *
  * The client is looked up rather than created, and a lookup that misses answers
  * `false`. A surface can outlive its Session by a frame — a close and a
@@ -13,17 +14,64 @@
  * with no stream behind it.
  */
 import * as React from "react";
-import type { ModelSelection, SessionInteractionResolution } from "@volli/shared";
+import type {
+  ModelSelection,
+  SessionInteraction,
+  SessionInteractionResolution,
+  SessionPresentationProjection,
+} from "@volli/shared";
+import type { UIMessage } from "ai";
 import { useStore, type StoreApi } from "zustand";
 
 import { getChatClient } from "@renderer/chat/registry";
-import type { ChatMessageDelivery, ChatSessionSlice, MessageDelivery } from "@renderer/chat/client";
+import {
+  isDeliverable,
+  type ChatMessageDelivery,
+  type MessageDelivery,
+} from "@renderer/chat/client";
 import type { QueuedMessage } from "@renderer/chat/session-model";
 import { useChatSessionsStore, type ChatSessionsState } from "@renderer/stores/chat-sessions";
 
+const NO_MESSAGES: readonly UIMessage[] = [];
+const NO_QUEUE: readonly QueuedMessage[] = [];
+const NO_OPENED: ReadonlyMap<string, SessionInteraction> = new Map();
+
+/**
+ * One Session's resident state, read field by field.
+ *
+ * NOT the `ChatSessionSlice` itself, and the difference is the whole point of
+ * this type. A live turn re-writes its slice once per animation frame — the
+ * transcript grows, `turnActive` and `turnEpoch` move — and a component
+ * subscribed to the slice re-rendered on every one of those, whether or not it
+ * draws a transcript. The composer, the model pill and the blocker row all did,
+ * once per frame, under the hand that was typing.
+ *
+ * So each field is its own subscription, and the two questions read as booleans
+ * are stored as booleans: `working` and `deliverable` derive from objects that
+ * are replaced wholesale on every projection refresh, and a boolean that did not
+ * flip is a subscription that does not fire. `turnActive` and `turnEpoch` are
+ * absent because no view reads them from here — the two callbacks that need an
+ * epoch read it from `getState()` at the moment they act, which is the only
+ * moment its value is meaningful.
+ */
+export interface SessionView {
+  /** `null` until the Session's first durable snapshot arrives. */
+  projection: SessionPresentationProjection | null;
+  messages: readonly UIMessage[];
+  /** Every interaction opened this Session, for the receipts they left behind. */
+  openedInteractions: ReadonlyMap<string, SessionInteraction>;
+  /** The Session's lifecycle is `working` — a turn is live. */
+  working: boolean;
+  /** A message typed now could actually leave — see {@link isDeliverable}. */
+  deliverable: boolean;
+  /** The one thing about a Session's plumbing a person needs told. */
+  sessionError: string | null;
+  queue: readonly QueuedMessage[];
+}
+
 export interface SessionController {
-  /** `undefined` until the Session is durable, and again once it is closed. */
-  session: ChatSessionSlice | undefined;
+  /** Empty rather than absent for a Session this surface no longer has. */
+  session: SessionView;
   selectModel(selection: ModelSelection): Promise<boolean>;
   enqueue(message: QueuedMessage): void;
   dequeue(id: string): void;
@@ -59,7 +107,39 @@ export function useSessionController(
   sessionId: string,
   store: ChatSessionsStore = useChatSessionsStore,
 ): SessionController {
-  const session = useStore(store, (state) => state.sessions[sessionId]);
+  // Seven subscriptions rather than one, for the reason {@link SessionView}
+  // spells out. Each selector returns a field the store already holds or a
+  // boolean derived from one, so none of them mints a value: a selector that
+  // built an object here would fire on every write and undo the whole exercise.
+  const projection = useStore(store, (state) => state.sessions[sessionId]?.projection ?? null);
+  const messages = useStore(
+    store,
+    (state) => state.sessions[sessionId]?.transcript.messages ?? NO_MESSAGES,
+  );
+  const openedInteractions = useStore(
+    store,
+    (state) => state.sessions[sessionId]?.transcript.openedInteractions ?? NO_OPENED,
+  );
+  const working = useStore(store, (state) => state.sessions[sessionId]?.lifecycle === "working");
+  const deliverable = useStore(store, (state) => {
+    const slice = state.sessions[sessionId];
+    return slice !== undefined && isDeliverable(slice);
+  });
+  const sessionError = useStore(store, (state) => state.sessions[sessionId]?.sessionError ?? null);
+  const queue = useStore(store, (state) => state.sessions[sessionId]?.queue ?? NO_QUEUE);
+
+  const session = React.useMemo<SessionView>(
+    () => ({
+      projection,
+      messages,
+      openedInteractions,
+      working,
+      deliverable,
+      sessionError,
+      queue,
+    }),
+    [deliverable, messages, openedInteractions, projection, queue, sessionError, working],
+  );
   const actions = React.useMemo(() => bind(sessionId, store), [sessionId, store]);
   return { session, ...actions };
 }

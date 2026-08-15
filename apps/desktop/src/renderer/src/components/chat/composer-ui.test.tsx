@@ -42,6 +42,16 @@ function findElements(
   return found;
 }
 
+/**
+ * The composer's own element tree, with no renderer under it — which is how
+ * every assertion below reads its props rather than its markup.
+ *
+ * `.type`, because `SessionComposer` is `React.memo`'d (see its own comment for
+ * why) and a memo component is an object, not a function. `.type` is the render
+ * function inside it, so this stays the same call it always was.
+ */
+const composerTree = SessionComposer.type;
+
 function composerProps(overrides: Partial<SessionComposerProps> = {}): SessionComposerProps {
   return {
     value: "",
@@ -100,7 +110,7 @@ describe("the queued message row", () => {
     let nextQueue: readonly { id: string; text: string }[] | undefined;
     let nextDraft: string | undefined;
     const acts: string[] = [];
-    const tree = SessionComposer(
+    const tree = composerTree(
       composerProps({
         value: "new thought",
         onQueuedChange: (queue) => {
@@ -139,7 +149,7 @@ describe("the queued message row", () => {
   it("does not edit or remove a row whose resident delivery claim rejects mutation", () => {
     let draft: string | undefined;
     let focusRequests = 0;
-    const tree = SessionComposer(
+    const tree = composerTree(
       composerProps({
         onQueuedChange: () => false,
         onValueChange: (value) => {
@@ -166,7 +176,7 @@ describe("the queued message row", () => {
     let steered: string | undefined;
     let nextQueue: readonly { id: string; text: string }[] | undefined;
     const acts: string[] = [];
-    const tree = SessionComposer(
+    const tree = composerTree(
       composerProps({
         onSteerQueued: (id) => {
           acts.push(`steer:${id}`);
@@ -251,7 +261,7 @@ function renderFooter(overrides: Partial<SessionComposerProps> = {}): string {
 function effortPill(
   overrides: Partial<SessionComposerProps> = {},
 ): React.ReactElement<InspectableProps> | undefined {
-  return findElements(SessionComposer(footerProps(overrides)), EffortPill)[0];
+  return findElements(composerTree(footerProps(overrides)), EffortPill)[0];
 }
 
 describe("the effort control's place in the footer", () => {
@@ -354,7 +364,7 @@ const TEMPLATES: readonly PromptTemplate[] = [
 /** Submit the composer's form the way ⏎ and the send button both do. */
 function submitComposer(props: Partial<SessionComposerProps>): string | undefined {
   let sent: string | undefined;
-  const tree = SessionComposer(
+  const tree = composerTree(
     composerProps({ working: false, queued: [], onSubmit: (text) => (sent = text), ...props }),
   );
   findElements(tree, PromptInput)[0]?.props.onSubmit?.();
@@ -412,10 +422,17 @@ function pickerState(overrides: Partial<ComposerPickerState> = {}): ComposerPick
   };
 }
 
+/**
+ * The card draws a mode and its rows and takes nothing else — the token being
+ * completed is the composer's business. The fixture stays a whole
+ * `ComposerPickerState` because that is what the composer builds; this narrows
+ * it exactly as the call site does.
+ */
 function renderPicker(value: ComposerPickerState | null): string {
   return renderToStaticMarkup(
     <ComposerPicker
-      state={value}
+      mode={value?.mode ?? null}
+      rows={value?.rows ?? []}
       active="review"
       onActiveChange={() => undefined}
       onSelect={() => undefined}
