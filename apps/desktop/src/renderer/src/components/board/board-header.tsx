@@ -140,42 +140,43 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
   const [archiveOpen, setArchiveOpen] = React.useState(false);
 
   return (
-    <PageHeader>
-      <h2 className="shrink-0 text-sm font-semibold">Board</h2>
+    <PageHeader
+      title="Board"
+      actions={
+        <>
+          <OrderingMenu projectId={projectId} />
+          <ViewToggle projectId={projectId} />
+          {/* The Archive is a per-project view, not a sixth column (CONCEPT #92) —
+              reached from here and only here. */}
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Archive"
+            className="border border-border text-muted-foreground"
+            onClick={() => setArchiveOpen(true)}
+          >
+            <ArchiveIcon className="size-3.5" />
+          </Button>
+          <ArchiveDialog open={archiveOpen} onOpenChange={setArchiveOpen} />
+          {/* The prominent, always-reachable create entry point — the column
+              composers (board-column.tsx) hide at the bottom of long columns,
+              so this + the plain "c" hotkey (use-new-ticket-shortcut.ts) are
+              the discoverable ways in. Default variant (not ghost/outline like
+              the chips around it) so it visibly pops. Accessible name is "New
+              ticket", not bare "New" — the column composers' buttons are named
+              "New" and the e2e smoke matches both with exact:true. */}
+          <Button
+            className="gap-1 px-2 text-ui"
+            onClick={() => useUiStore.getState().setNewTicketOpen(true)}
+          >
+            <PlusIcon className="size-3.5" />
+            New ticket
+          </Button>
+        </>
+      }
+    >
       <span className="shrink-0 font-mono text-ui text-muted-foreground">{ticketCount}</span>
       <FilterBar projectId={projectId} tickets={tickets} filter={filter} className="ml-4" />
-      {/* ml-auto parks the ordering + view cluster on the right so it doesn't
-          fight the filter bar as chips wrap onto a second line. */}
-      <div className="ml-auto flex shrink-0 items-center gap-2">
-        <OrderingMenu projectId={projectId} />
-        <ViewToggle projectId={projectId} />
-        {/* The Archive is a per-project view, not a sixth column (CONCEPT #92) —
-            reached from here and only here. */}
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Archive"
-          className="border border-border text-muted-foreground"
-          onClick={() => setArchiveOpen(true)}
-        >
-          <ArchiveIcon className="size-3.5" />
-        </Button>
-        <ArchiveDialog open={archiveOpen} onOpenChange={setArchiveOpen} />
-        {/* The prominent, always-reachable create entry point — the column
-            composers (board-column.tsx) hide at the bottom of long columns,
-            so this + the plain "c" hotkey (use-new-ticket-shortcut.ts) are
-            the discoverable ways in. Default variant (not ghost/outline like
-            the chips around it) so it visibly pops. Accessible name is "New
-            ticket", not bare "New" — the column composers' buttons are named
-            "New" and the e2e smoke matches both with exact:true. */}
-        <Button
-          className="gap-1 px-2 text-ui"
-          onClick={() => useUiStore.getState().setNewTicketOpen(true)}
-        >
-          <PlusIcon className="size-3.5" />
-          New ticket
-        </Button>
-      </div>
     </PageHeader>
   );
 }
