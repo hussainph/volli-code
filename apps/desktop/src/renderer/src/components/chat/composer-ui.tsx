@@ -19,7 +19,7 @@
  *     interrupting, and ⌫ on an empty box takes the newest queued message back.
  *     Stop turn appears beside submit only while there is something to stop.
  *  3. **What you type can open a list, and the list never takes the cursor.**
- *     `/` at the start of the box and `@` at a word boundary open a picker as a
+ *     `/` and `@`, each at a word boundary, open a picker as a
  *     card above the input (`composer-picker-ui.tsx`), driven entirely from
  *     here: the textarea keeps focus and forwards arrows, ⏎ and Escape to it.
  *     A picker that focused itself would take ⏎ and ⌫ with it, and both already

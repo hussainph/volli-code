@@ -180,49 +180,87 @@ export function mergePromptTemplates(input: {
 export interface CommandInvocation {
   /** The name typed after `/`, without the slash. */
   readonly name: string;
-  /** Everything after the name, unparsed — `parseCommandArgs`' input. */
+  /** Everything after the name to the end of its line, unparsed — `parseCommandArgs`' input. */
   readonly argsString: string;
+  /** Offset of the `/` — where an expansion's replacement begins. */
+  readonly start: number;
+  /** End of the invocation's line — where an expansion's replacement stops. */
+  readonly end: number;
 }
 
 /**
- * The `/name args` invocation this text opens with, or null.
+ * Every place this text could be invoking a command.
  *
- * Only at offset 0, and only when a name actually follows the slash: a message
- * that merely mentions `and/or` is not an invocation, and neither is a bare
- * `/`. Whether the name resolves to a template is a separate question — see
+ * A candidate is a `/` at a word boundary — the start of the text, or right
+ * after whitespace — whose name ends at a boundary of its own. That is what
+ * keeps prose safe on both sides of the slash: `and/or` and `src/app.ts` glue
+ * the slash to a word, so neither is a candidate, and `/review.md` runs the
+ * name into a character it cannot contain, so it never was one. `/reviewer`
+ * is not `/review` with the argument "er" for the same reason.
+ *
+ * An invocation's arguments run to the end of its LINE. The line is the unit
+ * of invocation: `/review a.ts` on one line and a sentence on the next are a
+ * command and a sentence, not a command with the sentence smuggled in as
+ * arguments — which is also what lets a staged command sit mid-draft at all.
+ *
+ * Whether a name resolves to a template is a separate question — see
  * {@link expandCommandInvocation} — because "unknown command" and "not a
  * command at all" must not send the same text.
  */
-export function parseCommandInvocation(text: string): CommandInvocation | null {
-  if (!text.startsWith("/")) return null;
-  let end = 1;
-  while (end < text.length && COMMAND_NAME_CHAR.test(text.charAt(end))) end += 1;
-  if (end === 1) return null;
-  const rest = text.slice(end);
-  // A name must END at a boundary. `/reviewer` is not `/review` with the
-  // argument "er", so anything that is neither whitespace nor end-of-text
-  // means this was never the command it looked like.
-  if (rest !== "" && !/^\s/.test(rest)) return null;
-  return { name: text.slice(1, end), argsString: rest.trim() };
+export function findCommandInvocations(text: string): readonly CommandInvocation[] {
+  const invocations: CommandInvocation[] = [];
+  for (let i = 0; i < text.length; i += 1) {
+    if (text.charAt(i) !== "/") continue;
+    // The slash must sit at a word boundary: a slash inside a word is prose.
+    if (i > 0 && !/\s/.test(text.charAt(i - 1))) continue;
+    let nameEnd = i + 1;
+    while (nameEnd < text.length && COMMAND_NAME_CHAR.test(text.charAt(nameEnd))) nameEnd += 1;
+    // A bare slash names nothing, and a name must END at a boundary too.
+    if (nameEnd === i + 1) continue;
+    if (nameEnd < text.length && !/\s/.test(text.charAt(nameEnd))) continue;
+    const newline = text.indexOf("\n", nameEnd);
+    const end = newline === -1 ? text.length : newline;
+    invocations.push({
+      name: text.slice(i + 1, nameEnd),
+      argsString: text.slice(nameEnd, end).trim(),
+      start: i,
+      end,
+    });
+  }
+  return invocations;
 }
 
 /**
- * The text a `/command` message actually sends.
+ * The text a message with `/command`s in it actually sends.
  *
  * Client-side expansion, and the last thing that happens before the existing
- * submit path takes over: a known `/name` becomes its template's body with the
- * arguments substituted, and everything else — plain prose, an unknown
- * `/name` — passes through untouched. An unknown command is deliberately NOT
- * an error: the harness is perfectly able to read a sentence that starts with a
- * slash, and swallowing it would lose the message.
+ * submit path takes over: each known `/name` at a word boundary becomes its
+ * template's body with the rest of its line substituted in as arguments, in
+ * place — text before it, and every other line, pass through untouched. A
+ * known command consumes its whole line, so a second `/name` on the same line
+ * is an argument, not a second command; an UNKNOWN one consumes nothing, so it
+ * neither blocks a later command on its line nor vanishes itself.
+ *
+ * An unknown command is deliberately NOT an error: the harness is perfectly
+ * able to read a sentence that mentions a slash, and swallowing it would lose
+ * the message.
  */
 export function expandCommandInvocation(
   text: string,
   templates: readonly PromptTemplate[],
 ): string {
-  const invocation = parseCommandInvocation(text);
-  if (invocation === null) return text;
-  const template = templates.find((candidate) => candidate.name === invocation.name);
-  if (template === undefined) return text;
-  return formatPromptTemplateInvocation(template, parseCommandArgs(invocation.argsString));
+  let result = "";
+  let cursor = 0;
+  for (const invocation of findCommandInvocations(text)) {
+    // Consumed already: this candidate sits inside a known command's arguments.
+    if (invocation.start < cursor) continue;
+    const template = templates.find((candidate) => candidate.name === invocation.name);
+    if (template === undefined) continue;
+    result += text.slice(cursor, invocation.start);
+    result += formatPromptTemplateInvocation(template, parseCommandArgs(invocation.argsString));
+    cursor = invocation.end;
+  }
+  // Nothing expanded — the exact string in is the exact string out.
+  if (cursor === 0) return text;
+  return result + text.slice(cursor);
 }

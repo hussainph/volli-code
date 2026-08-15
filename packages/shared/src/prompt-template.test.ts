@@ -5,7 +5,7 @@ import {
   formatPromptTemplateInvocation,
   mergePromptTemplates,
   parseCommandArgs,
-  parseCommandInvocation,
+  findCommandInvocations,
   promptTemplateDescription,
   promptTemplateTakesArgs,
   substituteArgs,
@@ -147,41 +147,55 @@ describe("mergePromptTemplates", () => {
   });
 });
 
-describe("parseCommandInvocation", () => {
+describe("findCommandInvocations", () => {
   it("splits a leading slash-name from its argument string", () => {
-    expect(parseCommandInvocation("/review src/app.ts")).toEqual({
-      name: "review",
-      argsString: "src/app.ts",
-    });
+    expect(findCommandInvocations("/review src/app.ts")).toEqual([
+      { name: "review", argsString: "src/app.ts", start: 0, end: 18 },
+    ]);
   });
 
   it("reads a bare name with no arguments", () => {
-    expect(parseCommandInvocation("/ship")).toEqual({ name: "ship", argsString: "" });
+    expect(findCommandInvocations("/ship")).toEqual([
+      { name: "ship", argsString: "", start: 0, end: 5 },
+    ]);
+  });
+
+  it("finds an invocation mid-text when the slash sits at a word boundary", () => {
+    expect(findCommandInvocations("please /review src/app.ts")).toEqual([
+      { name: "review", argsString: "src/app.ts", start: 7, end: 25 },
+    ]);
   });
 
   it("accepts the name characters a file basename can carry", () => {
-    expect(parseCommandInvocation("/pr:review-2 x")?.name).toBe("pr:review-2");
+    expect(findCommandInvocations("/pr:review-2 x")[0]?.name).toBe("pr:review-2");
   });
 
-  it("is null for text that only mentions a slash", () => {
-    expect(parseCommandInvocation("and/or")).toBeNull();
-    expect(parseCommandInvocation("plain prose")).toBeNull();
+  it("finds nothing in text that glues its slashes inside words", () => {
+    expect(findCommandInvocations("and/or")).toEqual([]);
+    expect(findCommandInvocations("look at src/app.ts")).toEqual([]);
+    expect(findCommandInvocations("plain prose")).toEqual([]);
   });
 
-  it("is null for a bare slash with no name after it", () => {
-    expect(parseCommandInvocation("/")).toBeNull();
-    expect(parseCommandInvocation("/ spaced")).toBeNull();
+  it("finds nothing after a bare slash with no name", () => {
+    expect(findCommandInvocations("/")).toEqual([]);
+    expect(findCommandInvocations("/ spaced")).toEqual([]);
   });
 
-  it("is null when the name runs straight into a character it cannot contain", () => {
-    expect(parseCommandInvocation("/review.md")).toBeNull();
+  it("finds nothing when the name runs straight into a character it cannot contain", () => {
+    expect(findCommandInvocations("/review.md")).toEqual([]);
   });
 
-  it("treats a newline after the name as the boundary it is", () => {
-    expect(parseCommandInvocation("/review\nsrc/app.ts")).toEqual({
-      name: "review",
-      argsString: "src/app.ts",
-    });
+  it("scopes an invocation's arguments to its own line", () => {
+    expect(findCommandInvocations("/review src/app.ts\nmore prose")).toEqual([
+      { name: "review", argsString: "src/app.ts", start: 0, end: 18 },
+    ]);
+  });
+
+  it("finds an invocation on each line that starts one", () => {
+    expect(findCommandInvocations("/ship\nprose\n/review a.ts").map((i) => i.name)).toEqual([
+      "ship",
+      "review",
+    ]);
   });
 });
 
@@ -213,5 +227,37 @@ describe("expandCommandInvocation", () => {
 
   it("passes ordinary prose through untouched", () => {
     expect(expandCommandInvocation("just a message", templates)).toBe("just a message");
+  });
+
+  it("expands a command mid-sentence, in place, keeping the prose before it", () => {
+    expect(expandCommandInvocation("please /review src/app.ts bugs", templates)).toBe(
+      "please Review src/app.ts for bugs.",
+    );
+  });
+
+  it("never mistakes a slash inside a word for a command", () => {
+    expect(expandCommandInvocation("look at src/review", templates)).toBe("look at src/review");
+  });
+
+  it("stops a command's arguments at its own line", () => {
+    expect(expandCommandInvocation("/ship\nAlso check tests", templates)).toBe(
+      "Ship it.\nAlso check tests",
+    );
+  });
+
+  it("expands one command per line, each on its own line", () => {
+    expect(expandCommandInvocation("/ship\n/review a.ts bugs", templates)).toBe(
+      "Ship it.\nReview a.ts for bugs.",
+    );
+  });
+
+  it("lets a known command consume the rest of its line — a second slash there is an argument", () => {
+    expect(expandCommandInvocation("/review a.ts bugs /ship", templates)).toBe(
+      "Review a.ts for bugs.",
+    );
+  });
+
+  it("lets a known command follow an unknown one on the same line", () => {
+    expect(expandCommandInvocation("/nope /ship", templates)).toBe("/nope Ship it.");
   });
 });

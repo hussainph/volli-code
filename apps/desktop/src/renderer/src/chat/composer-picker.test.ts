@@ -79,9 +79,35 @@ describe("commandTokenAt", () => {
     expect(commandTokenAt({ text: "/review ", offset: 8 })).toBeNull();
   });
 
-  it("never opens away from the start of the message", () => {
+  it("opens at a word boundary mid-message", () => {
+    expect(commandTokenAt({ text: "word /rev", offset: 9 })).toEqual({
+      from: 5,
+      to: 9,
+      query: "rev",
+    });
+    expect(commandTokenAt({ text: " /review", offset: 8 })).toEqual({
+      from: 1,
+      to: 8,
+      query: "review",
+    });
+  });
+
+  it("opens right after a newline — a line start is a word boundary", () => {
+    expect(commandTokenAt({ text: "prose\n/rev", offset: 10 })).toEqual({
+      from: 6,
+      to: 10,
+      query: "rev",
+    });
+  });
+
+  it("never opens on a slash glued inside a word", () => {
     expect(commandTokenAt({ text: "and/or", offset: 6 })).toBeNull();
-    expect(commandTokenAt({ text: " /review", offset: 8 })).toBeNull();
+    expect(commandTokenAt({ text: "look at src/app", offset: 15 })).toBeNull();
+    expect(commandTokenAt({ text: "https://ex", offset: 10 })).toBeNull();
+  });
+
+  it("closes at the space mid-message too", () => {
+    expect(commandTokenAt({ text: "word /review ", offset: 13 })).toBeNull();
   });
 
   it("does not open with the caret before the slash", () => {
@@ -181,6 +207,20 @@ describe("the picker, both halves composed", () => {
     const state = pick("/review");
 
     expect(state?.mode).toBe("command");
+  });
+
+  it("opens the command picker mid-draft at a word boundary", () => {
+    const state = pick("check /rev");
+
+    expect(state?.mode).toBe("command");
+    expect(state?.from).toBe(6);
+    expect(state?.rows.map((row) => row.value)).toEqual(["review", "preview"]);
+  });
+
+  it("keeps the file picker for the slash inside an @ ref", () => {
+    const state = pick("look at @src/app");
+
+    expect(state?.mode).toBe("file");
   });
 });
 

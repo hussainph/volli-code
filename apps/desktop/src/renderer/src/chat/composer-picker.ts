@@ -12,13 +12,15 @@
  * `/` delegates to `@volli/shared`'s prompt-template module, whose substitution
  * is Pi's own grammar under a parity test.
  *
- * ## Why the two triggers are not symmetric
+ * ## Where each trigger fires
  *
- * `@` fires at any ref boundary, because a file reference is a word inside a
- * sentence. `/` fires only at offset 0, because a command is not a word in a
- * sentence — it IS the message, and its expansion replaces the whole thing.
- * That asymmetry is the feature: a message that mentions `src/a.ts and/or b`
- * must not open a command picker halfway through.
+ * `@` fires at any ref boundary. `/` fires at a word boundary — the start of
+ * the text, or right after whitespace — because a command may sit mid-draft
+ * (`please /review a.ts`), but a slash glued inside a word never opens
+ * anything: a message that mentions `src/a.ts and/or b` is prose on both
+ * sides of both slashes. The same boundary rule decides what expands at
+ * submit (`@volli/shared`'s `findCommandInvocations`), so what the picker
+ * offers and what the send performs cannot disagree.
  */
 import {
   formatPromptTemplateInvocation,
@@ -69,20 +71,30 @@ export interface ComposerPickerState {
   readonly rows: readonly ComposerPickerRow[];
 }
 
-/** The `/name` token the caret sits in, or null. Offset 0 only — see the header. */
+/**
+ * The `/name` token the caret sits in, or null.
+ *
+ * The slash must sit at a word boundary — see the header — and the caret must
+ * still be inside the name: `/review src/a.ts` with the caret in the path is a
+ * command with an argument being typed, not a command being chosen, so the
+ * first space after the name is what closes the picker.
+ */
 export function commandTokenAt(input: {
   text: string;
   offset: number;
 }): { from: number; to: number; query: string } | null {
   const { text } = input;
-  if (input.offset < 1 || !text.startsWith("/")) return null;
+  if (input.offset < 1) return null;
   const offset = Math.min(input.offset, text.length);
-  let end = 1;
-  while (end < text.length && COMMAND_NAME_CHAR.test(text.charAt(end))) end += 1;
-  // Past the name is past the picker: `/review src/a.ts` with the caret in the
-  // path is a command with an argument being typed, not a command being chosen.
-  if (offset > end) return null;
-  return { from: 0, to: offset, query: text.slice(1, offset) };
+  // Walk left over name characters to where the name would start…
+  let start = offset;
+  while (start > 0 && COMMAND_NAME_CHAR.test(text.charAt(start - 1))) start -= 1;
+  // …which must be a slash, itself at a word boundary. A caret past the name
+  // walks back over whitespace or an argument first and lands on neither.
+  if (start === 0 || text.charAt(start - 1) !== "/") return null;
+  const slash = start - 1;
+  if (slash > 0 && !/\s/.test(text.charAt(slash - 1))) return null;
+  return { from: slash, to: offset, query: text.slice(start, offset) };
 }
 
 /**
@@ -139,9 +151,10 @@ export interface ComposerPickerDismissal {
  * The trigger token under this caret, or null — the grammar alone, with none of
  * {@link composerPickerTarget}'s gates applied and nothing ranked.
  *
- * `/` is checked first and wins outright: at offset 0 there is no `@` token to
- * be in, so the two can never both be live, and checking in a fixed order
- * removes the question of what would happen if they were.
+ * `/` is checked first and wins outright: a command's slash sits at a word
+ * boundary while the slash inside an `@` ref is glued to path characters, so
+ * the two can never both be live, and checking in a fixed order removes the
+ * question of what would happen if they were.
  *
  * Exported because a dismissal is scoped to a token, and the only honest way to
  * know a dismissal has expired is to notice the caret is no longer in one.
