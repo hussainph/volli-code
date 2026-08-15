@@ -1,5 +1,6 @@
 import * as React from "react";
-import type { ModelAccessSignInType, ModelAccessSignInUpdate, Result } from "@volli/shared";
+import type { ModelAccessSignInType, ModelAccessSignInUpdate } from "@volli/shared";
+import type { Result } from "../../../ipc/contract";
 
 import {
   ModelAccessProvider,

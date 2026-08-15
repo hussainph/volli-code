@@ -1,46 +1,67 @@
-// Type-only module: the Electron preload may only `import type` from
-// @volli/shared — the pack config requires main and preload to stay
-// dependency-disjoint (see CAUTION in apps/desktop/vite.config.ts). Adding a
-// runtime export here is fine for main, but preload must never import it at
-// runtime.
+// The Electron IPC catalog: every channel this app speaks, declared once.
+//
+// Type-only module, and it must stay that way. All three desktop processes may
+// `import type` from it; preload and renderer must never import it at RUNTIME.
+// The pack config requires main and preload to stay dependency-disjoint (see
+// CAUTION in apps/desktop/vite.config.ts), and a value export here would give a
+// preload import something to actually require — splitting a shared chunk out
+// of preload.cjs that the sandboxed preload cannot resolve. The runtime half of
+// the contract is src/main/ipc-descriptors.ts, which only main can reach.
+//
+// It lives in the app rather than in @volli/shared because a transport catalog
+// is knowledge of Electron, and that package is pure domain code.
 
-import type { ChangeSetSnapshot } from "./change-set";
-import type { FileKind, FileSource, IndexedFile } from "./file-ref";
-import type { ManifestError } from "./harness/manifest";
-import type { HarnessTrustPrompt, HarnessTrustVerdict } from "./harness/trust";
-import type { HarnessChannelStatus } from "./harness/channel";
-import type { HarnessAdapter, HarnessEvent } from "./harness/types";
-import type { DirEntry } from "./fs-entries";
-import type { Label } from "./label";
-import type { LegacyProject } from "./legacy-import";
-import type { ModelAccessSignInType } from "./model-access-sign-in";
-import type { Project } from "./project-identity";
-import type { PromptTemplate } from "./prompt-template";
-import type { HarnessEventOrder, SessionListingRow } from "./session";
-import type { SessionRpcIpcRequest, SessionRpcIpcResponse } from "./session-rpc-wire";
 import type {
+  Appearance,
+  ArchivedTicket,
+  Canvas,
+  ChangeSetSnapshot,
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
+  DiffStat,
+  DirEntry,
+  FileKind,
+  FileSource,
   GhosttyAppearancePayload,
   GhosttyConfigResult,
+  HarnessAdapter,
+  HarnessChannelStatus,
+  HarnessEvent,
+  HarnessEventOrder,
+  HarnessId,
+  HarnessTrustPrompt,
+  HarnessTrustVerdict,
+  IndexedFile,
+  Label,
+  LatestSessionSignal,
+  LegacyProject,
+  ManifestError,
+  ModelAccessSignInType,
+  Project,
+  ProjectThemeOverride,
+  PromptTemplate,
+  ResolvedAppearance,
+  RetentionReason,
+  SESSION_RPC_CANCEL_CHANNEL,
+  SESSION_RPC_EVENT_CHANNEL,
+  SESSION_RPC_IPC_CHANNEL,
+  SessionListingRow,
+  SessionRpcIpcRequest,
+  SessionRpcIpcResponse,
+  ShippedEditorThemeId,
   TerminalBusyResult,
   TerminalIoResult,
-} from "./terminal";
-import type { Appearance, Canvas, ResolvedAppearance } from "./theme/canvas/types";
-import type { ShippedEditorThemeId } from "./theme/editor-themes";
-import type { ProjectThemeOverride } from "./theme/project-override";
-import type { ArchivedTicket, HarnessId, Ticket, TicketPriority, TicketStatus } from "./ticket";
-import type { TicketComment } from "./ticket-comment";
-import type {
-  DiffStat,
-  LatestSessionSignal,
+  Ticket,
+  TicketComment,
   TicketEvent,
+  TicketPriority,
+  TicketStatus,
   TicketStatusEntry,
-} from "./ticket-events";
+} from "@volli/shared";
 
 // ---- request contract (issue #98) ------------------------------------------
 // Each invoke request is declared ONCE here as `{ args, result }`; the runtime
-// descriptor table in ipc-descriptors.ts is keyed by these channels and its
+// descriptor table in src/main/ipc-descriptors.ts is keyed by these channels and its
 // guards are compile-checked against the `args` tuples, so channel membership,
 // argument shape, and validator can no longer drift apart.
 
@@ -938,6 +959,32 @@ export type VolliIpcEvent =
   // Sent to the window that began the attempt, never broadcast.
   | "volli:model-access-sign-in";
 
+// ---- session-rpc wire agreement ---------------------------------------------
+// @volli/shared owns the three Session RPC channel NAMES (session-rpc-wire.ts)
+// because both ends of the tRPC edge need them and the package is the only
+// place both can reach. It cannot check them against this catalog itself: it is
+// pure domain code that knows nothing about Electron transport, and a package
+// may never import from the app that consumes it.
+//
+// So the agreement is asserted from this side, app → package. Each constant
+// must still name a channel the contract declares — renaming one in shared, or
+// dropping its declaration here, is a compile error in the desktop build
+// instead of a channel that quietly answers nothing at runtime.
+type Assert<Covered extends true> = Covered;
+type Declares<Channel extends string, Catalog extends string> = Channel extends Catalog
+  ? true
+  : false;
+
+export type SessionRpcInvokeChannelIsDeclared = Assert<
+  Declares<typeof SESSION_RPC_IPC_CHANNEL, keyof VolliInvokeContract & string>
+>;
+export type SessionRpcCancelChannelIsDeclared = Assert<
+  Declares<typeof SESSION_RPC_CANCEL_CHANNEL, keyof VolliSendContract & string>
+>;
+export type SessionRpcEventChannelIsDeclared = Assert<
+  Declares<typeof SESSION_RPC_EVENT_CHANNEL, VolliIpcEvent>
+>;
+
 /** Direction of a `volli:ui-zoom-command` event: step in/out one rung, or reset. */
 export type UiZoomCommand = "in" | "out" | "reset";
 
@@ -1416,9 +1463,9 @@ export type WorktreeCommitResult = Result<
 export type WorktreePushPrResult = Result<{ url: string; existing: boolean }>;
 
 // ---- retention (CONCEPT #16, issue #76) ------------------------------------
-
-/** Why a ticket is archive-ready — drives the retention prompt's copy. */
-export type RetentionReason = "pr-merged" | "ttl-expired";
+// `RetentionReason` is domain vocabulary, not transport: @volli/shared's pure
+// `computeArchiveReadiness` decides it, so the type is declared there and
+// imported above.
 
 /**
  * The composed retention state for ONE ticket, returned by

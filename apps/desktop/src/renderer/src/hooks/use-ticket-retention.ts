@@ -1,5 +1,5 @@
 import * as React from "react";
-import type { TicketRetentionState } from "@volli/shared";
+import type { TicketRetentionState } from "../../../ipc/contract";
 
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { planningChangeAffects, useBoardStore } from "@renderer/stores/board";

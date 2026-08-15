@@ -1,4 +1,5 @@
-import { DATA_CHANNELS } from "@volli/shared";
+import { DATA_CHANNELS } from "./ipc-descriptors";
+import type { SessionListingRow, Ticket } from "@volli/shared";
 import type {
   AppStateSetResult,
   BootstrapResult,
@@ -6,24 +7,22 @@ import type {
   ProjectMutationResult,
   Result,
   RetentionTtlResult,
-  SessionListingRow,
   SessionRenameResult,
   SessionsResult,
-  Ticket,
   TicketCommentResult,
   TicketCommentsResult,
   TicketEventsResult,
   TicketLatestSignalsResult,
   TicketResult,
-  TicketsResult,
   TicketStatusEntriesResult,
+  TicketsResult,
   VolliIpcChannel,
   WorktreeBranchesResult,
   WorktreeCommitResult,
   WorktreeOrphanDeleteResult,
   WorktreeOrphansResult,
   WorktreeRemoveResult,
-} from "@volli/shared";
+} from "../ipc/contract";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

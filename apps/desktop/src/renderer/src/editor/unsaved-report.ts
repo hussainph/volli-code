@@ -11,7 +11,7 @@
  */
 
 import { baseNameOf } from "@volli/shared";
-import type { UnsavedDocumentsReport } from "@volli/shared";
+import type { UnsavedDocumentsReport } from "../../../ipc/contract";
 
 import type { DocumentIdentity } from "./document-identity";
 

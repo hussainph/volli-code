@@ -11,14 +11,13 @@
  * persistence is the separate `commitReorder`, which the rail calls once, on
  * drag end/cancel, so a single drag doesn't spam `api.projects.reorder`.
  */
-import {
-  errorMessage,
-  type AppStateSetResult,
-  type Project,
-  type ProjectCreateResult,
-  type ProjectMutationResult,
-  type ProjectUpdateResult,
-} from "@volli/shared";
+import { errorMessage, type Project } from "@volli/shared";
+import type {
+  AppStateSetResult,
+  ProjectCreateResult,
+  ProjectMutationResult,
+  ProjectUpdateResult,
+} from "../../../ipc/contract";
 import { create } from "zustand";
 
 import { toastError } from "@renderer/lib/toast";

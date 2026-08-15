@@ -1,4 +1,4 @@
-import type { WorktreePhaseEvent } from "@volli/shared";
+import type { WorktreePhaseEvent } from "../../../ipc/contract";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   createWorktreeStore,

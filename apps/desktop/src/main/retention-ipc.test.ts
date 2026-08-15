@@ -8,12 +8,12 @@
  * archive-and-clean a worktree-less ticket.
  */
 import type {
+  Result,
   RetentionKeepResult,
   RetentionStateResult,
   RetentionTtlResult,
-  Result,
   VolliIpcChannel,
-} from "@volli/shared";
+} from "../ipc/contract";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const { handlers, dataChangedSends } = vi.hoisted(() => ({

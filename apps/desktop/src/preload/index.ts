@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
-// Type-only imports ONLY: the pack config keeps main and preload
-// dependency-disjoint (see CAUTION in vite.config.ts) — a runtime import
-// from @volli/shared here could split a shared chunk out of preload.cjs.
+// Type-only imports ONLY, from BOTH sources below: the pack config keeps main
+// and preload dependency-disjoint (see CAUTION in vite.config.ts) — a runtime
+// import from @volli/shared here could split a shared chunk out of preload.cjs.
 //
 // Not a theoretical risk, and worth knowing before reaching for one: turning
 // the three `import type` channel constants below into value imports was tried
@@ -15,6 +15,37 @@ import { contextBridge, ipcRenderer } from "electron";
 //
 // So agreement with main is proven the only way it can be from here: in the
 // type system, which is erased. See the Session RPC channels below.
+//
+// The split below is by KIND, not by risk. Domain vocabulary comes from
+// @volli/shared; the Electron channel contract comes from ../ipc/contract,
+// which is type-only by construction and so has nothing to require either way.
+import type {
+  Appearance,
+  Canvas,
+  CreateTerminalSessionRequest,
+  CreateTerminalSessionResult,
+  GhosttyAppearancePayload,
+  GhosttyConfigResult,
+  ModelAccessSignInType,
+  ModelAccessSignInUpdate,
+  OverlayEdits,
+  ProjectThemeOverride,
+  // Imported for `typeof` only — see the Session RPC door below. `import type`
+  // of a const is legal and fully erased, which is exactly why these three can
+  // be named here at all.
+  SESSION_RPC_CANCEL_CHANNEL,
+  SESSION_RPC_EVENT_CHANNEL,
+  SESSION_RPC_IPC_CHANNEL,
+  SessionRpcIpcEvent,
+  SessionRpcIpcRequest,
+  SessionRpcIpcResponse,
+  ShippedEditorThemeId,
+  TerminalBusyResult,
+  TerminalDataEvent,
+  TerminalExitEvent,
+  TerminalIoResult,
+  TerminalParkStateEvent,
+} from "@volli/shared";
 import type {
   AppStateSetResult,
   ArchivedTicketsResult,
@@ -24,8 +55,6 @@ import type {
   CommentCreateInput,
   CommentIdInput,
   CommentUpdateInput,
-  CreateTerminalSessionRequest,
-  CreateTerminalSessionResult,
   DataChangedEvent,
   DirChangedEvent,
   DirPathInput,
@@ -36,8 +65,8 @@ import type {
   FileReadResult,
   FileWriteInput,
   FileWriteResult,
-  GhosttyAppearancePayload,
-  GhosttyConfigResult,
+  FirstPaintHint,
+  HarnessEventNotice,
   HarnessPendingResult,
   HarnessRegisteredResult,
   HarnessTrustSetInput,
@@ -49,9 +78,8 @@ import type {
   LegacyImportResult,
   ListDirectoryResult,
   ModelAccessSignInBeginResult,
-  ModelAccessSignInType,
-  ModelAccessSignInUpdate,
   PickFolderResult,
+  ProjectCanvasWriteResult,
   ProjectCreateInput,
   ProjectCreateResult,
   ProjectIdInput,
@@ -61,51 +89,45 @@ import type {
   PromptTemplateIndexInput,
   PromptTemplateIndexResult,
   Result,
+  RetentionArchiveCleanResult,
+  RetentionDismissResult,
+  RetentionKeepResult,
+  RetentionPollResult,
+  RetentionStateResult,
+  RetentionTtlResult,
   RevealResult,
+  SessionHarnessNotice,
   SessionRenameInput,
   SessionRenameResult,
-  SessionRpcIpcEvent,
-  SessionRpcIpcRequest,
-  SessionRpcIpcResponse,
-  // Imported for `typeof` only — see the Session RPC door below. `import type`
-  // of a const is legal and fully erased, which is exactly why these three can
-  // be named here at all.
-  SESSION_RPC_CANCEL_CHANNEL,
-  SESSION_RPC_EVENT_CHANNEL,
-  SESSION_RPC_IPC_CHANNEL,
-  HarnessEventNotice,
-  SessionHarnessNotice,
   SessionsInterruptedEvent,
   SessionsResult,
-  TerminalBusyResult,
-  TerminalDataEvent,
-  TerminalExitEvent,
-  TerminalIoResult,
-  TerminalParkStateEvent,
+  TerminalOverlayWriteResult,
+  ThemeSetProjectResult,
+  ThemeStateInput,
+  ThemeStateResult,
   TicketCommentResult,
   TicketCommentsResult,
   TicketCreateInput,
   TicketEventsResult,
-  TicketLatestSignalsResult,
-  TicketStatusEntriesResult,
   TicketIdInput,
+  TicketLatestSignalsResult,
   TicketMoveInput,
   TicketResult,
   TicketSetLabelsInput,
   TicketSetPriorityInput,
-  TicketsResult,
+  TicketStatusEntriesResult,
   TicketUpdateInput,
+  TicketsResult,
   UiZoomCommand,
   UnsavedDocumentsReport,
   VolliInvokeContract,
   VolliIpcChannel,
   VolliIpcEvent,
   VolliSendContract,
-  WorktreeBranchesResult,
   WorktreeBaseReadResult,
+  WorktreeBranchesResult,
   WorktreeChangeSetResult,
   WorktreeChangedEvent,
-  WorktreeWatchErrorEvent,
   WorktreeCommitInput,
   WorktreeCommitResult,
   WorktreeDiffMode,
@@ -117,24 +139,8 @@ import type {
   WorktreePushPrResult,
   WorktreeRemoveResult,
   WorktreeStatusResult,
-  RetentionArchiveCleanResult,
-  RetentionDismissResult,
-  RetentionKeepResult,
-  RetentionPollResult,
-  RetentionStateResult,
-  RetentionTtlResult,
-  OverlayEdits,
-  ProjectThemeOverride,
-  ShippedEditorThemeId,
-  ThemeSetProjectResult,
-  ThemeStateInput,
-  ThemeStateResult,
-  TerminalOverlayWriteResult,
-  Appearance,
-  Canvas,
-  FirstPaintHint,
-  ProjectCanvasWriteResult,
-} from "@volli/shared";
+  WorktreeWatchErrorEvent,
+} from "../ipc/contract";
 
 /** Typed `ipcRenderer.invoke` bound to the shared contract: the channel literal fixes both the argument tuple and the result type, so a wrong pairing is a compile error. */
 const invoke = <C extends keyof VolliInvokeContract>(

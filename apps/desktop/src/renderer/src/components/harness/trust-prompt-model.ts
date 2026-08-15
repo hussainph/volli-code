@@ -14,13 +14,13 @@
  */
 
 import { errorMessage, shellSingleQuote } from "@volli/shared";
+import type { HarnessTrustVerdict } from "@volli/shared";
 import type {
   BrokenHarnessManifest,
-  HarnessTrustVerdict,
   PendingHarnessManifest,
   Result,
-} from "@volli/shared";
-import type { HarnessPendingResult } from "@volli/shared";
+} from "../../../../ipc/contract";
+import type { HarnessPendingResult } from "../../../../ipc/contract";
 
 /** The two calls this model needs — `window.api.harness` satisfies it. */
 export interface HarnessTrustApi {

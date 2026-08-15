@@ -1,4 +1,5 @@
-import type { DirEntry, ListDirectoryResult } from "@volli/shared";
+import type { DirEntry } from "@volli/shared";
+import type { ListDirectoryResult } from "../../../../ipc/contract";
 import { describe, expect, it } from "vite-plus/test";
 import {
   errorListing,

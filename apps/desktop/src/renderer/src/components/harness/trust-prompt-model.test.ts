@@ -5,7 +5,7 @@ import type {
   HarnessPendingResult,
   PendingHarnessManifest,
   Result,
-} from "@volli/shared";
+} from "../../../../ipc/contract";
 
 import {
   brokenHarnessMessage,

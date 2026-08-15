@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { Result } from "@volli/shared";
+import type { Result } from "../../../ipc/contract";
 
 import { rearmWatch } from "./rearm-watch";
 

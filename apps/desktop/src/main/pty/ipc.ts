@@ -14,8 +14,8 @@ import type {
   HarnessId,
   TerminalBusyResult,
   TerminalIoResult,
-  VolliIpcChannel,
 } from "@volli/shared";
+import type { VolliIpcChannel } from "../../ipc/contract";
 import { attachmentsRoot } from "../attachment-store";
 import type { DbHandle } from "../data-ipc";
 import { quitAlreadyRefused, refuseQuit } from "../quit-gate";

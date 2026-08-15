@@ -17,18 +17,20 @@ import {
   moveTicket as moveTicketOp,
   setTicketPriority as setTicketPriorityOp,
   type ArchivedTicket,
-  type ArchivedTicketsResult,
   type HarnessId,
   type Label,
-  type LabelResult,
-  type Result,
   type Ticket,
   type TicketFilter,
   type TicketPriority,
-  type TicketResult,
-  type TicketsResult,
   type TicketStatus,
 } from "@volli/shared";
+import type {
+  ArchivedTicketsResult,
+  LabelResult,
+  Result,
+  TicketResult,
+  TicketsResult,
+} from "../../../ipc/contract";
 import { create } from "zustand";
 
 import { killTicketSessions } from "@renderer/terminal/session-lifecycle";

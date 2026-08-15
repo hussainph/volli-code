@@ -4,16 +4,16 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { HARNESS_CHANNELS, HARNESS_EVENT_GRACE_MS, parseHarnessId } from "@volli/shared";
+import { HARNESS_EVENT_GRACE_MS, parseHarnessId } from "@volli/shared";
+import { HARNESS_CHANNELS } from "./ipc-descriptors";
+import type { HarnessAdapter, HarnessId } from "@volli/shared";
 import type {
-  HarnessAdapter,
-  HarnessId,
   HarnessPendingResult,
   HarnessRegisteredResult,
   PendingHarnessManifest,
   Result,
   VolliIpcChannel,
-} from "@volli/shared";
+} from "../ipc/contract";
 
 // Hoisted above module evaluation so the electron mock factory can capture into
 // it — the shape data-ipc.test.ts and theme-ipc.test.ts use.

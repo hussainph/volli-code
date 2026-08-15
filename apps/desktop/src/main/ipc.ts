@@ -2,13 +2,13 @@ import { BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { promises as fs } from "node:fs";
 import { basename, resolve } from "node:path";
 import { compareDirEntries, errorMessage } from "@volli/shared";
+import type { DirEntry } from "@volli/shared";
 import type {
-  DirEntry,
   ListDirectoryResult,
   PickFolderResult,
   RevealResult,
   VolliIpcChannel,
-} from "@volli/shared";
+} from "../ipc/contract";
 // The project-roots registry lives in ./project-roots so main-process
 // consumers (this file, pty.ts) share one instance.
 import { isPathWithinRoots, syncProjectRoots } from "./project-roots";

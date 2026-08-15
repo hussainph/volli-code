@@ -116,10 +116,9 @@ export {
   type ArchiveReadiness,
   type ArchiveReadinessInput,
 } from "@volli/shared";
-// `RetentionReason` also moved — it was already duplicated character-identical
-// with `packages/shared/src/ipc.ts` (K1); nothing in this file uses it directly
-// (the type only appears inside `ArchiveReadiness`, re-exported above), so no
-// import is needed here.
+// `RetentionReason` moved to `@volli/shared` alongside it; nothing in this file
+// uses the type directly (it only appears inside `ArchiveReadiness`, re-exported
+// above), so no import is needed here.
 
 // The archive here is a human-disposed affordance (the UI's "Archive & clean"),
 // so its `archived` event is attributed to the user — matching volli:ticket-archive.

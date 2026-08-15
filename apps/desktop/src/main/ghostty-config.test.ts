@@ -1,4 +1,4 @@
-import type { VolliIpcChannel, VolliIpcEvent } from "@volli/shared";
+import type { VolliIpcChannel, VolliIpcEvent } from "../ipc/contract";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 // Hoisted above module evaluation, like pty.test.ts, so the electron/node:fs

@@ -35,13 +35,12 @@
 
 import type { PiSignIn, PiSignInSteps } from "@volli/agent-runtime";
 import type {
-  ModelAccessSignInBeginResult,
   ModelAccessSignInEvent,
   ModelAccessSignInPrompt,
   ModelAccessSignInType,
   ModelAccessSignInUpdate,
-  Result,
 } from "@volli/shared";
+import type { ModelAccessSignInBeginResult, Result } from "../../ipc/contract";
 
 /**
  * Where one attempt's updates go, and the only thing this service knows about

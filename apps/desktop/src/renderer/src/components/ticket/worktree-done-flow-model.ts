@@ -10,7 +10,7 @@
  */
 import type { DiffStat } from "@volli/shared";
 
-/** The finer Details-rail worktree status (mirrors `WorktreeStatusResult["status"]`, packages/shared/src/ipc.ts). */
+/** The finer Details-rail worktree status (mirrors `WorktreeStatusResult["status"]`, apps/desktop/src/ipc/contract.ts). */
 export interface WorktreeStatusSnapshot {
   uncommitted: boolean;
   sequencerActive: boolean;

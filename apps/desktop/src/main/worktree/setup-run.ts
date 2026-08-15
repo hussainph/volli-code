@@ -16,7 +16,8 @@
  * a throwing insert is caught, logged, and never escapes the pty hot path).
  */
 import type Database from "better-sqlite3";
-import { errorMessage, trimWorktreeFailureStderr, type WorktreePhase } from "@volli/shared";
+import { errorMessage, trimWorktreeFailureStderr } from "@volli/shared";
+import type { WorktreePhase } from "../../ipc/contract";
 
 import { recordTicketEvent } from "../db/events-repo";
 import { setPhase } from "./phase";

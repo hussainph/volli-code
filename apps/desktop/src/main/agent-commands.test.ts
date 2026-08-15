@@ -4,14 +4,8 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type {
-  AgentRequest,
-  AgentResponse,
-  DoctorCheck,
-  HarnessEventNotice,
-  SessionHarnessNotice,
-  HarnessId,
-} from "@volli/shared";
+import type { AgentRequest, AgentResponse, DoctorCheck, HarnessId } from "@volli/shared";
+import type { HarnessEventNotice, SessionHarnessNotice } from "../ipc/contract";
 
 import { createAttachment } from "./db/attachments-repo";
 import { listHarnessChannels } from "./db/harness-channel-repo";

@@ -8,8 +8,8 @@ import {
   type ChangeSetFile,
   type ChangeSetFileStatus,
   type FileSource,
-  type WorktreeBaseReadResult,
 } from "@volli/shared";
+import type { WorktreeBaseReadResult } from "../../../../ipc/contract";
 
 import {
   diffFilePolicy,

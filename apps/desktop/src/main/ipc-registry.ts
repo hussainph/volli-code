@@ -1,7 +1,7 @@
 import { ipcMain } from "electron";
 import type { WebContents } from "electron";
 import { errorMessage } from "@volli/shared";
-import type { IpcArgs, IpcResult, VolliInvokeContract } from "@volli/shared";
+import type { IpcArgs, IpcResult, VolliInvokeContract } from "../ipc/contract";
 
 // The one guard→body→error envelope every DB-backed IPC surface registers
 // through (issue #98). Callers pass a shared descriptor table (the derived

@@ -27,8 +27,8 @@ import type {
   TerminalExitEvent,
   TerminalIoResult,
   TerminalParkStateEvent,
-  VolliIpcEvent,
 } from "@volli/shared";
+import type { VolliIpcEvent } from "../../ipc/contract";
 import { broadcastDataChanged } from "../broadcast";
 import { ensureHarnessWorkspaceFiles } from "../harness-workspace";
 import { createProcessInspector, parkConfigFromEnv } from "../park";

@@ -8,12 +8,12 @@
  * plain function over an injected api surface is testable; a `useEffect` body
  * is not.
  */
-import {
-  errorMessage,
-  type Result,
-  type WorktreeChangedEvent,
-  type WorktreeWatchErrorEvent,
-} from "@volli/shared";
+import { errorMessage } from "@volli/shared";
+import type {
+  Result,
+  WorktreeChangedEvent,
+  WorktreeWatchErrorEvent,
+} from "../../../../ipc/contract";
 
 /** The `window.api.worktree` subset a subscription needs — injected so tests drive it. */
 export interface WorktreeChangeWatchApi {

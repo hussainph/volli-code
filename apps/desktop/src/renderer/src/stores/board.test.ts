@@ -4,9 +4,9 @@ import {
   type Label,
   type Ticket,
   type TicketPriority,
-  type TicketResult,
   type TicketStatus,
 } from "@volli/shared";
+import type { TicketResult } from "../../../ipc/contract";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 import { type BoardGateway, createBoardStore, planningChangeAffects } from "./board";

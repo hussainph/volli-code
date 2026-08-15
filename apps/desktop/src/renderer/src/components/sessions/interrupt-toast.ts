@@ -7,12 +7,8 @@
  * `volli:sessions-interrupted` push it renders is fired by main only when
  * sessions were actually interrupted.
  */
-import {
-  displayTicketId,
-  type Project,
-  type SessionsInterruptedEvent,
-  type Ticket,
-} from "@volli/shared";
+import { displayTicketId, type Project, type Ticket } from "@volli/shared";
+import type { SessionsInterruptedEvent } from "../../../../ipc/contract";
 
 export interface InterruptToastModel {
   message: string;

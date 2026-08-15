@@ -44,7 +44,8 @@ import {
   THEME_APP_STATE_KEY,
   THEME_EDITOR_APP_STATE_KEY,
 } from "@volli/shared";
-import type { Appearance, Canvas, FirstPaintHint, ShippedEditorThemeId } from "@volli/shared";
+import type { Appearance, Canvas, ShippedEditorThemeId } from "@volli/shared";
+import type { FirstPaintHint } from "../../ipc/contract";
 import { setAppState } from "./app-state-repo";
 import { prepared } from "./prepared";
 

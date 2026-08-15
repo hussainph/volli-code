@@ -6,7 +6,7 @@ import type {
   PickFolderResult,
   RevealResult,
   VolliIpcChannel,
-} from "@volli/shared";
+} from "../ipc/contract";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 // The electron mock factory is hoisted above module evaluation, so anything

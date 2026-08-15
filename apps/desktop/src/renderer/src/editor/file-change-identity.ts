@@ -1,4 +1,5 @@
-import type { FileChangedEvent, FileSource } from "@volli/shared";
+import type { FileSource } from "@volli/shared";
+import type { FileChangedEvent } from "../../../ipc/contract";
 
 export interface ResolvedFileChangeIdentity {
   projectId: string;

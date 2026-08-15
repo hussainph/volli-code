@@ -19,12 +19,8 @@
 import { existsSync } from "node:fs";
 
 import type Database from "better-sqlite3";
-import {
-  displayTicketId,
-  type ChangeSetSnapshot,
-  type DiffStat,
-  type WorktreeDiffMode,
-} from "@volli/shared";
+import { displayTicketId, type ChangeSetSnapshot, type DiffStat } from "@volli/shared";
+import type { WorktreeDiffMode } from "../../ipc/contract";
 
 import { getProjectById } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";

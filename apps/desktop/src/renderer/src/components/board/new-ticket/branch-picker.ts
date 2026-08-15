@@ -29,7 +29,7 @@
  *   empty repo resolves to no base at all, and rendering that as the same `…`
  *   the in-flight read draws would show a settled answer as a waiting one.
  */
-import type { WorktreeBranchListing } from "@volli/shared";
+import type { WorktreeBranchListing } from "../../../../../ipc/contract";
 
 import { relativeTime } from "@renderer/lib/relative-time";
 

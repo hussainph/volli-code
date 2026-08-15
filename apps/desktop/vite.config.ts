@@ -153,6 +153,7 @@ export default defineConfig(({ mode }) => ({
         "src/terminal/option-as-alt.ts",
         "src/terminal/session-lifecycle.ts",
         "**/src/main/ipc.ts",
+        "**/src/main/ipc-descriptors.ts",
         "**/src/main/ipc-registry.ts",
         "**/src/main/navigation.ts",
         "**/src/main/project-roots.ts",

@@ -4,11 +4,11 @@
  * the ticket-detail UI (the session status chip, the pre-boot "starting"
  * affordance, and the rail repository card's failed-notice + retry) can render the live
  * ensure pipeline without polling `api.worktree.state`. NEVER persisted — main
- * doesn't persist phases either (ipc.ts), so a fresh app session starts empty
+ * doesn't persist phases either (src/ipc/contract.ts), so a fresh app session starts empty
  * and rehydrates as pushes land while tickets boot.
  */
 import { create } from "zustand";
-import type { WorktreePhase } from "@volli/shared";
+import type { WorktreePhase } from "../../../ipc/contract";
 
 interface WorktreeState {
   /** ticketId → last-seen ensure phase. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { WorktreeBranchListing } from "@volli/shared";
+import type { WorktreeBranchListing } from "../../../../../ipc/contract";
 
 import {
   baseChipLabel,
