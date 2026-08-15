@@ -2,7 +2,7 @@ import * as React from "react";
 import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { displayTicketId, type Ticket } from "@volli/shared";
+import { displayTicketId, type Label, type Ticket } from "@volli/shared";
 
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import { TagChip } from "@renderer/components/board/tag-chip";
@@ -11,7 +11,6 @@ import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { useTicketRetention } from "@renderer/hooks/use-ticket-retention";
 import { resolveLabelColor } from "@renderer/lib/labels";
 import { cn } from "@renderer/lib/utils";
-import { useBoardStore } from "@renderer/stores/board";
 
 /**
  * A minimal archive-ready dot on the card (issue #76): shown only when the
@@ -39,21 +38,23 @@ function ArchiveReadyBadge({ ticket }: { ticket: Ticket }) {
 
 /**
  * Pure presentational card body — also rendered inside the drag overlay
- * (always unselected there). `ticketPrefix` comes from the board (a board
- * only ever shows one project, so it's constant for the whole tree) rather
- * than a per-card projects-store subscription — see `displayTicketId`.
+ * (always unselected there). `ticketPrefix` and `projectLabels` both come from
+ * the board (a board only ever shows one project, so both are constant for the
+ * whole tree) rather than per-card store subscriptions — see `displayTicketId`
+ * and `resolveLabelColor`.
  */
 export function TicketCardContent({
   ticket,
   ticketPrefix,
+  projectLabels,
   selected = false,
 }: {
   ticket: Ticket;
   ticketPrefix: string;
+  projectLabels: readonly Label[];
   selected?: boolean;
 }) {
   const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
-  const projectLabels = useBoardStore((state) => state.labelsByProject[ticket.projectId]);
 
   return (
     <article
@@ -178,6 +179,8 @@ interface TicketCardProps {
   ticket: Ticket;
   projectId: string;
   ticketPrefix: string;
+  /** The board's owning project's label rows — constant for the whole board tree. */
+  projectLabels: readonly Label[];
   selected: boolean;
   onSelect(ticketId: string): void;
   /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
@@ -189,20 +192,26 @@ interface TicketCardProps {
  * Memoized — every card in every column would otherwise re-render on each
  * board render (drag-over events, selection changes, filter keystrokes);
  * `onSelect`/`onOpen` are stable id-taking callbacks from the board for that
- * reason, and `ticketPrefix` is a plain string from the board for the same
- * reason.
+ * reason, and `ticketPrefix`/`projectLabels` are board-wide values passed down
+ * for the same reason.
  */
 export const TicketCard = React.memo(function TicketCard({
   ticket,
   projectId,
   ticketPrefix,
+  projectLabels,
   selected,
   onSelect,
   onOpen,
 }: TicketCardProps) {
   return (
     <SortableTicketShell ticket={ticket} projectId={projectId} onSelect={onSelect} onOpen={onOpen}>
-      <TicketCardContent ticket={ticket} ticketPrefix={ticketPrefix} selected={selected} />
+      <TicketCardContent
+        ticket={ticket}
+        ticketPrefix={ticketPrefix}
+        projectLabels={projectLabels}
+        selected={selected}
+      />
     </SortableTicketShell>
   );
 });

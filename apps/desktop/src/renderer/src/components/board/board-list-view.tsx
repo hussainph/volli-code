@@ -6,6 +6,7 @@ import {
   displayTicketId,
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
+  type Label,
   type Ticket,
   type TicketStatus,
 } from "@volli/shared";
@@ -19,25 +20,25 @@ import { Badge } from "@renderer/components/ui/badge";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { resolveLabelColor } from "@renderer/lib/labels";
 import { cn } from "@renderer/lib/utils";
-import { useBoardStore } from "@renderer/stores/board";
 
 /**
  * Pure presentational row — also rendered inside the drag overlay (unselected
  * there), mirroring how `TicketCardContent` doubles as the card overlay body.
- * `ticketPrefix` comes from the board (constant for the whole board tree) —
- * see `displayTicketId`.
+ * `ticketPrefix` and `projectLabels` come from the board (constant for the
+ * whole board tree) — see `displayTicketId` and `resolveLabelColor`.
  */
 export function TicketRowContent({
   ticket,
   ticketPrefix,
+  projectLabels,
   selected = false,
 }: {
   ticket: Ticket;
   ticketPrefix: string;
+  projectLabels: readonly Label[];
   selected?: boolean;
 }) {
   const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
-  const projectLabels = useBoardStore((state) => state.labelsByProject[ticket.projectId]);
 
   return (
     <div
@@ -69,6 +70,7 @@ const SortableTicketRow = React.memo(function SortableTicketRow({
   ticket,
   projectId,
   ticketPrefix,
+  projectLabels,
   selected,
   onSelect,
   onOpen,
@@ -76,6 +78,7 @@ const SortableTicketRow = React.memo(function SortableTicketRow({
   ticket: Ticket;
   projectId: string;
   ticketPrefix: string;
+  projectLabels: readonly Label[];
   selected: boolean;
   onSelect(ticketId: string): void;
   /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
@@ -93,7 +96,12 @@ const SortableTicketRow = React.memo(function SortableTicketRow({
       onOpen={onOpen}
       dataAttributes={{ "data-ticket-row": "true", "data-ticket-id": displayId }}
     >
-      <TicketRowContent ticket={ticket} ticketPrefix={ticketPrefix} selected={selected} />
+      <TicketRowContent
+        ticket={ticket}
+        ticketPrefix={ticketPrefix}
+        projectLabels={projectLabels}
+        selected={selected}
+      />
     </SortableTicketShell>
   );
 });
@@ -110,6 +118,7 @@ function ListSection({
   tickets,
   projectId,
   ticketPrefix,
+  projectLabels,
   selectedId,
   onSelect,
   onOpen,
@@ -119,6 +128,7 @@ function ListSection({
   tickets: Ticket[];
   projectId: string;
   ticketPrefix: string;
+  projectLabels: readonly Label[];
   selectedId: string | null;
   onSelect(ticketId: string): void;
   /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
@@ -126,9 +136,9 @@ function ListSection({
   dragActive: boolean;
 }) {
   const { setNodeRef } = useDroppable({ id: columnDroppableId(status) });
-  // Memoized for the same reason as board-column.tsx's: a fresh array re-keys
-  // `SortableContext`'s value, and every `useSortable` row re-renders through
-  // `SortableTicketRow`'s `React.memo` because context is not props.
+  // Memoized for the same reason as board-column.tsx's, and with the same
+  // caveat about how far that invalidation actually travels — read the comment
+  // there rather than keep a second account of it here.
   const sortableIds = React.useMemo(() => tickets.map((ticket) => ticket.id), [tickets]);
 
   return (
@@ -145,6 +155,7 @@ function ListSection({
               ticket={ticket}
               projectId={projectId}
               ticketPrefix={ticketPrefix}
+              projectLabels={projectLabels}
               selected={ticket.id === selectedId}
               onSelect={onSelect}
               onOpen={onOpen}
@@ -225,6 +236,8 @@ interface BoardListViewProps {
   projectId: string;
   /** The board's owning project's ticket prefix — constant for the whole board tree. */
   ticketPrefix: string;
+  /** The board's owning project's label rows — constant for the whole board tree. */
+  projectLabels: readonly Label[];
   /** Grouped AND per-column sorted by the board (one sort pass shared with the columns view). */
   groups: Record<TicketStatus, Ticket[]>;
   /** Statuses rendered as full sections — frozen during a drag (board's `shown`). */
@@ -248,6 +261,7 @@ interface BoardListViewProps {
 export function BoardListView({
   projectId,
   ticketPrefix,
+  projectLabels,
   groups,
   shownStatuses,
   emptyDropStatuses,
@@ -275,6 +289,7 @@ export function BoardListView({
               tickets={groups[status]}
               projectId={projectId}
               ticketPrefix={ticketPrefix}
+              projectLabels={projectLabels}
               selectedId={selectedId}
               onSelect={onSelect}
               onOpen={onOpen}

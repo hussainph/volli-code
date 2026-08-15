@@ -1,4 +1,5 @@
 import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
+import type { Label } from "@volli/shared";
 
 import { composerChipClass } from "@renderer/components/board/new-ticket/composer-chip";
 import { TagChip } from "@renderer/components/board/tag-chip";
@@ -7,6 +8,10 @@ import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { resolveLabelColor } from "@renderer/lib/labels";
 import { useBoardStore } from "@renderer/stores/board";
+
+// Stable fallback for a project with no label rows — an inline `?? []` mints a
+// fresh array identity on every render of a label-less project's composer.
+const NO_LABELS: readonly Label[] = [];
 
 /**
  * The composer's Labels chip + popover: multi-select over the project's
@@ -26,7 +31,7 @@ export function ComposerLabels({
   value: string[];
   onChange: (next: string[]) => void;
 }) {
-  const projectLabels = useBoardStore((state) => state.labelsByProject[projectId]) ?? [];
+  const projectLabels = useBoardStore((state) => state.labelsByProject[projectId]) ?? NO_LABELS;
   const unselected = projectLabels.filter((label) => !value.includes(label.name));
 
   return (

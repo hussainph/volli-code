@@ -18,7 +18,7 @@ import type { ReactNode } from "react";
 
 import { TicketCardContent } from "@renderer/components/board/ticket-card";
 
-import { project, ticketById } from "../fixtures";
+import { labels, project, ticketById } from "../fixtures";
 import { appApi, seedBoard } from "../seed";
 
 export const title = "Ticket card";
@@ -49,22 +49,47 @@ export default function TicketCardScratch() {
   return (
     <div className="flex flex-wrap gap-8">
       <Row label="High + labels + archive-ready">
-        <TicketCardContent ticket={archiveReady} ticketPrefix={project.ticketPrefix} />
+        <TicketCardContent
+          ticket={archiveReady}
+          ticketPrefix={project.ticketPrefix}
+          projectLabels={labels}
+        />
       </Row>
       <Row label="Same card, selected">
-        <TicketCardContent ticket={archiveReady} ticketPrefix={project.ticketPrefix} selected />
+        <TicketCardContent
+          ticket={archiveReady}
+          ticketPrefix={project.ticketPrefix}
+          projectLabels={labels}
+          selected
+        />
       </Row>
       <Row label="Two labels">
-        <TicketCardContent ticket={twoLabels} ticketPrefix={project.ticketPrefix} />
+        <TicketCardContent
+          ticket={twoLabels}
+          ticketPrefix={project.ticketPrefix}
+          projectLabels={labels}
+        />
       </Row>
       <Row label="Single label">
-        <TicketCardContent ticket={singleLabel} ticketPrefix={project.ticketPrefix} />
+        <TicketCardContent
+          ticket={singleLabel}
+          ticketPrefix={project.ticketPrefix}
+          projectLabels={labels}
+        />
       </Row>
       <Row label="Two-line title clamp">
-        <TicketCardContent ticket={longTitle} ticketPrefix={project.ticketPrefix} />
+        <TicketCardContent
+          ticket={longTitle}
+          ticketPrefix={project.ticketPrefix}
+          projectLabels={labels}
+        />
       </Row>
       <Row label="No labels">
-        <TicketCardContent ticket={plain} ticketPrefix={project.ticketPrefix} />
+        <TicketCardContent
+          ticket={plain}
+          ticketPrefix={project.ticketPrefix}
+          projectLabels={labels}
+        />
       </Row>
     </div>
   );
