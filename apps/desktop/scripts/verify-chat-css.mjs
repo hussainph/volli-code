@@ -26,6 +26,13 @@ const REQUIRED_SELECTORS = {
   ".list-outside": "ai-elements/chat-markdown.tsx",
   ".overflow-y-hidden": "ai-elements/conversation.tsx",
   ".max-w-\\[95\\%\\]": "ai-elements/message.tsx",
+  // The composer footer's 8px lid, and the one entry here whose absence is
+  // INVISIBLE rather than broken: without it the addon's own `[.border-t]:pt-4`
+  // wins on specificity and the control band silently doubles its top padding,
+  // which reads as a slightly roomy composer rather than as a missing
+  // stylesheet. Checked the way the rest were — commenting the directive out
+  // makes it vanish from `dist/assets/*.css`.
+  ".\\[\\.border-t\\]\\:pt-2": "ai-elements/prompt-input.tsx",
   // @source "../../../node_modules/streamdown/dist/*.js" — nothing this app
   // owns emits `wrap-anywhere`, so its absence means that directive stopped
   // reaching Streamdown's own markup.

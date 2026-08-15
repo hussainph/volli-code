@@ -3,13 +3,17 @@
  *
  * Three ideas, and the shape follows from them:
  *
- *  1. **One model pill, and only where the model is yours to pick.** Provider is
- *     a heading inside the popover and effort is a segment on the selected row,
- *     because neither is a decision you make on its own — you pick a model, and
- *     the other two qualify it. Codex's shape: two values, one caret. An
- *     executor that pins its own model renders no pill at all rather than a
- *     disabled one, on the same rule as the mode segment below: a control naming
- *     models the harness will drop is worse than no control.
+ *  1. **Model and effort are peers in the footer, not one inside the other.**
+ *     Provider stays a heading inside the model popover, because it is not a
+ *     decision you make on its own — you pick a model and the provider follows.
+ *     Effort is not that: it is the per-task half of the same sentence where
+ *     model is the set-and-forget half, so it sits beside the pill as its own
+ *     chip (`composer-effort-ui.tsx`) rather than nested in the popover's
+ *     selected row, where it was invisible until opened and outgrew the popover
+ *     past four levels. An executor that pins its own model renders no pill at
+ *     all rather than a disabled one, on the same rule as the mode segment
+ *     below: a control naming models the harness will drop is worse than no
+ *     control.
  *  2. **Delivery is session state, not a control.** Idle, ⏎ sends. While a turn
  *     is live the submit glyph becomes Queue, ⏎ queues, ⌘⏎ steers without
  *     interrupting, and ⌫ on an empty box takes the newest queued message back.
@@ -56,6 +60,7 @@ import {
 } from "@ai-elements/prompt-input";
 import { expandCommandInvocation, type IndexedFile, type PromptTemplate } from "@volli/shared";
 
+import { reclampEffort } from "@renderer/chat/composer-effort";
 import { COMPOSER_STACK_SHELL } from "@renderer/chat/composer-stack";
 import {
   activePickerRow,
@@ -73,6 +78,7 @@ import {
   type ComposerIntent,
   type QueuedMessage,
 } from "@renderer/chat/session-model";
+import { EffortPill } from "@renderer/components/chat/composer-effort-ui";
 import { ComposerPicker } from "@renderer/components/chat/composer-picker-ui";
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -150,6 +156,7 @@ export function SessionComposer({
   className,
 }: SessionComposerProps) {
   const canSubmit = ready && value.trim().length > 0;
+  const effortStops = effortLevels(models, selection);
   // The menu's own event callbacks share this render. Keeping the selected id
   // in their closure lets close distinguish Edit from an ordinary dismissal
   // without adding component state to a fully controlled composer.
@@ -190,7 +197,11 @@ export function SessionComposer({
     >
       <PromptInput
         className={cn(
-          "pointer-events-auto overflow-hidden transition-[color,border-color,box-shadow]",
+          // `group/composer` is what the footer's resting dim reads: the
+          // control row recedes while the composer is unfocused and comes up
+          // the moment the caret is in the box. Named, because the picker card
+          // and the queued rows are groups' worth of their own.
+          "group/composer pointer-events-auto overflow-hidden transition-[color,border-color,box-shadow]",
           COMPOSER_STACK_SHELL,
           className,
         )}
@@ -284,8 +295,71 @@ export function SessionComposer({
           />
         </PromptInputBody>
 
-        <PromptInputFooter className="border-t border-border/70 pt-2">
-          <PromptInputTools className="min-w-0">
+        {/* THE CHROME RESTS DIM. While the composer is not focused its controls
+            sit at 70% and the transcript above owns the eye; the caret landing
+            in the box brings them up. This is what earns a permanently visible
+            effort control its place in the row — present while you are typing,
+            recessive while you are reading — and it is claude.ai's own rule.
+            The queued header is deliberately outside it: those rows are the
+            reader's own words, not our furniture.
+
+            `has-[[data-state=open]]` is the half `:focus-within` cannot do. A
+            Radix popover portals its content out of this form, so opening the
+            model list moves focus off the composer entirely and the row would
+            dim under the hand that opened it. The trigger stays here and stays
+            marked open, which is the fact worth reading.
+
+            AND THE DIM IS THE DIVIDER. There was a `border-t border-border/70`
+            here and it is the line the composer is better without. Measured,
+            it sat at 47.1% of a 77.65px shell — within three points of dead
+            centre — which is a rule declaring two co-equal halves over a box
+            whose top half is one line of a message and whose bottom half is our
+            furniture. A divider's job is to separate things of DIFFERENT kinds,
+            and this pair already differs by the loudest channel a UI has: the
+            row below is at 70% ink while the row above is at 100%. Drawing a
+            hairline as well says the same thing twice and asserts the wrong
+            thing once. ChatGPT and claude.ai both draw no line here.
+
+            Its padding went with it, and not by accident: `[.border-t]:pt-2`
+            existed to clear the rule, so removing the class removes the 8px lid
+            in the same stroke and the footer falls back to the 4px one
+            {@link PromptInputFooter} settles. The seam is 12px of air now — the
+            body's own 8px floor plus that 4px — against 8px at the card's outer
+            edges, so the widest space in the box is the one between the two
+            bands. That is what a lineless composer needs to be true. */}
+        <PromptInputFooter
+          className={cn(
+            "opacity-70 transition-opacity duration-200 ease-out",
+            "group-focus-within/composer:opacity-100 has-[[data-state=open]]:opacity-100",
+            "motion-reduce:transition-none!",
+          )}
+        >
+          {/* `flex-1`, so the control cluster is the row's elastic half and
+              the submit cluster beside it never has to move. Inside it, the
+              model NAME is the one thing that gives: it is the long value and
+              the only one with anything to lose, where an effort word is three
+              to ten characters and truncating it would leave "Extra hi…". Two
+              pills where there was one is what made this matter — the row
+              stopped having 400px of slack the moment effort joined it.
+
+              EVERY CONTROL IN THIS ROW IS THE LADDER'S 20px RUNG, one step
+              below the 24px it used to wear, and one row's worth of comments
+              is where that decision belongs rather than at each of the four
+              call sites. It is the other half of the answer to a footer that
+              outweighed its own subject. Both bands carried 16px of padding,
+              so the CONTENT decided which one won: a 24px control row came to
+              40.54px against a 20px message line's 36px, and the chrome ended
+              up 12.6% taller than the thing it serves and 52% of a 77.65px
+              shell. At 20px the band is 32px, the message is the taller object
+              by 4px, and the composer collapses to 69px.
+
+              A rung, not a shrink. `xs` is the bottom of the app's own four
+              rung pill ladder (20/24/28/32) and it is what the queued rows
+              already wear; the composer's resting chrome has no business
+              standing taller than the sentence being written into it. What
+              does NOT step down is the hierarchy inside the row — submit is
+              still the only filled object in it, and fill outranks 4px. */}
+          <PromptInputTools className="min-w-0 flex-1">
             <ModelPill
               models={models}
               selection={selection}
@@ -293,13 +367,28 @@ export function SessionComposer({
               disabled={modelChoiceDisabled}
               onChange={onSelectionChange}
             />
+            {/* A peer of the model pill, not a property of it. Effort is the
+                per-task decision and model is the set-and-forget one, so the
+                volatile choice is the one that is readable without opening
+                anything. It renders only where there is a choice to make: a
+                model with one level has no decision, and a control naming one
+                option is worse than no control — the same rule the pill itself
+                follows when nothing is pickable. */}
+            {effortStops.length > 1 ? (
+              <EffortPill
+                levels={effortStops}
+                value={selection.reasoningLevel}
+                disabled={modelChoiceDisabled}
+                onChange={(reasoningLevel) => onSelectionChange({ ...selection, reasoningLevel })}
+              />
+            ) : null}
           </PromptInputTools>
           <div className="ml-auto flex shrink-0 items-center gap-1">
             {working ? (
               <Button
                 type="button"
                 variant="ghost"
-                size="icon-sm"
+                size="icon-xs"
                 aria-label="Stop turn"
                 onClick={onStop}
               >
@@ -307,18 +396,25 @@ export function SessionComposer({
                   solid the way a play triangle does, and hollow it reads as a
                   checkbox. It is also the exception rather than the category —
                   it only exists while a turn is running. */}
-                <SquareIcon className="size-3.5" weight="fill" />
+                <SquareIcon className="size-3" weight="fill" />
               </Button>
             ) : null}
             <PromptInputSubmit
               status="ready"
+              size="icon-xs"
               disabled={!canSubmit}
               aria-label={working ? "Queue" : "Send"}
             >
+              {/* 12px, and therefore both `bold`. The house rule is that
+                  `bold`'s flat 1.50x is the small-size tier — at ≤12px regular
+                  draws lighter than the label beside it — and coverage is
+                  scale-invariant, so nothing about a smaller button can be
+                  answered by a bigger glyph. Queue was outline at 14px and had
+                  no reason to change until the button did. */}
               {working ? (
-                <QueueIcon className="size-3.5" />
+                <QueueIcon className="size-3" weight="bold" />
               ) : (
-                <ArrowUpIcon className="size-3.5" weight="bold" />
+                <ArrowUpIcon className="size-3" weight="bold" />
               )}
             </PromptInputSubmit>
           </div>
@@ -617,7 +713,7 @@ function useComposerPicker(input: {
 /* ------------------------------------------------------------------- model */
 
 /**
- * `sonnet-4.5 · high` — two values, one caret.
+ * One model, one caret.
  *
  * Every model here is one the Session could run right now. There is no state on
  * it because a model you cannot send to is not an option in a different colour,
@@ -641,9 +737,27 @@ export interface ComposerModelSelection {
   reasoningLevel: string;
 }
 
+/** The selected model's own stop set, or nothing when the list does not hold it. */
+function effortLevels(
+  models: readonly ComposerModel[],
+  selection: ComposerModelSelection,
+): readonly string[] {
+  return selectedModel(models, selection)?.reasoningLevels ?? [];
+}
+
+function selectedModel(
+  models: readonly ComposerModel[],
+  selection: ComposerModelSelection,
+): ComposerModel | undefined {
+  return models.find(
+    (candidate) =>
+      candidate.providerId === selection.providerId && candidate.modelId === selection.modelId,
+  );
+}
+
 /**
- * `sonnet-4.5 · high`, or `Azure OpenAI · gpt-5.6-luna` where the name alone
- * would not say which model this is.
+ * `sonnet-4.5`, or `Azure OpenAI · gpt-5.6-luna` where the name alone would not
+ * say which model this is.
  *
  * A model name is not unique across providers, and this pill runs into that
  * twice. A selection the list does not hold — the Session is pinned to a
@@ -652,6 +766,11 @@ export interface ComposerModelSelection {
  * ship a model called "GPT-5.6 Luna". Both read as an ordinary pill naming a
  * model that is not the one this Session will send to. Where the name is
  * ambiguous the provider leads it, exactly as Settings' model rows do.
+ *
+ * The effort level used to ride along as a third term. It does not any more:
+ * effort is its own chip beside this one, and a bare level word appended to a
+ * model name is read as a claim about the *model* — `gpt-5.6-luna · low` says
+ * "a low model" long before it says "thinking set to low". One fact per pill.
  */
 export function modelPillLabel(
   models: readonly ComposerModel[],
@@ -659,19 +778,15 @@ export function modelPillLabel(
   /** The Session's provider as the catalog names it, for a model no longer listed. */
   selectionProviderLabel?: string,
 ): string {
-  const model = models.find(
-    (candidate) =>
-      candidate.providerId === selection.providerId && candidate.modelId === selection.modelId,
-  );
+  const model = selectedModel(models, selection);
   const name = model?.label ?? selection.modelId;
   if (!name) return "Model";
   const ambiguous =
     model === undefined ||
     models.some((candidate) => candidate !== model && candidate.label === name);
-  const qualified = ambiguous
+  return ambiguous
     ? `${model?.providerLabel ?? selectionProviderLabel ?? selection.providerId} · ${name}`
     : name;
-  return selection.reasoningLevel ? `${qualified} · ${selection.reasoningLevel}` : qualified;
 }
 
 function ModelPill({
@@ -702,18 +817,23 @@ function ModelPill({
       <PopoverTrigger asChild>
         <Button
           type="button"
-          size="sm"
+          size="xs"
           variant="ghost"
           disabled={disabled || models.length === 0}
-          className="min-w-0 text-muted-foreground"
+          // `shrink` against `Button`'s own `shrink-0`: this is the row's give.
+          className="min-w-0 shrink text-muted-foreground"
         >
           <span className="min-w-0 truncate">
             {modelPillLabel(models, selection, selectionProviderLabel)}
           </span>
-          <CaretUpDownIcon className="size-3 shrink-0" />
+          <CaretUpDownIcon className="size-3 shrink-0" weight="bold" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" side="top" className="w-80 p-0">
+      {/* `w-72`, down from `w-80`: the extra 32px existed to hold the effort
+          segment on the selected row, and past four levels it did not hold it
+          anyway — the row that exists to name a model truncated the name to
+          nothing so the qualifier could fit. Rows are model names now. */}
+      <PopoverContent align="start" side="top" className="w-72 p-0">
         <PromptInputCommand>
           <PromptInputCommandInput placeholder="Model" />
           <PromptInputCommandList>
@@ -727,6 +847,12 @@ function ModelPill({
                       model.providerId === selection.providerId &&
                       model.modelId === selection.modelId;
                     return (
+                      // A model row, and only a model row. It used to carry the
+                      // effort segment on whichever row was selected — up to
+                      // seven pressable buttons inside a listbox option, kept
+                      // from also picking the row by a `stopPropagation`. Effort
+                      // is a chip in the footer now, so the workaround and the
+                      // thing it worked around both left together.
                       <PromptInputCommandItem
                         key={model.id}
                         value={`${model.providerId} ${model.modelId} ${model.label}`}
@@ -735,9 +861,13 @@ function ModelPill({
                             ...selection,
                             providerId: model.providerId,
                             modelId: model.modelId,
-                            reasoningLevel: model.reasoningLevels.includes(selection.reasoningLevel)
-                              ? selection.reasoningLevel
-                              : (model.reasoningLevels[0] ?? "off"),
+                            // The stop set changes under the effort chip when
+                            // the model does; a level the incoming model cannot
+                            // run is rewritten rather than held.
+                            reasoningLevel: reclampEffort(
+                              model.reasoningLevels,
+                              selection.reasoningLevel,
+                            ),
                           });
                           setOpen(false);
                         }}
@@ -747,15 +877,6 @@ function ModelPill({
                           weight="bold"
                         />
                         <span className="min-w-0 flex-1 truncate">{model.label}</span>
-                        {selected && model.reasoningLevels.length > 1 ? (
-                          <EffortSegment
-                            variants={model.reasoningLevels}
-                            value={selection.reasoningLevel}
-                            onChange={(reasoningLevel) =>
-                              onChange({ ...selection, reasoningLevel })
-                            }
-                          />
-                        ) : null}
                       </PromptInputCommandItem>
                     );
                   })}
@@ -765,44 +886,5 @@ function ModelPill({
         </PromptInputCommand>
       </PopoverContent>
     </Popover>
-  );
-}
-
-/**
- * Effort rides the selected row: it qualifies one model rather than standing
- * beside it, and it must not close the popover — changing effort is a smaller
- * decision than changing model, so it stays in place for a second look.
- */
-function EffortSegment({
-  variants,
-  value,
-  onChange,
-}: {
-  variants: readonly string[];
-  value: string;
-  onChange(variant: string): void;
-}) {
-  return (
-    <span className="flex shrink-0 items-center gap-1 rounded-full bg-muted p-1">
-      {variants.map((variant) => (
-        <button
-          key={variant}
-          type="button"
-          aria-pressed={variant === value}
-          onClick={(event) => {
-            event.stopPropagation();
-            onChange(variant);
-          }}
-          className={cn(
-            "rounded-full px-2 py-1 text-ui transition-colors duration-150 ease-swift",
-            variant === value
-              ? "bg-background text-foreground shadow-raised"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {variant}
-        </button>
-      ))}
-    </span>
   );
 }

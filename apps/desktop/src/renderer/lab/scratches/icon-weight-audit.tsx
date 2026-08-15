@@ -84,7 +84,6 @@ import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { BellSlashIcon } from "@phosphor-icons/react/dist/csr/BellSlash";
-import { BrainIcon } from "@phosphor-icons/react/dist/csr/Brain";
 import { BroomIcon } from "@phosphor-icons/react/dist/csr/Broom";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
@@ -97,6 +96,7 @@ import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
 import { FolderIcon } from "@phosphor-icons/react/dist/csr/Folder";
 import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
 import { FunnelSimpleIcon } from "@phosphor-icons/react/dist/csr/FunnelSimple";
+import { GaugeIcon } from "@phosphor-icons/react/dist/csr/Gauge";
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 import { GitCommitIcon } from "@phosphor-icons/react/dist/csr/GitCommit";
 import { GitPullRequestIcon } from "@phosphor-icons/react/dist/csr/GitPullRequest";
@@ -140,7 +140,6 @@ const INK = {
   ArrowClockwise: { regular: 0.138, bold: 0.208, fill: 0.146 },
   ArrowSquareOut: { regular: 0.169, bold: 0.253, fill: 0.187 },
   BellSlash: { regular: 0.202, bold: 0.291, fill: 0.391 },
-  Brain: { regular: 0.267, bold: 0.384, fill: 0.42 },
   Broom: { regular: 0.225, bold: 0.333, fill: 0.286 },
   CaretRight: { regular: 0.059, bold: 0.09, fill: 0.149 },
   ChatCircle: { regular: 0.159, bold: 0.237, fill: 0.54 },
@@ -153,6 +152,7 @@ const INK = {
   Folder: { regular: 0.182, bold: 0.274, fill: 0.483 },
   Folders: { regular: 0.213, bold: 0.325, fill: 0.44 },
   FunnelSimple: { regular: 0.103, bold: 0.161, fill: 0.475 },
+  Gauge: { regular: 0.192, bold: 0.283, fill: 0.377 },
   GearSix: { regular: 0.231, bold: 0.346, fill: 0.436 },
   GitCommit: { regular: 0.108, bold: 0.158, fill: 0.185 },
   GitPullRequest: { regular: 0.181, bold: 0.268, fill: 0.206 },
@@ -184,7 +184,6 @@ const GLYPH: Record<IconName, Icon> = {
   ArrowClockwise: ArrowClockwiseIcon,
   ArrowSquareOut: ArrowSquareOutIcon,
   BellSlash: BellSlashIcon,
-  Brain: BrainIcon,
   Broom: BroomIcon,
   CaretRight: CaretRightIcon,
   ChatCircle: ChatCircleIcon,
@@ -197,6 +196,7 @@ const GLYPH: Record<IconName, Icon> = {
   Folder: FolderIcon,
   Folders: FoldersIcon,
   FunnelSimple: FunnelSimpleIcon,
+  Gauge: GaugeIcon,
   GearSix: GearSixIcon,
   GitCommit: GitCommitIcon,
   GitPullRequest: GitPullRequestIcon,
@@ -465,14 +465,21 @@ const SURFACES: Surface[] = [
         verdict: "regular",
       },
       {
-        at: "chat/activity-ui.tsx:832",
-        icon: "Brain",
+        at: "chat/activity-ui.tsx:834",
+        icon: "Gauge",
         px: 14,
         ink: MUTED,
         label: "Thought for 4s",
         labelClass: "text-xs",
         job: "Reasoning noun",
         verdict: "regular",
+        // Was a Brain (0.267 / 0.384 / 0.42), retired app-wide on the owner's
+        // call. Gauge is the lightest glyph in this table at 0.192 — a hair
+        // above the 16.9% mean where an outline glyph disappears correctly
+        // into a sentence, which is exactly the job in a scannable list. The
+        // composer's effort chip draws the SAME glyph at `bold` (0.283) for
+        // the opposite reason: it sits alone on a control row that rests at
+        // 70%, where 0.192 draws lighter than the 13px word beside it.
       },
       {
         at: "chat/activity-ui.tsx:368",

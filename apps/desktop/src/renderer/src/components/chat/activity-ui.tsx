@@ -15,7 +15,6 @@
  * artifact.
  */
 import {
-  BrainIcon,
   CaretRightIcon,
   CheckCircleIcon,
   CircleDashedIcon,
@@ -23,6 +22,7 @@ import {
   FilePlusIcon,
   FileTextIcon,
   FolderIcon,
+  GaugeIcon,
   GlobeSimpleIcon,
   HandPalmIcon,
   ListChecksIcon,
@@ -804,6 +804,12 @@ const BundleRowView = React.memo(function BundleRowView({
  * component, and the reason is structural rather than aesthetic: a bespoke
  * reasoning block is a second kind of line in the same column, and two kinds of
  * line cannot share one left edge for long.
+ *
+ * The glyph is a Gauge, and it is the same one the composer's effort chip
+ * wears. Reasoning has one vocabulary in this app now: the dial you set before
+ * the turn and the row that reports what it bought are the same object seen
+ * from two ends. (It was a Brain, which said "thinking" and nothing else — no
+ * magnitude, and a lumpy drawing at 14px.)
  */
 const ReasoningRow = React.memo(function ReasoningRow({
   part,
@@ -825,7 +831,7 @@ const ReasoningRow = React.memo(function ReasoningRow({
         {streaming ? (
           <SpinnerGapIcon aria-hidden className="size-3.5 shrink-0 animate-spin text-primary" />
         ) : (
-          <BrainIcon aria-hidden className={GLYPH_CLASS} />
+          <GaugeIcon aria-hidden className={GLYPH_CLASS} />
         )}
         <span id={verbId} className="min-w-0 truncate">
           {status.verb}

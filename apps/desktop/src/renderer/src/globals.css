@@ -1053,6 +1053,28 @@ input[type="range"]:focus-visible {
   }
 }
 
+/* The effort slider's notches, dealt in left to right when the popover opens
+ * (`chat/composer-effort-ui.tsx`). Each one grows DOWN from the comb's top
+ * edge, which is the edge it hangs off, so the entrance draws the object rather
+ * than merely revealing it; the per-tick delay is a function of an index and
+ * therefore an inline style, which is why only the shape lives here.
+ *
+ * `scale`, not `height`: the mark is a 4×1px bar inside an `overflow-hidden`
+ * pill, and a height animation would relayout that pill on every frame of every
+ * notch. The reduced-motion gate rides the utility that applies this
+ * (`motion-reduce:animate-none!`) rather than sitting here, so the whole
+ * decision can be read at the element that wears it. */
+@keyframes effort-notch {
+  from {
+    scale: 1 0.2;
+    opacity: 0;
+  }
+  to {
+    scale: 1 1;
+    opacity: 1;
+  }
+}
+
 /* Reduced motion (HIG §accessibility): nothing here translates or scales, so
  * there is no vestibular motion to remove — and an eased brightness change is
  * itself the accessible treatment for a whole-window repaint. Keep the shortest
