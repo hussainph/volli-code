@@ -14,6 +14,7 @@ import {
 } from "@renderer/components/editor/monaco-document-editor";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
+import { Notice } from "@renderer/components/ui/notice";
 import { AUTOSAVE_IDLE_MS, planAutosave } from "@renderer/editor/autosave-plan";
 import { documentIdentityKey, fileDocumentIdentity } from "@renderer/editor/document-identity";
 import { matchesFileChangeIdentity } from "@renderer/editor/file-change-identity";
@@ -729,10 +730,10 @@ export function FileView({
       <div className="flex min-h-0 flex-1 flex-col gap-2 px-gutter py-4">
         {liveError !== null && <LiveReconciliationAffordance kind="error" message={liveError} />}
         {state.truncated && (
-          <div className="flex items-center justify-between gap-4 rounded-md border border-border bg-muted/30 px-4 py-2 text-ui text-muted-foreground">
-            <span>Showing the first 1 MiB. Reveal in Finder for the whole file.</span>
-            {revealButton}
-          </div>
+          <Notice
+            title="Showing the first 1 MiB. Reveal in Finder for the whole file."
+            actions={revealButton}
+          />
         )}
         <div className="min-h-0 flex-1 overflow-hidden rounded-md border border-border bg-background">
           <MonacoFileEditor

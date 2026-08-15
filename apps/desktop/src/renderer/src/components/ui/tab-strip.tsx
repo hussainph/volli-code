@@ -34,13 +34,11 @@
 import * as React from "react";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 
-// Upwards, and knowingly: `sessions/inline-rename.tsx` is the survivor of the
-// four inline-rename implementations and moves to `ui/inline-rename.tsx` in a
-// later step of this sweep, at which point this import flips to a sibling. It
-// is imported rather than accepted as a slot so the two strips that rename
-// cannot drift the field's size apart again — which is exactly what they had
-// done (`h-5 w-40 text-ui` against `h-5 w-32 text-sm`).
-import { InlineRename } from "@renderer/components/sessions/inline-rename";
+// Imported rather than accepted as a slot so the two strips that rename cannot
+// drift the field's size apart again — which is exactly what they had done
+// (`h-5 w-40 text-ui` against `h-5 w-32 text-sm`). The field owns that size now,
+// so a strip states only its width.
+import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { cn } from "@renderer/lib/utils";
 
@@ -302,7 +300,7 @@ export function Tab({
         <InlineRename
           value={renaming.value}
           ariaLabel={`Rename ${label}`}
-          className="h-5 w-40 text-ui"
+          className="w-40"
           onCommit={renaming.onCommit}
           onCancel={renaming.onCancel}
         />

@@ -110,7 +110,9 @@ import {
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
+import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { Input } from "@renderer/components/ui/input";
+import { Notice } from "@renderer/components/ui/notice";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { Skeleton } from "@renderer/components/ui/skeleton";
@@ -123,8 +125,21 @@ import { useBoardStore } from "@renderer/stores/board";
 import { ticketScope } from "@renderer/stores/sessions";
 import { phaseFor, useWorktreeStore } from "@renderer/stores/worktree";
 
-/** One card row's shared frame: full-width, quiet hover, seam above every row but the first. */
-const ROW = "flex w-full items-center gap-2 px-4 text-left";
+/**
+ * One card row's shared frame: full-width, quiet hover, seam above every row but
+ * the first.
+ *
+ * NOT `ui/list-row.tsx`, and the difference is the card. These two are edge-to-
+ * edge rows inside a framed surface, separated by seams and inset to the card's
+ * own 16 — a list row is a floating 12px-radius object inset to its list's 8,
+ * and one drawn in here would sit a rounded rectangle inside a rounded
+ * rectangle with two different insets. What they DID share was the omission:
+ * both were `<button>`s with no `focus-visible` treatment at all, which is a
+ * keyboard user with no idea which of the card's rows they are on. That is the
+ * primitive's recipe, spelled here because the row is not.
+ */
+const ROW =
+  "flex w-full items-center gap-2 px-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/45";
 
 /**
  * A commit press waiting on the gate. `flow` is which road it came from — the
@@ -258,8 +273,10 @@ function CommitGateDialog({
  * rather than `""`, matching the domain's null-until-a-worktree-exists convention. Displays an
  * em-dash when `value` is null and not being edited.
  *
- * Like InlineRename, a `done` guard makes commit/cancel one-shot so Enter (which commits and then
- * blurs) can't double-fire the commit; it resets when a fresh edit starts.
+ * The field itself is `ui/inline-rename.tsx`, which carries the one-shot guard that keeps Enter
+ * (which commits and then blurs) from double-firing. What stays here is the trigger and the
+ * `null` reading of an emptied box — `onClear` rather than a commit, because unset is a value in
+ * this domain and erasing the field is how you say so.
  */
 function InlineTextField({
   value,
@@ -269,43 +286,22 @@ function InlineTextField({
   onCommit(next: string | null): void;
 }) {
   const [editing, setEditing] = React.useState(false);
-  const [draft, setDraft] = React.useState(value ?? "");
-  // Guard against blur firing after an Enter/Escape already resolved the edit.
-  const done = React.useRef(false);
-
-  function commit() {
-    if (done.current) return;
-    done.current = true;
-    setEditing(false);
-    const trimmed = draft.trim();
-    const next = trimmed === "" ? null : trimmed;
-    if (next === value) return;
-    onCommit(next);
-  }
-
-  function cancel() {
-    if (done.current) return;
-    done.current = true;
-    setEditing(false);
-  }
 
   if (editing) {
     return (
-      <Input
-        autoFocus
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={commit}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            commit();
-          } else if (event.key === "Escape") {
-            event.preventDefault();
-            cancel();
-          }
+      <InlineRename
+        mono
+        size="field"
+        value={value ?? ""}
+        onCommit={(next) => {
+          setEditing(false);
+          onCommit(next);
         }}
-        className="h-7 font-mono text-ui"
+        onClear={() => {
+          setEditing(false);
+          if (value !== null) onCommit(null);
+        }}
+        onCancel={() => setEditing(false)}
       />
     );
   }
@@ -313,11 +309,7 @@ function InlineTextField({
   return (
     <button
       type="button"
-      onClick={() => {
-        done.current = false;
-        setDraft(value ?? "");
-        setEditing(true);
-      }}
+      onClick={() => setEditing(true)}
       className="w-full truncate rounded-md px-2 py-1 text-left font-mono text-ui text-foreground hover:bg-accent"
     >
       {value ?? <span className="text-muted-foreground">—</span>}
@@ -416,12 +408,16 @@ function WorktreeFailedNotice({ projectId, ticketId }: { projectId: string; tick
   }
 
   return (
-    <div className="flex flex-col items-start gap-1 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-2">
-      <span className="text-ui text-destructive">Worktree setup failed.</span>
-      <Button variant="outline" size="xs" disabled={retrying} onClick={() => void retry()}>
-        Retry
-      </Button>
-    </div>
+    <Notice
+      tone="error"
+      layout="stack"
+      title="Worktree setup failed."
+      actions={
+        <Button variant="outline" size="xs" disabled={retrying} onClick={() => void retry()}>
+          Retry
+        </Button>
+      }
+    />
   );
 }
 

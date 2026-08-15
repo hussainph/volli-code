@@ -749,7 +749,7 @@ const SURFACES: Surface[] = [
         note: "The one that looked like a toggle, and is the clearest case for clause 3. Active already reads as text-primary over bg-primary/15 — two channels. Filling it too would be a third copy of one bit, and it is the ONLY state the tab has, so the fill would be on permanently in the surface where you notice it least.",
       },
       {
-        at: "theme/segmented-choice.tsx:55",
+        at: "ui/segmented.tsx",
         icon: "Moon",
         px: 14,
         ink: "text-foreground",

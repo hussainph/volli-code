@@ -19,6 +19,7 @@ import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { errorMessage, type DiffStat } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
+import { Notice } from "@renderer/components/ui/notice";
 import { Skeleton } from "@renderer/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { toastError } from "@renderer/lib/toast";
@@ -154,6 +155,14 @@ export function RailRowActions({
  * `label` is the sentence a person needs; the underlying error text goes to
  * `title` and never onto the row, because at the rail's width it pushes Retry
  * off the end.
+ *
+ * The drawing is `ui/notice.tsx` now — this is the rail's inset around it, plus
+ * the two things a fault in a dragged-narrow column needs and a general notice
+ * does not: `truncate`, so a long label can never grow the row past the width
+ * the user chose, and the retry itself. Retry is a real `Button`; it used to be
+ * a bare `<button>` with `hover:underline` and no focus ring, which is a
+ * keyboard user who can reach the only recovery on the surface and cannot see
+ * that they have.
  */
 export function RailFaultBanner({
   label = "Updates paused",
@@ -173,27 +182,26 @@ export function RailFaultBanner({
   className?: string;
 }) {
   return (
-    <div
-      role="alert"
-      title={error}
+    <Notice
+      announce
+      truncate
+      tone="error"
+      icon={WarningIcon}
+      title={label}
+      hoverTitle={error}
       data-testid={testId}
-      className={cn(
-        "flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-2 py-2 text-ui text-destructive",
-        inset && cn("mb-2 shrink-0", RAIL_PANEL_MARGIN),
-        className,
-      )}
-    >
-      <WarningIcon weight="fill" className="size-3.5 shrink-0" />
-      <span className="min-w-0 flex-1">{label}</span>
-      <button
-        type="button"
-        onClick={onRetry}
-        className="flex shrink-0 items-center gap-1 font-medium hover:underline"
-      >
-        <ArrowClockwiseIcon />
-        Retry
-      </button>
-    </div>
+      // The rail's own narrow step over the notice's 16, for the reason
+      // RAIL_PANEL_INSET exists: at the 240px floor the label and Retry share
+      // one line, and four pixels a side is the difference between a sentence
+      // and an ellipsis.
+      className={cn(RAIL_PANEL_INSET, inset && cn("mb-2 shrink-0", RAIL_PANEL_MARGIN), className)}
+      actions={
+        <Button size="xs" variant="outline" onClick={onRetry}>
+          <ArrowClockwiseIcon />
+          Retry
+        </Button>
+      }
+    />
   );
 }
 

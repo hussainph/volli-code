@@ -33,8 +33,12 @@ describe("LiveReconciliationAffordance", () => {
       />,
     );
 
-    const liveRegion = /<span[^>]*role="status"[^>]*>(.*?)<\/span>/s.exec(html)?.[1];
-    expect(liveRegion).toBe("Your draft and the newer disk version were both preserved.");
+    // Element-agnostic on purpose: the rule is about what the live region
+    // CONTAINS, and `ui/notice.tsx` owns which element carries it.
+    const start = html.indexOf('role="status"');
+    const liveRegion = html.slice(start, html.indexOf("</div>", start));
+    expect(liveRegion).toContain("Your draft and the newer disk version were both preserved.");
+    expect(liveRegion).not.toContain("<button");
     expect(html).toContain("<button");
   });
 

@@ -106,10 +106,10 @@ import {
   type CanvasContrastReport,
   type CanvasFloorReading,
 } from "@renderer/components/theme/canvas-editor-model";
-import { SegmentedChoice } from "@renderer/components/theme/segmented-choice";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
+import { Segmented } from "@renderer/components/ui/segmented";
 import { useThemeStore, type ThemeScope } from "@renderer/stores/theme";
 
 /** 16:10 — the app's real default window (1280×800). See the module header. */
@@ -176,7 +176,7 @@ export function AppearanceModeChoice({
   onChange(next: Appearance): void;
 }) {
   return (
-    <SegmentedChoice
+    <Segmented
       ariaLabel="Appearance"
       testId={testId}
       value={value}
