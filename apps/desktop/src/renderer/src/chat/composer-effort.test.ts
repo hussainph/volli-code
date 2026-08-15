@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  EFFORT_CHROMA_GAIN,
   EFFORT_DEAD_ZONE,
+  EFFORT_MIX_CEILING,
+  EFFORT_MIX_FLOOR,
   EFFORT_STRETCH_LIMIT,
-  EFFORT_CHROMA_CEILING,
-  EFFORT_CHROMA_FLOOR,
   effortChroma,
+  effortGlow,
   effortIndex,
   effortLabel,
   effortStopPercent,
+  effortWashMix,
   readEffortPointer,
   reclampEffort,
   rubberBand,
@@ -151,30 +154,68 @@ describe("where the pointer is on the track", () => {
 });
 
 describe("how vibrant the wash is", () => {
-  it("starts desaturated, ends at the accent as the canvas derived it", () => {
-    expect(effortChroma(0, 5)).toBe(EFFORT_CHROMA_FLOOR);
-    expect(effortChroma(4, 5)).toBe(EFFORT_CHROMA_CEILING);
+  it("starts as the track barely tinted and ends half accent", () => {
+    expect(effortWashMix(0, 5)).toBe(EFFORT_MIX_FLOOR);
+    expect(effortWashMix(4, 5)).toBe(EFFORT_MIX_CEILING);
+  });
+
+  it("puts the mixed-away chroma back only at the top", () => {
+    // Held at the gain throughout, the bottom stop comes back fully saturated
+    // too and the control says "hot" at every setting.
+    expect(effortChroma(0, 5)).toBe(1);
+    expect(effortChroma(4, 5)).toBe(EFFORT_CHROMA_GAIN);
   });
 
   it("climbs on every single stop, so no two neighbours look alike", () => {
     // The whole point: three shared values across seven stops would leave four
     // adjacent pairs indistinguishable, which is the complaint being answered.
-    const seven = [0, 1, 2, 3, 4, 5, 6].map((at) => effortChroma(at, 7));
+    const stops = [0, 1, 2, 3, 4, 5, 6];
+    const mixes = stops.map((at) => effortWashMix(at, 7));
+    const chromas = stops.map((at) => effortChroma(at, 7));
 
-    for (let at = 1; at < seven.length; at += 1) {
-      expect(seven[at]).toBeGreaterThan(seven[at - 1] ?? 0);
+    for (let at = 1; at < stops.length; at += 1) {
+      expect(mixes[at]).toBeGreaterThan(mixes[at - 1] ?? 0);
+      expect(chromas[at]).toBeGreaterThan(chromas[at - 1] ?? 0);
     }
   });
 
   it("never leaves the ramp, whatever index it is handed", () => {
-    expect(effortChroma(-4, 5)).toBe(EFFORT_CHROMA_FLOOR);
-    expect(effortChroma(99, 5)).toBe(EFFORT_CHROMA_CEILING);
+    expect(effortWashMix(-4, 5)).toBe(EFFORT_MIX_FLOOR);
+    expect(effortWashMix(99, 5)).toBe(EFFORT_MIX_CEILING);
+    expect(effortChroma(-4, 5)).toBe(1);
+    expect(effortChroma(99, 5)).toBe(EFFORT_CHROMA_GAIN);
   });
 
-  it("gives a single-stop set the full accent rather than the floor", () => {
+  it("gives a single-stop set the top of every channel rather than the floor", () => {
     // One stop is not a ramp: there is nothing to be less vibrant *than*, and a
     // lone control drawn at the dimmest end would read as disabled.
-    expect(effortChroma(0, 1)).toBe(EFFORT_CHROMA_CEILING);
+    expect(effortWashMix(0, 1)).toBe(EFFORT_MIX_CEILING);
+    expect(effortChroma(0, 1)).toBe(EFFORT_CHROMA_GAIN);
+    expect(effortGlow(0, 1)).toBe(1);
+  });
+});
+
+describe("how hard the control radiates", () => {
+  it("is off at the bottom of the range and full at the top", () => {
+    expect(effortGlow(0, 5)).toBe(0);
+    expect(effortGlow(4, 5)).toBe(1);
+  });
+
+  it("spends the first half of the travel on almost nothing", () => {
+    // The halo is read alone rather than against its neighbour, so `low` must
+    // be absent rather than merely dimmer than `max`.
+    expect(effortGlow(3, 7)).toBeCloseTo(0.25, 10);
+    expect(effortGlow(3, 7)).toBeLessThan(effortStopPercent(3, 7) / 100);
+  });
+
+  it("climbs on every stop and never leaves 0…1", () => {
+    const seven = [0, 1, 2, 3, 4, 5, 6].map((at) => effortGlow(at, 7));
+
+    for (let at = 1; at < seven.length; at += 1) {
+      expect(seven[at]).toBeGreaterThan(seven[at - 1] ?? -1);
+    }
+    expect(effortGlow(-4, 5)).toBe(0);
+    expect(effortGlow(99, 5)).toBe(1);
   });
 });
 
