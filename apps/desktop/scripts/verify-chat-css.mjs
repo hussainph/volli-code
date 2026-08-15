@@ -41,7 +41,7 @@ const REQUIRED_SELECTORS = {
   // which reads as a slightly roomy composer rather than as a missing
   // stylesheet. Checked the way the rest were — commenting the directive out
   // makes it vanish from `dist/assets/*.css`.
-  ".\\[\\.border-t\\]\\:pt-2": "ai-elements/prompt-input.tsx",
+  ".\\[\\.border-t\\]\\:pt-2": "ui/ai-elements/prompt-input.tsx",
   // @source "../../../node_modules/streamdown/dist/*.js" — nothing this app
   // owns emits `wrap-anywhere`, so its absence means that directive stopped
   // reaching Streamdown's own markup.

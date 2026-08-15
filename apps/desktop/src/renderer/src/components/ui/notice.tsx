@@ -20,13 +20,16 @@
  * `icon`. A tone whose drawing is identical to another tone's is not a tone; it
  * is a name that invites the next author to invent a colour for it.
  *
- * THE ANNOUNCEMENT GOES ON THE TEXT, NEVER THE WRAPPER. `editor/live-reconciliation-affordance.tsx`
- * worked this out first: a live region containing buttons gets the buttons
- * re-announced on every polite update, and some screen readers flatten the
- * region's content into text rather than surfacing the controls as controls. So
- * `announce` marks the message, and the actions sit outside it. The rail's
- * fault banner used `role="alert"` on the whole block — assertive, and with
- * Retry inside it — which is the failure this rule describes.
+ * THE ANNOUNCEMENT GOES ON THE MESSAGE, NEVER ON ANYTHING THAT HOLDS A CONTROL.
+ * `editor/live-reconciliation-affordance.tsx` worked this out first: a live
+ * region containing buttons gets the buttons re-announced on every polite
+ * update, and some screen readers flatten the region's content into text rather
+ * than surfacing the controls as controls. So `announce` marks the paragraphs
+ * and nothing else — which is why the message is its own block inside the text
+ * column rather than the column itself. `layout="stack"` puts its actions in
+ * that column too, under the text, and a live region on the column would have
+ * swallowed them exactly as the rail's `role="alert"` banner once swallowed
+ * Retry. The stacked actions are the announced block's SIBLING.
  *
  * ACTIONS ARE `Button`s. The slot exists so the notice never draws one itself:
  * the fault banner's Retry was a bare `<button>` with `hover:underline` and no
@@ -112,10 +115,12 @@ export function Notice({
   // out of it would read as two subjects.
   const headline = detail !== undefined && tone !== "error";
 
-  const text = (
+  // The announced block: the sentence, and never a control. Unstyled on
+  // purpose — it is a plain block box in a block flow, so it contributes no
+  // geometry of its own and the paragraphs stack exactly as they did when they
+  // were the text column's direct children.
+  const message = (
     <div
-      className="min-w-0 flex-1"
-      title={hoverTitle}
       {...(announce ? { role: "status", "aria-live": "polite" as const, "aria-atomic": true } : {})}
     >
       <p
@@ -126,6 +131,12 @@ export function Notice({
       {detail === undefined ? null : (
         <p className={cn("mt-1 text-ui opacity-70", truncate && "truncate")}>{detail}</p>
       )}
+    </div>
+  );
+
+  const text = (
+    <div className="min-w-0 flex-1" title={hoverTitle}>
+      {message}
       {stacked && actions !== undefined ? (
         <div className="flex flex-wrap items-center gap-2 pt-2">{actions}</div>
       ) : null}

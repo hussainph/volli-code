@@ -28,7 +28,10 @@
  * double-click-to-rename, and the ticket detail's Escape-to-close. Every one of
  * those fires on a keystroke or a pointer press that is meant for the field.
  * `stopPropagation` on key, pointer, click and double-click is the contract,
- * not a workaround at one site.
+ * not a workaround at one site — with one line drawn through it: a ⌘/Ctrl chord
+ * belongs to the window and passes (⌘K, ⌘T), while every unmodified key is the
+ * field's. If a chord opens another surface the field blurs, and the one-shot
+ * latch commits exactly once, which is what the ticket title always did.
  */
 import * as React from "react";
 
@@ -118,7 +121,10 @@ export function InlineRename({
     "aria-label": ariaLabel,
     onChange: (event: React.ChangeEvent<HTMLInputElement>) => setDraft(event.target.value),
     onKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => {
-      event.stopPropagation();
+      // See WHAT IT SWALLOWS: unmodified keys are the field's, chords are the
+      // window's. Blanket swallowing killed ⌘K and ⌘T for as long as any
+      // rename was open.
+      if (!event.metaKey && !event.ctrlKey) event.stopPropagation();
       if (event.key === "Enter") {
         event.preventDefault();
         commit();
