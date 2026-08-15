@@ -5,19 +5,31 @@ import { describe, expect, it } from "vite-plus/test";
 import { Notice } from "./notice";
 
 describe("Notice", () => {
-  it("announces the message and never the actions", () => {
-    // The failure this rule exists for: a live region containing buttons gets
-    // the buttons re-announced with the status text on every polite update.
-    const html = renderToStaticMarkup(
-      <Notice announce title="Updates paused" actions={<button type="button">Retry</button>} />,
-    );
+  // Both layouts, because `stack` is the one that puts the actions in the same
+  // column as the text — the arrangement the rule is easiest to lose in, and
+  // the one where a live region on that column swallows Retry whole.
+  for (const layout of ["row", "stack"] as const) {
+    it(`announces the message and never the actions (${layout})`, () => {
+      // The failure this rule exists for: a live region containing buttons gets
+      // the buttons re-announced with the status text on every polite update.
+      const html = renderToStaticMarkup(
+        <Notice
+          announce
+          layout={layout}
+          title="Updates paused"
+          actions={<button type="button">Retry</button>}
+        />,
+      );
 
-    const start = html.indexOf('role="status"');
-    expect(start).toBeGreaterThan(-1);
-    const liveRegion = html.slice(start, html.indexOf("</div>", start));
-    expect(liveRegion).toContain("Updates paused");
-    expect(liveRegion).not.toContain("<button");
-  });
+      const start = html.indexOf('role="status"');
+      expect(start).toBeGreaterThan(-1);
+      const liveRegion = html.slice(start, html.indexOf("</div>", start));
+      expect(liveRegion).toContain("Updates paused");
+      expect(liveRegion).not.toContain("<button");
+      // …and the actions are still on the block, just outside the region.
+      expect(html).toContain("Retry");
+    });
+  }
 
   it("stays silent unless a site asks to announce", () => {
     const html = renderToStaticMarkup(<Notice title="Showing the first 1 MiB." />);

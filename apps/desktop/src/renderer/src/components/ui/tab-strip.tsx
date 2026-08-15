@@ -85,6 +85,11 @@ function moveTabFocus(from: HTMLElement, move: TabFocusMove): void {
  * Called from inside the × that is about to unmount, BEFORE the close lands, so
  * the successor is picked from the strip as it stands and the next Arrow keeps
  * moving from where the closed tab was.
+ *
+ * The accepted trade: a close the caller then CANCELS (a dirty-file guard) has
+ * already moved focus to the successor. Acceptable — the alternative is
+ * deferring focus until every async guard has resolved, by which point the
+ * closed tab is gone and there is nothing left to move from.
  */
 function focusSuccessorTab(from: HTMLElement): void {
   const tab = from.closest<HTMLElement>('[role="tab"]');
@@ -268,6 +273,11 @@ export function Tab({
           return;
         }
         if (event.key === "Enter" || event.key === " ") {
+          // Activation only when the tab ITSELF has the key: the close × is a
+          // real button inside this div, and swallowing its Enter here would
+          // select the tab the user was trying to close. Arrows stay unguarded
+          // above — roving out of the × is exactly what they are for.
+          if (event.target !== event.currentTarget) return;
           event.preventDefault();
           onActivate();
         }
@@ -293,7 +303,9 @@ export function Tab({
         className,
       )}
     >
-      {status !== undefined ? <StatusDot state={status} /> : null}
+      {/* 8px, not the 6px default: `ui/status-dot.tsx` sizes the dot by where it
+          sits, and a tab is the larger of its two homes. */}
+      {status !== undefined ? <StatusDot state={status} size="md" /> : null}
       {leading}
       {badge}
       {renamingNow ? (
@@ -365,7 +377,9 @@ function TabClose({ label, dirty, onClose }: { label: string; dirty: boolean; on
           className="size-2 rounded-full bg-primary group-hover/close:hidden"
         />
       ) : null}
-      <XIcon className={cn("size-3", dirty && "hidden group-hover/close:block")} />
+      {/* `bold` is the ≤12px tier (CLAUDE.md): at 12px regular draws lighter
+          than the label beside it, and coverage is scale-invariant. */}
+      <XIcon weight="bold" className={cn("size-3", dirty && "hidden group-hover/close:block")} />
     </button>
   );
 }
