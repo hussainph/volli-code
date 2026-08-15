@@ -22,6 +22,7 @@ import * as React from "react";
 
 import { installFakeApi } from "./fake-api";
 import { isScratchModule, slugFromPath, type ScratchModule } from "./scratch";
+import { LabThemeToolbar, useLabThemeController, type LabThemeController } from "./theme-toolbar";
 
 /**
  * Eager, so the picker can list every scratch's title without loading them
@@ -90,7 +91,7 @@ function useScratchSetup(active: Scratch | null): void {
  * a full app shell that owns its own stacking contexts — anything merely
  * "after" it in the DOM would end up beneath it.
  */
-function WindowStage({ scratch }: { scratch: Scratch }) {
+function WindowStage({ scratch, theme }: { scratch: Scratch; theme: LabThemeController }) {
   return (
     <>
       {/* Keyed on the slug for the same reason the stage below is: switching
@@ -98,6 +99,7 @@ function WindowStage({ scratch }: { scratch: Scratch }) {
       <div key={scratch.slug} className="h-svh w-full">
         <scratch.default />
       </div>
+      <LabThemeToolbar controller={theme} floating />
       {/* Bottom-RIGHT: the app's own bottom-left is the sidebar's pinned
           Settings row, and a lab control sitting on top of a real affordance
           is a control you will eventually mistake for one. */}
@@ -120,8 +122,11 @@ export function LabShell() {
   const stage = STAGE_WIDTHS[stageWidth];
 
   useScratchSetup(active);
+  const theme = useLabThemeController(active?.slug ?? null);
 
-  if (active !== null && active.viewport === "window") return <WindowStage scratch={active} />;
+  if (active !== null && active.viewport === "window") {
+    return <WindowStage scratch={active} theme={theme} />;
+  }
 
   return (
     <div className="flex h-svh w-full bg-background text-foreground">
@@ -154,18 +159,21 @@ export function LabShell() {
               <p className="truncate text-label text-muted-foreground">{active.note}</p>
             ) : null}
           </div>
-          <div className="flex shrink-0 items-center gap-1">
-            {(Object.keys(STAGE_WIDTHS) as StageWidth[]).map((key) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setStageWidth(key)}
-                aria-pressed={key === stageWidth}
-                className="rounded-full px-2.5 py-0.5 text-label text-muted-foreground transition-colors hover:text-foreground aria-pressed:bg-accent aria-pressed:text-foreground"
-              >
-                {STAGE_WIDTHS[key].label}
-              </button>
-            ))}
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            <LabThemeToolbar controller={theme} />
+            <div className="flex items-center gap-1 border-l border-border pl-2">
+              {(Object.keys(STAGE_WIDTHS) as StageWidth[]).map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setStageWidth(key)}
+                  aria-pressed={key === stageWidth}
+                  className="rounded-full px-2.5 py-0.5 text-label text-muted-foreground transition-colors hover:text-foreground aria-pressed:bg-accent aria-pressed:text-foreground"
+                >
+                  {STAGE_WIDTHS[key].label}
+                </button>
+              ))}
+            </div>
           </div>
         </header>
 
