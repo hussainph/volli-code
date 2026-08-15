@@ -61,14 +61,26 @@ import { cn } from "@renderer/lib/utils";
 /* ------------------------------------------------------------------- motion */
 
 /**
- * One collapse constant for the whole transcript. Height runs the full 400ms on
- * the app's swift curve; opacity is shorter so it leads on open and clears on
- * close, which is what keeps text from being clipped mid-glyph.
+ * The disclosure does not animate, and the caret is the whole of what does.
+ *
+ * It used to tween `grid-template-rows` for 400ms, which is a layout property:
+ * every frame of the open relaid and repainted the entire expanded body, and
+ * that body is a 300-line diff often enough to matter — 300 `<div>`s measured
+ * twenty-four times to show them once. The mirrored 400ms JS timer that held
+ * the children mounted through the close was the same cost again, on a subtree
+ * already on its way out of the DOM.
+ *
+ * Nothing replaced it, because nothing needed to. The height animation was
+ * making a continuity argument — "this body came from that row" — and the caret
+ * was already making it, adjacent to the label it opens and rotating in place.
+ * What the reader wants from a transcript row is the output, and 400ms is a
+ * long time to make someone wait to start reading it.
+ *
+ * 150ms, then, on the same curve as the caret's own hover fade: with the body
+ * instant, the rotation IS the disclosure's motion, and a glyph still turning
+ * long after the thing it discloses has arrived reads as lag.
  */
-const COLLAPSE = "duration-[400ms] ease-swift motion-reduce:transition-none";
-const COLLAPSE_FADE = "duration-[240ms] ease-swift motion-reduce:transition-none";
-/** The same 400ms, as a number. Tailwind only sees the literal, so both exist. */
-const COLLAPSE_MS = 400;
+const CARET_SPIN = "duration-150 ease-swift motion-reduce:transition-none";
 
 /**
  * The one caret, and it always sits against the label it opens.
@@ -97,10 +109,9 @@ function Caret({
   className?: string;
 }) {
   return (
-    // Two elements because the two transitions have different jobs: the wrapper
-    // fades on hover at hover speed, the glyph rotates in lockstep with the
-    // body it opens. Collapsed onto one node, `transition-opacity` would win the
-    // merge and the rotation would snap.
+    // Two elements even though both now run at 150ms: the wrapper's fade is
+    // keyed to hover and the glyph's rotation to open, and collapsed onto one
+    // node `transition-opacity` would win the merge and the rotation would snap.
     <span
       className={cn(
         // Zed's `visible_on_hover`. A caret on every row is a column of
@@ -116,7 +127,7 @@ function Caret({
         aria-hidden
         className={cn(
           "size-3 text-muted-foreground transition-transform",
-          COLLAPSE,
+          CARET_SPIN,
           open && "rotate-90",
         )}
       />
@@ -125,65 +136,18 @@ function Caret({
 }
 
 /**
- * A closed body is not in the DOM, and the animation is what decides when.
+ * A closed body is not in the DOM. That is the whole of it.
  *
- * The collapse animates a grid *track*, so what the track resolves `1fr` to is
- * the children's own height — a body dropped on the click would take the height
- * with it and leave an empty box sliding shut, and the 240ms fade would have
- * nothing left to fade. So closing keeps the children exactly one collapse
- * longer and then drops them.
- *
- * Opening is the mirror problem: mounted from an effect, the class flips a frame
- * before the content exists and the track animates 0 → 0 and then jumps. The
- * update is therefore taken during render, which is the one way React puts the
- * children and the `1fr` in the same commit — the browser sees `0fr` with
- * content on one side of the style change and `1fr` on the other, which is
- * precisely what it needs to interpolate.
- */
-function useCollapseMount(open: boolean): boolean {
-  const [mounted, setMounted] = React.useState(open);
-  if (open && !mounted) setMounted(true);
-
-  React.useEffect(() => {
-    if (open || !mounted) return;
-    const timer = window.setTimeout(() => setMounted(false), COLLAPSE_MS);
-    return () => window.clearTimeout(timer);
-  }, [open, mounted]);
-
-  return mounted;
-}
-
-/**
- * Grid-rows collapse: no keyframes, so the duration and curve stay on-token.
- *
- * The wrapper is always mounted and the body is not. A transcript holding fifty
- * closed tool rows was still emitting every one of their payloads — a 300-line
- * diff is 300 `<div>`s that nobody can see — and rebuilding all of them on every
- * streamed token. Nothing about the open state changes: what an open row shows,
- * and how it gets there, is the same frame for frame.
+ * A transcript holding fifty closed tool rows was once emitting every one of
+ * their payloads — a 300-line diff is 300 `<div>`s that nobody can see — and
+ * rebuilding all of them on every streamed token. That invariant is unchanged
+ * and is what this component exists for; what left is the machinery that used
+ * to schedule it. There is no wrapper element either: with no track to animate
+ * there is nothing for one to hold, and an always-mounted zero-height grid is a
+ * node per closed row for no one.
  */
 function Disclosure({ open, children }: React.PropsWithChildren<{ open: boolean }>) {
-  const mounted = useCollapseMount(open);
-  return (
-    <div
-      className={cn(
-        "grid transition-[grid-template-rows]",
-        COLLAPSE,
-        open ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
-      )}
-    >
-      <div
-        className={cn(
-          "min-h-0 overflow-hidden transition-opacity",
-          COLLAPSE_FADE,
-          open ? "opacity-100" : "opacity-0",
-        )}
-        aria-hidden={!open}
-      >
-        {mounted ? children : null}
-      </div>
-    </div>
-  );
+  return open ? <>{children}</> : null;
 }
 
 /** Selecting output text must not collapse the row under the pointer. */
