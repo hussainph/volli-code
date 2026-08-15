@@ -7,6 +7,7 @@ import {
   MonacoDocumentEditor,
 } from "@renderer/components/editor/monaco-document-editor";
 import { Button } from "@renderer/components/ui/button";
+import { Notice } from "@renderer/components/ui/notice";
 import { AUTOSAVE_IDLE_MS, planAutosave } from "@renderer/editor/autosave-plan";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
@@ -139,13 +140,15 @@ export function TicketBodyEditor({
   return (
     <div className="flex flex-col gap-2">
       {conflict !== null && (
-        <div className="flex items-center justify-between gap-4 rounded-md border border-border bg-muted/30 px-4 py-2 text-ui text-muted-foreground">
-          <span>Changed elsewhere. Autosave paused.</span>
-          <Button size="sm" variant="secondary" onClick={reload}>
-            <ArrowClockwiseIcon />
-            Reload
-          </Button>
-        </div>
+        <Notice
+          title="Changed elsewhere. Autosave paused."
+          actions={
+            <Button size="sm" variant="secondary" onClick={reload}>
+              <ArrowClockwiseIcon />
+              Reload
+            </Button>
+          }
+        />
       )}
       {/* -mx-4/px-4 bleeds the block into the gutter (Notion-style) so the body
           TEXT left-aligns with the title on the column edge. The padding is on

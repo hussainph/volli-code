@@ -23,8 +23,8 @@ import {
 } from "@renderer/components/pages/harness-catalog";
 import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
 import { Badge } from "@renderer/components/ui/badge";
+import { Segmented } from "@renderer/components/ui/segmented";
 import { toastError } from "@renderer/lib/toast";
-import { cn } from "@renderer/lib/utils";
 
 /**
  * `window.api` where there is one. The settings surfaces render under
@@ -98,32 +98,18 @@ export function HarnessSelector({
   return (
     // The track wears the same fill as the sections below it and no frame, for
     // the same reason they dropped theirs: this pane already sits inside the
-    // app shell's framed card.
-    <div
-      role="group"
-      aria-label="Harnesses"
-      className="flex w-fit flex-wrap gap-1 rounded-lg bg-card p-1"
-    >
-      {listings.map((listing) => {
-        const isActive = listing.id === activeId;
-        return (
-          <button
-            key={listing.id}
-            type="button"
-            aria-current={isActive ? true : undefined}
-            onClick={() => onSelect(listing.id)}
-            className={cn(
-              "h-7 rounded-md px-4 text-ui transition-colors",
-              isActive
-                ? "bg-accent text-foreground"
-                : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-            )}
-          >
-            {listing.label}
-          </button>
-        );
-      })}
-    </div>
+    // app shell's framed card. `flex-wrap` because this is the one segmented
+    // control whose members are user-installed and therefore unbounded.
+    <Segmented
+      ariaLabel="Harnesses"
+      // Chip height, not the settings step: this row IS the pane's subject, and
+      // every section below it is about whichever segment is pressed.
+      size="default"
+      value={activeId ?? ""}
+      options={listings.map((listing) => ({ key: listing.id, label: listing.label }))}
+      className="w-fit flex-wrap rounded-lg bg-card p-1"
+      onChange={onSelect}
+    />
   );
 }
 

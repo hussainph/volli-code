@@ -7,7 +7,6 @@ import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindo
 import { errorMessage, type SessionListingRow, type SessionRecord } from "@volli/shared";
 
 import { renameChatSession } from "@renderer/chat/rename";
-import { InlineRename } from "@renderer/components/sessions/inline-rename";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
 import { resumeTicketSession } from "@renderer/components/sessions/session-create";
 import {
@@ -18,7 +17,9 @@ import {
 } from "@renderer/components/ui/context-menu";
 import { Badge } from "@renderer/components/ui/badge";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
+import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { Input } from "@renderer/components/ui/input";
+import { ListRow } from "@renderer/components/ui/list-row";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
@@ -153,48 +154,36 @@ function SessionRow({
   onResume?(): void;
 }) {
   const Glyph = kind === "chat" ? ChatCircleIcon : TerminalWindowIcon;
-  const content = (
-    <>
-      <Glyph
-        aria-label={kind === "chat" ? "Chat" : "Terminal"}
-        className="size-4 shrink-0 text-muted-foreground"
-      />
-      {editing ? (
-        <InlineRename
-          value={title}
-          ariaLabel={`Rename ${title}`}
-          // `text-ui`, not the input default: the field replaces the title in
-          // place, so a size step here would resize the row's text the moment
-          // you double-clicked it. h-5 is that line's own height.
-          className="h-5 min-w-0 flex-1 text-ui"
-          onCommit={onCommitRename}
-          onCancel={onCancelRename}
+  const row = (
+    <ListRow
+      // While editing the row is inert: an input inside the activating button
+      // would both nest an interactive control and open the Session on every
+      // click into the field.
+      onActivate={editing ? null : onActivate}
+      leading={
+        <Glyph
+          aria-label={kind === "chat" ? "Chat" : "Terminal"}
+          className="size-4 shrink-0 text-muted-foreground"
         />
-      ) : (
-        <span className="min-w-0 flex-1 truncate text-ui" onDoubleClick={onStartRename}>
-          {title}
-        </span>
-      )}
-      {trailing}
-    </>
+      }
+      primary={
+        editing ? (
+          <InlineRename
+            value={title}
+            ariaLabel={`Rename ${title}`}
+            className="min-w-0 flex-1"
+            onCommit={onCommitRename}
+            onCancel={onCancelRename}
+          />
+        ) : (
+          <span className="min-w-0 flex-1 truncate text-ui" onDoubleClick={onStartRename}>
+            {title}
+          </span>
+        )
+      }
+      trailing={trailing}
+    />
   );
-
-  const shell = "flex w-full items-center gap-2 rounded-lg border border-transparent px-2 py-2";
-  // While editing the row is a plain div: an input inside the activating button
-  // would both nest an interactive control and open the Session on every click
-  // into the field.
-  const row =
-    onActivate !== null && !editing ? (
-      <button
-        type="button"
-        onClick={onActivate}
-        className={cn(shell, "text-left hover:border-sidebar-border hover:bg-accent/50")}
-      >
-        {content}
-      </button>
-    ) : (
-      <div className={shell}>{content}</div>
-    );
 
   return (
     <li>

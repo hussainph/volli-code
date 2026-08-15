@@ -52,6 +52,8 @@ import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
+import { ListRow } from "@renderer/components/ui/list-row";
+import { Notice } from "@renderer/components/ui/notice";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
 import { toastError } from "@renderer/lib/toast";
@@ -180,19 +182,15 @@ export function TicketChangesList({
     // changed" is a state the branch is IN, and a card says that the way the
     // repository card above says everything else about the worktree.
     return (
-      <div
+      <Notice
+        tone="positive"
+        layout="stack"
+        icon={CheckCircleIcon}
+        title="No changes vs base"
+        detail="The branch is up to date."
         data-testid="ticket-changes-empty"
-        className={cn(
-          "flex items-start gap-2 rounded-lg border border-sidebar-border/70 bg-background/30 p-4",
-          RAIL_PANEL_MARGIN,
-        )}
-      >
-        <CheckCircleIcon className="mt-1 size-4 shrink-0 text-positive" weight="fill" />
-        <div>
-          <p className="text-ui font-medium">No changes vs base</p>
-          <p className="mt-1 text-ui text-muted-foreground">The branch is up to date.</p>
-        </div>
-      </div>
+        className={RAIL_PANEL_MARGIN}
+      />
     );
   }
 
@@ -209,59 +207,45 @@ export function TicketChangesList({
         const StatusIcon = status.icon;
         return (
           <li key={row.path} role="option" aria-selected={focused}>
-            <div
-              className={cn(
-                "group relative w-full rounded-lg text-left",
-                focused ? "bg-accent/70" : "hover:bg-accent/50",
-              )}
-            >
-              <button
-                type="button"
-                data-testid="ticket-changes-row"
-                data-path={row.path}
-                data-focused={focused ? "true" : undefined}
-                aria-label={`${row.statusLabel}: ${row.path}`}
-                onClick={() => onSelectRow(row.path)}
-                // Two `text-ui` line boxes (20 each) plus `py-1.5` is the 52px
-                // row — the height is the content, not a number. `min-h-13` is
-                // the same 52 as a floor, and it binds for exactly one case: a
-                // repository-root file has no parent path, so its second line
-                // draws no box at all and the row would otherwise sit 20px
-                // shorter than every neighbour. `py-1.5` is a RECORDED spacing
-                // exception (docs/DESIGN.md): `py-2` would grow every row of a
-                // dense list to 56 and orphan the floor.
-                className="grid min-h-13 w-full grid-cols-[16px_minmax(0,1fr)_72px] items-center gap-x-2 px-2 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/45"
-              >
-                <StatusIcon className={cn("size-4 shrink-0", status.ink)} weight="bold" />
-                <span className="min-w-0">
-                  <span className="flex min-w-0 items-center gap-1">
-                    <span className="truncate text-ui font-medium">{row.filename}</span>
-                    {row.updatedLabel !== undefined && row.updatedDescription !== undefined ? (
-                      <span
-                        data-testid="ticket-changes-updated"
-                        aria-label={row.updatedDescription}
-                        className="shrink-0 text-label font-medium text-primary-text"
-                      >
-                        {row.updatedLabel}
-                      </span>
-                    ) : null}
-                    {/* The status word yields to the row's hover actions —
-                        they occupy the same strip, and the glyph on the left
-                        has already said which kind of change this is. */}
+            <ListRow
+              density="two-line"
+              selected={focused}
+              data-testid="ticket-changes-row"
+              data-path={row.path}
+              data-focused={focused ? "true" : undefined}
+              aria-label={`${row.statusLabel}: ${row.path}`}
+              onActivate={() => onSelectRow(row.path)}
+              leading={<StatusIcon className={cn("size-4 shrink-0", status.ink)} weight="bold" />}
+              primary={row.filename}
+              primaryTrailing={
+                <>
+                  {row.updatedLabel !== undefined && row.updatedDescription !== undefined ? (
                     <span
-                      className={cn(
-                        "shrink-0 text-label font-medium transition-opacity duration-100 group-focus-within:opacity-0 group-hover:opacity-0 motion-reduce:transition-none",
-                        "group-data-[narrow=true]/rail:sr-only",
-                        status.ink,
-                      )}
+                      data-testid="ticket-changes-updated"
+                      aria-label={row.updatedDescription}
+                      className="shrink-0 text-label font-medium text-primary-text"
                     >
-                      {row.statusLabel}
+                      {row.updatedLabel}
                     </span>
+                  ) : null}
+                  {/* The status word yields to the row's hover actions — they
+                      occupy the same strip, and the glyph on the left has
+                      already said which kind of change this is. */}
+                  <span
+                    className={cn(
+                      "shrink-0 text-label font-medium transition-opacity duration-100 group-focus-within:opacity-0 group-hover:opacity-0 motion-reduce:transition-none",
+                      "group-data-[narrow=true]/rail:sr-only",
+                      status.ink,
+                    )}
+                  >
+                    {row.statusLabel}
                   </span>
-                  <span className="block truncate text-ui text-muted-foreground/70">
-                    {row.renameFrom !== null ? `← ${row.renameFrom}` : row.parentPath}
-                  </span>
-                </span>
+                </>
+              }
+              secondary={row.renameFrom !== null ? `← ${row.renameFrom}` : row.parentPath}
+              // A fixed column, so the numbers line up down the list and the
+              // filename's truncation point never moves with them.
+              trailing={
                 <span className="flex w-[72px] shrink-0 justify-end gap-1 font-mono text-ui tabular-nums">
                   {row.binary ? (
                     <span className="text-muted-foreground">Binary</span>
@@ -272,16 +256,18 @@ export function TicketChangesList({
                     </>
                   )}
                 </span>
-              </button>
-              {/* Overlaid rather than a fourth grid column: the actions only
-                  exist on hover, and a column reserved for them would indent
-                  every row's counts for the one row a pointer is over. */}
-              <RailRowActions
-                path={row.path}
-                onOpen={onSelectRow}
-                className="absolute top-[5px] right-20 z-10 rounded-md bg-accent/90 px-1 shadow-raised"
-              />
-            </div>
+              }
+              // Overlaid rather than parked after the counts: the actions only
+              // exist on hover, and a slot reserved for them would indent every
+              // row's counts for the one row a pointer is over.
+              actions={
+                <RailRowActions
+                  path={row.path}
+                  onOpen={onSelectRow}
+                  className="absolute top-[5px] right-20 z-10 rounded-md bg-accent/90 px-1 shadow-raised"
+                />
+              }
+            />
           </li>
         );
       })}

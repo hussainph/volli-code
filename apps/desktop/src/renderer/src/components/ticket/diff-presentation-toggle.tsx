@@ -1,5 +1,10 @@
-import { Button } from "@renderer/components/ui/button";
+import { Segmented } from "@renderer/components/ui/segmented";
 import type { DiffPresentation } from "@renderer/stores/ui";
+
+const PRESENTATIONS = [
+  { key: "inline", label: "Inline" },
+  { key: "side-by-side", label: "Side by side" },
+] as const satisfies readonly { key: DiffPresentation; label: string }[];
 
 export function DiffPresentationToggle({
   presentation,
@@ -9,26 +14,13 @@ export function DiffPresentationToggle({
   onChange(next: DiffPresentation): void;
 }) {
   return (
-    <div
-      data-testid="ticket-diff-presentation"
-      className="flex shrink-0 items-center gap-1 border-b border-border px-gutter py-1"
-    >
-      <Button
-        size="sm"
-        variant={presentation === "inline" ? "secondary" : "ghost"}
-        aria-pressed={presentation === "inline"}
-        onClick={() => onChange("inline")}
-      >
-        Inline
-      </Button>
-      <Button
-        size="sm"
-        variant={presentation === "side-by-side" ? "secondary" : "ghost"}
-        aria-pressed={presentation === "side-by-side"}
-        onClick={() => onChange("side-by-side")}
-      >
-        Side by side
-      </Button>
-    </div>
+    <Segmented
+      ariaLabel="Diff presentation"
+      testId="ticket-diff-presentation"
+      value={presentation}
+      options={PRESENTATIONS}
+      className="shrink-0 border-b border-border px-gutter py-1"
+      onChange={onChange}
+    />
   );
 }

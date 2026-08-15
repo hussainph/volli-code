@@ -42,12 +42,8 @@ import {
   type TerminalSettingRow,
 } from "@renderer/components/theme/terminal-settings-model";
 import { planEditorThemePreview } from "@renderer/components/theme/editor-settings-model";
-import {
-  SegmentedChoice,
-  SURFACE_MODES,
-  type SurfaceMode,
-} from "@renderer/components/theme/segmented-choice";
 import { Button } from "@renderer/components/ui/button";
+import { Segmented, SURFACE_MODES, type SurfaceMode } from "@renderer/components/ui/segmented";
 import {
   DEFAULT_EDITOR_THEME_ID,
   resolveEditorThemeId,
@@ -180,7 +176,7 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
       title="App theme"
       icon={PaletteIcon}
       action={
-        <SegmentedChoice
+        <Segmented
           ariaLabel="Canvas scope"
           testId="project-appearance-canvas-mode"
           value={choice.kind === "inherit" ? "inherit" : "custom"}
@@ -241,7 +237,7 @@ function ProjectAppearanceModeSection({ project }: { project: Project }) {
       title="Light & dark"
       icon={CircleHalfIcon}
       action={
-        <SegmentedChoice
+        <Segmented
           ariaLabel="Appearance scope"
           testId="project-appearance-mode-scope"
           value={choice.kind === "inherit" ? "inherit" : "custom"}
@@ -296,7 +292,7 @@ function ProjectEditorThemeSection({ projectId }: { projectId: string }) {
       title="Editor"
       icon={BracketsCurlyIcon}
       action={
-        <SegmentedChoice
+        <Segmented
           ariaLabel="Editor theme scope"
           testId="project-appearance-editor-mode"
           value={choice.kind === "inherit" ? "inherit" : "custom"}
@@ -427,7 +423,7 @@ function ProjectTerminalThemeSection({ projectId }: { projectId: string }) {
       icon={TerminalWindowIcon}
       description="Volli never edits your Ghostty config."
       action={
-        <SegmentedChoice
+        <Segmented
           ariaLabel="Terminal theme scope"
           testId="project-appearance-terminal-mode"
           value={custom ? "custom" : "inherit"}

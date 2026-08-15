@@ -38,6 +38,7 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE, EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
+import { ListRow } from "@renderer/components/ui/list-row";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
 import { toastError } from "@renderer/lib/toast";
@@ -85,35 +86,31 @@ function FileRow({
   const primary = kind === "reference" ? label : filename;
   const Icon = ROW_ICONS[kind];
   return (
-    <div className="group flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-accent/50">
-      <button
-        type="button"
-        data-testid="ticket-files-row"
-        data-path={relPath}
-        data-kind={kind}
-        onClick={onActivate}
-        onDoubleClick={onPin}
-        className="flex min-w-0 flex-1 items-center gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/45"
-      >
-        <Icon className="size-4 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-ui font-medium">
-            {primary}
-            {kind === "directory" ? "/" : ""}
-          </span>
-          {/* A reference says so here rather than under a caption, which is
-              what lets both kinds share one list. */}
-          <span className="block truncate text-ui text-muted-foreground/70">
-            {kind === "reference" ? `Referenced · ${parentPath}` : parentPath}
-          </span>
-        </span>
-      </button>
-      {kind === "directory" ? (
-        <CaretDownIcon className="-rotate-90 shrink-0 text-muted-foreground" />
-      ) : (
-        <RailRowActions path={relPath} onOpen={() => onPin?.()} />
-      )}
-    </div>
+    <ListRow
+      density="two-line"
+      data-testid="ticket-files-row"
+      data-path={relPath}
+      data-kind={kind}
+      onActivate={onActivate}
+      onDoubleClick={onPin}
+      leading={<Icon className="size-4 shrink-0 text-muted-foreground" />}
+      primary={`${primary}${kind === "directory" ? "/" : ""}`}
+      // A reference says so here rather than under a caption, which is what
+      // lets both kinds share one list.
+      secondary={kind === "reference" ? `Referenced · ${parentPath}` : parentPath}
+      // The chevron is information (this row goes somewhere) and rides inside
+      // the target; the copy/open pair are their own click targets and cannot.
+      trailing={
+        kind === "directory" ? (
+          <CaretDownIcon className="-rotate-90 shrink-0 text-muted-foreground" />
+        ) : undefined
+      }
+      actions={
+        kind === "directory" ? undefined : (
+          <RailRowActions path={relPath} onOpen={() => onPin?.()} />
+        )
+      }
+    />
   );
 }
 

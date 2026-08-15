@@ -29,6 +29,7 @@ import {
   DialogTitle,
 } from "@renderer/components/ui/dialog";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
+import { ListRow } from "@renderer/components/ui/list-row";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { formatStamp } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
@@ -66,59 +67,75 @@ export function ArchiveRow({
 }) {
   const { branch, prUrl } = ticket;
   return (
-    <li className="flex items-center gap-2 rounded-md px-2 py-2 hover:bg-accent/50">
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="shrink-0 font-mono text-ui text-muted-foreground">
-            {displayTicketId(project.ticketPrefix, ticket.ticketNumber)}
+    <li>
+      {/* Inert: an archived ticket is not a place you go from here, so the row
+          does not light up under the pointer and everything you can do to it is
+          a control you can see. Both text lines are the caller's own elements —
+          the name line is an id beside a title, and the meta line is a wrapping
+          strip with a link in it, which is the one thing a truncating row must
+          not straighten. */}
+      <ListRow
+        density="two-line"
+        onActivate={null}
+        primary={
+          <span className="flex min-w-0 flex-1 items-center gap-2">
+            <span className="shrink-0 font-mono text-ui text-muted-foreground">
+              {displayTicketId(project.ticketPrefix, ticket.ticketNumber)}
+            </span>
+            <span className="truncate text-sm">{ticket.title}</span>
           </span>
-          <span className="truncate text-sm">{ticket.title}</span>
-        </div>
-        <div className="mt-1 flex flex-wrap items-center gap-x-1 gap-y-1 text-ui text-muted-foreground">
-          <span>{TICKET_STATUS_LABELS[ticket.status]}</span>
-          <span aria-hidden>·</span>
-          <span>Archived {formatArchivedAt(ticket.archivedAt)}</span>
-          {branch !== null ? (
-            <>
-              <span aria-hidden>·</span>
-              <span className="truncate font-mono" title={branch}>
-                {branch}
-              </span>
-            </>
-          ) : null}
-          {prUrl !== null ? (
-            <>
-              <span aria-hidden>·</span>
-              <button
-                type="button"
-                onClick={() => openExternalUrl(prUrl)}
-                className="inline-flex shrink-0 items-center gap-1 text-primary-text hover:underline"
-              >
-                <GitPullRequestIcon className="size-3" />
-                PR
-              </button>
-            </>
-          ) : null}
-        </div>
-      </div>
-      <Button
-        variant="ghost"
-        size="xs"
-        className="shrink-0 text-muted-foreground"
-        onClick={() => void useBoardStore.getState().unarchiveTicket(project.id, ticket.id)}
-      >
-        <ArrowUUpLeftIcon />
-        Restore
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        aria-label="Delete permanently"
-        className="shrink-0 text-muted-foreground hover:text-destructive"
-        onClick={() => onRequestDelete(ticket)}
-      >
-        <TrashIcon />
-      </Button>
+        }
+        secondary={
+          <span className="mt-1 flex flex-wrap items-center gap-x-1 gap-y-1 text-ui text-muted-foreground">
+            <span>{TICKET_STATUS_LABELS[ticket.status]}</span>
+            <span aria-hidden>·</span>
+            <span>Archived {formatArchivedAt(ticket.archivedAt)}</span>
+            {branch !== null ? (
+              <>
+                <span aria-hidden>·</span>
+                <span className="truncate font-mono" title={branch}>
+                  {branch}
+                </span>
+              </>
+            ) : null}
+            {prUrl !== null ? (
+              <>
+                <span aria-hidden>·</span>
+                <button
+                  type="button"
+                  onClick={() => openExternalUrl(prUrl)}
+                  className="inline-flex shrink-0 items-center gap-1 text-primary-text hover:underline"
+                >
+                  <GitPullRequestIcon className="size-3" />
+                  PR
+                </button>
+              </>
+            ) : null}
+          </span>
+        }
+        actions={
+          <>
+            <Button
+              variant="ghost"
+              size="xs"
+              className="shrink-0 text-muted-foreground"
+              onClick={() => void useBoardStore.getState().unarchiveTicket(project.id, ticket.id)}
+            >
+              <ArrowUUpLeftIcon />
+              Restore
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Delete permanently"
+              className="shrink-0 text-muted-foreground hover:text-destructive"
+              onClick={() => onRequestDelete(ticket)}
+            >
+              <TrashIcon />
+            </Button>
+          </>
+        }
+      />
     </li>
   );
 }
