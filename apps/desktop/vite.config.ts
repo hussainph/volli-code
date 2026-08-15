@@ -51,7 +51,6 @@ export default defineConfig(({ mode }) => ({
   plugins: [tailwindcss(), react()],
   resolve: {
     alias: {
-      "@ai-elements": fileURLToPath(new URL("./src/components/ai-elements", import.meta.url)),
       "@renderer": fileURLToPath(new URL("./src/renderer/src", import.meta.url)),
     },
   },

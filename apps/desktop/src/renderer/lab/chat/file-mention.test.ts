@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { looksLikeFilePath } from "../../../components/ai-elements/chat-markdown";
+import { looksLikeFilePath } from "@renderer/components/ui/ai-elements/chat-markdown";
 
 describe("looksLikeFilePath", () => {
   it("accepts common project paths and rejects urls / prose", () => {

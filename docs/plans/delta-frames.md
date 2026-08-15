@@ -527,7 +527,7 @@ mounts over a stream; the same object WITH `inlineCode` costs 22.
 
 **After** (recorded 2026-08-05, same machine and browser, page reloaded between
 the two readings so neither is measuring a hot-module state). The policy is one
-memo in `apps/desktop/src/components/ai-elements/message.tsx`: the merged
+memo in `apps/desktop/src/renderer/src/components/ui/ai-elements/message.tsx`: the merged
 `components` map keeps one identity for as long as its members do, and the
 common case — no caller override — passes the module constant straight through.
 `reasoning.tsx` already passed a module-level map and was already immune;

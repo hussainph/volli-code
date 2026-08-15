@@ -31,7 +31,7 @@ import {
   PromptInputCommandGroup,
   PromptInputCommandItem,
   PromptInputCommandList,
-} from "@ai-elements/prompt-input";
+} from "@renderer/components/ui/ai-elements/prompt-input";
 import { COMPOSER_STACK_SHELL } from "@renderer/chat/composer-stack";
 import type { ComposerPickerRow, ComposerPickerState } from "@renderer/chat/composer-picker";
 import { cn } from "@renderer/lib/utils";

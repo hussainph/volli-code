@@ -814,7 +814,7 @@ export function stopButton(page) {
  * entry per assistant turn that produced text, empty ones dropped.
  *
  * `.is-assistant` alone cannot answer this, and quietly said "yes" far too
- * early. `Message` (`ai-elements/message.tsx`) stamps that class on the WHOLE
+ * early. `Message` (`ui/ai-elements/message.tsx`) stamps that class on the WHOLE
  * assistant turn, and `chat-plane.tsx`'s `renderSegment` draws the tool
  * ActivityBundle inside it — so the first `.is-assistant` text of a turn that
  * runs anything at all is the bundle's own summary, literally "Ran 1 command".

@@ -5,17 +5,11 @@
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
     "paths": {
-      "@ai-elements/*": ["./src/components/ai-elements/*"],
       "@renderer/*": ["./src/renderer/src/*"]
     }
   },
   // The UI lab (src/renderer/lab) is dev-server-only and never built, but it
   // IS type-checked: it imports real app components, so a signature change in
   // the app should break the lab here rather than at `pnpm lab`.
-  "include": [
-    "src/components/ai-elements/**/*",
-    "src/renderer/src/**/*",
-    "src/renderer/lab/**/*",
-    "src/preload/*.d.ts"
-  ]
+  "include": ["src/renderer/src/**/*", "src/renderer/lab/**/*", "src/preload/*.d.ts"]
 }
