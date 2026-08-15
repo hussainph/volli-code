@@ -40,7 +40,7 @@ import type { ActivityKind } from "@volli/shared";
 import type { DynamicToolUIPart, ReasoningUIPart } from "ai";
 import * as React from "react";
 
-import { ReasoningBody, useElapsed } from "@ai-elements/reasoning";
+import { ReasoningBody, useElapsed } from "@renderer/components/ui/ai-elements/reasoning";
 import {
   bundleNeedsAttention,
   bundleSummary,

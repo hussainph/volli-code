@@ -16,8 +16,8 @@ vi.mock("streamdown", () => ({
   ),
 }));
 
-import { MessageResponse } from "../../components/ai-elements/message";
-import { ReasoningBody } from "../../components/ai-elements/reasoning";
+import { MessageResponse } from "@renderer/components/ui/ai-elements/message";
+import { ReasoningBody } from "@renderer/components/ui/ai-elements/reasoning";
 
 describe("MessageResponse", () => {
   it("enables Streamdown's immediate streaming update mode", () => {

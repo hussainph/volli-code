@@ -16,9 +16,10 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
-/* Chat primitives live beside the renderer root, so Tailwind's automatic scan
- * cannot see them from this stylesheet. Keep their shipped utilities explicit. */
-@source "../../components/ai-elements";
+/* Streamdown ships its own markup with its own utilities, and node_modules is
+ * outside Tailwind's automatic scan from this stylesheet. Keep it explicit.
+ * (The chat primitives no longer need a directive of their own: they live at
+ * `components/ui/ai-elements/`, under this file's own source root.) */
 @source "../../../node_modules/streamdown/dist/*.js";
 
 @custom-variant dark (&:is(.dark *));

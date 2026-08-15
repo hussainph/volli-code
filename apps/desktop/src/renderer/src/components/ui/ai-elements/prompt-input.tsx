@@ -1,5 +1,11 @@
 "use client";
 
+import { ArrowElbowDownLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowElbowDownLeft";
+import { ImageIcon } from "@phosphor-icons/react/dist/csr/Image";
+import { MonitorIcon } from "@phosphor-icons/react/dist/csr/Monitor";
+import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { SquareIcon } from "@phosphor-icons/react/dist/csr/Square";
+import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import {
   Command,
   CommandEmpty,
@@ -33,7 +39,6 @@ import { Spinner } from "@renderer/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
 import type { ChatStatus, FileUIPart, SourceDocumentUIPart } from "ai";
-import { CornerDownLeftIcon, ImageIcon, Monitor, PlusIcon, SquareIcon, XIcon } from "lucide-react";
 import { nanoid } from "nanoid";
 import type {
   ChangeEvent,
@@ -438,7 +443,7 @@ export const PromptInputActionAddScreenshot = ({
 
   return (
     <DropdownMenuItem {...props} onSelect={handleSelect}>
-      <Monitor className="mr-2 size-4" />
+      <MonitorIcon className="mr-2 size-4" />
       {label}
     </DropdownMenuItem>
   );
@@ -1130,12 +1135,16 @@ export const PromptInputSubmit = ({
 }: PromptInputSubmitProps) => {
   const isGenerating = status === "submitted" || status === "streaming";
 
-  let Icon = <CornerDownLeftIcon className="size-4" />;
+  let Icon = <ArrowElbowDownLeftIcon className="size-4" />;
 
   if (status === "submitted") {
     Icon = <Spinner />;
   } else if (status === "streaming") {
-    Icon = <SquareIcon className="size-4" />;
+    // The one glyph here that keeps its fill, matching the composer's own stop
+    // button: a stop square MEANS solid the way a play triangle does, and
+    // hollow it reads as a checkbox. It is also the exception rather than the
+    // category — it exists only while a turn is running.
+    Icon = <SquareIcon className="size-4" weight="fill" />;
   } else if (status === "error") {
     Icon = <XIcon className="size-4" />;
   }

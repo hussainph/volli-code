@@ -33,7 +33,10 @@
  */
 import * as React from "react";
 
-import { MessageResponse, type MessageResponseProps } from "@ai-elements/message";
+import {
+  MessageResponse,
+  type MessageResponseProps,
+} from "@renderer/components/ui/ai-elements/message";
 import { splitMarkdownSource } from "@renderer/chat/markdown-source";
 
 interface BoundaryProps {

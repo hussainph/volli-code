@@ -68,8 +68,8 @@ import {
   ConversationContent,
   ConversationEmptyState,
   ConversationScrollButton,
-} from "@ai-elements/conversation";
-import { FileMentionProvider } from "@ai-elements/chat-markdown";
+} from "@renderer/components/ui/ai-elements/conversation";
+import { FileMentionProvider } from "@renderer/components/ui/ai-elements/chat-markdown";
 import { groupTurns } from "@renderer/chat/activity";
 import { ChatTurn, type TurnContext } from "@renderer/components/chat/chat-plane";
 import { holdList, sameMessages } from "@renderer/components/chat/chat-plane-model";

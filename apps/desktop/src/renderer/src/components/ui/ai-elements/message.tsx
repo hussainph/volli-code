@@ -1,5 +1,7 @@
 "use client";
 
+import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
+import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { Button } from "@renderer/components/ui/button";
 import { ButtonGroup, ButtonGroupText } from "@renderer/components/ui/button-group";
 import {
@@ -13,7 +15,6 @@ import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
 import { mermaid } from "@streamdown/mermaid";
 import type { UIMessage } from "ai";
-import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import type { ComponentProps, HTMLAttributes, ReactElement } from "react";
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Streamdown } from "streamdown";
@@ -234,7 +235,7 @@ export const MessageBranchPrevious = ({ children, ...props }: MessageBranchPrevi
       variant="ghost"
       {...props}
     >
-      {children ?? <ChevronLeftIcon size={14} />}
+      {children ?? <CaretLeftIcon size={14} />}
     </Button>
   );
 };
@@ -254,7 +255,7 @@ export const MessageBranchNext = ({ children, ...props }: MessageBranchNextProps
       variant="ghost"
       {...props}
     >
-      {children ?? <ChevronRightIcon size={14} />}
+      {children ?? <CaretRightIcon size={14} />}
     </Button>
   );
 };

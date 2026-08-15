@@ -32,10 +32,10 @@ import {
   ConversationContent,
   ConversationEmptyState,
   ConversationScrollButton,
-} from "@ai-elements/conversation";
-import { FileMentionProvider } from "@ai-elements/chat-markdown";
-import { Message, MessageContent } from "@ai-elements/message";
-import { ReasoningLine } from "@ai-elements/reasoning";
+} from "@renderer/components/ui/ai-elements/conversation";
+import { FileMentionProvider } from "@renderer/components/ui/ai-elements/chat-markdown";
+import { Message, MessageContent } from "@renderer/components/ui/ai-elements/message";
+import { ReasoningLine } from "@renderer/components/ui/ai-elements/reasoning";
 import {
   approvalId,
   gatedApprovalIds,

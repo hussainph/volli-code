@@ -57,7 +57,7 @@ import {
   PromptInputSubmit,
   PromptInputTextarea,
   PromptInputTools,
-} from "@ai-elements/prompt-input";
+} from "@renderer/components/ui/ai-elements/prompt-input";
 import { expandCommandInvocation, type IndexedFile, type PromptTemplate } from "@volli/shared";
 
 import { reclampEffort } from "@renderer/chat/composer-effort";

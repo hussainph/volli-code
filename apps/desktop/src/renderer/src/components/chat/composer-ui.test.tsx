@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import type { PromptTemplate } from "@volli/shared";
 
-import { PromptInput } from "@ai-elements/prompt-input";
+import { PromptInput } from "@renderer/components/ui/ai-elements/prompt-input";
 import type { ComposerPickerState } from "@renderer/chat/composer-picker";
 import { Button } from "@renderer/components/ui/button";
 import { DropdownMenuContent, DropdownMenuItem } from "@renderer/components/ui/dropdown-menu";
