@@ -92,12 +92,37 @@ function recorder() {
   const eased: Paint[] = [];
   let arming = false;
   let prefersDark = true;
+  /**
+   * The swap a "view transition" is holding back, if a test asked it to.
+   *
+   * Chromium runs the update callback at the next rendering opportunity rather
+   * than inline, and the store is written for that: the eased swap re-reads the
+   * store when it fires. Held here so a test can move the state underneath one
+   * and see which canvas actually lands.
+   */
+  let heldSwap: (() => void) | null = null;
+  let holding = false;
+  const runSwap = (applyTokens: () => void) => {
+    arming = true;
+    applyTokens();
+    arming = false;
+  };
   return {
     painted,
     editorThemes,
     eased,
     setSystemPrefersDark: (value: boolean) => {
       prefersDark = value;
+    },
+    /** Stop running eased swaps inline; {@link releaseSwap} runs them instead. */
+    holdSwaps: () => {
+      holding = true;
+    },
+    /** Run the swap the engine was holding, as the frame after it would. */
+    releaseSwap: () => {
+      const swap = heldSwap;
+      heldSwap = null;
+      if (swap !== null) runSwap(swap);
     },
     paintCanvas: (
       canvas: Canvas,
@@ -107,11 +132,16 @@ function recorder() {
       const paint = { canvas, resolved, transient: options?.transient === true };
       painted.push(paint);
       if (arming) eased.push(paint);
-      arming = false;
     },
     refreshEditorTheme: (themeId: string) => void editorThemes.push(themeId),
-    beginScopeRepaint: () => {
-      arming = true;
+    // The fallback shape the real module takes where there is no view
+    // transition to run: the swap happens, synchronously, inside the call.
+    beginScopeRepaint: (applyTokens: () => void) => {
+      if (holding) {
+        heldSwap = applyTokens;
+        return;
+      }
+      runSwap(applyTokens);
     },
     systemPrefersDark: () => prefersDark,
   };
@@ -448,6 +478,26 @@ describe("the eased repaint", () => {
     expect(paint.eased).toEqual([]);
   });
 
+  it("never eases the authored rows arriving, even after a placeholder paint", async () => {
+    // `volli:theme-state` can beat the bootstrap payload back, and its `accept`
+    // repaints a store that has never seen an authored row — the shipped canvas
+    // at `auto`, which on a dark machine is a dark window. Easing out of that
+    // is a 300ms fade from a theme nobody chose, on every launch that loses the
+    // race; measured as a real dark frame at boot once the crossfade became a
+    // view transition and the swap stopped landing in the same task.
+    const { store, paint } = freshStore();
+    paint.setSystemPrefersDark(true);
+
+    await store.getState().hydrate();
+    store.getState().hydrateGlobal(appState(TEAL, "light"));
+
+    expect(paint.painted).toEqual([
+      { canvas: DEFAULT_CANVAS, resolved: "dark", transient: false },
+      { canvas: TEAL, resolved: "light", transient: false },
+    ]);
+    expect(paint.eased).toEqual([]);
+  });
+
   it("cuts straight to a canvas edit within one scope", async () => {
     const { store, paint } = freshStore();
     store.getState().hydrateGlobal(appState(DEFAULT_CANVAS, "dark"));
@@ -456,6 +506,31 @@ describe("the eased repaint", () => {
 
     expect(paint.eased).toEqual([]);
     expect(paint.painted).toHaveLength(2);
+  });
+
+  it("paints what the store says when the swap actually runs, not when it was decided", async () => {
+    // The eased swap is a CALLBACK the view transition runs a frame later, so
+    // the state can move under it. Painting the resolution captured at decision
+    // time would put the window on one canvas while the first-paint hint —
+    // always written from the newest state — recorded another.
+    const { store, paint } = freshStore({
+      state: vi.fn(async (input: { projectId?: string }) => ({
+        ok: true as const,
+        value: statePayload({ projectId: input.projectId ?? null }),
+      })),
+    });
+    await store.getState().hydrate();
+    paint.holdSwaps();
+
+    await store.getState().hydrate(projectScope({ canvas: TEAL }));
+    // Nothing has reached the DOM yet: the engine is still holding the swap.
+    expect(paint.eased).toEqual([]);
+    store.getState().startPreview(PLUM);
+    paint.releaseSwap();
+
+    expect(paint.eased).toEqual([
+      { canvas: PLUM, resolved: expect.anything() as never, transient: false },
+    ]);
   });
 });
 

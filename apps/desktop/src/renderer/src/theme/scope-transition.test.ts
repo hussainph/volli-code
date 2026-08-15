@@ -1,67 +1,141 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import {
-  beginScopeRepaint,
-  CANVAS_FADE_ATTRIBUTE,
-  CANVAS_FADE_VALUE,
-  CANVAS_OUTGOING_VARIABLE,
-  disarmScopeRepaint,
-  SCOPE_REPAINT,
-  SCOPE_REPAINT_HOLD_MS,
-  SCOPE_TRANSITION_ATTRIBUTE,
-  SCOPE_TRANSITION_VALUE,
-  shouldEaseScopeRepaint,
-} from "./scope-transition";
-
-/** A gradient value, standing in for whatever `paintCanvas` last wrote. */
-const OLD_CANVAS = "radial-gradient(ellipse at 20% 30%, #2ba39c, transparent 60%), #10201f";
-const NEWER_CANVAS = "radial-gradient(ellipse at 70% 10%, #e8652a, transparent 60%), #201510";
+import { beginScopeRepaint, disarmScopeRepaint, shouldEaseScopeRepaint } from "./scope-transition";
 
 /**
- * The renderer test project runs under vitest's default `node` environment, so
- * there is no DOM. `beginScopeRepaint` only ever moves two attributes, reads and
- * writes one custom property, and reads `offsetWidth`, so a recording stand-in
- * exercises the real contract — the same technique apply.test.ts uses for the
- * token writes.
+ * A stand-in for Chromium's view transition, with the engine's own sequencing
+ * left in the test's hands.
  *
- * The stand-in records the ORDER of the operations that happen around the
- * forced style read, because the restart depends on it: the fade attribute has
- * to come off before the flush and go back on after it, or the layer resumes a
- * spent animation instead of playing a new one.
+ * The renderer test project runs under vitest's default `node` environment, so
+ * there is neither a document nor a `startViewTransition` to drive — and the two
+ * facts worth pinning here are both about SEQUENCING rather than about pixels:
+ * the swap happens inside the update callback (never before or after it, or it
+ * would land in the captured old state), and a transition that is skipped or
+ * superseded settles without leaving an unhandled rejection behind.
+ *
+ * `run()` is the engine's "next rendering opportunity"; `skip` reproduces what
+ * `skipTransition` actually does, which is run the update callback if it has not
+ * run yet and then settle. `ready` rejects on a skip exactly as the real one
+ * does — that rejection is the whole reason the module handles it.
  */
-function fakeRoot(canvas = "") {
-  const attributes = new Map<string, string>();
-  const properties = new Map<string, string>([["--canvas", canvas]]);
-  const log: string[] = [];
-  let flushes = 0;
-  const root = {
-    setAttribute: (name: string, value: string) => {
-      log.push(`+${name}`);
-      attributes.set(name, value);
+function fakeViewTransitions() {
+  const transitions: FakeTransition[] = [];
+  const startViewTransition = vi.fn((update: () => void) => {
+    // Chromium skips the transition already in flight the moment a new one
+    // starts, synchronously, and running its update callback is part of that.
+    transitions.at(-1)?.skipTransition();
+    const transition = makeTransition(update);
+    transitions.push(transition);
+    return transition as unknown as ViewTransition;
+  });
+  // Chromium delivers a press during a transition to `<html>`, so the module
+  // listens in the capture phase on the document; the stand-in keeps the whole
+  // registration so a test can check the listener is taken off again.
+  const listeners: { type: string; handler: () => void }[] = [];
+  vi.stubGlobal("document", {
+    startViewTransition,
+    addEventListener: (type: string, handler: () => void) => void listeners.push({ type, handler }),
+    removeEventListener: (type: string, handler: () => void) => {
+      const at = listeners.findIndex((l) => l.type === type && l.handler === handler);
+      if (at >= 0) listeners.splice(at, 1);
     },
-    removeAttribute: (name: string) => {
-      log.push(`-${name}`);
-      attributes.delete(name);
-    },
-    style: {
-      getPropertyValue: (name: string) => properties.get(name) ?? "",
-      setProperty: (name: string, value: string) => void properties.set(name, value),
-      removeProperty: (name: string) => void properties.delete(name),
-    },
-    get offsetWidth(): number {
-      flushes += 1;
-      log.push("flush");
-      return 0;
-    },
-  };
+  });
   return {
-    root: root as unknown as HTMLElement,
-    attributes,
-    properties,
-    log,
-    flushCount: () => flushes,
+    startViewTransition,
+    transitions,
+    listeners,
+    /** The transition started most recently, which is the only live one. */
+    current: () => transitions.at(-1),
+    /**
+     * Every registered `pointerdown` handler fires, as a real press would.
+     * Filtered into a fresh array first, because a handler may take itself off.
+     */
+    press: () => {
+      for (const { handler } of listeners.filter((entry) => entry.type === "pointerdown")) {
+        handler();
+      }
+    },
   };
 }
+
+interface FakeTransition {
+  ready: Promise<void>;
+  finished: Promise<void>;
+  updateCallbackDone: Promise<void>;
+  skipTransition: () => void;
+  /** Runs the update callback as the engine would, one frame in. */
+  run: () => void;
+  /** Ends the animation normally, after {@link run}. */
+  finish: () => void;
+  skipped: boolean;
+  ran: boolean;
+}
+
+function makeTransition(update: () => void): FakeTransition {
+  let resolveReady!: () => void;
+  let rejectReady!: (reason: Error) => void;
+  let resolveFinished!: () => void;
+  let rejectFinished!: (reason: Error) => void;
+  const ready = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  const finished = new Promise<void>((resolve, reject) => {
+    resolveFinished = resolve;
+    rejectFinished = reject;
+  });
+  let readyResolved = false;
+  const transition: FakeTransition = {
+    ready,
+    finished,
+    updateCallbackDone: Promise.resolve(),
+    ran: false,
+    skipped: false,
+    run: () => {
+      if (transition.ran) return;
+      transition.ran = true;
+      try {
+        update();
+      } catch (error) {
+        rejectFinished(error as Error);
+        rejectReady(error as Error);
+        return;
+      }
+      // A skip runs the update too, but never gets to say the animation is
+      // about to start — that is the branch below.
+      if (transition.skipped) return;
+      readyResolved = true;
+      resolveReady();
+    },
+    finish: () => resolveFinished(),
+    skipTransition: () => {
+      if (transition.skipped) return;
+      transition.skipped = true;
+      transition.run();
+      // The real one: `finished` fulfils, and `ready` REJECTS with an
+      // AbortError unless the animation had already begun.
+      if (!readyResolved) rejectReady(new Error("AbortError"));
+      resolveFinished();
+    },
+  };
+  return transition;
+}
+
+/**
+ * Lets every already-settled promise callback run — and, one macrotask later,
+ * lets Node decide which rejections went unhandled.
+ */
+const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+/**
+ * The module holds the live transition at module scope, so a test that leaves
+ * one in flight would hand it to the next one. Disarming is exactly the reset:
+ * it is what an HMR dispose does, and it ends whatever is running.
+ */
+afterEach(() => {
+  disarmScopeRepaint();
+  vi.unstubAllGlobals();
+});
 
 describe("shouldEaseScopeRepaint", () => {
   it("eases a switch from one project to another", () => {
@@ -141,217 +215,155 @@ describe("shouldEaseScopeRepaint", () => {
   });
 });
 
-describe("beginScopeRepaint", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
+describe("beginScopeRepaint without the View Transition API", () => {
+  it("applies the swap synchronously where there is no document at all", () => {
+    // The renderer's own tests, and any host without a DOM: the module must
+    // still be the thing that performs the swap, not merely the thing that
+    // eases it.
+    const applyTokens = vi.fn();
+
+    beginScopeRepaint(applyTokens);
+
+    expect(applyTokens).toHaveBeenCalledTimes(1);
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
+  it("hard-cuts on an engine that has a document but no startViewTransition", () => {
+    vi.stubGlobal("document", { documentElement: {} });
+    const applyTokens = vi.fn();
+
+    beginScopeRepaint(applyTokens);
+
+    expect(applyTokens).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("beginScopeRepaint as a view transition", () => {
+  it("hands the swap to the engine instead of performing it", () => {
+    // The contract that makes the crossfade possible at all: the tokens move
+    // INSIDE the update callback. Applied before this call, they would be part
+    // of the captured old state and animate from themselves to themselves.
+    const engine = fakeViewTransitions();
+    const applyTokens = vi.fn();
+
+    beginScopeRepaint(applyTokens);
+
+    expect(engine.startViewTransition).toHaveBeenCalledTimes(1);
+    expect(applyTokens).not.toHaveBeenCalled();
+
+    engine.current()?.run();
+    expect(applyTokens).toHaveBeenCalledTimes(1);
   });
 
-  it("arms the transition, then takes it off once the swap has settled", () => {
-    const { root, attributes } = fakeRoot();
+  it("leaves a superseded transition's rejection handled", async () => {
+    // Two workspace hops inside one crossfade — the owner's actual usage.
+    // Chromium abandons the first transition, which REJECTS its `ready` with an
+    // AbortError; unhandled, the app's most repeated interaction would print a
+    // rejection every time it worked correctly.
+    const engine = fakeViewTransitions();
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
 
-    beginScopeRepaint(root);
-    expect(attributes.get(SCOPE_TRANSITION_ATTRIBUTE)).toBe(SCOPE_TRANSITION_VALUE);
+    beginScopeRepaint(vi.fn());
+    beginScopeRepaint(vi.fn());
+    await flush();
+    process.off("unhandledRejection", unhandled);
 
-    // Still armed while the crossfade is mid-flight.
-    vi.advanceTimersByTime(SCOPE_REPAINT.crossfade);
-    expect(attributes.has(SCOPE_TRANSITION_ATTRIBUTE)).toBe(true);
-
-    vi.advanceTimersByTime(SCOPE_REPAINT.tail);
-    expect(attributes.has(SCOPE_TRANSITION_ATTRIBUTE)).toBe(false);
+    expect(engine.transitions).toHaveLength(2);
+    expect(engine.transitions[0]?.skipped).toBe(true);
+    expect(unhandled).not.toHaveBeenCalled();
   });
 
-  it("flushes the pending style recalc so the transition is live before the tokens move", () => {
-    const { root, flushCount } = fakeRoot();
+  it("ends the crossfade on the first pointer press", () => {
+    // While the transition plays, Chromium hit-tests its own pseudo-element
+    // tree and every click in the window is DROPPED rather than delayed
+    // (measured: +0/+100/+200ms into a 300ms swap all lost, +320ms delivered).
+    // Ending on the first press turns "up to 300ms of dead window" into one
+    // lost click — and input outranking decoration is right anyway.
+    const engine = fakeViewTransitions();
 
-    beginScopeRepaint(root);
+    beginScopeRepaint(vi.fn());
+    expect(engine.current()?.skipped).toBe(false);
+    engine.press();
 
-    expect(flushCount()).toBe(1);
+    expect(engine.current()?.skipped).toBe(true);
   });
 
-  it("extends one window across overlapping scope changes rather than cutting the first short", () => {
-    // Two rail clicks in quick succession: the colors must re-target from
-    // wherever they are, not snap when the first timer fires.
-    const { root, attributes } = fakeRoot();
+  it("stops listening for presses once the transition is over", async () => {
+    // A listener per swap, never removed, is a leak on the app's most repeated
+    // interaction — and every stale one would skip a transition it has no
+    // relationship to.
+    const engine = fakeViewTransitions();
 
-    beginScopeRepaint(root);
-    vi.advanceTimersByTime(SCOPE_REPAINT_HOLD_MS - 1);
-    beginScopeRepaint(root);
-    vi.advanceTimersByTime(SCOPE_REPAINT_HOLD_MS - 1);
+    beginScopeRepaint(vi.fn());
+    const transition = engine.current();
+    transition?.run();
+    transition?.finish();
+    await flush();
 
-    expect(attributes.has(SCOPE_TRANSITION_ATTRIBUTE)).toBe(true);
-
-    vi.advanceTimersByTime(1);
-    expect(attributes.has(SCOPE_TRANSITION_ATTRIBUTE)).toBe(false);
+    expect(engine.listeners).toEqual([]);
   });
 
-  it("disarms the previous root when re-armed on a different one", () => {
-    // One timer serves every caller, so re-arming elsewhere cancels the first
-    // root's removal — take the attribute off there and then, or it would stay
-    // armed for the life of the window.
-    const first = fakeRoot();
-    const second = fakeRoot();
+  it("still applies the swap when its transition is abandoned mid-flight", () => {
+    // Skipping drops the ANIMATION, never the update: the window must end up
+    // wearing the new scope either way, hard cut and all.
+    const engine = fakeViewTransitions();
+    const first = vi.fn();
+    const second = vi.fn();
 
-    beginScopeRepaint(first.root);
-    beginScopeRepaint(second.root);
+    beginScopeRepaint(first);
+    beginScopeRepaint(second);
+    engine.current()?.run();
 
-    expect(first.attributes.has(SCOPE_TRANSITION_ATTRIBUTE)).toBe(false);
-    expect(second.attributes.get(SCOPE_TRANSITION_ATTRIBUTE)).toBe(SCOPE_TRANSITION_VALUE);
-
-    vi.advanceTimersByTime(SCOPE_REPAINT_HOLD_MS);
-    expect(second.attributes.has(SCOPE_TRANSITION_ATTRIBUTE)).toBe(false);
-  });
-
-  it("defaults to the document element", () => {
-    const { root, attributes } = fakeRoot();
-    vi.stubGlobal("document", { documentElement: root });
-
-    beginScopeRepaint();
-
-    expect(attributes.get(SCOPE_TRANSITION_ATTRIBUTE)).toBe(SCOPE_TRANSITION_VALUE);
-    vi.advanceTimersByTime(SCOPE_REPAINT_HOLD_MS);
-    expect(attributes.has(SCOPE_TRANSITION_ATTRIBUTE)).toBe(false);
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("disarmScopeRepaint", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  });
-
-  it("does nothing when no repaint is armed", () => {
+  it("does nothing when no repaint is in flight", () => {
     expect(() => disarmScopeRepaint()).not.toThrow();
   });
 
-  it("reverses an armed repaint immediately, without waiting for its timer", () => {
-    // The HMR teardown this exists for: a module edit landing between an arm
-    // and the timer's expiry, which the timer alone can never cover.
-    const { root, attributes, properties } = fakeRoot(OLD_CANVAS);
+  it("skips a running transition and applies its swap anyway", () => {
+    // The HMR teardown this exists for: a module edit landing mid-crossfade.
+    // The animation goes; the tokens stay, because a half-applied theme is not
+    // a state the app has any way to leave.
+    const engine = fakeViewTransitions();
+    const applyTokens = vi.fn();
 
-    beginScopeRepaint(root);
+    beginScopeRepaint(applyTokens);
     disarmScopeRepaint();
 
-    expect(attributes.has(SCOPE_TRANSITION_ATTRIBUTE)).toBe(false);
-    expect(attributes.has(CANVAS_FADE_ATTRIBUTE)).toBe(false);
-    expect(properties.has(CANVAS_OUTGOING_VARIABLE)).toBe(false);
+    expect(engine.current()?.skipped).toBe(true);
+    expect(applyTokens).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves the now-cleared timer harmless if it still fires", () => {
-    const { root, attributes } = fakeRoot(OLD_CANVAS);
+  it("has nothing left to skip once the transition has finished", async () => {
+    const engine = fakeViewTransitions();
 
-    beginScopeRepaint(root);
+    beginScopeRepaint(vi.fn());
+    const transition = engine.current();
+    transition?.run();
+    transition?.finish();
+    await flush();
     disarmScopeRepaint();
-    vi.advanceTimersByTime(SCOPE_REPAINT_HOLD_MS);
 
-    expect(attributes.has(SCOPE_TRANSITION_ATTRIBUTE)).toBe(false);
-  });
-});
-
-/**
- * The gradient's half of the same swap.
- *
- * What is testable headlessly is the HAND-OFF — which value is captured, when
- * the layer is mounted relative to the forced flush, and that nothing is left
- * behind — and that is exactly the part with decisions in it. What the layer
- * then LOOKS like is a `@keyframes` in globals.css and belongs to the smoke:
- * that it paints beneath the app, that opacity actually animates, and that
- * `prefers-reduced-motion` shortens it are properties of a real compositor.
- */
-describe("beginScopeRepaint's canvas crossfade", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
+    // Skipped exactly zero times: the reference was released when it settled,
+    // so nothing reached the engine after it was already done.
+    expect(transition?.skipped).toBe(false);
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  });
+  it("keeps skipping the LIVE transition after an older one settles late", async () => {
+    // A superseded transition settles after its successor started. Clearing the
+    // module's reference on that settle would leave the live crossfade with
+    // nothing able to end it — a stuck window under HMR.
+    const engine = fakeViewTransitions();
 
-  it("captures the gradient still on the element and mounts a layer painting it", () => {
-    // Read before anything is written: `paintCanvas` overwrites `--canvas`
-    // immediately after this call, so this is the only moment the outgoing
-    // gradient exists anywhere.
-    const { root, attributes, properties } = fakeRoot(OLD_CANVAS);
+    beginScopeRepaint(vi.fn());
+    beginScopeRepaint(vi.fn());
+    await flush();
+    disarmScopeRepaint();
 
-    beginScopeRepaint(root);
-
-    expect(properties.get(CANVAS_OUTGOING_VARIABLE)).toBe(OLD_CANVAS);
-    expect(attributes.get(CANVAS_FADE_ATTRIBUTE)).toBe(CANVAS_FADE_VALUE);
-  });
-
-  it("mounts the layer AFTER the flush, so its animation starts from the top", () => {
-    // The whole restart mechanism, and the one thing a DOM-free test can still
-    // prove: off, flush, on. A layer re-armed without the flush in between is
-    // the same element carrying the same animation, which does not replay — an
-    // overlapping switch would then show no gradient fade at all.
-    const { root, log } = fakeRoot(OLD_CANVAS);
-
-    beginScopeRepaint(root);
-
-    expect(log).toEqual([
-      `+${SCOPE_TRANSITION_ATTRIBUTE}`,
-      `-${CANVAS_FADE_ATTRIBUTE}`,
-      "flush",
-      `+${CANVAS_FADE_ATTRIBUTE}`,
-    ]);
-  });
-
-  it("re-captures on an overlapping change and leaves nothing behind at the end", () => {
-    // Two rail clicks in quick succession. The second fade starts from the
-    // canvas that was in force when it began — the first switch's INCOMING one —
-    // which is the same hand-off the mounted-copy implementation made.
-    const { root, attributes, properties } = fakeRoot(OLD_CANVAS);
-
-    beginScopeRepaint(root);
-    properties.set("--canvas", NEWER_CANVAS);
-    vi.advanceTimersByTime(SCOPE_REPAINT.crossfade);
-    beginScopeRepaint(root);
-
-    expect(properties.get(CANVAS_OUTGOING_VARIABLE)).toBe(NEWER_CANVAS);
-    expect(attributes.get(CANVAS_FADE_ATTRIBUTE)).toBe(CANVAS_FADE_VALUE);
-
-    // One hold, extended — and when it ends the layer is unmounted and the spent
-    // gradient dropped, so a stuck full-window overlay is not reachable.
-    vi.advanceTimersByTime(SCOPE_REPAINT_HOLD_MS);
-    expect(attributes.has(CANVAS_FADE_ATTRIBUTE)).toBe(false);
-    expect(properties.has(CANVAS_OUTGOING_VARIABLE)).toBe(false);
-  });
-
-  it("disarms the previous root's layer when re-armed on a different one", () => {
-    // Same argument as the transition attribute, with more at stake: one timer
-    // serves every caller, so without this the first root keeps a full-window
-    // gradient frozen at whatever opacity its animation reached.
-    const first = fakeRoot(OLD_CANVAS);
-    const second = fakeRoot(NEWER_CANVAS);
-
-    beginScopeRepaint(first.root);
-    beginScopeRepaint(second.root);
-
-    expect(first.attributes.has(CANVAS_FADE_ATTRIBUTE)).toBe(false);
-    expect(first.properties.has(CANVAS_OUTGOING_VARIABLE)).toBe(false);
-    expect(second.attributes.get(CANVAS_FADE_ATTRIBUTE)).toBe(CANVAS_FADE_VALUE);
-  });
-
-  it("cuts the gradient rather than fading from nothing when none has been painted", () => {
-    // Only reachable before the first `paintCanvas` — which is also the repaint
-    // that never eases. Mounting a layer painting an empty `background` would
-    // fade the window through a transparent frame; cutting is what the app did
-    // before the layer existed.
-    const { root, attributes, properties } = fakeRoot();
-
-    beginScopeRepaint(root);
-
-    expect(attributes.get(SCOPE_TRANSITION_ATTRIBUTE)).toBe(SCOPE_TRANSITION_VALUE);
-    expect(attributes.has(CANVAS_FADE_ATTRIBUTE)).toBe(false);
-    expect(properties.has(CANVAS_OUTGOING_VARIABLE)).toBe(false);
+    expect(engine.transitions[1]?.skipped).toBe(true);
   });
 });

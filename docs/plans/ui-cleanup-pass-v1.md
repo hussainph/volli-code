@@ -124,6 +124,16 @@ four wrong fixes.
   recalculation, because the transition is declared on
   `:root, :root *, :root *::before, :root *::after`.
 
+  Closed since, by rebuilding the crossfade on `document.startViewTransition`
+  (`theme/scope-transition.ts`): the tokens move once, inside the update
+  callback, and the compositor crossfades two captures of the window. The
+  per-element recalculation is gone, and the `html::before` layer that existed
+  only because two gradients cannot interpolate went with it — captures are
+  pixels. The cost that replaces it is input, not time: Chromium hit-tests its
+  own pseudo-element tree while a transition plays, so a click inside the 300ms
+  is dropped rather than delayed, which is why the first pointer press now ends
+  the crossfade.
+
 ### Two fixes that looked right and were not
 
 Both passed review and typecheck while rendering wrong; only a browser caught
