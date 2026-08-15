@@ -5,6 +5,7 @@ import {
   CANVAS_FADE_ATTRIBUTE,
   CANVAS_FADE_VALUE,
   CANVAS_OUTGOING_VARIABLE,
+  disarmScopeRepaint,
   SCOPE_REPAINT,
   SCOPE_REPAINT_HOLD_MS,
   SCOPE_TRANSITION_ATTRIBUTE,
@@ -213,6 +214,44 @@ describe("beginScopeRepaint", () => {
 
     expect(attributes.get(SCOPE_TRANSITION_ATTRIBUTE)).toBe(SCOPE_TRANSITION_VALUE);
     vi.advanceTimersByTime(SCOPE_REPAINT_HOLD_MS);
+    expect(attributes.has(SCOPE_TRANSITION_ATTRIBUTE)).toBe(false);
+  });
+});
+
+describe("disarmScopeRepaint", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("does nothing when no repaint is armed", () => {
+    expect(() => disarmScopeRepaint()).not.toThrow();
+  });
+
+  it("reverses an armed repaint immediately, without waiting for its timer", () => {
+    // The HMR teardown this exists for: a module edit landing between an arm
+    // and the timer's expiry, which the timer alone can never cover.
+    const { root, attributes, properties } = fakeRoot(OLD_CANVAS);
+
+    beginScopeRepaint(root);
+    disarmScopeRepaint();
+
+    expect(attributes.has(SCOPE_TRANSITION_ATTRIBUTE)).toBe(false);
+    expect(attributes.has(CANVAS_FADE_ATTRIBUTE)).toBe(false);
+    expect(properties.has(CANVAS_OUTGOING_VARIABLE)).toBe(false);
+  });
+
+  it("leaves the now-cleared timer harmless if it still fires", () => {
+    const { root, attributes } = fakeRoot(OLD_CANVAS);
+
+    beginScopeRepaint(root);
+    disarmScopeRepaint();
+    vi.advanceTimersByTime(SCOPE_REPAINT_HOLD_MS);
+
     expect(attributes.has(SCOPE_TRANSITION_ATTRIBUTE)).toBe(false);
   });
 });

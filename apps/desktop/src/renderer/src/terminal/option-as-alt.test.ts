@@ -79,11 +79,18 @@ describe("alt side tracker", () => {
         list.push(listener);
         listeners.set(type, list);
       },
+      removeEventListener(type: string, listener: Listener) {
+        listeners.set(
+          type,
+          (listeners.get(type) ?? []).filter((entry) => entry !== listener),
+        );
+      },
     };
     const fire = (type: string, event: unknown): void => {
       for (const listener of listeners.get(type) ?? []) listener(event);
     };
-    return { target: target as unknown as Window, fire };
+    const listenerCount = (type: string): number => (listeners.get(type) ?? []).length;
+    return { target: target as unknown as Window, fire, listenerCount };
   }
 
   beforeEach(() => {
@@ -127,5 +134,23 @@ describe("alt side tracker", () => {
     expect(heldAltSides()).toEqual({ left: false, right: false });
     first.fire("keydown", { key: "Alt", location: 1 });
     expect(heldAltSides()).toEqual({ left: true, right: false });
+  });
+
+  // The HMR teardown path: resetting (which is what `import.meta.hot?.dispose`
+  // drives in the real app) has to remove the listeners it installed, or an
+  // edit to this module stacks a fresh set on every pass without ever
+  // retiring the last one.
+  it("removes its own listeners on reset instead of leaving them stacked", () => {
+    const { target, listenerCount } = fakeWindow();
+    installAltSideTracker(target);
+    expect(listenerCount("keydown")).toBe(1);
+    expect(listenerCount("keyup")).toBe(1);
+    expect(listenerCount("blur")).toBe(1);
+
+    resetAltSideTrackerForTests();
+
+    expect(listenerCount("keydown")).toBe(0);
+    expect(listenerCount("keyup")).toBe(0);
+    expect(listenerCount("blur")).toBe(0);
   });
 });

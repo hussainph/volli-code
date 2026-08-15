@@ -63,7 +63,7 @@ function fitLiveEngines(): void {
 // permanently blank. Worse, the throw would escape `rotate()` into
 // gpu-session's `.catch()`, which drops it: silent, and the recovery never
 // completes.
-onGpuSessionRotated(() => {
+const unsubscribeGpuSessionRotated = onGpuSessionRotated(() => {
   let failed = 0;
   for (const engine of engines.values()) {
     try {
@@ -90,7 +90,7 @@ onGpuSessionRotated(() => {
     );
   }
 });
-onTerminalAppearanceChanged(() => {
+const unsubscribeTerminalAppearanceChanged = onTerminalAppearanceChanged(() => {
   const appearance = getCurrentAppearance();
   for (const engine of engines.values()) {
     try {
@@ -114,11 +114,22 @@ onTerminalAppearanceChanged(() => {
 // change when a window moves between displays. Keep the recovery at the
 // TerminalEngine seam: every current/future renderer only has to implement
 // fit(), while the app owns display lifecycle events.
+let unsubscribeDevicePixelRatio: (() => void) | null = null;
 if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
   // fit() itself re-measures once more next frame, covering the window where
   // Chromium reports the new DPR just before the final layout settles.
-  watchDevicePixelRatio(window, fitLiveEngines);
+  unsubscribeDevicePixelRatio = watchDevicePixelRatio(window, fitLiveEngines);
 }
+
+// The registry outlives this module: Vite re-evaluates it on every renderer HMR
+// edit, and without a teardown each outgoing copy keeps its three module-lifetime
+// subscriptions forever — the exact leak gpu-pressure.ts's own dispose hook (and
+// its comment) names.
+import.meta.hot?.dispose(() => {
+  unsubscribeGpuSessionRotated();
+  unsubscribeTerminalAppearanceChanged();
+  unsubscribeDevicePixelRatio?.();
+});
 
 /** The engine for `sessionId`, constructing it on first request. */
 export function getOrCreateEngine(sessionId: string): TerminalEngine {

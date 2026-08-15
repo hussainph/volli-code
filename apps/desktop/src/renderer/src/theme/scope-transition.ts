@@ -243,3 +243,25 @@ export function beginScopeRepaint(root?: HTMLElement): void {
   }, SCOPE_REPAINT_HOLD_MS);
   holding = { timer, target };
 }
+
+/**
+ * Reverses whatever is currently armed, on whichever root it is armed on.
+ *
+ * The module-level hold is otherwise only ever cleared by its own timer, so an
+ * HMR swap landing between an arm and that timer's expiry would leave the
+ * transition attribute, the fade layer and its spent gradient on the root
+ * forever — the first of those a universal-selector transition on eight paint
+ * properties. Exported so the dispose hook below can call it.
+ */
+export function disarmScopeRepaint(): void {
+  if (holding === null) return;
+  clearTimeout(holding.timer);
+  disarm(holding.target);
+  holding = null;
+}
+
+/* v8 ignore next 3 -- `import.meta.hot` exists only under the dev server;
+   tests and production builds cannot take this branch. */
+import.meta.hot?.dispose(() => {
+  disarmScopeRepaint();
+});
