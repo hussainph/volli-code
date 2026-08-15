@@ -255,22 +255,23 @@ async function main() {
 
     // === Phase 2: N idle claude sessions =====================================
     await page.getByText("Sessions", { exact: true }).click();
-    await waitForLiveCanvas(page); // first visit auto-creates session 1
 
     for (let i = 1; i <= N_SESSIONS; i++) {
-      if (i > 1) {
-        // The scratch strip's control is a split button (press = chat, caret =
-        // the kinds); this benchmark measures PTYs, so it takes the caret. The
-        // item's name carries its chord, hence the regex.
-        await page.getByLabel("Other session kinds").click();
-        await page.getByRole("menuitem", { name: /^Terminal/ }).click();
-        await page.waitForFunction(
-          (n) => document.querySelectorAll('[aria-label^="Close Terminal"]').length === n,
-          i,
-          { timeout: 10000 },
-        );
-        await waitForLiveCanvas(page);
-      }
+      // The scratch strip's control is a split button (press = chat, caret =
+      // the kinds); this benchmark measures PTYs, so EVERY tab takes the caret
+      // — the surface's default Session is a structured chat now (which, with
+      // no default model in this profile, refuses into the empty state), so
+      // nothing here is auto-created. `.first()` because the empty first visit
+      // mounts the control twice (tab strip + empty state). The item's name
+      // carries its chord, hence the regex.
+      await page.getByLabel("Other session kinds").first().click();
+      await page.getByRole("menuitem", { name: /^Terminal/ }).click();
+      await page.waitForFunction(
+        (n) => document.querySelectorAll('[aria-label^="Close Terminal"]').length === n,
+        i,
+        { timeout: 10000 },
+      );
+      await waitForLiveCanvas(page);
       await focusTerminal(page);
       await page.keyboard.type("claude");
       await page.keyboard.press("Enter");

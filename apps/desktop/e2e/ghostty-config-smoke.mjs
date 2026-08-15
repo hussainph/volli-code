@@ -283,8 +283,24 @@ async function main() {
     await page.waitForLoadState("domcontentloaded");
 
     // === 1. Fresh session renders in Front End Delight ======================
+    // The surface's default Session is a structured chat (which, with no
+    // default model in this profile, refuses into the empty state), so the
+    // terminal under test is minted explicitly through the session-start
+    // control's caret. `.first()` because an empty surface mounts the control
+    // twice (tab strip + empty state).
     await page.getByText("Sessions", { exact: true }).click();
+    await page.getByLabel("Other session kinds").first().click();
+    await page.getByRole("menuitem", { name: /^Terminal/ }).click();
     await waitForLiveCanvas(page);
+    // The color sample reads the canvas's bottom-right corner — the exact
+    // patch sonner toasts hover over, and this boot raises two (the refused
+    // auto-chat above, plus any leftover-worktree notice). Sample only once
+    // they are gone.
+    await page.waitForFunction(
+      () => document.querySelectorAll("[data-sonner-toast]").length === 0,
+      undefined,
+      { timeout: 15000 },
+    );
     const bootColor = await terminalBackgroundColor(page, join(SCRATCH, "01-fed.png"));
     const fedDistance = colorDistance(bootColor, FED_BG);
     check(

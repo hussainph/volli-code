@@ -1,8 +1,8 @@
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
+import { ChatsCircleIcon } from "@phosphor-icons/react/dist/csr/ChatsCircle";
 import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
 import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
 import { SlidersHorizontalIcon } from "@phosphor-icons/react/dist/csr/SlidersHorizontal";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 
 import {
   SidebarGroup,
@@ -16,7 +16,11 @@ import type { NavKey } from "@renderer/stores/workspace";
 
 const NAV_ITEMS: ReadonlyArray<{ key: NavKey; label: string; icon: PhosphorIcon }> = [
   { key: "board", label: "Board", icon: KanbanIcon },
-  { key: "sessions", label: "Sessions", icon: TerminalWindowIcon },
+  // The plural chat glyph, not TerminalWindow: the page lands on a structured
+  // chat (sessions-layer.tsx's first-visit auto-open) and holds many Sessions;
+  // a terminal is the companion kind, one caret away, and the kind glyphs
+  // (ChatCircle/TerminalWindow, session-band-row.tsx) stay per-row vocabulary.
+  { key: "sessions", label: "Sessions", icon: ChatsCircleIcon },
   { key: "files", label: "Files", icon: FoldersIcon },
   { key: "configure", label: "Configure", icon: SlidersHorizontalIcon },
 ];

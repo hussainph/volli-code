@@ -116,7 +116,9 @@ async function captureFailureEvidence(page, mainOut, mainErr, label) {
   console.log(`  evidence: ${join(EVIDENCE_DIR, `pi-scratch-chat-${slug}.log`)}`);
 }
 
-/** Navigate to Sessions and wait for its (auto-opened scratch terminal) tab strip to mount. */
+/** Navigate to Sessions and wait for its tab strip to mount — the first
+ *  reveal auto-opens a structured chat (the default model is already seeded
+ *  by check 1, so the create lands), which is the ≥1 tab waited on here. */
 async function goToSessions(page) {
   await page.getByRole("button", { name: "Sessions", exact: true }).click();
   await waitUntil(
