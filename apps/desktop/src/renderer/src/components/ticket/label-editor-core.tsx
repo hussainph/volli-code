@@ -76,9 +76,9 @@ function LabelColorMenu({
  * chips (reusing the board's `TagChip` + stored-color-or-hash treatment, and
  * `LabelColorMenu` on right-click for labels that exist as project rows) plus
  * an inline "add label" affordance — driven purely by a `value: string[]` and
- * `onChange`, so it works both against a persisted ticket (the ticket detail's
- * `TicketLabelEditor` wraps this and writes through `setLabels`) and against
- * plain local state (the New-ticket composer, before any ticket exists).
+ * `onChange`, so it works both against a persisted ticket (`ticket-properties.tsx`
+ * calls this directly and writes through `setLabels`) and against plain local
+ * state (the New-ticket composer, before any ticket exists).
  *
  * The add affordance has two modes:
  * - default (`alwaysInput` false): a `+` button reveals the text input, which
