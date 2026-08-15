@@ -3,6 +3,7 @@ import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
 import { Command } from "cmdk";
 
 import { Button } from "@renderer/components/ui/button";
+import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { cn } from "@renderer/lib/utils";
 
@@ -147,9 +148,7 @@ export function ThemeComboBox<Value extends string>({
             className="h-9 border-b border-border bg-transparent px-4 text-sm text-foreground outline-none placeholder:text-muted-foreground"
           />
           <Command.List className="max-h-64 overflow-y-auto p-1">
-            <Command.Empty className="py-6 text-center text-sm text-muted-foreground">
-              {empty}
-            </Command.Empty>
+            <Command.Empty className={EMPTY_INLINE}>{empty}</Command.Empty>
             {items.map((item) => (
               <Command.Item
                 key={item.value}

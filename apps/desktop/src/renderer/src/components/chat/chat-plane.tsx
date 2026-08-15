@@ -93,6 +93,7 @@ import {
 import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Button } from "@renderer/components/ui/button";
+import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { useMeasuredHeight } from "@renderer/hooks/use-measured-height";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
@@ -506,7 +507,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
             {messages.length === 0 ? (
               // A mark, and nothing else. What blocks typing sits on the
               // composer, where the typing is.
-              <ConversationEmptyState className="min-h-80">
+              <ConversationEmptyState className={cn(EMPTY_PAGE, "min-h-80")}>
                 <div className="flex size-10 items-center justify-center rounded-xl border border-border bg-card shadow-raised">
                   <CodeIcon className="size-5 text-muted-foreground" />
                 </div>

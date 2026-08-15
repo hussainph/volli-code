@@ -28,8 +28,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@renderer/components/ui/dialog";
+import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { formatStamp } from "@renderer/lib/relative-time";
+import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
 
 /** "Jul 14, 2026" — a compact archived-on stamp. */
@@ -157,16 +159,20 @@ function ArchiveList({ project }: { project: Project }) {
           genuinely empty. Distinguishing them avoids flashing "empty" before
           the first read lands. */}
       {loadFailed && archived === undefined ? (
-        <div className="flex flex-col items-center gap-4 py-8 text-center text-muted-foreground">
+        // All three states take the empty geometry: they hold the same slot in
+        // turn, and a different one would jump the dialog as the read lands.
+        <div className={cn(EMPTY_PAGE, "gap-4 text-muted-foreground")}>
           <p className="text-sm">Couldn’t load the archive.</p>
           <Button variant="outline" size="xs" onClick={load}>
             Retry
           </Button>
         </div>
       ) : archived === undefined ? (
-        <p className="py-8 text-center text-sm text-muted-foreground">Loading…</p>
+        <div className={cn(EMPTY_PAGE, "text-muted-foreground")}>
+          <p className="text-sm">Loading…</p>
+        </div>
       ) : archived.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 py-8 text-center text-muted-foreground">
+        <div className={cn(EMPTY_PAGE, "text-muted-foreground")}>
           <ArchiveIcon className="size-6" />
           <p className="text-sm">No archived tickets.</p>
         </div>

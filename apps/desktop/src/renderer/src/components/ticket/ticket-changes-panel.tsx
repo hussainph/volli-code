@@ -49,6 +49,7 @@ import {
 import type { ChangeRecencyState } from "@renderer/components/ticket/ticket-change-recency";
 import { subscribeWorktreeChanges } from "@renderer/components/ticket/worktree-change-watch";
 import { Button } from "@renderer/components/ui/button";
+import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
@@ -222,7 +223,15 @@ export function TicketChangesList({
                 data-focused={focused ? "true" : undefined}
                 aria-label={`${row.statusLabel}: ${row.path}`}
                 onClick={() => onSelectRow(row.path)}
-                className="grid min-h-[52px] w-full grid-cols-[16px_minmax(0,1fr)_72px] items-center gap-x-2 px-2 py-[7px] text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/45"
+                // Two `text-ui` line boxes (20 each) plus `py-1.5` is the 52px
+                // row — the height is the content, not a number. `min-h-13` is
+                // the same 52 as a floor, and it binds for exactly one case: a
+                // repository-root file has no parent path, so its second line
+                // draws no box at all and the row would otherwise sit 20px
+                // shorter than every neighbour. `py-1.5` is a RECORDED spacing
+                // exception (docs/DESIGN.md): `py-2` would grow every row of a
+                // dense list to 56 and orphan the floor.
+                className="grid min-h-13 w-full grid-cols-[16px_minmax(0,1fr)_72px] items-center gap-x-2 px-2 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/45"
               >
                 <StatusIcon className={cn("size-4 shrink-0", status.ink)} weight="bold" />
                 <span className="min-w-0">
@@ -441,10 +450,7 @@ export function TicketChangesPanel({
 
   if (ticket.worktreePath === null) {
     return (
-      <div
-        data-testid="ticket-changes-no-worktree"
-        className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-4 py-8 text-center"
-      >
+      <div data-testid="ticket-changes-no-worktree" className={cn("min-h-0 flex-1", EMPTY_PAGE)}>
         <p className="text-ui font-medium text-muted-foreground">No worktree yet</p>
         <p className="text-ui text-muted-foreground/70">Move this ticket to Doing to start one</p>
       </div>

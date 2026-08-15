@@ -40,6 +40,7 @@ import {
   AlertDialogTrigger,
 } from "@renderer/components/ui/alert-dialog";
 import { Button } from "@renderer/components/ui/button";
+import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import {
   buildActivityFeed,
   commentAuthorLabel,
@@ -463,7 +464,7 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
       <h3 className="text-label font-medium text-muted-foreground uppercase">Activity</h3>
 
       {loaded && feed.length === 0 ? (
-        <p className="px-1 text-sm text-muted-foreground">No activity yet.</p>
+        <p className={EMPTY_INLINE}>No activity yet.</p>
       ) : (
         <ul className="flex flex-col gap-2">
           {feed.map((item) =>

@@ -13,6 +13,8 @@
  * that depends on it stay with each surface.
  */
 
+import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
+
 /**
  * The popover box, shared by root menus, sub-menus and the select surface —
  * one elevation for all three, so a sub-menu does not read as floating above
@@ -139,5 +141,11 @@ export const MENU_SHORTCUT = "ml-auto text-ui text-muted-foreground";
 /** Hairline, bled back out through the surface's 4px padding to both walls. */
 export const MENU_SEPARATOR = "-mx-1 my-1 h-px bg-border";
 
-/** No-results copy: one row's worth of air above and below, at the row's size. */
-export const MENU_EMPTY = "py-4 text-center text-ui";
+/**
+ * No-results copy: one row's worth of air above and below, at the row's size.
+ *
+ * Which is the app's inline empty state exactly, so it IS that constant rather
+ * than a menu-shaped copy of it — a dropdown with nothing in it says the same
+ * thing at the same scale as a sidebar band with nothing in it.
+ */
+export const MENU_EMPTY = EMPTY_INLINE;

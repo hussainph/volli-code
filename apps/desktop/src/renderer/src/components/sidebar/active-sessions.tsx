@@ -8,6 +8,7 @@ import {
   type Ticket,
 } from "@volli/shared";
 
+import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { SidebarGroup, SidebarMenu } from "@renderer/components/ui/sidebar";
 import {
   buildActiveSessionListing,
@@ -425,7 +426,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
       <SidebarGroup data-session-band="active" className="gap-1">
         <SessionBandHeader label="Active" count={listing.active.length} />
         {listing.active.length === 0 ? (
-          <p className="px-2 py-1 text-ui text-muted-foreground">No active sessions</p>
+          <p className={EMPTY_INLINE}>No active sessions</p>
         ) : (
           <SidebarMenu>
             {listing.active.map((row) => (
@@ -446,7 +447,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
           <SessionBandFilterMenu filter={filter} onChange={setFilter} />
         </SessionBandHeader>
         {listing.previous.length === 0 ? (
-          <p className="px-2 py-1 text-ui text-muted-foreground">Nothing yet</p>
+          <p className={EMPTY_INLINE}>Nothing yet</p>
         ) : (
           <SidebarMenu>
             {listing.previous.map((row) => (

@@ -15,6 +15,7 @@ import { PriorityIndicator } from "@renderer/components/board/priority-indicator
 import { TagChip } from "@renderer/components/board/tag-chip";
 import { SortableTicketShell } from "@renderer/components/board/ticket-card";
 import { useTicketComposer } from "@renderer/components/board/use-ticket-composer";
+import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { resolveLabelColor } from "@renderer/lib/labels";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
@@ -256,8 +257,8 @@ export function BoardListView({
 }: BoardListViewProps) {
   if (shownStatuses.length === 0 && emptyDropStatuses.length === 0) {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-muted-foreground">
-        No tickets match
+      <div className={cn("min-h-0 flex-1", EMPTY_PAGE)}>
+        <p className="text-sm text-muted-foreground">No tickets match</p>
       </div>
     );
   }
