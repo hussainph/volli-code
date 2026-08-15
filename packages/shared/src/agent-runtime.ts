@@ -362,7 +362,9 @@ export interface SessionRuntimeSpec {
   identity: RuntimeSessionIdentity;
   /**
    * Immutable execution root — a Ticket's isolated worktree, or a project root
-   * for a ticketless Session. All filesystem and process work stays inside it.
+   * for a ticketless Session. Work lands inside it: the prompt's workspace
+   * layer instructs writes and destructive commands to stay in the workspace,
+   * while allowing task-anchored reads elsewhere on the machine.
    */
   workspacePath: string;
   venue: ExecutionVenue;
