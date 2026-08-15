@@ -257,14 +257,14 @@ function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): Brows
     minHeight: 600,
     show: false,
     // Slack/Cursor-style chrome: no title bar. The renderer paints a
-    // full-width 40px chrome band (ChromeBar) that owns the drag region
+    // full-width 36px chrome band (ChromeBar) that owns the drag region
     // (.app-region-drag in globals.css) and the traffic-light whitespace —
     // everything below that band is ordinary layout.
     titleBarStyle: "hiddenInset",
-    // Centers the 12px traffic-light group inside ChromeBar's 40px band
-    // ((40 - 12) / 2 = 14). Must stay in sync with ChromeBar's h-10 height
+    // Centers the 12px traffic-light group inside ChromeBar's 36px band
+    // ((36 - 12) / 2 = 12). Must stay in sync with ChromeBar's h-9 height
     // (chrome-bar.tsx), the same way backgroundColor below tracks the canvas.
-    trafficLightPosition: { x: 10, y: 14 },
+    trafficLightPosition: { x: 10, y: 12 },
     // The canvas's own base fill (window-theme.ts runs the same pure pipeline
     // the renderer does, preferring the background the renderer last actually
     // painted) — prevents the white flash before first paint, and keeps the

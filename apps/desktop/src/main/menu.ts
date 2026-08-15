@@ -10,7 +10,7 @@ import { buildExportDocument, defaultExportFilename, serializeExportDocument } f
  * EXCEPT the three zoom items in the View menu.
  *
  * Why we replace the built-in `zoomIn`/`zoomOut`/`resetZoom` roles: those roles
- * scale the ENTIRE renderer page, including the renderer-painted 40px chrome
+ * scale the ENTIRE renderer page, including the renderer-painted 36px chrome
  * band (ChromeBar). But the native macOS traffic lights sit at a fixed
  * `trafficLightPosition` and do NOT scale — so page zoom grows/shrinks the
  * chrome band away from the lights and the SidebarTrigger drifts out of

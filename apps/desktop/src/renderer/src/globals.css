@@ -425,7 +425,7 @@
  *   • `components/ui/sidebar.tsx` — `data-slot="sidebar"` is the `Sidebar`
  *     component root (the project rail and the primary sidebar). It does NOT
  *     match `data-slot="sidebar-inset"`, which IS the opaque card.
- *   • `components/chrome-bar.tsx` — the 40px band's root carries
+ *   • `components/chrome-bar.tsx` — the 36px band's root carries
  *     `app-region-drag`. `rail/project-rail.tsx` carries it too, which is
  *     harmless: the rail is on the canvas as well. */
 [data-slot="sidebar"],
