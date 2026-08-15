@@ -14,6 +14,7 @@
  */
 
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
+import { SECTION_HEADING, SECTION_HEADING_CMDK } from "@renderer/components/ui/section-heading";
 
 /**
  * The popover box, shared by root menus, sub-menus and the select surface —
@@ -116,17 +117,21 @@ export const MENU_INDICATOR =
  */
 export const MENU_INDICATOR_MARK = "text-current";
 
-/** Section label: 11px caps at 24px, a step below the rows it introduces. */
-export const MENU_LABEL = "px-2 py-1 text-label uppercase text-muted-foreground";
+/**
+ * Section label: 11px caps at 24px, a step below the rows it introduces.
+ *
+ * The ink is {@link SECTION_HEADING} — a menu's group label and a rail
+ * section's eyebrow are the same object seen on two surfaces, and the menus
+ * were the copy that never picked up the weight. All this adds is the box the
+ * rows put around it.
+ */
+export const MENU_LABEL = `px-2 py-1 ${SECTION_HEADING}`;
 
 /**
  * {@link MENU_LABEL} again, as the variant cmdk needs — it renders the group
- * heading itself, so the classes can only reach it through a selector. Written
- * out rather than derived: Tailwind resolves utilities by scanning source text,
- * so a prefix computed at runtime would emit no CSS at all.
+ * heading itself, so the classes can only reach it through a selector.
  */
-export const MENU_LABEL_CMDK =
-  "[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-label [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:text-muted-foreground";
+export const MENU_LABEL_CMDK = `[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 ${SECTION_HEADING_CMDK}`;
 
 /**
  * The shortcut column. No `tracking-widest` (stock shadcn's): letter spacing is

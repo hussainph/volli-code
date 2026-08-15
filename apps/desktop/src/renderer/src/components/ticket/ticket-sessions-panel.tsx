@@ -16,8 +16,10 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
+import { Badge } from "@renderer/components/ui/badge";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
+import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import {
@@ -75,10 +77,10 @@ const SESSION_SECTION_EMPTY = cn(
  * offers at the right. Inset by the rows' own `px-2` rather than the section's
  * edge, so the label sits over its list instead of hanging left of it.
  */
-function SectionHeading({ label, children }: { label: string; children?: React.ReactNode }) {
+function SectionHeadingRow({ label, children }: { label: string; children?: React.ReactNode }) {
   return (
     <div className="mb-1 flex items-center justify-between gap-2 px-2">
-      <h2 className="text-label font-medium text-muted-foreground uppercase">{label}</h2>
+      <SectionHeading>{label}</SectionHeading>
       {children}
     </div>
   );
@@ -503,7 +505,7 @@ export function TicketSessionsPanel({
             "+" at its right (the scratch's `SessionRows` header) — the height
             comes from the control, so there is no reserved dead space when the
             roster is full. */}
-        <SectionHeading label="Sessions">
+        <SectionHeadingRow label="Sessions">
           <NewSessionControl
             disabled={effectiveCreating}
             placement="rail"
@@ -512,7 +514,7 @@ export function TicketSessionsPanel({
             onNewChat={onNewChat}
             onNewTerminal={onNewSession}
           />
-        </SectionHeading>
+        </SectionHeadingRow>
         {current.length === 0 ? (
           // Nothing to read, so the block is the sentence alone: the header's
           // own control is 20px above it, and a second copy of the same act
@@ -524,13 +526,9 @@ export function TicketSessionsPanel({
       </section>
       {history.length > 0 ? (
         <section className={SECTION} data-testid="session-history">
-          <SectionHeading label="History">
-            {/* The Diffs page's own count pill, not the retired drawer's bare
-                number beside a caret — one shape for "how many are in here". */}
-            <span className="rounded-full bg-accent px-1 font-mono text-label text-muted-foreground">
-              {history.length}
-            </span>
-          </SectionHeading>
+          <SectionHeadingRow label="History">
+            <Badge variant="count-pill">{history.length}</Badge>
+          </SectionHeadingRow>
           {/* Past four rows the column stops being scannable, so the filter
               appears — in flow, like everything else in the stack. */}
           {history.length > 4 ? (

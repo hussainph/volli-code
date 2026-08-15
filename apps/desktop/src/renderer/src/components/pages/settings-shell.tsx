@@ -3,6 +3,7 @@ import { useState, type ReactNode } from "react";
 
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { PageHeader } from "@renderer/components/layout/page-header";
+import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { cn } from "@renderer/lib/utils";
 
 /** One selectable category in a settings surface: its rail row plus the pane it renders. */
@@ -52,7 +53,9 @@ export function SettingsShell({
         aria-label={`${title} categories`}
         className="flex w-52 shrink-0 flex-col gap-1 overflow-y-auto border-r border-border p-4"
       >
-        <p className="px-2 pb-2 pt-1 text-label uppercase text-muted-foreground">{title}</p>
+        <SectionHeading as="p" className="px-2 pb-2 pt-1">
+          {title}
+        </SectionHeading>
         {categories.map(({ key, label, icon: Icon }) => {
           const isActive = active?.key === key;
           return (

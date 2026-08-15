@@ -48,6 +48,7 @@ import {
 } from "@renderer/components/ticket/ticket-changes-model";
 import type { ChangeRecencyState } from "@renderer/components/ticket/ticket-change-recency";
 import { subscribeWorktreeChanges } from "@renderer/components/ticket/worktree-change-watch";
+import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
@@ -113,9 +114,7 @@ function ChangesTitle({ count }: { count: number }) {
   return (
     <>
       <p className="text-ui font-medium">Diffs</p>
-      <span className="rounded-full bg-accent px-1 font-mono text-label text-muted-foreground">
-        {count}
-      </span>
+      <Badge variant="count-pill">{count}</Badge>
     </>
   );
 }

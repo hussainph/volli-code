@@ -7,6 +7,7 @@ import { TICKET_STATUS_LABELS, type Ticket, type TicketStatus } from "@volli/sha
 import { columnDroppableId } from "@renderer/components/board/board-dnd";
 import { TicketCard } from "@renderer/components/board/ticket-card";
 import { useTicketComposer } from "@renderer/components/board/use-ticket-composer";
+import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
 
@@ -73,7 +74,7 @@ export function BoardColumn({
     >
       <div className="flex items-center gap-2 px-4 pt-2 pb-2">
         <span className="text-ui font-medium text-foreground">{TICKET_STATUS_LABELS[status]}</span>
-        <span className="font-mono text-ui text-muted-foreground">{tickets.length}</span>
+        <Badge variant="count">{tickets.length}</Badge>
       </div>
       <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
         <div

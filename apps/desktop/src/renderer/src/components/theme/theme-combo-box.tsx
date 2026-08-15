@@ -2,6 +2,7 @@ import * as React from "react";
 import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
 import { Command } from "cmdk";
 
+import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
@@ -186,9 +187,8 @@ export function ThemeComboBox<Value extends string>({
  * goes accent-colored the moment something Volli wrote is what you are looking
  * at, so "where did this value come from" is answered without opening anything.
  *
- * `--primary-text`, not `--primary`: the label is 11px, so it needs the accent
- * solved for body-sized text even more than body copy does. The border stays on
- * `--primary`, which is a fill.
+ * The two drawings are `ui/badge.tsx`'s `outline` and `accent`; the accent
+ * variant's ink/border split was worked out here and is recorded there now.
  */
 export function ThemeOriginPill({
   emphasized,
@@ -197,14 +197,5 @@ export function ThemeOriginPill({
   emphasized: boolean;
   children: React.ReactNode;
 }) {
-  return (
-    <span
-      className={cn(
-        "rounded-full border px-2 py-1 text-label",
-        emphasized ? "border-primary/30 text-primary-text" : "border-border text-muted-foreground",
-      )}
-    >
-      {children}
-    </span>
-  );
+  return <Badge variant={emphasized ? "accent" : "outline"}>{children}</Badge>;
 }

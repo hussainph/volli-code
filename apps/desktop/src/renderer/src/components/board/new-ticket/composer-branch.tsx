@@ -103,11 +103,7 @@ function BranchRows({
   return (
     <>
       {groups.map((group) => (
-        <CommandGroup
-          key={group.key}
-          heading={group.heading}
-          className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:text-label [&_[cmdk-group-heading]]:uppercase"
-        >
+        <CommandGroup key={group.key} heading={group.heading}>
           {group.options.map((option) => (
             <CommandItem
               key={option.name}
