@@ -1213,7 +1213,7 @@ async function main() {
         const focusGeometry =
           focused.sidebarHidden &&
           focused.insetLeft === 0 &&
-          focused.chromeHeight === 40 &&
+          focused.chromeHeight === 36 &&
           focused.tablists === 0 &&
           focused.asides === 0 &&
           focused.canvasVisible;

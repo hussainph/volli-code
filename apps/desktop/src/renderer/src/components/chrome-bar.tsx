@@ -25,9 +25,10 @@ import { displayTicketId } from "@volli/shared";
 /**
  * Full-width window chrome band — the ONLY drag-region owner for window
  * chrome (traffic lights, drag-to-move, the sidebar toggle). Everything
- * below it is ordinary layout. Its height (h-10, 40px) must stay in sync
+ * below it is ordinary layout. Its height (h-9, 36px) must stay in sync
  * with trafficLightPosition in main/index.ts, which centers the lights
- * inside it.
+ * inside it. 36 over the original 40 was a judged call (2026-08-15, the
+ * lab's chrome rig): the lights re-seat at y:12 and nothing else moves.
  */
 export function ChromeBar() {
   const fullScreen = useFullScreen();
@@ -48,7 +49,7 @@ export function ChromeBar() {
           canvas layer like the rail does. The ⌘K pill keeps its own material
           (`bg-foreground/10`), which was already written as a material over a
           fill rather than as a fill of its own. */}
-      <div className="app-region-drag relative flex h-10 shrink-0 items-center">
+      <div className="app-region-drag relative flex h-9 shrink-0 items-center">
         {/* Clears the traffic lights (start x:10, group renders ≈60px wide,
           ending ≈70px) plus breathing room so the trigger doesn't crowd them.
           Fullscreen hides the lights, so the spacer collapses and the trigger
@@ -63,8 +64,8 @@ export function ChromeBar() {
           <TerminalFocusBreadcrumb />
         ) : (
           <>
-            {/* translate-y-px: the lights' optical center lands at ~20.5px (y:14 +
-          half their ~13px diameter), just below the band's 20px flex center —
+            {/* translate-y-px: the lights' optical center lands at ~18.5px (y:12 +
+          half their ~13px diameter), just below the band's 18px flex center —
           nudge the trigger down to meet them. */}
             <div className="app-region-no-drag flex translate-y-px items-center">
               <WorkspaceRailToggle />
@@ -93,7 +94,7 @@ export function ChromeBar() {
  * Says WHICH Session owns the canvas while terminal focus is on. The band
  * remains the only window drag region and traffic-light owner; all ordinary
  * navigation/search controls step aside so the terminal gets every pixel below
- * this single 40px row.
+ * this single 36px row.
  *
  * It carries no exit control of its own — leaving is the band's persistent
  * {@link TerminalFocusExit}, in the trailing slot.
@@ -139,9 +140,9 @@ function TerminalFocusBreadcrumb() {
   return (
     <div
       aria-live="polite"
-      // top-[21px], not top-1/2: same 1px correction as the ⌘K pill — the
+      // top-[19px], not top-1/2: same 1px correction as the ⌘K pill — the
       // trailing focus toggle carries translate-y-px to meet the traffic lights.
-      className="pointer-events-none absolute left-1/2 top-[21px] flex max-w-[45vw] -translate-x-1/2 -translate-y-1/2 items-center gap-2 text-ui text-muted-foreground"
+      className="pointer-events-none absolute left-1/2 top-[19px] flex max-w-[45vw] -translate-x-1/2 -translate-y-1/2 items-center gap-2 text-ui text-muted-foreground"
     >
       <span className="max-w-[40%] shrink-0 truncate font-medium text-foreground">
         {ownerLabel}
@@ -164,7 +165,7 @@ function WorkspaceRailToggle() {
   return (
     <Button
       variant="ghost"
-      size="icon"
+      size="icon-sm"
       // No `aria-pressed`: the label below already carries the state, and the
       // button has no pressed appearance for it to describe. Both together
       // announce "Show workspace switcher, pressed" while the switcher is
@@ -193,7 +194,7 @@ function NavHistoryButtons() {
     <div className="app-region-no-drag flex translate-y-px items-center">
       <Button
         variant="ghost"
-        size="icon"
+        size="icon-sm"
         disabled={!backEnabled}
         onClick={() => navBack()}
         aria-label="Back"
@@ -204,7 +205,7 @@ function NavHistoryButtons() {
       </Button>
       <Button
         variant="ghost"
-        size="icon"
+        size="icon-sm"
         disabled={!forwardEnabled}
         onClick={() => navForward()}
         aria-label="Forward"
@@ -228,7 +229,7 @@ function NavHistoryButtons() {
  * accidentally ticket-only for as long as it did.
  *
  * Exit stays here, and the asymmetry is the point rather than a leftover. In zen
- * mode this 40px row is the only chrome left: the tab strips are gone, the
+ * mode this 36px row is the only chrome left: the tab strips are gone, the
  * sidebars are gone, and the pane fills everything below. A hover-revealed
  * corner control on a terminal the user is driving from the keyboard is not a
  * way out of a mode — it is a thing you have to remember exists and then go
@@ -247,7 +248,7 @@ function TerminalFocusExit() {
   return (
     <Button
       variant="ghost"
-      size="icon"
+      size="icon-sm"
       // mr-1 keeps it off the window's right edge; translate-y-px meets the
       // traffic lights, like every other icon button on this band.
       className="app-region-no-drag mr-1 translate-y-px"
@@ -283,9 +284,9 @@ function CommandPaletteTrigger({ onClick }: { onClick(): void }) {
       aria-haspopup="dialog"
       aria-label="Search tickets and sessions"
       title="Search tickets and sessions (⌘K)"
-      // top-[21px] (not top-1/2): band center is 20px, but the sibling
-      // icon-buttons carry translate-y-px to meet the traffic lights at ~21px.
-      // Anchor the pill's -translate-y-1/2 center to 21px so it aligns with them.
+      // top-[19px] (not top-1/2): band center is 18px, but the sibling
+      // icon-buttons carry translate-y-px to meet the traffic lights at ~19px.
+      // Anchor the pill's -translate-y-1/2 center to 19px so it aligns with them.
       //
       // The fill is a MATERIAL over the canvas rather than a rung of the ladder,
       // so it is a wash of the ink: `--foreground` runs toward white in dark and
@@ -298,7 +299,7 @@ function CommandPaletteTrigger({ onClick }: { onClick(): void }) {
       // grey patch on the band, not a hover. The border was already doing the
       // work (`border-border/50` → `border-border`); the fill now holds still at
       // the one wash rung and lets it.
-      className="app-region-no-drag absolute left-1/2 top-[21px] flex h-[26px] w-[380px] max-w-[40vw] -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-md border border-border/50 bg-foreground/10 px-2 text-left text-ui text-muted-foreground transition-colors hover:border-border focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45"
+      className="app-region-no-drag absolute left-1/2 top-[19px] flex h-[22px] w-[380px] max-w-[40vw] -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-md border border-border/50 bg-foreground/10 px-2 text-left text-ui text-muted-foreground transition-colors hover:border-border focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45"
     >
       <MagnifyingGlassIcon className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate">Search tickets and sessions</span>

@@ -1029,7 +1029,7 @@ async function main() {
     // back through the bootstrap payload, per the migration.
     await attempt(
       17,
-      "UI zoom command scales content (~1.1x) while the 40px chrome band stays put; uiScale persists to app_state",
+      "UI zoom command scales content (~1.1x) while the 36px chrome band stays put; uiScale persists to app_state",
       async () => {
         const band = page.locator(".app-region-drag").first();
         const content = cardById(page, "VC-8");
@@ -1066,9 +1066,9 @@ async function main() {
         }
 
         const bandStable =
-          Math.abs(bandBefore.height - 40) < 1 &&
-          Math.abs(bandZoomed.height - 40) < 1 &&
-          Math.abs(bandReset.height - 40) < 1;
+          Math.abs(bandBefore.height - 36) < 1 &&
+          Math.abs(bandZoomed.height - 36) < 1 &&
+          Math.abs(bandReset.height - 36) < 1;
         const growth = contentZoomed.height / contentBefore.height;
         const grew = growth > 1.07 && growth < 1.13;
         const restored = Math.abs(contentReset.height - contentBefore.height) < 1;
