@@ -42,6 +42,9 @@ import type {
   PromptTemplate,
   ResolvedAppearance,
   RetentionReason,
+  SESSION_RPC_CANCEL_CHANNEL,
+  SESSION_RPC_EVENT_CHANNEL,
+  SESSION_RPC_IPC_CHANNEL,
   SessionListingRow,
   SessionRpcIpcRequest,
   SessionRpcIpcResponse,
@@ -955,6 +958,32 @@ export type VolliIpcEvent =
   // swapped would leave a dead input box waiting for a code nothing consumes.
   // Sent to the window that began the attempt, never broadcast.
   | "volli:model-access-sign-in";
+
+// ---- session-rpc wire agreement ---------------------------------------------
+// @volli/shared owns the three Session RPC channel NAMES (session-rpc-wire.ts)
+// because both ends of the tRPC edge need them and the package is the only
+// place both can reach. It cannot check them against this catalog itself: it is
+// pure domain code that knows nothing about Electron transport, and a package
+// may never import from the app that consumes it.
+//
+// So the agreement is asserted from this side, app → package. Each constant
+// must still name a channel the contract declares — renaming one in shared, or
+// dropping its declaration here, is a compile error in the desktop build
+// instead of a channel that quietly answers nothing at runtime.
+type Assert<Covered extends true> = Covered;
+type Declares<Channel extends string, Catalog extends string> = Channel extends Catalog
+  ? true
+  : false;
+
+export type SessionRpcInvokeChannelIsDeclared = Assert<
+  Declares<typeof SESSION_RPC_IPC_CHANNEL, keyof VolliInvokeContract & string>
+>;
+export type SessionRpcCancelChannelIsDeclared = Assert<
+  Declares<typeof SESSION_RPC_CANCEL_CHANNEL, keyof VolliSendContract & string>
+>;
+export type SessionRpcEventChannelIsDeclared = Assert<
+  Declares<typeof SESSION_RPC_EVENT_CHANNEL, VolliIpcEvent>
+>;
 
 /** Direction of a `volli:ui-zoom-command` event: step in/out one rung, or reset. */
 export type UiZoomCommand = "in" | "out" | "reset";
