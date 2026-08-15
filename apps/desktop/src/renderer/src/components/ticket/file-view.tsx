@@ -13,6 +13,7 @@ import {
   MonacoDocumentEditor,
 } from "@renderer/components/editor/monaco-document-editor";
 import { Button } from "@renderer/components/ui/button";
+import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { AUTOSAVE_IDLE_MS, planAutosave } from "@renderer/editor/autosave-plan";
 import { documentIdentityKey, fileDocumentIdentity } from "@renderer/editor/document-identity";
 import { matchesFileChangeIdentity } from "@renderer/editor/file-change-identity";
@@ -20,6 +21,7 @@ import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { rearmWatch } from "@renderer/editor/rearm-watch";
 import { toastError } from "@renderer/lib/toast";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
+import { cn } from "@renderer/lib/utils";
 
 interface FileViewProps {
   projectId: string;
@@ -769,7 +771,7 @@ export function FileView({
 
   // binary
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-4 py-16 text-center">
+    <div className={cn("flex-1", EMPTY_PAGE, "gap-4")}>
       <FolderOpenIcon className="size-6 text-muted-foreground" />
       <p className="text-sm text-muted-foreground">{name} can&apos;t be previewed here.</p>
       <Button size="sm" variant="secondary" onClick={() => void handleReveal()}>

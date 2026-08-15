@@ -289,8 +289,13 @@ function ListingRows({
     return <div className="truncate px-2 py-1 text-ui text-destructive">{listing.error}</div>;
   }
 
+  // NOT `EMPTY_INLINE`. This renders at every depth, in the slot a child row
+  // would occupy, beside the two skeleton rows the loading branch draws — so it
+  // takes the TREE ROW's geometry, not the panel empty's, and a centred block
+  // here would ignore the indent that says WHICH folder is empty. The `italic`
+  // it used to carry was the only one in the app, and that did go.
   if (listing.length === 0) {
-    return <div className="px-2 py-1 text-ui text-muted-foreground italic">Empty</div>;
+    return <div className="px-2 py-1 text-ui text-muted-foreground">Empty</div>;
   }
 
   return (

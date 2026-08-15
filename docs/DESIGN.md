@@ -40,12 +40,13 @@ One ladder for every inset, gap and stack in the app, page rhythm included:
 | `4` | 16 | component padding, row rhythm |
 | `6` | 24 | the gutter (`--spacing-gutter`) |
 
-Above the ladder there is **page rhythm only** — `pt-8` (32px) and `pb-16` (64px) on reading
-surfaces — and below it `px` (1px), which is hairline alignment (`-mb-px` covering a border), not
-spacing. Nothing else: the half-steps (`0.5` `1.5` `2.5` `3.5`) and the orphans (`3` `5` `7` `10`)
+Above the ladder there is **page rhythm only** — `pt-5` (20px) on dense workbench tops (chat
+plane, ticket detail), `pt-8` (32px) on roomy reading surfaces, `pb-16` (64px) — and below it
+`px` (1px), which is hairline alignment (`-mb-px` covering a border), not spacing. Nothing else:
+the half-steps (`0.5` `1.5` `2.5` `3.5`) and the orphans (`3` `7` `10`)
 are gone, and a new one is a change argued here rather than a value picked in a component.
 
-**Four recorded exceptions**, each because the ladder's 8px gaps cannot express something finer
+**Five recorded exceptions**, each because the ladder's 8px gaps cannot express something finer
 that is measured rather than chosen. They are commented at their site; do not re-collapse them
 without looking at the surface:
 
@@ -55,6 +56,7 @@ without looking at the surface:
 | `rail-panel-parts.tsx` `RAIL_PANEL_INSET` | `px-3` at narrow | The narrow step must be *smaller* than 16 and still an inset; 8 halves the edge. Collapsed, the variant became a silent no-op |
 | `sidebar/session-band-row.tsx` | `mt-1.5` · `gap-0.5` | Optical alignment to the title's cap height, and the 2px that binds a title to its meta line |
 | `board/ticket-card.tsx` | `px-3` | A dense card trades air for content: at `px-4` real titles truncate a word earlier |
+| `ticket-changes-panel.tsx` change rows | `py-1.5` | Two `text-ui` line boxes + 12 keeps the measured 52px two-line row; `py-2` grows every row of a dense list to 56 and orphans the `min-h-13` floor |
 
 **Responsiveness is the whitespace, not breakpoints:** `<ContentColumn>` is
 `mx-auto w-full max-w-content px-gutter` — on wide windows the side margins grow; as the window

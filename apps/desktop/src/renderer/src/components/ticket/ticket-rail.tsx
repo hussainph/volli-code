@@ -120,7 +120,9 @@ function TicketRailTabs({
       <div
         role="tablist"
         aria-label="Ticket rail pages"
-        className="mx-auto flex h-10 w-40 items-center gap-1 rounded-full border border-sidebar-border bg-background/70 p-1 shadow-raised"
+        // No height of its own: the `h-8` tabs inside it plus `p-1` ARE the
+        // height (40px), so the track can never disagree with what it holds.
+        className="mx-auto flex w-40 items-center gap-1 rounded-full border border-sidebar-border bg-background/70 p-1 shadow-raised"
       >
         {modes.map((key, index) => {
           const Icon = MODE_ICONS[key];

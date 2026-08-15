@@ -13,9 +13,11 @@ import {
   type SettingsCategory,
 } from "@renderer/components/pages/settings-shell";
 import { Button } from "@renderer/components/ui/button";
+import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { toastError } from "@renderer/lib/toast";
+import { cn } from "@renderer/lib/utils";
 import { useProjectsStore } from "@renderer/stores/projects";
 
 /**
@@ -31,9 +33,9 @@ export function ConfigurePage() {
 
   if (project === null) {
     return (
-      <div className="flex flex-1 items-center justify-center p-8">
-        <div className="flex max-w-sm flex-col items-center text-center">
-          <div className="mb-4 flex size-11 items-center justify-center rounded-xl border border-border bg-card/70">
+      <div className={cn("flex-1", EMPTY_PAGE)}>
+        <div className="flex max-w-sm flex-col items-center">
+          <div className="mb-4 flex items-center justify-center rounded-xl border border-border bg-card/70 p-2">
             <SlidersHorizontalIcon className="size-5 text-muted-foreground" />
           </div>
           <h1 className="text-heading font-semibold">Nothing to configure</h1>

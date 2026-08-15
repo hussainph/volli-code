@@ -36,6 +36,7 @@ import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-re
 import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { subscribeWorktreePhases } from "@renderer/stores/worktree";
+import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { cn } from "@renderer/lib/utils";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { getEngine } from "@renderer/terminal/registry";
@@ -489,7 +490,7 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
           )}
 
           {selected && emptySurface && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-center">
+            <div className={cn("absolute inset-0", EMPTY_PAGE, "gap-4")}>
               {/* Chat, not a terminal: the control below starts a chat, and the
                   glyph crowning an empty state has to name the thing the button
                   does. */}

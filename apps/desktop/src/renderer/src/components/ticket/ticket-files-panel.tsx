@@ -36,6 +36,7 @@ import {
   type TicketWorktreeEntry,
 } from "@renderer/components/ticket/ticket-files-model";
 import { Button } from "@renderer/components/ui/button";
+import { EMPTY_INLINE, EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
@@ -134,10 +135,7 @@ export function TicketFilesList({
 }) {
   if (referenced.length === 0 && worktree.length === 0) {
     return (
-      <p
-        data-testid="ticket-files-empty"
-        className="px-4 py-6 text-center text-ui text-muted-foreground"
-      >
+      <p data-testid="ticket-files-empty" className={EMPTY_INLINE}>
         Nothing here yet
       </p>
     );
@@ -251,10 +249,7 @@ export function TicketFilesPanel({
 
   if (ticket.worktreePath === null && nav.referenced.length === 0) {
     return (
-      <div
-        data-testid="ticket-files-no-worktree"
-        className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-4 py-8 text-center"
-      >
+      <div data-testid="ticket-files-no-worktree" className={cn("min-h-0 flex-1", EMPTY_PAGE)}>
         <p className="text-ui font-medium text-muted-foreground">No worktree yet</p>
         <p className="text-ui text-muted-foreground/70">
           Reference files in the Ticket Body with @path

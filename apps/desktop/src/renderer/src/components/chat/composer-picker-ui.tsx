@@ -108,9 +108,7 @@ export function ComposerPicker({
             aria-label={MODE_HEADING[state.mode]}
           >
             <PromptInputCommandList className="max-h-64">
-              <PromptInputCommandEmpty className="px-4 py-4 text-left text-sm text-muted-foreground">
-                No match
-              </PromptInputCommandEmpty>
+              <PromptInputCommandEmpty>No match</PromptInputCommandEmpty>
               <PromptInputCommandGroup heading={MODE_HEADING[state.mode]}>
                 {state.rows.map((row) => (
                   <PromptInputCommandItem

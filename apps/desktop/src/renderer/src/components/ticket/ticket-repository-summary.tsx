@@ -109,6 +109,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
+import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
@@ -216,7 +217,6 @@ function CommitGateDialog({
             value={message}
             onChange={(event) => setMessage(event.target.value)}
             placeholder="Commit message (blank generates one)"
-            className="h-10"
           />
           <label className="flex w-fit items-center gap-2 text-ui text-foreground">
             <input
@@ -376,9 +376,9 @@ function BaseBranchField({ projectId, ticket }: { projectId: string; ticket: Tic
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         {loading ? (
-          <div className="px-2 py-1 text-ui text-muted-foreground">Loading…</div>
+          <div className={EMPTY_INLINE}>Loading…</div>
         ) : options.length === 0 ? (
-          <div className="px-2 py-1 text-ui text-muted-foreground">No branches found</div>
+          <div className={EMPTY_INLINE}>No branches found</div>
         ) : (
           <DropdownMenuRadioGroup
             value={ticket.baseBranch ?? ""}

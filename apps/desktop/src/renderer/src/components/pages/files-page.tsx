@@ -34,11 +34,13 @@ import {
 } from "@renderer/components/files/close-guard";
 import { FileSaveGuardDialog } from "@renderer/components/files/save-guard-dialog";
 import { FileView } from "@renderer/components/ticket/file-view";
+import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { fileDocumentIdentity } from "@renderer/editor/document-identity";
 import type { DocumentSnapshot } from "@renderer/editor/document-registry";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { toastError } from "@renderer/lib/toast";
+import { cn } from "@renderer/lib/utils";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 /** Stable empty map so the store selector doesn't hand back a new object each read. */
@@ -338,10 +340,7 @@ function FilesWorkbench({ project }: { project: Project }) {
 /** The workbench with nothing open — points at the one thing that opens a tab. */
 function NoOpenFile() {
   return (
-    <div
-      data-testid="files-empty-state"
-      className="flex flex-1 flex-col items-center justify-center gap-2 text-center"
-    >
+    <div data-testid="files-empty-state" className={cn("flex-1", EMPTY_PAGE)}>
       <FoldersIcon className="size-8 text-muted-foreground" />
       <h2 className="text-heading font-semibold">Files</h2>
       <p className="text-sm text-muted-foreground">Select a file in the sidebar.</p>

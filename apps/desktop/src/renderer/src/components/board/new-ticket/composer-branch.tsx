@@ -15,6 +15,7 @@ import {
 } from "@renderer/components/board/new-ticket/branch-picker";
 import { composerChipClass } from "@renderer/components/board/new-ticket/composer-chip";
 import { Button } from "@renderer/components/ui/button";
+import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import {
   Command,
   CommandGroup,
@@ -157,12 +158,14 @@ function BranchListBody({
       </div>
     );
   }
+  // Loading takes the empty geometry too: it holds the same slot a moment
+  // earlier, and a different one would make the list jump as the read lands.
   if (state.status === "loading") {
-    return <div className="px-2 py-2 text-ui text-muted-foreground">Reading branches…</div>;
+    return <div className={EMPTY_INLINE}>Reading branches…</div>;
   }
   if (groups.length === 0) {
     return (
-      <div className="px-2 py-2 text-ui text-muted-foreground">
+      <div className={EMPTY_INLINE}>
         {query.trim() === "" ? "No branches" : "No matching branches"}
       </div>
     );

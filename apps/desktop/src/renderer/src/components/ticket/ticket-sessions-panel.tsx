@@ -16,6 +16,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
+import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
@@ -58,6 +59,16 @@ const STATUS_LABEL: Record<TicketSessionStatus, string> = {
 
 /** Sessions and History are the same block twice — one shape, one inset, no seam. */
 const SECTION = cn("flex flex-col gap-1 pt-4", RAIL_PANEL_INSET);
+
+/**
+ * The inline empty, inside the dashed frame this rail uses for a section that
+ * has rows on other days. Written once — the two sites that take it (no current
+ * sessions, no history matches) were two copies of the same string.
+ */
+const SESSION_SECTION_EMPTY = cn(
+  "rounded-lg border border-dashed border-sidebar-border",
+  EMPTY_INLINE,
+);
 
 /**
  * A section's title line: the uppercase label at the left, whatever the block
@@ -506,9 +517,7 @@ export function TicketSessionsPanel({
           // Nothing to read, so the block is the sentence alone: the header's
           // own control is 20px above it, and a second copy of the same act
           // inside the empty frame would be the same offer twice in one glance.
-          <p className="rounded-lg border border-dashed border-sidebar-border py-4 text-center text-ui text-muted-foreground">
-            No active sessions
-          </p>
+          <p className={SESSION_SECTION_EMPTY}>No active sessions</p>
         ) : (
           <SessionList rows={current} variant="current" now={now} {...listProps} />
         )}
@@ -543,9 +552,7 @@ export function TicketSessionsPanel({
           {filteredHistory.length > 0 ? (
             <SessionList rows={filteredHistory} variant="history" now={now} {...listProps} />
           ) : (
-            <p className="rounded-lg border border-dashed border-sidebar-border py-4 text-center text-ui text-muted-foreground">
-              No matching sessions
-            </p>
+            <p className={SESSION_SECTION_EMPTY}>No matching sessions</p>
           )}
         </section>
       ) : null}

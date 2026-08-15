@@ -28,6 +28,7 @@ import {
   AlertDialogTitle,
 } from "@renderer/components/ui/alert-dialog";
 import { Button } from "@renderer/components/ui/button";
+import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
 import { toastError } from "@renderer/lib/toast";
 
@@ -290,9 +291,9 @@ function DirtyWorktreesList() {
     >
       <div className="flex flex-col gap-1">
         {state.status === "loading" ? (
-          <p className="text-ui text-muted-foreground">Checking…</p>
+          <p className={EMPTY_INLINE}>Checking…</p>
         ) : dirty.length === 0 ? (
-          <p className="text-ui text-muted-foreground">No orphaned worktrees.</p>
+          <p className={EMPTY_INLINE}>No orphaned worktrees.</p>
         ) : (
           dirty.map((orphan) => (
             <div

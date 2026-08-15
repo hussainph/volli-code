@@ -7,9 +7,11 @@ import { FilesPage } from "@renderer/components/pages/files-page";
 import { SettingsPage } from "@renderer/components/pages/settings-page";
 import { SessionsLayer } from "@renderer/components/sessions/sessions-layer";
 import { Button } from "@renderer/components/ui/button";
+import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useActiveNav } from "@renderer/hooks/use-active-nav";
 import { useAddProject } from "@renderer/hooks/use-add-project";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
+import { cn } from "@renderer/lib/utils";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -42,7 +44,7 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
         ) : selected === null && projectCount === 0 ? (
           <EmptyProjectsState />
         ) : selected === null ? (
-          <div className="flex flex-1 items-center justify-center">
+          <div className={cn("flex-1", EMPTY_PAGE)}>
             <p className="text-sm text-muted-foreground">Select a project</p>
           </div>
         ) : activeNav === "board" ? (
@@ -68,10 +70,12 @@ function EmptyProjectsState() {
   return (
     <div
       data-empty-projects-state
-      className="empty-projects-canvas relative flex flex-1 items-center justify-center overflow-hidden px-6"
+      className={cn("empty-projects-canvas relative flex-1 overflow-hidden", EMPTY_PAGE)}
     >
-      <div className="relative z-10 flex max-w-sm flex-col items-center text-center">
-        <div className="mb-4 flex size-11 items-center justify-center rounded-xl border border-border bg-card/70 shadow-raised">
+      <div className="relative z-10 flex max-w-sm flex-col items-center">
+        {/* The frame is the glyph plus its inset — 20 + 8 + 8 — so a bigger
+            or smaller icon moves the box instead of overflowing a fixed one. */}
+        <div className="mb-4 flex items-center justify-center rounded-xl border border-border bg-card/70 p-2 shadow-raised">
           <FolderPlusIcon className="size-5 text-muted-foreground" />
         </div>
         <h1 className="text-title font-semibold">Add your first project</h1>

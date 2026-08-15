@@ -952,7 +952,7 @@ export function TicketDetail({
           <div
             className={cn(
               "flex min-h-0 flex-1 flex-col overflow-hidden",
-              activeTab.kind === "body" && "pt-8",
+              activeTab.kind === "body" && "pt-5",
             )}
           >
             {activeTab.kind === "body" && (

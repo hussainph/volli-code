@@ -9,6 +9,7 @@ import {
 } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
+import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import type { FileIndexHandle } from "@renderer/hooks/use-file-index";
@@ -73,7 +74,7 @@ export function ComposerFileAttach({
         />
         <div className="max-h-64 overflow-y-auto">
           {results.length === 0 ? (
-            <div className="px-2 py-2 text-ui text-muted-foreground">No matching files</div>
+            <div className={EMPTY_INLINE}>No matching files</div>
           ) : (
             results.map(({ file }) => (
               <button
