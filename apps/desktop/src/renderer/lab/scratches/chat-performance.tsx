@@ -78,7 +78,7 @@ import { cn } from "@renderer/lib/utils";
 
 export const title = "Chat transcript · performance";
 export const note =
-  "Mount, token, working-flip, scroll and heap at 100 / 1000 / 3000 turns, plus the open-fence stream. ?nocode drops the fences, ?resize=instant swaps the follow-scroll";
+  "Mount, token, working-flip, scroll and heap at 100 / 1000 / 3000 turns, plus the open-fence stream. ?nocode drops the fences, ?resize=smooth swaps the follow-scroll";
 export const viewport = "window" as const;
 
 /* ------------------------------------------------------------- instrument */
@@ -937,12 +937,17 @@ const LONG_PROSE = [
 const CONTROL_NO_CODE = new URLSearchParams(window.location.search).has("nocode");
 
 /**
- * `?resize=instant` — the feel compare for the scroll that follows a growing
- * answer, since this is a question no number settles. Smooth is a JS spring
- * writing `scrollTop` per frame while the transcript is also rendering tokens;
- * instant is a single assignment. Both keep the reader pinned to the bottom, so
- * what is actually being judged is whether the trailing lag reads as the page
- * keeping up or as the page being dragged.
+ * `?resize=smooth` — the feel compare for the scroll that follows a growing
+ * answer. Smooth is a JS spring writing `scrollTop` per frame while the
+ * transcript is also rendering tokens; instant is a single assignment. Both
+ * keep the reader pinned to the bottom, so what is judged is whether the
+ * trailing lag reads as the page keeping up or as the page being dragged.
+ *
+ * The switch points at `smooth` because smooth is now the alternative.
+ * `Conversation` defaults to instant on this rig's own evidence — over the
+ * open-fence stream, a mean 13px behind the bottom edge against 89px, and in
+ * motion one frame in five against two in three. Point it back at smooth to
+ * re-run that comparison rather than take it on faith.
  *
  * Left `undefined` by default so `Conversation`'s own default is what you
  * compare against, rather than a copy of it that can drift. The same URL switch
@@ -950,15 +955,15 @@ const CONTROL_NO_CODE = new URLSearchParams(window.location.search).has("nocode"
  * change shape halfway through.
  */
 const CONTROL_RESIZE =
-  new URLSearchParams(window.location.search).get("resize") === "instant"
-    ? ("instant" as const)
+  new URLSearchParams(window.location.search).get("resize") === "smooth"
+    ? ("smooth" as const)
     : undefined;
 
 /** The other mode's URL, with every other search param left alone. */
 function resizeToggleHref(): string {
   const params = new URLSearchParams(window.location.search);
   if (CONTROL_RESIZE) params.delete("resize");
-  else params.set("resize", "instant");
+  else params.set("resize", "smooth");
   const query = params.toString();
   return `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
 }
