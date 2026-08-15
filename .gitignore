@@ -10,6 +10,10 @@ dist/
 dist-electron/
 coverage/
 apps/desktop/release/
+# Stale pre-#240 build output: prepare-pi-cli.mjs used to unpack the bundled pi
+# CLI here on every dev/build machine, and the formatter chokes on its vendored
+# CSS if it walks in. Nothing writes here any more; this keeps old checkouts sane.
+apps/desktop/resources/
 .vite-plus/
 .vite-hooks/
 *.tsbuildinfo
