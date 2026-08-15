@@ -21,6 +21,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
+import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { cn } from "@renderer/lib/utils";
 
 /** What the Previous band is currently showing. */
@@ -75,7 +76,7 @@ export function SessionBandHeader({
 }) {
   return (
     <div className="flex h-6 items-center gap-2 px-2">
-      <span className="text-label font-medium uppercase text-muted-foreground">{label}</span>
+      <SectionHeading as="span">{label}</SectionHeading>
       <span className="text-label tabular-nums text-muted-foreground/70">{count}</span>
       <span className="ml-auto flex items-center">{children}</span>
     </div>

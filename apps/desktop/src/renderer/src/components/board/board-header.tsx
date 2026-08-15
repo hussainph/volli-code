@@ -15,6 +15,7 @@ import {
 import { ArchiveDialog } from "@renderer/components/board/archive-dialog";
 import { FilterBar } from "@renderer/components/board/filter-bar";
 import { PageHeader } from "@renderer/components/layout/page-header";
+import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import {
   DropdownMenu,
@@ -175,7 +176,7 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
         </>
       }
     >
-      <span className="shrink-0 font-mono text-ui text-muted-foreground">{ticketCount}</span>
+      <Badge variant="count">{ticketCount}</Badge>
       <FilterBar projectId={projectId} tickets={tickets} filter={filter} className="ml-4" />
     </PageHeader>
   );

@@ -109,6 +109,7 @@ import {
 import { SegmentedChoice } from "@renderer/components/theme/segmented-choice";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
+import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { useThemeStore, type ThemeScope } from "@renderer/stores/theme";
 
 /** 16:10 — the app's real default window (1280×800). See the module header. */
@@ -893,7 +894,7 @@ function ContrastReport({
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <p className="text-label uppercase text-muted-foreground">Contrast</p>
+        <SectionHeading as="p">Contrast</SectionHeading>
         <ul data-testid="canvas-contrast-readout" className="mt-1 flex flex-col">
           {report.readings.map((reading) => (
             <FloorReading key={reading.token} reading={reading} />

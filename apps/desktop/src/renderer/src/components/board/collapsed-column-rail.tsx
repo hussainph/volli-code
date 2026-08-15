@@ -2,6 +2,7 @@ import { useDroppable } from "@dnd-kit/core";
 import { TICKET_STATUS_LABELS, type TicketStatus } from "@volli/shared";
 
 import { columnDroppableId } from "@renderer/components/board/board-dnd";
+import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { cn } from "@renderer/lib/utils";
 
 /**
@@ -26,7 +27,11 @@ export function CollapsedColumnRail({
 
   return (
     <div className="flex w-44 flex-none cursor-default flex-col gap-1">
-      <span className="text-label uppercase text-muted-foreground/70">Empty</span>
+      {/* A shade under the standard mute: this rail names a column that is not
+          there, and must never compete with the columns that are. */}
+      <SectionHeading as="span" className="text-muted-foreground/70">
+        Empty
+      </SectionHeading>
       {statuses.map((status) => (
         <CollapsedColumnTarget
           key={status}

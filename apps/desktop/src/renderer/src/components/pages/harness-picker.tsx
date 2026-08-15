@@ -22,6 +22,7 @@ import {
   type HarnessOrigin,
 } from "@renderer/components/pages/harness-catalog";
 import { SettingsRow, SettingsSection } from "@renderer/components/pages/settings-shell";
+import { Badge } from "@renderer/components/ui/badge";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 
@@ -155,9 +156,5 @@ export function HarnessIdentitySection({ listing }: { listing: HarnessListing })
 
 /** Built-in or registered, stated where the harness's other identity facts are. */
 function OriginChip({ origin }: { origin: HarnessOrigin }) {
-  return (
-    <span className="rounded-full border border-border px-2 py-1 text-label uppercase text-muted-foreground">
-      {origin === "built-in" ? "Built-in" : "Registered"}
-    </span>
-  );
+  return <Badge className="uppercase">{origin === "built-in" ? "Built-in" : "Registered"}</Badge>;
 }

@@ -112,6 +112,8 @@ import {
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import { SectionHeading } from "@renderer/components/ui/section-heading";
+import { Skeleton } from "@renderer/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { useTicketRetention } from "@renderer/hooks/use-ticket-retention";
 import { toastError } from "@renderer/lib/toast";
@@ -123,10 +125,6 @@ import { phaseFor, useWorktreeStore } from "@renderer/stores/worktree";
 
 /** One card row's shared frame: full-width, quiet hover, seam above every row but the first. */
 const ROW = "flex w-full items-center gap-2 px-4 text-left";
-
-function CardLabel({ children }: { children: React.ReactNode }) {
-  return <p className="text-label font-medium text-muted-foreground uppercase">{children}</p>;
-}
 
 /**
  * A commit press waiting on the gate. `flow` is which road it came from — the
@@ -449,7 +447,7 @@ function RepositoryPopoverContent({ projectId, ticket }: { projectId: string; ti
   return (
     <PopoverContent align="start" className="flex w-72 flex-col gap-4 p-4">
       <div className="flex flex-col gap-1">
-        <CardLabel>Base branch</CardLabel>
+        <SectionHeading as="p">Base branch</SectionHeading>
         {ticket.baseBranch ? (
           <span className="block truncate px-2 font-mono text-ui text-foreground">
             {ticket.baseBranch}
@@ -459,7 +457,7 @@ function RepositoryPopoverContent({ projectId, ticket }: { projectId: string; ti
         )}
       </div>
       <div className="flex flex-col gap-1">
-        <CardLabel>Branch</CardLabel>
+        <SectionHeading as="p">Branch</SectionHeading>
         {ticket.branch ? (
           <span className="block truncate px-2 font-mono text-ui text-foreground">
             {ticket.branch}
@@ -474,7 +472,7 @@ function RepositoryPopoverContent({ projectId, ticket }: { projectId: string; ti
         )}
       </div>
       <div className="flex flex-col gap-1 border-t border-border pt-4">
-        <CardLabel>Worktree</CardLabel>
+        <SectionHeading as="p">Worktree</SectionHeading>
         <div className="flex items-center gap-1">
           <span
             title={ticket.worktreePath ?? undefined}
@@ -1010,14 +1008,15 @@ export function TicketRepositorySummary({
       >
         <GitDiffIcon className="size-4 shrink-0 text-muted-foreground" />
         {/* One flex child either way, so the label lands where the bar was
-            rather than the row reflowing when the first read returns. The bar
-            is the page skeletons' own drawing, at a text line's height. */}
+            rather than the row reflowing when the first read returns. `span`
+            because this row is a button: a `div` here is not phrasing content. */}
         <span className="min-w-0 flex-1">
           {loadingChanges ? (
-            <span
+            <Skeleton
+              as="span"
               aria-hidden
               data-testid="ticket-repository-changes-loading"
-              className="my-[3px] block h-3.5 w-24 animate-pulse rounded-md bg-accent/70 motion-reduce:animate-none"
+              className="my-[3px] block h-3.5 w-24"
             />
           ) : (
             <span className="block truncate text-ui font-medium">{changesLabel}</span>

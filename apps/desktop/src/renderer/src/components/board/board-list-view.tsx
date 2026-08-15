@@ -15,6 +15,7 @@ import { PriorityIndicator } from "@renderer/components/board/priority-indicator
 import { TagChip } from "@renderer/components/board/tag-chip";
 import { SortableTicketShell } from "@renderer/components/board/ticket-card";
 import { useTicketComposer } from "@renderer/components/board/use-ticket-composer";
+import { Badge } from "@renderer/components/ui/badge";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { resolveLabelColor } from "@renderer/lib/labels";
 import { cn } from "@renderer/lib/utils";
@@ -134,7 +135,7 @@ function ListSection({
     <section data-list-section data-status={status}>
       <div className="sticky top-0 z-10 flex items-center gap-2 bg-muted/30 px-gutter py-1 backdrop-blur-sm">
         <span className="text-ui font-medium text-foreground">{TICKET_STATUS_LABELS[status]}</span>
-        <span className="font-mono text-ui text-muted-foreground">{tickets.length}</span>
+        <Badge variant="count">{tickets.length}</Badge>
       </div>
       <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
         <div ref={setNodeRef} className={cn(dragActive && "min-h-9")}>
@@ -215,7 +216,7 @@ function EmptyDropRow({ status }: { status: TicketStatus }) {
       <span className="text-ui font-medium text-muted-foreground">
         {TICKET_STATUS_LABELS[status]}
       </span>
-      <span className="font-mono text-ui text-muted-foreground">0</span>
+      <Badge variant="count">0</Badge>
     </div>
   );
 }

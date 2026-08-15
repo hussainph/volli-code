@@ -41,6 +41,7 @@ import {
 } from "@renderer/components/ui/alert-dialog";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
+import { SectionHeading } from "@renderer/components/ui/section-heading";
 import {
   buildActivityFeed,
   commentAuthorLabel,
@@ -461,7 +462,7 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
 
   return (
     <section className="flex flex-col gap-4 border-t border-border pt-6">
-      <h3 className="text-label font-medium text-muted-foreground uppercase">Activity</h3>
+      <SectionHeading as="h3">Activity</SectionHeading>
 
       {loaded && feed.length === 0 ? (
         <p className={EMPTY_INLINE}>No activity yet.</p>

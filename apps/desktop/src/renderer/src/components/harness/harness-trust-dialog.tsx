@@ -17,6 +17,7 @@ import {
   recordTrustVerdict,
   type HarnessTrustApi,
 } from "@renderer/components/harness/trust-prompt-model";
+import { Badge } from "@renderer/components/ui/badge";
 import { toastError } from "@renderer/lib/toast";
 import type { HarnessTrustVerdict, PendingHarnessManifest } from "@volli/shared";
 
@@ -97,13 +98,14 @@ export function HarnessTrustDialog() {
           </p>
           {manifest !== undefined && manifest.claimedEvents.length > 0 ? (
             <div className="flex flex-wrap gap-1">
+              {/* The one badge in the app that keeps `text-ui`: these are the
+                  same literal strings as the command line and manifest path
+                  above them, and this whole block is one quotation of what the
+                  harness declared about itself. */}
               {manifest.claimedEvents.map((event) => (
-                <span
-                  key={event}
-                  className="rounded-full border border-border px-2 py-1 font-mono text-ui text-muted-foreground"
-                >
+                <Badge key={event} mono className="text-ui">
                   {event}
-                </span>
+                </Badge>
               ))}
             </div>
           ) : null}

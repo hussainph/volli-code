@@ -19,6 +19,7 @@ import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { errorMessage, type DiffStat } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
+import { Skeleton } from "@renderer/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
@@ -206,13 +207,7 @@ export function RailPanelSkeleton({ label, testId }: { label: string; testId: st
   return (
     <div className="flex flex-col gap-2 p-4" data-testid={testId} aria-label={`Loading ${label}`}>
       {["w-4/5", "w-3/5", "w-full"].map((width) => (
-        <div
-          key={width}
-          className={cn(
-            "h-8 animate-pulse rounded-md bg-accent/70 motion-reduce:animate-none",
-            width,
-          )}
-        />
+        <Skeleton key={width} className={cn("h-8", width)} />
       ))}
     </div>
   );
