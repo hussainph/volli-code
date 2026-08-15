@@ -111,6 +111,8 @@ const DOM_KEY_LOCATION_RIGHT = 2;
 let leftAltHeld = false;
 let rightAltHeld = false;
 let trackerInstalled = false;
+/** Removes the tracker's own listeners; set alongside `trackerInstalled`. */
+let uninstallAltSideTracker: (() => void) | null = null;
 
 /** Which Option keys are currently held, per the window-level tracker. */
 export function heldAltSides(): { left: boolean; right: boolean } {
@@ -130,17 +132,33 @@ export function installAltSideTracker(target: Window): void {
     if (event.location === DOM_KEY_LOCATION_LEFT) leftAltHeld = held;
     else if (event.location === DOM_KEY_LOCATION_RIGHT) rightAltHeld = held;
   };
-  target.addEventListener("keydown", (event) => record(event, true), true);
-  target.addEventListener("keyup", (event) => record(event, false), true);
-  target.addEventListener("blur", () => {
+  const onKeyDown = (event: KeyboardEvent): void => record(event, true);
+  const onKeyUp = (event: KeyboardEvent): void => record(event, false);
+  const onBlur = (): void => {
     leftAltHeld = false;
     rightAltHeld = false;
-  });
+  };
+  target.addEventListener("keydown", onKeyDown, true);
+  target.addEventListener("keyup", onKeyUp, true);
+  target.addEventListener("blur", onBlur);
+  uninstallAltSideTracker = () => {
+    target.removeEventListener("keydown", onKeyDown, true);
+    target.removeEventListener("keyup", onKeyUp, true);
+    target.removeEventListener("blur", onBlur);
+  };
 }
+
+/* v8 ignore next 3 -- `import.meta.hot` exists only under the dev server;
+   tests and production builds cannot take this branch. */
+import.meta.hot?.dispose(() => {
+  uninstallAltSideTracker?.();
+});
 
 /** Test-only: reset the module-level tracker state between cases. */
 export function resetAltSideTrackerForTests(): void {
+  uninstallAltSideTracker?.();
   leftAltHeld = false;
   rightAltHeld = false;
   trackerInstalled = false;
+  uninstallAltSideTracker = null;
 }
