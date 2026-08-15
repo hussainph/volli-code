@@ -2,7 +2,7 @@ import * as React from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { TICKET_STATUS_LABELS, type Ticket, type TicketStatus } from "@volli/shared";
+import { TICKET_STATUS_LABELS, type Label, type Ticket, type TicketStatus } from "@volli/shared";
 
 import { columnDroppableId } from "@renderer/components/board/board-dnd";
 import { TicketCard } from "@renderer/components/board/ticket-card";
@@ -17,6 +17,8 @@ interface BoardColumnProps {
   projectId: string;
   /** The board's owning project's ticket prefix — constant for the whole board tree. */
   ticketPrefix: string;
+  /** The board's owning project's label rows — constant for the whole board tree. */
+  projectLabels: readonly Label[];
   selectedId: string | null;
   onSelect(ticketId: string): void;
   /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
@@ -33,6 +35,7 @@ export function BoardColumn({
   tickets,
   projectId,
   ticketPrefix,
+  projectLabels,
   selectedId,
   onSelect,
   onOpen,
@@ -45,9 +48,13 @@ export function BoardColumn({
   const { setNodeRef } = useDroppable({ id: columnDroppableId(status) });
   // `SortableContext` keys its context value on this array's identity, and every
   // `useSortable` card below reads that context — so a fresh array here
-  // re-renders all of them THROUGH `TicketCard`'s `React.memo`, which only ever
-  // stops props, never context. `tickets` is the board's memoized sorted group,
-  // so this holds until the group itself actually changes.
+  // invalidates it for all of them. What that reaches is narrower than it reads:
+  // `TicketCard`'s `React.memo` still holds (its props did not change), so what
+  // re-renders is `SortableTicketShell` INSIDE it — the component that actually
+  // calls `useContext` — while the card body it wraps is the same element object
+  // and is skipped. `tickets` is the board's memoized sorted group, whose
+  // identity board.tsx now holds across a drag-over for every column the drag
+  // did not touch.
   const sortableIds = React.useMemo(() => tickets.map((ticket) => ticket.id), [tickets]);
   const composer = useTicketComposer({
     projectId,
@@ -87,6 +94,7 @@ export function BoardColumn({
               ticket={ticket}
               projectId={projectId}
               ticketPrefix={ticketPrefix}
+              projectLabels={projectLabels}
               selected={ticket.id === selectedId}
               onSelect={onSelect}
               onOpen={onOpen}

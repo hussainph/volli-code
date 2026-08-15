@@ -21,6 +21,7 @@ import {
   moveTicket,
   sortTickets,
   TICKET_STATUSES,
+  type Label,
   type Ticket,
   type TicketStatus,
 } from "@volli/shared";
@@ -60,10 +61,23 @@ const boardCollision: CollisionDetection = (args) => {
   return within.length > 0 ? within : closestCorners(args);
 };
 
-// Stable fallback for projects with no ticket record yet — an inline `?? []`
-// would mint a fresh array identity every render and defeat the memos below.
-// Never mutated (every board op is pure); typed mutable to match the store.
+// Stable fallbacks for a project with no ticket/label record yet — an inline
+// `?? []` would mint a fresh array identity every render and defeat the memos
+// below. Never mutated (every board op is pure); `EMPTY_TICKETS` is typed
+// mutable to match the store's slice type.
 const EMPTY_TICKETS: Ticket[] = [];
+const EMPTY_LABELS: readonly Label[] = [];
+const NO_STATUSES: readonly TicketStatus[] = [];
+
+/**
+ * Whether two already-sorted columns hold exactly the same tickets in the same
+ * order. Identity per element, never deep: every board op is pure and
+ * `moveTicket` re-emits an untouched column's tickets BY REFERENCE, so an
+ * unchanged ticket is the same object and a `!==` here is a real change.
+ */
+function sameColumn(previous: readonly Ticket[], next: readonly Ticket[]): boolean {
+  return previous.length === next.length && previous.every((ticket, i) => ticket === next[i]);
+}
 
 /**
  * The kanban board: columns scroll vertically; the canvas pans horizontally.
@@ -90,6 +104,11 @@ export const Board = React.memo(function Board({
 }) {
   const storeTickets = useBoardStore((state) => state.ticketsByProject[projectId]) ?? EMPTY_TICKETS;
   const filter = useBoardStore((state) => state.filterByProject[projectId]) ?? EMPTY_TICKET_FILTER;
+  // One store subscription for the whole board rather than one per visible card
+  // — the same reasoning that already made `ticketPrefix` a prop: a board only
+  // ever shows one project, so its label rows are constant for the whole tree
+  // and every card was subscribing to the identical slice.
+  const projectLabels = useBoardStore((state) => state.labelsByProject[projectId]) ?? EMPTY_LABELS;
   // View mode and sort are per-workspace, session-only (same pattern as
   // use-active-nav.ts): fall back to the shared default for never-visited projects.
   const boardView = useWorkspaceStore(
@@ -149,22 +168,64 @@ export const Board = React.memo(function Board({
   );
   const groups = React.useMemo(() => groupTicketsByStatus(visible), [visible]);
   // One sort pass shared by BOTH views (the columns and the list sections
-  // previously each re-sorted per render).
+  // previously each re-sorted per render) — and one array identity per status
+  // held across it. `sortTickets` calls `toSorted`, so it hands back a fresh
+  // array every time even when nothing moved; a drag that only ever touches two
+  // columns was re-sorting all five on every preview change. Reusing the
+  // previous array whenever the sort produced the same tickets in the same
+  // order takes that to only the columns that changed.
+  //
+  // Honest about what this does NOT buy, measured in the lab's board scratch
+  // (13 cards, one cross-column mouse drag of 24 pointer steps, under
+  // StrictMode so halve the raw counts): it removed 80% of the sorted arrays
+  // (270 → 54) and 60% of the downstream
+  // `sortableIds` recomputes (270 → 108), and moved the card re-render count by
+  // exactly ZERO. `TicketCard`'s `React.memo` was already holding for every
+  // untouched column, and the `SortableContext` invalidation this avoids never
+  // reached the memo — it reaches `SortableTicketShell` inside it, which
+  // re-renders on dnd-kit's own context (`over`, `droppableRects`) on every
+  // pointermove regardless of what we do out here. This is a real CPU saving on
+  // the sort, not a fix for the drag's re-render volume; that one lives in
+  // dnd-kit.
+  //
+  // The ref is a memo cache, not state. Writing it during render is idempotent
+  // (a StrictMode double-invoke compares against its own first pass and reuses
+  // it), and a value cached by a render React later discards is still
+  // element-wise identical to what the next sort would produce — reuse can only
+  // ever hand back a correct array, never a stale one.
+  const previousSorted = React.useRef<Record<TicketStatus, Ticket[]> | null>(null);
   const sortedGroups = React.useMemo(() => {
+    const previous = previousSorted.current;
     const sorted = {} as Record<TicketStatus, Ticket[]>;
     for (const status of TICKET_STATUSES) {
-      sorted[status] = sortTickets(groups[status], boardSort);
+      const next = sortTickets(groups[status], boardSort);
+      const before = previous?.[status];
+      sorted[status] = before !== undefined && sameColumn(before, next) ? before : next;
     }
+    previousSorted.current = sorted;
     return sorted;
   }, [groups, boardSort]);
-  const hidden =
-    drag?.hiddenAtStart ??
-    // Derived straight from `groups` — a separate helper would group (and
-    // sort) the same array a second time.
-    TICKET_STATUSES.filter(
-      (status) => groups[status].length === 0 && status !== expandedEmptyStatus,
-    );
-  const shown = TICKET_STATUSES.filter((status) => !hidden.includes(status));
+  // Memoized for the same reason the sorted groups are: both are props, and a
+  // fresh array on every drag-over defeats the children's memos. `hidden`
+  // keeps its identity ACROSS drag start too — the drag freezes the very array
+  // this returned on the previous render.
+  const hidden = React.useMemo(
+    () =>
+      drag?.hiddenAtStart ??
+      // Derived straight from `groups` — a separate helper would group (and
+      // sort) the same array a second time.
+      TICKET_STATUSES.filter(
+        (status) => groups[status].length === 0 && status !== expandedEmptyStatus,
+      ),
+    [drag, groups, expandedEmptyStatus],
+  );
+  const shown = React.useMemo(
+    () => TICKET_STATUSES.filter((status) => !hidden.includes(status)),
+    [hidden],
+  );
+  // The list view's slim drop rows exist only during a drag; outside one this
+  // is the frozen empty array rather than a fresh `[]` per render.
+  const emptyDropStatuses = drag ? hidden : NO_STATUSES;
 
   const handleSelect = React.useCallback(
     (ticketId: string | null) => selectTicket(projectId, ticketId),
@@ -272,9 +333,10 @@ export const Board = React.memo(function Board({
             <BoardListView
               projectId={projectId}
               ticketPrefix={ticketPrefix}
+              projectLabels={projectLabels}
               groups={sortedGroups}
               shownStatuses={shown}
-              emptyDropStatuses={drag ? hidden : []}
+              emptyDropStatuses={emptyDropStatuses}
               dragActive={drag !== null}
               selectedId={selectedId}
               onSelect={handleSelect}
@@ -306,6 +368,7 @@ export const Board = React.memo(function Board({
                   tickets={sortedGroups[status]}
                   projectId={projectId}
                   ticketPrefix={ticketPrefix}
+                  projectLabels={projectLabels}
                   selectedId={selectedId}
                   onSelect={handleSelect}
                   onOpen={handleOpen}
@@ -337,11 +400,19 @@ export const Board = React.memo(function Board({
                 // light canvas), and a card being dragged is a card — the same
                 // tier the board's cards already sit at, one step further off.
                 <div className="cursor-grabbing overflow-hidden rounded-md bg-card shadow-card">
-                  <TicketRowContent ticket={drag.ticket} ticketPrefix={ticketPrefix} />
+                  <TicketRowContent
+                    ticket={drag.ticket}
+                    ticketPrefix={ticketPrefix}
+                    projectLabels={projectLabels}
+                  />
                 </div>
               ) : (
                 <div className="scale-[1.03] cursor-grabbing rounded-lg shadow-card">
-                  <TicketCardContent ticket={drag.ticket} ticketPrefix={ticketPrefix} />
+                  <TicketCardContent
+                    ticket={drag.ticket}
+                    ticketPrefix={ticketPrefix}
+                    projectLabels={projectLabels}
+                  />
                 </div>
               )
             ) : null}
