@@ -432,7 +432,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
 
             `overflow-hidden` on an OVERSIZED box, not `clip-path` on a tight
             one, and the difference is not stylistic. `clip-path` on an ancestor
-            forms a backdrop root: the peek panel's `backdrop-blur-2xl` stopped
+            forms a backdrop root: the peek panel's `backdrop-blur-lg` stopped
             sampling the board behind it and the glass went to plain 90% fill,
             with the card's text legible straight through it. `overflow` clips
             without grouping the backdrop, so the blur survives — but it clips
@@ -501,7 +501,13 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
                 // pane would be overruled in every mode. The lift then
                 // composites over this glass, which is the correct order
                 // anyway: material first, tier on top.
-                "overflow-hidden rounded-xl border border-border bg-sidebar/90 shadow-overlay backdrop-blur-2xl",
+                //
+                // `lg` (16px), not `2xl` (40px): the compositor re-samples the
+                // backdrop across the panel's whole area every frame it
+                // translates, and cost scales with radius — 40px was double the
+                // 20px transition-time budget for a panel whose entrance IS a
+                // translate. At 90% fill the material reads the same.
+                "overflow-hidden rounded-xl border border-border bg-sidebar/90 shadow-overlay backdrop-blur-lg",
               panelShown
                 ? "translate-x-0"
                 : // Reduced motion: the surface arrives where it will rest
