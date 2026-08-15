@@ -434,9 +434,14 @@ function TileComposite({ compact = false }: { compact?: boolean }) {
   const second = ticketById("tkt-14");
   return (
     <div data-rig-tile className="flex flex-col gap-2">
-      <TicketCardContent ticket={first} ticketPrefix={project.ticketPrefix} />
+      <TicketCardContent ticket={first} ticketPrefix={project.ticketPrefix} projectLabels={[]} />
       {compact ? null : (
-        <TicketCardContent ticket={second} ticketPrefix={project.ticketPrefix} selected />
+        <TicketCardContent
+          ticket={second}
+          ticketPrefix={project.ticketPrefix}
+          projectLabels={[]}
+          selected
+        />
       )}
     </div>
   );
@@ -482,7 +487,11 @@ function ChromeCornerComposite({ height = 220 }: { height?: number }) {
             Doing · 3
           </div>
           <div data-rig-tile className="p-3">
-            <TicketCardContent ticket={ticketById("tkt-12")} ticketPrefix={project.ticketPrefix} />
+            <TicketCardContent
+              ticket={ticketById("tkt-12")}
+              ticketPrefix={project.ticketPrefix}
+              projectLabels={[]}
+            />
           </div>
         </div>
       </div>
