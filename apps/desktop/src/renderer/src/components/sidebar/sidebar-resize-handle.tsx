@@ -57,7 +57,22 @@ export function SidebarResizeHandle({ onResizingChange }: SidebarResizeHandlePro
     startWidth: number;
     shell: HTMLElement;
     width: number;
+    frame: number | null;
   } | null>(null);
+
+  // The override is written to the shell, which outlives this grip — so a grip
+  // that goes away mid-drag leaves a property set with nothing left to clear
+  // it, pinning the pane at the dragged width against whatever the store says.
+  // `endDrag` is the normal path out; this is the one it cannot cover.
+  React.useEffect(() => {
+    return () => {
+      const drag = dragRef.current;
+      if (drag === null) return;
+      if (drag.frame !== null) window.cancelAnimationFrame(drag.frame);
+      drag.shell.style.removeProperty(LIVE_WIDTH_PROPERTY);
+      dragRef.current = null;
+    };
+  }, []);
 
   function handlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return;
@@ -75,6 +90,7 @@ export function SidebarResizeHandle({ onResizingChange }: SidebarResizeHandlePro
       startWidth,
       shell,
       width: startWidth,
+      frame: null,
     };
     event.currentTarget.setPointerCapture(event.pointerId);
     onResizingChange(true);
@@ -92,13 +108,28 @@ export function SidebarResizeHandle({ onResizingChange }: SidebarResizeHandlePro
     // take the minimum and maximum with it — the pane would follow the pointer
     // past both edges all drag and snap back on release.
     drag.width = clampSidebarWidth(drag.startWidth + (event.clientX - drag.startX) / scale);
-    drag.shell.style.setProperty(LIVE_WIDTH_PROPERTY, `${drag.width}px`);
+    // One write per FRAME, not per sample — the same rule the scroll thumb and
+    // the edge zone next door already run on. This property sizes every box in
+    // the sidebar, so each write is a relayout of the whole pane, and a
+    // trackpad samples well past 120Hz: the extra ones were laying out frames
+    // that never got shown. The pointer cannot be in two places within one
+    // frame, so only a frame's last sample could ever decide where the edge is.
+    if (drag.frame !== null) return;
+    drag.frame = window.requestAnimationFrame(() => {
+      drag.frame = null;
+      drag.shell.style.setProperty(LIVE_WIDTH_PROPERTY, `${drag.width}px`);
+    });
   }
 
   function endDrag(event: React.PointerEvent<HTMLDivElement>) {
     const drag = dragRef.current;
     if (!drag || event.pointerId !== drag.pointerId) return;
     dragRef.current = null;
+    // Drop the frame the last sample was waiting on: it would land after the
+    // override is cleared and set it again with nobody left to clear it. No
+    // sample is lost with it — `drag.width` below is that same last sample,
+    // and it goes straight to the store instead.
+    if (drag.frame !== null) window.cancelAnimationFrame(drag.frame);
     // Commit BEFORE clearing the override: `setSidebarWidth` schedules a render
     // that React flushes at the end of this handler, so by the time anything
     // paints the committed token already holds the dragged width and the

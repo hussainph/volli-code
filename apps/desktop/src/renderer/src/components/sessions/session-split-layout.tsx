@@ -335,19 +335,60 @@ interface SplitDividerProps {
   onChange(ratio: number): void;
 }
 
+/**
+ * ONE RATIO PER FRAME, not one per pointer sample — and on this divider that
+ * is not a micro-optimisation.
+ *
+ * Every write runs the whole chain: the store re-renders the split, each pane
+ * gets a new `flex` basis, restty's ResizeObserver fires, and each live pane
+ * sends a PTY resize over IPC — for both sides of the split, and again for
+ * every pane of a nested one. A trackpad samples past 120Hz, so an uncoalesced
+ * drag charged all of that several times per displayed frame, to terminals that
+ * reflow their scrollback on every column change. The pointer cannot be in two
+ * places within one frame, so only a frame's last sample could ever have
+ * decided where the divider lands; the rest were work nobody saw.
+ */
 function SplitDivider({ direction, ratio, onChange }: SplitDividerProps) {
   const vertical = direction === "vertical";
-  const dragging = React.useRef(false);
+  const dragRef = React.useRef<{
+    pointerId: number;
+    parent: HTMLElement;
+    x: number;
+    y: number;
+    frame: number | null;
+  } | null>(null);
 
-  const ratioFromPointer = (event: React.PointerEvent<HTMLDivElement>): number => {
-    const parent = event.currentTarget.parentElement;
-    if (parent === null) return ratio;
+  React.useEffect(() => {
+    return () => {
+      const drag = dragRef.current;
+      if (drag !== null && drag.frame !== null) window.cancelAnimationFrame(drag.frame);
+      dragRef.current = null;
+    };
+  }, []);
+
+  // The rect is read per frame rather than cached at the press: this box is not
+  // the drag's to own — a sidebar toggle or a full-screen shortcut can resize it
+  // mid-drag, and a stale rect would put the divider where the pointer isn't.
+  const ratioFromPointer = (parent: HTMLElement, clientX: number, clientY: number): number => {
     const rect = parent.getBoundingClientRect();
     const total = vertical ? rect.width : rect.height;
-    const position = vertical ? event.clientX - rect.left : event.clientY - rect.top;
+    const position = vertical ? clientX - rect.left : clientY - rect.top;
     const minRatio = Math.min(0.45, 96 / Math.max(total, 1));
     return Math.min(1 - minRatio, Math.max(minRatio, position / Math.max(total, 1)));
   };
+
+  function endDrag(event: React.PointerEvent<HTMLDivElement>, release: boolean): void {
+    const drag = dragRef.current;
+    if (drag === null || event.pointerId !== drag.pointerId) return;
+    dragRef.current = null;
+    if (release) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (drag.frame === null) return;
+    // The frame the last sample was waiting on will never run. Land it here, or
+    // the panes settle one sample short of where the pointer was released —
+    // visible as a divider that stops just shy of the cursor.
+    window.cancelAnimationFrame(drag.frame);
+    onChange(ratioFromPointer(drag.parent, drag.x, drag.y));
+  }
 
   return (
     <div
@@ -362,20 +403,33 @@ function SplitDivider({ direction, ratio, onChange }: SplitDividerProps) {
         vertical ? "w-1.5 cursor-col-resize" : "h-1.5 cursor-row-resize",
       )}
       onPointerDown={(event) => {
-        dragging.current = true;
+        const parent = event.currentTarget.parentElement;
+        if (parent === null) return;
         event.currentTarget.setPointerCapture(event.pointerId);
-        onChange(ratioFromPointer(event));
+        dragRef.current = {
+          pointerId: event.pointerId,
+          parent,
+          x: event.clientX,
+          y: event.clientY,
+          frame: null,
+        };
+        // The press itself jumps the divider to the pointer, unthrottled: it is
+        // one write, and waiting a frame for it would read as lag on the click.
+        onChange(ratioFromPointer(parent, event.clientX, event.clientY));
       }}
       onPointerMove={(event) => {
-        if (dragging.current) onChange(ratioFromPointer(event));
+        const drag = dragRef.current;
+        if (drag === null || event.pointerId !== drag.pointerId) return;
+        drag.x = event.clientX;
+        drag.y = event.clientY;
+        if (drag.frame !== null) return;
+        drag.frame = window.requestAnimationFrame(() => {
+          drag.frame = null;
+          onChange(ratioFromPointer(drag.parent, drag.x, drag.y));
+        });
       }}
-      onPointerUp={(event) => {
-        dragging.current = false;
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }}
-      onPointerCancel={() => {
-        dragging.current = false;
-      }}
+      onPointerUp={(event) => endDrag(event, true)}
+      onPointerCancel={(event) => endDrag(event, false)}
       onKeyDown={(event) => {
         const decrement = vertical ? event.key === "ArrowLeft" : event.key === "ArrowUp";
         const increment = vertical ? event.key === "ArrowRight" : event.key === "ArrowDown";
