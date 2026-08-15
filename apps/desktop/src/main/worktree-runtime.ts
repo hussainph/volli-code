@@ -10,7 +10,7 @@ import { app, BrowserWindow } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
-import type { VolliIpcEvent, WorktreePhaseEvent } from "@volli/shared";
+import type { VolliIpcEvent, WorktreePhaseEvent } from "../ipc/contract";
 
 import { attachmentsRoot } from "./attachment-store";
 import { runGitCapturing, runGitCapturingAsync } from "./worktree";

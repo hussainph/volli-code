@@ -1,9 +1,5 @@
-import {
-  errorMessage,
-  type FileChangedEvent,
-  type FilePathInput,
-  type Result,
-} from "@volli/shared";
+import { errorMessage } from "@volli/shared";
+import type { FileChangedEvent, FilePathInput, Result } from "../../../../ipc/contract";
 
 import {
   EMPTY_CHANGE_RECENCY_STATE,

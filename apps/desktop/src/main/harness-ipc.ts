@@ -34,22 +34,20 @@ import {
   getHarnessAdapter,
   harnessChannelState,
   harnessTrustPrompt,
-  HARNESS_CHANNELS,
   HARNESS_EVENT_GRACE_MS,
-  HARNESS_IPC,
   isFirstClassHarnessId,
   supportedEvents,
 } from "@volli/shared";
+import { HARNESS_CHANNELS, HARNESS_IPC } from "./ipc-descriptors";
+import type { HarnessAdapter, HarnessChannelStatus } from "@volli/shared";
 import type {
-  HarnessAdapter,
-  HarnessChannelStatus,
   HarnessIpcChannel,
   HarnessPendingResult,
   HarnessRegisteredResult,
   HarnessTrustSetInput,
   PendingHarnessManifest,
   Result,
-} from "@volli/shared";
+} from "../ipc/contract";
 
 import type { DbHandle } from "./data-ipc";
 import { listHarnessChannels } from "./db/harness-channel-repo";

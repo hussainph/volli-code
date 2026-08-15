@@ -54,11 +54,8 @@ import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
 import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 import { ChatCircleDotsIcon } from "@phosphor-icons/react/dist/csr/ChatCircleDots";
-import {
-  displayTicketId,
-  type ChangeSetSnapshot,
-  type WorktreeChangeSetResult,
-} from "@volli/shared";
+import { displayTicketId, type ChangeSetSnapshot } from "@volli/shared";
+import type { WorktreeChangeSetResult } from "../../../ipc/contract";
 
 import { AppShell } from "@renderer/components/app-shell";
 import { ContentColumn } from "@renderer/components/layout/content-column";

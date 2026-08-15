@@ -18,7 +18,8 @@
  */
 import { existsSync } from "node:fs";
 import type Database from "better-sqlite3";
-import type { TicketEventActor, TicketRetentionState, TicketStatus } from "@volli/shared";
+import type { TicketEventActor, TicketStatus } from "@volli/shared";
+import type { TicketRetentionState } from "../../ipc/contract";
 
 import { recordTicketEvent } from "../db/events-repo";
 import { getProjectById } from "../db/projects-repo";
@@ -27,7 +28,7 @@ import { listRetentionCandidates, updateTicketFields, type TicketRow } from "../
 import { ghDiscoverPr, ghPrStatus, type RunNet } from "./net";
 import { computeArchiveReadiness, doneEntryTimestamp, retentionTtlMs } from "./retention";
 
-export type { TicketRetentionState } from "@volli/shared";
+export type { TicketRetentionState } from "../../ipc/contract";
 
 /** System-level automation (no session): stamps and merge events are attributed here. */
 const AUTOMATION_ACTOR: TicketEventActor = { kind: "automation" };

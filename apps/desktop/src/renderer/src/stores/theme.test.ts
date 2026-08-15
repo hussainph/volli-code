@@ -11,8 +11,8 @@ import {
   type ProjectThemeOverride,
   type ResolvedAppearance,
   type ShippedEditorThemeId,
-  type ThemeStatePayload,
 } from "@volli/shared";
+import type { ThemeStatePayload } from "../../../ipc/contract";
 
 import {
   activeTheme,

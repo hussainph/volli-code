@@ -2,13 +2,8 @@ import * as React from "react";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
 import { FolderIcon } from "@phosphor-icons/react/dist/csr/Folder";
-import {
-  errorMessage,
-  type DirChangedEvent,
-  type DirEntry,
-  type DirPathInput,
-  type Project,
-} from "@volli/shared";
+import { errorMessage, type DirEntry, type Project } from "@volli/shared";
+import type { DirChangedEvent, DirPathInput } from "../../../../ipc/contract";
 
 import {
   Collapsible,

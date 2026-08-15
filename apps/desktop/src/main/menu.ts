@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, Menu, type MenuItemConstructorOptions } from "electron";
 import { writeFile } from "node:fs/promises";
 import { errorMessage } from "@volli/shared";
-import type { UiZoomCommand, VolliIpcEvent } from "@volli/shared";
+import type { UiZoomCommand, VolliIpcEvent } from "../ipc/contract";
 import type { DbHandle } from "./data-ipc";
 import { buildExportDocument, defaultExportFilename, serializeExportDocument } from "./db/export";
 

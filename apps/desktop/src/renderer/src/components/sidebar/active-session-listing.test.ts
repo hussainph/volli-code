@@ -5,12 +5,12 @@ import {
   type ChatSessionRecord,
   type CreateSessionHarnessStateInput,
   type HarnessEvent,
-  type HarnessEventNotice,
   type SessionHarnessState,
   type SessionRecord,
   type Ticket,
   type LatestSessionSignal,
 } from "@volli/shared";
+import type { HarnessEventNotice } from "../../../../ipc/contract";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {

@@ -1,4 +1,4 @@
-import type { BootstrapPayload } from "@volli/shared";
+import type { BootstrapPayload } from "../../../ipc/contract";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { useBoardStore } from "@renderer/stores/board";

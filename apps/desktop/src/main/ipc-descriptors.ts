@@ -1,9 +1,28 @@
-// Runtime half of the IPC request contract (issue #98). The type half lives in
-// ipc.ts; this module may be imported at runtime by MAIN ONLY — the preload
-// stays type-only on @volli/shared (the pack config keeps main and preload
-// dependency-disjoint; see CAUTION in apps/desktop/vite.config.ts).
+// Runtime half of the IPC request contract (issue #98). The type half is
+// ../ipc/contract.ts, which all three desktop processes may `import type` from.
+//
+// This is the half with values in it, and living in src/main/ is what keeps
+// "runtime-importable by MAIN ONLY" true: main is the only entry whose module
+// graph reaches this directory, so the rule is structural now rather than
+// written down and hoped for. The preload stays type-only either way (the pack
+// config keeps main and preload dependency-disjoint; see CAUTION in
+// apps/desktop/vite.config.ts).
 
-import { isHarnessTrustVerdict } from "./harness/trust";
+import {
+  isAppearance,
+  isHarnessTrustVerdict,
+  isHexColor,
+  isProjectThemeOverride,
+  isShippedEditorThemeId,
+  isTicketPriority,
+  isTicketStatus,
+  isValidBranchName,
+  isValidOverlayKey,
+  isValidOverlayValue,
+  parseCanvas,
+  parseHarnessId,
+} from "@volli/shared";
+
 import type {
   DataIpcChannel,
   FileIpcChannel,
@@ -12,14 +31,7 @@ import type {
   ModelAccessIpcChannel,
   ThemeIpcChannel,
   VolliInvokeContract,
-} from "./ipc";
-import { isAppearance, parseCanvas } from "./theme/canvas";
-import { isHexColor } from "./theme/color";
-import { isShippedEditorThemeId } from "./theme/editor-themes";
-import { isValidOverlayKey, isValidOverlayValue } from "./theme/ghostty-overlay";
-import { isProjectThemeOverride } from "./theme/project-override";
-import { isTicketPriority, isTicketStatus, parseHarnessId } from "./ticket";
-import { isValidBranchName } from "./ticket-branch";
+} from "../ipc/contract";
 
 /**
  * One request's runtime descriptor: the validator over the raw

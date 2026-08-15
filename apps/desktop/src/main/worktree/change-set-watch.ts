@@ -10,10 +10,10 @@ import { join } from "node:path";
 import type { WebContents } from "electron";
 import type {
   Result,
+  VolliIpcEvent,
   WorktreeChangedEvent,
   WorktreeWatchErrorEvent,
-  VolliIpcEvent,
-} from "@volli/shared";
+} from "../../ipc/contract";
 
 /** Same debounce as FileWatchManager / DirWatchManager (volli-fs.ts). */
 export const WATCH_DEBOUNCE_MS = 250;

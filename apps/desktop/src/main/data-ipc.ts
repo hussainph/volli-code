@@ -4,8 +4,6 @@ import { rm } from "node:fs/promises";
 import type Database from "better-sqlite3";
 import type { SessionEngine } from "@volli/session-engine";
 import {
-  DATA_CHANNELS,
-  DATA_IPC,
   derivePrefix,
   errorMessage,
   LEGACY_BACKUP_APP_STATE_KEY,
@@ -13,6 +11,15 @@ import {
   sanitizeLegacyProjects,
   USER_ACTOR,
   validateUniquePrefix,
+} from "@volli/shared";
+import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
+import type {
+  Label,
+  Project,
+  SessionListingRow,
+  SessionProjection,
+  Ticket,
+  TicketStatus,
 } from "@volli/shared";
 import type {
   AppStateSetResult,
@@ -23,12 +30,10 @@ import type {
   CommentIdInput,
   CommentUpdateInput,
   DataIpcChannel,
-  Label,
   LabelResult,
   LabelSetColorInput,
   LegacyImportRequest,
   LegacyImportResult,
-  Project,
   ProjectCreateInput,
   ProjectCreateResult,
   ProjectIdInput,
@@ -44,30 +49,26 @@ import type {
   RetentionStateResult,
   RetentionTtlResult,
   RetentionTtlSetInput,
-  SessionListingRow,
-  SessionProjection,
   SessionRenameInput,
   SessionRenameResult,
   SessionsResult,
-  Ticket,
   TicketCommentResult,
   TicketCommentsResult,
   TicketCreateInput,
   TicketEventsResult,
-  TicketLatestSignalsResult,
-  TicketStatusEntriesResult,
   TicketIdInput,
+  TicketLatestSignalsResult,
   TicketMoveInput,
   TicketResult,
   TicketSetLabelsInput,
   TicketSetPriorityInput,
-  TicketsResult,
-  TicketStatus,
+  TicketStatusEntriesResult,
   TicketUpdateInput,
-  WorktreeBranchesResult,
-  WorktreeChangeSetResult,
+  TicketsResult,
   WorktreeBaseReadInput,
   WorktreeBaseReadResult,
+  WorktreeBranchesResult,
+  WorktreeChangeSetResult,
   WorktreeCommitInput,
   WorktreeCommitResult,
   WorktreeDiffInput,
@@ -80,7 +81,7 @@ import type {
   WorktreeRemoveInput,
   WorktreeRemoveResult,
   WorktreeStatusResult,
-} from "@volli/shared";
+} from "../ipc/contract";
 import { getAllAppState, setAppState } from "./db/app-state-repo";
 import { deleteComment, getComment, listComments, updateComment } from "./db/comments-repo";
 import { listTicketEvents, listTicketStatusEntries } from "./db/events-repo";

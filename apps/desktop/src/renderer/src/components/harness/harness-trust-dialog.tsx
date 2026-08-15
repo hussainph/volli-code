@@ -19,7 +19,8 @@ import {
 } from "@renderer/components/harness/trust-prompt-model";
 import { Badge } from "@renderer/components/ui/badge";
 import { toastError } from "@renderer/lib/toast";
-import type { HarnessTrustVerdict, PendingHarnessManifest } from "@volli/shared";
+import type { HarnessTrustVerdict } from "@volli/shared";
+import type { PendingHarnessManifest } from "../../../../ipc/contract";
 
 /**
  * The confirmation a registered harness manifest is inert without

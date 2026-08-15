@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vite-plus/test";
-import type { IpcArgs } from "@volli/shared";
+import type { IpcArgs } from "../ipc/contract";
 
 const { handlers } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),

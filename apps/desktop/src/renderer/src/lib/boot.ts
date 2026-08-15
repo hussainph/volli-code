@@ -6,13 +6,13 @@
  * always-clear-legacy-storage step) is unit-testable without mounting React.
  */
 import { toast } from "sonner";
-import {
-  sanitizeLegacyProjects,
-  type BootstrapPayload,
-  type BootstrapResult,
-  type LegacyImportRequest,
-  type LegacyImportResult,
-} from "@volli/shared";
+import { sanitizeLegacyProjects } from "@volli/shared";
+import type {
+  BootstrapPayload,
+  BootstrapResult,
+  LegacyImportRequest,
+  LegacyImportResult,
+} from "../../../ipc/contract";
 
 import { seedAppStateCache } from "@renderer/lib/app-state-storage";
 import { setBootNotice } from "@renderer/lib/boot-notice";

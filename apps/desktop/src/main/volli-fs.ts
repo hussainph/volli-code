@@ -27,8 +27,6 @@ import {
   artifactBaseName,
   classifyFileKind,
   errorMessage,
-  FILE_CHANNELS,
-  FILE_IPC,
   imageMimeType,
   isArtifactRelPath,
   isSafeRelPath,
@@ -40,6 +38,8 @@ import {
   volliDir,
   withMarkdownExtension,
 } from "@volli/shared";
+import { FILE_CHANNELS, FILE_IPC } from "./ipc-descriptors";
+import type { FileKind, FileSource, IndexedFile } from "@volli/shared";
 import type {
   ArtifactCreateInput,
   ArtifactCreateResult,
@@ -50,19 +50,16 @@ import type {
   FileIndexInput,
   FileIndexResult,
   FileIpcChannel,
-  FileKind,
   FilePathInput,
   FileReadResult,
-  FileSource,
   FileWriteInput,
   FileWriteResult,
-  IndexedFile,
   PromptTemplateIndexInput,
   PromptTemplateIndexResult,
   Result,
   RevealResult,
   VolliIpcEvent,
-} from "@volli/shared";
+} from "../ipc/contract";
 import type { DbHandle } from "./data-ipc";
 import { getProjectById } from "./db/projects-repo";
 import { getTicketRow } from "./db/tickets-repo";

@@ -6,7 +6,8 @@ import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
 import { useCallback, useEffect, useState } from "react";
-import { errorMessage, type DirtyWorktreeOrphan } from "@volli/shared";
+import { errorMessage } from "@volli/shared";
+import type { DirtyWorktreeOrphan } from "../../../../ipc/contract";
 
 import { AppearanceSettings } from "@renderer/components/pages/appearance-settings";
 import { HarnessSettings } from "@renderer/components/pages/harness-settings";

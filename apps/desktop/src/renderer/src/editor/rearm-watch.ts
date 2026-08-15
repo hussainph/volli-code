@@ -1,4 +1,5 @@
-import { errorMessage, type Result } from "@volli/shared";
+import { errorMessage } from "@volli/shared";
+import type { Result } from "../../../ipc/contract";
 
 interface WatchApi<Input> {
   watch(input: Input): Promise<Result>;

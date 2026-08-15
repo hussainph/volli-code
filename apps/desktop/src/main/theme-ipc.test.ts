@@ -3,18 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { THEME_CHANNELS } from "@volli/shared";
+import { THEME_CHANNELS } from "./ipc-descriptors";
+import type { Canvas, ProjectThemeOverride, ResolvedAppearance } from "@volli/shared";
 import type {
-  Canvas,
   ProjectCanvasWriteResult,
-  ProjectThemeOverride,
-  ResolvedAppearance,
   Result,
+  TerminalOverlayWriteResult,
   ThemeSetProjectResult,
   ThemeStateResult,
-  TerminalOverlayWriteResult,
   VolliIpcChannel,
-} from "@volli/shared";
+} from "../ipc/contract";
 
 // Hoisted above module evaluation so the electron mock factory can capture
 // into it — the same shape data-ipc.test.ts and ghostty-config.test.ts use.

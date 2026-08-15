@@ -1,4 +1,4 @@
-import type { FileChangedEvent } from "@volli/shared";
+import type { FileChangedEvent } from "../../../ipc/contract";
 import { describe, expect, it } from "vite-plus/test";
 
 import { matchesFileChangeIdentity } from "./file-change-identity";

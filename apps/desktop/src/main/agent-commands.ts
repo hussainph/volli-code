@@ -37,21 +37,23 @@ import type {
   AgentErrorCode,
   AgentRequest,
   AgentResponse,
-  DataChangedEvent,
   DoctorFacts,
   DoctorObservation,
-  HarnessEventNotice,
   HarnessId,
   Observed,
   Project,
   SessionActivityState,
-  SessionHarnessNotice,
   SessionRecord,
   TicketEventActor,
   TicketBodyMutation,
   Ticket,
-  WorktreeDiffMode,
 } from "@volli/shared";
+import type {
+  DataChangedEvent,
+  HarnessEventNotice,
+  SessionHarnessNotice,
+  WorktreeDiffMode,
+} from "../ipc/contract";
 
 import { listAttachments } from "./db/attachments-repo";
 import { listTicketEvents } from "./db/events-repo";

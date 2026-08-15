@@ -7,5 +7,12 @@
     // .mjs — scripts/dev.mjs runs under plain node, so a .ts file won't do).
     "allowJs": true
   },
-  "include": ["src/main/**/*", "src/preload/**/*", "vite.config.ts", "scripts/dev-constants.mjs"]
+  // src/ipc is the shared type-only IPC contract — all three processes read it.
+  "include": [
+    "src/ipc/**/*",
+    "src/main/**/*",
+    "src/preload/**/*",
+    "vite.config.ts",
+    "scripts/dev-constants.mjs"
+  ]
 }

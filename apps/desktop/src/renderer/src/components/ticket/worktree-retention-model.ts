@@ -13,7 +13,7 @@
  *  - Keep is a HARD exemption (decision #16): a kept ticket is never
  *    archive-ready, so the prompt never fights a user's explicit "keep it".
  */
-import type { TicketRetentionState } from "@volli/shared";
+import type { TicketRetentionState } from "../../../../ipc/contract";
 
 /** A surfaced, non-gating retention notice — a merge conflict or failing checks. */
 export interface RetentionNotice {

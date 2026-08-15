@@ -1,4 +1,4 @@
-import type { TicketRetentionState } from "@volli/shared";
+import type { TicketRetentionState } from "../../../../ipc/contract";
 import { describe, expect, it } from "vite-plus/test";
 
 import { resolveRetention } from "./worktree-retention-model";

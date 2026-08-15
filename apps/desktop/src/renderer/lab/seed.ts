@@ -13,6 +13,7 @@
  * the thing the lab is supposed to be measuring — and none of it is what a
  * design question is ever about.
  */
+import type { SessionListingRow } from "@volli/shared";
 import type {
   AppStateSetResult,
   HarnessPendingResult,
@@ -20,13 +21,12 @@ import type {
   Result,
   RetentionStateResult,
   RetentionTtlResult,
-  SessionListingRow,
   SessionsResult,
   TicketIdInput,
   TicketLatestSignalsResult,
   TicketRetentionState,
   TicketStatusEntriesResult,
-} from "@volli/shared";
+} from "../../ipc/contract";
 
 import { EMPTY_NAV_HISTORY } from "@renderer/lib/nav-history";
 import { useBoardStore } from "@renderer/stores/board";

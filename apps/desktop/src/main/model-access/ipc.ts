@@ -20,13 +20,9 @@
  */
 
 import type { WebContents } from "electron";
-import { MODEL_ACCESS_CHANNELS, MODEL_ACCESS_IPC } from "@volli/shared";
-import type {
-  ModelAccessIpcChannel,
-  ModelAccessSignInUpdate,
-  Result,
-  VolliIpcEvent,
-} from "@volli/shared";
+import { MODEL_ACCESS_CHANNELS, MODEL_ACCESS_IPC } from "../ipc-descriptors";
+import type { ModelAccessSignInUpdate } from "@volli/shared";
+import type { ModelAccessIpcChannel, Result, VolliIpcEvent } from "../../ipc/contract";
 
 import {
   registerDegradedIpcHandlers,

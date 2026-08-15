@@ -7,7 +7,8 @@
  * exists to be screenshotted against `ticket-right-sidebar`, which is the
  * design of record.
  */
-import type { ChangeSetSnapshot, DirEntry, Ticket, WorktreeChangeSetResult } from "@volli/shared";
+import type { ChangeSetSnapshot, DirEntry, Ticket } from "@volli/shared";
+import type { WorktreeChangeSetResult } from "../../../ipc/contract";
 
 import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
 import { TicketChangesPanel } from "@renderer/components/ticket/ticket-changes-panel";
@@ -85,7 +86,7 @@ export const api = {
   worktree: {
     changeSet: (): Promise<WorktreeChangeSetResult> =>
       Promise.resolve({ ok: true, changeSet: CHANGE_SET }),
-    // `WorktreeStatusResult` (packages/shared/src/ipc.ts). The names matter more
+    // `WorktreeStatusResult` (apps/desktop/src/ipc/contract.ts). The names matter more
     // than they look: this stub used to answer `dirty`/`ahead`/`behind`/`branch`/
     // `hasUpstream`, none of which the type has — so `uncommitted` read back
     // `undefined`, the done-flow concluded a clean tree, and the one control this

@@ -27,17 +27,18 @@
  */
 
 import type Database from "better-sqlite3";
-import { THEME_CHANNELS, THEME_IPC } from "@volli/shared";
+import { THEME_CHANNELS, THEME_IPC } from "./ipc-descriptors";
+import type { GhosttyAppearancePayload, ResolvedAppearance } from "@volli/shared";
 import type {
   AppearanceSetGlobalInput,
   AppearanceSetProjectInput,
   CanvasSetGlobalInput,
   CanvasSetProjectInput,
   FirstPaintHint,
-  GhosttyAppearancePayload,
   ProjectCanvasWriteResult,
-  ResolvedAppearance,
   Result,
+  TerminalOverlayWriteInput,
+  TerminalOverlayWriteResult,
   ThemeIpcChannel,
   ThemeSetGlobalEditorInput,
   ThemeSetProjectInput,
@@ -45,9 +46,7 @@ import type {
   ThemeStateInput,
   ThemeStatePayload,
   ThemeStateResult,
-  TerminalOverlayWriteInput,
-  TerminalOverlayWriteResult,
-} from "@volli/shared";
+} from "../ipc/contract";
 import type { DbHandle } from "./data-ipc";
 import {
   getProjectById,

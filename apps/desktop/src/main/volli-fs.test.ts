@@ -12,8 +12,9 @@ import {
 import { mkdir, readFile, rename, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import type { DirChangedEvent, FileChangedEvent, VolliIpcChannel } from "@volli/shared";
-import { FILE_CHANNELS, VOLLI_GITIGNORE_CONTENT } from "@volli/shared";
+import type { DirChangedEvent, FileChangedEvent, VolliIpcChannel } from "../ipc/contract";
+import { VOLLI_GITIGNORE_CONTENT } from "@volli/shared";
+import { FILE_CHANNELS } from "./ipc-descriptors";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 // Hoisted above module evaluation, like pty.test.ts/data-ipc.test.ts, so the

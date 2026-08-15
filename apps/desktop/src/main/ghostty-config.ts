@@ -31,9 +31,8 @@ import type {
   GhosttyConfigResult,
   GhosttyOverlayLayer,
   ResolvedAppearance,
-  VolliIpcChannel,
-  VolliIpcEvent,
 } from "@volli/shared";
+import type { VolliIpcChannel, VolliIpcEvent } from "../ipc/contract";
 import type { FsDeps } from "./fs-deps";
 
 /**

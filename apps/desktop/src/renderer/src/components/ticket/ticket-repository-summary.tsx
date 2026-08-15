@@ -64,13 +64,8 @@ import { GithubLogoIcon } from "@phosphor-icons/react/dist/csr/GithubLogo";
 import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { toast } from "sonner";
-import {
-  changeSetToDiffStat,
-  errorMessage,
-  type DiffStat,
-  type Ticket,
-  type WorktreeCommitInput,
-} from "@volli/shared";
+import { changeSetToDiffStat, errorMessage, type DiffStat, type Ticket } from "@volli/shared";
+import type { WorktreeCommitInput } from "../../../../ipc/contract";
 
 import { createTerminalSession } from "@renderer/components/sessions/session-create";
 import {

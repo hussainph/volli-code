@@ -16,7 +16,8 @@
  * line totals), and RENAMES print the path with `=>` markers (`old => new` or
  * `pre/{old => new}/suf`) — we keep the NEW path, the thing that exists now.
  */
-import { DiffFileStat, DiffStat, type WorktreeDiffMode } from "@volli/shared";
+import { DiffFileStat, DiffStat } from "@volli/shared";
+import type { WorktreeDiffMode } from "../../ipc/contract";
 
 import { resolveComparisonRef } from "./comparison-ref";
 import { stderrOf } from "./git";

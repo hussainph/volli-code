@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveAppearance } from "./appearance";
+import { isAppearance, resolveAppearance } from "./appearance";
 import { DEFAULT_CANVAS, parseCanvas } from "./parse";
 
 describe("parseCanvas", () => {
@@ -107,5 +107,19 @@ describe("resolveAppearance", () => {
     expect(resolveAppearance("auto", false)).toBe("light");
     expect(resolveAppearance("light", true)).toBe("light");
     expect(resolveAppearance("dark", false)).toBe("dark");
+  });
+});
+
+describe("isAppearance", () => {
+  it("admits the three words migration 014's CHECK admits", () => {
+    expect(isAppearance("light")).toBe(true);
+    expect(isAppearance("dark")).toBe(true);
+    expect(isAppearance("auto")).toBe(true);
+  });
+
+  it("rejects anything else that could be sitting in a column", () => {
+    for (const junk of [null, undefined, "", "Light", "system", 0, {}, ["auto"]]) {
+      expect(isAppearance(junk)).toBe(false);
+    }
   });
 });

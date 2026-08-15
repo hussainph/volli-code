@@ -46,15 +46,17 @@ import type {
   Canvas,
   GhosttyAppearancePayload,
   Project,
-  ProjectCanvasWriteResult,
   ProjectThemeOverride,
   ResolvedAppearance,
   ShippedEditorThemeId,
+} from "@volli/shared";
+import type {
+  ProjectCanvasWriteResult,
+  Result,
   ThemeSetProjectResult,
   ThemeStatePayload,
   ThemeStateResult,
-  Result,
-} from "@volli/shared";
+} from "../../../ipc/contract";
 import { create } from "zustand";
 
 import { toastError } from "@renderer/lib/toast";

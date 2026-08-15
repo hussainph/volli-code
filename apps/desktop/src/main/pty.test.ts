@@ -7,8 +7,8 @@ import type {
   Project,
   TerminalBusyResult,
   TerminalIoResult,
-  VolliIpcChannel,
 } from "@volli/shared";
+import type { VolliIpcChannel } from "../ipc/contract";
 import {
   afterAll,
   afterEach,

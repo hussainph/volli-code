@@ -6,8 +6,10 @@
  * module re-exports everything below so the merge-watch and its IPC surface
  * need no changes.
  */
-import type { RetentionReason } from "./ipc";
 import type { TicketStatus } from "./ticket";
+
+/** Why a ticket is archive-ready — drives the retention prompt's copy. */
+export type RetentionReason = "pr-merged" | "ttl-expired";
 
 /** The inputs the readiness verdict is a pure function of. */
 export interface ArchiveReadinessInput {

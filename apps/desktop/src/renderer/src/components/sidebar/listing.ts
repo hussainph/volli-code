@@ -1,4 +1,5 @@
-import { errorMessage, type DirEntry, type ListDirectoryResult } from "@volli/shared";
+import { errorMessage, type DirEntry } from "@volli/shared";
+import type { ListDirectoryResult } from "../../../../ipc/contract";
 
 /** One directory level's listing state. `undefined` = not fetched yet. */
 export type Listing = DirEntry[] | "loading" | { error: string } | undefined;

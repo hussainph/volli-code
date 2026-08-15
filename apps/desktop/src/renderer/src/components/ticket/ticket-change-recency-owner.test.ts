@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { FileChangedEvent, FilePathInput, Result } from "@volli/shared";
+import type { FileChangedEvent, FilePathInput, Result } from "../../../../ipc/contract";
 
 import {
   createTicketRecencyWatchOwner,

@@ -24,14 +24,8 @@ import {
   ticketBranchName,
   VOLLI_USER_ZDOTDIR_ENV,
 } from "@volli/shared";
-import type {
-  FirstPaintHint,
-  HarnessAdapter,
-  HarnessId,
-  ResolvedAppearance,
-  VolliIpcChannel,
-  VolliIpcEvent,
-} from "@volli/shared";
+import type { HarnessAdapter, HarnessId, ResolvedAppearance } from "@volli/shared";
+import type { FirstPaintHint, VolliIpcChannel, VolliIpcEvent } from "../ipc/contract";
 import type { ManagedConflict } from "./harness-install";
 import {
   clearUnsavedDocumentsOnWindowClosed,

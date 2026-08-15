@@ -4,12 +4,14 @@ import {
   sessionActivitySource,
   type CreateSessionHarnessStateInput,
   type HarnessAdapter,
-  type HarnessEventNotice,
   type HarnessId,
-  type HarnessRegisteredResult,
-  type SessionHarnessNotice,
   type SessionListingRow,
 } from "@volli/shared";
+import type {
+  HarnessEventNotice,
+  HarnessRegisteredResult,
+  SessionHarnessNotice,
+} from "../../../ipc/contract";
 import { useTicketSessionRecordsStore } from "./ticket-session-records";
 import {
   createSessionsStore,

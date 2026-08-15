@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { Result, WorktreeChangedEvent, WorktreeWatchErrorEvent } from "@volli/shared";
+import type {
+  Result,
+  WorktreeChangedEvent,
+  WorktreeWatchErrorEvent,
+} from "../../../../ipc/contract";
 
 import { subscribeWorktreeChanges, type WorktreeChangeWatchApi } from "./worktree-change-watch";
 

@@ -13,7 +13,7 @@ import type {
   SessionHarnessNotice,
   SessionsInterruptedEvent,
   VolliIpcEvent,
-} from "@volli/shared";
+} from "../ipc/contract";
 
 /**
  * Fans the invalidation out to every open window. `change` carries the best

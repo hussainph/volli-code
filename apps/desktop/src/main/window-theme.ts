@@ -29,7 +29,8 @@
  */
 
 import { resolveAppearance, windowBackground } from "@volli/shared";
-import type { Appearance, Canvas, FirstPaintHint } from "@volli/shared";
+import type { Appearance, Canvas } from "@volli/shared";
+import type { FirstPaintHint } from "../ipc/contract";
 
 /**
  * Everything main can read synchronously at window construction. Passed as one
