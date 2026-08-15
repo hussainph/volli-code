@@ -28,6 +28,7 @@ import {
 import { ActiveBandRow, PreviousBandRow } from "@renderer/components/sidebar/session-band-row";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
+import { delayUntil } from "@renderer/lib/boundary-timer";
 import { nextAgeChangeAt } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
@@ -52,24 +53,6 @@ const EMPTY_STATUS_ENTERED_AT: ReadonlyMap<string, number> = new Map();
  * is what you notice. Replace it with a subscription the moment main grows one.
  */
 const CHAT_ACTIVITY_REFRESH_MS = 10_000;
-
-/**
- * The longest `setTimeout` a browser can hold. Past `2^31 - 1` ms the delay
- * overflows to a signed 32-bit int and the timer fires IMMEDIATELY — which,
- * for a timer whose handler re-arms it, is not a late wake but a spin. Both
- * clocks below wait on model-supplied instants, and one of them (the year the
- * age column stops printing) is legitimately months away, so the wait is
- * capped: the timer wakes early, recomputes, finds the same boundary and waits
- * again, which costs a fortnight's worth of nothing.
- */
-const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
-
-/** How long to wait for an absolute boundary, clamped at both ends. */
-function delayUntil(at: number): number {
-  // The +1 lands the wake INSIDE the new state rather than on the instant the
-  // old one is still true for.
-  return Math.min(Math.max(0, at - Date.now()) + 1, MAX_TIMER_DELAY_MS);
-}
 
 /** Re-indexes the batched durable Session projection for the pure listing model. */
 function indexSignalsByTicket(
@@ -429,8 +412,8 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   // `ageNow` is a dependency as well as an input, which the listing's boundary
   // above deliberately is not. That one can never be clamped (its furthest
   // instant is seven days out), so a wake it does not move is a wake nothing
-  // needed. This one can: a wake at MAX_TIMER_DELAY_MS lands with the same
-  // boundary still ahead of it, and keying the effect on the boundary alone
+  // needed. This one can: a wake at `boundary-timer.ts`'s clamp lands with the
+  // same boundary still ahead of it, and keying the effect on the boundary alone
   // would then re-render, recompute the same instant, and quietly arm nothing.
   React.useEffect(() => {
     if (nextAgeChange === null) return;

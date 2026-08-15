@@ -60,7 +60,20 @@ function TooltipContent({
           // loses the specificity fight with `data-[state=closed]:animate-out`
           // without it. The full argument is on MENU_SURFACE_FADE in
           // `ui/menu-classes.ts`, which every overlay in this folder follows.
-          "z-50 w-fit origin-(--radix-tooltip-content-transform-origin) animate-in rounded-control bg-foreground px-4 py-1 text-ui text-balance text-background shadow-overlay ease-out fade-in-0 zoom-in-95 motion-reduce:animate-none! data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
+          //
+          // THE GROUP'S SECOND TOOLTIP DOES NOT ANIMATE. `skipDelayDuration`
+          // above already says a sweep along a toolbar is one gesture, not a
+          // series of openings — Radix marks every re-open inside that window
+          // `instant-open` instead of `delayed-open`, and until this class
+          // existed nothing read the distinction: each hop replayed the whole
+          // 150ms fade+zoom+slide, so the label the pointer had already arrived
+          // at was still assembling itself. Instant is what the state name says
+          // and what the grouping was for. The exit is untouched — `closed` and
+          // `instant-open` are never both set — and this needs no `!`: the
+          // variant compiles to (0,2,0) against the unconditional `animate-in`'s
+          // (0,1,0), so it wins on specificity rather than on source order
+          // (verified in the browser, not by reading Tailwind's output).
+          "z-50 w-fit origin-(--radix-tooltip-content-transform-origin) animate-in rounded-control bg-foreground px-4 py-1 text-ui text-balance text-background shadow-overlay ease-out fade-in-0 zoom-in-95 motion-reduce:animate-none! data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=instant-open]:animate-none",
           className,
         )}
         {...props}
