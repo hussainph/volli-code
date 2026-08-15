@@ -148,10 +148,16 @@ export const reasoningMarkdownComponents: Components = {
 };
 
 const streamdownPlugins = { cjk, code, mermaid };
-// Streamdown defers streaming paints via useTransition unless an animation
-// plugin is present; without this the body stays blank until the transition
-// commits — the blank-then-warp UX.
-const immediateStreamingAnimation = { duration: 0, stagger: 0 } as const;
+// No `animated`, for the reason `message.tsx` sets out at length: any truthy
+// value builds Streamdown's animation controller, and a controller is what
+// forces the blocking scheduler.
+//
+// What stood here said the transition would leave the body blank until it
+// committed — the blank-then-warp UX. It does not. Streaming 4KB in 126 chunks
+// through the lab's fence probe, the longest the rendered character count went
+// without growing was 35ms on BOTH schedulers: one chunk interval, which is the
+// arrival rate and not the renderer. The transition commits inside the gap
+// between tokens.
 
 export type ReasoningBodyProps = {
   children: string;
@@ -160,11 +166,7 @@ export type ReasoningBodyProps = {
 
 export const ReasoningBody = React.memo(({ children, className }: ReasoningBodyProps) => (
   <div className={cn("text-ui leading-5 text-muted-foreground", className)}>
-    <Streamdown
-      plugins={streamdownPlugins}
-      animated={immediateStreamingAnimation}
-      components={reasoningMarkdownComponents}
-    >
+    <Streamdown plugins={streamdownPlugins} components={reasoningMarkdownComponents}>
       {children}
     </Streamdown>
   </div>

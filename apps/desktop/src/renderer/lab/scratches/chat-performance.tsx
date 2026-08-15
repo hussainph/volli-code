@@ -78,7 +78,7 @@ import { cn } from "@renderer/lib/utils";
 
 export const title = "Chat transcript · performance";
 export const note =
-  "Mount, token, working-flip, scroll and heap at 100 / 1000 / 3000 turns, plus the open-fence stream";
+  "Mount, token, working-flip, scroll and heap at 100 / 1000 / 3000 turns, plus the open-fence stream. ?nocode drops the fences, ?resize=instant swaps the follow-scroll";
 export const viewport = "window" as const;
 
 /* ------------------------------------------------------------- instrument */
@@ -937,6 +937,33 @@ const LONG_PROSE = [
 const CONTROL_NO_CODE = new URLSearchParams(window.location.search).has("nocode");
 
 /**
+ * `?resize=instant` — the feel compare for the scroll that follows a growing
+ * answer, since this is a question no number settles. Smooth is a JS spring
+ * writing `scrollTop` per frame while the transcript is also rendering tokens;
+ * instant is a single assignment. Both keep the reader pinned to the bottom, so
+ * what is actually being judged is whether the trailing lag reads as the page
+ * keeping up or as the page being dragged.
+ *
+ * Left `undefined` by default so `Conversation`'s own default is what you
+ * compare against, rather than a copy of it that can drift. The same URL switch
+ * as `?nocode`, for the same reason: read once at module load, so a run cannot
+ * change shape halfway through.
+ */
+const CONTROL_RESIZE =
+  new URLSearchParams(window.location.search).get("resize") === "instant"
+    ? ("instant" as const)
+    : undefined;
+
+/** The other mode's URL, with every other search param left alone. */
+function resizeToggleHref(): string {
+  const params = new URLSearchParams(window.location.search);
+  if (CONTROL_RESIZE) params.delete("resize");
+  else params.set("resize", "instant");
+  const query = params.toString();
+  return `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
+}
+
+/**
  * One assistant turn's messages. Shapes cycle so no size is a single case, and
  * every fourth turn ends on a fenced block — the share a real coding transcript
  * carries, and the reason these numbers are higher than the prose-only ones.
@@ -1274,7 +1301,7 @@ function TranscriptPane({
 
   return (
     <FileMentionProvider onOpenFile={onOpenFile}>
-      <Conversation className="min-h-0 bg-background">
+      <Conversation className="min-h-0 bg-background" resize={CONTROL_RESIZE}>
         <ConversationContent data-perf-transcript="" className="gap-6 px-0 pt-8 pb-24">
           {messages.length === 0 ? (
             <ConversationEmptyState className="min-h-80" title="Empty" description="" />
@@ -1373,6 +1400,16 @@ function PerfHarness() {
         >
           scroll
         </button>
+        {/* A link, not a toggle. The mode is a URL param read once at module
+            load — the same contract as `?nocode` — so the way to change it is
+            to load the other URL, and the reload is what guarantees both
+            halves of the comparison start from an identical transcript. */}
+        <a
+          href={resizeToggleHref()}
+          className="ml-3 rounded-full px-2.5 py-0.5 font-mono text-label text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          resize {CONTROL_RESIZE ?? "smooth"}
+        </a>
         <span
           data-perf-working=""
           className={cn(
