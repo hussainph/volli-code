@@ -11,7 +11,16 @@
  * no dot. Previous is where you go looking for something you already remember;
  * Active is where you look without being asked, and only one of them can win
  * that competition.
+ *
+ * **Both are memoised, and `onSelect` takes its row.** These bands are the one
+ * list in the app whose length nobody controls — Previous holds every Session a
+ * project has ever had — and the section around them re-renders for reasons
+ * that touch one row at most: a tab coming forward, a nav switch, an age
+ * ticking over. A per-row `() => activate(row)` closure would defeat the memo
+ * on every one of those, so the handler is the section's own stable callback
+ * and the row hands its own row back to it.
  */
+import * as React from "react";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
@@ -159,7 +168,7 @@ function stateLine(row: ActiveSessionRow): string {
  * at the canvas band's ceiling this text measures under the contrast floor
  * un-promoted and comfortably over it promoted.
  */
-export function ActiveBandRow({
+export const ActiveBandRow = React.memo(function ActiveBandRow({
   row,
   ticketPrefix,
   selected,
@@ -168,7 +177,7 @@ export function ActiveBandRow({
   row: ActiveSessionRow;
   ticketPrefix: string;
   selected: boolean;
-  onSelect(): void;
+  onSelect(row: ActiveSessionRow): void;
 }) {
   const needsYou = row.attention !== null;
   const working = !needsYou && row.activity === "working";
@@ -178,7 +187,7 @@ export function ActiveBandRow({
       <SidebarMenuButton
         size="lg"
         isActive={selected}
-        onClick={onSelect}
+        onClick={() => onSelect(row)}
         // Two lines at the tighter padding: long titles stay readable and the
         // band stops out-massing the board it sits beside.
         className="h-auto min-h-9 items-start gap-2 py-1 [&:hover_.session-row-dim]:text-foreground [&[data-active=true]_.session-row-dim]:text-foreground"
@@ -218,7 +227,7 @@ export function ActiveBandRow({
       </SidebarMenuButton>
     </SidebarMenuItem>
   );
-}
+});
 
 /**
  * One line, and quieter than Active on every axis at once.
@@ -239,7 +248,7 @@ export function ActiveBandRow({
  * Its departure takes the state's only accessible name with it, so the row says
  * it out of band.
  */
-export function PreviousBandRow({
+export const PreviousBandRow = React.memo(function PreviousBandRow({
   row,
   ticketPrefix,
   now,
@@ -248,16 +257,22 @@ export function PreviousBandRow({
 }: {
   row: PreviousSessionRow;
   ticketPrefix: string;
+  /**
+   * The clock the age below is read against. It advances on the next instant
+   * one of these rows' ages actually reads differently (`nextAgeChangeAt`) —
+   * roughly a minute for a fresh row and a day for an old one — never on an
+   * interval, so this prop is not a per-second re-render of the band.
+   */
   now: number;
   selected: boolean;
-  onSelect(): void;
+  onSelect(row: PreviousSessionRow): void;
 }) {
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
         size="sm"
         isActive={selected}
-        onClick={onSelect}
+        onClick={() => onSelect(row)}
         // `px-2` is gone rather than kept: the button's own `p-2` is already
         // 8px, so the override was a no-op that read like a deliberate
         // difference from the Active row above it.
@@ -280,4 +295,4 @@ export function PreviousBandRow({
       </SidebarMenuButton>
     </SidebarMenuItem>
   );
-}
+});

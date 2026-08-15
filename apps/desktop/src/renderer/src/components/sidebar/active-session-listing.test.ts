@@ -17,6 +17,7 @@ import {
   subscribeHarnessEvents,
   ticketScope,
   useSessionsStore,
+  WORKING_WINDOW_MS,
   type SessionLaunch,
 } from "../../stores/sessions";
 
@@ -27,6 +28,7 @@ import {
   DONE_LINGER_MS,
   isCleanupExempt,
   isConcludedBusiness,
+  listingOutputStamps,
   PREVIOUS_MAX_AGE_MS,
   type ActiveSessionRow,
 } from "./active-session-listing";
@@ -1672,6 +1674,122 @@ describe("buildActiveSessionListing — nextBoundaryAt", () => {
     // The quiet window (30m) fires before the Done linger (1h), which fires
     // long before the seven-day age limit.
     expect(result.nextBoundaryAt).toBe(quietAt + ACTIVE_QUIET_WINDOW_MS);
+  });
+
+  it("names the moment a working row stops being working", () => {
+    const now = 5_000_000;
+    const lastOutput = now - 1_000;
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: { t1: container("s1", [paneTab("s1", "Running")]) },
+      signalsByTicket: {},
+      records: [],
+      lastOutputAt: { s1: lastOutput },
+      parkState: {},
+      harness: {},
+      now,
+    });
+
+    // The row says "Working" and sits in the Active band's working group; both
+    // stop being true the instant the output window closes, which is well
+    // before the same stamp's half-hour quiet window.
+    expect(result.active).toMatchObject([{ activity: "working" }]);
+    expect(result.nextBoundaryAt).toBe(lastOutput + WORKING_WINDOW_MS + 1);
+
+    const after = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: { t1: container("s1", [paneTab("s1", "Running")]) },
+      signalsByTicket: {},
+      records: [],
+      lastOutputAt: { s1: lastOutput },
+      parkState: {},
+      harness: {},
+      now: lastOutput + WORKING_WINDOW_MS + 1,
+    });
+
+    expect(after.active).toMatchObject([{ activity: "idle" }]);
+  });
+
+  it("names the moment a hooked launch runs out of grace to report", () => {
+    const startedAt = 1_000;
+    const promised = createSessionHarnessState({
+      harnessId: "claude-code",
+      adapter: hookedAdapter(["session.started", "turn.started", "input.needed"]),
+      startedAt,
+    });
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: { t1: container("s1", [paneTab("s1", "Implement UI")]) },
+      signalsByTicket: {},
+      records: [],
+      // No stamp at all, so nothing about this row's BAND depends on the clock
+      // — only the word it uses for where its activity came from does.
+      lastOutputAt: {},
+      parkState: {},
+      harness: { s1: promised },
+      now: startedAt + 1,
+    });
+
+    expect(result.active.map((row) => row.activitySource)).toEqual(["inferred"]);
+    expect(result.nextBoundaryAt).toBe(startedAt + HARNESS_EVENT_GRACE_MS + 1);
+  });
+});
+
+describe("listingOutputStamps", () => {
+  const stamps = { s1: 10, s2: 20, "other-project": 30, "split-leaf": 40 };
+
+  it("keeps the stamps for the containers the listing walks, and nothing else", () => {
+    expect(
+      listingOutputStamps({
+        lastOutputAt: stamps,
+        containers: {
+          t1: container("s1", [paneTab("s1", "Ticket run")]),
+          p1: scratchOf([scratchTab("s2", "Scratch run")]),
+          // A container this project's listing never asks for: another
+          // project's scratch key. Its bump must not reach these bands.
+          p2: scratchOf([scratchTab("other-project", "Elsewhere")]),
+        },
+        ticketIds: ["t1"],
+        scratchOwnerId: "p1",
+      }),
+    ).toEqual({ s1: 10, s2: 20 });
+  });
+
+  it("keeps a tab's ROOT id as well as its panes, which an exited split is dated by", () => {
+    const split = {
+      sessionId: "s1",
+      title: "Split run",
+      scope: { kind: "ticket", projectId: "p1", ticketId: "t1" } as const,
+      layout: {
+        kind: "split",
+        id: "sp1",
+        direction: "vertical",
+        ratio: 0.5,
+        first: { kind: "pane", sessionId: "s2", exitCode: 0 },
+        second: { kind: "pane", sessionId: "split-leaf", exitCode: 0 },
+      } as const,
+      activePaneId: "s2",
+    };
+
+    expect(
+      listingOutputStamps({
+        lastOutputAt: stamps,
+        containers: { t1: { activeSessionId: "s1", tabs: [split] } },
+        ticketIds: ["t1"],
+        scratchOwnerId: "p1",
+      }),
+    ).toEqual({ s1: 10, s2: 20, "split-leaf": 40 });
+  });
+
+  it("skips an owner with no container and a session with no stamp", () => {
+    expect(
+      listingOutputStamps({
+        lastOutputAt: {},
+        containers: { t1: container("s1", [paneTab("s1", "Never printed")]) },
+        ticketIds: ["t1", "t-no-container"],
+        scratchOwnerId: "p1",
+      }),
+    ).toEqual({});
   });
 });
 

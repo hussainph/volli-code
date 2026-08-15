@@ -116,8 +116,15 @@ export interface SessionContainer {
  */
 export type SessionLaunch = Pick<SessionRecord, "title" | "harnessId" | "launchKind" | "createdAt">;
 
-/** Output within this window reads as `working`; quiet-but-live reads as `idle`. */
-const WORKING_WINDOW_MS = 10_000;
+/**
+ * Output within this window reads as `working`; quiet-but-live reads as `idle`.
+ *
+ * Exported because it is a CLOCK BOUNDARY, not just a threshold: a derivation
+ * built on {@link sessionActivityState} changes its answer on its own the
+ * instant this window closes, and the sidebar's listing has to be able to say
+ * exactly when that is instead of polling in case it already happened.
+ */
+export const WORKING_WINDOW_MS = 10_000;
 /** Coalesce output bumps: at most one `lastOutputAt` write per session per second. */
 const OUTPUT_THROTTLE_MS = 1_000;
 

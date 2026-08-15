@@ -31,6 +31,7 @@
  * moment nothing is live.
  */
 import {
+  HARNESS_EVENT_GRACE_MS,
   sessionActivitySource,
   type ChatSessionRecord,
   type ChatWaitingReason,
@@ -47,6 +48,7 @@ import { chatTabId, parseChatTabId } from "../ticket/ticket-chat-tab";
 import {
   sessionActivityState,
   sessionPanes,
+  WORKING_WINDOW_MS,
   type SessionContainer,
   type SessionPane,
   type SessionTab,
@@ -171,6 +173,52 @@ export function isScratchRowSelected(
 }
 
 /**
+ * The `lastOutputAt` entries {@link buildActiveSessionListing} can actually
+ * read for one project — every tab root and every pane under the containers it
+ * walks, and nothing else.
+ *
+ * The store keeps ONE flat output-stamp map for every live session in the app
+ * and replaces it wholesale on each bump (a busy session bumps about once a
+ * second), so a component subscribed to the map itself rebuilds this project's
+ * whole listing whenever any OTHER project's terminal prints a line. Projecting
+ * the map down to the keys the build can name is what makes that subscription
+ * honest: shallow-compared, an irrelevant bump now yields the same object and
+ * the listing is never rebuilt for it.
+ *
+ * Semantics-preserving by construction rather than by approximation — the raw
+ * stamps come through untouched, so recency ordering and every quiet window are
+ * computed from exactly the numbers they were before. It is a narrower
+ * SUBSCRIPTION, not a coarser input.
+ */
+export function listingOutputStamps(input: {
+  lastOutputAt: Readonly<Record<string, number>>;
+  containers: Readonly<Record<string, SessionContainer>>;
+  /** The project's ticket ids — the container keys its ticket Sessions live under. */
+  ticketIds: Iterable<string>;
+  /** The project's own id, which is the container key its scratch Sessions live under. */
+  scratchOwnerId: string;
+}): Record<string, number> {
+  const stamps: Record<string, number> = {};
+  const take = (sessionId: string): void => {
+    const at = input.lastOutputAt[sessionId];
+    if (at !== undefined) stamps[sessionId] = at;
+  };
+  const takeContainer = (ownerId: string): void => {
+    const container = input.containers[ownerId];
+    if (container === undefined) return;
+    for (const tab of container.tabs) {
+      // Both, and not just the panes: an exited tab is dated by its ROOT id
+      // (`fileExitedTab`), which in a split tab is no longer any live pane.
+      take(tab.sessionId);
+      for (const pane of sessionPanes(tab.layout)) take(pane.sessionId);
+    }
+  };
+  for (const ticketId of input.ticketIds) takeContainer(ticketId);
+  takeContainer(input.scratchOwnerId);
+  return stamps;
+}
+
+/**
  * A Previous-band row. Deliberately smaller than {@link ActiveSessionRow}: this
  * band renders one line per Session, so it carries identity, when the Session
  * last did anything, and how to get back to it — and nothing a one-line row
@@ -196,8 +244,13 @@ export interface ActiveSessionListing {
   previous: PreviousSessionRow[];
   /**
    * Epoch ms of the next moment this listing changes with no new input — a row
-   * ageing out of Active, or a cleanup rule newly firing. `null` when nothing
+   * ageing out of Active, a cleanup rule newly firing, a working row going
+   * quiet, a hooked launch running out of grace to report. `null` when nothing
    * about the result depends on the clock any more.
+   *
+   * It is the COMPLETE answer, which is what lets a caller hold one timer and
+   * no interval: every use of `now` inside the build either has its boundary
+   * reported here or belongs to a row that cannot change on the clock at all.
    */
   nextBoundaryAt: number | null;
 }
@@ -754,6 +807,31 @@ export function buildActiveSessionListing(
     if (at <= now) return;
     if (nextBoundaryAt === null || at < nextBoundaryAt) nextBoundaryAt = at;
   };
+
+  // The two boundaries the ACTIVITY derivation moves on, for every pane the
+  // walk above read one from. They are the reason a caller once needed a
+  // polling clock on top of `nextBoundaryAt`: neither is a band boundary, so
+  // neither was reported, and both change what a row says with no new input —
+  // `working` decays to `idle` a fixed window after the last output (which also
+  // drops the row out of the Active band's working group, a visible reorder),
+  // and a hooked launch that never delivered stops reading as `inferred` and
+  // starts reading as `silent` once its grace window is up. Reporting them here
+  // is what makes this field the whole answer its own doc comment promises.
+  //
+  // Deliberately over-inclusive: a stamp on a parked or harness-declared pane
+  // cannot actually flip anything, and a boundary that changes nothing costs
+  // one recompute that finds nothing — while a missing one leaves a row saying
+  // the wrong word until something unrelated happens to move.
+  for (const paneId of mountedPaneIds) {
+    const lastOutput = input.lastOutputAt[paneId];
+    // +1: both windows are inclusive (`<=`), so the first instant the answer
+    // differs is one millisecond past the window's end.
+    if (lastOutput !== undefined) considerBoundary(lastOutput + WORKING_WINDOW_MS + 1);
+    const startedAt = input.harness[paneId]?.startedAt;
+    if (startedAt !== undefined && startedAt !== null) {
+      considerBoundary(startedAt + HARNESS_EVENT_GRACE_MS + 1);
+    }
+  }
 
   for (const entry of activeEntries) {
     // Only the two groups the window actually holds can age out of Active on
