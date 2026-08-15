@@ -20,12 +20,23 @@ import { MessageResponse } from "@renderer/components/ui/ai-elements/message";
 import { ReasoningBody } from "@renderer/components/ui/ai-elements/reasoning";
 
 describe("MessageResponse", () => {
-  it("enables Streamdown's immediate streaming update mode", () => {
+  // The whole point of the prop's absence: any truthy `animated` builds
+  // Streamdown's animation controller, and the controller is what puts every
+  // streamed token's re-render on the urgent path ahead of paint. A default
+  // reinstated here would be invisible in the UI — the old one ran at 0ms — and
+  // would cost a blocking re-lex per token.
+  it("hands Streamdown no animation config, even while streaming", () => {
     const html = renderToStaticMarkup(
       <MessageResponse isAnimating>Incremental response</MessageResponse>,
     );
 
-    expect(html).toContain('data-animated="enabled"');
+    expect(html).toContain('data-animated="disabled"');
+  });
+
+  it("hands the reasoning body no animation config either", () => {
+    expect(renderToStaticMarkup(<ReasoningBody>Thinking</ReasoningBody>)).toContain(
+      'data-animated="disabled"',
+    );
   });
 
   it("keeps code and Mermaid but does not enable math rendering", () => {

@@ -2,6 +2,7 @@
 
 import { ArrowDownIcon } from "@phosphor-icons/react/dist/csr/ArrowDown";
 import { Button } from "@renderer/components/ui/button";
+import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { cn } from "@renderer/lib/utils";
 import type { ComponentProps } from "react";
 import { useCallback } from "react";
@@ -9,15 +10,43 @@ import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
 export type ConversationProps = ComponentProps<typeof StickToBottom>;
 
-export const Conversation = ({ className, ...props }: ConversationProps) => (
-  <StickToBottom
-    className={cn("relative flex-1 overflow-y-hidden", className)}
-    initial="smooth"
-    resize="smooth"
-    role="log"
-    {...props}
-  />
-);
+/**
+ * Opening a session STARTS at the bottom; only growth after that is animated.
+ *
+ * `initial` governs exactly one moment — the first resize the library's observer
+ * ever sees — and `initial="smooth"` spent it running a JS spring down the whole
+ * scrollback: ~500ms of `scrollTop` written per frame, measured on a 1000-turn
+ * transcript. Nobody asked to travel that distance. The reader did not scroll,
+ * and there is no earlier position for the motion to relate the new one to; it
+ * was a long animation of nothing, paid on the frame budget a session open has
+ * the least of.
+ *
+ * Which moment that is depends on whether the transcript is already in hand when
+ * this mounts. Mounted with messages, the first observation IS the transcript
+ * and `initial` decides it; mounted on the empty state, the first observation is
+ * the empty state's own height and everything after — the transcript included —
+ * is a `resize`. Worth knowing before concluding this prop does nothing.
+ *
+ * `resize` stays smooth, and is a different question: by then the reader IS
+ * somewhere, watching an answer push the bottom edge down, and the scroll is
+ * what keeps them attached to it. Under reduced motion that becomes `instant`
+ * — the library takes a `ScrollBehavior` here, so the opt-out is its own API
+ * rather than something we have to defeat it with (use-stick-to-bottom 1.1.6
+ * re-reads `resize` from a live ref, so flipping the OS setting mid-session
+ * takes effect on the next growth without a remount).
+ */
+export const Conversation = ({ className, resize, ...props }: ConversationProps) => {
+  const reducedMotion = useReducedMotion();
+  return (
+    <StickToBottom
+      className={cn("relative flex-1 overflow-y-hidden", className)}
+      initial="instant"
+      resize={resize ?? (reducedMotion ? "instant" : "smooth")}
+      role="log"
+      {...props}
+    />
+  );
+};
 
 export type ConversationContentProps = ComponentProps<typeof StickToBottom.Content>;
 

@@ -598,6 +598,73 @@
   }
 }
 
+/* The transcript's own sweep — the sidebar's effect, paid for differently.
+ *
+ * The row above animates `mask-position`, which is a repaint of the glyphs on
+ * every frame. That is affordable for one sidebar row; it is not affordable on
+ * a chat surface that is streaming, where the frames this would take are the
+ * frames the answer needs. So the band here MOVES rather than the mask under
+ * it: `transform` is the only property the compositor can advance on its own,
+ * and a translated layer is rastered once for the whole sweep.
+ *
+ * The words must stay put while the band crosses them, so `-ink` runs the exact
+ * inverse translation of `-band` — same duration, same linear curve, same
+ * percentage of the same width — and the two cancel to a standstill. Change one
+ * of the four keyframe offsets and you must change its mirror, or the bright
+ * copy drifts off the words it is meant to light up.
+ *
+ * 80% rather than 100%: at ±80% the band leaves the box on one side exactly as
+ * it enters on the other, so the sweep is continuous. Sending it the full width
+ * out either end buys a fifth of every cycle with no highlight on screen, which
+ * reads as the line having stopped.
+ *
+ * Unlayered on purpose (like the sweep above): `-ink` must win the `color` the
+ * caller's own utility class sets on the copy it clones.
+ *
+ * The overlay is mounted only when motion is allowed — the reduced-motion case
+ * is decided in `shimmer.tsx`, which drops these elements rather than freezing
+ * them, so there is no `@media` block here to keep in step. */
+.chat-shimmer {
+  overflow: hidden;
+}
+
+.chat-shimmer-band {
+  position: absolute;
+  inset: 0;
+  -webkit-mask-image: linear-gradient(90deg, transparent 20%, #000 50%, transparent 80%);
+  mask-image: linear-gradient(90deg, transparent 20%, #000 50%, transparent 80%);
+  animation: chat-shimmer-band var(--chat-shimmer-duration, 2s) linear infinite;
+}
+
+.chat-shimmer-ink {
+  position: absolute;
+  inset: 0;
+  /* The literal fallback is the same guard the sidebar sweep carries: an
+   * unresolvable token drops the declaration, and this copy would then inherit
+   * the row's own dim colour — a sweep that does nothing rather than a line
+   * that disappears. */
+  color: var(--foreground, #fff);
+  animation: chat-shimmer-ink var(--chat-shimmer-duration, 2s) linear infinite;
+}
+
+@keyframes chat-shimmer-band {
+  from {
+    transform: translateX(-80%);
+  }
+  to {
+    transform: translateX(80%);
+  }
+}
+
+@keyframes chat-shimmer-ink {
+  from {
+    transform: translateX(80%);
+  }
+  to {
+    transform: translateX(-80%);
+  }
+}
+
 /* ELEVATION — the lift overlays and the shadow set.
  *
  * Two tiers, applied outward from the gradient: tier 1 is the chrome band and
