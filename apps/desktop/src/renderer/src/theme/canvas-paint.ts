@@ -43,11 +43,13 @@ import { applyThemeTokens, type ThemeApplyOptions } from "@renderer/theme/apply"
  * it: a property the stylesheet declares and JS overrides is paintable before
  * any JS has run, and an element styled inline is not.
  *
- * Exported for `scope-transition.ts`, which reads the value off the root
- * immediately before this module overwrites it — that outgoing gradient is what
- * the eased repaint crossfades FROM.
+ * Module-private, and it stopped being anything else when the eased repaint
+ * moved to a view transition (`scope-transition.ts`): that module used to read
+ * the outgoing gradient off the root here to fade a copy of it out, and a
+ * capture of the window needs no such help — a gradient in a snapshot is
+ * pixels, and pixels crossfade.
  */
-export const CANVAS_VARIABLE = "--canvas";
+const CANVAS_VARIABLE = "--canvas";
 
 /**
  * The on-canvas copy ladder, head first.

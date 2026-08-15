@@ -6,104 +6,74 @@
  * there reads as a glitch, and it is exactly the abrupt brightness jump Apple's
  * accessibility guidance asks interfaces to ease rather than snap (HIG: ease
  * dark↔light theme changes). So a scope change crossfades, and everything else
- * — every hover-preview in the picker, every deliberate theme pick — stays
+ * — every live drag in the canvas editor, every deliberate theme pick — stays
  * instant, because there response is the whole point and a 300ms lag between
- * arrowing down the list and seeing the theme would be a regression.
+ * moving a stop and seeing it would be a regression.
  *
  * ┌───────────────────────────────────────────────────────────────────────────
  * │ SCOPE-CHANGE REPAINT STORYBOARD
  * │
- * │ Read top-to-bottom. Each `at` is ms after the new scope's payload lands.
+ * │      0ms   `document.startViewTransition` is called with the swap itself as
+ * │            its callback. Chromium blocks rendering and captures the window
+ * │            exactly as it stands.
+ * │   ~1 frame the callback runs: every color token is rewritten in ONE pass
+ * │            (theme/apply.ts, ~7ms), the same single style recalculation a
+ * │            hard cut would have cost, and the engine captures the result.
+ * │            The two captures become `::view-transition-old(root)` and
+ * │            `::view-transition-new(root)`.
+ * │  0→300ms   those two layers crossfade ON THE COMPOSITOR — no style, no
+ * │            layout, no paint on the main thread for the whole window — over
+ * │            --theme-scope-ease: fast start, long gentle settle, NO overshoot
+ * │            (this is a state change, not a thrown object; bounce would imply
+ * │            momentum that nothing here carries).
+ * │    300ms   the engine tears its own pseudo-element tree down. This module
+ * │            has no attribute to remove, no timer to clear and no layer to
+ * │            unmount, because it never created any. Sooner if the user
+ * │            presses anything — see {@link beginScopeRepaint} for why input
+ * │            has to end the crossfade rather than play over it.
  * │
- * │    0ms   data-theme-transition="scope" goes on <html>, and the pending
- * │          style recalc is flushed — the transition has to be LIVE before
- * │          the tokens move, or the browser has nothing to interpolate from
- * │    0ms   the gradient now on <html> is copied to --canvas-outgoing and
- * │          data-canvas-fade goes on, mounting the layer that fades it out
- * │    0ms   every color token is rewritten in one pass (theme/apply.ts)
- * │    0ms   background / text / border / shadow colors start easing, all of
- * │          them together, on --theme-scope-ease: fast start, long gentle
- * │          settle, NO overshoot (this is a state change, not a thrown object
- * │          — bounce would imply momentum that nothing here carries)
- * │  300ms   the crossfade lands — tokens AND gradient, one duration, one curve
- * │  340ms   both attributes come off, the outgoing gradient is dropped, and
- * │          ordinary hover transitions go back to their own durations
- * │
- * │ Reduced motion: globals.css's media query collapses the crossfade to
- * │ 120ms. Nothing translates or scales at any point, so there is no
- * │ vestibular motion to remove — the short ease IS the accessible option for
- * │ a whole-window brightness change, and it is over before it registers as
- * │ animation.
+ * │ Reduced motion: globals.css's media query collapses the crossfade to 120ms.
+ * │ Nothing translates or scales at any point, so there is no vestibular motion
+ * │ to remove — the short ease IS the accessible option for a whole-window
+ * │ brightness change, and it is over before it registers as animation.
  * └───────────────────────────────────────────────────────────────────────────
  *
- * CSS custom properties do not interpolate on their own (unregistered, they
- * animate discretely), so the crossfade is bought the standard way: the
- * PROPERTIES THAT CONSUME the tokens — `background-color`, `color`,
- * `border-color` and friends — get a transition for the length of the swap.
- * That rule lives in globals.css, unlayered so it outranks Tailwind's own
- * `transition-colors` utilities for the duration; this module owns when it is
- * on, and for how long.
+ * WHY A VIEW TRANSITION, and not the CSS transition this used to be. The old
+ * mechanism armed `transition-property` on eight paint properties over
+ * `:root, :root *, :root *::before, :root *::after` for the length of the swap.
+ * That is the only way to crossfade through custom properties — unregistered
+ * ones animate discretely, so the interpolation has to be bought on the
+ * properties that CONSUME them — and the price is per-element: every node in
+ * the document gets a live transition, and every one of them is restyled on
+ * every frame of it. Measured on a workspace hop: token derivation and the DOM
+ * write together were under 7ms, and the crossfade held the main thread in
+ * continuous style recalculation for ~331ms afterwards. The owner hops
+ * workspaces constantly, so that was ~400ms of jank on the app's most repeated
+ * interaction.
  *
- * THE GRADIENT NEEDS ITS OWN HALF, and this module owns that too. The canvas is
- * a multi-stop `background-image` on `<html>`, and no two gradient strings have
- * a value in between — CSS swaps them discretely however long the transition is.
- * Left alone that is WORSE than no animation: for a third of a second the card,
- * the sidebar and the text are still the outgoing workspace's colors, easing
- * over the incoming workspace's wallpaper. So the outgoing gradient is copied to
- * {@link CANVAS_OUTGOING_VARIABLE} and painted a second time on a layer that
- * fades out over the new one (globals.css's `[data-canvas-fade]` rule): opacity
- * interpolates between any two canvases, and it is compositor-friendly.
+ * A view transition inverts the cost. The tokens move exactly once, in one
+ * recalculation, inside the update callback — the same work as a hard cut — and
+ * what animates afterwards is two flattened captures of the window, which the
+ * compositor can crossfade without asking the main thread anything. Per-element
+ * recalculation becomes two layers.
  *
- * Both halves are one window — one duration, one curve, one hold timer, and one
- * reduced-motion collapse — because two timings would be two crossfades that
- * only look like one until something is retuned.
- */
-
-import { CANVAS_VARIABLE } from "@renderer/theme/canvas-paint";
-
-/**
- * The timing, in one place. `crossfade` is mirrored by
- * `--theme-scope-crossfade` in globals.css — CSS owns the interpolation, this
- * owns the attribute's lifetime, and `tail` is the small margin that keeps the
- * attribute alive through the final frame instead of racing it.
- */
-export const SCOPE_REPAINT = {
-  /** ms — the token crossfade itself. Mirrors `--theme-scope-crossfade`. */
-  crossfade: 300,
-  /** ms — held past the crossfade so the last frame lands before the rule goes. */
-  tail: 40,
-} as const;
-
-/** How long both root attributes below stay on the root element. */
-export const SCOPE_REPAINT_HOLD_MS = SCOPE_REPAINT.crossfade + SCOPE_REPAINT.tail;
-
-/** The root attribute globals.css keys the transition off. */
-export const SCOPE_TRANSITION_ATTRIBUTE = "data-theme-transition";
-
-/** Its only value today; named so the CSS selector and the writer cannot drift. */
-export const SCOPE_TRANSITION_VALUE = "scope";
-
-/**
- * The root attribute that mounts the gradient's fading copy — a SECOND
- * attribute rather than a second meaning for the one above, and that separation
- * is load-bearing.
+ * IT ALSO SOLVES THE GRADIENT, which used to need a whole mechanism of its own.
+ * The canvas is a multi-stop `background-image` on `<html>` and no two gradient
+ * strings have a value in between, so CSS swapped it discretely however long the
+ * transition ran — leaving a third of a second in which the card, the sidebar
+ * and the text were still the outgoing workspace's colors, easing over the
+ * incoming workspace's wallpaper. The fix was to copy the outgoing gradient to a
+ * custom property and paint it a second time on a fading `html::before` layer.
+ * Captures are pixels: a gradient in a snapshot is not a gradient any more, so
+ * two canvases crossfade for the same reason two of anything else do, and the
+ * outgoing-canvas layer, its attribute, its keyframes and the hold timer that
+ * dropped them all deleted with it.
  *
- * A CSS animation only restarts when the element carrying it is created afresh,
- * so an overlapping scope change has to take this off, let the style flush, and
- * put it back. Doing that to `data-theme-transition` would strip
- * `transition-property` off every element in the window mid-crossfade and SNAP
- * the colors to their current targets — the exact defect the re-entrant hold
- * below exists to avoid. Two attributes, one lifetime: they are armed together
- * and dropped together, so a stuck layer is not reachable without a stuck
- * transition, which the timer rules out.
+ * Timing and curve live entirely in globals.css now (`--theme-scope-crossfade`,
+ * `--theme-scope-ease`, and the reduced-motion collapse). This module owns only
+ * WHEN a swap eases and what the swap is; it holds no duration of its own,
+ * because a second copy of 300ms is a second crossfade waiting to drift.
  */
-export const CANVAS_FADE_ATTRIBUTE = "data-canvas-fade";
-
-/** Its only value; named for the same reason {@link SCOPE_TRANSITION_VALUE} is. */
-export const CANVAS_FADE_VALUE = "outgoing";
-
-/** The custom property that layer paints — the gradient being faded OUT. */
-export const CANVAS_OUTGOING_VARIABLE = "--canvas-outgoing";
 
 /** What the theme store knows about a repaint it is about to perform. */
 export interface ScopeRepaintInput {
@@ -161,103 +131,101 @@ export function shouldEaseScopeRepaint({
 }
 
 /**
- * The live timer AND what it is armed on, so overlapping scope changes extend
- * one window instead of cutting each other short — and so re-arming on a
- * different root disarms the first one rather than leaving it stuck mid-fade.
+ * The transition currently animating, so {@link disarmScopeRepaint} has
+ * something to skip.
+ *
+ * Chromium already keeps its own "active view transition" and skips it when a
+ * new one starts, so this is NOT the re-entrancy mechanism — overlapping scope
+ * changes are the engine's problem and it solves them by construction. This
+ * reference exists for the one case the engine cannot see: an HMR dispose or a
+ * teardown that has to end a transition nothing else will.
  */
-let holding: { timer: ReturnType<typeof setTimeout>; target: HTMLElement } | null = null;
+let running: ViewTransition | null = null;
 
 /**
- * Puts a root back to rest: no transition, no fading layer, no spent gradient
- * left inline.
+ * Runs `applyTokens` as an eased whole-window swap.
  *
- * One function because "armed" is a state of THREE things that must never be
- * separable — the timer's expiry and the hand-off to a different root are the
- * same disarm asked for from two places.
+ * The callback is the swap — the store hands its `paintCanvas` call in rather
+ * than making it before or after, and that is the whole contract. A view
+ * transition captures the window as it stands when it is STARTED, which happens
+ * at the next rendering opportunity rather than inside this call, so DOM changes
+ * made around it land in the OLD capture and animate from themselves to
+ * themselves. Only what changes inside the callback crossfades.
+ *
+ * Falls straight through to a hard cut where the API is missing — old Chromium,
+ * and the renderer's own tests, which run under vitest's `node` environment with
+ * no document at all. That path is not a degraded crossfade, it IS the swap: the
+ * tokens are applied synchronously, exactly as an un-eased repaint applies them,
+ * so the only thing lost is the easing.
+ *
+ * A POINTER PRESS ENDS THE CROSSFADE, and that is not polish. While a view
+ * transition plays, Chromium hit-tests the pseudo-element tree instead of the
+ * document, so every click inside the window resolves to `<html>` and is
+ * DROPPED — not queued, not delayed, gone. Measured in Electron 43: clicks at
+ * +0ms, +100ms and +200ms into a 300ms swap never reached the button under the
+ * cursor; one at +320ms did. `pointer-events: none` on the whole
+ * `::view-transition` tree does not lift it (the computed value takes and the
+ * hit test still lands on the root), so the only lever left is length. Skipping
+ * on the first press turns "up to 300ms of dead window" into "one lost click,
+ * then live" — and it is the right behaviour on its own terms: input outranks
+ * decoration, and a second gesture should never wait for the first animation.
+ * `pointerdown` rather than every input, because it is discrete and deliberate;
+ * a keypress is unaffected by any of this (keyboard focus never leaves the live
+ * DOM), and decaying scroll momentum would cut fades it has no opinion about.
  */
-function disarm(target: HTMLElement): void {
-  target.removeAttribute(SCOPE_TRANSITION_ATTRIBUTE);
-  target.removeAttribute(CANVAS_FADE_ATTRIBUTE);
-  target.style.removeProperty(CANVAS_OUTGOING_VARIABLE);
+export function beginScopeRepaint(applyTokens: () => void): void {
+  if (typeof document === "undefined" || typeof document.startViewTransition !== "function") {
+    applyTokens();
+    return;
+  }
+  // Held rather than re-read: the listener has to come off the document it went
+  // on, and `document` is a live global binding that a teardown can replace.
+  const host = document;
+  const transition = host.startViewTransition(applyTokens);
+  running = transition;
+  // Capture phase on the document, because the press is delivered to `<html>`
+  // and a listener on anything below it would never see the thing it is here to
+  // notice.
+  const yieldToInput = (): void => {
+    transition.skipTransition();
+  };
+  host.addEventListener("pointerdown", yieldToInput, { capture: true, once: true });
+  // `ready` REJECTS with an AbortError every time a transition is skipped, and
+  // skipping is the ORDINARY path here: a second workspace hop inside 300ms
+  // makes Chromium abandon the first one, which is exactly the behaviour we
+  // want. Swallowed deliberately, or the app's most repeated interaction fills
+  // the console with unhandled rejections for working correctly.
+  void transition.ready.catch(() => undefined);
+  // `finished` settles when the animation ends OR when it is skipped, and only
+  // rejects if `applyTokens` itself threw — so ONE handler serves both
+  // outcomes, and serving both is what keeps a rejection from going unheard.
+  // The identity guard is the point of it: a superseded transition can settle
+  // after its successor has already started, and clearing the reference then
+  // would leave the live one unskippable.
+  const forget = (): void => {
+    host.removeEventListener("pointerdown", yieldToInput, { capture: true });
+    if (running === transition) running = null;
+  };
+  void transition.finished.then(forget, forget);
+  // `updateCallbackDone` is left unhandled ON PURPOSE. It is the one promise
+  // that rejects only when the paint genuinely broke, and a broken paint should
+  // reach the console as loudly as the synchronous throw it would have been.
 }
 
 /**
- * Arms the crossfade on `root` (the document element by default) — tokens and
- * gradient both — and takes it off again once the swap has settled.
+ * Ends whatever is currently easing, immediately.
  *
- * Called immediately BEFORE the tokens are rewritten, which is also the only
- * moment the OUTGOING gradient can be read: `--canvas` is still the one on
- * screen, and `paintCanvas` is about to overwrite it. Reading the inline value
- * rather than the computed one is deliberate — inline is what that function
- * writes, so an empty answer means nothing has ever been painted, which is the
- * first paint, which never eases anyway. In that case the gradient simply cuts,
- * exactly as it did before this layer existed.
- *
- * The forced style read is not superstition, and it now does two jobs. The
- * attribute and the new token values would otherwise land in a single style
- * recalc, and while the spec says the after-change style's transition still
- * applies, flushing makes the two-step explicit and identical across engines.
- * The same flush is also what destroys the previous fading layer, so re-arming
- * mid-fade builds a NEW one whose animation starts from the top instead of
- * resuming a spent one at opacity 0.
- *
- * Re-entrant: a second scope change mid-crossfade keeps the transition attribute
- * on and restarts the hold, so the colors simply re-target from wherever they
- * are rather than snapping when the first timer fires. The hold EXTENDS rather
- * than stacking — one timer, cleared and re-armed — which is what makes two
- * changes in quick succession one window instead of two.
- *
- * ONE ARM PER CHANGE, and it is worth writing down because the measurement that
- * says otherwise is easy to take. `animationstart` for the gradient layer does
- * not fire when the attribute lands; it fires on the first rendering lifecycle
- * that samples the animation, measured at 40–100ms later on an idle window and
- * far longer when frames are starved. So a recorder attached between two changes
- * can collect the previous one's start alongside the current one's and read as a
- * single flip arming twice. Verified by patching `setAttribute` and stack-tracing
- * every arm through a full run: one call per flip, all of them from the store's
- * own repaint path. Anything counting fades has to start from a root at rest —
- * see `e2e/canvas-theming-smoke.mjs`'s `watchScopeRepaint`.
- */
-export function beginScopeRepaint(root?: HTMLElement): void {
-  const target = root ?? document.documentElement;
-  const outgoing = target.style.getPropertyValue(CANVAS_VARIABLE);
-  target.setAttribute(SCOPE_TRANSITION_ATTRIBUTE, SCOPE_TRANSITION_VALUE);
-  // Off before the flush, on after it: that is the whole restart mechanism.
-  target.removeAttribute(CANVAS_FADE_ATTRIBUTE);
-  // Flush: makes the transition current style before the caller moves the
-  // tokens, and retires any layer left over from a fade still in flight.
-  void target.offsetWidth;
-  if (outgoing !== "") {
-    target.style.setProperty(CANVAS_OUTGOING_VARIABLE, outgoing);
-    target.setAttribute(CANVAS_FADE_ATTRIBUTE, CANVAS_FADE_VALUE);
-  }
-  if (holding !== null) {
-    clearTimeout(holding.timer);
-    // A different root: its timer is gone, so disarm it here or it stays armed
-    // forever — with a full-window gradient layer frozen on top of it.
-    if (holding.target !== target) disarm(holding.target);
-  }
-  const timer = setTimeout(() => {
-    holding = null;
-    disarm(target);
-  }, SCOPE_REPAINT_HOLD_MS);
-  holding = { timer, target };
-}
-
-/**
- * Reverses whatever is currently armed, on whichever root it is armed on.
- *
- * The module-level hold is otherwise only ever cleared by its own timer, so an
- * HMR swap landing between an arm and that timer's expiry would leave the
- * transition attribute, the fade layer and its spent gradient on the root
- * forever — the first of those a universal-selector transition on eight paint
- * properties. Exported so the dispose hook below can call it.
+ * `skipTransition` still runs the update callback if it has not run yet, so the
+ * tokens land either way and the document is left in the state the swap was
+ * headed for — a hard cut, not an abandoned half-repaint. The engine drops its
+ * own pseudo-element tree with it, which is the whole cleanup: unlike the
+ * attribute-and-timer mechanism this replaced, there is nothing an HMR swap
+ * landing mid-crossfade could leave stuck on the root.
  */
 export function disarmScopeRepaint(): void {
-  if (holding === null) return;
-  clearTimeout(holding.timer);
-  disarm(holding.target);
-  holding = null;
+  if (running === null) return;
+  running.skipTransition();
+  running = null;
 }
 
 /* v8 ignore next 3 -- `import.meta.hot` exists only under the dev server;

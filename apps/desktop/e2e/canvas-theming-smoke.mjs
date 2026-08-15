@@ -176,24 +176,20 @@ const ABANDONED_HEX = "#7a2ea8";
 const OVERLAY_THEME = "Aardvark Blue";
 
 /**
- * Comfortably past `SCOPE_REPAINT_HOLD_MS` (300ms crossfade + 40ms tail, see
- * renderer/src/theme/scope-transition.ts). Spent only to prove both crossfade
- * attributes come back OFF, so a generous margin costs one wait per use.
+ * Comfortably past the 300ms crossfade (renderer/src/theme/scope-transition.ts).
+ * Spent only to prove the view transition has torn itself down, so a generous
+ * margin costs one wait per use.
  */
 const SCOPE_SETTLE_MS = 700;
 
 /**
- * `--theme-scope-crossfade` at rest and under reduced motion (globals.css, and
- * `SCOPE_REPAINT.crossfade` beside it). Read back off the RUNNING animation
- * rather than off the custom property, so a gradient layer that armed against
- * some timing of its own instead of the shared one fails here.
+ * `--theme-scope-crossfade` at rest and under reduced motion (globals.css).
+ * Read back off the RUNNING pseudo-element animations rather than off the custom
+ * property, so a half of the swap that armed against some timing of its own
+ * instead of the shared one fails here.
  */
 const CROSSFADE = { ms: 300, css: "0.3s" };
 const REDUCED_MOTION_CROSSFADE = { ms: 120, css: "0.12s" };
-
-/** Either reading of a fade's duration is enough; see {@link watchScopeRepaint}. */
-const fadeRanFor = (fade, expected) =>
-  fade?.computed === expected.css || fade?.duration === expected.ms;
 
 /** The user's own ghostty config — seeded, then asserted byte-identical (#67). */
 const USER_GHOSTTY_CONFIG = `# The user's own ghostty config. Volli must NEVER write this file.
@@ -573,151 +569,126 @@ const storedGlobalCanvas = (page) => storedTheme(page).then((state) => state.can
 // ---- the crossfade ----------------------------------------------------------
 
 /**
- * Arms an in-page recorder for BOTH halves of the scope crossfade, from now
- * until it is read.
+ * Arms an in-page recorder for the scope crossfade, from now until it is read.
  *
- * A poll would be racing a ~340ms window; the attributes are set and removed as
- * separate mutations, so a MutationObserver gets a record for each and cannot
- * miss it. Both attributes are watched because they are one lifetime with two
- * jobs — `data-theme-transition` eases the token colors, `data-canvas-fade`
- * mounts the pseudo-element that fades the outgoing gradient out — and a stuck
- * layer is only unreachable if they are armed together and dropped together.
+ * The swap is a VIEW TRANSITION (renderer/src/theme/scope-transition.ts): the
+ * tokens move once, inside the update callback, and what animates afterwards is
+ * two captures of the window crossfading on the compositor. So there is no
+ * attribute to observe any more — the honest evidence is the engine's own, and
+ * there are two independent readings of it:
  *
- * `animationstart` catches the gradient half's DURATION, which is the only
- * honest way to check the reduced-motion collapse: `--theme-scope-crossfade` is
- * resolved nowhere else. The animation lives on `html::before`, whose events
- * are dispatched at `html` itself with `pseudoElement` set.
+ *   • `:root:active-view-transition` matches for exactly as long as one is
+ *     running, so a rising edge is one swap. Counting edges is what tells a
+ *     single flip from a flip that armed twice, which used to read as a stutter.
+ *   • `document.getAnimations()` reports the pseudo-element animations Chromium
+ *     built, with their RESOLVED durations. `--theme-scope-crossfade` is
+ *     resolved nowhere else, so this is the only honest reading of the
+ *     reduced-motion collapse — and every animation on the swap is checked, not
+ *     just one, because the fades and Chromium's own `plus-lighter` blend all
+ *     take their timing from the same author rule and a half that kept the UA's
+ *     0.25s would show as a dip near the end of every swap.
  *
- * IT WAITS FOR THE ROOT TO BE AT REST FIRST, and that is a correctness fix
+ * A poll would be racing a ~300ms window, so the sampler runs on
+ * `requestAnimationFrame` — roughly eighteen samples inside the shortest swap
+ * this can be asked about, and seven inside the reduced-motion one.
+ *
+ * IT WAITS FOR THE DOCUMENT TO BE AT REST FIRST, and that is a correctness fix
  * rather than tidiness. Consecutive checks flip the mode ~400ms apart while the
- * hold window is 340ms, so a recorder installed the instant the previous check
- * finished could still find the last flip armed — and `animationstart` does not
- * fire when the attribute lands, it fires on the first rendering lifecycle that
- * samples the animation, which under a busy smoke can be hundreds of ms later
- * and therefore AFTER the new listener is attached. The result read as one flip
- * arming twice (measured: fades at +38ms and +354ms) when the app had in fact
- * called `beginScopeRepaint` exactly once per flip — verified by patching
- * `setAttribute` and stack-tracing every arm in a run: three arms, three clicks,
- * all through `setGlobalAppearance`. Starting from rest makes every fade this
- * records belong to the flip under test.
+ * crossfade is 300ms, so a recorder installed the instant the previous check
+ * finished could otherwise catch the tail of that flip and grade it as this
+ * one's.
  */
 async function watchScopeRepaint(page) {
   await page.waitForFunction(
-    () => {
-      const root = document.documentElement;
-      return (
-        root.getAttribute("data-theme-transition") === null &&
-        root.getAttribute("data-canvas-fade") === null
-      );
-    },
+    () => !document.documentElement.matches(":active-view-transition"),
     undefined,
     { timeout: 5000 },
   );
   await page.evaluate(() => {
-    const root = document.documentElement;
-    window.volliRepaint?.observer.disconnect();
-    if (window.volliRepaint !== undefined) {
-      root.removeEventListener("animationstart", window.volliRepaint.onAnimation);
-    }
+    cancelAnimationFrame(window.volliRepaint?.raf ?? 0);
     const started = performance.now();
-    const at = () => Math.round(performance.now() - started);
-    const state = {
-      /** Every {transition, fade} pair the root has worn, deduped, with when. */
-      trace: [],
-      fades: [],
-    };
-    const record = () => {
-      const entry = {
-        transition: root.getAttribute("data-theme-transition"),
-        fade: root.getAttribute("data-canvas-fade"),
-        at: at(),
-      };
-      const last = state.trace.at(-1);
-      if (last?.transition !== entry.transition || last?.fade !== entry.fade) {
-        state.trace.push(entry);
+    const state = { runs: [], anims: [] };
+    let wasActive = false;
+    const tick = () => {
+      const active = document.documentElement.matches(":active-view-transition");
+      // The rising edge only: one entry per swap, however many frames it spans.
+      if (active && !wasActive) state.runs.push(Math.round(performance.now() - started));
+      wasActive = active;
+      for (const animation of document.getAnimations()) {
+        const pseudo = animation.effect?.pseudoElement ?? "";
+        if (!pseudo.includes("view-transition")) continue;
+        const key = `${pseudo}|${animation.animationName}`;
+        if (state.anims.some((entry) => entry.key === key)) continue;
+        state.anims.push({
+          key,
+          pseudo,
+          name: animation.animationName,
+          duration: animation.effect.getTiming().duration,
+        });
       }
+      window.volliRepaint.raf = requestAnimationFrame(tick);
     };
-    record();
-    const observer = new MutationObserver(record);
-    observer.observe(root, {
-      attributes: true,
-      attributeFilter: ["data-theme-transition", "data-canvas-fade"],
-    });
-    const onAnimation = (event) => {
-      if (event.animationName !== "theme-canvas-crossfade") return;
-      const running = document
-        .getAnimations()
-        .find((animation) => animation.animationName === event.animationName);
-      state.fades.push({
-        pseudo: event.pseudoElement ?? null,
-        // When, relative to the root going to rest. Recording only ever starts
-        // from rest, so every offset here belongs to the swap under test — see
-        // {@link watchScopeRepaint}. An offset well past the crossfade is the
-        // signature of a real re-fade rather than a leftover.
-        at: at(),
-        // The RESOLVED duration, off the pseudo-element that is actually
-        // running: `--theme-scope-crossfade` is resolved nowhere else, so this
-        // is the only honest reading of the reduced-motion collapse. Both forms
-        // are recorded because `getAnimations()` reaching a pseudo-element is a
-        // Chromium detail and the computed style is not.
-        computed: getComputedStyle(root, "::before").animationDuration,
-        duration: running?.effect.getTiming().duration ?? null,
-        playState: running?.playState ?? "(gone)",
-      });
-    };
-    root.addEventListener("animationstart", onAnimation);
-    window.volliRepaint = { observer, onAnimation, state };
+    window.volliRepaint = { state, raf: 0 };
+    tick();
   });
 }
 
-/** The crossfade trace since {@link watchScopeRepaint}, plus what is armed now. */
+/** The crossfade trace since {@link watchScopeRepaint}, plus what is running now. */
 const readScopeRepaint = (page) =>
   page.evaluate(() => {
-    const state = window.volliRepaint?.state ?? { trace: [], fades: [] };
+    const state = window.volliRepaint?.state ?? { runs: [], anims: [] };
+    const oldHalf = getComputedStyle(document.documentElement, "::view-transition-old(root)");
+    const newHalf = getComputedStyle(document.documentElement, "::view-transition-new(root)");
     return {
-      trace: state.trace,
-      fades: state.fades,
-      now: {
-        transition: document.documentElement.getAttribute("data-theme-transition"),
-        fade: document.documentElement.getAttribute("data-canvas-fade"),
+      runs: state.runs,
+      anims: state.anims,
+      active: document.documentElement.matches(":active-view-transition"),
+      // The declared side of the same facts, which survives the swap being over.
+      resolved: {
+        oldDuration: oldHalf.animationDuration,
+        newDuration: newHalf.animationDuration,
+        oldTiming: oldHalf.animationTimingFunction,
+        newTiming: newHalf.animationTimingFunction,
+        oldBlend: oldHalf.mixBlendMode,
+        newBlend: newHalf.mixBlendMode,
       },
     };
   });
 
-/** Was there a moment with BOTH attributes armed? */
-const armedTogether = (trace) =>
-  trace.some((entry) => entry.transition === "scope" && entry.fade === "outgoing");
+/** Did the swap actually run a view transition? */
+const crossfaded = (trace) => trace.runs.length >= 1;
 
 /**
- * Every gradient fade the swap started, on the right pseudo-element and at the
- * shared duration.
- *
- * Still not a count, and now for a narrower reason than it used to be.
- * `beginScopeRepaint` removes the attribute, flushes and re-adds it so an
- * overlapping change restarts from the top rather than resuming a spent layer at
- * opacity 0 — that rebuild happens inside one task, never reaches a frame, and
- * whether Chromium dispatches one `animationstart` or two for it is an engine
- * detail rather than a fact about the crossfade. What must hold for every one of
- * them is that it ran on `html::before` for `--theme-scope-crossfade`; a second
- * timing anywhere fails here however many fades there were. What the count would
- * once have caught — a leftover fade from the PREVIOUS check — is now impossible
- * by construction, because recording starts from rest.
+ * …and exactly ONE. A flip that armed twice would land the second crossfade as
+ * the first finished, which reads as a stutter — the defect the old
+ * attribute-counting check existed to catch, in the one form the engine can
+ * still be asked about directly.
  */
-const fadesRanFor = (fades, expected) =>
-  fades.length >= 1 &&
-  fades.every((fade) => fade.pseudo === "::before" && fadeRanFor(fade, expected));
+const crossfadedOnce = (trace) => trace.runs.length === 1;
 
 /**
- * Whether every fade recorded belongs to ONE swap.
+ * Every animation the swap built, at the shared duration.
  *
- * Recording starts from rest, so the only honest reading of a fade that begins
- * long after the first is a second arming — the stutter this pins against. The
- * bar is the crossfade itself: a rebuild inside one task lands within a frame or
- * two of the first, and anything past the window the first fade occupies is a
- * repaint the user would see land twice.
+ * Not a count: how many pseudo-elements Chromium animates for a root-only
+ * transition is an engine detail (measured in Electron 43: the two fades, the
+ * group, and a `plus-lighter` blend on each half — five). What must hold for
+ * every one of them is that it took its timing from `--theme-scope-crossfade`;
+ * a second timing anywhere fails here however many animations there were.
  */
-const fadedOnce = (fades, expected) =>
-  fades.length >= 1 && fades.every((fade) => fade.at - fades[0].at < expected.ms);
+const crossfadeRanFor = (trace, expected) =>
+  trace.anims.length >= 1 &&
+  trace.anims.every((entry) => entry.duration === expected.ms) &&
+  trace.resolved.oldDuration === expected.css &&
+  trace.resolved.newDuration === expected.css;
+
+/**
+ * The blend is load-bearing, not decoration: the two captures are stacked, so
+ * ordinary compositing dips the whole window toward the backdrop at the
+ * midpoint. Additive blending sums two ramps that are complements of the same
+ * eased progress, so the sum is exactly 1 at every frame.
+ */
+const crossfadeBlendsAdditively = (trace) =>
+  trace.resolved.oldBlend === "plus-lighter" && trace.resolved.newBlend === "plus-lighter";
 
 /**
  * Records every value `--background` settles on from now until it is read.
@@ -955,7 +926,7 @@ try {
   });
 
   // ---- 3. the crossfade ----------------------------------------------------
-  await attempt(7, "a mode flip arms BOTH crossfade attributes, and drops both", async () => {
+  await attempt(7, "a mode flip crossfades once, and cleans up after itself", async () => {
     await watchScopeRepaint(page);
     await segment(page, "appearance-mode", "dark").click();
     await waitForToken(page, "--background", DARK["--background"]);
@@ -964,24 +935,22 @@ try {
     const after = await readScopeRepaint(page);
     return {
       ok:
-        armedTogether(during.trace) &&
-        // One lifetime: neither may outlive the other, or a full-window gradient
-        // layer is left frozen on top of a window that has stopped easing.
-        after.now.transition === null &&
-        after.now.fade === null &&
-        fadesRanFor(after.fades, CROSSFADE) &&
-        // …and ONE arming. A flip that armed twice would land the second fade
-        // as the first finished, which reads as a stutter.
-        fadedOnce(after.fades, CROSSFADE),
-      detail: `trace=${JSON.stringify(during.trace)} after=${JSON.stringify(after.now)} fades=${JSON.stringify(after.fades)}`,
+        crossfaded(during) &&
+        // The engine owns the teardown, and this is where that claim is kept
+        // honest: nothing may still be running once the swap has settled.
+        after.active === false &&
+        crossfadedOnce(after) &&
+        crossfadeRanFor(after, CROSSFADE) &&
+        crossfadeBlendsAdditively(after),
+      detail: `runs=${JSON.stringify(after.runs)} active=${after.active} anims=${JSON.stringify(after.anims)} resolved=${JSON.stringify(after.resolved)}`,
     };
   });
 
   await attempt(8, "reduced motion collapses the crossfade to its short ease", async () => {
     // HIG: nothing here translates or scales, so the accessible treatment is the
     // shortest honest ease rather than a hard cut. The media query moves ONE
-    // custom property and both halves read it — a duration of 300 here means the
-    // gradient has a timing of its own somewhere.
+    // custom property and every animation on the swap reads it — a duration of
+    // 300 on any of them means a half of the crossfade has a timing of its own.
     await page.emulateMedia({ reducedMotion: "reduce" });
     await watchScopeRepaint(page);
     await segment(page, "appearance-mode", "light").click();
@@ -992,10 +961,10 @@ try {
     await page.emulateMedia({ reducedMotion: null });
     return {
       ok:
-        armedTogether(during.trace) &&
-        fadesRanFor(after.fades, REDUCED_MOTION_CROSSFADE) &&
-        fadedOnce(after.fades, REDUCED_MOTION_CROSSFADE),
-      detail: `fades=${JSON.stringify(after.fades)} expected=${JSON.stringify(REDUCED_MOTION_CROSSFADE)}`,
+        crossfaded(during) &&
+        crossfadedOnce(after) &&
+        crossfadeRanFor(after, REDUCED_MOTION_CROSSFADE),
+      detail: `runs=${JSON.stringify(after.runs)} anims=${JSON.stringify(after.anims)} resolved=${JSON.stringify(after.resolved)} expected=${JSON.stringify(REDUCED_MOTION_CROSSFADE)}`,
     };
   });
 
@@ -1265,12 +1234,8 @@ cursor-style = block
     await sleep(SCOPE_SETTLE_MS);
     const after = await readScopeRepaint(page);
     return {
-      ok:
-        applied === globalBackground &&
-        armedTogether(during.trace) &&
-        after.now.transition === null &&
-        after.now.fade === null,
-      detail: `--background=${applied} trace=${JSON.stringify(during.trace)} after=${JSON.stringify(after.now)}`,
+      ok: applied === globalBackground && crossfaded(during) && after.active === false,
+      detail: `--background=${applied} runs=${JSON.stringify(after.runs)} active=${after.active}`,
     };
   });
 
@@ -1351,10 +1316,10 @@ cursor-style = block
           globalCanvas !== null &&
           paints.at(-1) === projectBackground &&
           excursions.length <= 1 &&
-          // No scope changed, so the crossfade has no business arming.
-          !armedTogether(armed.trace) &&
+          // No scope changed, so the crossfade has no business running.
+          !crossfaded(armed) &&
           stored.projects[projectAId]?.canvas?.stops[0]?.hex === WORKSPACE_HEX,
-        detail: `paints=${JSON.stringify(paints)} crossfade=${JSON.stringify(armed.trace)} A=${JSON.stringify(stored.projects[projectAId]?.canvas?.stops)}`,
+        detail: `paints=${JSON.stringify(paints)} crossfadeRuns=${JSON.stringify(armed.runs)} A=${JSON.stringify(stored.projects[projectAId]?.canvas?.stops)}`,
       };
     },
   );

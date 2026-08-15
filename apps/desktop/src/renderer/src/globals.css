@@ -1031,94 +1031,86 @@ input[type="range"]:focus-visible {
  * different project; the second is the brightness change Apple's accessibility
  * guidance singles out for easing (HIG: ease dark↔light theme changes).
  *
- * CSS custom properties don't interpolate (unregistered, they animate
- * discretely), so the crossfade is bought on the properties that CONSUME them.
- * Deliberately unlayered: `@import "tailwindcss"` puts every utility in a
- * cascade layer, and unlayered rules beat layered ones regardless of
- * specificity — which is the only way this can outrank `transition-colors` on a
- * button for the ~300ms it is armed. Nothing here is on at rest;
- * scope-transition.ts adds the attribute for the length of one swap.
+ * IT IS A VIEW TRANSITION, and the reason is that the obvious mechanism is
+ * quadratic in the wrong thing. CSS custom properties don't interpolate —
+ * unregistered, they animate discretely — so easing a token swap means buying
+ * the interpolation on the properties that CONSUME the tokens, which means
+ * arming `transition-property` over `:root, :root *, :root *::before,
+ * :root *::after` for the length of the swap. That is a live transition on every
+ * node in the document, and every one of them is restyled on every frame of it.
+ * Measured on a workspace hop: deriving the tokens and writing them took under
+ * 7ms, and the crossfade then held the main thread in continuous style
+ * recalculation for ~331ms. `document.startViewTransition` moves the tokens
+ * once, inside its update callback — one recalculation, the same cost as a hard
+ * cut — and animates two flattened captures of the window instead, which the
+ * compositor crossfades without asking the main thread anything.
  *
- * `background-image` is deliberately NOT in the list, and cannot be: two
- * multi-stop gradients have no value in between, so listing it would still cut.
- * The gradient's half of the crossfade is the stacked layer below.
+ * IT IS ALSO WHY THERE IS NO LONGER A SECOND MECHANISM FOR THE GRADIENT. The
+ * canvas is a multi-stop `background-image` on `html` (§ THE CANVAS above) and
+ * two gradients have no value in between, so a property transition swapped it on
+ * the first frame — leaving a third of a second in which the card, the sidebar
+ * and the text were still the outgoing workspace's colors, easing over the
+ * incoming workspace's wallpaper. That needed the outgoing gradient copied to a
+ * custom property and repainted on a fading `html::before` layer, with its own
+ * keyframes and its own hold timer. A capture is pixels: the gradient stops
+ * being a gradient the moment it is snapshotted, and crossfades for the same
+ * reason everything else in the window does.
  *
- * Timing lives in scope-transition.ts's storyboard; --theme-scope-crossfade
- * mirrors its `crossfade` constant. The curve is --ease-swift's, written out
- * because Tailwind's `inline` theme tokens are not guaranteed to be emitted as
- * custom properties. No overshoot: a theme change is a state change, not a
- * thrown object. */
+ * The curve is --ease-swift's, written out because Tailwind's `inline` theme
+ * tokens are not guaranteed to be emitted as custom properties. No overshoot: a
+ * theme change is a state change, not a thrown object. Both properties are
+ * declared on `:root`, which is where the `::view-transition` tree is rooted, so
+ * the pseudo-elements below inherit them — including the reduced-motion collapse
+ * at the bottom of this file, which moves the one variable both halves read. */
 :root {
   --theme-scope-crossfade: 300ms;
   --theme-scope-ease: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
-:root[data-theme-transition="scope"],
-:root[data-theme-transition="scope"] *,
-:root[data-theme-transition="scope"] *::before,
-:root[data-theme-transition="scope"] *::after {
-  transition-property:
-    background-color, color, border-color, outline-color, text-decoration-color, fill, stroke,
-    box-shadow;
-  transition-duration: var(--theme-scope-crossfade);
-  transition-timing-function: var(--theme-scope-ease);
+/* Chromium's own crossfade, retimed — not replaced. The UA stylesheet already
+ * fades `old` out and `new` in over the same progress, which is the animation we
+ * want; it runs it for 0.25s on `ease`, and the app's swap is 300ms on the
+ * scope curve. `animation-duration` is set on all three pseudo-elements rather
+ * than only on the pair, because the UA gives `old`/`new` `animation-duration:
+ * inherit` from the group — leave the group alone and any geometry morph it ever
+ * runs would keep a timing of its own.
+ *
+ * The group DOES animate, and giving it this duration is what keeps it silent.
+ * Measured in Electron 43, `getAnimations()` during a live swap reports five
+ * animations: `-ua-view-transition-group-anim-root` on the group,
+ * `-ua-view-transition-fade-out` / `-ua-view-transition-fade-in` on the pair,
+ * and a `-ua-mix-blend-mode-plus-lighter` on each half. The group animation
+ * interpolates the snapshot's box, and `group(root)`'s box is the viewport —
+ * the same box before and after a color swap — so it moves nothing today. Left
+ * on the UA's 0.25s it would still be a second timing waiting for the first
+ * window resize that lands mid-swap.
+ *
+ * `mix-blend-mode: plus-lighter` is written down rather than left implicit,
+ * because it is load-bearing and easy to mistake for decoration. The captures
+ * are stacked, so ordinary compositing at the midpoint shows a half-transparent
+ * old layer over a half-transparent new one and the window dips toward the
+ * backdrop on its way across. Additive blending sums them instead, and the two
+ * ramps are complements of the SAME eased progress — `old` at 1−p, `new` at p —
+ * so the sum is exactly 1 at every frame whatever the curve does.
+ *
+ * Chromium ALSO drives that blend from an animation of its own
+ * (`-ua-mix-blend-mode-plus-lighter`), which is the real reason the duration
+ * above has to be set on the pair rather than only on the group: an author
+ * duration applies to every animation on the pseudo-element, so retiming the
+ * fades retimes the blend with them. Leave them out of sync and the blend
+ * reverts to `normal` partway through a fade that is still running, which is a
+ * visible dip in the last stretch of every swap. This declaration is what the
+ * value rests at outside that animation. */
+:root::view-transition-group(root),
+:root::view-transition-old(root),
+:root::view-transition-new(root) {
+  animation-duration: var(--theme-scope-crossfade);
+  animation-timing-function: var(--theme-scope-ease);
 }
 
-/* THE GRADIENT'S HALF OF THAT CROSSFADE.
- *
- * The rule above eases every color the window draws with. It cannot ease the
- * canvas: `--canvas` is a multi-stop `background-image`, and two gradients have
- * no value in between, so it swaps on the first frame. That is worse than no
- * animation — for a third of a second the card, the sidebar and the text are
- * still the outgoing workspace's colors, easing over the incoming workspace's
- * wallpaper. Opacity, unlike a gradient, interpolates between any two canvases.
- *
- * So the OUTGOING gradient is painted a second time here and faded out over the
- * incoming one, which `html` is already painting underneath. One layer, not two:
- * the base canvas has to stay on `html` itself — that is the entire first-paint
- * argument (§ THE CANVAS above), since a value the stylesheet declares is
- * paintable before any JS runs and an element is not — so the only thing that
- * needs a second layer is the copy being retired.
- *
- * WHY `html::before` and not a React element. The layer must sit above `html`'s
- * own background and below every pixel of the app, and a negative-z fixed child
- * of the root stacking context is exactly that slot. Reaching it from React
- * would mean an element that mounts after first paint, that has to be kept
- * outside the `zoom: uiScale` row (app-shell.tsx) by hand, and that lives in the
- * same tree as the live terminals — which must never be unmounted incidentally.
- * A pseudo-element has no mount at all: it is created by an attribute and
- * destroyed by its removal, touches no component tree, and cannot be reordered
- * by a refactor above it. `::before` rather than `::after` because this paints
- * BENEATH everything; `::after` reads as the layer on top.
- *
- * An animation rather than a transition, because it plays exactly once from a
- * known start. `scope-transition.ts` removes the attribute, flushes, and re-adds
- * it, so an overlapping scope change builds a fresh layer that starts from the
- * top instead of resuming a spent one at opacity 0; `forwards` holds the last
- * frame until the shared hold timer takes the attribute off for good.
- *
- * `contain: strict` keeps a window-sized gradient out of every layout and paint
- * invalidation above it (safe here: an inset-0 fixed box takes its size from its
- * insets), and `pointer-events: none` is defensive — a full-window layer that
- * swallowed a click would be a bug in every direction. */
-:root[data-canvas-fade="outgoing"]::before {
-  position: fixed;
-  z-index: -1;
-  contain: strict;
-  inset: 0;
-  animation: theme-canvas-crossfade var(--theme-scope-crossfade) var(--theme-scope-ease) forwards;
-  pointer-events: none;
-  content: "";
-  background: var(--canvas-outgoing);
-}
-
-@keyframes theme-canvas-crossfade {
-  from {
-    opacity: 1;
-  }
-  to {
-    opacity: 0;
-  }
+:root::view-transition-old(root),
+:root::view-transition-new(root) {
+  mix-blend-mode: plus-lighter;
 }
 
 /* The effort slider's notches, dealt in left to right when the popover opens
@@ -1146,12 +1138,13 @@ input[type="range"]:focus-visible {
 /* Reduced motion (HIG §accessibility): nothing here translates or scales, so
  * there is no vestibular motion to remove — and an eased brightness change is
  * itself the accessible treatment for a whole-window repaint. Keep the shortest
- * honest ease rather than a hard cut, over before it reads as animation.
+ * honest ease rather than a hard cut, over before it reads as animation. A hard
+ * cut is what the setting would ask for if this were movement; it is a
+ * brightness jump, and jumping it is the thing the easing was for.
  *
- * One variable collapses BOTH halves, which is the point of their sharing it:
- * a gradient that outlived the token crossfade would leave the new workspace's
- * chrome sitting on the old one's wallpaper — the exact defect the layer exists
- * to remove, reintroduced by a second timing. */
+ * One variable is enough because there is only one timing left to collapse: the
+ * swap is a single crossfade of two captures, and the pseudo-elements that run
+ * it inherit this from `:root`. */
 @media (prefers-reduced-motion: reduce) {
   :root {
     --theme-scope-crossfade: 120ms;

@@ -160,12 +160,15 @@ export interface ThemeStoreDeps {
   /** Activates a Monaco/shiki catalog id (queued until Monaco boots). */
   refreshEditorTheme(themeId: string): void;
   /**
-   * Arms the eased repaint for ONE swap (#69, theme/scope-transition.ts).
-   * Called immediately before {@link paintCanvas}, and only for a scope change
-   * or a light↔dark flip — never for an authoring edit or a preview, where
-   * instant is the correct feedback.
+   * Runs ONE swap as an eased whole-window repaint (#69,
+   * theme/scope-transition.ts). Handed the {@link paintCanvas} call rather than
+   * called before it: the view transition captures the window as it stands when
+   * it starts, so a swap made outside its callback lands in the OLD capture and
+   * animates from itself to itself. Used only for a scope change or a light↔dark
+   * flip — never for an authoring edit or a preview, where instant is the
+   * correct feedback.
    */
-  beginScopeRepaint(): void;
+  beginScopeRepaint(applyTokens: () => void): void;
   /**
    * What the system was asking for when this window was built — main's
    * `nativeTheme` reading, handed over on the process arguments. Called exactly
@@ -194,7 +197,7 @@ const defaultDeps: ThemeStoreDeps = {
   // assignable to a longer signature, so the mistake typechecks.
   paintCanvas,
   refreshEditorTheme: (themeId) => refreshMonacoEditorTheme(themeId),
-  beginScopeRepaint: () => beginScopeRepaint(),
+  beginScopeRepaint,
   systemPrefersDark: () => systemPrefersDark(),
 };
 
@@ -415,12 +418,25 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
       if (key !== painted || (paintedInFlight && !transient)) {
         painted = key;
         paintedInFlight = transient;
-        // Armed only when there is an actual swap to ease: a scope change that
+        // Eased only when there is an actual swap to ease: a scope change that
         // resolves to the same canvas at the same mode repaints nothing, and a
-        // 300ms window in which every hover transition is slowed for no visible
-        // reason is a latency regression.
-        if (options.eased === true) deps.beginScopeRepaint();
-        deps.paintCanvas(active.canvas.value, active.resolved, { transient });
+        // 300ms crossfade of a window against an identical copy of itself is
+        // latency with nothing to show for it.
+        //
+        // The eased path re-reads the store instead of painting the `active`
+        // resolved above, because its callback runs a frame later, inside the
+        // view transition. What should be on screen when the swap actually
+        // happens is what the store says then — and the hint recorded below,
+        // which is always written from the newest state, would otherwise be
+        // able to describe a different canvas than the one painted.
+        if (options.eased === true) {
+          deps.beginScopeRepaint(() => {
+            const current = activeTheme(get());
+            deps.paintCanvas(current.canvas.value, current.resolved, { transient });
+          });
+        } else {
+          deps.paintCanvas(active.canvas.value, active.resolved, { transient });
+        }
         // The hint describes the NEXT launch's window, so it may only ever
         // describe something STORED. Keyed on a preview being in flight rather
         // than on this paint being transient, because those come apart: a
@@ -562,13 +578,18 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
       previewFrame = null;
     };
 
-    const setAndRepaint = (patch: Partial<ThemeState>): void => {
+    /**
+     * `ease: false` forces the hard cut for a change that moved the mode but is
+     * not a transition — see {@link ThemeState.hydrateGlobal}, the only caller
+     * that passes it.
+     */
+    const setAndRepaint = (patch: Partial<ThemeState>, { ease = true } = {}): void => {
       dropPendingPreviewPaint();
       const hadPainted = painted !== null;
       const before = activeTheme(get()).resolved;
       set(patch);
       const after = activeTheme(get()).resolved;
-      repaint({ eased: hadPainted && before !== after });
+      repaint({ eased: ease && hadPainted && before !== after });
     };
 
     /** The editor override the 013 row still owns, merged onto what this scope has. */
@@ -620,10 +641,24 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
           }
         }
         const appearance = appState[APPEARANCE_APP_STATE_KEY];
-        setAndRepaint({
-          globalCanvas: stored ?? DEFAULT_CANVAS,
-          globalAppearance: isAppearance(appearance) ? appearance : "auto",
-        });
+        // NEVER eased, and that is the same rule as "the first paint is not a
+        // transition" — it just has to be said here, because by the time these
+        // rows land something may already have painted. `volli:theme-state` can
+        // beat the bootstrap payload back (main.tsx asks for it the moment the
+        // renderer exists; this arrives with `boot()`), and that read's
+        // `accept` repaints from a store that has never seen an authored row:
+        // the shipped canvas at `auto`, which on a dark machine is a dark
+        // window. Crossfading from THAT to the user's stored look would ease
+        // out of a placeholder — a 300ms fade from a theme nobody chose, on
+        // every launch that loses the race. There is no previous look here by
+        // definition: this IS the previous look arriving.
+        setAndRepaint(
+          {
+            globalCanvas: stored ?? DEFAULT_CANVAS,
+            globalAppearance: isAppearance(appearance) ? appearance : "auto",
+          },
+          { ease: false },
+        );
       },
 
       async hydrate(scope) {
