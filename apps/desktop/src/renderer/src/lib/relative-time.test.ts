@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { compactAge, formatStamp, relativeTime } from "./relative-time";
+import { compactAge, formatStamp, nextAgeChangeAt, relativeTime } from "./relative-time";
 
 const NOW = Date.UTC(2026, 6, 14, 12, 0, 0); // 2026-07-14T12:00:00Z
 const SECOND = 1000;
@@ -68,6 +68,55 @@ describe("compactAge", () => {
 
   it("defaults `now` to the wall clock", () => {
     expect(compactAge(Date.now())).toBe("now");
+  });
+});
+
+/** What `compactAge` reads one millisecond either side of the boundary. */
+function straddle(epochMs: number, now: number): [string, string] {
+  const at = nextAgeChangeAt(epochMs, now);
+  return [compactAge(epochMs, at - 1), compactAge(epochMs, at)];
+}
+
+describe("nextAgeChangeAt", () => {
+  it("closes the 'just now' bucket at 45 seconds, a future stamp included", () => {
+    expect(nextAgeChangeAt(NOW, NOW)).toBe(NOW + 45 * SECOND);
+    expect(nextAgeChangeAt(NOW, NOW - 5 * MINUTE)).toBe(NOW + 45 * SECOND);
+    expect(straddle(NOW - 30 * SECOND, NOW)).toEqual(["now", "0m"]);
+  });
+
+  it("closes every later bucket on its own unit", () => {
+    expect(nextAgeChangeAt(NOW - 90 * SECOND, NOW)).toBe(NOW - 90 * SECOND + 2 * MINUTE);
+    expect(nextAgeChangeAt(NOW - 90 * MINUTE, NOW)).toBe(NOW - 90 * MINUTE + 2 * HOUR);
+    expect(nextAgeChangeAt(NOW - 36 * HOUR, NOW)).toBe(NOW - 36 * HOUR + 2 * DAY);
+    expect(nextAgeChangeAt(NOW - 10 * DAY, NOW)).toBe(NOW - 10 * DAY + 2 * WEEK);
+  });
+
+  it("is the first instant the age actually reads differently, at every rung", () => {
+    expect(straddle(NOW - 90 * SECOND, NOW)).toEqual(["1m", "2m"]);
+    expect(straddle(NOW - 90 * MINUTE, NOW)).toEqual(["1h", "2h"]);
+    expect(straddle(NOW - 36 * HOUR, NOW)).toEqual(["1d", "2d"]);
+    expect(straddle(NOW - 10 * DAY, NOW)).toEqual(["1w", "2w"]);
+    // The rung that leaves the relative ladder entirely. Only the near side is
+    // named: the far side is a localised date, so the fact worth asserting is
+    // that it is no longer a week count.
+    const [lastWeek, rolledUp] = straddle(NOW - 4 * WEEK + SECOND, NOW);
+    expect(lastWeek).toBe("3w");
+    expect(rolledUp).not.toMatch(/w$/);
+  });
+
+  it("waits for the turn of the year once the age is an absolute date", () => {
+    const at = nextAgeChangeAt(NOW - 6 * WEEK, NOW);
+    expect(at).toBe(new Date(2027, 0, 1).getTime());
+    // Nothing about that date moves until the year printed beside it does.
+    const [thisYear, nextYear] = straddle(NOW - 6 * WEEK, NOW);
+    expect(thisYear).not.toContain("'");
+    expect(nextYear).toContain("'26");
+  });
+
+  it("is always strictly in the future, so a caller arming a timer cannot spin", () => {
+    for (const age of [0, SECOND, MINUTE, HOUR, DAY, WEEK, 6 * WEEK, 60 * WEEK]) {
+      expect(nextAgeChangeAt(NOW - age, NOW)).toBeGreaterThan(NOW);
+    }
   });
 });
 

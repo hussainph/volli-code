@@ -91,3 +91,40 @@ export function compactAge(epochMs: number, now: number = Date.now()): string {
   const year = String(date.getFullYear() % 100).padStart(2, "0");
   return `${date.toLocaleDateString(undefined, { month: "short" })} '${year}`;
 }
+
+/** The first instant past the `unit`-wide bucket `diff` currently sits in. */
+function bucketEnd(diff: number, unit: number): number {
+  return (Math.floor(diff / unit) + 1) * unit;
+}
+
+/**
+ * The first instant at which {@link compactAge}(`epochMs`, …) reads differently
+ * from what it reads at `now`.
+ *
+ * A row showing an age is stale from that instant and correct until it, which
+ * makes this the whole of what a caller needs to keep one accurate: arm a timer
+ * on the soonest one on screen and there is no polling clock, no interval
+ * chosen against the smallest unit anything might display, and no window in
+ * which a stamp is wrong.
+ *
+ * It walks {@link relativeTime}'s ladder, and each rung's answer is the end of
+ * the bucket the stamp currently sits in — the "just now" bucket closes at 45
+ * seconds, every rung after it closes on its own unit. Past the four-week
+ * rollup the string is an absolute date with exactly one moving part: the year,
+ * which {@link compactAge} omits inside the current calendar year and prints
+ * outside it, so the next change is the turn of the year.
+ *
+ * Always strictly after `now`, a future stamp included, so a caller arming a
+ * timer on it can never spin.
+ */
+export function nextAgeChangeAt(epochMs: number, now: number): number {
+  const diff = now - epochMs;
+
+  if (diff < 45 * SECOND) return epochMs + 45 * SECOND;
+  if (diff < HOUR) return epochMs + bucketEnd(diff, MINUTE);
+  if (diff < DAY) return epochMs + bucketEnd(diff, HOUR);
+  if (diff < WEEK) return epochMs + bucketEnd(diff, DAY);
+  if (diff < ROLLUP_AFTER) return epochMs + bucketEnd(diff, WEEK);
+
+  return new Date(new Date(now).getFullYear() + 1, 0, 1).getTime();
+}
