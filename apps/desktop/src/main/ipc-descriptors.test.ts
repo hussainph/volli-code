@@ -375,6 +375,15 @@ describe("DATA_IPC descriptor table", () => {
       );
     });
 
+    it("accepts a usesWorktree flip (the pre-materialization destination control)", () => {
+      expect(guard([{ ticketId: "t1", usesWorktree: false }])).toBe(true);
+      expect(guard([{ ticketId: "t1", usesWorktree: true }])).toBe(true);
+    });
+
+    it("rejects a non-boolean usesWorktree when present", () => {
+      expect(guard([{ ticketId: "t1", usesWorktree: "yes" }])).toBe(false);
+    });
+
     it("rejects a non-object payload", () => {
       expect(guard([null])).toBe(false);
     });

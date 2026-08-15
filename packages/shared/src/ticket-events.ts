@@ -29,6 +29,10 @@ export const TICKET_EVENT_KINDS = [
   // automated later — `from`/`to` snapshot the ticket's worktree identity
   // fields (`ticket.ts`) around the change.
   "worktree_changed",
+  // Worktree scoping (VC-16): the ticket's isolated-worktree ↔ Main-checkout
+  // choice flipped, before any worktree materialized — the command layer
+  // refuses the flip once `worktree_path` is stamped.
+  "worktree_scope_changed",
   // Worktree creation failure (worktree-support §3/§8): the `ensure` pipeline
   // aborted at `create`/`copy`/`setup`. Records the failing `stage` and a
   // trimmed `stderr` excerpt so the History feed shows the real git error
@@ -108,6 +112,8 @@ export type TicketEventPayload =
   | { kind: "unarchived" }
   | { kind: "commented"; commentId: string }
   | { kind: "worktree_changed"; from: WorktreeIdentity; to: WorktreeIdentity }
+  /** The ticket's worktree scoping flipped (isolated worktree ↔ Main checkout) before any worktree existed. */
+  | { kind: "worktree_scope_changed"; from: boolean; to: boolean }
   | { kind: "worktree_failed"; stage: WorktreeFailureStage; stderr: string }
   | { kind: "worktree_committed"; message: string }
   | { kind: "pr_opened"; url: string }

@@ -128,6 +128,12 @@ export interface TicketUpdateInput {
   worktreePath?: string | null;
   branch?: string | null;
   baseBranch?: string | null;
+  /**
+   * Worktree scoping (VC-16): isolated worktree vs Main checkout. The command
+   * layer refuses a change once the ticket's worktree has materialized, so
+   * this is only honored while `worktreePath` is still null.
+   */
+  usesWorktree?: boolean;
 }
 
 export interface TicketSetLabelsInput {

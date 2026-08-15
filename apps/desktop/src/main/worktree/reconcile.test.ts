@@ -33,75 +33,117 @@ function listGit(extra = "") {
 }
 
 describe("reconcile matrix", () => {
-  it("creates cleanly when nothing is registered and the dir is missing", () => {
+  it("creates cleanly when nothing is registered and the dir is missing", async () => {
     const target = join(tempDir("home"), "wt-missing"); // does not exist
-    const { git } = listGit();
-    const result = reconcile(git, { projectPath: PROJECT, worktreePath: target, branch: BRANCH });
+    const { gitAsync: git } = listGit();
+    const result = await reconcile(git, {
+      projectPath: PROJECT,
+      worktreePath: target,
+      branch: BRANCH,
+    });
     expect(result).toEqual({ ok: true, value: { kind: "create", prune: false } });
   });
 
-  it("is an idempotent no-op when registered and the dir is present", () => {
+  it("is an idempotent no-op when registered and the dir is present", async () => {
     const target = tempDir("wt");
-    const { git } = listGit(`worktree ${target}\nHEAD def\nbranch refs/heads/${BRANCH}\n`);
-    const result = reconcile(git, { projectPath: PROJECT, worktreePath: target, branch: BRANCH });
+    const { gitAsync: git } = listGit(
+      `worktree ${target}\nHEAD def\nbranch refs/heads/${BRANCH}\n`,
+    );
+    const result = await reconcile(git, {
+      projectPath: PROJECT,
+      worktreePath: target,
+      branch: BRANCH,
+    });
     expect(result).toEqual({ ok: true, value: { kind: "already-present" } });
   });
 
-  it("prunes and recreates when registered but the dir is missing (stale metadata)", () => {
+  it("prunes and recreates when registered but the dir is missing (stale metadata)", async () => {
     const target = join(tempDir("home"), "wt-gone");
-    const { git } = listGit(`worktree ${target}\nHEAD def\nbranch refs/heads/${BRANCH}\n`);
-    const result = reconcile(git, { projectPath: PROJECT, worktreePath: target, branch: BRANCH });
+    const { gitAsync: git } = listGit(
+      `worktree ${target}\nHEAD def\nbranch refs/heads/${BRANCH}\n`,
+    );
+    const result = await reconcile(git, {
+      projectPath: PROJECT,
+      worktreePath: target,
+      branch: BRANCH,
+    });
     expect(result).toEqual({ ok: true, value: { kind: "create", prune: true } });
   });
 
-  it("creates into an existing EMPTY unregistered dir (git accepts an empty target)", () => {
+  it("creates into an existing EMPTY unregistered dir (git accepts an empty target)", async () => {
     const target = tempDir("wt"); // exists, empty
-    const { git } = listGit();
-    const result = reconcile(git, { projectPath: PROJECT, worktreePath: target, branch: BRANCH });
+    const { gitAsync: git } = listGit();
+    const result = await reconcile(git, {
+      projectPath: PROJECT,
+      worktreePath: target,
+      branch: BRANCH,
+    });
     expect(result).toEqual({ ok: true, value: { kind: "create", prune: false } });
   });
 
-  it("refuses an unregistered dir carrying a .git worktree file with the orphan message", () => {
+  it("refuses an unregistered dir carrying a .git worktree file with the orphan message", async () => {
     const target = tempDir("wt");
     writeFileSync(join(target, ".git"), "gitdir: /repo/.git/worktrees/wt\n");
-    const { git } = listGit();
-    const result = reconcile(git, { projectPath: PROJECT, worktreePath: target, branch: BRANCH });
+    const { gitAsync: git } = listGit();
+    const result = await reconcile(git, {
+      projectPath: PROJECT,
+      worktreePath: target,
+      branch: BRANCH,
+    });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toMatch(/orphaned worktree/);
   });
 
-  it("refuses a plain non-empty unregistered directory rather than blind rm -rf", () => {
+  it("refuses a plain non-empty unregistered directory rather than blind rm -rf", async () => {
     const target = tempDir("wt"); // someone's real dir with real contents
     writeFileSync(join(target, "notes.txt"), "keep me\n");
-    const { git } = listGit();
-    const result = reconcile(git, { projectPath: PROJECT, worktreePath: target, branch: BRANCH });
+    const { gitAsync: git } = listGit();
+    const result = await reconcile(git, {
+      projectPath: PROJECT,
+      worktreePath: target,
+      branch: BRANCH,
+    });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toMatch(/not a Volli worktree/);
   });
 
-  it("hard-fails (no --force) when the branch is checked out elsewhere", () => {
+  it("hard-fails (no --force) when the branch is checked out elsewhere", async () => {
     const target = join(tempDir("home"), "wt-new");
-    const { git } = listGit(`worktree /somewhere/else\nHEAD def\nbranch refs/heads/${BRANCH}\n`);
-    const result = reconcile(git, { projectPath: PROJECT, worktreePath: target, branch: BRANCH });
+    const { gitAsync: git } = listGit(
+      `worktree /somewhere/else\nHEAD def\nbranch refs/heads/${BRANCH}\n`,
+    );
+    const result = await reconcile(git, {
+      projectPath: PROJECT,
+      worktreePath: target,
+      branch: BRANCH,
+    });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toMatch(/already checked out/);
   });
 
-  it("refuses when a different branch is registered at our target path", () => {
+  it("refuses when a different branch is registered at our target path", async () => {
     const target = tempDir("wt");
-    const { git } = listGit(`worktree ${target}\nHEAD def\nbranch refs/heads/other\n`);
-    const result = reconcile(git, { projectPath: PROJECT, worktreePath: target, branch: BRANCH });
+    const { gitAsync: git } = listGit(`worktree ${target}\nHEAD def\nbranch refs/heads/other\n`);
+    const result = await reconcile(git, {
+      projectPath: PROJECT,
+      worktreePath: target,
+      branch: BRANCH,
+    });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toMatch(/not volli\/VC-1-x/);
   });
 
-  it("refuses a DETACHED-HEAD registration at our target path, naming detached HEAD", () => {
+  it("refuses a DETACHED-HEAD registration at our target path, naming detached HEAD", async () => {
     // A detached HEAD (no `branch` line) would otherwise pass the wrong-branch
     // guard vacuously and boot a session that strands its commits off any
     // branch — refuse just as hard, and say why (fix 2).
     const target = tempDir("wt");
-    const { git } = listGit(`worktree ${target}\nHEAD def\ndetached\n`);
-    const result = reconcile(git, { projectPath: PROJECT, worktreePath: target, branch: BRANCH });
+    const { gitAsync: git } = listGit(`worktree ${target}\nHEAD def\ndetached\n`);
+    const result = await reconcile(git, {
+      projectPath: PROJECT,
+      worktreePath: target,
+      branch: BRANCH,
+    });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toMatch(/detached HEAD/);
@@ -109,12 +151,16 @@ describe("reconcile matrix", () => {
     }
   });
 
-  it("surfaces an error when the worktree list can't be read", () => {
+  it("surfaces an error when the worktree list can't be read", async () => {
     const target = join(tempDir("home"), "wt");
-    const { git } = scriptedGit(() => {
+    const { gitAsync: git } = scriptedGit(() => {
       throw new GitError("fatal", "not a git repository", ["worktree", "list"]);
     });
-    const result = reconcile(git, { projectPath: PROJECT, worktreePath: target, branch: BRANCH });
+    const result = await reconcile(git, {
+      projectPath: PROJECT,
+      worktreePath: target,
+      branch: BRANCH,
+    });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toMatch(/not a git repository/);
   });

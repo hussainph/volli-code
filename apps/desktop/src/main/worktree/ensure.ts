@@ -6,8 +6,14 @@
  *
  * Order (git first, DB write last — DB writes never straddle long-running git):
  *   resolve identity → reconcile → resolve base → git worktree add → copy step
- *   → materialize attachments (CONCEPT decision #19, issue #77 PR 2) →
- *   persist identity (emits `worktree_changed`) → phase `ready`.
+ *   (freshly-created worktrees ONLY — the Main-checkout walk is a creation
+ *   cost, never a per-boot one) → materialize attachments (CONCEPT decision
+ *   #19, issue #77 PR 2) → persist identity (emits `worktree_changed`) →
+ *   phase `ready`.
+ *
+ * Every step is ASYNC — git through the non-blocking runner, the copy walk
+ * through fs/promises — because this pipeline runs on Electron main and its
+ * synchronous ancestor froze every window for the duration (VC-16).
  *
  * On failure at any stage: phase → `failed`, a `worktree_failed` ticket event
  * with the stage + trimmed stderr, and a typed error Result the caller toasts —
@@ -28,13 +34,13 @@ import { getProjectById } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
 import { updateTicketFieldsCommand } from "../ticket-commands";
 import { refExists, resolveBaseBranch } from "./base";
-import { GitError, stderrOf } from "./git";
+import { GitError, runGitCapturingAsync, stderrOf } from "./git";
 import { homeDir } from "./home";
 import { resolveWorktreeIdentity } from "./identity";
 import { copyIncludedFiles } from "./include";
 import { setPhase } from "./phase";
 import { reconcile } from "./reconcile";
-import { err, ok, type RunGit, type WorktreeDeps, type WorktreeResult } from "./types";
+import { err, ok, type RunGitAsync, type WorktreeDeps, type WorktreeResult } from "./types";
 
 /**
  * The success value of `ensure`: the resolved identity plus whether THIS run
@@ -76,23 +82,23 @@ function fail(
 }
 
 /** Runs `git worktree add`, pruning first if reconcile asked, and retrying ONCE after a prune on failure. */
-function addWorktree(
-  git: RunGit,
+async function addWorktree(
+  git: RunGitAsync,
   projectPath: string,
   addArgs: readonly string[],
   prune: boolean,
-): void {
-  const runAdd = (): void => {
-    git(["worktree", "add", ...addArgs], projectPath);
+): Promise<void> {
+  const runAdd = async (): Promise<void> => {
+    await git(["worktree", "add", ...addArgs], projectPath);
   };
-  if (prune) git(["worktree", "prune"], projectPath);
+  if (prune) await git(["worktree", "prune"], projectPath);
   try {
-    runAdd();
+    await runAdd();
   } catch (first) {
     // Vibe Kanban: a stale registration can defeat the first add; prune + one retry.
     try {
-      git(["worktree", "prune"], projectPath);
-      runAdd();
+      await git(["worktree", "prune"], projectPath);
+      await runAdd();
     } catch {
       throw first;
     }
@@ -108,6 +114,13 @@ async function runEnsure(
   const project = getProjectById(deps.db, ticket.project_id);
   if (!project) return err("Unknown project");
 
+  // Every git step below runs through the ASYNC runner — this pipeline runs on
+  // Electron main, and one `execFileSync` here freezes every window for the
+  // duration of a `git worktree add` (VC-16's rainbow wheel). The fallback is
+  // the real async runner, never `deps.git`, which would put the work back on
+  // the main thread (types.ts's rule for the Change Set reads, same reason).
+  const git = deps.gitAsync ?? runGitCapturingAsync;
+
   setPhase(ticketId, "creating", deps.onPhase);
 
   const displayId = displayTicketId(project.ticketPrefix, ticket.ticket_number);
@@ -122,7 +135,7 @@ async function runEnsure(
   });
 
   // Reconcile the collision matrix on canonicalized paths.
-  const reconciled = reconcile(deps.git, {
+  const reconciled = await reconcile(git, {
     projectPath: project.path,
     worktreePath: identity.path,
     branch: identity.branch,
@@ -132,8 +145,8 @@ async function runEnsure(
   // Resolve base for stamping + (for a new branch) branching. Reusing an
   // existing ticket branch never resets it, so base is only structurally
   // required when we create the branch.
-  const reuseBranch = refExists(deps.git, project.path, `refs/heads/${identity.branch}`);
-  const base = resolveBaseBranch(deps.git, {
+  const reuseBranch = await refExists(git, project.path, `refs/heads/${identity.branch}`);
+  const base = await resolveBaseBranch(git, {
     projectPath: project.path,
     ticketBaseBranch: ticket.base_branch,
     projectBaseBranch: project.baseBranch ?? null,
@@ -150,7 +163,7 @@ async function runEnsure(
       ? [identity.path, identity.branch]
       : ["-b", identity.branch, identity.path, base!.startPoint];
     try {
-      addWorktree(deps.git, project.path, addArgs, reconciled.value.prune);
+      await addWorktree(git, project.path, addArgs, reconciled.value.prune);
     } catch (caught) {
       const message =
         caught instanceof GitError && caught.stderr.trim()
@@ -160,13 +173,20 @@ async function runEnsure(
     }
   }
 
-  // Copy step — transport git-uncarried local files.
+  // Copy step — transport git-uncarried local files. CREATION ONLY: the walk
+  // visits the whole Main checkout (include.ts's performance note), and running
+  // it on every reuse boot was the multisecond stall VC-16's follow-up comment
+  // reports — a ready worktree already carries its local files, and a new `.env`
+  // in the Main checkout transports on the next worktree CREATION, not on every
+  // Session boot into an old one.
   setPhase(ticketId, "copying", deps.onPhase);
-  try {
-    copyIncludedFiles(project.path, identity.path);
-  } catch (caught) {
-    const message = caught instanceof Error ? caught.message : String(caught);
-    return fail(deps, ticketId, "copy", message, message);
+  if (created) {
+    try {
+      await copyIncludedFiles(project.path, identity.path);
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      return fail(deps, ticketId, "copy", message, message);
+    }
   }
 
   // Materialize the ticket's file attachments into the fresh worktree

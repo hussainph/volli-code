@@ -29,6 +29,7 @@ import { getProjectById } from "../db/projects-repo";
 import { getTicketRow, updateTicketFields } from "../db/tickets-repo";
 import { resolveBaseBranch } from "./base";
 import { commitRemaining, type CommitChoices, type CommitOutcome } from "./commit";
+import { runGitCapturingAsync } from "./git";
 import {
   fetchBase,
   ghCreateDraftPr,
@@ -79,7 +80,10 @@ interface TicketIdentity {
  * missing — the rail buttons should never have offered the action, but main
  * re-checks rather than trusting a stale client.
  */
-function loadIdentity(deps: PublishDeps, ticketId: string): WorktreeResult<TicketIdentity> {
+async function loadIdentity(
+  deps: PublishDeps,
+  ticketId: string,
+): Promise<WorktreeResult<TicketIdentity>> {
   const ticket = getTicketRow(deps.db, ticketId);
   if (!ticket) return err("Unknown ticket");
   const project = getProjectById(deps.db, ticket.project_id);
@@ -89,13 +93,18 @@ function loadIdentity(deps: PublishDeps, ticketId: string): WorktreeResult<Ticke
   }
   // Same offline precedence chain ensure/base.ts resolves from, so the PR base
   // matches the branch's actual fork point when `ticket.base_branch` is null.
+  // Async like the rest of this flow — base.ts moved off the sync runner with
+  // the ensure pipeline (VC-16), and a push is a user-clicked rail action on
+  // the main process too.
   const baseBranch =
     ticket.base_branch ??
-    resolveBaseBranch(deps.git, {
-      projectPath: project.path,
-      ticketBaseBranch: ticket.base_branch,
-      projectBaseBranch: project.baseBranch ?? null,
-    })?.name ??
+    (
+      await resolveBaseBranch(deps.gitAsync ?? runGitCapturingAsync, {
+        projectPath: project.path,
+        ticketBaseBranch: ticket.base_branch,
+        projectBaseBranch: project.baseBranch ?? null,
+      })
+    )?.name ??
     null;
   return ok({
     worktreePath: ticket.worktree_path,
@@ -185,7 +194,7 @@ export async function publishTicketBranch(
   deps: PublishDeps,
   ticketId: string,
 ): Promise<WorktreeResult<PublishOutcome>> {
-  const loaded = loadIdentity(deps, ticketId);
+  const loaded = await loadIdentity(deps, ticketId);
   if (!loaded.ok) return loaded;
   const identity = loaded.value;
 

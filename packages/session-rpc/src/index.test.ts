@@ -917,6 +917,63 @@ describe("Session tRPC router", () => {
     expect(JSON.stringify(calls)).not.toMatch(/adapter|profile|pi/i);
   });
 
+  it("mints Ticket and project Sessions without attaching — the optimistic-open route", async () => {
+    const fixture = runtimeFixture();
+    const calls: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      createTicketSession: async (input) => {
+        calls.push(["ticket.create", input]);
+        return { sessionId: "session-1" };
+      },
+      createProjectSession: async (input) => {
+        calls.push(["project.create", input]);
+        return { sessionId: "session-2" };
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    const ticket = await caller.ticketSessions.create({
+      operationId: "operation-1",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "VC-1",
+    });
+    const project = await caller.projectSessions.create({
+      operationId: "operation-2",
+      projectId: "project-1",
+      title: "Scratch",
+    });
+
+    expect(ticket).toEqual({ sessionId: "session-1" });
+    expect(project).toEqual({ sessionId: "session-2" });
+    expect(calls).toEqual([
+      [
+        "ticket.create",
+        { operationId: "operation-1", projectId: "project-1", ticketId: "ticket-1", title: "VC-1" },
+      ],
+      ["project.create", { operationId: "operation-2", projectId: "project-1", title: "Scratch" }],
+    ]);
+    expect(JSON.stringify(calls)).not.toMatch(/adapter|profile|pi/i);
+
+    // Unconfigured transports refuse explicitly, like every other product facade.
+    const bare = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+    await expect(
+      bare.ticketSessions.create({
+        operationId: "op",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        title: null,
+      }),
+    ).rejects.toThrow("Ticket Sessions are unavailable");
+    await expect(
+      bare.projectSessions.create({ operationId: "op", projectId: "project-1", title: null }),
+    ).rejects.toThrow("Project Sessions are unavailable");
+  });
+
   it("withholds executor creation and attachment commands from Electron renderers", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({

@@ -186,6 +186,7 @@ describe("EVENT_KIND_PRIORITY", () => {
       "attachment_added",
       "attachment_removed",
       "worktree_changed",
+      "worktree_scope_changed",
       "archived",
       "unarchived",
       "body_edited",

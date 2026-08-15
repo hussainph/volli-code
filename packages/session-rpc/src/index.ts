@@ -71,6 +71,11 @@ export interface ProjectSessionStartInput {
   title: string | null;
 }
 
+/** A create-only start's answer: durable identity, nothing about an executor. */
+export interface SessionCreateResult {
+  sessionId: string;
+}
+
 /**
  * The server-side composition root supplies this context. It deliberately
  * carries the deep runtime rather than leaking its ports to individual RPCs.
@@ -81,8 +86,11 @@ export interface SessionRouterContext {
   readDefaultModelSelection?: () => RpcModelSelection | null;
   writeDefaultModelSelection?: (selection: RpcModelSelection) => void | Promise<void>;
   startTicketSession?: (input: TicketSessionStartInput) => Promise<SessionStartResult>;
+  /** Create-only (no attach): the optimistic chat-open route — see the facades. */
+  createTicketSession?: (input: TicketSessionStartInput) => Promise<SessionCreateResult>;
   attachTicketSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
   startProjectSession?: (input: ProjectSessionStartInput) => Promise<SessionStartResult>;
+  createProjectSession?: (input: ProjectSessionStartInput) => Promise<SessionCreateResult>;
   attachProjectSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
   diagnostics: RpcDiagnosticLog;
   transport?: "electron-ipc" | "lab-http" | "unknown";
@@ -496,6 +504,21 @@ export function createSessionRouter() {
           }
           return ctx.startTicketSession(input);
         }),
+      create: instrumentedProcedure
+        .input(
+          z.object({
+            operationId: nonEmptyString,
+            projectId: nonEmptyString,
+            ticketId: nonEmptyString,
+            title: nullableString,
+          }),
+        )
+        .mutation(async ({ ctx, input }) => {
+          if (!ctx.createTicketSession) {
+            unavailable("Ticket Sessions are unavailable on this transport");
+          }
+          return ctx.createTicketSession(input);
+        }),
       attach: instrumentedProcedure
         .input(z.object({ operationId: nonEmptyString, sessionId: nonEmptyString }))
         .mutation(async ({ ctx, input }) => {
@@ -519,6 +542,20 @@ export function createSessionRouter() {
             unavailable("Project Sessions are unavailable on this transport");
           }
           return ctx.startProjectSession(input);
+        }),
+      create: instrumentedProcedure
+        .input(
+          z.object({
+            operationId: nonEmptyString,
+            projectId: nonEmptyString,
+            title: nullableString,
+          }),
+        )
+        .mutation(async ({ ctx, input }) => {
+          if (!ctx.createProjectSession) {
+            unavailable("Project Sessions are unavailable on this transport");
+          }
+          return ctx.createProjectSession(input);
         }),
       attach: instrumentedProcedure
         .input(z.object({ operationId: nonEmptyString, sessionId: nonEmptyString }))

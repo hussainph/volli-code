@@ -174,9 +174,9 @@ export function createChatSessionsStore(
 
       async createChatSession(input) {
         const edge = transport();
-        let started: Awaited<ReturnType<ChatSessionTransport["startSession"]>>;
+        let created: Awaited<ReturnType<ChatSessionTransport["createSession"]>>;
         try {
-          started = await edge.startSession({
+          created = await edge.createSession({
             operationId: edge.newCommandId(),
             projectId: input.projectId,
             ticketId: input.ticketId,
@@ -188,21 +188,44 @@ export function createChatSessionsStore(
           toastError(`Could not start Session: ${errorMessage(failure)}`);
           return null;
         }
-        const sessionId = started.sessionId;
+        const sessionId = created.sessionId;
+        // The Session is durable and addressable NOW — the id resolves and the
+        // caller lands the tab while the attach below is still in flight. The
+        // slice seeds `starting`, the latch only a settle clears, so the
+        // composer queues anything typed meanwhile and the release loop
+        // delivers it once an executor is live (VC-16's optimistic open).
         set((state) => ({ sessions: { ...state.sessions, [sessionId]: seedSlice("starting") } }));
         const client = attach(sessionId);
         void client.connect();
-        const refusal = rejectedReceipt(started);
-        // A ticketed refusal is reported by durable Ticket Attention on the
-        // projection, so a slice-level error here would say the same thing
-        // twice. A ticketless Session has no Attention surface, so its refusal
-        // is settled onto the slice.
-        get().settle(
-          sessionId,
-          started.state === "ready" || input.ticketId !== null
-            ? null
-            : `Could not start Session: ${refusal ?? "Runtime recovery is required."}`,
-        );
+        // The slow half — worktree ensure + Agent Runtime boot — runs in the
+        // background, deliberately not awaited. Its outcome still lands on the
+        // slice: the same settle rules the bundled start applied, plus the
+        // transport-failure arm, because now a Session exists to carry it.
+        void (async () => {
+          try {
+            const attached = await edge.attachSession({
+              operationId: edge.newCommandId(),
+              sessionId,
+              bornTicketless: input.ticketId === null,
+            });
+            const refusal = rejectedReceipt(attached);
+            // A ticketed refusal is reported by durable Ticket Attention on the
+            // projection, so a slice-level error here would say the same thing
+            // twice. A ticketless Session has no Attention surface, so its
+            // refusal is settled onto the slice.
+            get().settle(
+              sessionId,
+              attached.state === "ready" || input.ticketId !== null
+                ? null
+                : `Could not start Session: ${refusal ?? "Runtime recovery is required."}`,
+            );
+          } catch (failure) {
+            // An attach that never reached main has no receipt and no Attention
+            // — the slice is the only surface that can carry it, whatever the
+            // Session's Role.
+            get().settle(sessionId, `Could not start Session: ${errorMessage(failure)}`);
+          }
+        })();
         return sessionId;
       },
 

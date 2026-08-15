@@ -31,19 +31,13 @@
  *
  * Performance note: matching an unanchored basename pattern is depth-agnostic,
  * so the walk visits the whole tree (skipping `.git` and not following
- * symlinked dirs). Acceptable for a once-per-worktree-creation step; a
- * scoped/ignore-aware walk is a future optimization.
+ * symlinked dirs). The walk and every copy run through `fs/promises` — this
+ * step executes on Electron main, and the synchronous version froze every
+ * window for the walk's whole duration on a large Main checkout (VC-16's
+ * rainbow wheel). A scoped/ignore-aware walk is a future optimization.
  */
-import {
-  copyFileSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  readlinkSync,
-  symlinkSync,
-} from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { copyFile, lstat, mkdir, readdir, readlink, symlink } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 
 import { isInside } from "./paths";
@@ -169,8 +163,8 @@ interface WalkEntry {
 }
 
 /** Recursively yields every file/symlink under `root`, skipping `.git` and never following symlinked dirs. */
-function* walkFiles(root: string, dir: string): Generator<WalkEntry> {
-  for (const dirent of readdirSync(dir, { withFileTypes: true })) {
+async function* walkFiles(root: string, dir: string): AsyncGenerator<WalkEntry> {
+  for (const dirent of await readdir(dir, { withFileTypes: true })) {
     if (dirent.name === ".git") continue;
     const full = join(dir, dirent.name);
     if (dirent.isSymbolicLink()) {
@@ -194,11 +188,14 @@ export interface CopyResult {
  * covers tracked files). Symlinks are recreated as symlinks. Every source
  * location and destination is guarded inside its root.
  */
-export function copyIncludedFiles(projectRoot: string, worktreeRoot: string): CopyResult {
+export async function copyIncludedFiles(
+  projectRoot: string,
+  worktreeRoot: string,
+): Promise<CopyResult> {
   const patterns = loadIncludePatterns(projectRoot);
   const copied: string[] = [];
 
-  for (const entry of walkFiles(projectRoot, projectRoot)) {
+  for await (const entry of walkFiles(projectRoot, projectRoot)) {
     if (!isIncluded(patterns, entry.relPath)) continue;
 
     // Source guard: the file's LOCATION (not a symlink's target) must sit
@@ -214,20 +211,29 @@ export function copyIncludedFiles(projectRoot: string, worktreeRoot: string): Co
     }
     // Never overwrite (skips tracked files). `lstat` not `existsSync`: a
     // dangling symlink git may have materialized would read "absent" through
-    // `existsSync` (it follows the link), then `symlinkSync` below throws
+    // `existsSync` (it follows the link), then the `symlink` below throws
     // EEXIST and fails the whole ensure — lstat sees the link itself.
-    if (lstatSync(dest, { throwIfNoEntry: false }) !== undefined) continue;
+    if ((await lstatQuiet(dest)) !== null) continue;
 
-    mkdirSync(dirname(dest), { recursive: true });
+    await mkdir(dirname(dest), { recursive: true });
     if (entry.isSymlink) {
       // Recreate the link verbatim — never read through it, so a link pointing
       // outside the root transports the link, not the external contents.
-      symlinkSync(readlinkSync(entry.full), dest);
-    } else if (lstatSync(entry.full).isFile()) {
-      copyFileSync(entry.full, dest);
+      await symlink(await readlink(entry.full), dest);
+    } else if ((await lstat(entry.full)).isFile()) {
+      await copyFile(entry.full, dest);
     }
     copied.push(entry.relPath);
   }
 
   return { copied };
+}
+
+/** `lstat` that answers `null` for a missing path instead of throwing ENOENT. */
+async function lstatQuiet(path: string): Promise<Awaited<ReturnType<typeof lstat>> | null> {
+  try {
+    return await lstat(path);
+  } catch {
+    return null;
+  }
 }
