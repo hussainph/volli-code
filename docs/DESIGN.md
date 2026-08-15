@@ -65,8 +65,13 @@ narrows they compress to the 24px gutter floor before text ever reflows.
 ## Layout primitives (`components/layout/`)
 
 - **`<ContentColumn>`** — the Tier A measure column. Tier B surfaces must not wrap in it.
-- **`<PageHeader>`** — the page-level header row (board header today): gutter-aligned,
-  `py-4`, wrap-friendly. New surface headers compose it rather than re-deriving the row.
+- **`<PageHeader>`** — the page-level header, and the only one: `title` (always the page's `h1`),
+  optional `description`, optional right-parked `actions`, and `children` for controls that share
+  the title's row and wrap with it. `py-4`, wrap-friendly, gaps `4`/`2`. One axis, `variant`,
+  carries the tier: **`workbench`** (default) pays its own `px-gutter` and titles at `text-sm`, for
+  a dense control row; **`reading`** adds no inset — it is mounted inside a `<ContentColumn>` that
+  already owns one — and titles at `text-heading`, the masthead a step above the `text-sm` section
+  titles under it. Board and both settings shells compose it; nothing re-derives a title row.
 
 ## The framed content surface
 
@@ -129,7 +134,7 @@ than duplicating it under a second name:
 | label | `text-label` | 11px / 16px | +0.05em | UPPERCASE section labels, badges, field labels, monogram chips |
 | ui | `text-ui` | 13px / 20px | 0 | **the single UI size**: board cards/columns, list rows, timestamps, counts, event lines, hints, buttons, menus |
 | body | `text-sm` | 14px / 20px | 0 | prose, inputs, comments |
-| heading | `text-heading` | 18px / 26px | −0.01em | dialog titles, page/section headers |
+| heading | `text-heading` | 18px / 26px | −0.01em | dialog titles, reading-page mastheads, section headers |
 | title | `text-title` | 24px / 30px | −0.02em | the ticket title; the largest text in the app |
 
 Rules:

@@ -2,6 +2,7 @@ import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { useState, type ReactNode } from "react";
 
 import { ContentColumn } from "@renderer/components/layout/content-column";
+import { PageHeader } from "@renderer/components/layout/page-header";
 import { cn } from "@renderer/lib/utils";
 
 /** One selectable category in a settings surface: its rail row plus the pane it renders. */
@@ -78,30 +79,15 @@ export function SettingsShell({
         {active ? (
           // Tier A: a settings pane is a reading surface, so it takes the app's
           // canonical measure and page gutter rather than a width and an inset
-          // of its own (docs/DESIGN.md).
-          <ContentColumn className="py-4">
-            <SettingsPaneHeader title={active.label} description={active.description} />
+          // of its own (docs/DESIGN.md). The column pads only its tail — the
+          // header owns the rhythm above and below itself.
+          <ContentColumn className="pb-4">
+            <PageHeader variant="reading" title={active.label} description={active.description} />
             <div className="flex flex-col gap-4">{active.content}</div>
           </ContentColumn>
         ) : null}
       </div>
     </div>
-  );
-}
-
-/** The pane's top title row: the active category name plus an optional one-line description. */
-export function SettingsPaneHeader({
-  title,
-  description,
-}: {
-  title: string;
-  description?: ReactNode;
-}) {
-  return (
-    <header className="mb-4">
-      <h1 className="text-heading font-semibold">{title}</h1>
-      {description ? <p className="mt-1 text-sm text-muted-foreground">{description}</p> : null}
-    </header>
   );
 }
 
