@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import type { SessionLayout, SessionTab } from "@renderer/stores/sessions";
 import type { TerminalIoResult } from "@volli/shared";
-import { runOnLivePanes, terminalTabState } from "./terminal-tab-state";
+import {
+  runOnLivePanes,
+  terminalTabDot,
+  terminalTabState,
+  type TerminalTabState,
+} from "./terminal-tab-state";
 
 const toastError = vi.hoisted(() => vi.fn());
 vi.mock("@renderer/lib/toast", () => ({ toastError }));
@@ -71,6 +76,36 @@ describe("terminalTabState", () => {
     // gates the moon badge and "Park Now" on `!exited` as well.
     expect(dead.parked).toBe(true);
     expect(dead.livePaneIds).toEqual([]);
+  });
+});
+
+/** A live, unparked terminal — the baseline every case below varies one fact of. */
+function stateOf(overrides: Partial<TerminalTabState>): TerminalTabState {
+  return {
+    exited: false,
+    exitCode: null,
+    parked: false,
+    keptAwake: false,
+    livePaneIds: ["root"],
+    ...overrides,
+  };
+}
+
+describe("terminalTabDot", () => {
+  it("reads a running terminal as idle — live and quiet, not a live turn", () => {
+    expect(terminalTabDot(stateOf({}))).toBe("idle");
+  });
+
+  it("reads an ended PTY as exited", () => {
+    expect(terminalTabDot(stateOf({ exited: true, exitCode: 0, livePaneIds: [] }))).toBe("exited");
+  });
+
+  it("stays silent while parked — the moon badge says that one", () => {
+    expect(terminalTabDot(stateOf({ parked: true }))).toBeNull();
+  });
+
+  it("prefers exited over parked, because `parked` is vacuously true with no live panes", () => {
+    expect(terminalTabDot(stateOf({ exited: true, parked: true, livePaneIds: [] }))).toBe("exited");
   });
 });
 

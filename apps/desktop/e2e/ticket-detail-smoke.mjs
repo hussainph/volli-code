@@ -406,7 +406,7 @@ function fileTab(page, basename) {
 
 /** The unsaved-work dot a dirty file tab shows in place of its × (ticket-tabs.tsx). */
 function dirtyDot(page) {
-  return page.locator('[data-testid="ticket-tab-dirty"]');
+  return page.locator('[data-testid="tab-dirty"]');
 }
 
 function saveGuard(page) {

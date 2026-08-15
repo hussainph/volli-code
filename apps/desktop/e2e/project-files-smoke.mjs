@@ -134,7 +134,9 @@ function tabFor(page, relPath) {
 }
 
 function closeButtonFor(page, relPath) {
-  return page.locator(`[data-testid="file-tab-close"][data-rel-path="${relPath}"]`);
+  return page.locator(
+    `[data-testid="file-tab"][data-rel-path="${relPath}"] [data-testid="tab-close"]`,
+  );
 }
 
 function saveGuard(page) {
@@ -149,7 +151,7 @@ async function readTabs(page) {
       preview: tab.getAttribute("data-preview"),
       dirty: tab.getAttribute("data-dirty"),
       active: tab.getAttribute("aria-selected") === "true",
-      hint: tab.querySelector('[data-testid="file-tab-hint"]')?.textContent ?? null,
+      hint: tab.querySelector('[data-testid="tab-hint"]')?.textContent ?? null,
     })),
   );
 }

@@ -113,6 +113,10 @@ export default defineConfig(({ mode }) => ({
         "src/components/ticket/activity.ts",
         "src/components/ticket/session-history.ts",
         "src/components/ticket/ticket-chat-tab.ts",
+        // Pure `.ts` beside a `ui/` primitive: `ui/**` .tsx stays outside the
+        // report as view glue, but the roving-tabindex arithmetic left a
+        // component file precisely so the gate could reach it.
+        "src/components/ui/tab-focus.ts",
         "src/lib/project-shortcut.ts",
         "src/lib/new-session-shortcut.ts",
         "src/lib/new-ticket-shortcut.ts",
