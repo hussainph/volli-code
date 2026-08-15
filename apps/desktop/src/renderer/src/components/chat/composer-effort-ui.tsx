@@ -35,6 +35,19 @@
  * The arithmetic behind all three is in `chat/composer-effort.ts`, tested
  * without a DOM. This file is the drawing and the events.
  *
+ * AND WHAT MAKES IT LOOK LIKE A MAGNITUDE. Position is a weak carrier of one:
+ * at four stops, `low` and `medium` are 33% of a 224px track apart and nothing
+ * else tells them apart. So the filled share is a GRADIENT of the accent rather
+ * than a fill of it — one colour stop per effort stop, clipped at the seam — and
+ * the substance warms and thickens toward the value instead of only reaching
+ * further. How far that can go is not a taste decision: both labels sit ON the
+ * wash, and the alpha ceiling is whatever holds them at AA in the appearance
+ * that binds (`chat/composer-effort.ts` carries the measurements). Which is why
+ * the part of the idea that runs UNBOUNDED is outside the pill — an ember halo
+ * thrown onto the popover behind it, squared against the ramp so it is absent
+ * at the bottom of the range and the control plainly radiates at `max`. Nothing
+ * is legible through a halo, so nothing caps it.
+ *
  * TWO MOTION IDEAS WERE TRIED IN THE LAB AND ONE MORE WAS REJECTED THERE.
  * `lab/scratches/composer-redesign.tsx` mounted three CSS-only variants over
  * this exact component, hung off attributes it already publishes. **Grip** (the
@@ -55,9 +68,11 @@ import {
   EFFORT_DEAD_ZONE,
   EFFORT_STRETCH_LIMIT,
   effortChroma,
+  effortGlow,
   effortIndex,
   effortLabel,
   effortStopPercent,
+  effortWashMix,
   readEffortPointer,
 } from "@renderer/chat/composer-effort";
 import { Button } from "@renderer/components/ui/button";
@@ -144,6 +159,23 @@ export function EffortPill({ levels, value, onChange, disabled = false }: Effort
  */
 const EFFORT_NOTCH_STAGGER_MS = 35;
 
+/**
+ * The halo, at full strength. How much of it is on is the ramp's job
+ * ({@link effortGlow}); this is only its shape.
+ *
+ * Two shadows because one cannot be both. The tight one is the heat at the
+ * pill's own edge and the wide one is the room lighting up around it; a single
+ * radius wide enough to reach the popover is too diffuse to read as coming FROM
+ * anything, and one tight enough to read is a rim light nobody calls a glow.
+ * Both are `--primary` at the chroma the canvas derived — the halo is the one
+ * place in this control where the accent is never desaturated, because it is
+ * the only place nothing is legible through it.
+ */
+const EFFORT_HALO_SHADOW = [
+  "0 0 12px oklch(from var(--primary) l c h / 0.6)",
+  "0 0 30px 6px oklch(from var(--primary) l c h / 0.38)",
+].join(", ");
+
 /** How far the pill can be pulled past a dead zone before it stops giving. */
 function stretchLimit(reduced: boolean): number {
   // Reduced motion drops elastic and overshoot; it does not drop *aim*, so the
@@ -191,8 +223,28 @@ function EffortSlider({
     anchor: "left",
   });
 
-  const last = levels.length - 1;
+  const stops = levels.length;
+  const last = stops - 1;
   const index = effortIndex(levels, value);
+  const filled = effortStopPercent(index, stops);
+  // The ramp, drawn once: one colour stop per EFFORT stop, each at its own
+  // notch. Nothing here depends on the value — the value is the clip below —
+  // which is what lets the reveal transition at all (Chromium interpolates
+  // `clip-path` and does not interpolate a gradient, checked in the browser).
+  //
+  // Read the expression inside out: mix the accent into the pill's own unfilled
+  // colour, which puts the LIGHTNESS somewhere the labels can stand in either
+  // appearance; then read that colour back and multiply its CHROMA, which the
+  // labels cannot feel. Both moves are on the ramp, so the wash walks from the
+  // groove barely warmed to a saturated ember. See `chat/composer-effort.ts`.
+  const ramp = levels
+    .map((_, at) => {
+      const mix = (effortWashMix(at, stops) * 100).toFixed(2);
+      const chroma = effortChroma(at, stops).toFixed(3);
+      const accent = `color-mix(in oklab, var(--primary) ${mix}%, var(--border-strong))`;
+      return `oklch(from ${accent} l calc(c * ${chroma}) h) ${effortStopPercent(at, stops)}%`;
+    })
+    .join(", ");
   const commit = (next: number): void => {
     const level = levels[Math.min(last, Math.max(0, next))];
     if (level !== undefined && level !== value) onChange(level);
@@ -200,7 +252,7 @@ function EffortSlider({
 
   const track = (rail: HTMLDivElement) => ({
     width: rail.getBoundingClientRect().width,
-    stops: levels.length,
+    stops,
     deadZone: EFFORT_DEAD_ZONE,
     stretchLimit: stretchLimit(reduced),
   });
@@ -240,7 +292,7 @@ function EffortSlider({
       aria-valuetext={effortLabel(value)}
       data-dragging={dragging ? "" : undefined}
       className={cn(
-        "group/rail w-56 shrink-0 cursor-pointer touch-none select-none outline-none",
+        "group/rail relative w-56 shrink-0 cursor-pointer touch-none select-none outline-none",
         "data-[dragging]:cursor-grabbing",
       )}
       onPointerDown={(event) => {
@@ -289,15 +341,57 @@ function EffortSlider({
         commit(next);
       }}
     >
+      {/* THE HALO — the vibrancy that is not spent on the labels.
+          Everything inside the pill is capped by the two words lying on it: the
+          wash can only thicken as far as `--foreground` stays at AA over it,
+          which is measured and is not far. Outside the pill nothing is legible
+          through anything, so this is where the accent runs at full chroma and
+          the ramp can go all the way — at `max` the control lights the popover
+          it is sitting in, and at the bottom of the range it is not there.
+
+          IT IS BEHIND THE PILL, WHICH IS WHY IT IS FREE. `bg-border-strong` is
+          opaque, so only the spill past the pill's edge is ever seen and not
+          one pixel of this composites under a label: the contrast table upstairs
+          stays true whatever this does. Sitting outside also gets it past the
+          pill's `overflow-hidden`, which a glow drawn on the handle could never
+          escape.
+
+          IT HUGS THE FILLED SHARE rather than the whole pill — same width as the
+          wash, so the light and the substance are the same object seen twice,
+          and the seam is a hot edge rather than the middle of a lit box.
+
+          AND IT DOES NOT STRETCH. The pill's elastic overdrag is the material
+          giving; light is not material, and a 7px slip inside a 30px blur is
+          not a thing anyone can see. Leaving the pull off it keeps the halo's
+          own transition free to run at the wash's duration instead of being
+          switched off mid-drag with the stretch. */}
+      <span
+        aria-hidden
+        data-slot="effort-halo"
+        style={{
+          width: `${filled}%`,
+          opacity: effortGlow(index, stops),
+          boxShadow: EFFORT_HALO_SHADOW,
+        }}
+        className={cn(
+          "pointer-events-none absolute inset-y-0 left-0 rounded-full",
+          "transition-[width,opacity] duration-150 ease-out",
+          "group-data-[dragging]/rail:duration-100 motion-reduce:transition-none!",
+        )}
+      />
+
       <div
         style={{ scale: `${pull.scaleX} 1`, transformOrigin: `${pull.anchor} center` }}
         className={cn(
-          // `--border-strong` unfilled and `--primary` filled: the same two
+          // `--border-strong` unfilled and the accent filled: the same two
           // tokens `globals.css` paints `input[type="range"]` with, so this
           // reads as the object the app already ships rather than as a second
-          // slider language. `bg-muted` was tried first and is 2 RGB steps off
-          // `--popover` on this canvas — measured, and the pill's empty half
-          // simply disappeared into the surface holding it.
+          // slider language. It is also the wash's own floor — the ramp mixes
+          // the accent INTO this colour, so the filled and unfilled halves are
+          // two points on one line rather than two decisions. `bg-muted` was
+          // tried first and is 2 RGB steps off `--popover` on this canvas —
+          // measured, and the pill's empty half simply disappeared into the
+          // surface holding it.
           "relative flex h-7 items-center overflow-hidden rounded-full bg-border-strong",
           // The pill, not the rail, wears the keyboard ring: it is the object
           // the eye reads as the control, and a ring on the untransformed rail
@@ -312,37 +406,55 @@ function EffortSlider({
         )}
       >
         {/* The filled share, swept under the text rather than beside it — and
-            the ramp: it gets more SATURATED the further it reaches
-            ({@link effortChroma}), so magnitude is carried by substance as well
-            as by length. A warm grey at the bottom of the range, the accent at
-            full strength at the top.
+            the ramp itself, painted rather than merely reached.
 
-            DERIVED FROM THE LIVE TOKEN, NEVER AUTHORED. `oklch(from
-            var(--primary) …)` reads whatever the canvas engine derived for this
-            scope and moves one channel of it, so a workspace that reseeds its
-            accent reseeds this ramp with it. A hand-mixed hex here would be the
-            one colour in the app the theme does not own.
+            THE WHOLE RAMP IS ALWAYS THERE; THE VALUE IS HOW MUCH OF IT IS
+            SHOWING. The gradient is laid across the FULL pill with one colour
+            stop per effort stop, each sitting on its own notch, and the value
+            clips it at the seam. So a single state carries the magnitude twice:
+            the wash reaches further AND the colour under the value's own end of
+            it holds more of the accent. The flat fill this replaces could only
+            ever say it across TIME, while dragging — at rest it was one tone
+            that meant nothing without the previous one to compare it to.
 
-            AND IT MOVES THE CHANNEL THAT COSTS NOTHING. `l` and `h` are held;
-            only `c` scales — so every rung has the same perceptual lightness,
-            and contrast, which is a lightness relationship, barely moves. The
-            alpha version of this ramp was built first and measured at 2.90:1 in
-            dark against 6.33:1 in light, i.e. an AA failure in one appearance
-            only. See {@link EFFORT_CHROMA_FLOOR} for the full numbers.
+            The seam is therefore never an arbitrary colour: clipped at stop `n`
+            the leading edge is exactly the stop the notch is on
+            ({@link effortWashMix}`(n)` at {@link effortChroma}`(n)`), and at the
+            top of the range it is a saturated ember rather than the brown a
+            half-transparent accent over a grey track can ever be.
 
-            `background-color` is a paint rather than a compositor property, and
-            that is accepted here rather than worked around with a second
-            stacked layer: this element is already transitioning its `width`, so
-            it repaints on every stop regardless, and the painted box is 224×28. */}
+            DERIVED FROM LIVE TOKENS, NEVER AUTHORED. Both ends of the mix are
+            variables — the accent the canvas engine derived for this scope and
+            the pill's own unfilled colour — so a workspace that reseeds its
+            accent reseeds this ramp with it, and the floor is the control's own
+            groove rather than a colour someone picked to sit near it. A
+            hand-mixed hex here would be the one colour in the app the theme does
+            not own.
+
+            AND IT SPENDS THE TWO CHANNELS SEPARATELY, WHICH IS THE WHOLE
+            VIBRANCY. Mixing sets the LIGHTNESS, toward the track, which is the
+            only direction that is safe in both appearances; the `calc(c * …)`
+            then sets the CHROMA on top of that lightness, where the labels
+            cannot feel it. Alpha could not do that — it moves both at once, and
+            that is why the wash it painted had no headroom left to be bright
+            with. {@link EFFORT_MIX_FLOOR} carries the measurements and the
+            margin.
+
+            CLIPPED, NOT RESIZED, and that is what makes the paint free. The
+            gradient never changes, so the box is rastered once and the stop
+            change moves a `clip-path` — the one channel Chromium interpolates
+            here at all (a `background-image` between two gradients snaps to the
+            new one, checked in the browser), and the reason the ramp can be a
+            gradient and still animate. */}
         <span
           data-slot="effort-wash"
           style={{
-            width: `${effortStopPercent(index, levels.length)}%`,
-            backgroundColor: `oklch(from var(--primary) l calc(c * ${effortChroma(index, levels.length)}) h / 0.5)`,
+            backgroundImage: `linear-gradient(to right, ${ramp})`,
+            clipPath: `inset(0 ${100 - filled}% 0 0)`,
           }}
           className={cn(
-            "absolute inset-y-0 left-0",
-            "transition-[width,background-color] duration-150 ease-out",
+            "absolute inset-0",
+            "transition-[clip-path] duration-150 ease-out",
             // Shorter under the hand: 150ms reads as a snap when you click a
             // stop and as drag lag when you sweep through five of them.
             "group-data-[dragging]/rail:duration-100 motion-reduce:transition-none!",
@@ -361,11 +473,14 @@ function EffortSlider({
             the top clears every glyph at every stop count and the notches can
             finally all be counted.
 
-            `data-passed` IS THE VIBRANCY RAMP'S BILL. A tick sits on the groove
-            or on the wash depending on where the value is, and once the wash
-            climbed towards a near-solid accent a single ink stopped serving
-            both grounds — measured, the unpassed rung all but vanished under a
-            `max` wash. So a passed tick takes a rung up, which is also the
+            `data-passed` IS THE VIBRANCY RAMP'S BILL, AND IT IS EXACTLY TWO
+            GROUNDS. A tick is passed precisely when it is behind the seam, so a
+            passed one stands on the wash and an unpassed one stands on the
+            groove — never the other way round. One ink cannot serve both: at
+            `/50`, which the groove needs (3.58:1 dark, 3.10:1 light), a rung on
+            the top of the wash reads 2.34:1 dark and 2.85:1 light, under the 3:1
+            a non-text mark is owed. At `/90` the same rung reads 4.40:1 dark and
+            6.75:1 light. So a passed tick takes a rung up, which is also the
             honest reading: the ones behind the grip have been crossed. */}
         {/* AND THEY DROP IN, LEFT TO RIGHT, WHEN THE POPOVER OPENS. The comb is
             the only thing on this control that says the axis has STOPS rather
@@ -383,7 +498,7 @@ function EffortSlider({
             data-slot="effort-tick"
             data-passed={index >= at + 1 ? "" : undefined}
             style={{
-              left: `${effortStopPercent(at + 1, levels.length)}%`,
+              left: `${effortStopPercent(at + 1, stops)}%`,
               animationDelay: `${at * EFFORT_NOTCH_STAGGER_MS}ms`,
             }}
             className={cn(
@@ -402,12 +517,12 @@ function EffortSlider({
             there. It sits ON the wash, which is a mid-tone in both appearances
             — so `--muted-foreground`, a tier solved for the app's own quiet
             surfaces, has no relationship at all with the ground it landed on
-            here. Measured over the composited wash at every stop of the ramp:
-            the muted noun read 3.74–3.84:1 in dark, under AA across the WHOLE
-            track rather than at one end of it, and 4.64–4.50:1 in light, which
-            reaches the line and stops. At `--foreground` the same label reads
-            5.72–5.87:1 and 9.90–9.60:1. Muting it was buying hierarchy with
-            legibility, on the one word that says what the control IS.
+            here. Measured over the wash at both ends of the ramp: the muted noun
+            reads 4.67 → 3.30:1 in dark and 4.28 → 3.55:1 in light, under AA
+            across most of the track rather than at one end of it. At
+            `--foreground` the same label reads 7.14 → 5.05:1 and 9.13 → 7.58:1.
+            Muting it was buying hierarchy with legibility, on the one word that
+            says what the control IS.
 
             The hierarchy is flatter now and that is the accepted cost. It is a
             small one, because the label was never carrying the hierarchy:
@@ -451,7 +566,7 @@ function EffortSlider({
         >
           <span
             data-slot="effort-handle-mover"
-            style={{ transform: `translateX(${effortStopPercent(index, levels.length)}%)` }}
+            style={{ transform: `translateX(${filled}%)` }}
             className={cn(
               "absolute inset-y-0 left-0 w-full",
               "transition-transform duration-150 ease-out",
