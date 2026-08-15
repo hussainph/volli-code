@@ -183,9 +183,11 @@ describe("composeSystemPrompt", () => {
     // The workspace layer softened from prohibition to norm (VC-11): reads
     // elsewhere are task-anchored judgment. The write side and the credentials
     // sentence are pinned here because this instruction is currently the only
-    // containment layer — the gate is unwired and Seatbelt is off. Loosening
-    // either is tied to docs/plans/authority-two-axis-rearchitecture.md
-    // slices 1-2 landing, so instruction and enforcement move as a pair.
+    // containment layer — nothing gates a tool call and nothing sandboxes a
+    // command, so the sentence in the prompt is the whole of the boundary.
+    // The condition, not any plan, is what this test guards: loosen these when
+    // something actually enforces them, so instruction and enforcement move as
+    // a pair.
     for (const prompt of [composeSystemPrompt(spec()), composeSystemPrompt(projectSpec())]) {
       expect(prompt).toContain("Writes and\ndestructive commands stay inside the workspace");
       expect(prompt).toContain("credentials stay unread");

@@ -391,9 +391,9 @@ each session, a single permission prompt was swapped for a clearly dangerous com
 "approving the prompt never resulted in anything dangerous being run."
 
 The 93% (Mar) and 97% (Aug) approval figures are both real and from different posts five
-months apart — not a discrepancy to resolve. `docs/plans/authority-and-runtime-shape.md` cites
-the 97%/39% pair from the announcement and records the 93% alongside it, which is right: quote
-whichever post you are citing.
+months apart — not a discrepancy to resolve. The retired
+`docs/plans/authority-and-runtime-shape.md` cited the 97%/39% pair from the announcement and
+recorded the 93% alongside it, which is right: quote whichever post you are citing.
 
 ---
 
@@ -681,7 +681,9 @@ reason is written down. The article says nothing about obfuscation at the lexica
 
 ## 2.4 Corrections to the Slice 4 design
 
-Read `docs/plans/authority-and-runtime-shape.md` § "Slice 4 — scope, settled" against §1.13.
+Read against §1.13. The Slice 4 design this corrects lived in
+`docs/plans/authority-and-runtime-shape.md` § "Slice 4 — scope, settled"; that document has
+been retired, so the design is quoted inline below rather than cross-referenced.
 
 **(a) Our escalation is a check-in; Anthropic's is a mode change. Name it correctly.**
 
@@ -762,8 +764,9 @@ Nothing to correct — the article has one verdict and one escalation. Our split
 
 ## 2.5 Two errors this reading found in the plan doc, both since fixed
 
-Recorded because the reasoning is worth keeping, not because anything is outstanding.
-`docs/plans/authority-and-runtime-shape.md` has been corrected on both counts.
+Recorded because the reasoning is worth keeping, not because anything is outstanding. The
+now-retired `docs/plans/authority-and-runtime-shape.md` was corrected on both counts before it
+was retired; `docs/plans/authority-two-axis-rearchitecture.md` is the live authority plan.
 
 **The injection layer was collapsed into the classifier.** The plan's "Product decision"
 paragraph listed "screens fetched content for prompt injection" among the things Anthropic's
