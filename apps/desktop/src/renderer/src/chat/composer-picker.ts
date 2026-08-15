@@ -136,8 +136,8 @@ export interface ComposerPickerDismissal {
 }
 
 /**
- * The trigger token under this caret, or null — the cheap half of
- * {@link composerPicker}, with no ranking done.
+ * The trigger token under this caret, or null — the grammar alone, with none of
+ * {@link composerPickerTarget}'s gates applied and nothing ranked.
  *
  * `/` is checked first and wins outright: at offset 0 there is no `@` token to
  * be in, so the two can never both be live, and checking in a fixed order
@@ -161,7 +161,8 @@ export function composerPickerToken(input: {
 }
 
 /**
- * The whole open/closed decision, in one place.
+ * The whole open/closed decision, in one place — and the cheap half of the
+ * picker.
  *
  * Three things can keep a picker shut that the caret alone would open, and each
  * is a different kind of no:
@@ -175,46 +176,67 @@ export function composerPickerToken(input: {
  *    scoped to the token it was taken on and expires when the caret leaves it;
  *    the caller drops it the moment {@link composerPickerToken} answers null,
  *    which is why this only has to compare the token it was given.
+ *
+ * ## Why this is separate from {@link composerPickerRows}
+ *
+ * The two halves of an open picker have different urgencies, and one of them is
+ * not negotiable. WHERE it writes — the mode and the `from`/`to` span
+ * {@link applyPickerRow} overwrites — has to be exactly the caret's, because a
+ * span one keystroke behind the text writes the completion over the wrong range
+ * and leaves the characters typed since dangling on the right. WHAT it offers
+ * may trail: a list that catches up a frame later is a list, not a corruption.
+ *
+ * So this half is a few character-class tests and answers on the keystroke's own
+ * commit, while the ranking beside it — an O(n log n) pass over the whole
+ * project file index — is free to be deferred by the caller.
  */
-export function composerPicker(input: {
+export function composerPickerTarget(input: {
   text: string;
   caret: number;
-  templates: readonly PromptTemplate[];
-  files: readonly IndexedFile[];
   /** The composer can take a message at all. */
   ready?: boolean;
   /** An interaction card holds the slot above the composer. */
   interactionOpen?: boolean;
   dismissed?: ComposerPickerDismissal | null;
-}): ComposerPickerState | null {
+}): ComposerPickerToken | null {
   if (input.ready === false || input.interactionOpen === true) return null;
   const token = composerPickerToken(input);
   if (token === null) return null;
   const dismissed = input.dismissed ?? null;
   if (dismissed !== null && dismissed.mode === token.mode && dismissed.from === token.from)
     return null;
-  if (token.mode === "command") {
-    return {
-      ...token,
-      rows: rankCommandCompletions({ query: token.query, templates: input.templates }),
-    };
-  }
-  return {
-    ...token,
-    // "Create artifact" is deliberately dropped: it is an intent that writes a
-    // file, and the composer has nowhere to open the result. The `@` picker in
-    // the editor — which does — keeps it.
-    rows: rankFileRefCompletions({ query: token.query, index: input.files })
-      .filter((completion) => completion.kind === "file")
-      .map((completion) => ({
-        kind: "file" as const,
-        value: completion.relPath,
-        label: completion.label,
-        detail: completion.detail,
-        relPath: completion.relPath,
-        artifact: completion.artifact,
-      })),
-  };
+  return token;
+}
+
+/**
+ * What an open token offers — the expensive half, and the reason the two are
+ * apart. See {@link composerPickerTarget}.
+ *
+ * The file branch ranks the entire project index on every call, which is why
+ * the caller memoizes it and may hand it a query one or two keystrokes behind
+ * the caret.
+ */
+export function composerPickerRows(input: {
+  mode: ComposerPickerMode;
+  query: string;
+  templates: readonly PromptTemplate[];
+  files: readonly IndexedFile[];
+}): readonly ComposerPickerRow[] {
+  if (input.mode === "command")
+    return rankCommandCompletions({ query: input.query, templates: input.templates });
+  // "Create artifact" is deliberately dropped: it is an intent that writes a
+  // file, and the composer has nowhere to open the result. The `@` picker in
+  // the editor — which does — keeps it.
+  return rankFileRefCompletions({ query: input.query, index: input.files })
+    .filter((completion) => completion.kind === "file")
+    .map((completion) => ({
+      kind: "file" as const,
+      value: completion.relPath,
+      label: completion.label,
+      detail: completion.detail,
+      relPath: completion.relPath,
+      artifact: completion.artifact,
+    }));
 }
 
 /** The text and caret a pick produces. */

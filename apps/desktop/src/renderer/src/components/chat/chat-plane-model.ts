@@ -750,3 +750,15 @@ export function sameMessages(left: readonly UIMessage[], right: readonly UIMessa
 export function sameInteractionId(left: SessionInteraction, right: SessionInteraction): boolean {
   return left.id === right.id;
 }
+
+/**
+ * Content, not identity — the one predicate here that cannot be `===`.
+ *
+ * {@link heldStrip} builds a fresh row for every held message on every call, so
+ * two runs over unchanged records answer with different objects saying the same
+ * two things. A queued row IS its id and its text: nothing else about it is
+ * drawn, and the id is stable across the whole of its life.
+ */
+export function sameQueuedMessage(left: QueuedMessage, right: QueuedMessage): boolean {
+  return left.id === right.id && left.text === right.text;
+}

@@ -5,7 +5,8 @@ import {
   activePickerRow,
   applyPickerRow,
   commandTokenAt,
-  composerPicker,
+  composerPickerRows,
+  composerPickerTarget,
   composerPickerToken,
   movePickerActive,
   rankCommandCompletions,
@@ -33,8 +34,24 @@ const FILES: readonly IndexedFile[] = [
   indexed(".volli/artifacts/notes.md", true),
 ];
 
+/**
+ * The two halves composed — which is exactly what the composer does, at two
+ * different urgencies. Everything asserted through here is a statement about
+ * the pair, and the gates get their own block below against the cheap half
+ * alone, because that is the half that decides open or shut.
+ */
 function pick(text: string, caret = text.length): ComposerPickerState | null {
-  return composerPicker({ text, caret, templates: TEMPLATES, files: FILES });
+  const target = composerPickerTarget({ text, caret });
+  if (target === null) return null;
+  return {
+    ...target,
+    rows: composerPickerRows({
+      mode: target.mode,
+      query: target.query,
+      templates: TEMPLATES,
+      files: FILES,
+    }),
+  };
 }
 
 describe("commandTokenAt", () => {
@@ -119,7 +136,7 @@ describe("rankCommandCompletions", () => {
   });
 });
 
-describe("composerPicker", () => {
+describe("the picker, both halves composed", () => {
   it("opens the command picker on a leading slash", () => {
     const state = pick("/rev");
 
@@ -167,58 +184,98 @@ describe("composerPicker", () => {
   });
 });
 
+describe("composerPickerRows", () => {
+  it("ranks templates for a command token", () => {
+    const rows = composerPickerRows({
+      mode: "command",
+      query: "rev",
+      templates: TEMPLATES,
+      files: FILES,
+    });
+
+    expect(rows.map((row) => row.value)).toEqual(["review", "preview"]);
+  });
+
+  it("ranks the file index for a file token", () => {
+    const rows = composerPickerRows({
+      mode: "file",
+      query: "src/app",
+      templates: TEMPLATES,
+      files: FILES,
+    });
+
+    expect(rows.map((row) => row.value)).toContain("src/app.ts");
+    expect(rows.every((row) => row.kind === "file")).toBe(true);
+  });
+
+  it("ranks whatever query it is handed, which is how it may lag the caret", () => {
+    // The composer defers this half: the token under the caret can be `@src/ap`
+    // while the rows on screen are still the ones `@src/a` ranked. A list one
+    // keystroke behind is a list; a `from`/`to` span one keystroke behind would
+    // corrupt the text, which is why that half is never deferred.
+    const rows = composerPickerRows({
+      mode: "file",
+      query: "",
+      templates: TEMPLATES,
+      files: FILES,
+    });
+
+    expect(rows).toHaveLength(FILES.length);
+  });
+});
+
 describe("the gates that keep a picker shut", () => {
-  const base = { text: "/rev", caret: 4, templates: TEMPLATES, files: FILES };
+  const base = { text: "/rev", caret: 4 };
 
   it("opens by default", () => {
-    expect(composerPicker(base)).not.toBeNull();
+    expect(composerPickerTarget(base)).not.toBeNull();
   });
 
   it("stays shut while the composer cannot take a message", () => {
-    expect(composerPicker({ ...base, ready: false })).toBeNull();
+    expect(composerPickerTarget({ ...base, ready: false })).toBeNull();
   });
 
   it("stays shut while an interaction card holds the slot", () => {
-    expect(composerPicker({ ...base, interactionOpen: true })).toBeNull();
+    expect(composerPickerTarget({ ...base, interactionOpen: true })).toBeNull();
   });
 
   it("stays shut on the token Escape dismissed", () => {
-    expect(composerPicker({ ...base, dismissed: { mode: "command", from: 0 } })).toBeNull();
+    expect(composerPickerTarget({ ...base, dismissed: { mode: "command", from: 0 } })).toBeNull();
   });
 
   it("keeps a dismissal shut however much more is typed into the same token", () => {
     const dismissed = { mode: "command", from: 0 } as const;
 
-    expect(composerPicker({ ...base, text: "/revie", caret: 6, dismissed })).toBeNull();
+    expect(composerPickerTarget({ text: "/revie", caret: 6, dismissed })).toBeNull();
   });
 
   it("opens a different token even while one is dismissed", () => {
-    const state = composerPicker({
+    const target = composerPickerTarget({
       text: "look at @src/ap",
       caret: 15,
-      templates: TEMPLATES,
-      files: FILES,
       dismissed: { mode: "file", from: 0 },
     });
 
-    expect(state?.mode).toBe("file");
-    expect(state?.from).toBe(8);
+    expect(target?.mode).toBe("file");
+    expect(target?.from).toBe(8);
   });
 
   it("does not confuse a dismissed command with a file token at the same offset", () => {
-    const state = composerPicker({
+    const target = composerPickerTarget({
       text: "@src/ap",
       caret: 7,
-      templates: TEMPLATES,
-      files: FILES,
       dismissed: { mode: "command", from: 0 },
     });
 
-    expect(state?.mode).toBe("file");
+    expect(target?.mode).toBe("file");
   });
 
   it("treats an explicit null dismissal as no dismissal", () => {
-    expect(composerPicker({ ...base, dismissed: null })).not.toBeNull();
+    expect(composerPickerTarget({ ...base, dismissed: null })).not.toBeNull();
+  });
+
+  it("is null wherever the grammar has no token at all", () => {
+    expect(composerPickerTarget({ text: "plain prose", caret: 5 })).toBeNull();
   });
 });
 
@@ -296,7 +353,7 @@ describe("applyPickerRow", () => {
 
   it("never consumes the text to the right of the caret", () => {
     const text = "@src/ap and then some";
-    const state = composerPicker({ text, caret: 7, templates: TEMPLATES, files: FILES });
+    const state = pick(text, 7);
     if (state === null) throw new Error("expected an open picker");
     const row = state.rows.find((entry) => entry.value === "src/app.ts");
     if (row === undefined) throw new Error("expected src/app.ts");
@@ -306,7 +363,7 @@ describe("applyPickerRow", () => {
 
   it("skips its own space when the text to the right already starts with one", () => {
     const text = "/rev args";
-    const state = composerPicker({ text, caret: 4, templates: TEMPLATES, files: FILES });
+    const state = pick(text, 4);
     if (state === null) throw new Error("expected an open picker");
 
     expect(applyPickerRow({ text, state, row: commandRow("review") })).toEqual({

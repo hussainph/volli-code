@@ -70,6 +70,7 @@ import {
   resolvingWith,
   sameInteractionId,
   sameMessages,
+  sameQueuedMessage,
   sessionBlocker,
   sessionModelStanding,
   steerRollbackState,
@@ -108,7 +109,6 @@ import {
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useUiStore } from "@renderer/stores/ui";
 
-const NO_MESSAGES: readonly UIMessage[] = [];
 const NO_INTERACTIONS: readonly SessionInteraction[] = [];
 const NO_QUEUE: readonly QueuedMessage[] = [];
 const NO_HELD: readonly HeldMessage[] = [];
@@ -119,7 +119,6 @@ const EMPTY_MODEL_SELECTION: ComposerModelSelection = {
   reasoningLevel: "",
 };
 const EMPTY_ATTENTION: SessionAttentionProjection = { active: [], primary: null };
-const EMPTY_OPENED: ReadonlyMap<string, SessionInteraction> = new Map();
 const EMPTY_RESOLVING: ReadonlySet<string> = new Set();
 
 export interface ChatPlaneProps {
@@ -147,7 +146,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
     selectModel,
     submit,
   } = controller;
-  const slice = controller.session;
+  const session = controller.session;
 
   // The half-typed message is part of the Session, not this view: it has to
   // survive both a tab switch (this component unmounts) and a relaunch, so it
@@ -171,17 +170,16 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   const composerHeight = useMeasuredHeight<HTMLDivElement>();
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const steeringQueued = React.useRef(new Set<string>());
+  // Two one-line callbacks that were inline literals, and inline is what they
+  // could not be: they are props of a memoized composer, so a fresh closure per
+  // render re-renders the whole box once per streamed frame.
+  const focusComposer = React.useCallback(() => textareaRef.current?.focus(), []);
 
-  const messages = slice?.transcript.messages ?? NO_MESSAGES;
-  const queue = slice?.queue ?? NO_QUEUE;
-  const modelSelection = slice?.projection?.modelSelection ?? null;
+  const { messages, queue, working, deliverable, projection } = session;
+  const modelSelection = projection?.modelSelection ?? null;
   const selection: ComposerModelSelection = modelSelection ?? EMPTY_MODEL_SELECTION;
-  const working = slice?.lifecycle === "working";
-  const liveExecutorId = slice?.projection?.liveExecutor?.id ?? null;
-  const deliverable = slice !== undefined && isDeliverable(slice);
-  const { models, providers, catalogState, catalogError } = useModelAccess(
-    slice?.projection != null,
-  );
+  const liveExecutorId = projection?.liveExecutor?.id ?? null;
+  const { models, providers, catalogState, catalogError } = useModelAccess(projection !== null);
   // A durable model is not enough to type: the row that says this Session is
   // pinned to something nobody can run waits on the catalog, and until the
   // catalog answers there is nothing to say it with. A box that takes a message
@@ -216,7 +214,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   // written once, at `interaction.opened`, and leaves the list only when it is
   // resolved or cancelled — so the id is the whole of its identity here.
   const interactions = useStableList(
-    slice?.projection?.interactions.active ?? NO_INTERACTIONS,
+    projection?.interactions.active ?? NO_INTERACTIONS,
     sameInteractionId,
   );
 
@@ -281,10 +279,18 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
     () => new Set(messages.map((message) => message.id)),
     [messages],
   );
-  const strip = React.useMemo(
-    () =>
-      heldStrip(held, queue, durableMessageIds, hasReconciledSessionSnapshot(slice?.projection)),
-    [durableMessageIds, held, queue, slice?.projection],
+  // Held to its identity, and that is what keeps the composer out of the
+  // stream's frame budget. `durableMessageIds` is a fresh Set on every flush of
+  // a live turn, so this memo re-runs once per frame and `heldStrip` mints a
+  // fresh row object for every held message — a new array, saying exactly what
+  // the old one said, straight into `SessionComposer`'s memo. Rows compare by
+  // content, so an unchanged strip stays the array it was.
+  const strip = useStableList(
+    React.useMemo(
+      () => heldStrip(held, queue, durableMessageIds, hasReconciledSessionSnapshot(projection)),
+      [durableMessageIds, held, projection, queue],
+    ),
+    sameQueuedMessage,
   );
 
   // The composer only ever takes messages OUT of the strip — editing one puts
@@ -452,12 +458,12 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   const turnContext = React.useMemo<TurnContext>(
     () => ({
       onOpenFile,
-      interactions: slice?.transcript.openedInteractions ?? EMPTY_OPENED,
+      interactions: session.openedInteractions,
       open: interactions,
       resolving,
       onResolve: answer,
     }),
-    [answer, interactions, onOpenFile, resolving, slice?.transcript.openedInteractions],
+    [answer, interactions, onOpenFile, resolving, session.openedInteractions],
   );
 
   // Grouping is O(messages), so it is memoized and then held per turn: a turn
@@ -467,6 +473,8 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
     React.useMemo(() => groupTurns(messages), [messages]),
     sameMessages,
   );
+
+  const stopTurn = React.useCallback(() => void interrupt(), [interrupt]);
 
   const blockerActs = React.useMemo<SessionBlockerActs>(
     () => ({
@@ -484,8 +492,8 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   );
   const blocker = sessionBlocker(
     {
-      sessionError: slice?.sessionError ?? null,
-      attention: slice?.projection?.attention ?? EMPTY_ATTENTION,
+      sessionError: session.sessionError,
+      attention: projection?.attention ?? EMPTY_ATTENTION,
       catalogState,
       catalogError,
       sessionModel,
@@ -573,7 +581,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               value={input}
               onValueChange={onInputChange}
               textareaRef={textareaRef}
-              onComposerFocusRequest={() => textareaRef.current?.focus()}
+              onComposerFocusRequest={focusComposer}
               // The two caret-driven pickers' supply. Both are project-scoped
               // reads, handed in as plain arrays so the composer stays a
               // controlled view the Lab can mount without a bridge.
@@ -594,7 +602,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               onQueuedChange={onQueuedChange}
               onSteerQueued={onSteerQueued}
               onSubmit={send}
-              onStop={() => void interrupt()}
+              onStop={stopTurn}
             />
           </ComposerInteractionStack>
         </ContentColumn>

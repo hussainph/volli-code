@@ -30,6 +30,7 @@ import {
   resolvingWith,
   sameInteractionId,
   sameMessages,
+  sameQueuedMessage,
   sessionBlocker,
   sessionModelStanding,
   steerRollbackState,
@@ -1392,5 +1393,32 @@ describe("sameInteractionId", () => {
 
     expect(sameInteractionId(opened, again)).toBe(true);
     expect(sameInteractionId(opened, other)).toBe(false);
+  });
+});
+
+describe("sameQueuedMessage", () => {
+  it("reads two freshly built rows for the same message as the same row", () => {
+    const row = { id: "m1", text: "ship it" };
+
+    expect(sameQueuedMessage(row, { ...row })).toBe(true);
+  });
+
+  it("separates a row whose text was edited, and one that is a different message", () => {
+    const row = { id: "m1", text: "ship it" };
+
+    expect(sameQueuedMessage(row, { id: "m1", text: "ship it now" })).toBe(false);
+    expect(sameQueuedMessage(row, { id: "m2", text: "ship it" })).toBe(false);
+  });
+
+  it("holds a strip's identity across a rebuild that changed nothing", () => {
+    // The whole point of the predicate: `heldStrip` mints new row objects on
+    // every flush of a live turn, and the composer's memo compares by identity.
+    const strip = [
+      { id: "m1", text: "ship it" },
+      { id: "m2", text: "then rest" },
+    ];
+    const rebuilt = strip.map((entry) => ({ ...entry }));
+
+    expect(holdList(strip, rebuilt, sameQueuedMessage)).toBe(strip);
   });
 });

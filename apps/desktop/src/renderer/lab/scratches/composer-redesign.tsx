@@ -268,6 +268,100 @@ export default function ComposerRedesignScratch() {
           </pre>
         </ContentColumn>
       )}
+
+      <WidthRack />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ widths */
+
+/**
+ * Every width the app can actually hand this composer, at once.
+ *
+ * THE NUMBERS ARE THE APP'S, NOT A GUESS. The window's own minimum is 940px
+ * (`src/main/index.ts`). Out of that the workspace rail takes 60, the pinned
+ * sidebar panel takes `sidebarWidth − 60` (280–640 clamped, `stores/ui.ts`), the
+ * framed content card takes 9 (8px inset + 1px edge), and a ticket's right rail
+ * takes another 240–560. What is left is the plane, and the composer sits inside
+ * a `ContentColumn` that spends 24px of it on each side:
+ *
+ *   940 − 60 − 258 − 9 − 300 = 313   ← the SHIPPED DEFAULTS at the window floor
+ *   940 − 60 − 220 − 9 − 240 = 411   ← every clamp at its own minimum
+ *
+ * So **313 is the width to design against** and 411 is the one most people will
+ * actually meet. Narrower than 313 is reachable — the two rail clamps never
+ * consult the viewport, so dragging both to their maximum can starve the plane
+ * to nothing — but a composer cannot answer for a layout that has already given
+ * it zero pixels. 280 is here as headroom, not as a contract.
+ *
+ * Each row is the REAL component in a real `ContentColumn`, in its loudest
+ * state: a live turn (so Stop stands beside Queue), an ambiguous model name (so
+ * the pill carries `provider · model`, the longest label it can have), an effort
+ * chip, and a queued row with its three actions. Anything that breaks, breaks
+ * here first.
+ */
+const RACK_WIDTHS = [560, 480, 420, 360, 313, 280] as const;
+
+/** Ambiguous on purpose: two providers ship this name, so the pill leads with the provider. */
+const RACK_MODELS: readonly ComposerModel[] = [
+  ...MODELS,
+  {
+    id: "azure/gpt-5.6-luna",
+    providerId: "azure",
+    providerLabel: "Azure OpenAI",
+    modelId: "gpt-5.6-luna",
+    label: "gpt-5.6-luna",
+    reasoningLevels: ["minimal", "low", "medium", "high", "xhigh"],
+  },
+];
+
+const RACK_SELECTION = {
+  providerId: "azure",
+  modelId: "gpt-5.6-luna",
+  reasoningLevel: "xhigh",
+};
+
+const RACK_QUEUED = [{ id: "q1", text: "and then run the smoke test against the packaged build" }];
+
+function WidthRack() {
+  return (
+    <div data-width-rack className="flex flex-col gap-6">
+      <div className="text-label text-muted-foreground uppercase">
+        Widths · 313 is the shipped default at the 940px window floor
+      </div>
+      {/* Stacked rather than side by side: six boxes come to 2.4k of width, and
+          a rack that wraps is a rack whose widest case is the one you cannot
+          see. */}
+      <div className="flex flex-col items-start gap-6">
+        {RACK_WIDTHS.map((width) => (
+          <div key={width} className="flex flex-col gap-1">
+            <span className="text-label text-muted-foreground tabular-nums">{width}px</span>
+            <div
+              data-rack-box={width}
+              style={{ width }}
+              className="overflow-hidden rounded-lg border border-dashed border-border-strong py-3"
+            >
+              <ContentColumn>
+                <SessionComposer
+                  value="check the packaged build"
+                  onValueChange={() => undefined}
+                  models={RACK_MODELS}
+                  selection={RACK_SELECTION}
+                  onSelectionChange={() => undefined}
+                  working
+                  ready
+                  queued={RACK_QUEUED}
+                  onQueuedChange={() => undefined}
+                  onSteerQueued={() => undefined}
+                  onSubmit={() => undefined}
+                  onStop={() => undefined}
+                />
+              </ContentColumn>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

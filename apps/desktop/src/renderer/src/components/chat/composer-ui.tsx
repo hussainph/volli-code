@@ -65,11 +65,13 @@ import { COMPOSER_STACK_SHELL } from "@renderer/chat/composer-stack";
 import {
   activePickerRow,
   applyPickerRow,
-  composerPicker,
+  composerPickerRows,
+  composerPickerTarget,
   composerPickerToken,
   movePickerActive,
   type ComposerPickerDismissal,
   type ComposerPickerRow,
+  type ComposerPickerState,
 } from "@renderer/chat/composer-picker";
 import {
   composerIntent,
@@ -132,7 +134,19 @@ export interface SessionComposerProps {
 const NO_TEMPLATES: readonly PromptTemplate[] = [];
 const NO_FILES: readonly IndexedFile[] = [];
 
-export function SessionComposer({
+/**
+ * MEMOIZED, and this is the boundary that keeps typing off the stream's clock.
+ *
+ * The composer's parent draws the transcript, so it re-renders on every rAF
+ * flush a live turn produces — and until this boundary existed the composer,
+ * the model popover and the effort chip were re-rendered with it, once per
+ * frame, while someone was typing into them. Nothing about a growing transcript
+ * changes anything on this surface: the props here are the draft, the model
+ * catalog, the queued strip and a handful of callbacks, and `chat-plane.tsx`
+ * holds every one of them at a stable identity for exactly this reason. A prop
+ * added here that churns per frame silently switches the boundary off again.
+ */
+export const SessionComposer = React.memo(function SessionComposer({
   value,
   onValueChange,
   textareaRef,
@@ -208,7 +222,19 @@ export function SessionComposer({
         onSubmit={() => send(composerIntent({ working, steer: false }))}
       >
         {queued.length > 0 ? (
-          <PromptInputHeader className="flex-col items-stretch gap-1 border-b border-border/70">
+          // `flex-nowrap`, AND IT IS LOAD-BEARING RATHER THAN TIDY-UP.
+          // `PromptInputHeader` is a wrapping ROW — right for the chip strip it
+          // was written for — and this call site turns it into a column without
+          // retracting the wrap. A wrapping column sizes each flex LINE to its
+          // widest item's max-content and then stretches the item to *that*, so
+          // a queued row measured 460px inside a 263px composer: the message
+          // ran out through the card's right edge and took Steer, Remove and
+          // the actions menu with it, off screen and unclickable. Measured at
+          // every width the app can hand this box, the first failure was 480px
+          // and by 420px all three controls were outside. The row's own
+          // `min-w-0 flex-1 truncate` was already right and could do nothing,
+          // because nothing was applying any pressure to it.
+          <PromptInputHeader className="flex-col flex-nowrap items-stretch gap-1 border-b border-border/70">
             {queued.map((entry) => (
               <div
                 key={entry.id}
@@ -359,7 +385,26 @@ export function SessionComposer({
               standing taller than the sentence being written into it. What
               does NOT step down is the hierarchy inside the row — submit is
               still the only filled object in it, and fill outranks 4px. */}
-          <PromptInputTools className="min-w-0 flex-1">
+          {/* AND IT WRAPS ONCE, AT A POINT THE MODEL PILL CHOOSES. The chat
+              pane is genuinely narrow in the app's own default layout — 940px
+              window minimum, less the 60px workspace rail, the sidebar panel,
+              the framed card's 9px and a ticket's 300px right rail, leaves the
+              composer 265px of usable width — and at that width the row had a
+              44px submit cluster and a 111px effort chip taking everything, so
+              the model name was crushed to 36px and then to 3px. A pill naming
+              nothing is not a smaller pill; it is a control that has stopped
+              being one.
+
+              So the model NAME still gives first, exactly as the row's own rule
+              says, and it stops giving at a floor it can still be read at
+              ({@link ModelPill}). Past that floor the pills no longer fit
+              beside each other and the effort chip takes its own line rather
+              than either of them shrinking into illegibility. ONE break point,
+              not reflow: `flex-wrap` here can only ever move the second of two
+              chips, and the submit cluster is outside this box, so it does not
+              move at all — which is the whole reason the row was built with the
+              cluster as the fixed half. */}
+          <PromptInputTools className="min-w-0 flex-1 flex-wrap">
             <ModelPill
               models={models}
               selection={selection}
@@ -422,7 +467,7 @@ export function SessionComposer({
       </PromptInput>
     </ComposerPickerStack>
   );
-}
+});
 
 /* ------------------------------------------------------------------ picker */
 
@@ -484,7 +529,8 @@ function ComposerPickerStack({
     // full one, because it would contribute no height for anything to clear.
     <div data-slot="composer-picker-stack" className="flex flex-col gap-2">
       <ComposerPicker
-        state={picker.state}
+        mode={picker.state?.mode ?? null}
+        rows={picker.rows}
         active={picker.active}
         onActiveChange={picker.setActive}
         onSelect={picker.select}
@@ -566,12 +612,18 @@ function ComposerTextarea({
 
 /** What {@link useComposerPicker} hands the stack's render and its textarea. */
 interface ComposerPickerHandle {
-  state: ReturnType<typeof composerPicker>;
+  /** The token being completed, for the code that writes over it. */
+  state: ComposerPickerState | null;
+  /** What the card draws — held apart from the token because it may lag it. */
+  rows: readonly ComposerPickerRow[];
   active: string;
   setActive(value: string): void;
   select(row: ComposerPickerRow): void;
   binding: ComposerCaretBinding;
 }
+
+/** One array, so a closed picker does not mint a fresh empty one per render. */
+const NO_PICKER_ROWS: readonly ComposerPickerRow[] = [];
 
 /**
  * The caret-driven picker, kept out of the composer's render.
@@ -582,8 +634,10 @@ interface ComposerPickerHandle {
  * document fact. **Dismissal** is what makes Escape mean something durable.
  *
  * What is NOT here is any decision: whether those three add up to an open
- * picker is `composerPicker`'s, in the pure module beside this one, and so is
- * what a picked row writes. This hook holds state and forwards keys.
+ * picker is `composerPickerTarget`'s, in the pure module beside this one, what
+ * that token offers is `composerPickerRows`', and so is what a picked row
+ * writes. This hook holds state, forwards keys, and decides only one thing the
+ * pure module cannot — which of those two answers may lag the keystroke.
  */
 function useComposerPicker(input: {
   value: string;
@@ -636,25 +690,60 @@ function useComposerPicker(input: {
     if (!inToken) setDismissed(null);
   }, [inToken]);
 
-  const state = composerPicker({
+  // WHERE THE PICKER WRITES — urgent, and it may never lag the caret. This is a
+  // handful of character-class tests, and {@link applyPickerRow} overwrites the
+  // `from`/`to` span it names: a span one keystroke behind the text would write
+  // the completion over the wrong range and leave what was typed since dangling
+  // to the right of it.
+  const target = composerPickerTarget({
     text: value,
     caret,
-    templates: promptTemplates,
-    files,
     ready,
     interactionOpen,
     dismissed: inToken ? dismissed : null,
   });
+  const mode = target?.mode ?? null;
+  const from = target?.from ?? 0;
+  const to = target?.to ?? 0;
+  const query = target?.query ?? "";
+
+  // WHAT IT OFFERS — deferred, because it is the one expensive thing on this
+  // surface. `@` ranks the WHOLE project file index (filter, score, sort, slice
+  // — O(n log n) over an unbounded array) and it used to run in the same commit
+  // as the controlled textarea's own value update, so on a large repo every
+  // keystroke waited on a sort of the repo before the character appeared. The
+  // textarea's value stays urgent; the list is allowed to arrive a frame or two
+  // later, which is what a list is for.
+  //
+  // THE MODE IS DELIBERATELY NOT DEFERRED. Only the query is. A deferred mode
+  // would make the frame that OPENS the picker rank against `null` — the card
+  // would arrive saying "No match" and fill in afterwards, which is worse than
+  // arriving late. A mode change is one keystroke (`/`, `@`, or leaving a
+  // token) and pays for its ranking on that keystroke alone; a query change is
+  // every keystroke after it, and those are the ones that had to stop paying.
+  const deferredQuery = React.useDeferredValue(query);
+  const rows = React.useMemo(
+    () =>
+      mode === null
+        ? NO_PICKER_ROWS
+        : composerPickerRows({ mode, query: deferredQuery, templates: promptTemplates, files }),
+    [deferredQuery, files, mode, promptTemplates],
+  );
+  // Rebuilt every render on purpose: the token half moves with the caret, so
+  // this object is genuinely new whenever it is different, and nothing holds it
+  // across renders. The card is handed `mode` and `rows` instead of this —
+  // three of these four fields are things it does not draw, and passing them
+  // was re-rendering fifty list rows per keystroke to redraw the same fifty.
+  const state: ComposerPickerState | null = mode === null ? null : { mode, from, to, query, rows };
 
   // The open EDGE, not every render: `refresh()` is cache-gated, but calling it
   // on each keystroke would still be a call per keystroke.
-  const fileMode = state?.mode === "file";
+  const fileMode = mode === "file";
   const { onFilePickerOpen } = input;
   React.useEffect(() => {
     if (fileMode) onFilePickerOpen?.();
   }, [fileMode, onFilePickerOpen]);
 
-  const rows = state?.rows ?? [];
   // Derived rather than reset: a re-ranked list can drop the row the highlight
   // named, and falling back to the first one means ⏎ always has a target
   // without an effect racing the render that changed the list.
@@ -697,17 +786,50 @@ function useComposerPicker(input: {
     return false;
   };
 
-  return {
-    state,
-    active: activeValue,
-    setActive,
-    select,
-    binding: {
-      ref: textareaRef,
-      handleKeyDown,
-      trackCaret: (element) => setCaret(element.selectionStart ?? 0),
-    },
-  };
+  /**
+   * ONE BINDING OBJECT FOR THE LIFE OF THE COMPOSER, and it has to be one.
+   *
+   * This is a CONTEXT VALUE, and a fresh one re-renders every consumer whatever
+   * React.memo says — the same fact `ticket-dialog-host.tsx` is built around.
+   * It was a new object with two new closures on every render, and the render
+   * that matters here is the one nothing else causes: a caret move. Arrowing or
+   * clicking through a long draft changes `caret` and nothing else, so
+   * `SessionComposer` does not re-render, `children` is the element it already
+   * was, and React would bail the whole input subtree out — except that the
+   * churning context value dragged the textarea back in with it.
+   *
+   * Neither handler can be a `useCallback`: both read the token, the rows and
+   * the active row, all of which change on the keystroke. So both are held by
+   * ref and reached through a stable wrapper — the latest-callback pattern.
+   * `select` gets the same treatment for a second reason: it is the picker
+   * card's `onSelect`, and the card is memoized on rows that deliberately do
+   * not change on most keystrokes.
+   *
+   * Writing the refs in a layout effect rather than during render is what keeps
+   * this correct under concurrent rendering: a render React discards must not
+   * leave its handler behind, and both of these run after a commit.
+   */
+  const latest = React.useRef({ handleKeyDown, select });
+  React.useLayoutEffect(() => {
+    latest.current = { handleKeyDown, select };
+  });
+  const forwardKeyDown = React.useCallback(
+    (event: React.KeyboardEvent<HTMLTextAreaElement>): boolean =>
+      latest.current.handleKeyDown(event),
+    [],
+  );
+  const forwardSelect = React.useCallback((row: ComposerPickerRow): void => {
+    latest.current.select(row);
+  }, []);
+  const trackCaret = React.useCallback((element: HTMLTextAreaElement): void => {
+    setCaret(element.selectionStart ?? 0);
+  }, []);
+  const binding = React.useMemo<ComposerCaretBinding>(
+    () => ({ ref: textareaRef, handleKeyDown: forwardKeyDown, trackCaret }),
+    [forwardKeyDown, textareaRef, trackCaret],
+  );
+
+  return { state, rows, active: activeValue, setActive, select: forwardSelect, binding };
 }
 
 /* ------------------------------------------------------------------- model */
@@ -821,9 +943,35 @@ function ModelPill({
           variant="ghost"
           disabled={disabled || models.length === 0}
           // `shrink` against `Button`'s own `shrink-0`: this is the row's give.
-          className="min-w-0 shrink text-muted-foreground"
+          //
+          // AND THE BASIS IS WHAT ORDERS THE GIVE AGAINST THE WRAP. In a
+          // wrapping row the line breaks on an item's flex BASIS, not on the
+          // width it would shrink to — so with `basis-auto` this pill kept its
+          // full natural width and the effort chip dropped to a second line the
+          // moment the two no longer fitted side by side at full size, which
+          // measured as a 24px-taller composer at 420px while there was still
+          // room to simply truncate. `basis-22` is the 88px floor (a 56px label
+          // plus this button's own 32px of caret and padding), so the line only
+          // breaks once the NAME has already given everything it has; `grow`
+          // then spends whatever is left on the label, and `max-w-max` stops it
+          // spending more than the name is wide — a ghost button stretched to
+          // the full row is a hover target the size of the footer.
+          className="min-w-0 max-w-max shrink grow basis-22 text-muted-foreground"
         >
-          <span className="min-w-0 truncate">
+          {/* THE GIVE HAS A FLOOR, and 3.5rem is where it is. This is the row's
+              elastic member and it should be — a model name is the long value
+              and the only one with anything to lose. What it was doing instead
+              was losing everything: measured in a 313px chat pane (the app's
+              own default at its 940px window minimum) this label came out 36px
+              wide, and 3px in the pane one notch narrower. At 3px the pill is a
+              caret and a gap, and the one fact it exists to carry is gone.
+
+              56px holds roughly eight characters and an ellipsis at the ui
+              size — enough to tell `sonnet-4.5` from `gpt-5.6-luna`, which is
+              the question this control answers most of the time. Below it the
+              footer wraps instead (see `PromptInputTools` above), so the floor
+              is what CHOOSES that break rather than a width that overflows. */}
+          <span className="min-w-14 truncate">
             {modelPillLabel(models, selection, selectionProviderLabel)}
           </span>
           <CaretUpDownIcon className="size-3 shrink-0" weight="bold" />
