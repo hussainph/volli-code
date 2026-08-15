@@ -407,7 +407,7 @@ async function main() {
         "diff host + tab dirty",
         async () => {
           const monaco = await readDiffMonaco(page);
-          const dirtyDot = await page.getByTestId("ticket-tab-dirty").count();
+          const dirtyDot = await page.getByTestId("tab-dirty").count();
           if (monaco.dirty === "true" && monaco.lines.includes(EDIT_MARKER) && dirtyDot >= 1) {
             return monaco;
           }
@@ -450,7 +450,7 @@ async function main() {
           const diffStill = (tabs.diffs ?? []).includes(TARGET);
           const activeFile = tabs.active === `file:${TARGET}`;
           const monaco = await readFileMonaco(page);
-          const dirtyDot = await page.getByTestId("ticket-tab-dirty").count();
+          const dirtyDot = await page.getByTestId("tab-dirty").count();
           if (
             fileOpen &&
             diffStill &&
@@ -543,7 +543,7 @@ async function main() {
         { timeout: 20000 },
       );
 
-      const dirtyDots = await page.getByTestId("ticket-tab-dirty").count();
+      const dirtyDots = await page.getByTestId("tab-dirty").count();
       return {
         ok: !!cleaned && diskOk && !!diffClean && dirtyDots === 0,
         detail: `fileClean=${!!cleaned} diskOk=${diskOk} diffClean=${!!diffClean} dirtyDots=${dirtyDots} disk=${JSON.stringify(onDisk.slice(0, 80))}`,

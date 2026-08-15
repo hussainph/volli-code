@@ -168,6 +168,11 @@ Heights come from the primitive's size variants — don't restate them per-use:
 `default` is the chip height on purpose: a default Button next to a filter chip reads as one family.
 Nothing in the app should render a taller control than `lg`.
 
+**Tabs ride the same rung.** `ui/tab-strip.tsx` is the one tab, at 28px / `text-ui` in both its
+drawings — `variant="folder"` (rounded top corners, active tab bleeding `-mb-px` over the strip's
+bottom border) and `variant="pill"` (rounded rectangle in a centred band). A tab is a place, not a
+hero action; the two strips that sat at `h-8 text-sm` were reading at `lg`.
+
 ## Vertical rhythm (reading surfaces)
 
 The Ticket Body tab is the reference implementation: generous air above the title (`pt-8` below the

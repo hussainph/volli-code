@@ -101,7 +101,7 @@ describe("FileTabStrip", () => {
       new Set(["src/index.ts"]),
     );
 
-    expect(html).toContain('data-testid="file-tab-dirty"');
+    expect(html).toContain('data-testid="tab-dirty"');
     expect(html).toContain('data-dirty="true"');
     expect(html).toContain("Unsaved changes");
   });
@@ -109,7 +109,7 @@ describe("FileTabStrip", () => {
   it("gives every tab a close control the smoke can target", () => {
     const html = render([{ relPath: "src/index.ts", pinned: true }], "src/index.ts");
 
-    expect(html).toContain('data-testid="file-tab-close"');
+    expect(html).toContain('data-testid="tab-close"');
     expect(html).toContain('aria-label="Close index.ts"');
   });
 
@@ -124,7 +124,7 @@ describe("FileTabStrip", () => {
 
     expect(html).toContain("main");
     expect(html).toContain("preload");
-    expect(html).toContain('data-testid="file-tab-hint"');
+    expect(html).toContain('data-testid="tab-hint"');
   });
 
   it("renders nothing at all when no file is open", () => {

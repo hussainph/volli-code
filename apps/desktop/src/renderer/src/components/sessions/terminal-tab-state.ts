@@ -11,6 +11,7 @@
  * leaves view glue outside, so logic parked in a component file is logic nobody
  * is holding to 100%.
  */
+import type { StatusDotState } from "@renderer/components/ui/status-dot";
 import { toastError } from "@renderer/lib/toast";
 import { sessionPanes, type SessionTab } from "@renderer/stores/sessions";
 import { errorMessage, type TerminalIoResult } from "@volli/shared";
@@ -49,6 +50,27 @@ export function terminalTabState(
     keptAwake: livePanes.some((pane) => parkState[pane.sessionId]?.keepAwake ?? false),
     livePaneIds: livePanes.map((pane) => pane.sessionId),
   };
+}
+
+/**
+ * The status dot a terminal tab wears, or `null` while the moon badge is
+ * speaking for it instead.
+ *
+ * The fourth ad-hoc status map lived here, written out twice: both strips
+ * painted an exited PTY at `bg-muted-foreground/30`, a running one at full
+ * `bg-muted-foreground`, and the ACTIVE tab's dot in the accent — which put a
+ * status dot in the same colour as the selected-tab indicator two pixels away,
+ * the exact collision `ui/status-dot.tsx` exists to have ended. Liveness is a
+ * fact about the Session, not about which tab is in front, so it says the same
+ * thing whether or not you are looking at it.
+ *
+ * `parked` returns null rather than the `"parked"` tone because a parked tab
+ * already draws a moon: two marks for one state, and the moon is the one that
+ * explains itself.
+ */
+export function terminalTabDot(state: TerminalTabState): StatusDotState | null {
+  if (state.exited) return "exited";
+  return state.parked ? null : "idle";
 }
 
 /**
