@@ -38,7 +38,6 @@ import { nanoid } from "nanoid";
 import type {
   ChangeEvent,
   ChangeEventHandler,
-  ClipboardEventHandler,
   ComponentProps,
   FormEvent,
   FormEventHandler,
@@ -892,6 +891,17 @@ export const PromptInputBody = ({ className, ...props }: PromptInputBodyProps) =
 
 export type PromptInputTextareaProps = ComponentProps<typeof InputGroupTextarea>;
 
+/**
+ * NO `onPaste`, AND NO ATTACHMENT BACKSPACE. Both used to be here, and both
+ * were silent: `handlePaste` put a pasted image into the attachments context,
+ * this app renders no attachment strip and `SessionComposer.send()` never
+ * reads `files`, so a pasted screenshot went into React state, showed nothing,
+ * and was dropped on submit — after which Backspace on an empty box deleted
+ * the invisible thing instead of doing nothing. Two silent paths for a feature
+ * that does not exist. Nothing surfaces a failure here now, because nothing
+ * accepts the file in the first place; the day an attachment strip is built,
+ * both come back together with it.
+ */
 export const PromptInputTextarea = ({
   onChange,
   onKeyDown,
@@ -900,7 +910,6 @@ export const PromptInputTextarea = ({
   ...props
 }: PromptInputTextareaProps) => {
   const controller = useOptionalPromptInputController();
-  const attachments = usePromptInputAttachments();
   const [isComposing, setIsComposing] = useState(false);
 
   const handleKeyDown: KeyboardEventHandler<HTMLTextAreaElement> = useCallback(
@@ -933,44 +942,8 @@ export const PromptInputTextarea = ({
 
         form?.requestSubmit();
       }
-
-      // Remove last attachment when Backspace is pressed and textarea is empty
-      if (e.key === "Backspace" && e.currentTarget.value === "" && attachments.files.length > 0) {
-        e.preventDefault();
-        const lastAttachment = attachments.files.at(-1);
-        if (lastAttachment) {
-          attachments.remove(lastAttachment.id);
-        }
-      }
     },
-    [onKeyDown, isComposing, attachments],
-  );
-
-  const handlePaste: ClipboardEventHandler<HTMLTextAreaElement> = useCallback(
-    (event) => {
-      const items = event.clipboardData?.items;
-
-      if (!items) {
-        return;
-      }
-
-      const files: File[] = [];
-
-      for (const item of items) {
-        if (item.kind === "file") {
-          const file = item.getAsFile();
-          if (file) {
-            files.push(file);
-          }
-        }
-      }
-
-      if (files.length > 0) {
-        event.preventDefault();
-        attachments.add(files);
-      }
-    },
-    [attachments],
+    [onKeyDown, isComposing],
   );
 
   const handleCompositionEnd = useCallback(() => setIsComposing(false), []);
@@ -995,7 +968,6 @@ export const PromptInputTextarea = ({
       onCompositionEnd={handleCompositionEnd}
       onCompositionStart={handleCompositionStart}
       onKeyDown={handleKeyDown}
-      onPaste={handlePaste}
       placeholder={placeholder}
       {...props}
       {...controlledProps}
@@ -1008,7 +980,11 @@ export type PromptInputHeaderProps = Omit<ComponentProps<typeof InputGroupAddon>
 export const PromptInputHeader = ({ className, ...props }: PromptInputHeaderProps) => (
   <InputGroupAddon
     align="block-end"
-    className={cn("order-first flex-wrap gap-1", className)}
+    // `py-2`, because the addon's `block-end` alignment pairs a 4px lid with a
+    // 16px floor — a band that is level with the box below it and four times
+    // that above. See {@link PromptInputFooter} for why the fix is spelled
+    // here rather than at the call site.
+    className={cn("order-first flex-wrap gap-1 py-2", className)}
     {...props}
   />
 );
@@ -1018,7 +994,18 @@ export type PromptInputFooterProps = Omit<ComponentProps<typeof InputGroupAddon>
 export const PromptInputFooter = ({ className, ...props }: PromptInputFooterProps) => (
   <InputGroupAddon
     align="block-end"
-    className={cn("justify-between gap-1", className)}
+    // THE PADDING IS SETTLED HERE, and it has to be. `inputGroupAddonVariants`
+    // pairs `block-end` with `pb-4` and `[.border-t]:pt-4` — a 16px lid and a
+    // 16px floor, sized for a field whose body is a 64px box. This footer's
+    // body is a 36px line, so 16/16 around one 24px control row made the
+    // control band 45% of a collapsed composer. 8/8 is the pair of that floor.
+    //
+    // Written with the same `[.border-t]` variant rather than as a bare
+    // `pt-2`: the variant compiles to `&.border-t`, which is (0,2,0) against a
+    // plain utility's (0,1,0), so a bare override is emitted and never
+    // applied. Matching the variant puts both in one `cn()` group instead,
+    // where the later one simply replaces the earlier one.
+    className={cn("justify-between gap-1 pb-2 [.border-t]:pt-2", className)}
     {...props}
   />
 );
