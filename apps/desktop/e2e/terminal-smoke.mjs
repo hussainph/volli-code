@@ -164,6 +164,26 @@ async function waitForLiveCanvas(page, timeoutMs = 20000) {
   await sleep(2200);
 }
 
+/**
+ * Boot a terminal tab through the session-start control's caret and wait for
+ * its canvas. The Sessions surface's default Session is a structured chat
+ * (sessions-layer.tsx's first-visit auto-open — which, with no default model
+ * recorded in this profile, refuses into the empty state), so a PTY smoke
+ * mints every terminal itself. `.first()` because an EMPTY surface mounts the
+ * control twice (tab strip + empty state) and either would do; `expectedTabs`
+ * pins the wait to this create rather than a canvas an earlier tab painted.
+ */
+async function startTerminalTab(page, expectedTabs) {
+  await page.getByLabel("Other session kinds").first().click();
+  await page.getByRole("menuitem", { name: /^Terminal/ }).click();
+  await page.waitForFunction(
+    (n) => document.querySelectorAll('[aria-label^="Close Terminal"]').length === n,
+    expectedTabs,
+    { timeout: 10000 },
+  );
+  await waitForLiveCanvas(page);
+}
+
 // ---- main ------------------------------------------------------------------
 
 async function main() {
@@ -292,9 +312,9 @@ async function main() {
     await page.reload();
     await page.waitForLoadState("domcontentloaded");
 
-    // === 1. Workspace A: open Sessions, get a terminal, probe cwd ==========
+    // === 1. Workspace A: open Sessions, start a terminal, probe cwd =========
     await page.getByText("Sessions", { exact: true }).click();
-    await waitForLiveCanvas(page); // first-visit auto-creates a session
+    await startTerminalTab(page, 1); // a terminal is an explicit pick now
     const aTabs1 = await tabCount(page);
     await page.screenshot({ path: shot("01-workspace-a-terminal.png") });
 
@@ -313,7 +333,7 @@ async function main() {
     // workspace opens on Board — click Sessions to reveal its terminal surface.
     await page.getByText("BC", { exact: true }).click(); // Beta Cove monogram
     await page.getByText("Sessions", { exact: true }).click();
-    await waitForLiveCanvas(page); // auto-creates beta's first session
+    await startTerminalTab(page, 1); // beta's first terminal, explicitly
     const bTabs = await tabCount(page);
     await page.screenshot({ path: shot("02-workspace-b-terminal.png") });
 
@@ -430,15 +450,9 @@ async function main() {
 
     // === 6. Second tab in A: caret → two tabs, each its own live shell ======
     // The scratch strip's control is a split button (press = chat, caret = the
-    // kinds); this flow boots the terminal kind, so it takes the caret. The
-    // item's name carries its chord, hence the regex.
-    await page.getByLabel("Other session kinds").click();
-    await page.getByRole("menuitem", { name: /^Terminal/ }).click();
-    await page.waitForFunction(
-      () => document.querySelectorAll('[aria-label^="Close Terminal"]').length === 2,
-      { timeout: 10000 },
-    );
-    await waitForLiveCanvas(page); // tab 2 becomes active on create
+    // kinds); this flow boots the terminal kind, so it takes the caret — the
+    // same gesture startTerminalTab encodes. Tab 2 becomes active on create.
+    await startTerminalTab(page, 2);
     const aTabs4 = await tabCount(page);
     await page.screenshot({ path: shot("06-two-tabs.png") });
 

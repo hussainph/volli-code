@@ -105,9 +105,9 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
   // terminal interposes a confirm before the actual PTY teardown runs.
   const closeGuard = useCloseGuard();
 
-  // Projects that already got their one auto-opened scratch session. Marked at
+  // Projects that already got their one auto-opened structured chat. Marked at
   // attempt time and never cleared — a failure's retry surface is the empty
-  // state's "New session" button, and a user closing their last tab must be able
+  // state's "New chat" control, and a user closing their last tab must be able
   // to hold zero sessions without the effect respawning one.
   const autoOpenedRef = React.useRef(new Set<string>());
 
@@ -193,6 +193,17 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
     void startScratchTerminal(projectId);
   }, []);
 
+  /**
+   * Mints one durable, ticketless chat Session on `projectId` and puts its tab
+   * in front. The whole boot lives in `session-create.ts` so this surface's
+   * control, the ⌘T chord and the first-visit auto-open below cannot disagree
+   * about what a new chat is; no executor is passed — the plane resolves the
+   * project's own runtime preferences when it mounts.
+   */
+  const createChat = React.useCallback((projectId: string) => {
+    void startScratchChat(projectId);
+  }, []);
+
   const selectedId = selected?.id ?? null;
   const scratch = selectedId === null ? undefined : byOwner[selectedId];
   const terminalTabs = scratch?.tabs ?? NO_TERMINAL_TABS;
@@ -272,10 +283,16 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
     setSessionsActiveTab(selectedId, activeTabId);
   }, [activeTabId, recordedActiveTab, selectedId, setSessionsActiveTab]);
 
-  // Zero-friction first visit: auto-open a scratch terminal when Sessions is
-  // revealed for a project that has never had a Session here — once per project.
-  // A chat counts as one: the surface is not empty, and a terminal nobody asked
-  // for would be an odd thing to find beside it.
+  // Zero-friction first visit: auto-open a structured chat when Sessions is
+  // revealed for a project that has never had a Session here — once per
+  // project. A chat and not a terminal, because the chat IS the product's own
+  // runtime (a ticketless Session runs as a project-Role Session on the main
+  // checkout, `agent-runtime/src/prompt.ts`); a terminal is its manual
+  // companion, one caret away on the strip's control, never the landing
+  // surface. A terminal counts as one: the surface is not empty, and a chat
+  // nobody asked for would be an odd thing to find beside it. A fresh profile
+  // with no default model refuses the create exactly as an explicit press
+  // would — the toast names the setting, and the empty state keeps the retry.
   const emptySurface = terminalTabs.length === 0 && openChatIds.length === 0;
   React.useEffect(() => {
     if (
@@ -286,20 +303,9 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
       !creating
     ) {
       autoOpenedRef.current.add(selected.id);
-      createScratch(selected.id);
+      createChat(selected.id);
     }
-  }, [visible, selected, emptySurface, creating, createScratch]);
-
-  /**
-   * Mints one durable, ticketless chat Session on `projectId` and puts its tab
-   * in front. The whole boot lives in `session-create.ts` so this surface's
-   * control and the ⌘T chord cannot disagree about what a new chat is; no
-   * executor is passed — the plane resolves the project's own runtime
-   * preferences when it mounts.
-   */
-  const createChat = React.useCallback((projectId: string) => {
-    void startScratchChat(projectId);
-  }, []);
+  }, [visible, selected, emptySurface, creating, createChat]);
 
   /**
    * Where a file a chat names opens. A ticketless chat has no worktree, so

@@ -192,8 +192,20 @@ async function main() {
     await sleep(1500);
 
     // === Setup: two scratch tabs, each writing its shell pid to a marker ======
+    // The surface's default Session is a structured chat (which, with no
+    // default model in this profile, refuses into the empty state) — parking
+    // is a terminal-only tier, so tab 1 is minted explicitly through the
+    // session-start control's caret. `.first()` because an empty surface
+    // mounts the control twice (tab strip + empty state).
     await page.getByText("Sessions", { exact: true }).click();
-    await waitForLiveCanvas(page); // first visit auto-creates tab 1
+    await page.getByLabel("Other session kinds").first().click();
+    await page.getByRole("menuitem", { name: /^Terminal/ }).click();
+    await page.waitForFunction(
+      () => document.querySelectorAll('[aria-label^="Close Terminal"]').length === 1,
+      undefined,
+      { timeout: 10000 },
+    );
+    await waitForLiveCanvas(page);
 
     const marker1 = join(SCRATCH, "tab-1.pid");
     await focusTerminal(page);
