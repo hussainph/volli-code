@@ -141,8 +141,12 @@ const PI_RUNTIME_IDENTITY: NativeRuntimeIdentity = {
   fingerprint: `npm:${PI_RUNTIME_PACKAGE}@${PI_RUNTIME_VERSION}`,
 };
 
-/** The coding tools this slice loads — with no gate and no sandbox, the only bound. */
-const PI_TOOLS = { tools: ["read", "edit", "write", "execute"] } as const;
+/**
+ * The coding tools this slice loads — with no gate and no sandbox, the only
+ * bound. Exported for the `prompt.baseline` diagnostic, which must price the
+ * authority layer over the same tool list a real attach names.
+ */
+export const PI_TOOLS = { tools: ["read", "edit", "write", "execute"] } as const;
 
 /** Everything about a Session that a directory cannot tell the runtime. */
 interface PiRuntimeContextFields {
