@@ -41,6 +41,10 @@ export const DEFAULT_MODEL_REQUIRED =
 export type StructuredSessionsErrorCode =
   | "DEFAULT_MODEL_REQUIRED"
   | "MODEL_SELECTION_REJECTED"
+  // An invocation-time model override Model Access cannot honor: a model it
+  // does not know, a provider that needs sign-in first, or a reasoning level
+  // the chosen model cannot run. Refused before any Session exists.
+  | "MODEL_UNAVAILABLE"
   | "SESSION_NOT_TICKET_SESSION"
   | "SESSION_NOT_PROJECT_SESSION"
   | "SKILL_NOT_FOUND"

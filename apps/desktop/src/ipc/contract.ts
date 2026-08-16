@@ -55,6 +55,7 @@ import type {
   Ticket,
   TicketComment,
   TicketEvent,
+  TicketEventActorKind,
   TicketPriority,
   TicketStatus,
   TicketStatusEntry,
@@ -953,6 +954,11 @@ export type VolliIpcEvent =
   // its own launch wrapper. The other involuntary channel, and the one that
   // reaches the tiers hooks cannot — see {@link SessionHarnessNotice}.
   | "volli:session-harness"
+  // A structured chat Session was started on a ticket from OUTSIDE this window
+  // (the agent socket's `session.start`, VC-13). The renderer shows a toast
+  // whose action opens that session's chat tab — and does nothing else: the
+  // app must never navigate or steal focus because a start landed.
+  | "volli:session-started"
   // Ordered frames for one live Session RPC subscription — see
   // {@link SessionRpcIpcEvent}. Every subscription shares this channel and is
   // told apart by the id main acknowledged the request with.
@@ -1110,6 +1116,29 @@ export interface SessionHarnessNotice {
    */
   changed: boolean;
   /** Epoch ms the announce was ingested (main's clock). */
+  at: number;
+}
+
+/**
+ * Main→renderer: a structured chat Session was started on a ticket through the
+ * agent socket (`volli session start`, VC-13). The renderer toasts it —
+ * "<actor> started a session on VC-4" — with an action that opens the
+ * session's chat tab; without the click nothing moves. Board/sidebar surfaces
+ * refresh through the ordinary `volli:data-changed` path, so this notice only
+ * carries what the toast itself says and where its action goes.
+ */
+export interface SessionStartedNotice {
+  /** The FULL session id — the action addresses live renderer state, not a human reader. */
+  sessionId: string;
+  projectId: string;
+  ticketId: string;
+  /** The started ticket's display id, precomputed so the toast never joins. */
+  ticketDisplayId: string;
+  /** Who started it, as the door derived it (`requestActor`) — never self-declared. */
+  actor: TicketEventActorKind;
+  /** Display id of the ticket the starting session was itself working, when known. */
+  actorTicket: string | null;
+  /** Epoch ms the start was ingested (main's clock). */
   at: number;
 }
 

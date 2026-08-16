@@ -197,6 +197,36 @@ describe("renderCliSuccess", () => {
     expect(renderCliSuccess("session.done", { session: "abcdef12", signal: "done" }, options)).toBe(
       "abcdef12  done\n",
     );
+    // The short id leads: it is the one thing the acceptance requires printed,
+    // and the handle every follow-up (session peek/list) addresses by.
+    expect(
+      renderCliSuccess(
+        "session.start",
+        {
+          session: "abcdef12",
+          ticket: "VC-4",
+          state: "ready",
+          model: "openai-codex/gpt-5.2-sol",
+          reasoning: "high",
+        },
+        options,
+      ),
+    ).toBe("abcdef12  VC-4  ready  openai-codex/gpt-5.2-sol high\n");
+    // A failed attach still prints the id — the Session is durable and the app
+    // carries its Retry — with the state naming what happened.
+    expect(
+      renderCliSuccess(
+        "session.start",
+        {
+          session: "abcdef12",
+          ticket: "VC-4",
+          state: "needs-recovery",
+          model: "anthropic/claude",
+          reasoning: "medium",
+        },
+        options,
+      ),
+    ).toBe("abcdef12  VC-4  needs-recovery  anthropic/claude medium\n");
     expect(
       renderCliSuccess("session.blocked", { session: "abcdef12", signal: "blocked" }, options),
     ).toBe("abcdef12  blocked\n");

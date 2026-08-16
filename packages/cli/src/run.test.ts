@@ -51,6 +51,62 @@ describe("runCli", () => {
     ]);
   });
 
+  it("carries session start's overrides over the socket and prints the short id line", async () => {
+    const stdout: string[] = [];
+    const requests: AgentRequest[] = [];
+
+    const exitCode = await runCli(
+      [
+        "session",
+        "start",
+        "VC-4",
+        "-m",
+        "Fix the flaky test",
+        "--model",
+        "openai-codex/gpt-5.2",
+        "--reasoning",
+        "high",
+      ],
+      {
+        env: { VOLLI_SOCKET: "/profiles/volli.sock" },
+        cwd: "/work/volli",
+        stdout: (text) => stdout.push(text),
+        stderr: () => undefined,
+        readText: async () => "",
+        observe: async () => ({}),
+        request: async (_socketPath, request) => {
+          requests.push(request);
+          return {
+            v: 1,
+            ok: true,
+            data: {
+              session: "abcdef12",
+              ticket: "VC-4",
+              state: "ready",
+              model: "openai-codex/gpt-5.2",
+              reasoning: "high",
+            },
+          };
+        },
+        launch: async () => ({ alreadyRunning: true }),
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(requests).toEqual([
+      expect.objectContaining({
+        cmd: "session.start",
+        args: {
+          id: "VC-4",
+          message: "Fix the flaky test",
+          model: { providerId: "openai-codex", modelId: "gpt-5.2" },
+          reasoning: "high",
+        },
+      }),
+    ]);
+    expect(stdout).toEqual(["abcdef12  VC-4  ready  openai-codex/gpt-5.2 high\n"]);
+  });
+
   it("identifies environment context in degraded mode when the app is down", async () => {
     const stdout: string[] = [];
     const stderr: string[] = [];

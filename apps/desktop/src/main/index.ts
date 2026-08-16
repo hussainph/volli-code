@@ -50,6 +50,7 @@ import { openVolliDb } from "./db";
 import { getProjectById, listProjects } from "./db/projects-repo";
 import { getTicket } from "./db/tickets-repo";
 import { listAttachments } from "./db/attachments-repo";
+import { recordTicketEvent } from "./db/events-repo";
 import { createDesktopSessionEngine } from "./session-control";
 import { createDesktopSessionRuntime } from "./session-runtime";
 import { closeStaleAttachments } from "./session-runtime/boot-recovery";
@@ -87,6 +88,7 @@ import {
   broadcastHarnessEvent,
   broadcastSessionHarness,
   broadcastSessionsInterrupted,
+  broadcastSessionStarted,
   broadcastSystemAppearance,
 } from "./broadcast";
 import { startOrphanSweep } from "./orphan-sweep";
@@ -748,6 +750,23 @@ app.whenReady().then(async () => {
           readBornTicketless: async (sessionId) =>
             (await sessionRuntime.projection({ sessionId })).projection.bornTicketless,
           skills: sessionSkills,
+          // Consulted only when a start carries an invocation-time model
+          // override (the CLI's --model/--reasoning); the saved default was
+          // validated when it was chosen.
+          inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}),
+          // One creation path, one event (VC-13 decision 3): the renderer's
+          // optimistic-open `create` (VC-16) and the agent socket's `start`
+          // both mint through the same path, each carrying the actor its own
+          // door derived.
+          recordSessionStarted: ({ ticketId, sessionId, actor }) => {
+            recordTicketEvent(
+              sessionDb,
+              ticketId,
+              { kind: "session_started", sessionId },
+              Date.now(),
+              actor,
+            );
+          },
         })
       : null;
   const projectSessions =
@@ -1401,6 +1420,42 @@ app.whenReady().then(async () => {
           appVersion: app.getVersion(),
           observeSession: (sessionId, lines) => ptyManager.peek(sessionId, lines),
           notify: (title, message) => new Notification({ title, body: message }).show(),
+          // The product Ticket Session start route (VC-13): the same facade the
+          // renderer's `ticketSessions.start` RPC rides — no parallel creation
+          // path. Absent when the Session runtime never came up this launch,
+          // which the verb answers as retryable APP_UNREACHABLE.
+          ...(ticketSessions !== null ? { ticketSessions } : {}),
+          // The kickoff turn's delivery seam. `message.submit` resolves when
+          // the TURN ends, so the door fires it detached; a refusal lands in
+          // the Session's own durable state and the log.
+          ...(sessionRuntime !== null
+            ? {
+                submitSessionMessage: async ({
+                  sessionId,
+                  text,
+                }: {
+                  sessionId: string;
+                  text: string;
+                }) => {
+                  await sessionRuntime.command({
+                    commandId: randomUUID(),
+                    sessionId,
+                    command: {
+                      kind: "message.submit",
+                      message: {
+                        id: randomUUID(),
+                        role: "user",
+                        parts: [{ type: "text", text }],
+                      },
+                    },
+                  });
+                },
+              }
+            : {}),
+          // The no-redirect rule (VC-13 decision 2): a start pushes a toast
+          // notice; the toast's action is the only thing that ever opens the
+          // new session's tab.
+          onSessionStarted: (notice) => broadcastSessionStarted(notice),
           // Backward-move interrupt (issue #78): a socket `ticket.move` that
           // leaves the active columns Esc's the ticket's live agent sessions,
           // announced via toast exactly like the renderer's own move path.

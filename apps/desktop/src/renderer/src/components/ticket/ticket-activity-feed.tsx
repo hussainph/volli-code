@@ -13,6 +13,7 @@ import { NotePencilIcon } from "@phosphor-icons/react/dist/csr/NotePencil";
 import { PaperclipIcon } from "@phosphor-icons/react/dist/csr/Paperclip";
 import { PaperPlaneTiltIcon } from "@phosphor-icons/react/dist/csr/PaperPlaneTilt";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
+import { PlayCircleIcon } from "@phosphor-icons/react/dist/csr/PlayCircle";
 import { PlusCircleIcon } from "@phosphor-icons/react/dist/csr/PlusCircle";
 import { RobotIcon } from "@phosphor-icons/react/dist/csr/Robot";
 import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
@@ -77,6 +78,7 @@ const EVENT_ICON: Record<TicketEventKind, PhosphorIcon> = {
   pr_merged: GitMergeIcon,
   attachment_added: PaperclipIcon,
   attachment_removed: TrashSimpleIcon,
+  session_started: PlayCircleIcon,
 };
 
 /** The single muted line for one property-change event: icon + sentence + time. */

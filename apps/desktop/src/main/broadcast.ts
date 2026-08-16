@@ -12,6 +12,7 @@ import type {
   HarnessEventNotice,
   SessionHarnessNotice,
   SessionsInterruptedEvent,
+  SessionStartedNotice,
   VolliIpcEvent,
 } from "../ipc/contract";
 
@@ -85,6 +86,20 @@ export function broadcastSessionHarness(notice: SessionHarnessNotice): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.webContents.isDestroyed()) continue;
     window.webContents.send("volli:session-harness" satisfies VolliIpcEvent, notice);
+  }
+}
+
+/**
+ * Announces a socket-originated Session start (VC-13) to every window: the
+ * renderer toasts "<actor> started a session on VC-4" with an action that
+ * opens the session's chat tab. A notice, never a navigation — without the
+ * click nothing moves, and board/sidebar surfaces refresh through the normal
+ * `volli:data-changed` path beside it.
+ */
+export function broadcastSessionStarted(notice: SessionStartedNotice): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.webContents.isDestroyed()) continue;
+    window.webContents.send("volli:session-started" satisfies VolliIpcEvent, notice);
   }
 }
 

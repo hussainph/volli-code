@@ -101,6 +101,7 @@ import type {
   SessionRenameResult,
   SessionsInterruptedEvent,
   SessionsResult,
+  SessionStartedNotice,
   TerminalOverlayWriteResult,
   ThemeSetProjectResult,
   ThemeStateInput,
@@ -386,6 +387,18 @@ const api = {
       ipcRenderer.on("volli:harness-event" satisfies VolliIpcEvent, listener);
       return () =>
         ipcRenderer.removeListener("volli:harness-event" satisfies VolliIpcEvent, listener);
+    },
+    /**
+     * Subscribes to socket-originated Session starts (VC-13): `volli session
+     * start` opened a chat Session on a ticket, and the renderer toasts it —
+     * with an "Open session" action — instead of navigating anywhere itself.
+     */
+    onStarted: (callback: (event: SessionStartedNotice) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: SessionStartedNotice) =>
+        callback(payload);
+      ipcRenderer.on("volli:session-started" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:session-started" satisfies VolliIpcEvent, listener);
     },
     /**
      * Subscribes to harness-change announcements: a different harness's launch
