@@ -5,8 +5,12 @@
  * a worktree ticket, the main checkout for a worktree-opt-out one (see
  * `sessionAttachmentsDir`'s header for the boundary vs. `.volli/artifacts`).
  * `url` attachments have no bytes and pass through untouched. SYNCHRONOUS —
- * this runs inside the sync worktree `ensure` pipeline and pty.ts's sync
- * kickoff-command build, both of which are on the session-boot hot path.
+ * `pty/scope.ts`'s kickoff-command build is itself sync, and the work here is
+ * bounded by the ticket's own attachment list rather than by the size of a
+ * checkout, so it stays cheap on the session-boot hot path. The worktree
+ * `ensure` pipeline around its other call site is ASYNC as of VC-16 (its copy
+ * walk visits the whole Main checkout, which froze every window); this step is
+ * the one synchronous survivor inside it.
  *
  * Idempotent by construction: an already-materialized destination is never
  * overwritten (mirrors `worktree/include.ts`'s copy semantics), so re-booting

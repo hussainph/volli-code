@@ -634,6 +634,23 @@ describe("updateTicket", () => {
     expect(patched?.baseBranch).toBe("main");
   });
 
+  it("optimistically flips worktree scoping, so the destination control reads its own press", () => {
+    // VC-16: the Now pane's destination control is the only writer of this
+    // field after creation, and its label is projected straight off the ticket
+    // — without the optimistic patch the radio would snap back to the old
+    // choice until the gateway answered.
+    const a = ticket({ id: "a", projectId: "p1", status: "backlog", usesWorktree: true });
+    const gateway = fakeGateway({
+      updateTicket: vi.fn<BoardGateway["updateTicket"]>(() => new Promise<TicketResult>(() => {})),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a] }, {});
+
+    void store.getState().updateTicket({ ticketId: "a", usesWorktree: false });
+
+    expect(store.getState().ticketsByProject.p1?.[0]?.usesWorktree).toBe(false);
+  });
+
   it("leaves fields the caller didn't pass untouched in the optimistic patch", () => {
     const a = ticket({
       id: "a",
