@@ -18,7 +18,7 @@ import type {
 import type { VolliIpcChannel } from "../../ipc/contract";
 import { attachmentsRoot } from "../attachment-store";
 import type { DbHandle } from "../data-ipc";
-import { quitAlreadyRefused, refuseQuit } from "../quit-gate";
+import { quitAlreadyRefused, refuseQuit, updateInstallQuitInFlight } from "../quit-gate";
 import { createDesktopSessionEngine } from "../session-control";
 import type { AgentRuntimeEnvironment } from "./manager";
 import { PtyManager } from "./manager";
@@ -303,7 +303,12 @@ export function registerTerminalIpcHandlers(
     // stack a second modal on an answer the user has given, and don't killAll
     // over a quit that is not happening.
     if (quitAlreadyRefused(event)) return;
-    const busy = manager.busySessions();
+    // An accepted update install (VC-59) already carried this exact warning —
+    // busy terminals, counted and named — in its own dialog, so asking again
+    // here would be the double prompt that dialog exists to prevent. Standing
+    // down means skipping the CONFIRM only: killAll below still runs, or
+    // Squirrel would relaunch the new build over orphaned shells.
+    const busy = updateInstallQuitInFlight() ? [] : manager.busySessions();
     if (
       busy.length > 0 &&
       !confirmDestructiveClose(busy, { message: "Quit Volli?", confirmLabel: "Quit" })

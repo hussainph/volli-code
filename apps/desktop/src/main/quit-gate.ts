@@ -104,6 +104,48 @@ export function quitConfirmDetail(names: readonly string[]): string {
 }
 
 /**
+ * The update-install quit latch (VC-59): whether the user has already accepted
+ * a restart through the explicit install dialog.
+ *
+ * That dialog is the ONE prompt on the install path — it carries the whole
+ * warning (busy terminals, open agent Sessions, unsaved drafts), so the
+ * destructive-work gates behind it (the window `close` confirms, the
+ * before-quit unsaved-drafts and busy-terminal confirms) check this latch and
+ * stand down rather than stacking a second modal on an answer the user has
+ * given. Teardown itself never stands down: the accepted-quit coordinator
+ * still runs the full shutdown and exits 0 — `BaseUpdater.addQuitHandler`
+ * refuses to install on a non-zero exit.
+ *
+ * A module-level latch rather than a per-event mark, deliberately: Electron's
+ * native `autoUpdater.quitAndInstall()` closes every window BEFORE emitting
+ * `before-quit`, so the first gate to consult this (a window `close` handler)
+ * has no quit event to key on. It is raised strictly BEFORE
+ * `quitAndInstall()` is issued and lowered only if that issue throws — there
+ * is no path back once Squirrel has been told to relaunch, so a raised latch
+ * never outlives a run that could still see a plain ⌘Q.
+ */
+let updateInstallQuitAccepted = false;
+
+/** Raises the latch — call strictly before `quitAndInstall()` is issued. */
+export function beginAcceptedUpdateInstall(): void {
+  updateInstallQuitAccepted = true;
+}
+
+/**
+ * Lowers the latch after a `quitAndInstall()` that threw synchronously: the
+ * app is staying up after all, and a latch left raised would let the next
+ * ordinary quit bypass every destructive-work confirm.
+ */
+export function abandonAcceptedUpdateInstall(): void {
+  updateInstallQuitAccepted = false;
+}
+
+/** Whether an accepted update install is driving the current shutdown. */
+export function updateInstallQuitInFlight(): boolean {
+  return updateInstallQuitAccepted;
+}
+
+/**
  * Cancels this quit and records the refusal so the listeners behind it stand
  * down. Takes the event rather than reaching for Electron's `app`, so the whole
  * gate can be tested without a live Electron.

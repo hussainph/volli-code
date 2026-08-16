@@ -34,6 +34,8 @@ import type { HarnessAdapter, HarnessId, ResolvedAppearance } from "@volli/share
 import type { FirstPaintHint, VolliIpcChannel, VolliIpcEvent } from "../ipc/contract";
 import type { ManagedConflict } from "./harness-install";
 import {
+  abandonAcceptedUpdateInstall,
+  beginAcceptedUpdateInstall,
   clearUnsavedDocumentsOnWindowClosed,
   planUnsavedQuit,
   quitAlreadyRefused,
@@ -42,6 +44,7 @@ import {
   registerAcceptedQuitCoordinator,
   refuseQuit,
   unsavedDocumentNames,
+  updateInstallQuitInFlight,
 } from "./quit-gate";
 import { isInternalNavigationTarget } from "./navigation";
 import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
@@ -89,9 +92,15 @@ import {
   broadcastSessionsInterrupted,
   broadcastSessionStarted,
   broadcastSystemAppearance,
+  broadcastUpdateState,
 } from "./broadcast";
 import { startOrphanSweep } from "./orphan-sweep";
-import { agentTurnOpenWithin, releaseAgentSites as releaseWorktreeAgentSites } from "./worktree";
+import { registerUpdateIpcHandlers } from "./update-ipc";
+import {
+  agentTurnOpenWithin,
+  countOpenAgentTurns,
+  releaseAgentSites as releaseWorktreeAgentSites,
+} from "./worktree";
 import type { AgentSiteReleaseReport } from "./worktree";
 import { worktreeDeps } from "./worktree-runtime";
 import { getRetentionWatcher } from "./retention-runtime";
@@ -343,6 +352,13 @@ function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): Brows
   let closeConfirmed = false;
   mainWindow.on("close", (event) => {
     if (closeConfirmed) return;
+    // An accepted update install (VC-59): its dialog already named the unsaved
+    // drafts and busy terminals this close destroys, and Electron's native
+    // quitAndInstall closes every window BEFORE before-quit fires — a confirm
+    // here would be the second prompt the one-dialog decision forbids, and a
+    // Cancel would leave Squirrel already instructed to relaunch over a still-
+    // running app.
+    if (updateInstallQuitInFlight()) return;
     // Unsaved editor drafts are asked about FIRST and separately from the busy
     // terminals: closing the window destroys the renderer holding those drafts
     // exactly as finally as quitting does, and unlike a killed shell there is
@@ -1154,6 +1170,10 @@ app.whenReady().then(async () => {
   // teardown until this gate and the terminal gate have recorded their verdict.
   app.on("before-quit", (event) => {
     if (quitAlreadyRefused(event)) return;
+    // An accepted update install already carried the unsaved-drafts warning in
+    // its own dialog (VC-59's one-prompt decision) — asking again here would
+    // stack a second modal on an answer the user has given.
+    if (updateInstallQuitInFlight()) return;
     const names = unsavedDocumentNames();
     const step = planUnsavedQuit({
       names,
@@ -1211,12 +1231,38 @@ app.whenReady().then(async () => {
   // Wired OUTSIDE the dbHandle.ok block: a broken db must not also strand
   // the install on a stale build (an update may well be what fixes it), so
   // that case just falls back to the default prerelease policy (off).
-  startAutoUpdate({
+  const autoUpdate = startAutoUpdate({
     isPackaged: app.isPackaged,
     updater: autoUpdater,
     allowPrerelease: dbHandle.ok ? readAllowPrerelease(dbHandle.db) : false,
+    currentVersion: app.getVersion(),
     notify: (title, body) => new Notification({ title, body }).show(),
     log: (line) => console.info(line),
+    onStateChange: broadcastUpdateState,
+    // The double-notify guard: with a window open the sidebar badge/dialog
+    // owns the "downloaded" announcement; the native notification only speaks
+    // when no window is left to show it (macOS keeps the app alive).
+    hasUpdateSurface: () =>
+      BrowserWindow.getAllWindows().some((window) => !window.webContents.isDestroyed()),
+  });
+  // The sidebar's door onto that updater (VC-59) — same guarded invoke
+  // surface as everything else, and like startAutoUpdate itself deliberately
+  // OUTSIDE dbHandle.ok: the update UI must survive exactly the broken-db
+  // case the updater was built to survive. The live-work readers answer from
+  // what exists this launch — no session runtime truthfully means no open
+  // agent turns.
+  registerUpdateIpcHandlers({
+    update: autoUpdate,
+    busyCommands: () => ptyManager.busySessions().map((busy) => busy.process),
+    openAgentTurns: () =>
+      sessionRuntime === null
+        ? Promise.resolve(0)
+        : countOpenAgentTurns(sessionRuntime, (sessionId, error) => {
+            console.warn(`[volli] could not read Session ${sessionId}:`, errorMessage(error));
+          }),
+    unsavedDrafts: unsavedDocumentNames,
+    beginInstall: beginAcceptedUpdateInstall,
+    abandonInstall: abandonAcceptedUpdateInstall,
   });
 
   let shimPath = join(runtimePaths.binDir, "volli");
