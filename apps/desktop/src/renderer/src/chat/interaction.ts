@@ -25,6 +25,7 @@ import {
   SESSION_ESCALATION_CONTINUE_ID,
   SESSION_ESCALATION_STOP_ID,
   SESSION_REFUSAL_OPTION_IDS,
+  type RendererSessionEventPayload,
   type SessionEventPayload,
   type SessionInteraction,
   type SessionInteractionAnswer,
@@ -1007,10 +1008,16 @@ function receiptTrailer(
  * instead of printing an opaque id.
  */
 export function indexOpenedInteractions(
-  frames: readonly { event: { payload: SessionEventPayload } }[],
+  // Both edges of the seam: renderer-safe payloads off the wire, durable ones
+  // in tests and fixtures. A null event is a kind this build does not know,
+  // which by definition opened nothing it can draw.
+  frames: readonly {
+    event: { payload: SessionEventPayload | RendererSessionEventPayload } | null;
+  }[],
 ): ReadonlyMap<string, SessionInteraction> {
   const byId = new Map<string, SessionInteraction>();
   for (const frame of frames) {
+    if (frame.event === null) continue;
     const { payload } = frame.event;
     if (payload.kind === "interaction.opened")
       byId.set(payload.interaction.id, payload.interaction);

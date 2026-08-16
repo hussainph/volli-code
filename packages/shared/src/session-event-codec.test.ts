@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   assertSession,
   assertSessionEvent,
+  parseRendererSessionEvent,
   scrubSessionCommand,
   scrubSessionEvent,
   scrubSessionEventPayload,
@@ -960,5 +961,222 @@ describe("the renderer-safe scrub", () => {
         venue: null,
       }),
     ).toEqual({ source: { kind: "user", id: "person", detail: null }, venue: null });
+  });
+});
+
+function rendererEvent(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: "event-1",
+    sessionId: "session-1",
+    sequence: 1,
+    occurredAt: 100,
+    recordedAt: 100,
+    provenance: { source: { kind: "system", id: "session-runtime", detail: null }, venue: null },
+    payload: { kind: "turn.started", attachmentId: "attachment-1", turnId: "turn-1" },
+    ...overrides,
+  };
+}
+
+describe("the renderer-side parse", () => {
+  it("round-trips what the edge ships: scrub, JSON, parse", () => {
+    const durable: SessionEvent = {
+      id: "event-1",
+      sessionId: "session-1",
+      sequence: 1,
+      occurredAt: 100,
+      recordedAt: 100,
+      attachmentId: "attachment-1",
+      provenance: {
+        source: { kind: "adapter", id: "pi", detail: { pid: 42 } },
+        venue: { id: "local", kind: "local" },
+      },
+      payload: { kind: "attachment.opened", attachment },
+    };
+    const shipped = scrubSessionEvent(durable);
+    const parsed = parseRendererSessionEvent(JSON.parse(encodeSessionJson(shipped)), "event");
+    expect(parsed).toEqual({ ok: true, event: shipped });
+  });
+
+  it("parses every scrubbed kind the table publishes", () => {
+    // The kinds whose scrub removes keys carry their own renderer decode;
+    // everything else parses through scrub(decode(…)). Both paths, per kind.
+    const durables: SessionEventPayload[] = [
+      { kind: "command.recorded", command },
+      {
+        kind: "command.recorded",
+        command: { ...command, intent: { kind: "session.retitle", title: null }, route: null },
+      },
+      { kind: "attachment.opened", attachment },
+      {
+        kind: "attachment.failed",
+        attachment,
+        failure: { code: "spawn", detail: null, diagnostic: { stderr: "boom" } },
+      },
+      {
+        kind: "attachment.native_referenced",
+        attachmentId: "attachment-1",
+        native: { id: "native-1", detail: null },
+      },
+      { kind: "interaction.opened", interaction },
+      { kind: "session.archived" },
+    ];
+    for (const durable of durables) {
+      const shipped = scrubSessionEventPayload(durable);
+      const parsed = parseRendererSessionEvent(
+        rendererEvent({ payload: JSON.parse(encodeSessionJson(shipped)) }),
+        "event",
+      );
+      expect(parsed.ok ? parsed.event.payload : parsed).toEqual(shipped);
+    }
+  });
+
+  it("answers an unknown kind with the distinct tolerant arm, not an error", () => {
+    expect(
+      parseRendererSessionEvent(
+        rendererEvent({ payload: { kind: "capabilities.retired" } }),
+        "event",
+      ),
+    ).toEqual({ ok: false, reason: "unknown-kind", kind: "capabilities.retired" });
+  });
+
+  it("answers corruption of a known kind with the loud arm", () => {
+    expect(
+      parseRendererSessionEvent(
+        rendererEvent({ payload: { kind: "turn.started", attachmentId: "a", turnId: 7 } }),
+        "event",
+      ),
+    ).toEqual({
+      ok: false,
+      reason: "malformed",
+      message: "event.payload.turnId must be a string",
+    });
+    expect(parseRendererSessionEvent(null, "event")).toEqual({
+      ok: false,
+      reason: "malformed",
+      message: "event must be an object",
+    });
+    expect(parseRendererSessionEvent(rendererEvent({ sequence: 0 }), "event")).toEqual({
+      ok: false,
+      reason: "malformed",
+      message: "event has an invalid envelope",
+    });
+    expect(parseRendererSessionEvent(rendererEvent({ id: "" }), "event")).toEqual({
+      ok: false,
+      reason: "malformed",
+      message: "event has an invalid envelope",
+    });
+    expect(parseRendererSessionEvent(rendererEvent({ sessionId: "" }), "event")).toEqual({
+      ok: false,
+      reason: "malformed",
+      message: "event has an invalid envelope",
+    });
+  });
+
+  it("keeps optional envelope correlation ids, absent either way", () => {
+    const bare = parseRendererSessionEvent(rendererEvent(), "event");
+    expect(bare.ok && "attachmentId" in bare.event).toBe(false);
+    expect(bare.ok && "commandId" in bare.event).toBe(false);
+    const correlated = parseRendererSessionEvent(
+      rendererEvent({ attachmentId: "attachment-1", commandId: "command-1" }),
+      "event",
+    );
+    expect(correlated.ok ? correlated.event.attachmentId : null).toBe("attachment-1");
+    expect(correlated.ok ? correlated.event.commandId : null).toBe("command-1");
+    // Explicit nulls decode back to absence, like the SQLite row read.
+    const nulled = parseRendererSessionEvent(
+      rendererEvent({ attachmentId: null, commandId: null }),
+      "event",
+    );
+    expect(nulled.ok && "attachmentId" in nulled.event).toBe(false);
+  });
+
+  it("re-scrubs on read: a leaked adapter source, native id or adapterId never survives", () => {
+    const leakedProvenance = parseRendererSessionEvent(
+      rendererEvent({
+        provenance: { source: { kind: "adapter", id: "pi", detail: { pid: 42 } }, venue: null },
+      }),
+      "event",
+    );
+    expect(leakedProvenance.ok ? leakedProvenance.event.provenance.source : null).toEqual({
+      kind: "system",
+      id: "session-runtime",
+      detail: null,
+    });
+    const leakedNative = parseRendererSessionEvent(
+      rendererEvent({
+        payload: {
+          kind: "interaction.opened",
+          interaction: { ...interaction, native: { id: "leaked", detail: { path: "/tmp" } } },
+        },
+      }),
+      "event",
+    );
+    expect(
+      leakedNative.ok && leakedNative.event.payload.kind === "interaction.opened"
+        ? leakedNative.event.payload.interaction.native
+        : null,
+    ).toEqual({ id: null, detail: null });
+    // An executor.start intent that still carries adapterId loses it on read.
+    const leakedIntent = parseRendererSessionEvent(
+      rendererEvent({
+        payload: { kind: "command.recorded", command: { ...command, route: null } },
+      }),
+      "event",
+    );
+    expect(
+      leakedIntent.ok && leakedIntent.event.payload.kind === "command.recorded"
+        ? leakedIntent.event.payload.command.intent
+        : null,
+    ).toEqual({ kind: "executor.start", continuity: "fresh" });
+  });
+
+  it("rejects a malformed renderer-safe command or attachment", () => {
+    const parse = (payload: unknown) =>
+      parseRendererSessionEvent(rendererEvent({ payload }), "event");
+    expect(parse({ kind: "command.recorded", command: { ...command, id: "" } })).toEqual({
+      ok: false,
+      reason: "malformed",
+      message: "event.payload.command is not a valid Session command",
+    });
+    expect(
+      parse({
+        kind: "command.recorded",
+        command: { ...command, route: { attachmentId: 7 } },
+      }),
+    ).toEqual({
+      ok: false,
+      reason: "malformed",
+      message: "event.payload.command.route.attachmentId must be a string",
+    });
+    const scrubbed = scrubSessionEventPayload({ kind: "attachment.opened", attachment });
+    const shippedAttachment =
+      scrubbed.kind === "attachment.opened" ? scrubbed.attachment : undefined;
+    expect(
+      parse({ kind: "attachment.opened", attachment: { ...shippedAttachment, id: "" } }),
+    ).toEqual({
+      ok: false,
+      reason: "malformed",
+      message: "event.payload.attachment is not a valid Session attachment",
+    });
+    expect(
+      parse({
+        kind: "attachment.opened",
+        attachment: { ...shippedAttachment, venue: { id: "", kind: "local" } },
+      }),
+    ).toEqual({
+      ok: false,
+      reason: "malformed",
+      message: "event.payload.attachment is not a valid Session attachment",
+    });
+    expect(
+      parse({
+        kind: "attachment.opened",
+        attachment: { ...shippedAttachment, sessionId: "" },
+      }),
+    ).toEqual({
+      ok: false,
+      reason: "malformed",
+      message: "event.payload.attachment is not a valid Session attachment",
+    });
   });
 });

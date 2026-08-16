@@ -91,16 +91,71 @@ function projectionFor(attachmentId: string | null): SessionPresentationProjecti
   };
 }
 
+/** The renderer-safe payload each kind actually crosses the edge with. */
+function payloadOf(kind: string): Record<string, unknown> {
+  switch (kind) {
+    case "turn.started":
+    case "turn.completed":
+    case "turn.interrupted":
+      return { kind, attachmentId: "attach-1", turnId: "turn-1" };
+    case "interaction.opened":
+      return {
+        kind,
+        interaction: {
+          id: "ask:call-1",
+          attachmentId: "attach-1",
+          kind: "permission",
+          title: "Allow write?",
+          detail: null,
+          options: [],
+          multiple: false,
+          native: { id: null, detail: null },
+        },
+      };
+    case "attention.raised":
+      return {
+        kind,
+        attention: {
+          kind: "input_required",
+          id: "attention-1",
+          attachmentId: null,
+          detail: null,
+          diagnostic: null,
+        },
+      };
+    case "transcript.referenced":
+      return {
+        kind,
+        attachmentId: null,
+        turnId: null,
+        reference: { id: "sha256:artifact", mediaType: null, digest: null },
+      };
+    default:
+      return { kind };
+  }
+}
+
 /** A durable frame as it crosses the edge: loose JSON the wire reader validates. */
 function frameOf(sequence: number, kind: string): unknown {
-  return { sessionId: SESSION.id, sequence, event: { payload: { kind } }, transcript: null };
+  return {
+    sessionId: SESSION.id,
+    sequence,
+    event: {
+      id: `event-${sequence}`,
+      sessionId: SESSION.id,
+      sequence,
+      occurredAt: sequence,
+      recordedAt: sequence,
+      provenance: { source: { kind: "system", id: "session-runtime", detail: null }, venue: null },
+      payload: payloadOf(kind),
+    },
+    transcript: null,
+  };
 }
 
 function transcriptFrameOf(sequence: number, messageId: string): unknown {
   return {
-    sessionId: SESSION.id,
-    sequence,
-    event: { payload: { kind: "transcript.referenced" } },
+    ...(frameOf(sequence, "transcript.referenced") as Record<string, unknown>),
     transcript: {
       message: { id: messageId, role: "assistant", parts: [{ type: "text", text: "settled" }] },
     },

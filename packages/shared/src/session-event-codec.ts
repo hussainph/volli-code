@@ -37,6 +37,7 @@
 
 import { REASONING_LEVELS } from "./agent-runtime";
 import type { ModelSelection } from "./agent-runtime";
+import { errorMessage } from "./errors";
 import {
   SESSION_ATTACHMENT_CONTINUITIES,
   SESSION_ATTENTION_KINDS,
@@ -104,6 +105,14 @@ interface SessionEventKindCodec<Kind extends SessionEventKind, Safe = unknown> {
    * published contract for its kind.
    */
   scrub(payload: PayloadOf<Kind>): Safe;
+  /**
+   * Renderer-safe JSON → typed renderer payload, for the read back on the
+   * renderer's side of the edge. Only needed when the scrub *removes* keys —
+   * `decode` then rejects the scrubbed JSON — so most kinds omit it and the
+   * renderer parse runs `scrub(decode(…))` instead, which both validates the
+   * shape and re-nulls anything an unscrubbed value could be leaking.
+   */
+  decodeRenderer?(record: JsonRecord, context: string): Safe;
 }
 
 /**
@@ -119,6 +128,10 @@ const codecs = {
       command: decodeSessionCommand(record.command, `${context}.command`),
     }),
     scrub: (payload) => ({ ...payload, command: scrubSessionCommand(payload.command) }),
+    decodeRenderer: (record, context) => ({
+      kind: "command.recorded" as const,
+      command: decodeRendererCommand(record.command, `${context}.command`),
+    }),
   },
   "session.created": {
     decode: (record, context) => ({
@@ -172,6 +185,10 @@ const codecs = {
       attachment: decodeAttachment(record.attachment, `${context}.attachment`),
     }),
     scrub: (payload) => ({ ...payload, attachment: scrubSessionAttachment(payload.attachment) }),
+    decodeRenderer: (record, context) => ({
+      kind: "attachment.opened" as const,
+      attachment: decodeRendererAttachment(record.attachment, `${context}.attachment`),
+    }),
   },
   "attachment.native_referenced": {
     decode: (record, context) => ({
@@ -191,6 +208,13 @@ const codecs = {
       ...payload,
       attachment: scrubSessionAttachment(payload.attachment),
       failure: scrubSessionAttachmentFailure(payload.failure),
+    }),
+    decodeRenderer: (record, context) => ({
+      kind: "attachment.failed" as const,
+      attachment: decodeRendererAttachment(record.attachment, `${context}.attachment`),
+      // Decoded with the durable reader, then re-scrubbed: a leaked diagnostic
+      // is nulled rather than trusted.
+      failure: scrubSessionAttachmentFailure(decodeFailure(record.failure, `${context}.failure`)),
     }),
   },
   "attachment.closed": {
@@ -477,6 +501,146 @@ export function scrubSessionCommand(command: SessionCommand): RendererSessionCom
 
 function scrubbedNativeReference(): RendererSessionNativeReference {
   return { id: null, detail: null };
+}
+
+/* ------------------------------------------------------- renderer-side parse */
+
+/**
+ * The non-throwing read of one renderer-safe event, for consumers that must
+ * not throw — the chat wire reader runs inside React state updaters, where a
+ * throw takes the whole surface down instead of losing one frame.
+ *
+ * The two failure arms are deliberately distinct, mirroring the ledger's read
+ * rule: an `unknown-kind` is an expected consequence of a writer newer than
+ * this build (live on the lab HTTP transport, and on any replay) and the
+ * caller keeps the envelope while folding nothing; `malformed` is corruption
+ * of a known kind and the caller surfaces it.
+ */
+export type RendererSessionEventParse =
+  | { ok: true; event: RendererSessionEvent }
+  | { ok: false; reason: "unknown-kind"; kind: string }
+  | { ok: false; reason: "malformed"; message: string };
+
+export function parseRendererSessionEvent(
+  value: unknown,
+  context: string,
+): RendererSessionEventParse {
+  try {
+    return { ok: true, event: decodeRendererSessionEvent(value, context) };
+  } catch (error) {
+    if (error instanceof UnknownSessionEventKindError) {
+      return { ok: false, reason: "unknown-kind", kind: error.payloadKind };
+    }
+    return { ok: false, reason: "malformed", message: errorMessage(error) };
+  }
+}
+
+/**
+ * Renderer-safe JSON → typed renderer payload. Throws exactly like
+ * {@link decodeSessionEventPayload}: the distinct error on an unknown kind, a
+ * plain one on a malformed known kind.
+ */
+export function decodeRendererSessionEventPayload(
+  value: unknown,
+  context: string,
+): RendererSessionEventPayload {
+  const record = asRecord(value, context);
+  const kind = readString(record.kind, `${context}.kind`);
+  const codec = codecByKind[kind];
+  if (codec === undefined) throw new UnknownSessionEventKindError(kind, context);
+  // `scrub(decode(…))` where the scrubbed JSON is still durable-decodable:
+  // one parse per kind, and re-scrubbing on read means an unscrubbed leak is
+  // nulled here rather than trusted. The kinds whose scrub removes keys carry
+  // their own renderer decode instead, because `decode` would refuse them.
+  return codec.decodeRenderer === undefined
+    ? codec.scrub(codec.decode(record, context))
+    : codec.decodeRenderer(record, context);
+}
+
+function decodeRendererSessionEvent(value: unknown, context: string): RendererSessionEvent {
+  const row = asRecord(value, context);
+  const attachmentId = readAbsentableString(row.attachmentId, `${context}.attachmentId`);
+  const commandId = readAbsentableString(row.commandId, `${context}.commandId`);
+  const event: RendererSessionEvent = {
+    id: readString(row.id, `${context}.id`),
+    sessionId: readString(row.sessionId, `${context}.sessionId`),
+    sequence: readInteger(row.sequence, `${context}.sequence`),
+    occurredAt: readInteger(row.occurredAt, `${context}.occurredAt`),
+    recordedAt: readInteger(row.recordedAt, `${context}.recordedAt`),
+    // Decoded with the durable reader, then re-scrubbed for the same reason
+    // the payload is: an adapter source that leaked through arrives here as a
+    // system one, never as itself.
+    provenance: scrubSessionEventProvenance(
+      decodeSessionEventProvenance(row.provenance, `${context}.provenance`),
+    ),
+    payload: decodeRendererSessionEventPayload(row.payload, `${context}.payload`),
+  };
+  if (!event.id || !event.sessionId || event.sequence < 1) {
+    throw new Error(`${context} has an invalid envelope`);
+  }
+  if (attachmentId !== null) event.attachmentId = attachmentId;
+  if (commandId !== null) event.commandId = commandId;
+  return event;
+}
+
+function decodeRendererCommand(value: unknown, context: string): RendererSessionCommand {
+  const row = asRecord(value, context);
+  const command: RendererSessionCommand = {
+    id: readString(row.id, `${context}.id`),
+    sessionId: readString(row.sessionId, `${context}.sessionId`),
+    createdAt: readInteger(row.createdAt, `${context}.createdAt`),
+    intent: decodeRendererCommandIntent(row.intent, `${context}.intent`),
+    route: row.route === null ? null : decodeRendererCommandRoute(row.route, `${context}.route`),
+  };
+  if (!command.id || !command.sessionId) {
+    throw new Error(`${context} is not a valid Session command`);
+  }
+  return command;
+}
+
+function decodeRendererCommandIntent(
+  value: unknown,
+  context: string,
+): RendererSessionCommandIntent {
+  const row = asRecord(value, context);
+  // The one arm the scrub reshapes: no `adapterId` to read, and none returned
+  // even when an unscrubbed value carries one.
+  if (row.kind === "executor.start") {
+    return {
+      kind: "executor.start",
+      continuity: enumValue(
+        row.continuity,
+        SESSION_ATTACHMENT_CONTINUITIES,
+        `${context}.continuity`,
+      ),
+    };
+  }
+  // Every other arm crosses the edge unchanged, so the durable decoder is the
+  // renderer decoder — and each durable arm is assignable to its renderer arm.
+  return decodeSessionCommandIntent(value, context);
+}
+
+function decodeRendererCommandRoute(value: unknown, context: string): RendererSessionCommandRoute {
+  const row = asRecord(value, context);
+  return { attachmentId: readNullableString(row.attachmentId, `${context}.attachmentId`) };
+}
+
+function decodeRendererAttachment(value: unknown, context: string): RendererSessionAttachment {
+  const row = asRecord(value, context);
+  const venue = asRecord(row.venue, `${context}.venue`);
+  const attachment: RendererSessionAttachment = {
+    id: readString(row.id, `${context}.id`),
+    sessionId: readString(row.sessionId, `${context}.sessionId`),
+    venue: {
+      id: readString(venue.id, `${context}.venue.id`),
+      kind: enumValue(venue.kind, VENUE_KINDS, `${context}.venue.kind`),
+    },
+    continuity: enumValue(row.continuity, SESSION_ATTACHMENT_CONTINUITIES, `${context}.continuity`),
+  };
+  if (!attachment.id || !attachment.sessionId || !attachment.venue.id) {
+    throw new Error(`${context} is not a valid Session attachment`);
+  }
+  return attachment;
 }
 
 /* --------------------------------------------------- renderer-safe projection */
