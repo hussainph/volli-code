@@ -34,6 +34,7 @@
  * Pure string ops only, so the renderer, main and the CLI share one grammar —
  * the same rule `file-ref.ts` follows for `@path`.
  */
+import { skillInvocationText, type SkillReference } from "./skill";
 
 /**
  * One loaded template. Structurally Pi's `PromptTemplate`, and deliberately so:
@@ -241,6 +242,13 @@ export function findCommandInvocations(text: string): readonly CommandInvocation
  * is an argument, not a second command; an UNKNOWN one consumes nothing, so it
  * neither blocks a later command on its line nor vanishes itself.
  *
+ * A `/name` may also be a SKILL (`skill.ts`): the same grammar, the same
+ * line-scoped consumption, a different expansion. A template's body goes
+ * through Pi's argument substitution; a skill's body arrives verbatim inside
+ * a delimited RESOURCE block with the line's remaining text preserved after
+ * it — `skillInvocationText` says why. Templates win a shared name outright,
+ * which is the rule `visibleSkills` keeps the picker honest against.
+ *
  * An unknown command is deliberately NOT an error: the harness is perfectly
  * able to read a sentence that mentions a slash, and swallowing it would lose
  * the message.
@@ -248,6 +256,7 @@ export function findCommandInvocations(text: string): readonly CommandInvocation
 export function expandCommandInvocation(
   text: string,
   templates: readonly PromptTemplate[],
+  skills: readonly SkillReference[] = [],
 ): string {
   let result = "";
   let cursor = 0;
@@ -255,9 +264,17 @@ export function expandCommandInvocation(
     // Consumed already: this candidate sits inside a known command's arguments.
     if (invocation.start < cursor) continue;
     const template = templates.find((candidate) => candidate.name === invocation.name);
-    if (template === undefined) continue;
+    const skill =
+      template === undefined
+        ? skills.find((candidate) => candidate.name === invocation.name)
+        : undefined;
+    if (template === undefined && skill === undefined) continue;
     result += text.slice(cursor, invocation.start);
-    result += formatPromptTemplateInvocation(template, parseCommandArgs(invocation.argsString));
+    result +=
+      template !== undefined
+        ? formatPromptTemplateInvocation(template, parseCommandArgs(invocation.argsString))
+        : // The guard above leaves exactly one of the two defined on this path.
+          skillInvocationText(skill!, invocation.argsString);
     cursor = invocation.end;
   }
   // Nothing expanded — the exact string in is the exact string out.

@@ -1658,6 +1658,25 @@ describe("registerFileIpcHandlers", () => {
     expect(result.templates?.find((entry) => entry.name === "review")?.content).toBe("Review $1.");
   });
 
+  it("answers prompt-templates with the project's skills beside the templates", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    mkdirSync(join(setup.projectPath, ".agents", "skills", "logos"), { recursive: true });
+    writeFileSync(
+      join(setup.projectPath, ".agents", "skills", "logos", "SKILL.md"),
+      "---\ndescription: Draw logos\n---\n# Logos\n",
+      "utf8",
+    );
+
+    const result = await invoke<{
+      ok: boolean;
+      skills?: { name: string; description: string; body: string }[];
+    }>("volli:prompt-templates", {}, { projectId: setup.projectId });
+
+    expect(result.ok).toBe(true);
+    expect(result.skills).toEqual([{ name: "logos", description: "Draw logos", body: "# Logos" }]);
+  });
+
   it("answers prompt-templates with an empty list when neither directory exists", async () => {
     const setup = setupDbAndHandlers();
     ctx = setup.ctx;
@@ -1668,7 +1687,7 @@ describe("registerFileIpcHandlers", () => {
       { projectId: setup.projectId },
     );
 
-    expect(result).toEqual({ ok: true, templates: [] });
+    expect(result).toEqual({ ok: true, templates: [], skills: [] });
   });
 
   it("rejects prompt-templates for an unknown project", async () => {

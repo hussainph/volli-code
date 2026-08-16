@@ -449,11 +449,13 @@ describe("racingFlushScheduler", () => {
 describe("browserChatTransport", () => {
   it("routes product starts and retries without renderer runtime identity", async () => {
     const procedures: string[] = [];
+    const inputs: unknown[] = [];
     vi.stubGlobal("window", {
       api: {
         sessionRpc: {
-          request: async (request: { procedure: string }) => {
+          request: async (request: { procedure: string; input: unknown }) => {
             procedures.push(request.procedure);
+            inputs.push(request.input);
             return { ok: true, data: null };
           },
           onEvent: () => () => undefined,
@@ -483,6 +485,22 @@ describe("browserChatTransport", () => {
       ticketId: "ticket-1",
       title: "VC-1",
     });
+    // Named skills ride the same two start procedures — slugs only, never
+    // bodies: main resolves and records the bytes.
+    await transport.startSession({
+      operationId: "project-skill-start",
+      projectId: "project-1",
+      ticketId: null,
+      title: "Scratch",
+      skills: ["svg-logo-designer"],
+    });
+    await transport.startSession({
+      operationId: "ticket-skill-start",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "VC-1",
+      skills: ["svg-logo-designer"],
+    });
     await transport.attachSession({
       operationId: "project-retry",
       sessionId: "session-1",
@@ -496,9 +514,15 @@ describe("browserChatTransport", () => {
     expect(procedures).toEqual([
       "projectSessions.start",
       "ticketSessions.start",
+      "projectSessions.start",
+      "ticketSessions.start",
       "projectSessions.attach",
       "ticketSessions.attach",
     ]);
+    expect(inputs[0]).not.toHaveProperty("skills");
+    expect(inputs[1]).not.toHaveProperty("skills");
+    expect(inputs[2]).toMatchObject({ skills: ["svg-logo-designer"] });
+    expect(inputs[3]).toMatchObject({ skills: ["svg-logo-designer"] });
     vi.unstubAllGlobals();
   });
 });

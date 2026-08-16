@@ -58,7 +58,12 @@ import {
   PromptInputTextarea,
   PromptInputTools,
 } from "@renderer/components/ui/ai-elements/prompt-input";
-import { expandCommandInvocation, type IndexedFile, type PromptTemplate } from "@volli/shared";
+import {
+  expandCommandInvocation,
+  type IndexedFile,
+  type PromptTemplate,
+  type SkillReference,
+} from "@volli/shared";
 
 import { reclampEffort } from "@renderer/chat/composer-effort";
 import { COMPOSER_STACK_SHELL } from "@renderer/chat/composer-stack";
@@ -118,6 +123,8 @@ export interface SessionComposerProps {
   onStop(): void;
   /** `/` picker rows, and what expands a staged `/name args` on submit. */
   promptTemplates?: readonly PromptTemplate[];
+  /** The `/` picker's second supply: skills, expanded as delimited RESOURCE blocks. */
+  skills?: readonly SkillReference[];
   /** `@` picker rows — the project file index, ranked by the shared grammar. */
   files?: readonly IndexedFile[];
   /** The `@` picker opened; a cache-gated index refresh is worth kicking. */
@@ -132,6 +139,7 @@ export interface SessionComposerProps {
 }
 
 const NO_TEMPLATES: readonly PromptTemplate[] = [];
+const NO_SKILLS: readonly SkillReference[] = [];
 const NO_FILES: readonly IndexedFile[] = [];
 
 /**
@@ -164,6 +172,7 @@ export const SessionComposer = React.memo(function SessionComposer({
   onSubmit,
   onStop,
   promptTemplates = NO_TEMPLATES,
+  skills = NO_SKILLS,
   files = NO_FILES,
   onFilePickerOpen,
   interactionOpen = false,
@@ -184,7 +193,7 @@ export const SessionComposer = React.memo(function SessionComposer({
     // travelling beside a durable message, and inventing one to keep `/review`
     // on screen would mean the record and the request disagree about what the
     // model was asked.
-    onSubmit(expandCommandInvocation(value.trim(), promptTemplates), intent);
+    onSubmit(expandCommandInvocation(value.trim(), promptTemplates, skills), intent);
   };
 
   const editQueued = (id: string) => {
@@ -205,6 +214,7 @@ export const SessionComposer = React.memo(function SessionComposer({
       ready={ready}
       interactionOpen={interactionOpen}
       promptTemplates={promptTemplates}
+      skills={skills}
       files={files}
       onFilePickerOpen={onFilePickerOpen}
       textareaRef={textareaRef}
@@ -509,6 +519,7 @@ function ComposerPickerStack({
   ready: boolean;
   interactionOpen: boolean;
   promptTemplates: readonly PromptTemplate[];
+  skills: readonly SkillReference[];
   files: readonly IndexedFile[];
   onFilePickerOpen?(): void;
   textareaRef?: React.Ref<HTMLTextAreaElement>;
@@ -656,11 +667,12 @@ function useComposerPicker(input: {
   ready: boolean;
   interactionOpen: boolean;
   promptTemplates: readonly PromptTemplate[];
+  skills: readonly SkillReference[];
   files: readonly IndexedFile[];
   onFilePickerOpen?(): void;
   textareaRef?: React.Ref<HTMLTextAreaElement>;
 }): ComposerPickerHandle {
-  const { value, onValueChange, ready, interactionOpen, promptTemplates, files } = input;
+  const { value, onValueChange, ready, interactionOpen, promptTemplates, skills, files } = input;
   const [caret, setCaret] = React.useState(0);
   const [active, setActive] = React.useState("");
   const [dismissed, setDismissed] = React.useState<ComposerPickerDismissal | null>(null);
@@ -737,8 +749,14 @@ function useComposerPicker(input: {
     () =>
       mode === null
         ? NO_PICKER_ROWS
-        : composerPickerRows({ mode, query: deferredQuery, templates: promptTemplates, files }),
-    [deferredQuery, files, mode, promptTemplates],
+        : composerPickerRows({
+            mode,
+            query: deferredQuery,
+            templates: promptTemplates,
+            skills,
+            files,
+          }),
+    [deferredQuery, files, mode, promptTemplates, skills],
   );
   // Rebuilt every render on purpose: the token half moves with the caret, so
   // this object is genuinely new whenever it is different, and nothing holds it

@@ -1,6 +1,7 @@
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
+import type { SkillReference } from "@volli/shared";
 
 import { renameChatSession } from "@renderer/chat/rename";
 import { ChatPlane } from "@renderer/components/chat/chat-plane";
@@ -21,6 +22,7 @@ import {
   CHAT_TAB_FALLBACK_LABEL,
 } from "@renderer/components/ticket/ticket-chat-tab";
 import { useNewSessionShortcut } from "@renderer/hooks/use-new-session-shortcut";
+import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import {
@@ -204,7 +206,16 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
     void startScratchChat(projectId);
   }, []);
 
+  /** The attach-time route's start control: one named skill, one new chat. */
+  const createChatWithSkill = React.useCallback((projectId: string, name: string) => {
+    void startScratchChat(projectId, [name]);
+  }, []);
+
   const selectedId = selected?.id ?? null;
+  // The selected project's skills, for the session-start control's "Chat with
+  // skill" submenu. Fetched here — the one always-mounted layer — so the strip
+  // and the empty state offer the same rows.
+  const { skills } = usePromptTemplates(selectedId);
   const scratch = selectedId === null ? undefined : byOwner[selectedId];
   const terminalTabs = scratch?.tabs ?? NO_TERMINAL_TABS;
   /**
@@ -440,6 +451,8 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
             }}
             onNewSession={() => createScratch(selected.id)}
             onNewChat={() => createChat(selected.id)}
+            skills={skills}
+            onNewChatWithSkill={(name) => createChatWithSkill(selected.id, name)}
           />
         )}
 
@@ -510,7 +523,9 @@ export function SessionsLayer({ visible }: SessionsLayerProps) {
                 placement="empty"
                 align="start"
                 shortcuts
+                skills={skills}
                 onNewChat={() => createChat(selected.id)}
+                onNewChatWithSkill={(name) => createChatWithSkill(selected.id, name)}
                 onNewTerminal={() => createScratch(selected.id)}
               />
             </div>
@@ -552,6 +567,8 @@ function ScratchTabs({
   onRename,
   onNewSession,
   onNewChat,
+  skills,
+  onNewChatWithSkill,
 }: {
   terminalTabs: readonly SessionTab[];
   chatIds: readonly string[];
@@ -562,6 +579,8 @@ function ScratchTabs({
   onRename(tab: SessionTabDescriptor, title: string): void;
   onNewSession(): void;
   onNewChat(): void;
+  skills?: readonly SkillReference[];
+  onNewChatWithSkill?(name: string): void;
 }) {
   const chatTitles = useChatSessionsStore(
     useShallow((state) =>
@@ -601,6 +620,8 @@ function ScratchTabs({
       onRename={onRename}
       onNewSession={onNewSession}
       onNewChat={onNewChat}
+      skills={skills}
+      onNewChatWithSkill={onNewChatWithSkill}
     />
   );
 }

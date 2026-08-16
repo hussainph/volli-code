@@ -89,11 +89,22 @@ export interface ChatTranscriptState {
   messages: readonly UIMessage[];
   /** Every interaction this Session has opened, for the receipts they leave. */
   openedInteractions: ReadonlyMap<string, SessionInteraction>;
+  /**
+   * The skills this Session was started with — the names off its durable
+   * `prompt-resources` input event. The system prompt those resources landed
+   * in is not a transcript message, so this fold is how the transcript still
+   * shows the injection happened: the chat surface draws the names above the
+   * conversation. At most one such event exists per Session (the record is
+   * written once, ahead of the first attachment), so the fold is last-write-
+   * wins over a list that never actually changes.
+   */
+  promptResources: readonly string[];
 }
 
 const EMPTY_INTERACTION_INDEX: ReadonlyMap<string, SessionInteraction> = new Map();
 const EMPTY_OVERLAY: TranscriptOverlay = new Map();
 const EMPTY_DURABLE_SEQUENCES: ReadonlyMap<string, number> = new Map();
+const EMPTY_PROMPT_RESOURCES: readonly string[] = [];
 export const EMPTY_TRANSCRIPT: ChatTranscriptState = {
   frames: [],
   throughSequence: 0,
@@ -104,6 +115,7 @@ export const EMPTY_TRANSCRIPT: ChatTranscriptState = {
   durableSequences: EMPTY_DURABLE_SEQUENCES,
   messages: [],
   openedInteractions: EMPTY_INTERACTION_INDEX,
+  promptResources: EMPTY_PROMPT_RESOURCES,
 };
 
 /**
@@ -135,6 +147,7 @@ export function appendFrames(
   let turnActive = state.turnActive;
   let turnEpoch = state.turnEpoch;
   let overlay = state.overlay;
+  let promptResources = state.promptResources;
   // Copied once, and only if something settles. A history replay hands this
   // every transcript frame the Session ever committed in a single batch, and
   // copying per frame would make seeding an old Session quadratic in its own
@@ -145,6 +158,12 @@ export function appendFrames(
     if (kind === "turn.started" || kind === "turn.completed" || kind === "turn.interrupted") {
       turnActive = kind === "turn.started";
       turnEpoch += 1;
+    }
+    if (
+      frame.event.payload.kind === "session.input.recorded" &&
+      frame.event.payload.input.kind === "prompt-resources"
+    ) {
+      promptResources = frame.event.payload.input.resources.map((resource) => resource.name);
     }
     const settledId = frame.transcript?.message.id;
     if (settledId === undefined) continue;
@@ -192,6 +211,7 @@ export function appendFrames(
       opened.size === 0
         ? state.openedInteractions
         : new Map([...state.openedInteractions, ...opened]),
+    promptResources,
   };
 }
 

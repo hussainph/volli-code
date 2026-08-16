@@ -287,6 +287,12 @@ export async function createTerminalSplit(
 export interface ChatBoot {
   title: string;
   /**
+   * Skill slugs the Session starts with. Carried through to the start RPC,
+   * where main resolves the bodies and records them ahead of the attach —
+   * explicit selection at the moment of creation, never ambient.
+   */
+  skills?: readonly string[];
+  /**
    * Registers the tab against FRESH store state, returning whether it landed —
    * false ⇒ the owner vanished mid-flight, so this surface lets the Session go.
    */
@@ -355,10 +361,14 @@ export async function startScratchTerminal(projectId: string): Promise<void> {
  * at call time rather than passed in, so a chord fired from another page counts
  * the same tabs the strip would have.
  */
-export async function startScratchChat(projectId: string): Promise<void> {
+export async function startScratchChat(
+  projectId: string,
+  skills?: readonly string[],
+): Promise<void> {
   const openChats = useChatSessionsStore.getState().openTabs[projectId]?.length ?? 0;
   await bootChatSession(scratchScope(projectId), {
     title: `Chat ${nextChatOrdinal(0, openChats)}`,
+    skills,
     land: (sessionId) => {
       useChatSessionsStore.getState().openChatTab(projectId, sessionId);
       useWorkspaceStore.getState().setSessionsActiveTab(projectId, chatTabId(sessionId));
@@ -399,13 +409,18 @@ export async function startTicketTerminal(projectId: string, ticketId: string): 
  * without the rail on screen numbers the chat off the same two facts the strip
  * would have: the ticket's durable chat rows, and the tabs currently open on it.
  */
-export async function startTicketChat(projectId: string, ticketId: string): Promise<void> {
+export async function startTicketChat(
+  projectId: string,
+  ticketId: string,
+  skills?: readonly string[],
+): Promise<void> {
   const openChats = useChatSessionsStore.getState().openTabs[ticketId]?.length ?? 0;
   const durableChats = (useTicketSessionRecordsStore.getState().byTicket[ticketId] ?? []).filter(
     (row) => row.kind === "chat",
   ).length;
   await bootChatSession(ticketScope(projectId, ticketId), {
     title: `Chat ${nextChatOrdinal(durableChats, openChats)}`,
+    skills,
     land: (sessionId) => {
       // The ticket itself may have been deleted while the create was in flight;
       // a tab on a card that no longer exists is unreachable, so let the Session
@@ -423,7 +438,7 @@ export async function startTicketChat(projectId: string, ticketId: string): Prom
 
 export async function bootChatSession(
   scope: SessionScope,
-  { title, land }: ChatBoot,
+  { title, skills, land }: ChatBoot,
 ): Promise<string | null> {
   return underOwnerGuard(scope, chatStarting, async () => {
     try {
@@ -431,6 +446,7 @@ export async function bootChatSession(
         projectId: scope.projectId,
         ticketId: scope.kind === "ticket" ? scope.ticketId : null,
         title,
+        ...(skills !== undefined && skills.length > 0 ? { skills } : {}),
       });
       if (sessionId === null) return null;
       // The owner may have been removed while `session.create` was in flight;

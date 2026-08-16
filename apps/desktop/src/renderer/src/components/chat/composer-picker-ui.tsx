@@ -21,6 +21,7 @@
  * is closed, decided one level up in `SessionComposer`.
  */
 import * as React from "react";
+import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
 import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
 import { NoteIcon } from "@phosphor-icons/react/dist/csr/Note";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
@@ -42,6 +43,26 @@ const MODE_HEADING: Record<ComposerPickerMode, string> = {
   command: "Commands",
   file: "Files",
 };
+
+/**
+ * Command mode holds two kinds of row — commands, then skills — and each kind
+ * gets its own group so the heading says which kind of thing a row is before
+ * anyone reads its glyph. The split preserves the flat row order (`rows` is
+ * already commands-then-skills, `rankSkillCompletions` says why), so the
+ * arrow keys and the eye walk the same list.
+ */
+function groupedRows(
+  rows: readonly ComposerPickerRow[],
+): readonly { heading: string; rows: readonly ComposerPickerRow[] }[] {
+  const skills = rows.filter((row) => row.kind === "skill");
+  if (skills.length === 0) return [{ heading: "Commands", rows }];
+  const commands = rows.filter((row) => row.kind !== "skill");
+  if (commands.length === 0) return [{ heading: "Skills", rows }];
+  return [
+    { heading: "Commands", rows: commands },
+    { heading: "Skills", rows: skills },
+  ];
+}
 
 /**
  * THE LIST, AND NOT THE TOKEN IT COMPLETES. This used to take the whole
@@ -123,35 +144,40 @@ export const ComposerPicker = React.memo(function ComposerPicker({
           >
             <PromptInputCommandList className="max-h-64">
               <PromptInputCommandEmpty>No match</PromptInputCommandEmpty>
-              <PromptInputCommandGroup heading={MODE_HEADING[mode]}>
-                {rows.map((row) => (
-                  <PromptInputCommandItem
-                    key={row.value}
-                    value={row.value}
-                    onSelect={() => onSelect(row)}
-                    className="gap-2"
-                  >
-                    <RowIcon row={row} />
-                    {/* `shrink-0` was here to keep the NAME whole while the
-                        directory beside it gave — the right priority, and the
-                        wrong mechanism. It is `flex: 0 0 auto` against a detail
-                        that is already `flex: 1 1 0%`, so the directory yields
-                        every pixel it has before this span is asked for
-                        anything: the priority is in the two flex bases, not in
-                        the shrink factor. What `shrink-0` added on top was a
-                        name that could not truncate AT ALL — measured in a
-                        265px composer (the app's own default at its 940px
-                        window minimum), a 53-character filename ran 110px out
-                        through the card's right edge, `truncate` and all. */}
-                    <span className="min-w-0 truncate text-foreground">{row.label}</span>
-                    {row.detail ? (
-                      <span className="min-w-0 flex-1 truncate text-ui text-muted-foreground">
-                        {row.detail}
-                      </span>
-                    ) : null}
-                  </PromptInputCommandItem>
-                ))}
-              </PromptInputCommandGroup>
+              {(mode === "command"
+                ? groupedRows(rows)
+                : [{ heading: MODE_HEADING[mode], rows }]
+              ).map((group) => (
+                <PromptInputCommandGroup key={group.heading} heading={group.heading}>
+                  {group.rows.map((row) => (
+                    <PromptInputCommandItem
+                      key={row.value}
+                      value={row.value}
+                      onSelect={() => onSelect(row)}
+                      className="gap-2"
+                    >
+                      <RowIcon row={row} />
+                      {/* `shrink-0` was here to keep the NAME whole while the
+                          directory beside it gave — the right priority, and the
+                          wrong mechanism. It is `flex: 0 0 auto` against a detail
+                          that is already `flex: 1 1 0%`, so the directory yields
+                          every pixel it has before this span is asked for
+                          anything: the priority is in the two flex bases, not in
+                          the shrink factor. What `shrink-0` added on top was a
+                          name that could not truncate AT ALL — measured in a
+                          265px composer (the app's own default at its 940px
+                          window minimum), a 53-character filename ran 110px out
+                          through the card's right edge, `truncate` and all. */}
+                      <span className="min-w-0 truncate text-foreground">{row.label}</span>
+                      {row.detail ? (
+                        <span className="min-w-0 flex-1 truncate text-ui text-muted-foreground">
+                          {row.detail}
+                        </span>
+                      ) : null}
+                    </PromptInputCommandItem>
+                  ))}
+                </PromptInputCommandGroup>
+              ))}
             </PromptInputCommandList>
           </PromptInputCommand>
         </motion.div>
@@ -168,6 +194,7 @@ export const ComposerPicker = React.memo(function ComposerPicker({
  */
 function RowIcon({ row }: { row: ComposerPickerRow }) {
   if (row.kind === "command") return <TerminalWindowIcon className="size-3.5 shrink-0" />;
+  if (row.kind === "skill") return <BookOpenIcon className="size-3.5 shrink-0" />;
   return row.artifact ? (
     <NoteIcon className="size-3.5 shrink-0" />
   ) : (

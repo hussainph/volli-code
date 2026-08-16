@@ -334,6 +334,8 @@ export interface ChatSessionTransport {
     projectId: string;
     ticketId: string | null;
     title: string | null;
+    /** Skill slugs to inject at attach time. Absent means none. */
+    skills?: readonly string[];
   }): Promise<ProductSessionResult>;
   attachSession(input: {
     operationId: string;
@@ -361,12 +363,14 @@ export function browserChatTransport(): ChatSessionTransport {
             operationId: input.operationId,
             projectId: input.projectId,
             title: input.title,
+            ...(input.skills === undefined ? {} : { skills: [...input.skills] }),
           })
         : rpc.ticketSessions.start.mutate({
             operationId: input.operationId,
             projectId: input.projectId,
             ticketId: input.ticketId,
             title: input.title,
+            ...(input.skills === undefined ? {} : { skills: [...input.skills] }),
           }),
     attachSession: (input) =>
       input.bornTicketless

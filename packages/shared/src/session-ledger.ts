@@ -3,7 +3,7 @@
  * A Session belongs to Volli; adapters and UI surfaces only attach to it.
  */
 
-import type { ModelSelection } from "./agent-runtime";
+import type { ModelSelection, PromptResource } from "./agent-runtime";
 
 export interface Session {
   id: string;
@@ -343,8 +343,20 @@ export type SessionAttention =
       kind: Exclude<SessionAttentionKind, "rate_limited" | "quota_exhausted">;
     });
 
-/** Immutable product input captured before the Agent Runtime first receives it. */
-export type SessionInput = { kind: "runtime-brief"; text: string };
+/**
+ * Immutable product input captured before the Agent Runtime first receives it.
+ *
+ * `prompt-resources` is the attach-time skill record: the resources a Session
+ * was started with, written durably BEFORE the first attachment exists so
+ * every recomposition of the system prompt — including a restart-recovery
+ * re-attach — reads the same bytes, and so the Session's own history names
+ * what was injected. Bodies ride along with the names deliberately: the skill
+ * file on disk can change or vanish after the Session starts, and the record
+ * has to say what THIS Session actually received.
+ */
+export type SessionInput =
+  | { kind: "runtime-brief"; text: string }
+  | { kind: "prompt-resources"; resources: readonly PromptResource[] };
 
 export type SessionEventPayload =
   | { kind: "command.recorded"; command: SessionCommand }

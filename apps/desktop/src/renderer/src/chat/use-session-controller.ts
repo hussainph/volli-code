@@ -35,6 +35,7 @@ import { useChatSessionsStore, type ChatSessionsState } from "@renderer/stores/c
 const NO_MESSAGES: readonly UIMessage[] = [];
 const NO_QUEUE: readonly QueuedMessage[] = [];
 const NO_OPENED: ReadonlyMap<string, SessionInteraction> = new Map();
+const NO_PROMPT_RESOURCES: readonly string[] = [];
 
 /**
  * One Session's resident state, read field by field.
@@ -67,6 +68,13 @@ export interface SessionView {
   /** The one thing about a Session's plumbing a person needs told. */
   sessionError: string | null;
   queue: readonly QueuedMessage[];
+  /**
+   * The skills this Session was started with — the durable `prompt-resources`
+   * record's names, folded off the stream. The injection itself lives in the
+   * system prompt, which no transcript message shows, so this is what lets the
+   * chat surface say it happened.
+   */
+  promptResources: readonly string[];
 }
 
 export interface SessionController {
@@ -127,6 +135,10 @@ export function useSessionController(
   });
   const sessionError = useStore(store, (state) => state.sessions[sessionId]?.sessionError ?? null);
   const queue = useStore(store, (state) => state.sessions[sessionId]?.queue ?? NO_QUEUE);
+  const promptResources = useStore(
+    store,
+    (state) => state.sessions[sessionId]?.transcript.promptResources ?? NO_PROMPT_RESOURCES,
+  );
 
   const session = React.useMemo<SessionView>(
     () => ({
@@ -137,8 +149,18 @@ export function useSessionController(
       deliverable,
       sessionError,
       queue,
+      promptResources,
     }),
-    [deliverable, messages, openedInteractions, projection, queue, sessionError, working],
+    [
+      deliverable,
+      messages,
+      openedInteractions,
+      projection,
+      promptResources,
+      queue,
+      sessionError,
+      working,
+    ],
   );
   const actions = React.useMemo(() => bind(sessionId, store), [sessionId, store]);
   return { session, ...actions };

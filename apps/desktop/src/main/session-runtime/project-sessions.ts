@@ -21,6 +21,7 @@ import {
   recordModelSelection,
   requireDefaultModel,
   StructuredSessionsError,
+  type SessionSkillPorts,
   type StructuredSessionCommands,
 } from "./structured-sessions";
 
@@ -44,6 +45,8 @@ export interface ProjectSessionStartInput {
   operationId: string;
   projectId: string;
   title: string | null;
+  /** Skill slugs to inject at attach time. Absent means none — never ambient. */
+  skills?: readonly string[];
 }
 
 export interface ProjectSessionAttachInput {
@@ -62,12 +65,18 @@ export interface ProjectSessionsOptions {
   readBornTicketless(sessionId: string): Promise<boolean>;
   /** This Session's durable model policy, or `null` when it has never recorded one. */
   readModelSelection(sessionId: string): Promise<ModelSelection | null>;
+  skills: SessionSkillPorts;
 }
 
 export function createProjectSessions(options: ProjectSessionsOptions): ProjectSessions {
   return {
     async start(input) {
       const model = requireDefaultModel(options.readDefaultModel(), DEFAULT_MODEL_REQUIRED);
+      // Resolved before anything durable exists — see ticket-sessions.ts.
+      const resources =
+        input.skills !== undefined && input.skills.length > 0
+          ? await options.skills.resolve(input.projectId, input.skills)
+          : [];
       const created = await options.runtime.command({
         commandId: `${input.operationId}:create`,
         command: {
@@ -82,6 +91,7 @@ export function createProjectSessions(options: ProjectSessionsOptions): ProjectS
         sessionId: created.sessionId,
         model,
       });
+      if (resources.length > 0) await options.skills.record(created.sessionId, resources);
       return attachStructuredSession(options.runtime, input.operationId, created.sessionId);
     },
     async attach(input) {

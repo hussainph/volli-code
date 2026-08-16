@@ -15,6 +15,7 @@
  * which cards have a decision in flight.
  */
 import * as React from "react";
+import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
 import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
 import { ClockIcon } from "@phosphor-icons/react/dist/csr/Clock";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
@@ -93,6 +94,7 @@ import {
 } from "@renderer/components/chat/interaction-ui";
 import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
 import { ContentColumn } from "@renderer/components/layout/content-column";
+import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
@@ -410,12 +412,13 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   const pending =
     interactions.length > 0 ? footInteraction(interactions, gatedApprovalIds(messages)) : null;
 
-  // What the composer's two caret-driven pickers rank over. Both are
+  // What the composer's two caret-driven pickers rank over. All of it is
   // project-scoped: the file index is the one the editor's `@` already uses,
-  // and the templates are `.volli/commands/` over the global tier.
+  // the templates are `.volli/commands/` over the global tier, and the skills
+  // are `.agents/skills/` — explicit `/` references, never ambient injection.
   const fileIndex = useFileIndex(projectId);
   const files = fileIndex.getIndex();
-  const promptTemplates = usePromptTemplates(projectId);
+  const { templates: promptTemplates, skills } = usePromptTemplates(projectId);
 
   // The landing travels back to the card. A decision the harness never heard has
   // to say so where it was taken — the card is the only thing on screen at that
@@ -512,6 +515,27 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               it, with enough left that the last line lands on clean background
               rather than inside the fade. */}
           <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
+            {/* The attach-time injection's visible receipt. The skills landed
+                in the system prompt, which no transcript bubble shows, so the
+                names are said once at the top of the conversation — folded
+                from the Session's own durable record, never from what the
+                project's skills directory holds today. */}
+            {session.promptResources.length > 0 ? (
+              <ContentColumn>
+                <div
+                  className="flex flex-wrap items-center gap-1.5 text-ui text-muted-foreground"
+                  aria-label="Skills injected at start"
+                >
+                  <BookOpenIcon aria-hidden className="size-3.5 shrink-0" />
+                  <span>Started with</span>
+                  {session.promptResources.map((name) => (
+                    <Badge key={name} variant="outline" className="font-mono">
+                      {name}
+                    </Badge>
+                  ))}
+                </div>
+              </ContentColumn>
+            ) : null}
             {messages.length === 0 ? (
               // A mark, and nothing else. What blocks typing sits on the
               // composer, where the typing is.
@@ -582,10 +606,11 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               onValueChange={onInputChange}
               textareaRef={textareaRef}
               onComposerFocusRequest={focusComposer}
-              // The two caret-driven pickers' supply. Both are project-scoped
+              // The two caret-driven pickers' supply. All project-scoped
               // reads, handed in as plain arrays so the composer stays a
               // controlled view the Lab can mount without a bridge.
               promptTemplates={promptTemplates}
+              skills={skills}
               files={files}
               onFilePickerOpen={fileIndex.refresh}
               // One thing parks above the composer at a time; a pending

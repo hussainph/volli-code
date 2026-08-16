@@ -21,6 +21,7 @@ import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import type { SkillReference } from "@volli/shared";
 
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
 import {
@@ -138,6 +139,10 @@ interface TicketTabStripProps {
   onNewSession(): void;
   /** Mints a chat Session and opens its tab. */
   onNewChat(): void;
+  /** The project's skills — the "Chat with skill" submenu's rows. */
+  skills?: readonly SkillReference[];
+  /** Mints a chat Session with one named skill injected at attach time. */
+  onNewChatWithSkill?(name: string): void;
   /** Drives the corner control's label — the details rail's current state. */
   railCollapsed: boolean;
   onToggleRail(): void;
@@ -335,6 +340,8 @@ export function TicketTabStrip({
   onRenameSessionTab,
   onNewSession,
   onNewChat,
+  skills,
+  onNewChatWithSkill,
   railCollapsed,
   onToggleRail,
 }: TicketTabStripProps) {
@@ -360,7 +367,9 @@ export function TicketTabStrip({
               placement="strip"
               align="end"
               shortcuts
+              skills={skills}
               onNewChat={onNewChat}
+              onNewChatWithSkill={onNewChatWithSkill}
               onNewTerminal={onNewSession}
             />
           </div>

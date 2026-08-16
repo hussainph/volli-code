@@ -49,6 +49,7 @@ import type {
   SessionRpcIpcRequest,
   SessionRpcIpcResponse,
   ShippedEditorThemeId,
+  SkillReference,
   TerminalBusyResult,
   TerminalIoResult,
   Ticket,
@@ -1229,15 +1230,21 @@ export interface PromptTemplateIndexInput {
 }
 
 /**
- * Every prompt template the composer's `/` picker can offer — returned by
- * `volli:prompt-templates`, already merged (project over global) and sorted.
+ * Everything the composer's `/` picker can offer — returned by
+ * `volli:prompt-templates`: the prompt templates, already merged (project over
+ * global) and sorted, and the project's skills (`.agents/skills/<slug>/SKILL.md`),
+ * shadowed names not yet removed — that is the renderer's `visibleSkills` call,
+ * beside the ranking that consumes it.
  *
- * A missing commands directory is an empty list, never an error: most projects
- * have no `.volli/commands/` and a picker that toasts about it on every open
- * would be reporting the normal case. `ok: false` means a directory that DOES
- * exist could not be read.
+ * A missing directory is an empty list, never an error: most projects have no
+ * `.volli/commands/` or `.agents/skills/` and a picker that toasts about it on
+ * every open would be reporting the normal case. `ok: false` means a directory
+ * that DOES exist could not be read.
  */
-export type PromptTemplateIndexResult = Result<{ templates: PromptTemplate[] }>;
+export type PromptTemplateIndexResult = Result<{
+  templates: PromptTemplate[];
+  skills: SkillReference[];
+}>;
 
 /**
  * A read file's content, discriminated by how the renderer must render it:

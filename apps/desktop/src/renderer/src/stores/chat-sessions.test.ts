@@ -181,6 +181,26 @@ describe("createChatSession", () => {
     expect(commands).toEqual([]);
   });
 
+  it("carries named skills onto the start, and only when the list has any", async () => {
+    const { store, ticketStarts } = fixture();
+
+    await store.getState().createChatSession({
+      projectId: "p1",
+      ticketId: "t1",
+      title: "VC-1",
+      skills: ["svg-logo-designer"],
+    });
+    await store.getState().createChatSession({
+      projectId: "p1",
+      ticketId: "t1",
+      title: "VC-1",
+      skills: [],
+    });
+
+    expect(ticketStarts[0]).toMatchObject({ skills: ["svg-logo-designer"] });
+    expect(ticketStarts[1]).not.toHaveProperty("skills");
+  });
+
   it("keeps the durable Session when the attach is refused", async () => {
     // A refused attach does not un-create the Session: the id comes back so the
     // retry addresses it, and the error sits on the Session it belongs to.

@@ -35,6 +35,8 @@ export interface CreateChatSessionInput {
   projectId: string;
   ticketId: string | null;
   title: string | null;
+  /** Skill slugs the Session starts with — attach-time RESOURCE injection. */
+  skills?: readonly string[];
 }
 
 export interface ChatSessionsState extends ChatSessionWrites {
@@ -181,6 +183,9 @@ export function createChatSessionsStore(
             projectId: input.projectId,
             ticketId: input.ticketId,
             title: input.title,
+            ...(input.skills !== undefined && input.skills.length > 0
+              ? { skills: input.skills }
+              : {}),
           });
         } catch (failure) {
           // The one failure with nothing durable to carry it: there is no id, so

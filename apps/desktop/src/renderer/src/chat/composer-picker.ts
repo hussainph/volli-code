@@ -10,7 +10,8 @@
  * (which delegates in turn to `@volli/shared`), so the composer's picker, the
  * Monaco editor's autocomplete and the CLI's view of a ref cannot drift apart.
  * `/` delegates to `@volli/shared`'s prompt-template module, whose substitution
- * is Pi's own grammar under a parity test.
+ * is Pi's own grammar under a parity test — and offers the project's skills
+ * beside the commands, same grammar, different expansion (`skill.ts`).
  *
  * ## Where each trigger fires
  *
@@ -25,8 +26,10 @@
 import {
   formatPromptTemplateInvocation,
   promptTemplateTakesArgs,
+  visibleSkills,
   type IndexedFile,
   type PromptTemplate,
+  type SkillReference,
 } from "@volli/shared";
 
 import { fileRefTokenAt, rankFileRefCompletions, refInsertion } from "@renderer/editor/file-refs";
@@ -48,6 +51,13 @@ export type ComposerPickerRow =
       readonly label: string;
       readonly detail: string;
       readonly template: PromptTemplate;
+    }
+  | {
+      readonly kind: "skill";
+      readonly value: string;
+      readonly label: string;
+      readonly detail: string;
+      readonly skill: SkillReference;
     }
   | {
       readonly kind: "file";
@@ -130,6 +140,50 @@ function commandMatchTier(query: string, template: PromptTemplate): number | nul
   if (query === "" || name.startsWith(query)) return 0;
   if (name.includes(query)) return 1;
   if (template.description.toLowerCase().includes(query)) return 2;
+  return null;
+}
+
+/**
+ * Rank skills for the same `/` query — the same three tiers over the same two
+ * fields, because a skill is invoked by the same grammar. Shadowed names are
+ * gone before ranking (`visibleSkills`): a row the submit-time lookup would
+ * resolve to a command must not be offered as a skill.
+ *
+ * Skill rows trail the command rows in the combined list rather than
+ * interleaving with them. The two are different kinds of thing — a command is
+ * a prompt you wrote, a skill is a document you installed — and the card
+ * groups them under separate headings, so the flat row order has to agree
+ * with the visual one or the arrow keys walk a different list than the eye.
+ */
+export function rankSkillCompletions(input: {
+  query: string;
+  skills: readonly SkillReference[];
+  templates: readonly PromptTemplate[];
+}): readonly ComposerPickerRow[] {
+  const query = input.query.toLowerCase();
+  return visibleSkills(input.skills, input.templates)
+    .map((skill) => ({ skill, tier: skillMatchTier(query, skill) }))
+    .filter((entry): entry is { skill: SkillReference; tier: number } => entry.tier !== null)
+    .toSorted((a, b) => a.tier - b.tier || a.skill.name.localeCompare(b.skill.name))
+    .slice(0, MAX_COMMAND_RESULTS)
+    .map(({ skill }) => ({
+      kind: "skill" as const,
+      // Prefixed so a value can never collide with a command row's — cmdk's
+      // "active" is a value lookup, and two rows answering to one value would
+      // highlight together.
+      value: `skill:${skill.name}`,
+      label: `/${skill.name}`,
+      detail: skill.description,
+      skill,
+    }));
+}
+
+/** The command tiers, over a skill's slug and description. */
+function skillMatchTier(query: string, skill: SkillReference): number | null {
+  const name = skill.name.toLowerCase();
+  if (query === "" || name.startsWith(query)) return 0;
+  if (name.includes(query)) return 1;
+  if (skill.description.toLowerCase().includes(query)) return 2;
   return null;
 }
 
@@ -233,10 +287,19 @@ export function composerPickerRows(input: {
   mode: ComposerPickerMode;
   query: string;
   templates: readonly PromptTemplate[];
+  skills?: readonly SkillReference[];
   files: readonly IndexedFile[];
 }): readonly ComposerPickerRow[] {
-  if (input.mode === "command")
-    return rankCommandCompletions({ query: input.query, templates: input.templates });
+  if (input.mode === "command") {
+    return [
+      ...rankCommandCompletions({ query: input.query, templates: input.templates }),
+      ...rankSkillCompletions({
+        query: input.query,
+        skills: input.skills ?? [],
+        templates: input.templates,
+      }),
+    ];
+  }
   // "Create artifact" is deliberately dropped: it is an intent that writes a
   // file, and the composer has nowhere to open the result. The `@` picker in
   // the editor — which does — keeps it.
@@ -286,15 +349,24 @@ export function applyPickerRow(input: {
       ? promptTemplateTakesArgs(row.template)
         ? spaced(`/${row.template.name}`)
         : spaced(formatPromptTemplateInvocation(row.template))
-      : spaced(
-          refInsertion({
-            // `fileRefTokenAt` only matches at a ref boundary, so this is
-            // already whitespace, `(`, or start-of-text. Asking anyway is what
-            // keeps the one grammar answering the question.
-            precedingChar: state.from === 0 ? "" : text.charAt(state.from - 1),
-            text: `@${row.relPath}`,
-          }),
-        );
+      : row.kind === "skill"
+        ? // Always staged, never expanded at pick — twice deliberate. A skill
+          // body is a document, and pasting fifteen kilobytes into the box the
+          // reader is typing in is not "showing the prompt you are about to
+          // send", it is losing the draft under it. And the words after the
+          // name are the user's own ask, which `skillInvocationText` carries
+          // over the block at submit — so the caret parks after the space,
+          // exactly like a command that still wants its arguments.
+          spaced(`/${row.skill.name}`)
+        : spaced(
+            refInsertion({
+              // `fileRefTokenAt` only matches at a ref boundary, so this is
+              // already whitespace, `(`, or start-of-text. Asking anyway is what
+              // keeps the one grammar answering the question.
+              precedingChar: state.from === 0 ? "" : text.charAt(state.from - 1),
+              text: `@${row.relPath}`,
+            }),
+          );
 
   return {
     text: `${text.slice(0, state.from)}${written}${rest}`,

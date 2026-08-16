@@ -13,9 +13,9 @@
  * because a ticketless chat is not a more trusted place to run an agent.
  */
 
+import { promptResourceBlock } from "@volli/shared";
 import type {
   AuthoritySnapshot,
-  PromptResource,
   RuntimeBrief,
   RuntimeSessionRole,
   RuntimeToolBundle,
@@ -153,14 +153,6 @@ function authorityLayer(
   ].join("\n");
 }
 
-function resourceSection(resource: PromptResource): string {
-  return [
-    `--- BEGIN RESOURCE: ${resource.name} ---`,
-    resource.text,
-    `--- END RESOURCE: ${resource.name} ---`,
-  ].join("\n");
-}
-
 /** Compose the full system prompt: operating rules, role and trust, workspace, resources. */
 export function composeSystemPrompt(spec: SessionRuntimeSpec): string {
   const role = spec.identity.role;
@@ -171,7 +163,9 @@ export function composeSystemPrompt(spec: SessionRuntimeSpec): string {
     workspaceLayer(role, spec.workspacePath),
   ];
   for (const resource of spec.promptResources ?? []) {
-    sections.push(resourceSection(resource));
+    // The one spelling of the delimiter, shared with the composer's `/skill`
+    // expansion so the two injection routes can never drift apart.
+    sections.push(promptResourceBlock(resource));
   }
   return sections.join("\n\n");
 }

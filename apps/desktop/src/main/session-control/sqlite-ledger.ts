@@ -7,6 +7,7 @@ import type {
   ListSessionsQuery,
   LatestSessionSignal,
   ModelSelection,
+  PromptResource,
   Session,
   SessionAttachment,
   SessionAttachmentFailure,
@@ -643,11 +644,22 @@ function decodePayload(value: unknown, context: string): SessionEventPayload {
       };
     case "session.input.recorded": {
       const input = asRecord(record.input, `${context}.input`);
+      const inputKind = enumValue(
+        input.kind,
+        ["runtime-brief", "prompt-resources"],
+        `${context}.input.kind`,
+      );
+      if (inputKind === "runtime-brief") {
+        return {
+          kind,
+          input: { kind: inputKind, text: readString(input.text, `${context}.input.text`) },
+        };
+      }
       return {
         kind,
         input: {
-          kind: enumValue(input.kind, ["runtime-brief"], `${context}.input.kind`),
-          text: readString(input.text, `${context}.input.text`),
+          kind: inputKind,
+          resources: decodePromptResources(input.resources, `${context}.input.resources`),
         },
       };
     }
@@ -899,6 +911,17 @@ function decodeReceiptResult(value: unknown, context: string): CommandReceiptRes
     `${context}.kind`,
   );
   return { kind, sessionId: readString(row.sessionId, `${context}.sessionId`) };
+}
+
+function decodePromptResources(value: unknown, context: string): readonly PromptResource[] {
+  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
+  return value.map((entry, index) => {
+    const row = asRecord(entry, `${context}[${index}]`);
+    return {
+      name: readString(row.name, `${context}[${index}].name`),
+      text: readString(row.text, `${context}[${index}].text`),
+    };
+  });
 }
 
 function decodeModelSelection(value: unknown, context: string): ModelSelection {

@@ -191,6 +191,28 @@ describe("appendFrames", () => {
     expect(interrupted.turnActive).toBe(false);
     expect(interrupted.turnEpoch).toBe(2);
   });
+
+  it("folds the Session's prompt-resources record into the skill names it shows", () => {
+    const folded = appendFrames(EMPTY_TRANSCRIPT, [
+      frame(1, {
+        kind: "session.input.recorded",
+        input: {
+          kind: "prompt-resources",
+          resources: [{ name: "svg-logo-designer", text: "# Logos" }],
+        },
+      }),
+    ]);
+
+    expect(folded.promptResources).toEqual(["svg-logo-designer"]);
+  });
+
+  it("keeps the empty prompt-resources identity while no record arrives", () => {
+    const folded = appendFrames(EMPTY_TRANSCRIPT, [
+      frame(1, { kind: "session.input.recorded", input: { kind: "runtime-brief", text: "brief" } }),
+    ]);
+
+    expect(folded.promptResources).toBe(EMPTY_TRANSCRIPT.promptResources);
+  });
 });
 
 describe("appendFrames overlays", () => {

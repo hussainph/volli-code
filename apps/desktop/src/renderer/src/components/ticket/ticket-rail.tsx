@@ -31,7 +31,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChatCircleDotsIcon } from "@phosphor-icons/react/dist/csr/ChatCircleDots";
 import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
 import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
-import type { Ticket } from "@volli/shared";
+import type { SkillReference, Ticket } from "@volli/shared";
 
 import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import { TicketProperties } from "@renderer/components/ticket/ticket-properties";
@@ -208,6 +208,8 @@ export function TicketRail({
   creating,
   onNewSession,
   onNewChat,
+  skills,
+  onNewChatWithSkill,
   onActivateSession,
   onActivateChat,
   activeTabId,
@@ -219,6 +221,10 @@ export function TicketRail({
   creating: boolean;
   onNewSession(): void;
   onNewChat(): void;
+  /** The project's skills — the "Chat with skill" submenu's rows. */
+  skills?: readonly SkillReference[];
+  /** Mints a chat Session with one named skill injected at attach time. */
+  onNewChatWithSkill?(name: string): void;
   /** Focus (or open) a session tab in the main strip — deliberate selection only. */
   onActivateSession(sessionId: string): void;
   /** Open (adopting first, if nothing is attached) a chat Session's tab. */
@@ -295,6 +301,8 @@ export function TicketRail({
               creating={creating}
               onNewSession={onNewSession}
               onNewChat={onNewChat}
+              skills={skills}
+              onNewChatWithSkill={onNewChatWithSkill}
               onActivateSession={onActivateSession}
               onActivateChat={onActivateChat}
             />
