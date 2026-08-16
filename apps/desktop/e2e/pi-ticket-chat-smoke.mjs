@@ -105,7 +105,6 @@ const VULNERABLE_LOCATOR_TIMEOUT_MS = 8_000;
 const NORMAL_LOCATOR_TIMEOUT_MS = 30_000;
 const CLOSE_APP_SAFETY_MARGIN_MS = 2_000;
 const Q2_CLOSE_RESERVE_MS = CLOSE_APP_BOUNDED_MAX_MS + CLOSE_APP_SAFETY_MARGIN_MS;
-const Q1_TO_CLICK_BUDGET_MS = VULNERABLE_LOCATOR_TIMEOUT_MS * 4;
 const PI_MARKER_TYPE = "volli.observation.v1";
 const LIVE_RUNTIME_FRAME_KINDS = new Set([
   "attachment.opened",
@@ -149,6 +148,22 @@ const EVIDENCE_DIR = join(EVIDENCE_ROOT, EVIDENCE_RUN);
 const PI_SESSION_DIR = join(userDataDir, "pi-sessions");
 
 function messageBox(page) {
+  // This is still the accessible Message textarea: check 6 verifies that
+  // semantic contract through its role and name before the turn starts. It is
+  // a CSS lookup here because the q2 scenario reads composer geometry WHILE a
+  // queued row's actions dropdown is open, and that dropdown is a modal Radix
+  // menu (`modal` defaults to true): on mount its content calls `hideOthers`,
+  // which puts `aria-hidden` on everything outside the menu — this textarea
+  // included. Playwright's role engine skips aria-hidden elements, so a
+  // role+name lookup can NEVER resolve inside that window and the old
+  // `getByRole` read timed out deterministically (VC-36/VC-39/VC-43, red
+  // since the check was authored — #233 reproduced it on a quiet machine).
+  // The DOM contract still pins the same control; only the resolution path
+  // stops depending on an accessibility tree a modal menu legitimately hides.
+  return page.locator('textarea[aria-label="Message"]').first();
+}
+
+function accessibleMessageBox(page) {
   return page.getByRole("textbox", { name: "Message", exact: true }).first();
 }
 
@@ -177,33 +192,45 @@ async function waitForComposerState(
   { value, focused = false, working = false, timeout = 5000, deadline } = {},
 ) {
   const boundedTimeout = deadline?.timeout("waiting for composer state", timeout) ?? timeout;
-  return waitUntil(
-    `queued messages to read ${JSON.stringify(expected)}`,
-    async () => {
-      const box = messageBox(page);
-      const locatorOptions =
-        deadline === undefined
-          ? undefined
-          : { timeout: deadline.timeout("checking composer state") };
-      const [actual, input, hasFocus, stopCount] = await Promise.all([
-        queuedMessageTexts(page),
-        value === undefined ? Promise.resolve(value) : box.inputValue(locatorOptions),
-        focused
-          ? box.evaluate(
-              (textarea) => document.activeElement === textarea,
-              undefined,
-              locatorOptions,
-            )
-          : Promise.resolve(true),
-        working ? stopButton(page).count() : Promise.resolve(1),
-      ]);
-      const ordered =
-        actual.length === expected.length &&
-        actual.every((text, index) => text === expected[index]);
-      return ordered && input === value && hasFocus && stopCount === 1 ? actual : false;
-    },
-    { timeout: boundedTimeout, interval: Math.min(50, boundedTimeout) },
-  );
+  // Kept across polls so a timeout can say WHICH condition never held — a
+  // bare `false` cost a billed run to distinguish a focus loss from a stop
+  // button that a stale aria-hidden was still keeping out of the role tree.
+  let lastState = null;
+  try {
+    return await waitUntil(
+      `queued messages to read ${JSON.stringify(expected)}`,
+      async () => {
+        const box = messageBox(page);
+        const locatorOptions =
+          deadline === undefined
+            ? undefined
+            : { timeout: deadline.timeout("checking composer state") };
+        const [actual, input, hasFocus, stopCount] = await Promise.all([
+          queuedMessageTexts(page),
+          value === undefined ? Promise.resolve(value) : box.inputValue(locatorOptions),
+          focused
+            ? box.evaluate(
+                (textarea) => document.activeElement === textarea,
+                undefined,
+                locatorOptions,
+              )
+            : Promise.resolve(true),
+          working ? stopButton(page).count() : Promise.resolve(1),
+        ]);
+        const ordered =
+          actual.length === expected.length &&
+          actual.every((text, index) => text === expected[index]);
+        lastState = { queued: actual, input, hasFocus, stopCount };
+        return ordered && input === value && hasFocus && stopCount === 1 ? actual : false;
+      },
+      { timeout: boundedTimeout, interval: Math.min(50, boundedTimeout) },
+    );
+  } catch (error) {
+    if (lastState !== null && error instanceof Error) {
+      error.message += ` [expected queued=${JSON.stringify(expected)} value=${JSON.stringify(value)} focused=${focused} working=${working}; last read ${JSON.stringify(lastState)}]`;
+    }
+    throw error;
+  }
 }
 
 /**
@@ -775,9 +802,12 @@ async function runQ1SteerScenario(page, barrierStartedAt) {
     timeoutCeilingMs: VULNERABLE_LOCATOR_TIMEOUT_MS,
   });
   return deadline.run(async () => {
-    if (Date.now() > deadline.expiresAt - Q1_TO_CLICK_BUDGET_MS) {
-      throw new Error(`q1 admission missed its ${Q1_TO_CLICK_BUDGET_MS}ms pre-click reserve`);
-    }
+    // The absolute deadline is the reservation: it expires with 30s of sleep
+    // left, leaving the bounded close path ample time before the barrier can
+    // drain. Do not subtract a multiplier of the per-locator clamp here. The
+    // old 4 × 8s calculation exceeded this 30s window, so it rejected q1
+    // immediately after widening the vulnerable-locator budget — before it
+    // could exercise queue-and-Steer at all.
     const activeSleep = await readLiveSleepActivity(page);
     const barrierTiming = isInProgressSleepActivity(activeSleep)
       ? sleepBarrierTiming(activeSleep)
@@ -874,6 +904,10 @@ async function main() {
   };
 
   let chatTabLabel = null;
+  // The pre-relaunch graceful close ends the first app mid-run; the outer
+  // finally must not close it a second time — `app.process()` on a closed
+  // ElectronApplication throws, which turned a 10/10 run into an abort.
+  let appClosedForRelaunch = false;
   try {
     const page = await app.firstWindow();
     await page.waitForLoadState("domcontentloaded");
@@ -1000,10 +1034,11 @@ async function main() {
       "the composer is ready, its Model pill naming the recorded model (not the unselected placeholder)",
       async () => {
         const textarea = messageBox(page);
+        const accessibleTextarea = accessibleMessageBox(page);
         await waitUntil("the composer to mount", async () => (await textarea.count()) > 0);
         await waitUntil(
           "the composer to become ready",
-          async () => !(await textarea.isDisabled()),
+          async () => !(await textarea.isDisabled()) && (await accessibleTextarea.count()) === 1,
           { timeout: 30000 },
         ).catch(async (error) => {
           await abortMainBeforeEvidence(page, "composer-inert");
@@ -1111,6 +1146,8 @@ async function main() {
                 const byAttr = document.querySelectorAll(`[aria-label=${JSON.stringify(label)}]`);
                 const first = byAttr[0] ?? null;
                 const rect = first?.getBoundingClientRect() ?? null;
+                const active = document.activeElement;
+                const textarea = document.querySelector('textarea[aria-label="Message"]');
                 return {
                   rows: rows.length,
                   byAttr: byAttr.length,
@@ -1124,6 +1161,20 @@ async function main() {
                         h: rect.height,
                       }
                     : null,
+                  // Post-menu state: a modal Radix menu aria-hides everything
+                  // else while open; if its abrupt unmount ever leaks that
+                  // state, every role-based read (stop button included) stays
+                  // empty while the DOM looks perfectly healthy.
+                  ariaHiddenMarks: document.querySelectorAll("[data-aria-hidden]").length,
+                  openMenus: document.querySelectorAll(
+                    '[data-slot="dropdown-menu-content"][data-state="open"]',
+                  ).length,
+                  activeElement: active
+                    ? `${active.tagName.toLowerCase()}[aria-label=${JSON.stringify(active.getAttribute("aria-label"))}]`
+                    : null,
+                  composerValue: textarea ? textarea.value : null,
+                  stopButtonsInDom: document.querySelectorAll('button[aria-label="Stop turn"]')
+                    .length,
                 };
               }, `Queued message actions: ${QUEUED_TEXT.q2}`)
               .catch((censusError) => ({ censusError: String(censusError) })),
@@ -1219,6 +1270,7 @@ async function main() {
     // the DURABLE transcript is what renders both sides of the exchange.
     await sleep(500);
     await requireGracefulClose(app, "pre-relaunch Electron main");
+    appClosedForRelaunch = true;
 
     const app2 = await launch({
       dbPath,
@@ -1245,11 +1297,24 @@ async function main() {
         "relaunch renders durable history without opening a live executor or adding runtime frames",
         async () => {
           try {
+            // The pre-quit structured attachment DURABLY projects as open
+            // across a relaunch, on purpose: shutdown releases the binding
+            // without writing `attachment.closed` (session-runtime's
+            // `#releaseBindingsAfterClose`), and boot recovery exempts the
+            // structured adapter precisely so Pi can rehydrate from its
+            // recovery sidecar (`boot-recovery.ts`). So "no live attach" here
+            // cannot mean `liveExecutor == null` — it means the ledger holds
+            // nothing NEW: at most the same pre-quit attachment id (adoption),
+            // and zero new runtime frames, `attachment.opened` included, which
+            // `newRuntimeFrames` proves below. This first read only waits for
+            // the relaunched projection to replay the full durable ledger.
             const relaunchBeforeView = await waitUntil(
-              "the relaunched Session projection to have no live executor",
+              "the relaunched Session projection to replay the durable ledger",
               async () => {
                 const evidence = await readSessionEvidence(page2, sessionId);
-                return evidence.projection.liveExecutor == null ? evidence : false;
+                return evidence.ok && evidence.throughSequence >= preCloseSession.throughSequence
+                  ? evidence
+                  : false;
               },
               { timeout: 10000 },
             );
@@ -1278,12 +1343,18 @@ async function main() {
             // A durable q1 must reconcile its crash-safe held copy by identity,
             // while deleted q2 must remain absent from both the queue and box.
             await waitForComposerState(page2, [], { value: "", timeout: 10000 });
+            let lastRender = null;
             const rendered = await waitUntil(
               "the durable original prompt, q1 steer, and reply sentinel to render without a live adapter",
               async () => {
                 const userTexts = await userMessageTexts(page2);
                 const assistantTexts = await assistantReplyTexts(page2);
-                const originalShown = userTexts.some((text) => text.includes(PROMPT_TEXT));
+                // The transcript renders user messages as markdown, so the
+                // prompt's `sleep 60` backticks become a <code> element and
+                // vanish from textContent. Compare against the rendered form —
+                // the raw string can never appear in the DOM.
+                const promptRendered = PROMPT_TEXT.replaceAll("`", "");
+                const originalShown = userTexts.some((text) => text.includes(promptRendered));
                 const q1Shown = userTexts.some((text) => text.includes(QUEUED_TEXT.q1));
                 const forbiddenShown = [QUEUED_TEXT.q2].filter((text) =>
                   userTexts.some((renderedText) => renderedText.includes(text)),
@@ -1291,6 +1362,14 @@ async function main() {
                 const replyIncludesSentinel = assistantTexts.some((text) =>
                   text.includes(EXPECTED_REPLY),
                 );
+                lastRender = {
+                  userTexts,
+                  assistantTexts,
+                  originalShown,
+                  q1Shown,
+                  forbiddenShown,
+                  replyIncludesSentinel,
+                };
                 return originalShown &&
                   q1Shown &&
                   forbiddenShown.length === 0 &&
@@ -1308,15 +1387,39 @@ async function main() {
             );
             const beforeLiveExecutor = relaunchBeforeView.projection.liveExecutor ?? null;
             const afterLiveExecutor = durable.projection.liveExecutor ?? null;
+            const preCloseExecutorId = preCloseSession.projection.liveExecutor?.id ?? null;
+            // Adopted, never re-opened: any executor the relaunched projection
+            // names must be the binding check 9 already proved live before the
+            // quit. A different id would be a fresh attach — exactly what this
+            // check forbids — and would also surface in `newRuntimeFrames`.
+            const adoptedOnly =
+              (beforeLiveExecutor === null || beforeLiveExecutor.id === preCloseExecutorId) &&
+              (afterLiveExecutor === null || afterLiveExecutor.id === preCloseExecutorId);
             const proven =
               rendered !== null &&
               durable.ok &&
               relaunchBeforeView.throughSequence >= preCloseSession.throughSequence &&
-              beforeLiveExecutor === null &&
-              afterLiveExecutor === null &&
+              adoptedOnly &&
               newRuntimeFrames.length === 0 &&
               durable.turnSummary.exactlyOneCompletedTurn;
-            if (!proven) throw new Error("relaunch evidence did not satisfy the contract");
+            if (!proven) {
+              // Every term, named: a composite `false` here costs a full
+              // billed re-run to localize otherwise.
+              throw new Error(
+                `relaunch evidence did not satisfy the contract: ${JSON.stringify({
+                  rendered: rendered !== null,
+                  lastRender,
+                  durableOk: durable.ok,
+                  caughtUp: relaunchBeforeView.throughSequence >= preCloseSession.throughSequence,
+                  adoptedOnly,
+                  beforeLiveExecutor,
+                  afterLiveExecutor,
+                  preCloseExecutorId,
+                  newRuntimeFrames: newRuntimeFrames.map((frame) => frame.kind),
+                  exactlyOneCompletedTurn: durable.turnSummary.exactlyOneCompletedTurn,
+                })}`,
+              );
+            }
             return {
               ok: true,
               detail:
@@ -1339,7 +1442,7 @@ async function main() {
 
     console.log(`\nEvidence dir: ${EVIDENCE_DIR}`);
   } finally {
-    await closeAppBounded(app);
+    if (!appClosedForRelaunch) await closeAppBounded(app);
   }
   return summarize();
 }
