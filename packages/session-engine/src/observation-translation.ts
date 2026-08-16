@@ -809,14 +809,18 @@ function settledParts(message: SettledAssistantMessage): TranscriptPart[] {
 function messageMetadata(message: SettledAssistantMessage): { metadata?: unknown } {
   const usage = message.usage;
   const tokens =
-    usage === undefined || (usage.inputTokens === undefined && usage.outputTokens === undefined)
+    usage === undefined ||
+    (usage.inputTokens === undefined &&
+      usage.outputTokens === undefined &&
+      usage.cacheReadTokens === undefined &&
+      usage.cacheWriteTokens === undefined)
       ? null
       : {
           input: usage.inputTokens ?? null,
           output: usage.outputTokens ?? null,
           reasoning: null,
-          cacheRead: null,
-          cacheWrite: null,
+          cacheRead: usage.cacheReadTokens ?? null,
+          cacheWrite: usage.cacheWriteTokens ?? null,
         };
   const cost = usage?.costUsd ?? null;
   if (message.model === undefined && cost === null && tokens === null) return {};

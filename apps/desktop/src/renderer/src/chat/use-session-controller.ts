@@ -59,6 +59,12 @@ export interface SessionView {
   /** `null` until the Session's first durable snapshot arrives. */
   projection: SessionPresentationProjection | null;
   messages: readonly UIMessage[];
+  /**
+   * The settled transcript only — no live overlay. Its identity moves once
+   * per settle rather than once per streamed frame, which is what lets the
+   * context meter memoize on it without joining the stream's frame budget.
+   */
+  durableMessages: readonly UIMessage[];
   /** Every interaction opened this Session, for the receipts they left behind. */
   openedInteractions: ReadonlyMap<string, RendererSessionInteraction>;
   /** The Session's lifecycle is `working` — a turn is live. */
@@ -124,6 +130,10 @@ export function useSessionController(
     store,
     (state) => state.sessions[sessionId]?.transcript.messages ?? NO_MESSAGES,
   );
+  const durableMessages = useStore(
+    store,
+    (state) => state.sessions[sessionId]?.transcript.durableMessages ?? NO_MESSAGES,
+  );
   const openedInteractions = useStore(
     store,
     (state) => state.sessions[sessionId]?.transcript.openedInteractions ?? NO_OPENED,
@@ -144,6 +154,7 @@ export function useSessionController(
     () => ({
       projection,
       messages,
+      durableMessages,
       openedInteractions,
       working,
       deliverable,
@@ -153,6 +164,7 @@ export function useSessionController(
     }),
     [
       deliverable,
+      durableMessages,
       messages,
       openedInteractions,
       projection,

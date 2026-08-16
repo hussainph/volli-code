@@ -66,6 +66,7 @@ import {
 } from "@volli/shared";
 
 import { reclampEffort } from "@renderer/chat/composer-effort";
+import type { SessionContextUsage } from "@renderer/chat/context-usage";
 import { COMPOSER_STACK_SHELL } from "@renderer/chat/composer-stack";
 import {
   activePickerRow,
@@ -86,6 +87,7 @@ import {
   type QueuedMessage,
 } from "@renderer/chat/session-model";
 import { EffortPill } from "@renderer/components/chat/composer-effort-ui";
+import { ContextUsagePill } from "@renderer/components/chat/context-usage-ui";
 import { ComposerPicker } from "@renderer/components/chat/composer-picker-ui";
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -135,6 +137,12 @@ export interface SessionComposerProps {
    * parks here at a time.
    */
   interactionOpen?: boolean;
+  /**
+   * The Session's context occupancy, or null while nothing has been metered.
+   * Settles once per turn, never per frame — the parent memoizes it on the
+   * durable transcript, so it cannot switch the memo boundary off.
+   */
+  contextUsage?: SessionContextUsage | null;
   className?: string;
 }
 
@@ -176,6 +184,7 @@ export const SessionComposer = React.memo(function SessionComposer({
   files = NO_FILES,
   onFilePickerOpen,
   interactionOpen = false,
+  contextUsage = null,
   className,
 }: SessionComposerProps) {
   const canSubmit = ready && value.trim().length > 0;
@@ -446,6 +455,10 @@ export const SessionComposer = React.memo(function SessionComposer({
             ) : null}
           </PromptInputTools>
           <div className="ml-auto flex shrink-0 items-center gap-1">
+            {/* The Session's standing fact, beside the controls that act on the
+                turn but before them: it is read, not pressed, most of its life.
+                Absent — not zero — until a first reply has been metered. */}
+            {contextUsage ? <ContextUsagePill usage={contextUsage} /> : null}
             {working ? (
               <Button
                 type="button"

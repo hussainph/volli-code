@@ -393,6 +393,7 @@ describe("model access", () => {
           label: "GPT-5.6 Sol",
           state: "available",
           reasoningLevels: ["off", "minimal", "low", "medium", "high"],
+          contextWindow: 128000,
         },
         {
           providerId: "anthropic",
@@ -400,6 +401,7 @@ describe("model access", () => {
           label: "Claude Sonnet",
           state: "authentication-required",
           reasoningLevels: ["off", "minimal", "low", "medium", "high"],
+          contextWindow: 128000,
         },
       ],
     });
@@ -487,6 +489,7 @@ describe("model access", () => {
           label: "Claude Sonnet",
           state: "unavailable",
           reasoningLevels: ["off", "minimal", "low", "medium", "high"],
+          contextWindow: 128000,
         },
       ],
     });

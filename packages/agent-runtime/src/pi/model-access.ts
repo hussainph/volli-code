@@ -104,6 +104,12 @@ export async function inspectPiModelAccess(
         providerId: provider.id,
         modelId: model.id,
         label: model.name,
+        // Only a size a meter can divide by. Pi's catalog types the field as
+        // required, but a gateway entry can still carry 0 or garbage, and "no
+        // window" must stay distinguishable from a zero-token one.
+        ...(Number.isFinite(model.contextWindow) && model.contextWindow > 0
+          ? { contextWindow: Math.floor(model.contextWindow) }
+          : {}),
         state:
           refreshError !== undefined
             ? "unavailable"

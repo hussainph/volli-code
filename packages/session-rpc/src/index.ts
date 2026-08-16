@@ -360,6 +360,9 @@ const modelAccessSnapshotSchema = z.object({
         label: displayLabel,
         state: modelAccessStateSchema,
         reasoningLevels: z.array(z.enum(REASONING_LEVELS)),
+        // Absent when the catalog reports no usable size; the renderer's
+        // context meter divides by this, so zero is not allowed through.
+        contextWindow: positiveSafeInteger.optional(),
       })
       .transform((model) => ({
         ...model,

@@ -173,7 +173,13 @@ describe("classifyAssistantMessage", () => {
         text: "Done.",
         reasoning: "weighing options",
         model: { providerId: "anthropic", modelId: "claude-haiku-4-5" },
-        usage: { inputTokens: 120, outputTokens: 40, costUsd: 0.3 },
+        usage: {
+          inputTokens: 120,
+          outputTokens: 40,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          costUsd: 0.3,
+        },
       },
     });
   });
