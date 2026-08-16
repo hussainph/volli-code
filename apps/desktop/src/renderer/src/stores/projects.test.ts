@@ -1070,6 +1070,39 @@ describe("updateSkillsAutoDisclosure", () => {
     expect(saved).toBe(false);
     expect(gateway.update).not.toHaveBeenCalled();
   });
+
+  it("re-sends null when the project has no pinned baseBranch, and leaves other projects untouched", async () => {
+    const target = project({ id: "p1", path: "/repo", baseBranch: null });
+    const other = project({ id: "p2", path: "/other", baseBranch: "main" });
+    const gateway = fakeGateway();
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([target, other], target.id);
+
+    const saved = await store.getState().updateSkillsAutoDisclosure(target.id, true);
+
+    expect(saved).toBe(true);
+    expect(gateway.update).toHaveBeenCalledWith({
+      id: target.id,
+      baseBranch: null,
+      skillsAutoDisclosure: true,
+    });
+    // The unrelated project passes through the reconciliation map unchanged.
+    expect(store.getState().projects[1]).toEqual(other);
+  });
+
+  it("returns false and preserves state when persistence fails", async () => {
+    const original = project({ id: "p1", path: "/repo", baseBranch: "main" });
+    const gateway = fakeGateway({
+      update: vi.fn<ProjectsGateway["update"]>(async () => ({ ok: false, error: "locked" })),
+    });
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([original], original.id);
+
+    const saved = await store.getState().updateSkillsAutoDisclosure(original.id, true);
+
+    expect(saved).toBe(false);
+    expect(store.getState().projects[0]).toEqual(original);
+  });
 });
 
 describe("updateSetupCommand", () => {
