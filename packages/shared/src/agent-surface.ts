@@ -19,7 +19,7 @@ export const AGENT_COMMANDS = [
   "session.list",
   "session.peek",
   // Attended-only Session start (VC-13): rides the app-owned product start
-  // route (the ticketSessions facade) over the socket. The CLI's only
+  // route (the Sessions facade) over the socket. The CLI's only
   // transport is that socket and the Pi runtime lives in Electron main, so
   // there is deliberately no headless path — app not running is
   // APP_UNREACHABLE, and `volli app launch` is the sanctioned recovery.

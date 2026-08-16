@@ -58,12 +58,11 @@ import { sessionRootThreadId } from "@volli/session-engine";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { ModelAccessSignInService } from "./model-access/sign-in-service";
 import { createPiRuntimeHost } from "./session-runtime/pi-adapter";
-import { createTicketSessions } from "./session-runtime/ticket-sessions";
-import { createProjectSessions } from "./session-runtime/project-sessions";
 import {
+  createSessions,
   StructuredSessionsError,
   type SessionSkillPorts,
-} from "./session-runtime/structured-sessions";
+} from "./session-runtime/sessions";
 import { loadSkills } from "./skills";
 import {
   assertDefaultModelAvailable,
@@ -737,18 +736,18 @@ app.whenReady().then(async () => {
           },
         }
       : null;
-  const ticketSessions =
+  const sessions =
     sessionRuntime !== null &&
     piRuntimeHost !== null &&
     sessionDb !== null &&
     sessionSkills !== null
-      ? createTicketSessions({
+      ? createSessions({
           runtime: sessionRuntime,
           readDefaultModel: () => readDefaultModelSelection(sessionDb),
           ticketBelongsToProject: (projectId, ticketId) =>
             getTicket(sessionDb, ticketId)?.projectId === projectId,
-          readBornTicketless: async (sessionId) =>
-            (await sessionRuntime.projection({ sessionId })).projection.bornTicketless,
+          readModelSelection: async (sessionId) =>
+            (await sessionRuntime.projection({ sessionId })).projection.modelSelection,
           skills: sessionSkills,
           // Consulted only when a start carries an invocation-time model
           // override (the CLI's --model/--reasoning); the saved default was
@@ -769,21 +768,6 @@ app.whenReady().then(async () => {
           },
         })
       : null;
-  const projectSessions =
-    sessionRuntime !== null &&
-    piRuntimeHost !== null &&
-    sessionDb !== null &&
-    sessionSkills !== null
-      ? createProjectSessions({
-          runtime: sessionRuntime,
-          readDefaultModel: () => readDefaultModelSelection(sessionDb),
-          readBornTicketless: async (sessionId) =>
-            (await sessionRuntime.projection({ sessionId })).projection.bornTicketless,
-          readModelSelection: async (sessionId) =>
-            (await sessionRuntime.projection({ sessionId })).projection.modelSelection,
-          skills: sessionSkills,
-        })
-      : null;
   const sessionRpc =
     sessionRuntime === null
       ? null
@@ -800,12 +784,8 @@ app.whenReady().then(async () => {
                   writeDefaultModelSelection(sessionDb, selection, Date.now());
                 }
               : undefined,
-          startTicketSession: ticketSessions?.start,
-          createTicketSession: ticketSessions?.create,
-          attachTicketSession: ticketSessions?.attach,
-          startProjectSession: projectSessions?.start,
-          createProjectSession: projectSessions?.create,
-          attachProjectSession: projectSessions?.attach,
+          createSession: sessions?.create,
+          attachSession: sessions?.attach,
         });
   // Signing in is a Model Access task, not a Session one, so it gets its own
   // surface rather than a Session RPC namespace — see the contract in
@@ -1420,11 +1400,11 @@ app.whenReady().then(async () => {
           appVersion: app.getVersion(),
           observeSession: (sessionId, lines) => ptyManager.peek(sessionId, lines),
           notify: (title, message) => new Notification({ title, body: message }).show(),
-          // The product Ticket Session start route (VC-13): the same facade the
-          // renderer's `ticketSessions.start` RPC rides — no parallel creation
+          // The product Session start route (VC-13): the same facade the
+          // renderer's `sessions.create` RPC rides — no parallel creation
           // path. Absent when the Session runtime never came up this launch,
           // which the verb answers as retryable APP_UNREACHABLE.
-          ...(ticketSessions !== null ? { ticketSessions } : {}),
+          ...(sessions !== null ? { sessions } : {}),
           // The kickoff turn's delivery seam. `message.submit` resolves when
           // the TURN ends, so the door fires it detached; a refusal lands in
           // the Session's own durable state and the log.

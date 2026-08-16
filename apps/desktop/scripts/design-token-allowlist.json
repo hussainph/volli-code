@@ -1,4 +1,11 @@
 {
   "note": "Recorded exceptions to check-design-tokens.mjs. An entry excuses one rule on the lines of one file whose text contains `contains`. Every entry needs a reason, and an entry that stops matching FAILS the check — retiring these is part of finishing the sweep that made them unnecessary.",
-  "entries": []
+  "entries": [
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/context-usage-ui.tsx",
+      "rule": "radius-arbitrary",
+      "contains": "rounded-[2px]",
+      "reason": "The context meter's 1%-wide heat cells (and the legend's matching 8px swatch) are far below the ladder's smallest rung — `rounded-sm` (8px) would render them as circles. 2px is a hairline softening specific to this data visualization, not a surface radius; if a micro rung ever joins the ladder, move these onto it and retire this entry. Recorded while unblocking CI for VC-20 (the check had not run on the VC-33 merge that introduced them)."
+    }
+  ]
 }
