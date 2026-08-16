@@ -72,11 +72,17 @@ export function createProjectSessions(options: ProjectSessionsOptions): ProjectS
   return {
     async start(input) {
       const model = requireDefaultModel(options.readDefaultModel(), DEFAULT_MODEL_REQUIRED);
-      // Resolved before anything durable exists — see ticket-sessions.ts.
-      const resources =
+      // Named bodies resolved before anything durable exists, then the
+      // best-effort opt-in index behind them — see ticket-sessions.ts.
+      const explicit =
         input.skills !== undefined && input.skills.length > 0
           ? await options.skills.resolve(input.projectId, input.skills)
           : [];
+      const index = await options.skills.index(
+        input.projectId,
+        explicit.map((resource) => resource.name),
+      );
+      const resources = index === null ? explicit : [...explicit, index];
       const created = await options.runtime.command({
         commandId: `${input.operationId}:create`,
         command: {

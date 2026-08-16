@@ -23,6 +23,7 @@ import {
   projectSkillsDir,
   resolveShell,
   skillPromptResource,
+  skillsIndexResource,
   ticketBranchName,
   VOLLI_USER_ZDOTDIR_ENV,
 } from "@volli/shared";
@@ -655,12 +656,15 @@ app.whenReady().then(async () => {
       : null;
   const sessionDb = dbHandle.ok ? dbHandle.db : null;
   /**
-   * How a Session start turns named skills into its durable prompt resources
+   * How a Session start turns skills into its durable prompt resources
    * (`SessionSkillPorts`): resolve reads `.agents/skills/` off the project's
    * main checkout and refuses the start when a named skill is not there;
-   * record writes the resolved bodies as the Session's own input event, ahead
-   * of the first attachment, which is the record `resolveRuntimeContext`
-   * composes the system prompt from ever after.
+   * index answers the opt-in metadata disclosure best-effort — no project, no
+   * readable directory, nothing opted in are all simply no index, because an
+   * ambient nicety must never brick a chat; record writes everything resolved
+   * as the Session's own input event, ahead of the first attachment, which is
+   * the record `resolveRuntimeContext` composes the system prompt from ever
+   * after.
    */
   const sessionSkills: SessionSkillPorts | null =
     sessionEngine !== null && sessionDb !== null
@@ -692,6 +696,13 @@ app.whenReady().then(async () => {
               }
               return skillPromptResource(skill);
             });
+          },
+          index: async (projectId, injectedNames) => {
+            const project = getProjectById(sessionDb, projectId);
+            if (!project) return null;
+            const read = await readProjectSkills(projectSkillsDir(project.path));
+            if (!read.ok) return null;
+            return skillsIndexResource(read.skills, injectedNames);
           },
           record: async (sessionId, resources) => {
             await sessionEngine.getOrRecordSessionInput({

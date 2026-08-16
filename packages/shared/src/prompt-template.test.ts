@@ -272,6 +272,8 @@ describe("expandCommandInvocation", () => {
     ];
     const block = [
       "--- BEGIN RESOURCE: logos ---",
+      "Skill directory: .agents/skills/logos/ — file references in this skill resolve relative to it.",
+      "",
       "# Logos\n\nRun `awk '{print $1}'` first.",
       "--- END RESOURCE: logos ---",
     ].join("\n");

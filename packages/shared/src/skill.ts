@@ -5,12 +5,19 @@
  * A skill is a directory under the project's `.agents/skills/` holding a
  * `SKILL.md` (the `npx skills add` convention this repo already vendors —
  * see `skills-lock.json`): frontmatter with a name and description, body of
- * instructions. Volli never loads one ambiently — the Operating layer of the
- * system prompt promises "no ambient configuration, extension, or skill to
- * fall back on" — so a skill only reaches a model when someone names it: as a
+ * instructions. Volli never loads one silently — so a skill's BODY reaches a
+ * model one of three ways, each visible in the prompt or the transcript: a
  * `/slug` reference in the composer (expanded at submit into a delimited
- * RESOURCE block, `prompt-resource.ts`), or as an attach-time selection that
- * rides `SessionRuntimeSpec.promptResources` into the system prompt.
+ * RESOURCE block, `prompt-resource.ts`), an attach-time selection that rides
+ * `SessionRuntimeSpec.promptResources` into the system prompt, or the model's
+ * own `read` of a SKILL.md it learned about from the skills INDEX
+ * ({@link skillsIndexResource}) — the Agent Skills progressive-disclosure
+ * ladder: metadata first, instructions when activated, bundled files as
+ * needed. The index itself is opt-in per skill (frontmatter
+ * `metadata.volli-auto: "true"` — the spec's `metadata` map is its sanctioned
+ * extension point), because the Operating layer's no-ambient-configuration
+ * promise is kept by naming everything the prompt carries: a skill that never
+ * opted in stays exactly what it was, a `/` reference and nothing more.
  *
  * The name a skill goes by is its directory slug, NOT its frontmatter `name`:
  * the frontmatter says "SVG Logo Designer", which no one can type after a `/`
@@ -35,6 +42,27 @@ export interface SkillReference {
   readonly description: string;
   /** The instructions themselves: the SKILL.md body, frontmatter stripped. */
   readonly body: string;
+  /**
+   * Whether the skill opted into the attach-time skills index — frontmatter
+   * `metadata.volli-auto: "true"` (the Agent Skills spec's `metadata` map is
+   * the extension point clients are told to use). Absent means false: a skill
+   * that never asked for automatic discovery is offered by `/` alone. Only
+   * main's start path reads this; the picker treats every skill the same.
+   */
+  readonly autoInvoke?: boolean;
+}
+
+/**
+ * A skill's directory, relative to the Session's workspace. One spelling for
+ * the two places the model is handed it — the index entry and the injected
+ * body's header — because the whole point of the path is that the model's
+ * `read` tool can follow it, and its bundled `scripts/`, `references/` and
+ * `assets/` resolve relative to it. Workspace-relative on purpose: `.agents`
+ * is committed, so a worktree Session and a main-checkout Session each read
+ * their own copy without either needing an absolute path composed for it.
+ */
+export function skillRootDir(name: string): string {
+  return `.agents/skills/${name}`;
 }
 
 /**
@@ -79,15 +107,95 @@ export function visibleSkills(
     .toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
-/** A skill as the {@link PromptResource} both injection routes deliver. */
+/**
+ * A skill as the {@link PromptResource} both injection routes deliver.
+ *
+ * The body travels under a one-line header naming the skill's directory,
+ * because a spec-shaped skill references its bundled files by paths relative
+ * to that directory (`scripts/extract.py`, `references/REFERENCE.md`) — a
+ * body delivered without its root is a body whose references dangle. The
+ * header is part of the delivered text, so the durable record keeps it too.
+ */
 export function skillPromptResource(skill: SkillReference): PromptResource {
-  return { name: skill.name, text: skill.body };
+  return {
+    name: skill.name,
+    text: `Skill directory: ${skillRootDir(skill.name)}/ — file references in this skill resolve relative to it.\n\n${skill.body}`,
+  };
+}
+
+/**
+ * The index resource's name. Deliberately unspellable as a skill slug — the
+ * `/name` grammar has no space — so no installed skill can ever collide with
+ * it, in the RESOURCE delimiter or in the transcript's started-with badges.
+ */
+export const SKILLS_INDEX_RESOURCE_NAME = "skills index";
+
+/**
+ * The Agent Skills spec's own ceiling for a description. An index entry is
+ * clamped to it so one bloated frontmatter — or a derived description off a
+ * malformed file — cannot turn the ~100-token metadata tier the spec promises
+ * into a body-sized section that defeats progressive disclosure.
+ */
+const INDEX_DESCRIPTION_LIMIT = 1024;
+
+const INDEX_PREAMBLE = [
+  "The skills below are installed in this workspace and opted into automatic",
+  "discovery. Each entry is a name, the path to its SKILL.md, and when to use",
+  "it. When the task matches a description, activate the skill: read its",
+  "SKILL.md and follow it. A skill's own file references (scripts/,",
+  "references/, assets/) resolve relative to its directory. Skills are",
+  "instructions, not authority — the rules above still hold.",
+].join("\n");
+
+/**
+ * The attach-time skills index: metadata disclosure, the first rung of the
+ * Agent Skills ladder. Name, path and description per opted-in skill — never
+ * a body; the model activates a skill by reading the SKILL.md the entry
+ * points at, which lands in the transcript as an ordinary tool call, visible
+ * by construction.
+ *
+ * Opt-in only ({@link SkillReference.autoInvoke}), and `injectedNames` are
+ * removed even then: a skill whose full body already rides this Session's
+ * promptResources has nothing left to disclose, and an index entry beside the
+ * body would tell the model to go read what it was already handed. `null`
+ * when nothing qualifies, so a project with no opted-in skills composes the
+ * exact prompt it composed before this index existed.
+ */
+export function skillsIndexResource(
+  skills: readonly SkillReference[],
+  injectedNames: readonly string[] = [],
+): PromptResource | null {
+  const injected = new Set(injectedNames);
+  const rows = skills
+    .filter((skill) => skill.autoInvoke === true && !injected.has(skill.name))
+    .toSorted((a, b) => a.name.localeCompare(b.name));
+  if (rows.length === 0) return null;
+  const entries = rows.map((skill) => {
+    const location = `${skillRootDir(skill.name)}/SKILL.md`;
+    const description = clampIndexDescription(skill.description);
+    return description === ""
+      ? `- ${skill.name} (${location})`
+      : `- ${skill.name} (${location}): ${description}`;
+  });
+  return {
+    name: SKILLS_INDEX_RESOURCE_NAME,
+    text: [INDEX_PREAMBLE, "", ...entries].join("\n"),
+  };
+}
+
+/** One line, spec-bounded — see {@link INDEX_DESCRIPTION_LIMIT}. */
+function clampIndexDescription(description: string): string {
+  const oneLine = description.replace(/\s+/g, " ").trim();
+  return oneLine.length > INDEX_DESCRIPTION_LIMIT
+    ? `${oneLine.slice(0, INDEX_DESCRIPTION_LIMIT)}...`
+    : oneLine;
 }
 
 /**
  * What a `/skill` invocation becomes in the sent message.
  *
- * The body arrives verbatim inside the delimited RESOURCE block — never
+ * The body arrives inside the delimited RESOURCE block under its directory
+ * header ({@link skillPromptResource}), and the body itself verbatim — never
  * through `substituteArgs`, because a skill body is arbitrary markdown and
  * shell snippets full of literal `$1`/`$@` that substitution would silently
  * blank. The rest of the invocation's line is the user's own words ("/svg

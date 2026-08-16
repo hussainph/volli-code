@@ -18,9 +18,10 @@ const MODEL: ModelSelection = {
   reasoningLevel: "high",
 };
 
-/** Skill ports for the Sessions these tests start: none named, none resolved. */
+/** Skill ports for the Sessions these tests start: none named, none opted in. */
 const NO_SKILLS: SessionSkillPorts = {
   resolve: async () => [],
+  index: async () => null,
   record: async () => undefined,
 };
 
@@ -91,6 +92,10 @@ describe("project Sessions", () => {
           trail.push(`resolve:${projectId}:${names.join(",")}`);
           return names.map((name) => ({ name, text: `body of ${name}` }));
         },
+        index: async (projectId, injectedNames) => {
+          trail.push(`index:${projectId}:${injectedNames.join(",")}`);
+          return null;
+        },
         record: async (sessionId, resources) => {
           trail.push("record");
           recorded.push({ sessionId, resources });
@@ -114,6 +119,7 @@ describe("project Sessions", () => {
     expect(started).toMatchObject({ sessionId: "session-1", state: "ready" });
     expect(trail).toEqual([
       "resolve:project-1:svg-logo-designer",
+      "index:project-1:svg-logo-designer",
       "session.create",
       "model.select",
       "record",
@@ -135,6 +141,7 @@ describe("project Sessions", () => {
         resolve: async () => {
           throw new StructuredSessionsError("SKILL_NOT_FOUND", "no such skill");
         },
+        index: async () => null,
         record: async () => undefined,
       },
     });
@@ -148,6 +155,29 @@ describe("project Sessions", () => {
       }),
     ).rejects.toMatchObject({ code: "SKILL_NOT_FOUND" });
     expect(commands).toEqual([]);
+  });
+
+  it("records the opt-in index even when the start names no skills", async () => {
+    const recorded: { name: string; text: string }[][] = [];
+    const { projectSessions } = sessions({
+      skills: {
+        resolve: async () => {
+          throw new Error("resolve must not run");
+        },
+        index: async () => ({ name: "skills index", text: "- a (.agents/skills/a/SKILL.md)" }),
+        record: async (_sessionId, resources) => {
+          recorded.push(resources.map((resource) => ({ ...resource })));
+        },
+      },
+    });
+
+    await projectSessions.start({
+      operationId: "project-index",
+      projectId: "project-1",
+      title: null,
+    });
+
+    expect(recorded).toEqual([[{ name: "skills index", text: "- a (.agents/skills/a/SKILL.md)" }]]);
   });
 
   it("refuses to start without a default model rather than choosing one", async () => {

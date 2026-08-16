@@ -50,10 +50,18 @@ export function createTicketSessions(options: TicketSessionsOptions): TicketSess
       const model = requireDefaultModel(options.readDefaultModel(), DEFAULT_MODEL_REQUIRED);
       // Resolved before anything durable exists: a missing skill refuses the
       // start outright instead of stranding a Session that never attaches.
-      const resources =
+      const explicit =
         input.skills !== undefined && input.skills.length > 0
           ? await options.skills.resolve(input.projectId, input.skills)
           : [];
+      // The opt-in metadata index rides behind the named bodies — specific
+      // material first, then what else is available. Best-effort by the
+      // port's contract: null costs the index, never the start.
+      const index = await options.skills.index(
+        input.projectId,
+        explicit.map((resource) => resource.name),
+      );
+      const resources = index === null ? explicit : [...explicit, index];
       const created = await options.runtime.command({
         commandId: `${input.operationId}:create`,
         command: {

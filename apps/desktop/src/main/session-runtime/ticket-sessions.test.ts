@@ -12,9 +12,10 @@ import {
 } from "./structured-sessions";
 import { createTicketSessions } from "./ticket-sessions";
 
-/** Skill ports for the Sessions these tests start: none named, none resolved. */
+/** Skill ports for the Sessions these tests start: none named, none opted in. */
 const NO_SKILLS: SessionSkillPorts = {
   resolve: async () => [],
+  index: async () => null,
   record: async () => undefined,
 };
 
@@ -364,6 +365,10 @@ describe("Ticket Sessions", () => {
           trail.push(`resolve:${projectId}:${names.join(",")}`);
           return names.map((name) => ({ name, text: `body of ${name}` }));
         },
+        index: async (projectId, injectedNames) => {
+          trail.push(`index:${projectId}:${injectedNames.join(",")}`);
+          return null;
+        },
         record: async (sessionId, resources) => {
           trail.push("record");
           recorded.push({ sessionId, resources });
@@ -393,6 +398,9 @@ describe("Ticket Sessions", () => {
     // attach so the first system prompt already reads the durable record.
     expect(trail).toEqual([
       "resolve:project-1:svg-logo-designer",
+      // Asked with the resolved names, so the index never re-lists a skill
+      // whose full body already rides this Session.
+      "index:project-1:svg-logo-designer",
       "session.create",
       "model.select",
       "record",
@@ -413,6 +421,7 @@ describe("Ticket Sessions", () => {
         resolve: async () => {
           throw new StructuredSessionsError("SKILL_NOT_FOUND", "no such skill");
         },
+        index: async () => null,
         record: async () => undefined,
       },
       readBornTicketless: async () => false,
@@ -432,11 +441,16 @@ describe("Ticket Sessions", () => {
     expect(commands).toEqual([]);
   });
 
-  it("never touches the skill ports when the start names none", async () => {
+  it("never resolves nor records when nothing is named and nothing opted in", async () => {
+    const indexAsks: string[] = [];
     const ticketSessions = createTicketSessions({
       skills: {
         resolve: async () => {
           throw new Error("resolve must not run");
+        },
+        index: async (projectId) => {
+          indexAsks.push(projectId);
+          return null;
         },
         record: async () => {
           throw new Error("record must not run");
@@ -454,6 +468,59 @@ describe("Ticket Sessions", () => {
     await expect(ticketSessions.start(startInput("operation-plain"))).resolves.toMatchObject({
       sessionId: "session-1",
     });
+    // The index IS asked — opt-in disclosure has no other trigger — but a null
+    // answer leaves nothing to record.
+    expect(indexAsks).toEqual(["project-1"]);
+  });
+
+  it("records the opt-in index even when the start names no skills", async () => {
+    const recorded: { name: string; text: string }[][] = [];
+    const ticketSessions = createTicketSessions({
+      skills: {
+        resolve: async () => {
+          throw new Error("resolve must not run");
+        },
+        index: async () => ({ name: "skills index", text: "- a (.agents/skills/a/SKILL.md)" }),
+        record: async (_sessionId, resources) => {
+          recorded.push(resources.map((resource) => ({ ...resource })));
+        },
+      },
+      readBornTicketless: async () => false,
+      ticketBelongsToProject: () => true,
+      runtime: {
+        command: async (request) =>
+          result(request, request.command.kind === "adapter.attach" ? "accepted" : "completed"),
+      },
+      readDefaultModel,
+    });
+
+    await ticketSessions.start(startInput("operation-index"));
+
+    expect(recorded).toEqual([[{ name: "skills index", text: "- a (.agents/skills/a/SKILL.md)" }]]);
+  });
+
+  it("records the index behind the named bodies, specific material first", async () => {
+    const recorded: string[][] = [];
+    const ticketSessions = createTicketSessions({
+      skills: {
+        resolve: async (_projectId, names) => names.map((name) => ({ name, text: "body" })),
+        index: async () => ({ name: "skills index", text: "index" }),
+        record: async (_sessionId, resources) => {
+          recorded.push(resources.map((resource) => resource.name));
+        },
+      },
+      readBornTicketless: async () => false,
+      ticketBelongsToProject: () => true,
+      runtime: {
+        command: async (request) =>
+          result(request, request.command.kind === "adapter.attach" ? "accepted" : "completed"),
+      },
+      readDefaultModel,
+    });
+
+    await ticketSessions.start({ ...startInput("operation-both"), skills: ["named"] });
+
+    expect(recorded).toEqual([["named", "skills index"]]);
   });
 });
 
