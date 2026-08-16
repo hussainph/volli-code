@@ -1,7 +1,7 @@
 import {
   SESSION_ESCALATION_OPTIONS,
   SESSION_ESCALATION_STOP_ID,
-  type SessionInteraction,
+  type RendererSessionInteraction,
   type SessionInteractionOption,
   type SessionInteractionPrompt,
 } from "@volli/shared";
@@ -51,7 +51,9 @@ const PERMISSION_OPTIONS = [
   { id: "reject", label: "Reject", description: null },
 ];
 
-function permission(overrides: Partial<SessionInteraction> = {}): SessionInteraction {
+function permission(
+  overrides: Partial<RendererSessionInteraction> = {},
+): RendererSessionInteraction {
   return {
     id: "permission:p1",
     attachmentId: "attach-1",
@@ -70,7 +72,7 @@ function permission(overrides: Partial<SessionInteraction> = {}): SessionInterac
         custom: false,
       },
     ],
-    native: { id: "perm-1", detail: null },
+    native: { id: null, detail: null },
     ...overrides,
   };
 }
@@ -90,7 +92,7 @@ function prompt(overrides: Partial<SessionInteractionPrompt> = {}): SessionInter
   };
 }
 
-function question(prompts: readonly SessionInteractionPrompt[]): SessionInteraction {
+function question(prompts: readonly SessionInteractionPrompt[]): RendererSessionInteraction {
   return {
     id: "question:q1",
     attachmentId: "attach-1",
@@ -100,7 +102,7 @@ function question(prompts: readonly SessionInteractionPrompt[]): SessionInteract
     options: prompts.flatMap((entry) => entry.options),
     multiple: true,
     prompts,
-    native: { id: "q-1", detail: null },
+    native: { id: null, detail: null },
   };
 }
 
@@ -129,7 +131,9 @@ function escalationOptions(): {
  * What the sandbox raises when the block stands whatever the answer: one
  * question, the offer's own two options, no free-text answer to give.
  */
-function escalation(overrides: Partial<SessionInteraction> = {}): SessionInteraction {
+function escalation(
+  overrides: Partial<RendererSessionInteraction> = {},
+): RendererSessionInteraction {
   return {
     id: "question:e1",
     attachmentId: "attach-1",
@@ -148,7 +152,7 @@ function escalation(overrides: Partial<SessionInteraction> = {}): SessionInterac
         custom: false,
       },
     ],
-    native: { id: "esc-1", detail: null },
+    native: { id: null, detail: null },
     ...overrides,
   };
 }

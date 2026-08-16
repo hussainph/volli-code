@@ -14,7 +14,7 @@
  */
 import type { SessionStreamOverlay, TranscriptDelta } from "@volli/session-engine";
 import { scrubSessionEventPayload } from "@volli/shared";
-import type { SessionEvent, SessionInteraction } from "@volli/shared";
+import type { SessionEvent, RendererSessionInteraction } from "@volli/shared";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -109,7 +109,7 @@ function turn(
 }
 
 function opening(sequence: number, id: string): ChatSessionFrame {
-  const interaction: SessionInteraction = {
+  const interaction: RendererSessionInteraction = {
     id,
     attachmentId: "attachment-1",
     kind: "permission",
@@ -117,7 +117,7 @@ function opening(sequence: number, id: string): ChatSessionFrame {
     detail: null,
     options: [],
     multiple: false,
-    native: { id, detail: null },
+    native: { id: null, detail: null },
   };
   return frame(sequence, { kind: "interaction.opened", interaction });
 }

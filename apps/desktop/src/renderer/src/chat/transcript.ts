@@ -13,7 +13,7 @@ import {
   type SessionStreamOverlay,
   type TranscriptOverlay,
 } from "@volli/session-engine";
-import type { RendererSessionEvent, SessionInteraction } from "@volli/shared";
+import type { RendererSessionEvent, RendererSessionInteraction } from "@volli/shared";
 import type { UIMessage } from "ai";
 
 import { indexOpenedInteractions } from "@renderer/chat/interaction";
@@ -93,10 +93,10 @@ export interface ChatTranscriptState {
   /** What the chat draws: the durable list with every live overlay laid over it. */
   messages: readonly UIMessage[];
   /** Every interaction this Session has opened, for the receipts they leave. */
-  openedInteractions: ReadonlyMap<string, SessionInteraction>;
+  openedInteractions: ReadonlyMap<string, RendererSessionInteraction>;
 }
 
-const EMPTY_INTERACTION_INDEX: ReadonlyMap<string, SessionInteraction> = new Map();
+const EMPTY_INTERACTION_INDEX: ReadonlyMap<string, RendererSessionInteraction> = new Map();
 const EMPTY_OVERLAY: TranscriptOverlay = new Map();
 const EMPTY_DURABLE_SEQUENCES: ReadonlyMap<string, number> = new Map();
 export const EMPTY_TRANSCRIPT: ChatTranscriptState = {

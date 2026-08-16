@@ -1,7 +1,7 @@
 /**
  * Answering an interaction — the pure half.
  *
- * Everything here is a function of a `SessionInteraction` and a draft, so what
+ * Everything here is a function of a `RendererSessionInteraction` and a draft, so what
  * a card can be answered with is testable without mounting one. The JSX in
  * `interaction-ui.tsx` owns only how it looks; these rules are what an app port
  * reuses when the surface moves out of the lab.
@@ -26,8 +26,7 @@ import {
   SESSION_ESCALATION_STOP_ID,
   SESSION_REFUSAL_OPTION_IDS,
   type RendererSessionEventPayload,
-  type SessionEventPayload,
-  type SessionInteraction,
+  type RendererSessionInteraction,
   type SessionInteractionAnswer,
   type SessionInteractionOption,
   type SessionInteractionPrompt,
@@ -100,7 +99,7 @@ const EMPTY_PROMPT_DRAFT: InteractionPromptDraft = { optionIds: [], response: ""
  * Nothing is preselected, and that is deliberate for a blocking card: a default
  * choice on a permission means one stray Enter grants it.
  */
-export function emptyInteractionDraft(interaction: SessionInteraction): InteractionDraft {
+export function emptyInteractionDraft(interaction: RendererSessionInteraction): InteractionDraft {
   const draft: Record<string, InteractionPromptDraft> = {};
   for (const prompt of readInteractionPrompts(interaction)) draft[prompt.id] = EMPTY_PROMPT_DRAFT;
   return draft;
@@ -248,7 +247,7 @@ export function promptFieldOpen(
  * answers still stood lit beside it.
  */
 export function interactionRedirected(
-  interaction: SessionInteraction,
+  interaction: RendererSessionInteraction,
   draft: InteractionDraft,
 ): boolean {
   return redirectMessage(interaction, draft) !== null;
@@ -264,7 +263,7 @@ export function interactionRedirected(
  * reader takes the card back.
  */
 export function promptResponseSuperseded(
-  interaction: SessionInteraction,
+  interaction: RendererSessionInteraction,
   prompt: SessionInteractionPrompt,
   draft: InteractionDraft,
 ): boolean {
@@ -299,7 +298,7 @@ export function isPromptAnswered(
  * is the refusal itself, said deliberately.
  */
 export function canSubmitInteraction(
-  interaction: SessionInteraction,
+  interaction: RendererSessionInteraction,
   draft: InteractionDraft,
 ): boolean {
   const prompts = readInteractionPrompts(interaction);
@@ -323,7 +322,7 @@ export function canSubmitInteraction(
  * has to mint it — and on a card that can submit nothing, that control is the
  * only exit there is.
  */
-export function needsOwnRefusal(interaction: SessionInteraction): boolean {
+export function needsOwnRefusal(interaction: RendererSessionInteraction): boolean {
   return !readInteractionPrompts(interaction).some((prompt) =>
     prompt.options.some((option) => optionPolarity(option) === "reject"),
   );
@@ -335,7 +334,9 @@ export function needsOwnRefusal(interaction: SessionInteraction): boolean {
  * answer per prompt, and so refusing can never send a selection the reader made
  * and then abandoned.
  */
-export function refusalResolution(interaction: SessionInteraction): SessionInteractionResolution {
+export function refusalResolution(
+  interaction: RendererSessionInteraction,
+): SessionInteractionResolution {
   return interactionResolution(interaction, emptyInteractionDraft(interaction));
 }
 
@@ -363,7 +364,7 @@ export interface InteractionSubmission {
  * did not type.
  */
 export function redirectMessage(
-  interaction: SessionInteraction,
+  interaction: RendererSessionInteraction,
   draft: InteractionDraft,
 ): string | null {
   const said = readInteractionPrompts(interaction).flatMap((prompt) => {
@@ -382,7 +383,7 @@ export function redirectMessage(
  * harness value can impersonate it. The words leave separately.
  */
 export function refusalSubmission(
-  interaction: SessionInteraction,
+  interaction: RendererSessionInteraction,
   draft: InteractionDraft,
 ): InteractionSubmission {
   return {
@@ -401,7 +402,7 @@ export function refusalSubmission(
  * refusal rather than beside it.
  */
 export function interactionSubmission(
-  interaction: SessionInteraction,
+  interaction: RendererSessionInteraction,
   draft: InteractionDraft,
 ): InteractionSubmission | null {
   const redirect = redirectMessage(interaction, draft);
@@ -447,7 +448,7 @@ export function interactionSubmission(
  *    sent out from under the reader who wrote them.
  */
 export function optionSubmitsOnSelect(
-  interaction: SessionInteraction,
+  interaction: RendererSessionInteraction,
   prompt: SessionInteractionPrompt,
   option: SessionInteractionOption,
   draft: InteractionDraft,
@@ -475,7 +476,7 @@ export function optionSubmitsOnSelect(
  *   neutral word, and so does a request that asked more than one thing.
  */
 export function interactionSubmitLabel(
-  interaction: SessionInteraction,
+  interaction: RendererSessionInteraction,
   draft: InteractionDraft,
 ): string {
   const prompts = readInteractionPrompts(interaction);
@@ -496,7 +497,7 @@ export function interactionSubmitLabel(
 }
 
 export function interactionAnswers(
-  interaction: SessionInteraction,
+  interaction: RendererSessionInteraction,
   draft: InteractionDraft,
 ): SessionInteractionAnswer[] {
   return readInteractionPrompts(interaction).map((prompt) => {
@@ -519,7 +520,7 @@ export function interactionAnswers(
  * lossy convenience. `answers` rides along for the readers that understand it.
  */
 export function interactionResolution(
-  interaction: SessionInteraction,
+  interaction: RendererSessionInteraction,
   draft: InteractionDraft,
 ): SessionInteractionResolution {
   const answers = interactionAnswers(interaction, draft);
@@ -543,7 +544,7 @@ export interface InteractionQuestion {
 }
 
 export function interactionQuestions(
-  interaction: SessionInteraction,
+  interaction: RendererSessionInteraction,
 ): readonly InteractionQuestion[] {
   const prompts = readInteractionPrompts(interaction);
   return prompts.map((prompt) => ({
@@ -580,7 +581,7 @@ export interface InteractionCarousel {
 }
 
 export function interactionCarousel(
-  interaction: SessionInteraction,
+  interaction: RendererSessionInteraction,
   draft: InteractionDraft,
   index: number,
 ): InteractionCarousel | null {
@@ -612,7 +613,7 @@ export function interactionCarousel(
  * is no verdict to weight and nothing to read the list against — only answers,
  * one question at a time.
  */
-export function isAskUserInteraction(interaction: SessionInteraction): boolean {
+export function isAskUserInteraction(interaction: RendererSessionInteraction): boolean {
   return interaction.kind === "question" && needsOwnRefusal(interaction);
 }
 
@@ -686,7 +687,7 @@ export function promptRowLayout(prompt: SessionInteractionPrompt): InteractionRo
  * what the card takes them back to instead of leaving the press silent.
  */
 export function firstUnansweredPrompt(
-  interaction: SessionInteraction,
+  interaction: RendererSessionInteraction,
   draft: InteractionDraft,
 ): number {
   return readInteractionPrompts(interaction).findIndex(
@@ -745,7 +746,7 @@ export interface InteractionStep {
 }
 
 export function interactionStep(
-  interaction: SessionInteraction,
+  interaction: RendererSessionInteraction,
   draft: InteractionDraft,
   index: number,
 ): InteractionStep | null {
@@ -805,7 +806,7 @@ export type InteractionAdvance =
   | { kind: "send"; submission: InteractionSubmission };
 
 export function interactionAdvance(
-  interaction: SessionInteraction,
+  interaction: RendererSessionInteraction,
   draft: InteractionDraft,
   index: number,
 ): InteractionAdvance | null {
@@ -846,9 +847,9 @@ export function interactionAdvance(
  * to be exactly one of each.
  */
 export function interactionForApproval(
-  interactions: readonly SessionInteraction[],
+  interactions: readonly RendererSessionInteraction[],
   toolCallId: string | null,
-): SessionInteraction | null {
+): RendererSessionInteraction | null {
   if (toolCallId === null) return null;
   const interactionId = askInteractionId(toolCallId);
   return interactions.find((interaction) => interaction.id === interactionId) ?? null;
@@ -866,9 +867,9 @@ export function interactionForApproval(
  * belongs here by construction rather than by exclusion.
  */
 export function footInteraction(
-  interactions: readonly SessionInteraction[],
+  interactions: readonly RendererSessionInteraction[],
   gatedCallIds: ReadonlySet<string>,
-): SessionInteraction | null {
+): RendererSessionInteraction | null {
   const drawn = new Set([...gatedCallIds].map(askInteractionId));
   return interactions.find((interaction) => !drawn.has(interaction.id)) ?? null;
 }
@@ -902,7 +903,7 @@ const RECEIPT_LEADS: Record<InteractionReceipt["verdict"], string> = {
 };
 
 export function describeInteractionResolution(
-  interaction: SessionInteraction,
+  interaction: RendererSessionInteraction,
   resolution: SessionInteractionResolution,
 ): InteractionReceipt {
   const prompts = readInteractionPrompts(interaction);
@@ -1008,14 +1009,16 @@ function receiptTrailer(
  * instead of printing an opaque id.
  */
 export function indexOpenedInteractions(
-  // Both edges of the seam: renderer-safe payloads off the wire, durable ones
-  // in tests and fixtures. A null event is a kind this build does not know,
-  // which by definition opened nothing it can draw.
+  // Renderer-safe payloads only: everything on this side of the edge has been
+  // through the codec's parse, fixtures included — a durable payload here
+  // would let a `native` id flow into a map the types promise is scrubbed.
+  // A null event is a kind this build does not know, which by definition
+  // opened nothing it can draw.
   frames: readonly {
-    event: { payload: SessionEventPayload | RendererSessionEventPayload } | null;
+    event: { payload: RendererSessionEventPayload } | null;
   }[],
-): ReadonlyMap<string, SessionInteraction> {
-  const byId = new Map<string, SessionInteraction>();
+): ReadonlyMap<string, RendererSessionInteraction> {
+  const byId = new Map<string, RendererSessionInteraction>();
   for (const frame of frames) {
     if (frame.event === null) continue;
     const { payload } = frame.event;

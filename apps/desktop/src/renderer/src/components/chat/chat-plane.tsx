@@ -22,7 +22,7 @@ import type {
   ModelAccessModel,
   ModelAccessProvider,
   SessionAttentionProjection,
-  SessionInteraction,
+  RendererSessionInteraction,
 } from "@volli/shared";
 import { errorMessage } from "@volli/shared";
 import type { DynamicToolUIPart, UIMessage } from "ai";
@@ -109,7 +109,7 @@ import {
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useUiStore } from "@renderer/stores/ui";
 
-const NO_INTERACTIONS: readonly SessionInteraction[] = [];
+const NO_INTERACTIONS: readonly RendererSessionInteraction[] = [];
 const NO_QUEUE: readonly QueuedMessage[] = [];
 const NO_HELD: readonly HeldMessage[] = [];
 const NO_MODELS: readonly ModelAccessModel[] = [];
@@ -757,9 +757,9 @@ const MESSAGE_GAP = "flex flex-col gap-4";
 export interface TurnContext {
   onOpenFile(path: string): void;
   /** Every interaction opened this Session, for the receipts they left behind. */
-  interactions: ReadonlyMap<string, SessionInteraction>;
+  interactions: ReadonlyMap<string, RendererSessionInteraction>;
   /** The ones still open, so a gated row can draw the card it is waiting on. */
-  open: readonly SessionInteraction[];
+  open: readonly RendererSessionInteraction[];
   /** The ids with a decision in flight — one card in flight is not all of them. */
   resolving: ReadonlySet<string>;
   onResolve(interactionId: string, submission: InteractionSubmission): Promise<boolean>;
