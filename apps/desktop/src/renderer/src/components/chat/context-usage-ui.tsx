@@ -78,64 +78,142 @@ export const ContextUsagePill = React.memo(function ContextUsagePill({
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" side="top" className="w-64 p-3">
-        <div className="flex items-baseline justify-between gap-2">
-          <span className="text-ui font-medium">Context</span>
-          <span className="text-label tabular-nums text-muted-foreground">
-            {usage.contextWindow === null
-              ? `${formatTokens(usage.usedTokens)} tokens`
-              : `${formatTokens(usage.usedTokens)} of ${formatTokens(usage.contextWindow)} · ${percent}`}
-          </span>
-        </div>
-
-        {/* The window as a surface. Each cell is 1% and carries its bucket's
-            name on hover; the cells run in segment order so a bucket is one
-            contiguous region rather than confetti. */}
-        <div role="img" aria-label={summary} className="mt-2.5 grid grid-cols-10 gap-0.5">
-          {keyedCells(cells).map((cell) => (
-            <div
-              key={cell.key}
-              title={cellTitle(cell.id, byId, free)}
-              className={cn("aspect-square rounded-[2px]", SEGMENT_CELL[cell.id])}
-            />
-          ))}
-        </div>
-
-        <ul className="mt-2.5 space-y-1">
-          {usage.segments.map((segment) => (
-            <li key={segment.id} className="flex items-center gap-2 text-ui">
-              <span
-                aria-hidden
-                className={cn("size-2 shrink-0 rounded-[2px]", SEGMENT_CELL[segment.id])}
-              />
-              <span className="min-w-0 flex-1 truncate text-muted-foreground">{segment.label}</span>
-              <span className="shrink-0 text-label tabular-nums text-muted-foreground">
-                {formatTokens(segment.tokens)}
-              </span>
-            </li>
-          ))}
-          {free !== null && free > 0 ? (
-            <li className="flex items-center gap-2 text-ui">
-              <span
-                aria-hidden
-                className={cn("size-2 shrink-0 rounded-[2px]", SEGMENT_CELL.free)}
-              />
-              <span className="min-w-0 flex-1 truncate text-muted-foreground">Free</span>
-              <span className="shrink-0 text-label tabular-nums text-muted-foreground">
-                {formatTokens(free)}
-              </span>
-            </li>
-          ) : null}
-        </ul>
-
-        {/* The hedge, said once and where the numbers are: the total is the
-            provider's, the split is ours. */}
-        <p className="mt-2 text-label text-muted-foreground/70">
-          Total measured by the provider; split estimated from the transcript.
-        </p>
+        {/* Inside its own component so Radix's unmount-on-close resets the
+            hover state — a reopened popover must not lead with whatever cell
+            the pointer last left. */}
+        <ContextBreakdown
+          usage={usage}
+          cells={cells}
+          byId={byId}
+          free={free}
+          percent={percent}
+          summary={summary}
+        />
       </PopoverContent>
     </Popover>
   );
 });
+
+/**
+ * The grid and the one line that reads it.
+ *
+ * The permanent legend is gone on purpose: six always-on rows made the
+ * popover taller than the picture it explains, for facts the grid already
+ * encodes in area and color. What replaced it is a single reserved line —
+ * fixed height, so the popover never jumps — that reads whichever bucket the
+ * pointer is over, while every other bucket steps back to 40%. Resting, the
+ * line carries the invitation and the hedge in one sentence; the pill's own
+ * tooltip and aria-label still carry the totals for anyone not hovering.
+ */
+function ContextBreakdown({
+  usage,
+  cells,
+  byId,
+  free,
+  percent,
+  summary,
+}: {
+  usage: SessionContextUsage;
+  cells: readonly (ContextSegmentId | "free")[];
+  byId: ReadonlyMap<string, { label: string; tokens: number }>;
+  free: number | null;
+  percent: string | null;
+  summary: string;
+}) {
+  const [hovered, setHovered] = React.useState<ContextSegmentId | "free" | null>(null);
+  const detail = hovered === null ? null : hoverDetail(hovered, byId, free, usage);
+  return (
+    <>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-ui font-medium">Context</span>
+        <span className="text-label tabular-nums text-muted-foreground">
+          {usage.contextWindow === null
+            ? `${formatTokens(usage.usedTokens)} tokens`
+            : `${formatTokens(usage.usedTokens)} of ${formatTokens(usage.contextWindow)} · ${percent}`}
+        </span>
+      </div>
+
+      {/* The window as a surface. Each cell is 1%; the cells run in segment
+          order so a bucket is one contiguous region rather than confetti, and
+          hovering any cell of it lights the whole region while the rest step
+          back. Mouse-leave on the container, not per cell — the pointer
+          crossing the 2px gutters must not flicker the line off. */}
+      <div
+        role="img"
+        aria-label={summary}
+        className="mt-2.5 grid grid-cols-10 gap-0.5"
+        onMouseLeave={() => setHovered(null)}
+      >
+        {keyedCells(cells).map((cell) => (
+          <div
+            key={cell.key}
+            onMouseEnter={() => setHovered(cell.id)}
+            className={cn(
+              "aspect-square rounded-[2px] transition-opacity duration-100",
+              SEGMENT_CELL[cell.id],
+              hovered !== null && hovered !== cell.id && "opacity-40",
+            )}
+          />
+        ))}
+      </div>
+
+      {/* One line, always the same height. Resting it is the invitation and
+          the hedge; hovering it is the hovered bucket's legend row. */}
+      <div className="mt-2.5 flex h-4 items-center gap-2">
+        {detail === null ? (
+          <span className="min-w-0 truncate text-label text-muted-foreground/70">
+            Hover the grid — the split is estimated
+          </span>
+        ) : (
+          <>
+            <span
+              aria-hidden
+              className={cn("size-2 shrink-0 rounded-[2px]", SEGMENT_CELL[detail.id])}
+            />
+            <span className="min-w-0 flex-1 truncate text-ui text-muted-foreground">
+              {detail.label}
+            </span>
+            <span className="shrink-0 text-label tabular-nums text-muted-foreground">
+              {detail.amount}
+            </span>
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
+/**
+ * The hovered bucket as a legend row: free is a measured count, every spent
+ * bucket is the estimate it is, marked with the ~ the resting line explains.
+ */
+function hoverDetail(
+  hovered: ContextSegmentId | "free",
+  byId: ReadonlyMap<string, { label: string; tokens: number }>,
+  free: number | null,
+  usage: SessionContextUsage,
+): { id: ContextSegmentId | "free"; label: string; amount: string } | null {
+  const total = usage.contextWindow ?? usage.usedTokens;
+  if (hovered === "free") {
+    return free === null || free <= 0
+      ? null
+      : { id: "free", label: "Free", amount: withShare(formatTokens(free), free, total) };
+  }
+  const segment = byId.get(hovered);
+  return segment === undefined
+    ? null
+    : {
+        id: hovered,
+        label: segment.label,
+        amount: withShare(`~${formatTokens(segment.tokens)}`, segment.tokens, total),
+      };
+}
+
+/** "~23k · 12%" — the count, then its share of the window when one is known. */
+function withShare(count: string, tokens: number, total: number): string {
+  if (total <= 0) return count;
+  return `${count} · ${formatPercent(tokens / total)}`;
+}
 
 /**
  * A 12px donut, drawn in `currentColor` so the pill's tone escalation carries
@@ -207,14 +285,4 @@ function keyedCells(
     seen.set(id, ordinal);
     return { key: `${id}:${ordinal}`, id };
   });
-}
-
-function cellTitle(
-  id: ContextSegmentId | "free",
-  segments: ReadonlyMap<string, { label: string; tokens: number }>,
-  free: number | null,
-): string {
-  if (id === "free") return `Free — ${formatTokens(free ?? 0)} tokens`;
-  const segment = segments.get(id);
-  return segment === undefined ? "" : `${segment.label} — ~${formatTokens(segment.tokens)} tokens`;
 }
