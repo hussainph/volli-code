@@ -5,10 +5,9 @@ import {
   createSessionRouter,
   RpcDiagnosticLog,
   sanitizeDiagnosticText,
-  type ProjectSessionStartInput,
   type SessionAttachInput,
+  type SessionCreateInput,
   type SessionCreateResult,
-  type TicketSessionStartInput,
 } from "@volli/session-rpc";
 import type { SessionRuntime } from "@volli/session-engine";
 import type { ModelAccessSnapshot, ModelSelection, SessionStartResult } from "@volli/shared";
@@ -102,12 +101,9 @@ export interface RegisterSessionRpcIpcOptions {
   inspectModelAccess?: (input: { refresh?: boolean }) => Promise<ModelAccessSnapshot>;
   readDefaultModelSelection?: () => ModelSelection | null;
   writeDefaultModelSelection?: (selection: ModelSelection) => void | Promise<void>;
-  startTicketSession?: (input: TicketSessionStartInput) => Promise<SessionStartResult>;
-  createTicketSession?: (input: TicketSessionStartInput) => Promise<SessionCreateResult>;
-  attachTicketSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
-  startProjectSession?: (input: ProjectSessionStartInput) => Promise<SessionStartResult>;
-  createProjectSession?: (input: ProjectSessionStartInput) => Promise<SessionCreateResult>;
-  attachProjectSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
+  /** Create-only (no attach): the renderer's optimistic chat-open — see the Sessions facade. */
+  createSession?: (input: SessionCreateInput) => Promise<SessionCreateResult>;
+  attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
   diagnostics?: RpcDiagnosticLog;
 }
 
@@ -156,12 +152,8 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
           inspectModelAccess: options.inspectModelAccess,
           readDefaultModelSelection: options.readDefaultModelSelection,
           writeDefaultModelSelection: options.writeDefaultModelSelection,
-          startTicketSession: options.startTicketSession,
-          createTicketSession: options.createTicketSession,
-          attachTicketSession: options.attachTicketSession,
-          startProjectSession: options.startProjectSession,
-          createProjectSession: options.createProjectSession,
-          attachProjectSession: options.attachProjectSession,
+          createSession: options.createSession,
+          attachSession: options.attachSession,
           diagnostics,
           transport: "electron-ipc",
         });
@@ -188,7 +180,6 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
       {
         runtime: options.runtime,
         inspectModelAccess: options.inspectModelAccess,
-        startTicketSession: options.startTicketSession,
         diagnostics,
         transport: "electron-ipc",
       },
@@ -288,18 +279,10 @@ async function callProcedure(
       return caller.modelAccess.defaultSelection();
     case "modelAccess.setDefault":
       return caller.modelAccess.setDefault(request.input as never);
-    case "ticketSessions.start":
-      return caller.ticketSessions.start(request.input as never);
-    case "ticketSessions.create":
-      return caller.ticketSessions.create(request.input as never);
-    case "ticketSessions.attach":
-      return caller.ticketSessions.attach(request.input as never);
-    case "projectSessions.start":
-      return caller.projectSessions.start(request.input as never);
-    case "projectSessions.create":
-      return caller.projectSessions.create(request.input as never);
-    case "projectSessions.attach":
-      return caller.projectSessions.attach(request.input as never);
+    case "sessions.create":
+      return caller.sessions.create(request.input as never);
+    case "sessions.attach":
+      return caller.sessions.attach(request.input as never);
     case "session.snapshot":
       return caller.session.snapshot(request.input as never);
     case "session.projection":

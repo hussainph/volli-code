@@ -98,7 +98,7 @@ import {
   type WorkLocationKind,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
-import { STRUCTURED_ADAPTER_ID } from "./structured-sessions";
+import { STRUCTURED_ADAPTER_ID } from "./sessions";
 
 /**
  * The one adapter id. Pi is the structured product's single target executor.
