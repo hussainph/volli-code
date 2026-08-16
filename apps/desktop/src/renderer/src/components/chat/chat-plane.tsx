@@ -747,12 +747,14 @@ function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
 const SEGMENT_GAP = "space-y-4";
 
 /**
- * And the same value between messages, because a harness splits one reply into a
- * message per step. A wider gap here would put 24px between two tool bundles and
- * 12px between two others purely on where the stream was cut — a seam the reader
- * cannot see and must not feel.
+ * And a wider beat between turns. Every boundary at this level is between two
+ * utterances — `groupTurns` collapses a harness's message-per-step splits into
+ * one turn, so the wider gap can never land on an invisible seam the way it
+ * once could between two tool bundles. 16px inside a reply, 24px between
+ * speakers is what gives the feed its paragraph structure: a turn holds
+ * together, and the hand-off to the other voice reads as a break.
  */
-const MESSAGE_GAP = "flex flex-col gap-4";
+const MESSAGE_GAP = "flex flex-col gap-6";
 
 export interface TurnContext {
   onOpenFile(path: string): void;
