@@ -106,36 +106,19 @@ describe("readProjectSkills", () => {
     }
   });
 
-  it("reads the spec metadata map's volli-auto opt-in, quoted or bare", async () => {
+  it("reads nothing Volli-specific out of a SKILL.md — spec fields only", async () => {
+    // The files are hash-pinned installer artifacts; auto-disclosure is a
+    // Volli project setting, never a byte in the skill.
     const dir = makeSkillsDir({
-      quoted: '---\ndescription: q\nmetadata:\n  volli-auto: "true"\n---\nBody',
-      bare: "---\ndescription: b\nmetadata:\n  volli-auto: true\n---\nBody",
+      flagged: '---\ndescription: d\nmetadata:\n  volli-auto: "true"\n---\nBody',
     });
 
     const result = await readProjectSkills(dir);
 
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.skills.map((skill) => [skill.name, skill.autoInvoke])).toEqual([
-        ["bare", true],
-        ["quoted", true],
-      ]);
-    }
-  });
-
-  it("treats anything but a true flag as not opted in, absent field included", async () => {
-    const dir = makeSkillsDir({
-      unflagged: "---\ndescription: n\n---\nBody",
-      declined: '---\ndescription: n\nmetadata:\n  volli-auto: "false"\n---\nBody',
-      mistyped: "---\ndescription: n\nmetadata:\n  volli-auto: 1\n---\nBody",
+    expect(result).toEqual({
+      ok: true,
+      skills: [{ name: "flagged", description: "d", body: "Body" }],
     });
-
-    const result = await readProjectSkills(dir);
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.skills.every((skill) => skill.autoInvoke === undefined)).toBe(true);
-    }
   });
 
   it("derives a description from the body when the frontmatter has none", async () => {

@@ -96,15 +96,18 @@ function fakeGateway(overrides: Partial<ProjectsGateway> = {}): ProjectsGateway 
     project: project({ id: `id-${input.path}`, path: input.path, name: input.name }),
   }));
   const remove = vi.fn<ProjectsGateway["remove"]>(async () => ({ ok: true }));
-  const update = vi.fn<ProjectsGateway["update"]>(async ({ id, baseBranch, setupCommand }) => ({
-    ok: true,
-    project: project({
-      id,
-      path: "/repo",
-      baseBranch,
-      ...(setupCommand !== undefined ? { setupCommand } : {}),
+  const update = vi.fn<ProjectsGateway["update"]>(
+    async ({ id, baseBranch, setupCommand, skillsAutoDisclosure }) => ({
+      ok: true,
+      project: project({
+        id,
+        path: "/repo",
+        baseBranch,
+        ...(setupCommand !== undefined ? { setupCommand } : {}),
+        ...(skillsAutoDisclosure !== undefined ? { skillsAutoDisclosure } : {}),
+      }),
     }),
-  }));
+  );
   const reorder = vi.fn<ProjectsGateway["reorder"]>(async () => ({ ok: true }));
   const setSelection = vi.fn<ProjectsGateway["setSelection"]>(async () => ({ ok: true }));
   return { create, update, remove, reorder, setSelection, ...overrides };
@@ -1035,6 +1038,37 @@ describe("updateBaseBranch", () => {
     const second = await store.getState().updateBaseBranch(original.id, "release/next");
     expect(second).toBe(true);
     expect(store.getState().projects[0]?.baseBranch).toBe("release/next");
+  });
+});
+
+describe("updateSkillsAutoDisclosure", () => {
+  it("re-sends the current baseBranch alongside the new consent and lands the row", async () => {
+    const original = project({ id: "p1", path: "/repo", baseBranch: "release/next" });
+    const gateway = fakeGateway();
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([original], original.id);
+
+    const saved = await store.getState().updateSkillsAutoDisclosure(original.id, true);
+
+    expect(saved).toBe(true);
+    expect(gateway.update).toHaveBeenCalledWith({
+      id: original.id,
+      baseBranch: "release/next",
+      skillsAutoDisclosure: true,
+    });
+    expect(store.getState().projects[0]?.skillsAutoDisclosure).toBe(true);
+  });
+
+  it("is a no-op (no IPC call) for an unknown id", async () => {
+    const only = project({ id: "only", path: "/a" });
+    const gateway = fakeGateway();
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([only], only.id);
+
+    const saved = await store.getState().updateSkillsAutoDisclosure("missing", true);
+
+    expect(saved).toBe(false);
+    expect(gateway.update).not.toHaveBeenCalled();
   });
 });
 

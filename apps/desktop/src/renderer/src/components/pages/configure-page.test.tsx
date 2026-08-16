@@ -28,6 +28,7 @@ describe("ConfigureGeneralSection", () => {
         project={project}
         onSaveBaseBranch={async () => true}
         onSaveSetupCommand={async () => true}
+        onSaveSkillsAutoDisclosure={async () => true}
       />,
     );
 
@@ -38,6 +39,34 @@ describe("ConfigureGeneralSection", () => {
     expect(html).toContain("Save");
     // The project name titles the section.
     expect(html).toContain("Volli Code");
+  });
+
+  it("offers the skills auto-disclosure switch, off for a project that never consented", () => {
+    const html = renderToStaticMarkup(
+      <ConfigureGeneralSection
+        project={project}
+        onSaveBaseBranch={async () => true}
+        onSaveSetupCommand={async () => true}
+        onSaveSkillsAutoDisclosure={async () => true}
+      />,
+    );
+
+    expect(html).toContain("Auto-disclose skills");
+    // Radix Switch renders its state as aria-checked on a button role=switch.
+    expect(html).toContain('aria-checked="false"');
+  });
+
+  it("shows the switch on when the project consented", () => {
+    const html = renderToStaticMarkup(
+      <ConfigureGeneralSection
+        project={{ ...project, skillsAutoDisclosure: true }}
+        onSaveBaseBranch={async () => true}
+        onSaveSetupCommand={async () => true}
+        onSaveSkillsAutoDisclosure={async () => true}
+      />,
+    );
+
+    expect(html).toContain('aria-checked="true"');
   });
 });
 

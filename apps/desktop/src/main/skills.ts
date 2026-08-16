@@ -9,9 +9,11 @@
  * grammar cannot spell is skipped rather than offered unreachably. The
  * frontmatter parses under the same rules as a prompt template — same fence,
  * same description key, same first-line fallback — which is why this module
- * borrows `prompt-templates.ts`'s parser instead of writing a second one. The
- * one extra key read here is the spec's `metadata` map, for the `volli-auto`
- * opt-in ({@link isAutoInvoke}) that puts a skill in the attach-time index.
+ * borrows `prompt-templates.ts`'s parser instead of writing a second one.
+ * Nothing Volli-specific is read out of a SKILL.md, deliberately: the files
+ * are hash-pinned installer artifacts (`skills-lock.json`) and stay fully
+ * spec-neutral — whether a project auto-discloses its skills is a Volli
+ * setting (`Project.skillsAutoDisclosure`), never a byte in the skill.
  *
  * The failure policy is `prompt-templates.ts`'s, verbatim: a missing
  * directory is the normal case and reads as empty, only a directory that
@@ -79,31 +81,14 @@ export async function readProjectSkills(
       // No readable SKILL.md — not a skill, and one loss never costs the rest.
       continue;
     }
-    const { description, metadata, body } = parsePromptTemplateFile(raw);
+    const { description, body } = parsePromptTemplateFile(raw);
     skills.push({
       name: slug,
       description: promptTemplateDescription({ body, frontmatterDescription: description }),
       body,
-      // Set only when true, so a skill that never mentioned the flag reads
-      // exactly as it did before the flag existed.
-      ...(isAutoInvoke(metadata) ? { autoInvoke: true } : {}),
     });
   }
   return { ok: true, skills };
-}
-
-/**
- * The opt-in for the attach-time skills index: frontmatter
- * `metadata.volli-auto: "true"`. The spec types metadata values as strings,
- * so `"true"` is the canonical spelling — but YAML parses an unquoted `true`
- * as a boolean, and an author who wrote the flag either way meant it, so both
- * count. Anything else — absent map, absent key, `"false"`, a number — is
- * not an opt-in.
- */
-function isAutoInvoke(metadata: unknown): boolean {
-  if (typeof metadata !== "object" || metadata === null) return false;
-  const flag = (metadata as Record<string, unknown>)["volli-auto"];
-  return flag === true || flag === "true";
 }
 
 /** ENOENT/ENOTDIR — the directory is absent, which this surface treats as empty. */

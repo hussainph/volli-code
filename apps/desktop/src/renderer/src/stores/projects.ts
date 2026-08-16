@@ -73,6 +73,8 @@ export interface ProjectsGateway {
     baseBranch: string | null;
     /** `undefined` leaves it untouched; `null`/empty clears it (setup step is skipped). */
     setupCommand?: string | null;
+    /** `undefined` leaves it untouched; the per-project skills index consent otherwise. */
+    skillsAutoDisclosure?: boolean;
   }): Promise<ProjectUpdateResult>;
   remove(id: string): Promise<ProjectMutationResult>;
   reorder(orderedIds: string[]): Promise<ProjectMutationResult>;
@@ -139,6 +141,8 @@ interface ProjectsState {
   updateBaseBranch(id: string, baseBranch: string | null): Promise<boolean>;
   /** Settings → Worktrees' setup-command field; leaves `baseBranch` untouched (re-sends the current pinned value). */
   updateSetupCommand(id: string, setupCommand: string | null): Promise<boolean>;
+  /** Configure → General's skills auto-disclosure switch; same re-send discipline as `updateSetupCommand`. */
+  updateSkillsAutoDisclosure(id: string, enabled: boolean): Promise<boolean>;
   removeProject(id: string): Promise<void>;
   /** Optimistic local reorder for live drag feedback; does not persist — see `commitReorder`. */
   reorder(activeId: string, overId: string): void;
@@ -294,6 +298,33 @@ export function createProjectsStore(
           "save project setup command",
           (): Promise<ProjectUpdateResult> =>
             gateway.update({ id, baseBranch: current.baseBranch ?? null, setupCommand }),
+        );
+        if (!result) return false;
+        set({
+          projects: get().projects.map((project) =>
+            project.id === result.project.id ? result.project : project,
+          ),
+        });
+        return true;
+      });
+    },
+
+    async updateSkillsAutoDisclosure(id, enabled) {
+      return queueProjectUpdate(id, async () => {
+        // Re-send discipline is updateSetupCommand's, and for its reason: the
+        // gateway's update is a pinned-fields write, so this save carries the
+        // freshest baseBranch this queue slot can know.
+        const current = get().projects.find((project) => project.id === id);
+        if (!current) return false;
+
+        const result = await writeThrough(
+          "save skills auto-disclosure",
+          (): Promise<ProjectUpdateResult> =>
+            gateway.update({
+              id,
+              baseBranch: current.baseBranch ?? null,
+              skillsAutoDisclosure: enabled,
+            }),
         );
         if (!result) return false;
         set({

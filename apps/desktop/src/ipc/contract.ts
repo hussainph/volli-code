@@ -79,6 +79,11 @@ export interface ProjectUpdateInput {
   baseBranch: string | null;
   /** `undefined` (untouched), `null` (clear), or a `string` (set) — the same shape as ticket-update's worktree-identity fields. */
   setupCommand?: string | null;
+  /**
+   * `undefined` (untouched) or the new consent — whether Session starts
+   * compose the project's skills index into the system prompt (migration 020).
+   */
+  skillsAutoDisclosure?: boolean;
 }
 
 /** `{ projectId }` — shared by every project-scoped read (session list, worktree branches). */

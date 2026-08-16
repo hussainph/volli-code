@@ -47,6 +47,15 @@ export interface Project {
    * gradient and overriding the mode are independent things to want.
    */
   themeAppearance?: Appearance | null;
+  /**
+   * Whether structured Session starts compose the project's `.agents/skills/`
+   * metadata index into the system prompt (migration 020). Volli-owned consent,
+   * defaulting off, and deliberately never a repository file: a committed
+   * opt-in would let a cloned repo authorize its own skills' injection.
+   * Flipping it governs the NEXT start — running Sessions keep the prompt
+   * their durable record already fixed.
+   */
+  skillsAutoDisclosure?: boolean;
   /** Index into {@link PROJECT_COLORS}, assigned round-robin at creation. */
   colorIndex: number;
   /** Rail order; dense, rewritten `0..n-1` whenever the rail is reordered. */

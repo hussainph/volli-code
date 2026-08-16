@@ -659,9 +659,11 @@ app.whenReady().then(async () => {
    * How a Session start turns skills into its durable prompt resources
    * (`SessionSkillPorts`): resolve reads `.agents/skills/` off the project's
    * main checkout and refuses the start when a named skill is not there;
-   * index answers the opt-in metadata disclosure best-effort — no project, no
-   * readable directory, nothing opted in are all simply no index, because an
-   * ambient nicety must never brick a chat; record writes everything resolved
+   * index answers the metadata disclosure best-effort and only under the
+   * project's own consent (`skillsAutoDisclosure`, migration 020) — consent
+   * withheld, no project, no readable directory, no skills are all simply no
+   * index, because a disclosure nicety must never brick a chat; record writes
+   * everything resolved
    * as the Session's own input event, ahead of the first attachment, which is
    * the record `resolveRuntimeContext` composes the system prompt from ever
    * after.
@@ -699,7 +701,10 @@ app.whenReady().then(async () => {
           },
           index: async (projectId, injectedNames) => {
             const project = getProjectById(sessionDb, projectId);
-            if (!project) return null;
+            // The per-project consent gate (migration 020). Volli-owned state,
+            // never a repo file, so a cloned repository cannot authorize its
+            // own skills' disclosure by committing a flag beside them.
+            if (!project || project.skillsAutoDisclosure !== true) return null;
             const read = await readProjectSkills(projectSkillsDir(project.path));
             if (!read.ok) return null;
             return skillsIndexResource(read.skills, injectedNames);

@@ -71,6 +71,8 @@ export interface ExportProject {
    */
   themeCanvas: string | null;
   themeAppearance: string | null;
+  /** Per-project skills auto-disclosure consent (migration 020), as the row's 0/1. */
+  skillsAutoDisclosure: number;
   colorIndex: number;
   sortOrder: number;
   rowVersion: number;
@@ -245,6 +247,7 @@ interface ProjectRow {
   theme_seed: string | null;
   theme_canvas: string | null;
   theme_appearance: string | null;
+  skills_auto_disclosure: number;
   color_index: number;
   sort_order: number;
   row_version: number;
@@ -281,6 +284,7 @@ function exportProjects(db: Database.Database): ExportProject[] {
     themeSeed: row.theme_seed,
     themeCanvas: row.theme_canvas,
     themeAppearance: row.theme_appearance,
+    skillsAutoDisclosure: row.skills_auto_disclosure,
     colorIndex: row.color_index,
     sortOrder: row.sort_order,
     rowVersion: row.row_version,

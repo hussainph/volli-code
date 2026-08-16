@@ -41,19 +41,11 @@ import {
  */
 const MAX_TEMPLATES_PER_DIR = 200;
 
-/** The frontmatter fence. */
+/** The frontmatter fence, and the only key this format reads. */
 const FRONTMATTER_FENCE = "---";
 
 interface Frontmatter {
   readonly description: unknown;
-  /**
-   * The Agent Skills spec's `metadata` map, raw. Templates never carry one —
-   * Pi's format has no such key — but the skills reader shares this parser,
-   * and the spec names `metadata` as the extension point where a client's own
-   * flags live (`skills.ts` reads `volli-auto` out of it). Unvalidated here:
-   * what the map means is the caller's question.
-   */
-  readonly metadata: unknown;
   readonly body: string;
 }
 
@@ -72,19 +64,19 @@ interface Frontmatter {
 export function parsePromptTemplateFile(raw: string): Frontmatter {
   const normalized = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   if (!normalized.startsWith(FRONTMATTER_FENCE))
-    return { description: undefined, metadata: undefined, body: normalized };
+    return { description: undefined, body: normalized };
   const endIndex = normalized.indexOf(`\n${FRONTMATTER_FENCE}`, FRONTMATTER_FENCE.length);
-  if (endIndex === -1) return { description: undefined, metadata: undefined, body: normalized };
+  if (endIndex === -1) return { description: undefined, body: normalized };
   const body = normalized.slice(endIndex + 4).trim();
   try {
     const frontmatter: unknown = parseYaml(normalized.slice(4, endIndex));
-    const record =
+    const description =
       typeof frontmatter === "object" && frontmatter !== null
-        ? (frontmatter as Record<string, unknown>)
+        ? (frontmatter as Record<string, unknown>)["description"]
         : undefined;
-    return { description: record?.["description"], metadata: record?.["metadata"], body };
+    return { description, body };
   } catch {
-    return { description: undefined, metadata: undefined, body };
+    return { description: undefined, body };
   }
 }
 

@@ -614,6 +614,22 @@ ALTER TABLE projects ADD COLUMN runtime_preferences TEXT
   CHECK (runtime_preferences IS NULL OR json_valid(runtime_preferences));
 `;
 
+/**
+ * Migration 020: per-project skills auto-disclosure — whether structured
+ * Session starts compose the `.agents/skills/` metadata index into the system
+ * prompt. A Volli-owned column and deliberately NOT a repo file: a committed
+ * opt-in would let a cloned repository authorize its own skills' injection by
+ * shipping the flag beside them, and the vendored files themselves are
+ * hash-pinned (`skills-lock.json`) so nothing Volli-specific may live inside
+ * them. Default 0 — disclosure is explicit consent, never a default — and the
+ * CHECK keeps the column an honest boolean the way 019's CHECK keeps its
+ * column honest JSON.
+ */
+const MIGRATION_020_PROJECT_SKILLS_AUTO_DISCLOSURE = `
+ALTER TABLE projects ADD COLUMN skills_auto_disclosure INTEGER NOT NULL DEFAULT 0
+  CHECK (skills_auto_disclosure IN (0, 1));
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -701,6 +717,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 19,
     name: "projects.runtime_preferences — the per-project override of the global runtime record",
     sql: MIGRATION_019_PROJECT_RUNTIME_PREFERENCES,
+  },
+  {
+    version: 20,
+    name: "projects.skills_auto_disclosure — per-project consent to the attach-time skills index",
+    sql: MIGRATION_020_PROJECT_SKILLS_AUTO_DISCLOSURE,
   },
 ];
 
