@@ -163,6 +163,7 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/quit-gate.ts",
         "**/src/main/shutdown-deadline.ts",
         "**/src/main/fs-deps.ts",
+        "**/src/main/auto-update.ts",
         "**/src/main/ghostty-config.ts",
         "**/src/main/harness-ipc.ts",
         "**/src/main/session-runtime/boot-recovery.ts",

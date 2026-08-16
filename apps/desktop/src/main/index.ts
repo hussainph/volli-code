@@ -10,6 +10,7 @@ import {
   session,
   shell,
 } from "electron";
+import { autoUpdater } from "electron-updater";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { realpath } from "node:fs/promises";
@@ -126,6 +127,7 @@ import {
   type AgentToolsConsentStatus,
 } from "./agent-tools";
 import { getAllAppState, setAppState } from "./db/app-state-repo";
+import { readAllowPrerelease, startAutoUpdate } from "./auto-update";
 import {
   PACKAGED_RENDERER_ENTRY_URL,
   PACKAGED_RENDERER_HOST,
@@ -1202,6 +1204,21 @@ app.whenReady().then(async () => {
     mainWindow.webContents.once("did-finish-load", () => retention.start());
     app.on("browser-window-focus", () => retention.triggerNow());
   }
+
+  // Auto-update (VC-24): packaged builds poll GitHub Releases ~30s after
+  // boot and every ~4h after, download in the background, and install on
+  // quit (Squirrel.Mac applies the staged update at the next launch) — one
+  // native notification per downloaded version, failures only ever log.
+  // Wired OUTSIDE the dbHandle.ok block: a broken db must not also strand
+  // the install on a stale build (an update may well be what fixes it), so
+  // that case just falls back to the default prerelease policy (off).
+  startAutoUpdate({
+    isPackaged: app.isPackaged,
+    updater: autoUpdater,
+    allowPrerelease: dbHandle.ok ? readAllowPrerelease(dbHandle.db) : false,
+    notify: (title, body) => new Notification({ title, body }).show(),
+    log: (line) => console.info(line),
+  });
 
   let shimPath = join(runtimePaths.binDir, "volli");
 
