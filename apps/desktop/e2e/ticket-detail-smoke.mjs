@@ -35,8 +35,10 @@
  *   6. Resident keep-alive — navigating ticket → board → ticket keeps the SAME
  *      terminal canvas DOM node mounted (marked node survives) and the shell
  *      alive (the overlay hosts terminals, the detail is only a view over it);
- *      the ACTIVE band's meta line carries the truthful source ("Shell", never
- *      the default Claude harness) — the one surface that still prints it.
+ *      the ACTIVE band row's hover `title` carries the truthful source
+ *      ("Shell", never the default Claude harness) — the one surface that
+ *      still carries it — while its meta line names the ticket's column
+ *      ("Doing"), which is what the source label used to sit in front of.
  *   7. Session rename — double-click the session tab, type, Enter; the new title
  *      shows on both the tab and the rail row.
  *   8. Icon-mode rail — Sessions is the default mode; Properties renders
@@ -189,7 +191,8 @@ const SESSION_INITIAL = "Session 1";
 const SESSION_RENAMED = "Renamed session";
 
 /**
- * A sidebar session row's meta line (`VC-1 · Shell · Working`).
+ * A sidebar session row's meta line (`VC-1 · Doing · Working` — the ticket's
+ * status, with the source label moved to the row's hover `title`).
  *
  * Everything dimmed in the row promotes together under decision #74's vibrancy
  * rule, so the hook class is `session-row-dim` and the title carries it too —
@@ -893,9 +896,9 @@ async function main() {
         // it. So both halves here are absence assertions, and absence alone
         // cannot tell a rail that resolves the right harness from one that
         // resolves none. The positive half — that the source resolved, and
-        // resolved truthfully — moves to check 6, at the ACTIVE band's second
-        // line (`session-band-row.tsx:147`), which is the one surface in the
-        // app that still prints it.
+        // resolved truthfully — moves to check 6, at the ACTIVE band row's
+        // hover `title` (`session-band-row.tsx`), which is the one surface in
+        // the app that still carries it.
         const noFalseClaude = (await aside.getByText("Claude Code", { exact: true }).count()) === 0;
         const noHarnessInRoster = (await aside.getByText("Shell", { exact: true }).count()) === 0;
 
@@ -967,16 +970,25 @@ async function main() {
         await page.mouse.move(0, 0);
         await sleep(200);
 
-        // THE TRUTHFUL SOURCE LABEL, at the surface that still prints it.
+        // THE TRUTHFUL SOURCE LABEL, at the surface that still carries it.
         // Check 5 can only say the rail invents nothing; a rail that drew the
         // row and the chip while resolving no harness at all would satisfy it.
         // This is the positive half: a Session booted by the rail's Terminal
-        // control resolves to `Shell`, not to the default Claude harness, and
-        // the meta line is `VC-1 · Shell · <activity>` (`session-band-row.tsx`
-        // joins them with `·`, so this is a substring question, not an exact
-        // one).
+        // control resolves to `Shell`, not to the default Claude harness.
+        //
+        // It reads the row's hover `title`, not its meta line. That line's
+        // first slot now holds the ticket's STATUS — the fact a band of twenty
+        // Sessions is actually scanned by — and the source moved to the tooltip
+        // when the status took the slot (`session-band-row.tsx`). Both halves
+        // are asserted, because either one alone can pass while the change is
+        // half-made: the source still has to resolve truthfully, AND it has to
+        // have really been displaced by `Doing`, the column this ticket was
+        // moved to above. Substring questions on both — the row joins its
+        // tokens with `·`.
         const metaText = (await activeSessionRow.locator(SESSION_ROW_META).textContent()) ?? "";
-        const truthfulSource = metaText.includes("Shell") && !metaText.includes("Claude Code");
+        const rowTitle = (await activeSessionRow.getAttribute("title")) ?? "";
+        const truthfulSource = rowTitle.includes("Shell") && !rowTitle.includes("Claude Code");
+        const statusInMeta = metaText.includes("Doing") && !metaText.includes("Shell");
 
         const subtextBefore = await activeSessionRow
           .locator(SESSION_ROW_META)
@@ -1028,10 +1040,11 @@ async function main() {
           !!nodeSurvived &&
           !!shellAlive &&
           subtextHighlighted &&
-          truthfulSource;
+          truthfulSource &&
+          statusInMeta;
         return {
           ok,
-          detail: `marked=${marked} exactTab=${!!exactTabSelected} nodeSurvived=${!!nodeSurvived} shellAlive=${!!shellAlive} truthfulSource=${truthfulSource} meta=${JSON.stringify(metaText)} subtextBefore=${subtextBefore} subtext=${JSON.stringify(subtextHighlight)}`,
+          detail: `marked=${marked} exactTab=${!!exactTabSelected} nodeSurvived=${!!nodeSurvived} shellAlive=${!!shellAlive} truthfulSource=${truthfulSource} statusInMeta=${statusInMeta} meta=${JSON.stringify(metaText)} title=${JSON.stringify(rowTitle)} subtextBefore=${subtextBefore} subtext=${JSON.stringify(subtextHighlight)}`,
         };
       },
     );

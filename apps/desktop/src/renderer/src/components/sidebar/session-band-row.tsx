@@ -26,6 +26,7 @@ import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import {
   displayTicketId,
+  TICKET_STATUS_LABELS,
   type ChatWaitingReason,
   type SessionActivityState,
   type Ticket,
@@ -147,14 +148,34 @@ function attentionLine(attention: SessionAttention, waitingOn: ChatWaitingReason
   return waitingOn === null ? "Waiting for you" : WAITING_COPY[waitingOn];
 }
 
-/** The Active row's second line: why a human is needed, else what is running. */
+/**
+ * The meta line's first slot: WHERE the Session lives, not what launched it.
+ *
+ * This slot used to hold the source label — the harness name, or `Chat · Live`
+ * for an attached chat. Neither is what a reader scans this band for. A band
+ * holding twenty Sessions is parsed by which ticket column each one sits in,
+ * and "Live" in particular said only what the Active band already says by
+ * being the Active band. The ticket's status is the fact that makes the list
+ * sortable by eye, so it takes the slot; the harness moves to the row's
+ * `title`, where a question asked about ONE row belongs.
+ *
+ * A ticketless row — a project scratch Session, or one whose ticket has left
+ * the board — has no column to name and keeps its source. That is also the one
+ * place `Chat · Live` still earns its keep: with no status to say it better,
+ * whether the attachment is still open is the only thing worth saying.
+ */
+function placeLine(row: ActiveSessionRow): string {
+  return row.ticket === null ? row.source : TICKET_STATUS_LABELS[row.ticket.status];
+}
+
+/** The Active row's second line: why a human is needed, else where it lives and what is running. */
 function stateLine(row: ActiveSessionRow): string {
   if (row.attention !== null) return attentionLine(row.attention, row.waitingOn);
   // A session whose hooks never arrived states that, in place of an activity it
   // would only be guessing at. Every other row keeps its activity word: a Known
   // harness never promised to report, so inference there is not news.
-  if (row.activitySource === "silent") return `${row.source} · Not reporting`;
-  return `${row.source} · ${ACTIVITY_LABEL[row.activity]}`;
+  if (row.activitySource === "silent") return `${placeLine(row)} · Not reporting`;
+  return `${placeLine(row)} · ${ACTIVITY_LABEL[row.activity]}`;
 }
 
 /**
@@ -188,6 +209,13 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
         size="lg"
         isActive={selected}
         onClick={() => onSelect(row)}
+        // The source label's new home, now that the ticket's status holds the
+        // meta line's first slot. Native `title` rather than the button's
+        // `tooltip` prop: that one is Radix and `hidden` unless the sidebar is
+        // COLLAPSED (`ui/sidebar.tsx`), so it would never fire on the expanded
+        // band this row lives in. The full title rides along because the
+        // visible one truncates.
+        title={`${row.title}\n${row.source}`}
         // Two lines at the tighter padding: long titles stay readable and the
         // band stops out-massing the board it sits beside.
         className="h-auto min-h-9 items-start gap-2 py-1 [&:hover_.session-row-dim]:text-foreground [&[data-active=true]_.session-row-dim]:text-foreground"
