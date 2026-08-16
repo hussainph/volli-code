@@ -76,12 +76,10 @@ const COPY_FEEDBACK_MS = 1200;
 
 export function ModelAccessAccounts({
   providers,
-  loading,
   onRecover,
   onChanged,
 }: {
   providers: readonly ModelAccessProvider[];
-  loading: boolean;
   /** The `retry` half of recovery — a refresh of the whole snapshot. */
   onRecover(provider: ModelAccessProvider): void | Promise<void>;
   /** A credential was stored or removed; the snapshot no longer describes the profile. */
@@ -94,7 +92,6 @@ export function ModelAccessAccounts({
         <ProviderAccount
           key={provider.id}
           provider={provider}
-          loading={loading}
           onRecover={onRecover}
           onChanged={onChanged}
         />
@@ -105,12 +102,10 @@ export function ModelAccessAccounts({
 
 function ProviderAccount({
   provider,
-  loading,
   onRecover,
   onChanged,
 }: {
   provider: ModelAccessProvider;
-  loading: boolean;
   onRecover(provider: ModelAccessProvider): void | Promise<void>;
   onChanged(): void | Promise<void>;
 }) {
@@ -134,7 +129,12 @@ function ProviderAccount({
     [],
   );
 
-  const busy = loading || starting || signingOut;
+  // A global snapshot reload does not gate this row. The sign-in methods it
+  // needs are already in the rendered snapshot, so greying every row for the
+  // whole inspection — which can hang on a single provider — was the bug. Only
+  // this row's own in-flight work, starting a sign-in or signing out, disables
+  // its actions; sign-out and cancel are unchanged.
+  const busy = starting || signingOut;
 
   async function startSignIn(type: ModelAccessSignInType): Promise<void> {
     if (client === null || session !== null || starting) return;
