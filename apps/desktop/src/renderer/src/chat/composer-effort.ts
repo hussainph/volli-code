@@ -175,37 +175,89 @@ export function readEffortPointer(offsetX: number, track: EffortTrack): EffortRe
 }
 
 /**
- * The vibrancy ramp's two ends, as a multiplier on the accent's own CHROMA.
+ * The vibrancy ramp's two ends, as the share of the ACCENT in the track.
  *
- * The floor is a heavily desaturated ember — warm grey rather than grey, so a
- * low-effort wash still reads as the accent's family and never as a disabled
- * control. The ceiling is the accent at full strength, exactly as the canvas
- * derived it. Nothing in between is a colour anyone authored: the whole ramp is
- * one token seen at seven saturations.
+ * The wash is `color-mix(in oklab, var(--primary) N%, var(--border-strong))`:
+ * the pill's own unfilled colour with the accent stirred into it. So the floor
+ * is the track barely tinted, the ceiling is half accent, and 0% would be the
+ * groove exactly — the ramp starts where the control already is instead of at
+ * some colour that had to be picked. Nothing in it is authored; it is two live
+ * tokens and one number.
  *
- * WHY CHROMA AND NOT ALPHA. The obvious ramp is opacity — 50 up to 90 on the
- * alpha ladder — and it was built first and measured, and it fails. Both of
- * this pill's labels sit ON the wash at the top stop, and pushing more ember
- * under them moves the two appearances in OPPOSITE directions: light ink over a
- * strengthening mid-tone loses contrast while dark ink gains it. Measured, at
- * `--primary` 90%: the value label reads 2.90:1 in dark against 6.33:1 in
- * light, so the alpha ramp is a WCAG AA failure in exactly one appearance and
- * comfortable in the other.
+ * WHY A MIX RATHER THAN THE ALPHA IT REPLACES. Both put the accent over the
+ * track, but only one of them can be made vibrant, and the reason is where the
+ * contrast budget goes. A translucent wash spends the budget on LIGHTNESS —
+ * every extra percent of alpha drags the ground toward the accent's own
+ * lightness, which is mid, which is the direction the ink cannot afford in
+ * either appearance — and it takes chroma along for the ride at exactly the
+ * same rate, so the most saturated wash the labels can stand is a mid-tone
+ * brown. Measured on the shipped ramp, over its true ground: the value label
+ * read 4.61 → 4.74:1 in dark, already inside a quarter-point of AA, on a wash
+ * whose top stop was `#8b5641`. There was no headroom left to be vibrant with.
  *
- * A chroma ramp has no such cost, and the reason is structural rather than
- * lucky. `oklch(from … l calc(c * K) h)` holds L and H fixed and moves only C,
- * so every rung of the ramp has the SAME perceptual lightness — and contrast is
- * a lightness relationship. Measured across the whole ramp the value label
- * moves 4.63 → 4.78 in dark and 8.01 → 7.76 in light: a quarter of a point,
- * where the alpha ramp cost nearly two. The eye still reads a warm grey turning
- * into full ember, which is what "more vibrant" actually means.
+ * A mix separates the two. `color-mix` lands the lightness — toward the track,
+ * which is the safe direction in BOTH appearances because the track is a colour
+ * the ink already stands on — and then {@link EFFORT_CHROMA_GAIN} puts the
+ * chroma back on top of that lightness, where it costs nothing. Same measurement
+ * on the same labels: 7.14 → 5.05:1 in dark and 9.13 → 7.58:1 in light, a
+ * HIGHER floor than the old ceiling, on a top stop of `#a53e0b` — a burnt
+ * orange rather than a brown.
+ *
+ * WHY THE CEILING IS 50% AND NOT MORE. Dark binds, as it always does here, and
+ * it binds late enough to be worth measuring: the top stop reads 5.34:1 at 45%,
+ * 5.05:1 at 50%, 4.71:1 at 55% and 4.41:1 at 60%, so AA's 4.5 line sits between
+ * 55 and 60 and 50 keeps half a point in hand for a canvas that derives a
+ * lighter groove than this one. Light is nowhere near it (7.58:1 at 50%).
  */
-export const EFFORT_CHROMA_FLOOR = 0.3;
-export const EFFORT_CHROMA_CEILING = 1;
+export const EFFORT_MIX_FLOOR = 0.2;
+export const EFFORT_MIX_CEILING = 0.5;
 
 /**
- * How saturated the wash is at a given stop, as a multiplier on the accent's
- * chroma.
+ * How much of the chroma the mix took away is put back at the top of the ramp.
+ *
+ * Mixing the accent into the track cuts its chroma in proportion, so at the
+ * ceiling the wash carries about half the accent's saturation and all of the
+ * lightness it needs. `oklch(from <mix> l calc(c * 2) h)` reads the mixed colour
+ * back, holds the lightness the mix just solved and doubles the chroma only.
+ * That is the whole trick, and it is why this ramp can be saturated at all.
+ *
+ * Doubling slightly OVERSHOOTS the accent, because the track is not neutral and
+ * the mix picks up its chroma too: measured on the shipped canvas, the top stop
+ * lands at C 0.147 in dark and C 0.173 in light against the accent's own 0.129.
+ * That overshoot is wanted — it is the difference between the top of the ramp
+ * reading as the accent and reading as heat — and it is bounded, which the next
+ * paragraph is about.
+ *
+ * IT CANNOT BLOW THE GAMUT, WHICH THE OBVIOUS VERSION OF THIS CAN. Multiplying
+ * `var(--primary)`'s chroma directly is the same idea and it is unshippable:
+ * `--primary` is whatever the accent math derived, at vibrancy 1 it IS the
+ * authored seed, and several shipped seeds sit near the sRGB edge already —
+ * measured, `oklch(from #e8652a l calc(c * 1.5) h)` clips and `#f2d060` and
+ * `#e05561` clip too, which collapses the top rungs into one colour on exactly
+ * the canvases that start most saturated. Doubling AFTER the mix starts from
+ * roughly half the chroma and at a lightness pulled toward the track, which is
+ * away from the gamut's own ceiling on both counts: checked by driving each of
+ * the nine coloured swatches through the whole seven-rung ramp, every seed
+ * produces seven separable colours with none of them stuck at an edge.
+ */
+export const EFFORT_CHROMA_GAIN = 2;
+
+/**
+ * Where a stop sits on the ramp: 0 at the first, 1 at the last.
+ *
+ * A one-stop set reads as the TOP rather than as 0/0, and that is not the same
+ * clamp {@link effortStopPercent} makes: a lone stop has nowhere to sit on a
+ * track, so it is drawn at the left end — but it has nothing to be less vibrant
+ * *than*, and a lone control painted at the dimmest end would read as disabled.
+ */
+function effortTravel(index: number, stops: number): number {
+  const last = stops - 1;
+  if (last <= 0) return 1;
+  return Math.min(last, Math.max(0, index)) / last;
+}
+
+/**
+ * How much accent is in the wash at a given stop, as a `color-mix` share.
  *
  * Effort's meaning is magnitude, and until now the only thing carrying that was
  * position: at four stops the difference between `low` and `medium` was 33% of
@@ -217,11 +269,47 @@ export const EFFORT_CHROMA_CEILING = 1;
  * across seven stops leaves four pairs of adjacent stops looking identical, and
  * "adjacent stops look the same" is the complaint the redesign started from.
  */
+export function effortWashMix(index: number, stops: number): number {
+  const travel = effortTravel(index, stops);
+  return EFFORT_MIX_FLOOR + (EFFORT_MIX_CEILING - EFFORT_MIX_FLOOR) * travel;
+}
+
+/**
+ * The chroma multiplier applied to the mix at a given stop — 1 at the floor,
+ * {@link EFFORT_CHROMA_GAIN} at the ceiling.
+ *
+ * It ramps rather than sitting at the ceiling throughout, and that is the
+ * difference between a ramp and a tint. Held at 2 the bottom stop comes back
+ * fully saturated too — measured in light, where the track carries chroma of its
+ * own, the floor lands on `#f49773`, a vivid orange that is only slightly paler
+ * than the top — and the control then says "hot" at every setting. Ramped, the
+ * floor is the track's own colour barely warmed and the two channels move
+ * together: at the bottom of the range there is little accent in the wash and
+ * what there is stays quiet; at the top there is a lot of it and it is at full
+ * strength.
+ */
 export function effortChroma(index: number, stops: number): number {
-  const last = stops - 1;
-  if (last <= 0) return EFFORT_CHROMA_CEILING;
-  const travel = Math.min(last, Math.max(0, index)) / last;
-  return EFFORT_CHROMA_FLOOR + (EFFORT_CHROMA_CEILING - EFFORT_CHROMA_FLOOR) * travel;
+  const travel = effortTravel(index, stops);
+  return 1 + (EFFORT_CHROMA_GAIN - 1) * travel;
+}
+
+/**
+ * How hard the control radiates at a given stop, as an opacity for the ember
+ * halo the pill throws onto the popover behind it.
+ *
+ * SQUARED, where the two ramps above are straight lines, and for a reason the
+ * ramps do not have. The mix and the gain are read by COMPARISON — a stop is
+ * only ever hotter than the one beside it, so every pair has to differ and a
+ * straight line is the only curve that guarantees it. A halo is read on its
+ * own, in one glance, against no neighbour: it has to be absent at the bottom
+ * of the range rather than merely dimmer, or a control set to `low` sits there
+ * glowing at a third of `max` and the top of the range stops meaning anything.
+ * Squaring spends half the travel getting to a quarter of the strength and the
+ * top of the range on the rest of it.
+ */
+export function effortGlow(index: number, stops: number): number {
+  const travel = effortTravel(index, stops);
+  return travel * travel;
 }
 
 /** Where a stop sits along the track, as a percentage of its width. */
