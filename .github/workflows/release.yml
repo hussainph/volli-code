@@ -36,6 +36,16 @@ name: Release
 #     to draft, and its publisher reuses an existing draft as-is, so a
 #     drafted canary can never go live automatically — learned from the
 #     v0.1.0-canary.3 run.)
+#
+# The release itself is pre-created in a workflow step rather than left to
+# electron-builder: electron-publish races its own concurrent publisher
+# instances on release creation, which produced duplicate drafts with the
+# artifacts split across them (v0.1.0-canary.3) and 422 already_exists
+# failures for live prereleases (v0.1.0-canary.4). With the release seeded,
+# every publisher instance finds and reuses it and only uploads assets.
+# (Prerelease reuse has a 2h published_at window in electron-publish —
+# re-running a failed job later than that needs the release + tag deleted
+# and the tag re-pushed anyway.)
 #   - Stable: bare tags (e.g. v0.2.0). These land as drafts: edit the release
 #     notes, then publish the draft to put it on the updater feed
 #     (electron-updater ignores draft releases).
@@ -124,6 +134,29 @@ jobs:
           printf '%s' "$MAC_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/mac-cert.p12"
           printf '%s\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
           chmod 600 "$RUNNER_TEMP/mac-cert.p12" "$RUNNER_TEMP/AuthKey.p8"
+
+      # Seed the release for this tag before electron-builder runs, so its
+      # racing publisher instances all find and reuse one release instead of
+      # each trying to create it (see header). Hyphenated tag = live
+      # pre-release, bare tag = draft. Skips if a release already exists
+      # (re-run safety).
+      - name: Pre-create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          existing=$(curl -sf -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=100" |
+            jq -r --arg t "$GITHUB_REF_NAME" '[.[] | select(.tag_name == $t)] | length')
+          if [ "$existing" -gt 0 ]; then
+            echo "release for $GITHUB_REF_NAME already exists — electron-builder will upload into it"
+            exit 0
+          fi
+          if [[ "$version" == *-* ]]; then draft=false; prerelease=true; else draft=true; prerelease=false; fi
+          curl -sf -X POST -H "Authorization: Bearer $GH_TOKEN" \
+            -d "{\"tag_name\":\"$GITHUB_REF_NAME\",\"name\":\"$version\",\"draft\":$draft,\"prerelease\":$prerelease}" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases" > /dev/null
+          echo "created $([ "$draft" = true ] && echo draft || echo "live pre-release") release for $GITHUB_REF_NAME"
 
       # Mirrors ci.yml. run-install triggers apps/desktop's postinstall
       # (rebuild:native + cache:node-sqlite) — proven to survive on the macOS
