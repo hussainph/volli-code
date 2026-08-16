@@ -541,8 +541,11 @@ describe("Session tRPC router", () => {
     ]);
     expect(resolved.projection.liveExecutor).toEqual({ id: "attachment-1" });
     expect(
-      payloads[0]?.kind === "attachment.opened" ? payloads[0].attachment.native : undefined,
-    ).toBeUndefined();
+      payloads[0]?.kind === "attachment.opened" ? "native" in payloads[0].attachment : undefined,
+    ).toBe(false);
+    expect(
+      payloads[0]?.kind === "attachment.opened" ? "adapterId" in payloads[0].attachment : undefined,
+    ).toBe(false);
     expect(
       payloads[1]?.kind === "attachment.native_referenced" ? payloads[1].native : undefined,
     ).toEqual({
@@ -550,8 +553,8 @@ describe("Session tRPC router", () => {
       detail: null,
     });
     expect(
-      payloads[2]?.kind === "attachment.failed" ? payloads[2].attachment.native : undefined,
-    ).toBeUndefined();
+      payloads[2]?.kind === "attachment.failed" ? "native" in payloads[2].attachment : undefined,
+    ).toBe(false);
     expect(
       payloads[3]?.kind === "interaction.opened" ? payloads[3].interaction.native : undefined,
     ).toEqual({ id: null, detail: null });
@@ -581,8 +584,11 @@ describe("Session tRPC router", () => {
 
     const payloads = rendererFrames.map((item) => item.event.payload);
     expect(
-      payloads[0]?.kind === "attachment.opened" ? payloads[0].attachment.native : undefined,
-    ).toBeUndefined();
+      payloads[0]?.kind === "attachment.opened" ? "native" in payloads[0].attachment : undefined,
+    ).toBe(false);
+    expect(
+      payloads[0]?.kind === "attachment.opened" ? "adapterId" in payloads[0].attachment : undefined,
+    ).toBe(false);
     expect(
       payloads[1]?.kind === "attachment.native_referenced" ? payloads[1].native : undefined,
     ).toEqual({
@@ -590,8 +596,8 @@ describe("Session tRPC router", () => {
       detail: null,
     });
     expect(
-      payloads[2]?.kind === "attachment.failed" ? payloads[2].attachment.native : undefined,
-    ).toBeUndefined();
+      payloads[2]?.kind === "attachment.failed" ? "native" in payloads[2].attachment : undefined,
+    ).toBe(false);
     expect(
       payloads[3]?.kind === "interaction.opened" ? payloads[3].interaction.native : undefined,
     ).toEqual({ id: null, detail: null });
@@ -917,7 +923,64 @@ describe("Session tRPC router", () => {
     expect(JSON.stringify(calls)).not.toMatch(/adapter|profile|pi/i);
   });
 
-  it("carries named skill slugs to a start, and refuses one the grammar cannot spell", async () => {
+  it("mints Ticket and project Sessions without attaching — the optimistic-open route", async () => {
+    const fixture = runtimeFixture();
+    const calls: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      createTicketSession: async (input) => {
+        calls.push(["ticket.create", input]);
+        return { sessionId: "session-1" };
+      },
+      createProjectSession: async (input) => {
+        calls.push(["project.create", input]);
+        return { sessionId: "session-2" };
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    const ticket = await caller.ticketSessions.create({
+      operationId: "operation-1",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "VC-1",
+    });
+    const project = await caller.projectSessions.create({
+      operationId: "operation-2",
+      projectId: "project-1",
+      title: "Scratch",
+    });
+
+    expect(ticket).toEqual({ sessionId: "session-1" });
+    expect(project).toEqual({ sessionId: "session-2" });
+    expect(calls).toEqual([
+      [
+        "ticket.create",
+        { operationId: "operation-1", projectId: "project-1", ticketId: "ticket-1", title: "VC-1" },
+      ],
+      ["project.create", { operationId: "operation-2", projectId: "project-1", title: "Scratch" }],
+    ]);
+    expect(JSON.stringify(calls)).not.toMatch(/adapter|profile|pi/i);
+
+    // Unconfigured transports refuse explicitly, like every other product facade.
+    const bare = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+    });
+    await expect(
+      bare.ticketSessions.create({
+        operationId: "op",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        title: null,
+      }),
+    ).rejects.toThrow("Ticket Sessions are unavailable");
+    await expect(
+      bare.projectSessions.create({ operationId: "op", projectId: "project-1", title: null }),
+    ).rejects.toThrow("Project Sessions are unavailable");
+  });
+
+  it("carries skill slugs to BOTH start and create, and refuses one the grammar cannot spell", async () => {
     const fixture = runtimeFixture();
     const calls: unknown[] = [];
     const caller = createSessionRouter().createCaller({
@@ -931,6 +994,10 @@ describe("Session tRPC router", () => {
           throughSequence: 6,
         };
       },
+      createTicketSession: async (input) => {
+        calls.push(input);
+        return { sessionId: "session-1" };
+      },
       diagnostics: new RpcDiagnosticLog(),
     });
 
@@ -941,11 +1008,23 @@ describe("Session tRPC router", () => {
       title: "VC-1",
       skills: ["svg-logo-designer"],
     });
-    expect(calls).toEqual([expect.objectContaining({ skills: ["svg-logo-designer"] })]);
+    // The optimistic-open route is the one that MINTS the Session, so it has
+    // to carry them too — `attach` composes from the record, never the input.
+    await caller.ticketSessions.create({
+      operationId: "operation-2",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "VC-1",
+      skills: ["svg-logo-designer"],
+    });
+    expect(calls).toEqual([
+      expect.objectContaining({ skills: ["svg-logo-designer"] }),
+      expect.objectContaining({ skills: ["svg-logo-designer"] }),
+    ]);
 
     await expect(
       caller.ticketSessions.start({
-        operationId: "operation-2",
+        operationId: "operation-3",
         projectId: "project-1",
         ticketId: "ticket-1",
         title: "VC-1",

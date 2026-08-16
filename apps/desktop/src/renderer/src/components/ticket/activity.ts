@@ -69,6 +69,7 @@ export const EVENT_KIND_PRIORITY: readonly TicketEventKind[] = [
   "attachment_added",
   "attachment_removed",
   "worktree_changed",
+  "worktree_scope_changed",
   "archived",
   "unarchived",
   "body_edited",
@@ -200,6 +201,10 @@ export function describeEvent(payload: TicketEventPayload): string | null {
       return "restored the ticket";
     case "worktree_changed":
       return describeWorktreeChange(payload.from, payload.to);
+    case "worktree_scope_changed":
+      return payload.to
+        ? "scoped the ticket to a new worktree"
+        : "scoped the ticket to the main checkout";
     case "worktree_failed": {
       const stage = WORKTREE_FAILURE_STAGE_LABELS[payload.stage];
       const excerpt = worktreeFailureExcerpt(payload.stderr);

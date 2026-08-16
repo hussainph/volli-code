@@ -2704,10 +2704,16 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
       ticketId: "ticket-1",
       title: "Durable Session",
     });
-    const createReceipt = acceptedReceipt("receipt-create", createCommand.id, {
-      kind: "session.created",
-      sessionId: createdSession.id,
-    });
+    // Sequence 3 matches the receipt event's envelope below: the in-memory
+    // ledger now runs the codec's write-side assertion for SQLite parity, and
+    // a receipt whose sequence disagrees with its own event is refused there.
+    const createReceipt = {
+      ...acceptedReceipt("receipt-create", createCommand.id, {
+        kind: "session.created",
+        sessionId: createdSession.id,
+      }),
+      sequence: 3,
+    };
     await mismatchedCreatedFact.ledger.transaction((transaction) => {
       transaction.insertSession(createdSession);
       transaction.saveCommand(createCommand);

@@ -301,6 +301,13 @@ export const SessionComposer = React.memo(function SessionComposer({
                         // Edit removes the trigger. Radix must not restore focus
                         // to that vanished node after we focused the composer.
                         event.preventDefault();
+                        // And the focus `editQueued` placed did not survive: this
+                        // menu is modal, so its FocusScope trapped focus inside
+                        // the content and snapped it right back off the textarea.
+                        // When the row then unmounted, the browser dropped focus
+                        // to <body>. This handler is the first moment after the
+                        // trap is gone, so the request lands here or nowhere.
+                        onComposerFocusRequest?.();
                       }}
                     >
                       <DropdownMenuItem onSelect={() => editQueued(entry.id)}>

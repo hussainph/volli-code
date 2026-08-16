@@ -62,7 +62,7 @@ import {
   XCircleIcon,
 } from "@phosphor-icons/react";
 import type {
-  SessionInteraction,
+  RendererSessionInteraction,
   SessionInteractionOption,
   SessionInteractionResolution,
 } from "@volli/shared";
@@ -175,7 +175,7 @@ function AnswerArrow({ focus }: { focus: string }) {
 export function PendingInteractionAnnouncement({
   interaction,
 }: {
-  interaction: SessionInteraction | null;
+  interaction: RendererSessionInteraction | null;
 }) {
   return (
     <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
@@ -185,7 +185,7 @@ export function PendingInteractionAnnouncement({
 }
 
 export interface InteractionCardProps {
-  interaction: SessionInteraction;
+  interaction: RendererSessionInteraction;
   /**
    * Where the decision goes, and — where the caller can say — whether it landed.
    * A handler that returns nothing is taken at its word; one that returns a
@@ -743,7 +743,7 @@ function QuestionStep({
   onAdvance,
 }: {
   step: InteractionStep;
-  interaction: SessionInteraction;
+  interaction: RendererSessionInteraction;
   draft: InteractionDraft;
   disabled?: boolean;
   onBack(): void;
@@ -1061,7 +1061,7 @@ export function ComposerInteractionStack({
   children,
   className,
 }: React.PropsWithChildren<{
-  interaction: SessionInteraction | null;
+  interaction: RendererSessionInteraction | null;
   resolving?: boolean;
   onResolve(
     interactionId: string,
@@ -1155,7 +1155,7 @@ function InteractionQuestionFields({
   onDraftChange,
   onSubmit,
 }: {
-  interaction: SessionInteraction;
+  interaction: RendererSessionInteraction;
   question: InteractionQuestion;
   draft: InteractionDraft;
   disabled?: boolean;
@@ -1383,7 +1383,7 @@ export function InteractionReceiptLine({
   interaction,
   resolution,
 }: {
-  interaction: SessionInteraction;
+  interaction: RendererSessionInteraction;
   resolution: SessionInteractionResolution;
 }) {
   const receipt = describeInteractionResolution(interaction, resolution);

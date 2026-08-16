@@ -780,8 +780,10 @@ app.whenReady().then(async () => {
                 }
               : undefined,
           startTicketSession: ticketSessions?.start,
+          createTicketSession: ticketSessions?.create,
           attachTicketSession: ticketSessions?.attach,
           startProjectSession: projectSessions?.start,
+          createProjectSession: projectSessions?.create,
           attachProjectSession: projectSessions?.attach,
         });
   // Signing in is a Model Access task, not a Session one, so it gets its own

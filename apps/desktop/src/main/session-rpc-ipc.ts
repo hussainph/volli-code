@@ -7,6 +7,7 @@ import {
   sanitizeDiagnosticText,
   type ProjectSessionStartInput,
   type SessionAttachInput,
+  type SessionCreateResult,
   type TicketSessionStartInput,
 } from "@volli/session-rpc";
 import type { SessionRuntime } from "@volli/session-engine";
@@ -102,8 +103,10 @@ export interface RegisterSessionRpcIpcOptions {
   readDefaultModelSelection?: () => ModelSelection | null;
   writeDefaultModelSelection?: (selection: ModelSelection) => void | Promise<void>;
   startTicketSession?: (input: TicketSessionStartInput) => Promise<SessionStartResult>;
+  createTicketSession?: (input: TicketSessionStartInput) => Promise<SessionCreateResult>;
   attachTicketSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
   startProjectSession?: (input: ProjectSessionStartInput) => Promise<SessionStartResult>;
+  createProjectSession?: (input: ProjectSessionStartInput) => Promise<SessionCreateResult>;
   attachProjectSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
   diagnostics?: RpcDiagnosticLog;
 }
@@ -154,8 +157,10 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
           readDefaultModelSelection: options.readDefaultModelSelection,
           writeDefaultModelSelection: options.writeDefaultModelSelection,
           startTicketSession: options.startTicketSession,
+          createTicketSession: options.createTicketSession,
           attachTicketSession: options.attachTicketSession,
           startProjectSession: options.startProjectSession,
+          createProjectSession: options.createProjectSession,
           attachProjectSession: options.attachProjectSession,
           diagnostics,
           transport: "electron-ipc",
@@ -285,10 +290,14 @@ async function callProcedure(
       return caller.modelAccess.setDefault(request.input as never);
     case "ticketSessions.start":
       return caller.ticketSessions.start(request.input as never);
+    case "ticketSessions.create":
+      return caller.ticketSessions.create(request.input as never);
     case "ticketSessions.attach":
       return caller.ticketSessions.attach(request.input as never);
     case "projectSessions.start":
       return caller.projectSessions.start(request.input as never);
+    case "projectSessions.create":
+      return caller.projectSessions.create(request.input as never);
     case "projectSessions.attach":
       return caller.projectSessions.attach(request.input as never);
     case "session.snapshot":

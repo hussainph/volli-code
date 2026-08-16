@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for the packaged app. electron-builder applies
+  this file to the main app AND the nested Electron helpers (entitlements and
+  entitlementsInherit both point here — the sandbox-style "inherit" plist is
+  the wrong tool under hardened runtime).
+
+  - allow-jit: V8 JIT under hardened runtime (main process and renderer
+    helpers).
+  - allow-unsigned-executable-memory: Electron still allocates executable
+    memory outside the MAP_JIT path in places; without it hardened-runtime
+    builds can crash at startup.
+
+  Deliberately omitted from electron-builder's default template:
+  com.apple.security.cs.disable-library-validation. Our native modules
+  (better-sqlite3, node-pty + its spawn-helper, all in app.asar.unpacked) are
+  signed with the same Developer ID by electron-builder's deep-sign pass, so
+  library validation holds without it. If a future native dep ships pre-signed
+  by a third party and fails to dlopen, this is the knob to revisit.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+</dict>
+</plist>

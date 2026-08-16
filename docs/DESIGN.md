@@ -151,6 +151,11 @@ Rules:
   from this table** rather than from `em` multiples — a rendered `<h2>` in a ticket is
   `--text-heading` exactly, because a dialog title beside it is. Same for Document Mode
   (`editor/document-mode.css`), the editable twin of that surface.
+- **Paragraphs read at `--leading-prose` (1.7), not at a step's paired leading.** The paired
+  line-heights above are single-line rungs — right for an input or a row, dense for prose. Every
+  rendered-markdown surface shares the one prose ratio: the chat transcript wears it as the
+  `leading-prose` utility (on `MessageContent`), `typeset.css` reads `var(--leading-prose)`. A new
+  prose surface takes this token; it does not pick its own ratio.
 
 ## Controls — the pill scale
 

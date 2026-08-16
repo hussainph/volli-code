@@ -1,7 +1,6 @@
 import { initTRPC, TRPCError, tracked } from "@trpc/server";
 import {
   isSessionStreamOverlay,
-  REASONING_LEVELS,
   type ModelAccessSnapshot,
   type SessionClientCommand,
   type SessionRuntime,
@@ -9,11 +8,18 @@ import {
   type SessionRuntimeCommandRequest,
   type SessionRuntimeProjectionSnapshot,
   type SessionRuntimeSnapshot,
-  type SessionPresentationProjection,
-  type SessionStreamEmission,
   type SessionStreamFrame,
+  type SessionStreamOverlay,
   type SessionStartResult,
 } from "@volli/session-engine";
+import {
+  REASONING_LEVELS,
+  scrubSessionAttention,
+  scrubSessionEvent,
+  scrubSessionInteraction,
+  type RendererSessionEvent,
+  type SessionPresentationProjection,
+} from "@volli/shared";
 import { z } from "zod";
 
 type RpcUiMessage = Extract<SessionClientCommand, { kind: "message.submit" }>["message"];
@@ -40,18 +46,24 @@ export type RendererSessionCommandResult = Pick<
   "sessionId" | "receipt" | "throughSequence"
 >;
 
-type RendererSafeValue<Value> = Value extends readonly (infer Item)[]
-  ? readonly RendererSafeValue<Item>[]
-  : Value extends object
-    ? {
-        [Key in keyof Value as Key extends "adapterId" ? never : Key]: RendererSafeValue<
-          Value[Key]
-        >;
-      }
-    : Value;
+/**
+ * One durable frame as the renderer receives it. The event type is the
+ * codec's {@link RendererSessionEvent} — derived from the scrub return types,
+ * so it cannot claim a field survives this edge that never arrives.
+ */
+export type RendererSessionStreamFrame = Omit<SessionStreamFrame, "event"> & {
+  event: RendererSessionEvent;
+};
 
-/** A streamed Session emission with executor routing identity removed. */
-export type RendererSessionStreamEmission = RendererSafeValue<SessionStreamEmission>;
+/** A streamed Session emission with executor identity and adapter-native detail removed. */
+export type RendererSessionStreamEmission = RendererSessionStreamFrame | SessionStreamOverlay;
+
+/** The durable arm carries no `kind` of its own, mirroring the runtime's own test. */
+function isRendererStreamOverlay(
+  emission: RendererSessionStreamEmission,
+): emission is SessionStreamOverlay {
+  return "kind" in emission;
+}
 
 export interface TicketSessionStartInput {
   operationId: string;
@@ -78,6 +90,11 @@ export interface ProjectSessionStartInput {
   skills?: readonly string[];
 }
 
+/** A create-only start's answer: durable identity, nothing about an executor. */
+export interface SessionCreateResult {
+  sessionId: string;
+}
+
 /**
  * The server-side composition root supplies this context. It deliberately
  * carries the deep runtime rather than leaking its ports to individual RPCs.
@@ -88,8 +105,11 @@ export interface SessionRouterContext {
   readDefaultModelSelection?: () => RpcModelSelection | null;
   writeDefaultModelSelection?: (selection: RpcModelSelection) => void | Promise<void>;
   startTicketSession?: (input: TicketSessionStartInput) => Promise<SessionStartResult>;
+  /** Create-only (no attach): the optimistic chat-open route — see the facades. */
+  createTicketSession?: (input: TicketSessionStartInput) => Promise<SessionCreateResult>;
   attachTicketSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
   startProjectSession?: (input: ProjectSessionStartInput) => Promise<SessionStartResult>;
+  createProjectSession?: (input: ProjectSessionStartInput) => Promise<SessionCreateResult>;
   attachProjectSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
   diagnostics: RpcDiagnosticLog;
   transport?: "electron-ipc" | "lab-http" | "unknown";
@@ -516,6 +536,25 @@ export function createSessionRouter() {
           }
           return ctx.startTicketSession(input);
         }),
+      create: instrumentedProcedure
+        .input(
+          z.object({
+            operationId: nonEmptyString,
+            projectId: nonEmptyString,
+            ticketId: nonEmptyString,
+            title: nullableString,
+            // The optimistic-open path mints the Session, so it is the path
+            // that has to carry the skills: `attach` composes the prompt from
+            // the record `create` wrote, and never sees this input.
+            skills: skillSlugs,
+          }),
+        )
+        .mutation(async ({ ctx, input }) => {
+          if (!ctx.createTicketSession) {
+            unavailable("Ticket Sessions are unavailable on this transport");
+          }
+          return ctx.createTicketSession(input);
+        }),
       attach: instrumentedProcedure
         .input(z.object({ operationId: nonEmptyString, sessionId: nonEmptyString }))
         .mutation(async ({ ctx, input }) => {
@@ -540,6 +579,22 @@ export function createSessionRouter() {
             unavailable("Project Sessions are unavailable on this transport");
           }
           return ctx.startProjectSession(input);
+        }),
+      create: instrumentedProcedure
+        .input(
+          z.object({
+            operationId: nonEmptyString,
+            projectId: nonEmptyString,
+            title: nullableString,
+            /** See `ticketSessions.create`. */
+            skills: skillSlugs,
+          }),
+        )
+        .mutation(async ({ ctx, input }) => {
+          if (!ctx.createProjectSession) {
+            unavailable("Project Sessions are unavailable on this transport");
+          }
+          return ctx.createProjectSession(input);
         }),
       attach: instrumentedProcedure
         .input(z.object({ operationId: nonEmptyString, sessionId: nonEmptyString }))
@@ -593,7 +648,7 @@ export function createSessionRouter() {
         .subscription(async function* ({ ctx, input, signal }) {
           if (signal?.aborted) return;
           const afterSequence = maxCursor(input.afterSequence, input.lastEventId);
-          const queue = new AsyncQueue<SessionStreamEmission>();
+          const queue = new AsyncQueue<RendererSessionStreamEmission>();
           const sourceFailure: { current: { error: unknown } | null } = { current: null };
           const unsubscribe = await ctx.runtime.subscribe(
             { sessionId: input.sessionId, afterSequence },
@@ -626,7 +681,7 @@ export function createSessionRouter() {
             // reconnect from an overlay id therefore replays durable history and
             // is served a fresh baseline.
             for await (const emission of queue) {
-              yield isSessionStreamOverlay(emission)
+              yield isRendererStreamOverlay(emission)
                 ? tracked(String(emission.throughSequence), emission)
                 : tracked(String(emission.sequence), emission);
             }
@@ -752,32 +807,6 @@ export function createSessionRouter() {
   });
 }
 
-/** Runtime identity and recovery locators stay behind the product edge. */
-function rendererAttachment<
-  Attachment extends {
-    adapterId: string;
-    native: SessionRuntimeSnapshot["projection"]["attachments"][number]["native"];
-  },
->(attachment: Attachment): Attachment {
-  const { adapterId: _adapterId, native: _native, ...presentation } = attachment;
-  return presentation as Attachment;
-}
-
-function rendererCommand(
-  command: SessionRuntimeSnapshot["projection"]["commands"][number],
-): SessionRuntimeSnapshot["projection"]["commands"][number] {
-  const intent =
-    command.intent.kind === "executor.start"
-      ? (({ adapterId: _adapterId, ...presentation }) => presentation)(command.intent)
-      : command.intent;
-  const route = command.route === null ? null : { attachmentId: command.route.attachmentId };
-  return {
-    ...command,
-    intent,
-    route,
-  } as SessionRuntimeSnapshot["projection"]["commands"][number];
-}
-
 function rendererCommandResult(result: SessionRuntimeCommandResult): RendererSessionCommandResult {
   return {
     sessionId: result.sessionId,
@@ -786,126 +815,13 @@ function rendererCommandResult(result: SessionRuntimeCommandResult): RendererSes
   };
 }
 
-function rendererInteraction<
-  Interaction extends {
-    native: SessionRuntimeSnapshot["projection"]["interactions"]["active"][number]["native"];
-  },
->(interaction: Interaction): Interaction {
-  return { ...interaction, native: { id: null, detail: null } };
-}
-
-function rendererAttention<
-  Attention extends {
-    diagnostic: SessionRuntimeSnapshot["projection"]["attention"]["active"][number]["diagnostic"];
-  },
->(attention: Attention): Attention {
-  return { ...attention, diagnostic: null };
-}
-
-function rendererFrame(frame: SessionStreamFrame): SessionStreamFrame {
-  const payload = frame.event.payload;
-  const safeFrame: SessionStreamFrame = {
-    ...frame,
-    event: {
-      ...frame.event,
-      provenance: {
-        ...frame.event.provenance,
-        source:
-          frame.event.provenance.source.kind === "adapter"
-            ? { kind: "system", id: "session-runtime", detail: null }
-            : frame.event.provenance.source,
-      },
-    },
-  };
-  switch (payload.kind) {
-    case "command.recorded":
-      return {
-        ...safeFrame,
-        event: {
-          ...safeFrame.event,
-          payload: { ...payload, command: rendererCommand(payload.command) },
-        },
-      };
-    case "attachment.opened":
-    case "attachment.failed":
-      return {
-        ...safeFrame,
-        event: {
-          ...safeFrame.event,
-          payload:
-            payload.kind === "attachment.failed"
-              ? {
-                  ...payload,
-                  attachment: rendererAttachment(payload.attachment),
-                  failure: { ...payload.failure, diagnostic: null },
-                }
-              : { ...payload, attachment: rendererAttachment(payload.attachment) },
-        },
-      };
-    case "attachment.native_referenced":
-      return {
-        ...safeFrame,
-        event: {
-          ...safeFrame.event,
-          payload: { ...payload, native: { id: null, detail: null } },
-        },
-      };
-    case "attention.raised":
-      return {
-        ...safeFrame,
-        event: {
-          ...safeFrame.event,
-          payload: { ...payload, attention: rendererAttention(payload.attention) },
-        },
-      };
-    case "interaction.opened":
-      return {
-        ...safeFrame,
-        event: {
-          ...safeFrame.event,
-          payload: { ...payload, interaction: rendererInteraction(payload.interaction) },
-        },
-      };
-    case "adapter.observed":
-      return {
-        ...safeFrame,
-        event: { ...safeFrame.event, payload: { ...payload, native: null } },
-      };
-    // Payload kinds this edge deliberately forwards untouched — none of them
-    // carry adapter-native detail, a recovery locator, or another field a case
-    // above exists to strip. Listed rather than caught by a `default`, with a
-    // `never` fallback, so a new `SessionEventPayload` kind is a compile error
-    // here instead of a kind that reaches the renderer unscrubbed by simply
-    // falling through. Mirrors `session-ledger.ts`'s own listed-not-defaulted
-    // switch, for the same reason: silence is not the safe default at a
-    // product/renderer boundary.
-    case "session.created":
-    case "session.archived":
-    case "session.retitled":
-    case "model.selected":
-    case "session.input.recorded":
-    case "session.signaled":
-    case "attachment.closed":
-    case "run.started":
-    case "run.completed":
-    case "turn.started":
-    case "turn.completed":
-    case "turn.interrupted":
-    case "transcript.referenced":
-    case "attention.cleared":
-    case "interaction.resolved":
-    case "interaction.cancelled":
-    case "command.receipt.recorded":
-    // `authority.denied` carries no adapter-native detail of its own — `tool`,
-    // `cause` and `reason` are Volli's own vocabulary already, not a harness's.
-    case "authority.denied":
-      return safeFrame;
-    /* v8 ignore next 4 -- unreachable while the union is exhausted above; it exists to stop being so at compile time. */
-    default: {
-      const unhandled: never = payload;
-      return unhandled;
-    }
-  }
+/**
+ * Runtime identity and recovery locators stay behind the product edge. The
+ * per-kind knowledge lives in the codec's scrub table, where a new payload
+ * kind without an entry fails to compile — this edge only composes it.
+ */
+function rendererFrame(frame: SessionStreamFrame): RendererSessionStreamFrame {
+  return { ...frame, event: scrubSessionEvent(frame.event) };
 }
 
 function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
@@ -918,17 +834,17 @@ function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
   if (source.status !== undefined) projection.status = source.status;
   if (source.attention !== undefined) {
     projection.attention = {
-      active: source.attention.active.map(rendererAttention),
+      active: source.attention.active.map(scrubSessionAttention),
       primary:
-        source.attention.primary === null ? null : rendererAttention(source.attention.primary),
+        source.attention.primary === null ? null : scrubSessionAttention(source.attention.primary),
     };
   }
   if (source.interactions !== undefined) {
     projection.interactions = {
-      active: source.interactions.active.map(rendererInteraction),
+      active: source.interactions.active.map(scrubSessionInteraction),
       resolved: source.interactions.resolved.map((entry) => ({
         ...entry,
-        interaction: rendererInteraction(entry.interaction),
+        interaction: scrubSessionInteraction(entry.interaction),
       })),
     };
   }
@@ -948,7 +864,7 @@ function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
 
 function rendererSnapshot(snapshot: SessionRuntimeSnapshot): {
   projection: SessionPresentationProjection;
-  frames: SessionStreamFrame[];
+  frames: RendererSessionStreamFrame[];
   throughSequence: number;
 } {
   return {

@@ -9,7 +9,8 @@
  * stale local base is the honest local-first semantic (fetch-first returns with
  * issue #82).
  */
-import { detectProjectBaseBranch, type RunGit } from "../project-base-branch";
+import { detectProjectBaseBranchAsync } from "../project-base-branch";
+import type { RunGitAsync } from "./types";
 
 /** The one remote every downstream reader of a stamped base assumes — see below. */
 const ORIGIN_PREFIX = "origin/";
@@ -25,10 +26,10 @@ export interface BaseResolution {
   startPoint: string;
 }
 
-/** Whether `ref` resolves in `cwd` — `rev-parse --verify --quiet` exits non-zero (throws) when it doesn't. */
-export function refExists(git: RunGit, cwd: string, ref: string): boolean {
+/** Whether `ref` resolves in `cwd` — `rev-parse --verify --quiet` exits non-zero (rejects) when it doesn't. */
+export async function refExists(git: RunGitAsync, cwd: string, ref: string): Promise<boolean> {
   try {
-    git(["rev-parse", "--verify", "--quiet", ref], cwd);
+    await git(["rev-parse", "--verify", "--quiet", ref], cwd);
     return true;
   } catch {
     return false;
@@ -41,21 +42,21 @@ export function refExists(git: RunGit, cwd: string, ref: string): boolean {
  * caller then fails the `create` stage. When a name resolves, the start point
  * is always chosen offline from existing refs.
  */
-export function resolveBaseBranch(
-  git: RunGit,
+export async function resolveBaseBranch(
+  git: RunGitAsync,
   input: {
     projectPath: string;
     ticketBaseBranch: string | null;
     projectBaseBranch: string | null;
   },
-): BaseResolution | null {
+): Promise<BaseResolution | null> {
   const name =
     input.ticketBaseBranch ??
     input.projectBaseBranch ??
-    detectProjectBaseBranch(input.projectPath, git);
+    (await detectProjectBaseBranchAsync(input.projectPath, git));
   if (!name) return null;
 
-  if (refExists(git, input.projectPath, `refs/heads/${name}`)) {
+  if (await refExists(git, input.projectPath, `refs/heads/${name}`)) {
     return { name, startPoint: name };
   }
 
@@ -87,13 +88,13 @@ export function resolveBaseBranch(
   // Checked AFTER refs/heads so a local branch literally named `origin/main`
   // still wins as itself.
   const remoteTracking = `refs/remotes/${name}`;
-  if (name.includes("/") && refExists(git, input.projectPath, remoteTracking)) {
+  if (name.includes("/") && (await refExists(git, input.projectPath, remoteTracking))) {
     const stamped = name.startsWith(ORIGIN_PREFIX) ? name.slice(ORIGIN_PREFIX.length) : name;
     return { name: stamped, startPoint: remoteTracking };
   }
 
   const remoteRef = `refs/remotes/origin/${name}`;
-  if (refExists(git, input.projectPath, remoteRef)) {
+  if (await refExists(git, input.projectPath, remoteRef)) {
     return { name, startPoint: remoteRef };
   }
   // Neither a local nor a remote-tracking ref — hand git the bare name and let

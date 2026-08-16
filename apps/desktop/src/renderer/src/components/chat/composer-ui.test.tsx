@@ -142,7 +142,11 @@ describe("the queued message row", () => {
     });
     expect(nextQueue).toEqual([]);
     expect(nextDraft).toBe("also cover the empty-name branch\nnew thought");
-    expect(acts).toEqual(["queue", "draft", "focus"]);
+    // Two focus requests: one inside `editQueued` (which the modal menu's
+    // focus trap swallows while the content is still mounted) and one from
+    // `onCloseAutoFocus`, the first moment after the trap is gone — the only
+    // request that can actually land on the textarea.
+    expect(acts).toEqual(["queue", "draft", "focus", "focus"]);
     expect(restorePrevented).toBe(true);
   });
 

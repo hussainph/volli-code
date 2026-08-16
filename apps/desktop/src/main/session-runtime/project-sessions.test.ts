@@ -48,6 +48,30 @@ function sessions(
 }
 
 describe("project Sessions", () => {
+  it("create mints the durable Session and records model policy WITHOUT attaching — the optimistic-open half", async () => {
+    const { commands, projectSessions } = sessions();
+
+    const created = await projectSessions.create({
+      operationId: "project-operation",
+      projectId: "project-1",
+      title: "Scratch",
+    });
+
+    expect(created).toEqual({ sessionId: "session-1" });
+    expect(commands.map((request) => request.command.kind)).toEqual([
+      "session.create",
+      "model.select",
+    ]);
+  });
+
+  it("create refuses without a default model, before anything durable exists", async () => {
+    const { commands, projectSessions } = sessions({ readDefaultModel: () => null });
+    await expect(
+      projectSessions.create({ operationId: "op", projectId: "project-1", title: null }),
+    ).rejects.toMatchObject({ code: "DEFAULT_MODEL_REQUIRED" });
+    expect(commands).toEqual([]);
+  });
+
   it("creates, records model policy, and privately attaches the singular runtime in order", async () => {
     const { commands, projectSessions } = sessions();
 

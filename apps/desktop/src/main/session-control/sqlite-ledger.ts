@@ -1,55 +1,30 @@
 import type Database from "better-sqlite3";
 import type {
   CommandReceipt,
-  CommandReceiptResult,
   ListSessionEventsQuery,
   ListLatestTicketSignalsQuery,
   ListSessionsQuery,
   LatestSessionSignal,
-  ModelSelection,
-  PromptResource,
   Session,
-  SessionAttachment,
-  SessionAttachmentFailure,
   SessionCommand,
-  SessionCommandIntent,
-  SessionCommandRoute,
   SessionEvent,
-  SessionEventPayload,
-  SessionEventProvenance,
-  SessionInteractionAnswer,
-  SessionInteractionOption,
-  SessionInteractionPrompt,
   SessionLedger,
   SessionLedgerTransaction,
-  SessionNativeDetail,
 } from "@volli/shared";
 import {
-  isSessionAttachmentContinuity,
-  REASONING_LEVELS,
+  assertSession,
+  assertSessionEvent,
+  decodeCommandReceipt,
+  decodeSessionCommandIntent,
+  decodeSessionCommandRoute,
+  decodeSessionEventPayload,
+  decodeSessionEventProvenance,
+  encodeSessionJson,
   sameCommandReceipt,
-  SESSION_INTERACTION_CANCEL_REASONS,
+  UnknownSessionEventKindError,
 } from "@volli/shared";
 
 type SqlRow = Record<string, unknown>;
-
-/**
- * Thrown when durable history carries a payload kind this build does not know.
- *
- * Separate from every other decode failure on purpose: a retired kind is an
- * expected consequence of removing a Session Event, while a malformed field
- * inside a known kind is corruption. The read path drops the first and still
- * fails loudly on the second.
- */
-export class UnknownPayloadKindError extends Error {
-  constructor(
-    readonly payloadKind: string,
-    context: string,
-  ) {
-    super(`${context}.kind is not a known Session event payload`);
-    this.name = "UnknownPayloadKindError";
-  }
-}
 
 /**
  * The desktop's sole durable Session writer.  Although better-sqlite3 is
@@ -223,14 +198,14 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     try {
       return decodeEvent(row, "session_events row");
     } catch (error) {
-      if (error instanceof UnknownPayloadKindError) return null;
+      if (error instanceof UnknownSessionEventKindError) return null;
       throw error;
     }
   }
 
   appendEvent(event: SessionEvent): void {
     this.assertOpen();
-    assertEvent(event, "Session event");
+    assertSessionEvent(event, "Session event");
     this.#touchedSessionIds.add(event.sessionId);
     this.assertGloballyUnusedId(event.id);
     const prior = this.db
@@ -260,10 +235,10 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
         sequence: event.sequence,
         occurredAt: event.occurredAt,
         recordedAt: event.recordedAt,
-        provenance: encodeJson(event.provenance),
+        provenance: encodeSessionJson(event.provenance),
         attachmentId: event.attachmentId ?? null,
         commandId: event.commandId ?? null,
-        payload: encodeJson(event.payload),
+        payload: encodeSessionJson(event.payload),
       });
     if (event.payload.kind === "command.receipt.recorded") {
       const receipt = this.getReceipt(event.payload.receipt.id);
@@ -337,7 +312,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
         try {
           decoded.push(decodeEvent(row, "session_events row"));
         } catch (error) {
-          if (!(error instanceof UnknownPayloadKindError)) throw error;
+          if (!(error instanceof UnknownSessionEventKindError)) throw error;
           dropped += 1;
           retiredKinds.add(error.payloadKind);
         }
@@ -381,8 +356,8 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
         id: command.id,
         sessionId: command.sessionId,
         createdAt: command.createdAt,
-        intent: encodeJson(command.intent),
-        route: command.route === null ? null : encodeJson(command.route),
+        intent: encodeSessionJson(command.intent),
+        route: command.route === null ? null : encodeSessionJson(command.route),
       });
   }
 
@@ -412,7 +387,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
 
   appendReceipt(receipt: CommandReceipt): void {
     this.assertOpen();
-    assertReceipt(receipt, "Command receipt");
+    decodeCommandReceipt(receipt, "Command receipt");
     this.assertGloballyUnusedId(receipt.id);
     const command = this.getCommand(receipt.commandId);
     if (!command) throw new Error(`Command ${receipt.commandId} was not found`);
@@ -429,7 +404,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
         commandId: receipt.commandId,
         sequence: receipt.sequence,
         recordedAt: receipt.recordedAt,
-        receipt: encodeJson(receipt),
+        receipt: encodeSessionJson(receipt),
       });
   }
 
@@ -507,9 +482,10 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
         venueKind: attachment.venue.kind,
         continuity: attachment.continuity,
         nativeId: attachment.native?.id ?? null,
-        nativeDetail: attachment.native === null ? null : encodeJson(attachment.native.detail),
+        nativeDetail:
+          attachment.native === null ? null : encodeSessionJson(attachment.native.detail),
         observedKind: payload.kind === "attachment.opened" ? "opened" : "failed",
-        failure: payload.kind === "attachment.failed" ? encodeJson(payload.failure) : null,
+        failure: payload.kind === "attachment.failed" ? encodeSessionJson(payload.failure) : null,
         createdSequence: event.sequence,
       });
   }
@@ -572,11 +548,14 @@ function decodeCommand(row: unknown, context: string): SessionCommand {
     id: readString(value.id, `${context}.id`),
     sessionId: readString(value.session_id, `${context}.session_id`),
     createdAt: readInteger(value.created_at, `${context}.created_at`),
-    intent: decodeIntent(parseJson(value.intent, `${context}.intent`), `${context}.intent`),
+    intent: decodeSessionCommandIntent(
+      parseJson(value.intent, `${context}.intent`),
+      `${context}.intent`,
+    ),
     route:
       value.route === null
         ? null
-        : decodeRoute(parseJson(value.route, `${context}.route`), `${context}.route`),
+        : decodeSessionCommandRoute(parseJson(value.route, `${context}.route`), `${context}.route`),
   };
   assertCommand(command, context);
   return command;
@@ -584,7 +563,7 @@ function decodeCommand(row: unknown, context: string): SessionCommand {
 
 function decodeReceiptRow(row: unknown, context: string): CommandReceipt {
   const value = asRecord(row, context);
-  const receipt = decodeReceipt(
+  const receipt = decodeCommandReceipt(
     parseJson(value.receipt, `${context}.receipt`),
     `${context}.receipt`,
   );
@@ -613,603 +592,27 @@ function decodeEvent(row: unknown, context: string): SessionEvent {
     sequence: readInteger(value.sequence, `${context}.sequence`),
     occurredAt: readInteger(value.occurred_at, `${context}.occurred_at`),
     recordedAt: readInteger(value.recorded_at, `${context}.recorded_at`),
-    provenance: decodeProvenance(
+    provenance: decodeSessionEventProvenance(
       parseJson(value.provenance, `${context}.provenance`),
       `${context}.provenance`,
     ),
-    payload: decodePayload(parseJson(value.payload, `${context}.payload`), `${context}.payload`),
+    payload: decodeSessionEventPayload(
+      parseJson(value.payload, `${context}.payload`),
+      `${context}.payload`,
+    ),
   };
   if (attachmentId !== null) event.attachmentId = attachmentId;
   if (commandId !== null) event.commandId = commandId;
-  assertEvent(event, context);
+  assertSessionEvent(event, context);
   return event;
-}
-
-function decodePayload(value: unknown, context: string): SessionEventPayload {
-  const record = asRecord(value, context);
-  const kind = readString(record.kind, `${context}.kind`);
-  switch (kind) {
-    case "command.recorded":
-      return { kind, command: decodeCommandValue(record.command, `${context}.command`) };
-    case "session.created":
-      return { kind, session: decodeSessionValue(record.session, `${context}.session`) };
-    case "session.archived":
-      return { kind };
-    case "session.retitled":
-      return { kind, title: readNullableString(record.title, `${context}.title`) };
-    case "model.selected":
-      return {
-        kind,
-        selection: decodeModelSelection(record.selection, `${context}.selection`),
-      };
-    case "session.input.recorded": {
-      const input = asRecord(record.input, `${context}.input`);
-      const inputKind = enumValue(
-        input.kind,
-        ["runtime-brief", "prompt-resources"],
-        `${context}.input.kind`,
-      );
-      if (inputKind === "runtime-brief") {
-        return {
-          kind,
-          input: { kind: inputKind, text: readString(input.text, `${context}.input.text`) },
-        };
-      }
-      return {
-        kind,
-        input: {
-          kind: inputKind,
-          resources: decodePromptResources(input.resources, `${context}.input.resources`),
-        },
-      };
-    }
-    case "session.signaled":
-      return {
-        kind,
-        signal: enumValue(record.signal, ["done", "blocked"], `${context}.signal`),
-        reason: readNullableString(record.reason, `${context}.reason`),
-      };
-    case "attachment.opened":
-      return { kind, attachment: decodeAttachment(record.attachment, `${context}.attachment`) };
-    case "attachment.native_referenced":
-      return {
-        kind,
-        attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
-        native: decodeNative(record.native, `${context}.native`),
-      };
-    case "attachment.failed":
-      return {
-        kind,
-        attachment: decodeAttachment(record.attachment, `${context}.attachment`),
-        failure: decodeFailure(record.failure, `${context}.failure`),
-      };
-    case "attachment.closed":
-      return {
-        kind,
-        attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
-        outcome: enumValue(
-          record.outcome,
-          ["completed", "failed", "interrupted"],
-          `${context}.outcome`,
-        ),
-      };
-    case "run.started":
-    case "run.completed":
-      return {
-        kind,
-        attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
-        runId: readString(record.runId, `${context}.runId`),
-      };
-    case "turn.started":
-    case "turn.completed":
-    case "turn.interrupted":
-      return {
-        kind,
-        attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
-        turnId: readString(record.turnId, `${context}.turnId`),
-      };
-    case "transcript.referenced":
-      return {
-        kind,
-        attachmentId: readNullableString(record.attachmentId, `${context}.attachmentId`),
-        turnId: readNullableString(record.turnId, `${context}.turnId`),
-        reference: decodeTranscript(record.reference, `${context}.reference`),
-      };
-    case "attention.raised":
-      return { kind, attention: decodeAttention(record.attention, `${context}.attention`) };
-    case "attention.cleared":
-      return { kind, attentionId: readString(record.attentionId, `${context}.attentionId`) };
-    case "interaction.opened":
-      return {
-        kind,
-        interaction: decodeInteraction(record.interaction, `${context}.interaction`),
-      };
-    case "interaction.resolved":
-      return {
-        kind,
-        attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
-        interactionId: readString(record.interactionId, `${context}.interactionId`),
-        resolution: decodeInteractionResolution(record.resolution, `${context}.resolution`),
-      };
-    // No resolution is read back, because none was written: the reason is the
-    // whole fact. Decoding one here would be inventing the decision the event
-    // exists to say nobody made.
-    case "interaction.cancelled":
-      return {
-        kind,
-        attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
-        interactionId: readString(record.interactionId, `${context}.interactionId`),
-        reason: enumValue(record.reason, SESSION_INTERACTION_CANCEL_REASONS, `${context}.reason`),
-      };
-    // `cause` is read as a plain string, not checked against the live rule pack.
-    // History outlives the pack that wrote it, and a decoder that rejected a
-    // retired rule id would make an old Session unreadable — every later read of
-    // that Session, not just this event, because the decode throws.
-    case "authority.denied":
-      return {
-        kind,
-        attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
-        turnId: readNullableString(record.turnId, `${context}.turnId`),
-        tool: readString(record.tool, `${context}.tool`),
-        cause: readString(record.cause, `${context}.cause`),
-        reason: readString(record.reason, `${context}.reason`),
-      };
-    case "command.receipt.recorded":
-      return { kind, receipt: decodeReceipt(record.receipt, `${context}.receipt`) };
-    case "adapter.observed":
-      return {
-        kind,
-        attachmentId: readNullableString(record.attachmentId, `${context}.attachmentId`),
-        name: readString(record.name, `${context}.name`),
-        native: decodeNativeDetail(record.native, `${context}.native`),
-      };
-    default:
-      throw new UnknownPayloadKindError(kind, context);
-  }
-}
-
-function decodeSessionValue(value: unknown, context: string): Session {
-  const row = asRecord(value, context);
-  const session: Session = {
-    id: readString(row.id, `${context}.id`),
-    projectId: readString(row.projectId, `${context}.projectId`),
-    ticketId: readNullableString(row.ticketId, `${context}.ticketId`),
-    title: readNullableString(row.title, `${context}.title`),
-    createdAt: readInteger(row.createdAt, `${context}.createdAt`),
-  };
-  assertSession(session, context);
-  return session;
-}
-
-function decodeCommandValue(value: unknown, context: string): SessionCommand {
-  const row = asRecord(value, context);
-  const command: SessionCommand = {
-    id: readString(row.id, `${context}.id`),
-    sessionId: readString(row.sessionId, `${context}.sessionId`),
-    createdAt: readInteger(row.createdAt, `${context}.createdAt`),
-    intent: decodeIntent(row.intent, `${context}.intent`),
-    route: row.route === null ? null : decodeRoute(row.route, `${context}.route`),
-  };
-  assertCommand(command, context);
-  return command;
-}
-
-function decodeIntent(value: unknown, context: string): SessionCommandIntent {
-  const row = asRecord(value, context);
-  const kind = readString(row.kind, `${context}.kind`);
-  switch (kind) {
-    case "session.create":
-      return {
-        kind,
-        projectId: readString(row.projectId, `${context}.projectId`),
-        ticketId: readNullableString(row.ticketId, `${context}.ticketId`),
-        title: readNullableString(row.title, `${context}.title`),
-      };
-    case "session.archive":
-      return { kind };
-    case "session.retitle":
-      return { kind, title: readNullableString(row.title, `${context}.title`) };
-    case "session.signal":
-      return {
-        kind,
-        signal: enumValue(row.signal, ["done", "blocked"], `${context}.signal`),
-        reason: readNullableString(row.reason, `${context}.reason`),
-      };
-    case "model.select":
-      return {
-        kind,
-        selection: decodeModelSelection(row.selection, `${context}.selection`),
-      };
-    case "executor.start":
-      return {
-        kind,
-        adapterId: readString(row.adapterId, `${context}.adapterId`),
-        continuity: enumValue(
-          row.continuity,
-          ["fresh", "native_resume", "context_replay", "recreate"],
-          `${context}.continuity`,
-        ),
-      };
-    case "executor.stop":
-    case "executor.interrupt":
-    case "executor.retry":
-      return { kind, attachmentId: readString(row.attachmentId, `${context}.attachmentId`) };
-    case "message.submit":
-      return { kind, reference: decodeTranscript(row.reference, `${context}.reference`) };
-    case "interaction.resolve":
-      return {
-        kind,
-        attachmentId: readString(row.attachmentId, `${context}.attachmentId`),
-        interactionId: readString(row.interactionId, `${context}.interactionId`),
-        resolution: decodeInteractionResolution(row.resolution, `${context}.resolution`),
-        reference: decodeTranscript(row.reference, `${context}.reference`),
-      };
-    default:
-      throw new Error(`${context}.kind is not a known Session command`);
-  }
-}
-
-function decodeRoute(value: unknown, context: string): SessionCommandRoute {
-  const row = asRecord(value, context);
-  return {
-    adapterId: readString(row.adapterId, `${context}.adapterId`),
-    attachmentId: readNullableString(row.attachmentId, `${context}.attachmentId`),
-  };
-}
-
-function decodeReceipt(value: unknown, context: string): CommandReceipt {
-  const row = asRecord(value, context);
-  const base = {
-    id: readString(row.id, `${context}.id`),
-    commandId: readString(row.commandId, `${context}.commandId`),
-    sequence: readInteger(row.sequence, `${context}.sequence`),
-    recordedAt: readInteger(row.recordedAt, `${context}.recordedAt`),
-  };
-  const status = readString(row.status, `${context}.status`);
-  if (status === "accepted") {
-    return {
-      ...base,
-      status,
-      acceptedAt: readInteger(row.acceptedAt, `${context}.acceptedAt`),
-      result: decodeReceiptResult(row.result, `${context}.result`),
-    };
-  }
-  if (status === "rejected") {
-    return {
-      ...base,
-      status,
-      code: readString(row.code, `${context}.code`),
-      detail: readNullableString(row.detail, `${context}.detail`),
-    };
-  }
-  if (status === "completed") {
-    return { ...base, status, result: decodeReceiptResult(row.result, `${context}.result`) };
-  }
-  if (status === "unreconciled") {
-    return { ...base, status, detail: readNullableString(row.detail, `${context}.detail`) };
-  }
-  throw new Error(`${context}.status is not a known receipt status`);
-}
-
-function decodeReceiptResult(value: unknown, context: string): CommandReceiptResult {
-  const row = asRecord(value, context);
-  const kind = enumValue(
-    row.kind,
-    [
-      "session.created",
-      "session.archived",
-      "session.retitled",
-      "session.signaled",
-      "model.selected",
-      "executor.start.requested",
-      "executor.stop.requested",
-      "executor.interrupted",
-      "executor.retried",
-      "message.submitted",
-      "interaction.resolved",
-    ],
-    `${context}.kind`,
-  );
-  return { kind, sessionId: readString(row.sessionId, `${context}.sessionId`) };
-}
-
-function decodePromptResources(value: unknown, context: string): readonly PromptResource[] {
-  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
-  return value.map((entry, index) => {
-    const row = asRecord(entry, `${context}[${index}]`);
-    return {
-      name: readString(row.name, `${context}[${index}].name`),
-      text: readString(row.text, `${context}[${index}].text`),
-    };
-  });
-}
-
-function decodeModelSelection(value: unknown, context: string): ModelSelection {
-  const row = asRecord(value, context);
-  return {
-    providerId: readString(row.providerId, `${context}.providerId`),
-    modelId: readString(row.modelId, `${context}.modelId`),
-    reasoningLevel: enumValue(row.reasoningLevel, REASONING_LEVELS, `${context}.reasoningLevel`),
-  };
-}
-
-function decodeAttachment(value: unknown, context: string): SessionAttachment {
-  const row = asRecord(value, context);
-  const venue = asRecord(row.venue, `${context}.venue`);
-  const attachment: SessionAttachment = {
-    id: readString(row.id, `${context}.id`),
-    sessionId: readString(row.sessionId, `${context}.sessionId`),
-    adapterId: readString(row.adapterId, `${context}.adapterId`),
-    venue: {
-      id: readString(venue.id, `${context}.venue.id`),
-      kind: enumValue(venue.kind, ["local", "cloud", "remote", "unknown"], `${context}.venue.kind`),
-    },
-    continuity: enumValue(
-      row.continuity,
-      ["fresh", "native_resume", "context_replay", "recreate"],
-      `${context}.continuity`,
-    ),
-    native: row.native === null ? null : decodeNative(row.native, `${context}.native`),
-  };
-  assertAttachment(attachment, context);
-  return attachment;
-}
-
-function decodeNative(
-  value: unknown,
-  context: string,
-): { id: string | null; detail: SessionNativeDetail | null } {
-  const row = asRecord(value, context);
-  return {
-    id: readNullableString(row.id, `${context}.id`),
-    detail: decodeNativeDetail(row.detail, `${context}.detail`),
-  };
-}
-
-function decodeFailure(value: unknown, context: string): SessionAttachmentFailure {
-  const row = asRecord(value, context);
-  return {
-    code: readString(row.code, `${context}.code`),
-    detail: readNullableString(row.detail, `${context}.detail`),
-    diagnostic: decodeNativeDetail(row.diagnostic, `${context}.diagnostic`),
-  };
-}
-
-function decodeTranscript(
-  value: unknown,
-  context: string,
-): { id: string; mediaType: string | null; digest: string | null } {
-  const row = asRecord(value, context);
-  return {
-    id: readString(row.id, `${context}.id`),
-    mediaType: readNullableString(row.mediaType, `${context}.mediaType`),
-    digest: readNullableString(row.digest, `${context}.digest`),
-  };
-}
-
-function decodeAttention(
-  value: unknown,
-  context: string,
-): Extract<SessionEventPayload, { kind: "attention.raised" }>["attention"] {
-  const row = asRecord(value, context);
-  const kind = enumValue(
-    row.kind,
-    [
-      "input_required",
-      "permission_required",
-      "auth_required",
-      "configuration_invalid",
-      "rate_limited",
-      "quota_exhausted",
-      "context_limit_reached",
-      "transport_retrying",
-      "partial_turn_interrupted",
-      "adapter_disconnected",
-      "adapter_unrecoverable",
-    ],
-    `${context}.kind`,
-  );
-  const base = {
-    id: readString(row.id, `${context}.id`),
-    attachmentId: readNullableString(row.attachmentId, `${context}.attachmentId`),
-    detail: readNullableString(row.detail, `${context}.detail`),
-    diagnostic: decodeNativeDetail(row.diagnostic, `${context}.diagnostic`),
-  };
-  if (kind === "rate_limited") {
-    return { ...base, kind, retryAt: readNullableInteger(row.retryAt, `${context}.retryAt`) };
-  }
-  if (kind === "quota_exhausted") {
-    return { ...base, kind, resetAt: readNullableInteger(row.resetAt, `${context}.resetAt`) };
-  }
-  return { ...base, kind };
-}
-
-function decodeInteractionOptions(
-  value: unknown,
-  context: string,
-): readonly SessionInteractionOption[] {
-  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
-  return value.map((item, index) => {
-    const option = asRecord(item, `${context}[${index}]`);
-    // Both absences, because both occur. `SessionInteractionOption.description`
-    // is `string | null` and every adapter writes the explicit `null` — while
-    // events persisted before that contract simply omit the key. Reading only
-    // `undefined` as absent threw on the null, which killed the whole
-    // `interaction.opened` event at the persistence boundary: no durable
-    // interaction, an always-empty `projection.interactions`, and an approval
-    // nothing could ever resolve. The throw surfaced nowhere, so the gate
-    // still drew its buttons from the adapter's in-memory state and simply
-    // did not respond.
-    const description = readAbsentableString(
-      option.description,
-      `${context}[${index}].description`,
-    );
-    return {
-      id: readString(option.id, `${context}[${index}].id`),
-      label: readString(option.label, `${context}[${index}].label`),
-      description,
-    };
-  });
-}
-
-function decodeInteractionPrompts(
-  value: unknown,
-  context: string,
-): readonly SessionInteractionPrompt[] {
-  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
-  return value.map((item, index) => {
-    const prompt = asRecord(item, `${context}[${index}]`);
-    return {
-      id: readString(prompt.id, `${context}[${index}].id`),
-      label: readString(prompt.label, `${context}[${index}].label`),
-      detail: readNullableString(prompt.detail, `${context}[${index}].detail`),
-      options: decodeInteractionOptions(prompt.options, `${context}[${index}].options`),
-      multiple: readBoolean(prompt.multiple, `${context}[${index}].multiple`),
-      custom: readBoolean(prompt.custom, `${context}[${index}].custom`),
-    };
-  });
-}
-
-function decodeInteractionAnswers(
-  value: unknown,
-  context: string,
-): readonly SessionInteractionAnswer[] {
-  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
-  return value.map((item, index) => {
-    const answer = asRecord(item, `${context}[${index}]`);
-    if (!Array.isArray(answer.optionIds)) {
-      throw new Error(`${context}[${index}].optionIds must be an array`);
-    }
-    return {
-      promptId: readString(answer.promptId, `${context}[${index}].promptId`),
-      optionIds: answer.optionIds.map((optionId, position) =>
-        readString(optionId, `${context}[${index}].optionIds[${position}]`),
-      ),
-      response: readNullableString(answer.response, `${context}[${index}].response`),
-    };
-  });
-}
-
-function decodeInteraction(
-  value: unknown,
-  context: string,
-): Extract<SessionEventPayload, { kind: "interaction.opened" }>["interaction"] {
-  const row = asRecord(value, context);
-  const interaction = {
-    id: readString(row.id, `${context}.id`),
-    attachmentId: readString(row.attachmentId, `${context}.attachmentId`),
-    kind: enumValue(row.kind, ["permission", "question"], `${context}.kind`),
-    title: readString(row.title, `${context}.title`),
-    detail: readNullableString(row.detail, `${context}.detail`),
-    options: decodeInteractionOptions(row.options, `${context}.options`),
-    multiple: readBoolean(row.multiple, `${context}.multiple`),
-    native: decodeNative(row.native, `${context}.native`),
-  };
-  // `prompts` is optional in both directions. A record written before an
-  // interaction could carry per-question detail must decode back without the
-  // key — not with an empty array, and not with one synthesised from the flat
-  // fields. Synthesis belongs to `readInteractionPrompts` at the read seam;
-  // doing it here would persist a derived value on the next write.
-  if (row.prompts === undefined) return interaction;
-  return { ...interaction, prompts: decodeInteractionPrompts(row.prompts, `${context}.prompts`) };
-}
-
-function decodeInteractionResolution(
-  value: unknown,
-  context: string,
-): Extract<SessionEventPayload, { kind: "interaction.resolved" }>["resolution"] {
-  const row = asRecord(value, context);
-  if (!Array.isArray(row.optionIds)) throw new Error(`${context}.optionIds must be an array`);
-  const resolution = {
-    optionIds: row.optionIds.map((item, index) =>
-      readString(item, `${context}.optionIds[${index}]`),
-    ),
-    response: readNullableString(row.response, `${context}.response`),
-  };
-  // Absent stays absent, for the same reason `prompts` does: a flat resolution
-  // answers the interaction's first prompt, and `readInteractionAnswers` is
-  // what says so.
-  if (row.answers === undefined) return resolution;
-  return { ...resolution, answers: decodeInteractionAnswers(row.answers, `${context}.answers`) };
-}
-
-function decodeProvenance(value: unknown, context: string): SessionEventProvenance {
-  const row = asRecord(value, context);
-  const source = asRecord(row.source, `${context}.source`);
-  const venue = row.venue === null ? null : asRecord(row.venue, `${context}.venue`);
-  return {
-    source: {
-      kind: enumValue(source.kind, ["user", "adapter", "system"], `${context}.source.kind`),
-      id: readString(source.id, `${context}.source.id`),
-      detail: decodeNativeDetail(source.detail, `${context}.source.detail`),
-    },
-    venue:
-      venue === null
-        ? null
-        : {
-            id: readString(venue.id, `${context}.venue.id`),
-            kind: enumValue(
-              venue.kind,
-              ["local", "cloud", "remote", "unknown"],
-              `${context}.venue.kind`,
-            ),
-          },
-  };
-}
-
-function assertSession(value: Session, context: string): void {
-  if (!value.id || !value.projectId || !Number.isInteger(value.createdAt)) {
-    throw new Error(`${context} is not a valid Session`);
-  }
 }
 
 function assertCommand(value: SessionCommand, context: string): void {
   if (!value.id || !value.sessionId || !Number.isInteger(value.createdAt)) {
     throw new Error(`${context} is not a valid Session command`);
   }
-  decodeIntent(value.intent, `${context}.intent`);
-  if (value.route !== null) decodeRoute(value.route, `${context}.route`);
-}
-
-function assertAttachment(value: SessionAttachment, context: string): void {
-  if (
-    !value.id ||
-    !value.sessionId ||
-    !value.adapterId ||
-    !value.venue.id ||
-    !isSessionAttachmentContinuity(value.continuity)
-  ) {
-    throw new Error(`${context} is not a valid Session attachment`);
-  }
-  if (value.native !== null) decodeNative(value.native, `${context}.native`);
-}
-
-function assertReceipt(value: CommandReceipt, context: string): void {
-  decodeReceipt(value, context);
-}
-
-function assertEvent(value: SessionEvent, context: string): void {
-  if (
-    !value.id ||
-    !value.sessionId ||
-    !Number.isInteger(value.sequence) ||
-    value.sequence < 1 ||
-    !Number.isInteger(value.occurredAt) ||
-    !Number.isInteger(value.recordedAt)
-  ) {
-    throw new Error(`${context} has an invalid envelope`);
-  }
-  decodeProvenance(value.provenance, `${context}.provenance`);
-  decodePayload(value.payload, `${context}.payload`);
-  if (value.payload.kind === "command.receipt.recorded") {
-    if (
-      value.commandId !== value.payload.receipt.commandId ||
-      value.sequence !== value.payload.receipt.sequence ||
-      value.recordedAt !== value.payload.receipt.recordedAt
-    ) {
-      throw new Error(`${context} receipt envelope does not match receipt`);
-    }
-  }
+  decodeSessionCommandIntent(value.intent, `${context}.intent`);
+  if (value.route !== null) decodeSessionCommandRoute(value.route, `${context}.route`);
 }
 
 function parseJson(value: unknown, context: string): unknown {
@@ -1219,35 +622,6 @@ function parseJson(value: unknown, context: string): unknown {
   } catch {
     throw new Error(`${context} contains invalid JSON`);
   }
-}
-
-function encodeJson(value: unknown): string {
-  assertJsonValue(value, "JSON value");
-  const encoded = JSON.stringify(value);
-  if (encoded === undefined) throw new Error("JSON value cannot be undefined");
-  return encoded;
-}
-
-function decodeNativeDetail(value: unknown, context: string): SessionNativeDetail | null {
-  assertJsonValue(value, context);
-  return value as SessionNativeDetail;
-}
-
-function assertJsonValue(value: unknown, context: string): void {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return;
-  if (typeof value === "number") {
-    if (Number.isFinite(value)) return;
-    throw new Error(`${context} contains a non-finite number`);
-  }
-  if (Array.isArray(value)) {
-    value.forEach((item, index) => assertJsonValue(item, `${context}[${index}]`));
-    return;
-  }
-  if (typeof value === "object") {
-    for (const [key, item] of Object.entries(value)) assertJsonValue(item, `${context}.${key}`);
-    return;
-  }
-  throw new Error(`${context} is not JSON-compatible`);
 }
 
 function asRecord(value: unknown, context: string): SqlRow {
@@ -1270,25 +644,11 @@ function readNullableString(value: unknown, context: string): string | null {
   return value === null ? null : readString(value, context);
 }
 
-/** Absent either way — an explicit `null` or a key an older event never wrote. */
-function readAbsentableString(value: unknown, context: string): string | null {
-  return value === null || value === undefined ? null : readString(value, context);
-}
-
-function readBoolean(value: unknown, context: string): boolean {
-  if (typeof value !== "boolean") throw new Error(`${context} must be a boolean`);
-  return value;
-}
-
 function readInteger(value: unknown, context: string): number {
   if (typeof value !== "number" || !Number.isInteger(value)) {
     throw new Error(`${context} must be an integer`);
   }
   return value;
-}
-
-function readNullableInteger(value: unknown, context: string): number | null {
-  return value === null ? null : readInteger(value, context);
 }
 
 function enumValue<const T extends readonly string[]>(
