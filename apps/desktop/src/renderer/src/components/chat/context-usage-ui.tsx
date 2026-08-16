@@ -102,8 +102,10 @@ export const ContextUsagePill = React.memo(function ContextUsagePill({
  * encodes in area and color. What replaced it is a single reserved line —
  * fixed height, so the popover never jumps — that reads whichever bucket the
  * pointer is over, while every other bucket steps back to 40%. Resting, the
- * line carries the invitation and the hedge in one sentence; the pill's own
- * tooltip and aria-label still carry the totals for anyone not hovering.
+ * line shows Free — the number the meter exists to protect — falling back to
+ * the largest bucket when there is no free window to speak of. The estimate
+ * hedge rides the ~ every estimated count wears; Free needs none, being
+ * window minus measurement.
  */
 function ContextBreakdown({
   usage,
@@ -121,7 +123,9 @@ function ContextBreakdown({
   summary: string;
 }) {
   const [hovered, setHovered] = React.useState<ContextSegmentId | "free" | null>(null);
-  const detail = hovered === null ? null : hoverDetail(hovered, byId, free, usage);
+  const detail =
+    (hovered === null ? null : hoverDetail(hovered, byId, free, usage)) ??
+    restingDetail(usage, byId, free);
   return (
     <>
       <div className="flex items-baseline justify-between gap-2">
@@ -157,35 +161,44 @@ function ContextBreakdown({
         ))}
       </div>
 
-      {/* One line, always the same height. Resting it is the invitation and
-          the hedge; hovering it is the hovered bucket's legend row. */}
-      <div className="mt-2.5 flex h-4 items-center gap-2">
-        {detail === null ? (
-          <span className="min-w-0 truncate text-label text-muted-foreground/70">
-            Hover the grid — the split is estimated
+      {/* One line, always the same height: the hovered bucket's legend row,
+          or the resting default when the pointer is elsewhere. */}
+      {detail === null ? null : (
+        <div className="mt-2.5 flex h-4 items-center gap-2">
+          <span
+            aria-hidden
+            className={cn("size-2 shrink-0 rounded-[2px]", SEGMENT_CELL[detail.id])}
+          />
+          <span className="min-w-0 flex-1 truncate text-ui text-muted-foreground">
+            {detail.label}
           </span>
-        ) : (
-          <>
-            <span
-              aria-hidden
-              className={cn("size-2 shrink-0 rounded-[2px]", SEGMENT_CELL[detail.id])}
-            />
-            <span className="min-w-0 flex-1 truncate text-ui text-muted-foreground">
-              {detail.label}
-            </span>
-            <span className="shrink-0 text-label tabular-nums text-muted-foreground">
-              {detail.amount}
-            </span>
-          </>
-        )}
-      </div>
+          <span className="shrink-0 text-label tabular-nums text-muted-foreground">
+            {detail.amount}
+          </span>
+        </div>
+      )}
     </>
   );
 }
 
 /**
+ * What the line says when nothing is hovered: Free — the meter's headline
+ * number — or, when there is no free window to report (unknown window, or one
+ * fully spent), the largest bucket, which is the next most useful fact.
+ */
+function restingDetail(
+  usage: SessionContextUsage,
+  byId: ReadonlyMap<string, { label: string; tokens: number }>,
+  free: number | null,
+): { id: ContextSegmentId | "free"; label: string; amount: string } | null {
+  if (free !== null && free > 0) return hoverDetail("free", byId, free, usage);
+  const largest = [...usage.segments].toSorted((a, b) => b.tokens - a.tokens)[0];
+  return largest === undefined ? null : hoverDetail(largest.id, byId, free, usage);
+}
+
+/**
  * The hovered bucket as a legend row: free is a measured count, every spent
- * bucket is the estimate it is, marked with the ~ the resting line explains.
+ * bucket is the estimate it is, marked with the ~ that says so.
  */
 function hoverDetail(
   hovered: ContextSegmentId | "free",
