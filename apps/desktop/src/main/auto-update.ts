@@ -39,6 +39,16 @@ import { prepared } from "./db/prepared";
  *     "INSERT INTO app_state (key, value, updated_at)
  *      VALUES ('volli:update-allow-prerelease', 'true', 0)
  *      ON CONFLICT(key) DO UPDATE SET value = excluded.value;"
+ *
+ * The toggle only ever WIDENS the update surface, so it is applied one-way:
+ * `true` forces prereleases on, `false`/absent leaves electron-updater's own
+ * default in place. That default is already the right policy per install
+ * kind — `true` when the RUNNING build's version carries a prerelease
+ * component (a canary install exists only because someone opted into
+ * canaries) and `false` for stable versions. Forcing `false` onto a canary
+ * install would strand it: its checks would read the stable-only feed
+ * (`releases/latest`), which 404s while only prereleases exist, and it
+ * would never follow the canary line it came from.
  */
 export const UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY = "volli:update-allow-prerelease";
 
@@ -90,7 +100,11 @@ export interface AutoUpdateDeps {
   /** `app.isPackaged` — dev runs must never check. */
   isPackaged: boolean;
   updater: AutoUpdaterLike;
-  /** The one persisted policy input — see {@link readAllowPrerelease}. */
+  /**
+   * The one persisted policy input — see {@link readAllowPrerelease}. Applied
+   * one-way: `true` widens to prereleases, `false` defers to the updater's
+   * version-derived default (see the note on the app_state key above).
+   */
   allowPrerelease: boolean;
   /** The app's notification seam: a native `Notification`, never a dialog. */
   notify(title: string, body: string): void;
@@ -117,7 +131,14 @@ export function startAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
   const { updater } = deps;
   updater.autoDownload = true;
   updater.autoInstallOnAppQuit = true;
-  updater.allowPrerelease = deps.allowPrerelease;
+  // One-way widen — never assign `false` over the updater's version-derived
+  // default (see UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY's doc for why).
+  if (deps.allowPrerelease) updater.allowPrerelease = true;
+  // The effective policy, logged up front: "why did/didn't this install see
+  // the canary?" must be answerable from the log alone.
+  deps.log(
+    `[updater] allowPrerelease=${String(updater.allowPrerelease)} (toggle=${String(deps.allowPrerelease)})`,
+  );
 
   updater.on("checking-for-update", () => deps.log("[updater] checking for updates"));
   updater.on("update-available", (info) =>

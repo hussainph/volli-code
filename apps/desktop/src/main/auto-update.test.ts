@@ -133,10 +133,27 @@ describe("startAutoUpdate", () => {
     expect(harness.updater.autoDownload).toBe(true);
     expect(harness.updater.autoInstallOnAppQuit).toBe(true);
     expect(harness.updater.allowPrerelease).toBe(true);
+    expect(harness.logs).toContain("[updater] allowPrerelease=true (toggle=true)");
     handle.stop();
+  });
 
-    harness.start({ allowPrerelease: false }).stop();
-    expect(harness.updater.allowPrerelease).toBe(false);
+  it("applies the prerelease toggle one-way: off defers to the updater's own default", () => {
+    vi.useFakeTimers();
+
+    // Stable-build default (false) stays false with the toggle off…
+    const stable = makeHarness();
+    stable.start({ allowPrerelease: false }).stop();
+    expect(stable.updater.allowPrerelease).toBe(false);
+    expect(stable.logs).toContain("[updater] allowPrerelease=false (toggle=false)");
+
+    // …and a canary build's version-derived default (true) is never
+    // clobbered by an absent/false toggle — forcing false would point the
+    // install at the stable-only feed and off its own canary line.
+    const canary = makeHarness();
+    canary.updater.allowPrerelease = true;
+    canary.start({ allowPrerelease: false }).stop();
+    expect(canary.updater.allowPrerelease).toBe(true);
+    expect(canary.logs).toContain("[updater] allowPrerelease=true (toggle=false)");
   });
 
   it("checks after the initial delay and then on the interval", () => {
@@ -193,6 +210,7 @@ describe("startAutoUpdate", () => {
     harness.updater.emit("error", new Error("feed unreachable"));
 
     expect(harness.logs).toEqual([
+      "[updater] allowPrerelease=false (toggle=false)",
       "[updater] checking for updates",
       "[updater] update available: 0.2.0 — downloading",
       "[updater] up to date (latest: 0.1.0)",
