@@ -1,0 +1,173 @@
+name: Release
+
+# Tag-driven release lane (VC-25): pushing a `v*` tag produces a Developer
+# ID-signed, notarized, stapled build published to GitHub Releases, where the
+# in-app updater (VC-24, electron-updater) picks it up. Releasing is:
+#
+#   git tag v0.x.y && git push origin v0.x.y
+#
+# All signing/notarization/publish mechanics live in
+# apps/desktop/electron-builder.yml (VC-23) and scripts/staple-dmg.mjs; this
+# workflow only supplies credentials, runs the dist pipeline with --publish,
+# and gates the result.
+#
+# Required repo secrets (Settings -> Secrets and variables -> Actions):
+#   MAC_CERT_P12_BASE64  "Developer ID Application: Hussain Phalasiya
+#                        (Y54F649NH4)" cert + private key, exported from the
+#                        login keychain as a password-protected .p12, then
+#                        base64-encoded (`base64 -i cert.p12`).
+#   MAC_CERT_PASSWORD    Password on that .p12.
+#   APPLE_API_KEY_P8     Contents of the App Store Connect API key
+#                        (~/.appstoreconnect/private_keys/AuthKey_Volli.p8 on
+#                        the dev machine).
+#   APPLE_API_KEY_ID     Key ID of that API key.
+#   APPLE_API_ISSUER     Issuer ID of that API key.
+# A preflight step fails the run if any are missing: electron-builder would
+# otherwise fall back to ad-hoc signing and the dmg staple hook would skip
+# silently, shipping a build Gatekeeper rejects and Squirrel.Mac refuses to
+# apply as an update.
+#
+# Channels and release states (plan agreed on VC-24):
+#   - Canary: prerelease-suffixed tags (e.g. v0.2.0-canary.3).
+#     electron-builder auto-marks these as GitHub pre-releases and they go
+#     live immediately — only allowPrerelease installs (the dogfood build)
+#     follow them.
+#   - Stable: bare tags (e.g. v0.2.0). electron-builder's default releaseType
+#     is draft: edit the release notes, then publish the draft to put it on
+#     the updater feed (electron-updater ignores draft releases).
+#
+# Cadence (dogfooding-solo policy): tag whenever something meaningful merges,
+# roughly weekly, on a green main. Add real beta/stable discipline only when
+# someone besides the owner runs the app.
+#
+# The updater hits the feed unauthenticated, so releases must stay publicly
+# readable (the repo is public today; if it ever goes private, every update
+# check 404s until that is revisited).
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  # electron-builder creates the GitHub Release and uploads dmg + zip +
+  # latest-mac.yml using GH_TOKEN.
+  contents: write
+
+jobs:
+  release:
+    name: Sign, notarize, publish
+    # arm64, matching the arm64-only target list in electron-builder.yml.
+    runs-on: macos-latest
+    # Two notarytool --wait submissions (.app during pack, dmg in the staple
+    # hook) dominate; usually well under this, but Apple occasionally queues.
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # Fail before the expensive install if the tag cannot produce a coherent
+      # release. Exact string match, so prerelease tags (v0.1.0-canary.3) must
+      # match package.json exactly too. apps/desktop/package.json is the
+      # version electron-builder reads — it names the artifacts and feeds
+      # latest-mac.yml.
+      - name: "Guard: tag matches app version"
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          pkg="$(jq -r .version apps/desktop/package.json)"
+          if [ "$version" != "$pkg" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match apps/desktop/package.json version $pkg — bump the version (or fix the tag) and re-tag."
+            exit 1
+          fi
+
+      - name: "Guard: release secrets present"
+        env:
+          MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          missing=()
+          for name in MAC_CERT_P12_BASE64 MAC_CERT_PASSWORD APPLE_API_KEY_P8 APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            [ -n "${!name}" ] || missing+=("$name")
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing repo secret(s): ${missing[*]} — refusing to ship an unsigned or unnotarized build. See the workflow header for what each secret contains."
+            exit 1
+          fi
+
+      # electron-builder 26 and scripts/staple-dmg.mjs both expect
+      # APPLE_API_KEY to be a *file path* to the .p8, so both key secrets are
+      # materialized in the runner's temp dir. CSC_LINK gets a path too
+      # (rather than raw base64) so a line-wrapped secret cannot trip
+      # electron-builder's base64 sniffing.
+      - name: Materialize signing credentials
+        env:
+          MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          printf '%s' "$MAC_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/mac-cert.p12"
+          printf '%s\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+          chmod 600 "$RUNNER_TEMP/mac-cert.p12" "$RUNNER_TEMP/AuthKey.p8"
+
+      # Mirrors ci.yml. run-install triggers apps/desktop's postinstall
+      # (rebuild:native + cache:node-sqlite) — proven to survive on the macOS
+      # image by ci.yml's desktop-smoke lane.
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Build desktop pipeline
+        run: vp run --filter @volli/desktop build
+
+      # The dist script minus its build half (done above): electron-builder
+      # imports CSC_LINK into its own throwaway keychain, signs with hardened
+      # runtime, notarizes the .app (mac.notarize) and the dmg
+      # (afterAllArtifactBuild staple hook), and uploads dmg + zip +
+      # latest-mac.yml to the GitHub Release for this tag.
+      - name: Package, sign, notarize, publish
+        working-directory: apps/desktop
+        env:
+          CSC_LINK: ${{ runner.temp }}/mac-cert.p12
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_API_KEY: ${{ runner.temp }}/AuthKey.p8
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # vp exec (ci.yml's pattern for workspace binaries) resolves
+        # electron-builder from the install's bin dirs regardless of hoisting.
+        run: vp exec electron-builder --publish always
+
+      # mac.notarize and the staple hook both degrade to a skip when
+      # credentials are absent or wrong-shaped, so trust nothing: prove the
+      # artifacts exist and that Gatekeeper accepts them before calling the
+      # run green. (The release is already uploaded at this point — a failure
+      # here means: fix, delete the bad release + tag, re-tag.)
+      - name: "Gate: artifacts complete and notarized"
+        run: |
+          cd apps/desktop/release
+          shopt -s nullglob
+          dmgs=(*.dmg)
+          zips=(*-mac.zip)
+          [ "${#dmgs[@]}" -eq 1 ] || { echo "::error::expected exactly one dmg, found: ${dmgs[*]:-none}"; exit 1; }
+          [ "${#zips[@]}" -eq 1 ] || { echo "::error::expected exactly one auto-update zip, found: ${zips[*]:-none}"; exit 1; }
+          [ -f latest-mac.yml ] || { echo "::error::latest-mac.yml missing — the updater feed was not generated"; exit 1; }
+          echo "stapler validate: ${dmgs[0]}"
+          xcrun stapler validate "${dmgs[0]}"
+          app="mac-arm64/Volli Code.app"
+          [ -d "$app" ] || { echo "::error::$app missing"; exit 1; }
+          spctl -a -vv --type execute "$app" 2>&1 | tee spctl-assessment.txt
+          if ! grep -q "source=Notarized Developer ID" spctl-assessment.txt; then
+            echo "::error::app is not notarized — spctl did not report 'Notarized Developer ID'"
+            exit 1
+          fi
+
+      - name: Scrub credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/mac-cert.p12" "$RUNNER_TEMP/AuthKey.p8"
