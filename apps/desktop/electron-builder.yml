@@ -1,7 +1,18 @@
-# Packaging config for the local macOS build: `pnpm -C apps/desktop run dist`
+# Packaging config for macOS builds: `pnpm -C apps/desktop run dist`
 # (vp build/pack first, then electron-builder). Output lands in release/
-# (gitignored). Unsigned beyond macOS's mandatory ad-hoc signature — this is a
-# personal-machine build, not a notarized distribution artifact.
+# (gitignored).
+#
+# Signing posture (VC-23): electron-builder signs with the Developer ID
+# Application identity it finds in the login keychain (or via CSC_NAME /
+# CSC_LINK+CSC_KEY_PASSWORD in CI) — hardened runtime with
+# build/entitlements.mac.plist. Notarization runs when credentials are in the
+# env: APPLE_API_KEY (path to .p8) + APPLE_API_KEY_ID + APPLE_API_ISSUER
+# (App Store Connect API key, preferred) or APPLE_ID +
+# APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID. Credentials live only in env /
+# CI secrets, never in the repo. Without a cert and credentials the build
+# falls back to ad-hoc signing and skips notarization — fine for a personal
+# machine, but Squirrel.Mac auto-updates and Gatekeeper on other machines
+# require the full Developer ID + notarization path.
 appId: app.volli.desktop
 # productName comes from package.json ("Volli Code"); the .app icon comes from
 # buildResources (build/icon.icns — canonical baked asset, never regenerated).
@@ -19,7 +30,10 @@ directories:
 # require()s from node_modules at runtime is therefore a tiny closed set:
 #   @trpc/server, better-sqlite3 (-> bindings -> file-uri-to-path), node-pty
 # (node-pty via a lazy `import("node-pty")`), yaml (prompt-template
-# frontmatter). The extglob negation below drops
+# frontmatter), and electron-updater (VC-24) with its own runtime tree
+# (builder-util-runtime -> debug -> ms, sax; fs-extra -> graceful-fs,
+# jsonfile, universalify; js-yaml -> argparse; lazy-val; lodash.escaperegexp;
+# lodash.isequal; semver; tiny-typed-emitter). The extglob negation below drops
 # the other ~500 collected packages (~400 MB: monaco, mermaid, icon packs, AI
 # SDK providers — all renderer-only or already bundled). KEEP IN SYNC with the
 # bare `require(`/`import(` specifiers in dist-electron/*.cjs: a new external
@@ -29,7 +43,7 @@ files:
   - dist/**
   - dist-electron/**
   - "!dist-electron/*.map"
-  - "!node_modules/!(@trpc|better-sqlite3|bindings|file-uri-to-path|node-pty|yaml)/**"
+  - "!node_modules/!(@trpc|argparse|better-sqlite3|bindings|builder-util-runtime|debug|electron-updater|file-uri-to-path|fs-extra|graceful-fs|js-yaml|jsonfile|lazy-val|lodash.escaperegexp|lodash.isequal|ms|node-pty|sax|semver|tiny-typed-emitter|universalify|yaml)/**"
   - "!node_modules/@trpc/!(server)/**"
   # Dev-only artifacts inside kept modules: deps/ is better-sqlite3's vendored
   # SQLite source, prebuilds/ is the Node-ABI cache that cache-node-sqlite.mjs
@@ -54,7 +68,38 @@ electronLanguages:
 
 mac:
   category: public.app-category.developer-tools
+  # Hardened runtime is a notarization requirement. The entitlements file is
+  # our own minimal set (see comments in it); the same file applies to the
+  # nested Electron helpers via entitlementsInherit.
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # Boolean in electron-builder 26: notarizes when the APPLE_* env credentials
+  # above are present, warns and skips when they are not (so credential-less
+  # local builds keep working).
+  notarize: true
+  # dmg is the human download; zip is what Squirrel.Mac/electron-updater
+  # consumes (VC-24) — a dmg alone cannot drive auto-updates. arm64-only by
+  # decision; no Intel builds for now.
   target:
     - target: dmg
       arch:
         - arm64
+    - target: zip
+      arch:
+        - arm64
+
+# electron-builder notarizes/staples the .app but not the dmg artifact
+# itself; this hook gives the dmg its own ticket so `stapler validate`
+# passes and Gatekeeper can verify the download offline (VC-23 acceptance).
+# No-op when the APPLE_API_* env vars are absent — see the script header.
+afterAllArtifactBuild: scripts/staple-dmg.mjs
+
+# GitHub Releases is the distribution channel. electron-builder only uploads
+# when invoked with --publish and a GH_TOKEN (the release workflow's job,
+# VC-25); this block's presence also makes builds emit latest-mac.yml next to
+# the artifacts, which electron-updater (VC-24) needs on the release.
+publish:
+  provider: github
+  owner: hussainph
+  repo: volli-code
