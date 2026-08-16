@@ -444,6 +444,242 @@ footer nav a:hover {
   color: var(--text);
 }
 
+/* Download page — one reading column, two channel cards. States (loading /
+   no-stable / API failure) share the card frame so nothing jumps. */
+
+.download-main {
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 28px 40px 96px;
+}
+
+.download-topbar {
+  display: flex;
+  min-height: 56px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.download-brand {
+  padding-top: 0;
+}
+
+.download-topbar nav {
+  display: flex;
+  gap: 26px;
+}
+
+.download-topbar nav a {
+  min-height: 44px;
+  color: #717174;
+  font-size: 13px;
+  line-height: 44px;
+  transition: color 160ms ease;
+}
+
+.download-topbar nav a:hover {
+  color: var(--text);
+}
+
+.download-intro {
+  padding: 72px 0 40px;
+}
+
+.download-intro h1 {
+  margin: 0 0 14px;
+  color: var(--text);
+  font-size: clamp(34px, 4.2vw, 44px);
+  font-weight: 420;
+  letter-spacing: -0.05em;
+  line-height: 1.13;
+  text-wrap: balance;
+}
+
+.download-sub {
+  max-width: 520px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 380;
+  line-height: 1.6;
+}
+
+.download-sub a,
+.download-all-releases a,
+.channel-status a {
+  color: #ff966c;
+  text-decoration: underline;
+  text-decoration-color: rgb(255 150 108 / 38%);
+  text-underline-offset: 3px;
+  transition: text-decoration-color 180ms ease;
+}
+
+.download-sub a:hover,
+.download-all-releases a:hover,
+.channel-status a:hover {
+  text-decoration-color: #ff966c;
+}
+
+.platform-note {
+  margin: 18px 0 0;
+  color: #c9a27c;
+  font-size: 13px;
+  letter-spacing: 0.01em;
+}
+
+.channel-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.channel-card {
+  display: flex;
+  min-height: 268px;
+  padding: 24px 24px 22px;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #101010;
+}
+
+.channel-card--canary {
+  background: linear-gradient(155deg, rgb(232 101 42 / 7%), transparent 42%), #101010;
+}
+
+.channel-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.channel-head h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 480;
+  letter-spacing: -0.03em;
+}
+
+.channel-badge {
+  padding: 3px 9px;
+  border: 1px solid rgb(232 101 42 / 45%);
+  border-radius: 999px;
+  color: #ff9a68;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.channel-tagline {
+  margin: 8px 0 20px;
+  color: var(--quiet);
+  font-size: 13.5px;
+  font-weight: 380;
+  line-height: 1.5;
+}
+
+.channel-body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.channel-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 380;
+  line-height: 1.55;
+}
+
+.channel-version {
+  display: flex;
+  margin: 0;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.channel-version-number {
+  color: var(--text);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.channel-version-date {
+  color: var(--quiet);
+  font-size: 12.5px;
+}
+
+.artifact-list {
+  display: grid;
+  gap: 8px;
+}
+
+.artifact {
+  display: flex;
+  min-height: 46px;
+  padding: 0 16px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #303030;
+  border-radius: 12px;
+  background: #161616;
+  color: #d9d9db;
+  font-size: 14px;
+  font-weight: 560;
+  letter-spacing: -0.01em;
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease,
+    transform 180ms ease;
+}
+
+.artifact:hover {
+  border-color: #454545;
+  background: #1b1b1b;
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.artifact--primary {
+  border-color: transparent;
+  background: var(--ember);
+  color: #160b06;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 22%),
+    0 8px 24px rgb(232 101 42 / 15%);
+}
+
+.artifact--primary:hover {
+  border-color: transparent;
+  background: #f2773e;
+  color: #160b06;
+}
+
+.artifact-meta {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 480;
+  opacity: 0.72;
+  white-space: nowrap;
+}
+
+.download-all-releases {
+  margin: 40px 0 0;
+  color: var(--quiet);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
 @media (max-width: 1050px) {
   .hero-shell {
     padding: 24px 24px 0;
@@ -479,9 +715,27 @@ footer nav a:hover {
   }
 }
 
+@media (max-width: 700px) {
+  .channel-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .channel-card {
+    min-height: 0;
+  }
+}
+
 @media (max-width: 560px) {
   .hero-shell {
     padding: 16px 16px 0;
+  }
+
+  .download-main {
+    padding: 16px 20px 72px;
+  }
+
+  .download-intro {
+    padding: 56px 0 32px;
   }
 
   .statement-section {
