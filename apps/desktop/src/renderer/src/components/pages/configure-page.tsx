@@ -15,7 +15,6 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
-import { Switch } from "@renderer/components/ui/switch";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
@@ -31,7 +30,6 @@ export function ConfigurePage() {
   const project = useSelectedProject();
   const updateBaseBranch = useProjectsStore((state) => state.updateBaseBranch);
   const updateSetupCommand = useProjectsStore((state) => state.updateSetupCommand);
-  const updateSkillsAutoDisclosure = useProjectsStore((state) => state.updateSkillsAutoDisclosure);
 
   if (project === null) {
     return (
@@ -57,7 +55,6 @@ export function ConfigurePage() {
           project={project}
           onSaveBaseBranch={updateBaseBranch}
           onSaveSetupCommand={updateSetupCommand}
-          onSaveSkillsAutoDisclosure={updateSkillsAutoDisclosure}
         />
       ),
     },
@@ -80,69 +77,21 @@ export function ConfigurePage() {
   return <SettingsShell title="Configure" categories={categories} />;
 }
 
-/** General category: the project's base-branch, setup-command and skills-disclosure defaults. */
+/** General category: the project's base-branch and setup-command automation defaults. */
 export function ConfigureGeneralSection({
   project,
   onSaveBaseBranch,
   onSaveSetupCommand,
-  onSaveSkillsAutoDisclosure,
 }: {
   project: Project | null;
   onSaveBaseBranch: (projectId: string, baseBranch: string | null) => Promise<boolean>;
   onSaveSetupCommand: (projectId: string, setupCommand: string | null) => Promise<boolean>;
-  onSaveSkillsAutoDisclosure: (projectId: string, enabled: boolean) => Promise<boolean>;
 }) {
   return (
     <SettingsSection title={project?.name ?? "No project selected"}>
       <BaseBranchField project={project} onSave={onSaveBaseBranch} />
       <SetupCommandField project={project} onSave={onSaveSetupCommand} />
-      <SkillsAutoDisclosureField project={project} onSave={onSaveSkillsAutoDisclosure} />
     </SettingsSection>
-  );
-}
-
-/**
- * Per-project consent for the attach-time skills index: new chat Sessions get
- * a metadata listing of `.agents/skills/` in their system prompt and activate
- * a skill by reading its SKILL.md. Volli-owned state on purpose — never a
- * file a repository could commit to authorize its own skills' injection — and
- * the flip governs the NEXT Session start; running Sessions keep the prompt
- * their durable record already fixed. No save button: a switch IS its save,
- * reverted (with a toast) when the write fails.
- */
-function SkillsAutoDisclosureField({
-  project,
-  onSave,
-}: {
-  project: Project | null;
-  onSave: (projectId: string, enabled: boolean) => Promise<boolean>;
-}) {
-  const [saving, setSaving] = useState(false);
-
-  async function save(enabled: boolean): Promise<void> {
-    if (!project || saving) return;
-    setSaving(true);
-    try {
-      const ok = await onSave(project.id, enabled);
-      if (!ok) toastError("Couldn't save skills auto-disclosure");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <SettingsRow
-      label="Auto-disclose skills"
-      htmlFor="project-skills-auto-disclosure"
-      description="New chats see the names of installed skills (.agents/skills/) and can load one when the task calls for it."
-    >
-      <Switch
-        id="project-skills-auto-disclosure"
-        checked={project?.skillsAutoDisclosure ?? false}
-        disabled={!project || saving}
-        onCheckedChange={(checked) => void save(checked)}
-      />
-    </SettingsRow>
   );
 }
 

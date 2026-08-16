@@ -12,10 +12,12 @@
  * frontmatter parses under the same rules as a prompt template — same fence,
  * same description key, same first-line fallback — which is why this module
  * borrows `prompt-templates.ts`'s parser instead of writing a second one.
- * Nothing Volli-specific is read out of a SKILL.md, deliberately: the files
- * are hash-pinned installer artifacts (`skills-lock.json`) and stay fully
- * spec-neutral — whether a project auto-discloses its skills is a Volli
- * setting (`Project.skillsAutoDisclosure`), never a byte in the skill.
+ * Only spec fields are read: `description`, and the one `metadata` key that
+ * lets a skill keep itself out of the model's index (`isUserInvokeOnly`).
+ * `metadata` is where the specification puts client-specific properties, so
+ * reading a namespaced key out of it is the format working as designed — and
+ * a skill that sets nothing behaves the way the format says it should, which
+ * is disclosed.
  *
  * The failure policy is `prompt-templates.ts`'s, verbatim: a missing
  * directory is the normal case and reads as empty, only a directory that
@@ -28,6 +30,7 @@ import { join } from "node:path";
 import {
   errorMessage,
   isSkillName,
+  isUserInvokeOnly,
   mergeSkills,
   promptTemplateDescription,
   skillRootDir,
@@ -94,11 +97,12 @@ export async function readSkillDir(
       // No readable SKILL.md — not a skill, and one loss never costs the rest.
       continue;
     }
-    const { description, body } = parsePromptTemplateFile(raw);
+    const { description, metadata, body } = parsePromptTemplateFile(raw);
     skills.push({
       name: slug,
       description: promptTemplateDescription({ body, frontmatterDescription: description }),
       body,
+      userInvokeOnly: isUserInvokeOnly(metadata),
       root: rootFor(slug),
     });
   }

@@ -96,7 +96,6 @@ import {
   reorderProjects,
   updateProjectBaseBranch,
   updateProjectSetupCommand,
-  updateProjectSkillsAutoDisclosure,
 } from "./db/projects-repo";
 import {
   chatSessionRecord,
@@ -395,10 +394,6 @@ export function registerDataIpcHandlers(
         const trimmed = input.setupCommand === null ? null : input.setupCommand.trim();
         const normalized = trimmed === "" ? null : trimmed;
         project = updateProjectSetupCommand(db, input.id, normalized, now);
-        if (!project) return { ok: false, error: "Unknown project" };
-      }
-      if (input.skillsAutoDisclosure !== undefined) {
-        project = updateProjectSkillsAutoDisclosure(db, input.id, input.skillsAutoDisclosure, now);
         if (!project) return { ok: false, error: "Unknown project" };
       }
       return { ok: true, project };

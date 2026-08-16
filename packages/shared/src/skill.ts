@@ -20,18 +20,21 @@
  * ladder: metadata first, instructions when activated, bundled files as
  * needed.
  *
- * The index is gated by a PER-PROJECT toggle in Volli's own settings
- * (`Project.skillsAutoDisclosure`), and deliberately not by anything inside
- * the repository. Twice deliberate. A committed opt-in would let a cloned
- * repo authorize its own injection — ship a skill and the flag together, and
- * the first chat eats both — which is exactly the ambient hazard the
- * Operating layer's no-ambient-configuration promise exists against; consent
- * has to come from the user, on the machine, where no repo can commit it.
- * And a per-file flag was tried and retracted: vendored skills are pinned by
- * content hash (`skills-lock.json`), so the files Volli reads must stay
- * byte-identical to what the installer wrote — fully spec-neutral, nothing
- * Volli-specific inside them. With the toggle off, a skill is exactly what it
- * was: a `/` reference and a start-time pick, nothing more.
+ * Metadata disclosure is ON, always, because that is what the format says it
+ * is: the Agent Skills specification's progressive-disclosure ladder loads
+ * "the `name` and `description` fields ... at startup for all skills", then
+ * the body on activation, then bundled files as needed. Volli's job is to
+ * absorb the toolkit the user installed and make it faithfully available —
+ * not to hold an opinion about how they organize it, and not to ask them to
+ * re-consent to the format's own default. Where a skill lives is likewise
+ * theirs: personal and project tiers are offered identically.
+ *
+ * The one thing that can withhold a skill from the index is the SKILL a
+ * user authored ({@link isUserInvokeOnly}) — a `metadata` key, which is the
+ * extension point the spec itself sanctions ("clients can use this to store
+ * additional properties not defined by the Agent Skills spec"). Such a skill
+ * stays fully usable; it is simply not advertised to the model, so it runs
+ * when a person asks for it by name and never otherwise.
  *
  * The name a skill goes by is its directory slug, NOT its frontmatter `name`:
  * the frontmatter says "SVG Logo Designer", which no one can type after a `/`
@@ -56,6 +59,12 @@ export interface SkillReference {
   readonly description: string;
   /** The instructions themselves: the SKILL.md body, frontmatter stripped. */
   readonly body: string;
+  /**
+   * Whether the skill asked not to be advertised to the model — its own
+   * frontmatter's call, never Volli's. Out of the index, still `/`-invocable
+   * and still selectable at start.
+   */
+  readonly userInvokeOnly: boolean;
   /**
    * The skill's own directory, spelled the way the MODEL must address it —
    * and therefore tier-dependent, which is the whole reason it is carried as
@@ -181,6 +190,34 @@ export function skillPromptResource(skill: SkillReference): PromptResource {
 export const SKILLS_INDEX_RESOURCE_NAME = "skills index";
 
 /**
+ * The `metadata` key a skill sets to keep itself out of the index.
+ *
+ * Namespaced because the spec asks for it — "we recommend making your key
+ * names reasonably unique to avoid accidental conflicts" — and read out of
+ * `metadata` rather than invented as a top-level field because that map is
+ * precisely where the spec puts client-specific properties. Nothing else in
+ * a SKILL.md is Volli's business.
+ */
+export const SKILL_USER_INVOKE_ONLY_KEY = "volli-user-invoke-only";
+
+/**
+ * Whether a parsed `metadata` map opts its skill out of the index.
+ *
+ * Lenient in what it accepts, like every other frontmatter read here: the
+ * spec types `metadata` as string→string, so `"true"` is the spelling to
+ * expect, but a YAML author who writes a bare `true` meant the same thing and
+ * is not going to be told otherwise by silence. Anything else — absent, empty,
+ * `"false"`, a nested map — leaves the skill advertised, because the default
+ * has to be the format's default.
+ */
+export function isUserInvokeOnly(metadata: unknown): boolean {
+  if (typeof metadata !== "object" || metadata === null) return false;
+  const value = (metadata as Record<string, unknown>)[SKILL_USER_INVOKE_ONLY_KEY];
+  if (typeof value === "boolean") return value;
+  return typeof value === "string" && value.trim().toLowerCase() === "true";
+}
+
+/**
  * The Agent Skills spec's own ceiling for a description. An index entry is
  * clamped to it so one bloated frontmatter — or a derived description off a
  * malformed file — cannot turn the ~100-token metadata tier the spec promises
@@ -204,14 +241,14 @@ const INDEX_PREAMBLE = [
  * which lands in the transcript as an ordinary tool call, visible by
  * construction.
  *
- * Every skill handed in is listed — whether to disclose AT ALL is the
- * caller's per-project gate (the module doc says why the gate lives in
- * Volli's settings and not here or in the files). `injectedNames` are removed
- * even so: a skill whose full body already rides this Session's
- * promptResources has nothing left to disclose, and an index entry beside the
- * body would tell the model to go read what it was already handed. `null`
- * when nothing remains, so a Session with nothing to disclose composes the
- * exact prompt it composed before this index existed.
+ * Two kinds of skill are left out, and only two. A skill that asked to be
+ * user-invoked only ({@link isUserInvokeOnly}) is not advertised — its own
+ * decision, made in its own file. And `injectedNames` are removed because a
+ * skill whose full body already rides this Session's promptResources has
+ * nothing left to disclose; an index entry beside the body would tell the
+ * model to go read what it was already handed. `null` when nothing remains,
+ * so a Session with nothing to disclose composes the exact prompt it composed
+ * before this index existed.
  */
 export function skillsIndexResource(
   skills: readonly SkillReference[],
@@ -219,7 +256,7 @@ export function skillsIndexResource(
 ): PromptResource | null {
   const injected = new Set(injectedNames);
   const rows = skills
-    .filter((skill) => !injected.has(skill.name))
+    .filter((skill) => !skill.userInvokeOnly && !injected.has(skill.name))
     .toSorted((a, b) => a.name.localeCompare(b.name));
   if (rows.length === 0) return null;
   const entries = rows.map((skill) => {

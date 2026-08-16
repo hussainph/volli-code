@@ -1688,7 +1688,13 @@ describe("registerFileIpcHandlers", () => {
 
     const result = await invoke<{
       ok: boolean;
-      skills?: { name: string; description: string; body: string; root: string }[];
+      skills?: {
+        name: string;
+        description: string;
+        body: string;
+        userInvokeOnly: boolean;
+        root: string;
+      }[];
     }>("volli:prompt-templates", {}, { projectId: setup.projectId });
 
     expect(result.ok).toBe(true);
@@ -1697,12 +1703,14 @@ describe("registerFileIpcHandlers", () => {
         name: "logos",
         description: "Draw logos",
         body: "# Logos",
+        userInvokeOnly: false,
         root: ".agents/skills/logos",
       },
       {
         name: "pdf",
         description: "Fill PDFs",
         body: "# PDF",
+        userInvokeOnly: false,
         root: `${setup.globalSkillsDir}/pdf`,
       },
     ]);

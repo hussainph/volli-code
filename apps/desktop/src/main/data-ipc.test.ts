@@ -248,33 +248,6 @@ describe("volli:project-update — pinned base branch", () => {
       }),
     );
   });
-
-  it("flips skills auto-disclosure both ways and leaves it untouched when omitted", () => {
-    const projectId = createProject();
-
-    const enabled = invoke<{ ok: boolean; project?: { skillsAutoDisclosure?: boolean } }>(
-      "volli:project-update",
-      { id: projectId, baseBranch: null, skillsAutoDisclosure: true },
-    );
-    expect(enabled).toEqual(
-      expect.objectContaining({
-        ok: true,
-        project: expect.objectContaining({ skillsAutoDisclosure: true }),
-      }),
-    );
-
-    const untouched = invoke<{ ok: boolean; project?: { skillsAutoDisclosure?: boolean } }>(
-      "volli:project-update",
-      { id: projectId, baseBranch: null },
-    );
-    expect(untouched.project?.skillsAutoDisclosure).toBe(true);
-
-    const disabled = invoke<{ ok: boolean; project?: { skillsAutoDisclosure?: boolean } }>(
-      "volli:project-update",
-      { id: projectId, baseBranch: null, skillsAutoDisclosure: false },
-    );
-    expect(disabled.project?.skillsAutoDisclosure).toBe(false);
-  });
 });
 
 describe("volli:ticket-create — ticket numbers never recycle across a hard delete (#35)", () => {

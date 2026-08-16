@@ -216,9 +216,6 @@ describe("buildExportDocument — populated db", () => {
         themeSeed: null,
         themeCanvas: JSON.stringify(exportedCanvas),
         themeAppearance: "auto",
-        // Migration 020's consent column, carried as the row's 0/1; never
-        // flipped in this fixture, so the DEFAULT.
-        skillsAutoDisclosure: 0,
         colorIndex: project.colorIndex,
         sortOrder: project.sortOrder,
         // Bumped by the three theme writes above.

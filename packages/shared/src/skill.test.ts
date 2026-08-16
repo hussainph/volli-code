@@ -5,6 +5,8 @@ import type { PromptTemplate } from "./prompt-template";
 import {
   globalSkillsDir,
   isSkillName,
+  isUserInvokeOnly,
+  SKILL_USER_INVOKE_ONLY_KEY,
   mergeSkills,
   projectSkillsDir,
   skillInvocationText,
@@ -29,6 +31,7 @@ function skill(overrides: Partial<SkillReference> = {}): SkillReference {
     name,
     description: "Create professional SVG logos",
     body: "# SVG Logo Designer\n\nUse `awk '{print $1}'` when needed.",
+    userInvokeOnly: false,
     root: `.agents/skills/${name}`,
     ...overrides,
   };
@@ -153,8 +156,6 @@ describe("skillInvocationText", () => {
 
 describe("skillsIndexResource", () => {
   it("lists every skill handed in, name-sorted, as name + path + description", () => {
-    // Whether to disclose at all is the caller's per-project gate; this
-    // function never filters on anything inside a skill.
     const second = skill({ name: "beta", description: "Do beta things" });
     const first = skill({ name: "alpha", description: "Do alpha things" });
 
@@ -169,6 +170,20 @@ describe("skillsIndexResource", () => {
 
   it("is null for no skills at all, so the prompt composes exactly as before", () => {
     expect(skillsIndexResource([])).toBeNull();
+  });
+
+  it("leaves out a skill that asked to be user-invoked only, and nothing else", () => {
+    const quiet = skill({ name: "quiet", userInvokeOnly: true });
+    const loud = skill({ name: "loud", description: "Advertised" });
+
+    const resource = skillsIndexResource([quiet, loud]);
+
+    expect(resource?.text).toContain("- loud (");
+    expect(resource?.text).not.toContain("quiet");
+  });
+
+  it("is null when every skill opted out, so the prompt composes as if none existed", () => {
+    expect(skillsIndexResource([skill({ userInvokeOnly: true })])).toBeNull();
   });
 
   it("points a personal-tier entry at its absolute SKILL.md", () => {
@@ -217,5 +232,24 @@ describe("skillsIndexResource", () => {
       "- svg-logo-designer (.agents/skills/svg-logo-designer/SKILL.md)",
     );
     expect(resource?.text).not.toContain("SKILL.md):");
+  });
+});
+
+describe("isUserInvokeOnly", () => {
+  it("reads the namespaced key out of the spec's metadata map", () => {
+    expect(isUserInvokeOnly({ [SKILL_USER_INVOKE_ONLY_KEY]: "true" })).toBe(true);
+    expect(isUserInvokeOnly({ [SKILL_USER_INVOKE_ONLY_KEY]: "TRUE " })).toBe(true);
+    expect(isUserInvokeOnly({ [SKILL_USER_INVOKE_ONLY_KEY]: true })).toBe(true);
+  });
+
+  it("leaves a skill advertised for anything else — the format's default wins", () => {
+    expect(isUserInvokeOnly(undefined)).toBe(false);
+    expect(isUserInvokeOnly(null)).toBe(false);
+    expect(isUserInvokeOnly("not a map")).toBe(false);
+    expect(isUserInvokeOnly({})).toBe(false);
+    expect(isUserInvokeOnly({ author: "someone" })).toBe(false);
+    expect(isUserInvokeOnly({ [SKILL_USER_INVOKE_ONLY_KEY]: "false" })).toBe(false);
+    expect(isUserInvokeOnly({ [SKILL_USER_INVOKE_ONLY_KEY]: false })).toBe(false);
+    expect(isUserInvokeOnly({ [SKILL_USER_INVOKE_ONLY_KEY]: { nested: "map" } })).toBe(false);
   });
 });

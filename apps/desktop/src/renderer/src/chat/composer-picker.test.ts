@@ -25,6 +25,7 @@ function skill(overrides: Partial<SkillReference> = {}): SkillReference {
     name,
     description: "Create professional SVG logos",
     body: "# Logos\n\nDo the thing.",
+    userInvokeOnly: false,
     root: `.agents/skills/${name}`,
     ...overrides,
   };

@@ -23,8 +23,6 @@ interface ProjectRow {
   /** Migration 014 — the authored canvas as JSON, and the appearance; NULL = inherit. */
   theme_canvas: string | null;
   theme_appearance: string | null;
-  /** Migration 020 — consent to the attach-time skills index; 0 unless the user flipped it. */
-  skills_auto_disclosure: number;
   color_index: number;
   sort_order: number;
   row_version: number;
@@ -101,7 +99,6 @@ function mapProject(row: ProjectRow): Project {
     // The CHECK on the column already limits this to the three words, so a
     // value that fails the guard means a db edited around it — inherit.
     themeAppearance: isAppearance(row.theme_appearance) ? row.theme_appearance : null,
-    skillsAutoDisclosure: row.skills_auto_disclosure === 1,
     colorIndex: row.color_index,
     sortOrder: row.sort_order,
     createdAt: row.created_at,
@@ -165,28 +162,6 @@ export function updateProjectSetupCommand(
         SET setup_command = ?, row_version = row_version + 1, updated_at = ?
       WHERE id = ?`,
   ).run(setupCommand, now, id);
-  return getProjectById(db, id);
-}
-
-/**
- * Updates the per-project skills auto-disclosure consent and returns the
- * authoritative row — the `base_branch`/`setup_command` precedent above, for
- * the column migration 020 adds. Session starts read this through
- * `getProjectById`, so the flip governs the NEXT start; an attached Session's
- * prompt is already durably recorded and stays what it was.
- */
-export function updateProjectSkillsAutoDisclosure(
-  db: Database.Database,
-  id: string,
-  enabled: boolean,
-  now: number,
-): Project | undefined {
-  prepared(
-    db,
-    `UPDATE projects
-        SET skills_auto_disclosure = ?, row_version = row_version + 1, updated_at = ?
-      WHERE id = ?`,
-  ).run(enabled ? 1 : 0, now, id);
   return getProjectById(db, id);
 }
 

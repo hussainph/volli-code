@@ -707,13 +707,13 @@ app.whenReady().then(async () => {
           },
           index: async (projectId, injectedNames) => {
             const project = getProjectById(sessionDb, projectId);
-            // The per-project consent gate (migration 020). Volli-owned state,
-            // never a repo file, so a cloned repository cannot authorize its
-            // own skills' disclosure by committing a flag beside them.
-            if (!project || project.skillsAutoDisclosure !== true) return null;
-            // Both tiers: consent governs WHETHER this project discloses, not
-            // which tier it may name. Listing only the vendored half would
-            // hide exactly the skills the convention installs by default.
+            if (!project) return null;
+            // Both tiers, always. Metadata disclosure is the Agent Skills
+            // ladder's first rung -- the spec loads every skill's name and
+            // description at startup -- so Volli absorbs the toolkit the user
+            // installed rather than holding an opinion about it. A skill opts
+            // ITSELF out through its frontmatter (`skillsIndexResource`); no
+            // Volli-side switch decides for the user.
             const read = await loadSkills({
               projectSkillsDir: projectSkillsDir(project.path),
               globalSkillsDir: globalSkillsDir(fsDeps.homeDir),

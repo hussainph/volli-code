@@ -267,12 +267,14 @@ describe("expandCommandInvocation", () => {
         name: "logos",
         description: "Design logos",
         body: "# Logos\n\nRun `awk '{print $1}'` first.",
+        userInvokeOnly: false,
         root: ".agents/skills/logos",
       },
       {
         name: "ship",
         description: "Shadowed by the template",
         body: "never delivered",
+        userInvokeOnly: false,
         root: ".agents/skills/ship",
       },
     ];

@@ -52,6 +52,7 @@ describe("readProjectSkills", () => {
           name: "svg-logo-designer",
           description: "Draw logos",
           body: "# Logos\n\nDo the thing.",
+          userInvokeOnly: false,
           root: ".agents/skills/svg-logo-designer",
         },
       ],
@@ -112,19 +113,40 @@ describe("readProjectSkills", () => {
     }
   });
 
-  it("reads nothing Volli-specific out of a SKILL.md — spec fields only", async () => {
-    // The files are hash-pinned installer artifacts; auto-disclosure is a
-    // Volli project setting, never a byte in the skill.
-    const dir = makeSkillsDir({
-      flagged: '---\ndescription: d\nmetadata:\n  volli-auto: "true"\n---\nBody',
-    });
+  it("defaults a skill to advertised — the format's own default", async () => {
+    const dir = makeSkillsDir({ plain: "---\ndescription: d\n---\nBody" });
 
     const result = await readProjectSkills(dir);
 
     expect(result).toEqual({
       ok: true,
-      skills: [{ name: "flagged", description: "d", body: "Body", root: ".agents/skills/flagged" }],
+      skills: [
+        {
+          name: "plain",
+          description: "d",
+          body: "Body",
+          userInvokeOnly: false,
+          root: ".agents/skills/plain",
+        },
+      ],
     });
+  });
+
+  it("honours the spec-sanctioned metadata opt-out, as a string or a bare boolean", async () => {
+    const dir = makeSkillsDir({
+      quiet: '---\ndescription: d\nmetadata:\n  volli-user-invoke-only: "true"\n---\nBody',
+      yamlish: "---\ndescription: d\nmetadata:\n  volli-user-invoke-only: true\n---\nBody",
+      loud: '---\ndescription: d\nmetadata:\n  volli-user-invoke-only: "false"\n---\nBody',
+      unrelated: "---\ndescription: d\nmetadata:\n  author: someone\n---\nBody",
+    });
+
+    const result = await readProjectSkills(dir);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(
+      Object.fromEntries(result.skills.map((skill) => [skill.name, skill.userInvokeOnly])),
+    ).toEqual({ quiet: true, yamlish: true, loud: false, unrelated: false });
   });
 
   it("derives a description from the body when the frontmatter has none", async () => {
@@ -181,6 +203,7 @@ describe("loadSkills", () => {
         name: "shared",
         description: "from project",
         body: "Project body",
+        userInvokeOnly: false,
         root: ".agents/skills/shared",
       },
     ]);
