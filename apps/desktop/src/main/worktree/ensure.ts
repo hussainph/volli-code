@@ -195,7 +195,7 @@ async function runEnsure(
   // missing source file (row exists, bytes don't) throws with the
   // attachment's label, which becomes this stage's failure message.
   try {
-    materializeAttachments(deps.db, deps.attachmentsRoot, ticketId, identity.path);
+    await materializeAttachments(deps.db, deps.attachmentsRoot, ticketId, identity.path);
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : String(caught);
     return fail(deps, ticketId, "attachments", message, message);

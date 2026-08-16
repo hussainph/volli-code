@@ -1,4 +1,5 @@
 import {
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -169,6 +170,51 @@ describe("copyIncludedFiles", () => {
 
     expect(copied).not.toContain("link.txt"); // never overwritten, never threw
     expect(readlinkSync(join(worktree, "link.txt"))).toBe(join(worktree, "does-not-exist"));
+  });
+
+  it("never descends into node_modules — the walk's dominant cost on a JS checkout", async () => {
+    const project = tempDir("proj");
+    const worktree = tempDir("wt");
+    write(project, ".env", "SECRET=1");
+    // Packages ship `.env.example` files of their own, and `.env*` is an
+    // unanchored default, so the old whole-tree walk did not merely COST the
+    // seconds VC-16 reported — it also transported other people's samples into
+    // the agent's checkout.
+    write(project, "node_modules/some-pkg/.env.example", "NOT_MINE=1");
+
+    const { copied } = await copyIncludedFiles(project, worktree);
+
+    expect(copied).toEqual([".env"]);
+    expect(existsSync(join(worktree, "node_modules"))).toBe(false);
+  });
+
+  it("descends into a pruned directory a .worktreeinclude line asks for by name", async () => {
+    const project = tempDir("proj");
+    const worktree = tempDir("wt");
+    write(project, ".worktreeinclude", "node_modules/.bin/\n");
+    write(project, "node_modules/.bin/local-tool", "#!/bin/sh\n");
+    write(project, "node_modules/some-pkg/index.js", "x");
+
+    const { copied } = await copyIncludedFiles(project, worktree);
+
+    // The named path is reachable again; the rest of the directory is not
+    // suddenly walked back in as a side effect of asking for one corner.
+    expect(copied).toEqual(["node_modules/.bin/local-tool"]);
+  });
+
+  it("keeps the prune when the only mention of the directory is a negation", async () => {
+    const project = tempDir("proj");
+    const worktree = tempDir("wt");
+    // `!node_modules/` can only ever EXCLUDE, so honoring it as a request to
+    // descend would make writing it slower than leaving it out — the one
+    // reading of the line that is never what the author meant.
+    write(project, ".worktreeinclude", "!node_modules/\n");
+    write(project, ".env", "SECRET=1");
+    write(project, "node_modules/some-pkg/.env", "NOT_MINE=1");
+
+    const { copied } = await copyIncludedFiles(project, worktree);
+
+    expect(copied).toEqual([".env"]);
   });
 
   it("yields to the event loop mid-walk instead of starving the main process", async () => {
