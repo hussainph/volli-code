@@ -72,9 +72,12 @@ export const ContextUsagePill = React.memo(function ContextUsagePill({
         >
           <UsageRing fraction={usage.fraction} />
           {/* The number a glance needs: share of the window when the window is
-              known, the raw spend when it is not. Label-sized — this is the
-              quietest fact in the row until it stops being small. */}
-          <span className="text-label">{percent ?? formatTokens(usage.usedTokens)}</span>
+              known, the raw spend when it is not. It inherits the button's own
+              text-ui — the model and effort pills are its peers on this rung,
+              and a second type size inside one control row is a hierarchy
+              nobody declared. Quietness comes from the muted tone, not from
+              shrinking the type. */}
+          <span>{percent ?? formatTokens(usage.usedTokens)}</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" side="top" className="w-64 p-3">
