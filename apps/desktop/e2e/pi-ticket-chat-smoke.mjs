@@ -105,7 +105,6 @@ const VULNERABLE_LOCATOR_TIMEOUT_MS = 8_000;
 const NORMAL_LOCATOR_TIMEOUT_MS = 30_000;
 const CLOSE_APP_SAFETY_MARGIN_MS = 2_000;
 const Q2_CLOSE_RESERVE_MS = CLOSE_APP_BOUNDED_MAX_MS + CLOSE_APP_SAFETY_MARGIN_MS;
-const Q1_TO_CLICK_BUDGET_MS = VULNERABLE_LOCATOR_TIMEOUT_MS * 4;
 const PI_MARKER_TYPE = "volli.observation.v1";
 const LIVE_RUNTIME_FRAME_KINDS = new Set([
   "attachment.opened",
@@ -149,6 +148,17 @@ const EVIDENCE_DIR = join(EVIDENCE_ROOT, EVIDENCE_RUN);
 const PI_SESSION_DIR = join(userDataDir, "pi-sessions");
 
 function messageBox(page) {
+  // This is still the accessible Message textarea: check 6 verifies that
+  // semantic contract through its role and name before the turn starts. Once
+  // Pi is streaming, however, Chromium's global accessibility-tree query can
+  // be starved behind transcript activity even while this mounted, enabled
+  // control is ready to receive input. Target its explicit textarea + name
+  // contract here so queueing exercises the composer instead of that unrelated
+  // accessibility-tree refresh.
+  return page.locator('textarea[aria-label="Message"]').first();
+}
+
+function accessibleMessageBox(page) {
   return page.getByRole("textbox", { name: "Message", exact: true }).first();
 }
 
@@ -775,9 +785,12 @@ async function runQ1SteerScenario(page, barrierStartedAt) {
     timeoutCeilingMs: VULNERABLE_LOCATOR_TIMEOUT_MS,
   });
   return deadline.run(async () => {
-    if (Date.now() > deadline.expiresAt - Q1_TO_CLICK_BUDGET_MS) {
-      throw new Error(`q1 admission missed its ${Q1_TO_CLICK_BUDGET_MS}ms pre-click reserve`);
-    }
+    // The absolute deadline is the reservation: it expires with 30s of sleep
+    // left, leaving the bounded close path ample time before the barrier can
+    // drain. Do not subtract a multiplier of the per-locator clamp here. The
+    // old 4 × 8s calculation exceeded this 30s window, so it rejected q1
+    // immediately after widening the vulnerable-locator budget — before it
+    // could exercise queue-and-Steer at all.
     const activeSleep = await readLiveSleepActivity(page);
     const barrierTiming = isInProgressSleepActivity(activeSleep)
       ? sleepBarrierTiming(activeSleep)
@@ -985,10 +998,11 @@ async function main() {
       "the composer is ready, its Model pill naming the recorded model (not the unselected placeholder)",
       async () => {
         const textarea = messageBox(page);
+        const accessibleTextarea = accessibleMessageBox(page);
         await waitUntil("the composer to mount", async () => (await textarea.count()) > 0);
         await waitUntil(
           "the composer to become ready",
-          async () => !(await textarea.isDisabled()),
+          async () => !(await textarea.isDisabled()) && (await accessibleTextarea.count()) === 1,
           { timeout: 30000 },
         ).catch(async (error) => {
           await abortMainBeforeEvidence(page, "composer-inert");
