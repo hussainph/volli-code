@@ -28,13 +28,17 @@ name: Release
 # apply as an update.
 #
 # Channels and release states (plan agreed on VC-24):
-#   - Canary: prerelease-suffixed tags (e.g. v0.2.0-canary.3).
-#     electron-builder auto-marks these as GitHub pre-releases and they go
-#     live immediately — only allowPrerelease installs (the dogfood build)
-#     follow them.
-#   - Stable: bare tags (e.g. v0.2.0). electron-builder's default releaseType
-#     is draft: edit the release notes, then publish the draft to put it on
-#     the updater feed (electron-updater ignores draft releases).
+#   - Canary: prerelease-suffixed tags (e.g. v0.2.0-canary.3). The version
+#     guard step sets EP_PRE_RELEASE=true for hyphenated tags, so these
+#     publish live immediately as GitHub pre-releases — only allowPrerelease
+#     installs (the dogfood build) follow them. (electron-builder does NOT
+#     infer this from the version: without EP_PRE_RELEASE everything defaults
+#     to draft, and its publisher reuses an existing draft as-is, so a
+#     drafted canary can never go live automatically — learned from the
+#     v0.1.0-canary.3 run.)
+#   - Stable: bare tags (e.g. v0.2.0). These land as drafts: edit the release
+#     notes, then publish the draft to put it on the updater feed
+#     (electron-updater ignores draft releases).
 #
 # Cadence (dogfooding-solo policy): tag whenever something meaningful merges,
 # roughly weekly, on a green main. Add real beta/stable discipline only when
@@ -80,6 +84,14 @@ jobs:
           if [ "$version" != "$pkg" ]; then
             echo "::error::Tag $GITHUB_REF_NAME does not match apps/desktop/package.json version $pkg — bump the version (or fix the tag) and re-tag."
             exit 1
+          fi
+          # Channel routing (see header): hyphenated = prerelease tag, goes
+          # live immediately; bare = stable, drafted for manual publish.
+          if [[ "$version" == *-* ]]; then
+            echo "EP_PRE_RELEASE=true" >> "$GITHUB_ENV"
+            echo "prerelease tag — will publish live as a GitHub pre-release"
+          else
+            echo "bare tag — will be created as a draft (edit notes, then publish)"
           fi
 
       - name: "Guard: release secrets present"
