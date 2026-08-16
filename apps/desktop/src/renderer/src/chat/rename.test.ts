@@ -1,4 +1,8 @@
-import type { ChatSessionRecord, SessionListingRow, SessionProjection } from "@volli/shared";
+import type {
+  ChatSessionRecord,
+  SessionListingRow,
+  SessionPresentationProjection,
+} from "@volli/shared";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -13,20 +17,15 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 const SESSION = { id: "chat-1", projectId: "p1", ticketId: "t1", title: "Plan", createdAt: 0 };
 
-const projection: SessionProjection = {
+const projection: SessionPresentationProjection = {
   session: SESSION,
   status: "open",
-  commands: [],
-  receipts: [],
-  pendingExecutorStart: null,
-  attachments: [],
   liveExecutor: null,
   attention: { active: [], primary: null },
   interactions: { active: [], resolved: [] },
   signal: null,
   modelSelection: null,
   turnActive: false,
-  authorityDenials: 0,
   lastActivityAt: 0,
   bornTicketless: false,
 };

@@ -13,7 +13,7 @@
  * that takes focus off the composer it mounted beside, and a question drawn
  * with the verdict card's chrome.
  */
-import type { SessionInteraction, SessionInteractionPrompt } from "@volli/shared";
+import type { RendererSessionInteraction, SessionInteractionPrompt } from "@volli/shared";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -29,7 +29,7 @@ const PERMISSION_OPTIONS = [
   { id: "reject", label: "Reject", description: null },
 ];
 
-function permission(): SessionInteraction {
+function permission(): RendererSessionInteraction {
   return {
     id: "permission:p1",
     attachmentId: "attach-1",
@@ -48,11 +48,11 @@ function permission(): SessionInteraction {
         custom: false,
       },
     ],
-    native: { id: "perm-1", detail: null },
+    native: { id: null, detail: null },
   };
 }
 
-function asked(): SessionInteraction {
+function asked(): RendererSessionInteraction {
   const options = [{ id: "question:0:bWFpbg", label: "main", description: null }];
   return {
     id: "question:q1",
@@ -72,11 +72,11 @@ function asked(): SessionInteraction {
         custom: false,
       },
     ],
-    native: { id: "q-1", detail: null },
+    native: { id: null, detail: null },
   };
 }
 
-function freeText(options: SessionInteraction["options"] = []): SessionInteraction {
+function freeText(options: RendererSessionInteraction["options"] = []): RendererSessionInteraction {
   return {
     id: "question:free-text",
     attachmentId: "attach-1",
@@ -95,7 +95,7 @@ function freeText(options: SessionInteraction["options"] = []): SessionInteracti
         custom: true,
       },
     ],
-    native: { id: "q-free-text", detail: null },
+    native: { id: null, detail: null },
   };
 }
 
@@ -115,7 +115,7 @@ function askPrompt(overrides: Partial<SessionInteractionPrompt> = {}): SessionIn
 }
 
 /** A harness question: encoded ids, so none of them can read as a declared no. */
-function ask(prompts: readonly SessionInteractionPrompt[]): SessionInteraction {
+function ask(prompts: readonly SessionInteractionPrompt[]): RendererSessionInteraction {
   return {
     id: "question:ask",
     attachmentId: "attach-1",
@@ -125,11 +125,11 @@ function ask(prompts: readonly SessionInteractionPrompt[]): SessionInteraction {
     options: prompts.flatMap((prompt) => prompt.options),
     multiple: prompts.some((prompt) => prompt.multiple),
     prompts,
-    native: { id: "ask-1", detail: null },
+    native: { id: null, detail: null },
   };
 }
 
-function drawn(interaction: SessionInteraction): string {
+function drawn(interaction: RendererSessionInteraction): string {
   return renderToStaticMarkup(<InteractionCard interaction={interaction} onResolve={() => {}} />);
 }
 
@@ -226,7 +226,7 @@ describe("the ask-user card", () => {
   it("keeps a sandbox escalation on the verdict card", () => {
     // Stored as a question, but it offers a declared yes and no — which is the
     // permission's shape, and the one case `kind` alone reads wrong.
-    const raised: SessionInteraction = {
+    const raised: RendererSessionInteraction = {
       ...ask([
         {
           id: "prompt:0",
@@ -346,7 +346,7 @@ describe("the ask-user card", () => {
  * makes the words a redirection and stands the box open on the verdict card —
  * the one shape in which both cards draw a text box at once.
  */
-function noteOpenPermission(): SessionInteraction {
+function noteOpenPermission(): RendererSessionInteraction {
   const options = PERMISSION_OPTIONS.slice(0, 2);
   return {
     id: "permission:p2",
@@ -366,7 +366,7 @@ function noteOpenPermission(): SessionInteraction {
         custom: false,
       },
     ],
-    native: { id: "perm-2", detail: null },
+    native: { id: null, detail: null },
   };
 }
 

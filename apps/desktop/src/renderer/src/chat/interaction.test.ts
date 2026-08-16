@@ -1,7 +1,7 @@
 import {
   SESSION_ESCALATION_OPTIONS,
   SESSION_ESCALATION_STOP_ID,
-  type SessionInteraction,
+  type RendererSessionInteraction,
   type SessionInteractionOption,
   type SessionInteractionPrompt,
 } from "@volli/shared";
@@ -51,7 +51,9 @@ const PERMISSION_OPTIONS = [
   { id: "reject", label: "Reject", description: null },
 ];
 
-function permission(overrides: Partial<SessionInteraction> = {}): SessionInteraction {
+function permission(
+  overrides: Partial<RendererSessionInteraction> = {},
+): RendererSessionInteraction {
   return {
     id: "permission:p1",
     attachmentId: "attach-1",
@@ -70,7 +72,7 @@ function permission(overrides: Partial<SessionInteraction> = {}): SessionInterac
         custom: false,
       },
     ],
-    native: { id: "perm-1", detail: null },
+    native: { id: null, detail: null },
     ...overrides,
   };
 }
@@ -90,7 +92,7 @@ function prompt(overrides: Partial<SessionInteractionPrompt> = {}): SessionInter
   };
 }
 
-function question(prompts: readonly SessionInteractionPrompt[]): SessionInteraction {
+function question(prompts: readonly SessionInteractionPrompt[]): RendererSessionInteraction {
   return {
     id: "question:q1",
     attachmentId: "attach-1",
@@ -100,7 +102,7 @@ function question(prompts: readonly SessionInteractionPrompt[]): SessionInteract
     options: prompts.flatMap((entry) => entry.options),
     multiple: true,
     prompts,
-    native: { id: "q-1", detail: null },
+    native: { id: null, detail: null },
   };
 }
 
@@ -129,7 +131,9 @@ function escalationOptions(): {
  * What the sandbox raises when the block stands whatever the answer: one
  * question, the offer's own two options, no free-text answer to give.
  */
-function escalation(overrides: Partial<SessionInteraction> = {}): SessionInteraction {
+function escalation(
+  overrides: Partial<RendererSessionInteraction> = {},
+): RendererSessionInteraction {
   return {
     id: "question:e1",
     attachmentId: "attach-1",
@@ -148,7 +152,7 @@ function escalation(overrides: Partial<SessionInteraction> = {}): SessionInterac
         custom: false,
       },
     ],
-    native: { id: "esc-1", detail: null },
+    native: { id: null, detail: null },
     ...overrides,
   };
 }
@@ -1358,29 +1362,33 @@ describe("one press of the control that moves the flow on", () => {
 });
 
 describe("where a card draws", () => {
-  it("pairs a gated call with its question on the harness's own id", () => {
-    const gated = permission();
-    const other = permission({ id: "permission:p2", native: { id: "perm-2", detail: null } });
-    expect(interactionForApproval([other, gated], "perm-1")).toBe(gated);
-    expect(interactionForApproval([other, gated], "perm-9")).toBe(null);
+  it("pairs a gated call with its question on the durable ask:<toolCallId> id", () => {
+    // The identity that survives the product edge: the runtime mints the
+    // interaction as `ask:<toolCallId>`, and the gated part carries the same
+    // tool call id. `native` is nulled on everything the edge ships, so it
+    // correlates nothing.
+    const gated = permission({ id: "ask:call-1" });
+    const other = permission({ id: "ask:call-2" });
+    expect(interactionForApproval([other, gated], "call-1")).toBe(gated);
+    expect(interactionForApproval([other, gated], "call-9")).toBe(null);
     // A row with no gate names no interaction — never the only open one by
     // adjacency, which would put a subagent's question on a parent's call.
     expect(interactionForApproval([gated], null)).toBe(null);
   });
 
   it("leaves the foot the oldest interaction no row is showing", () => {
-    const gated = permission();
+    const gated = permission({ id: "ask:call-1" });
     const asked = question([prompt()]);
-    expect(footInteraction([gated, asked], new Set(["perm-1"]))).toBe(asked);
+    expect(footInteraction([gated, asked], new Set(["call-1"]))).toBe(asked);
     expect(footInteraction([gated, asked], new Set())).toBe(gated);
-    expect(footInteraction([gated], new Set(["perm-1"]))).toBe(null);
+    expect(footInteraction([gated], new Set(["call-1"]))).toBe(null);
   });
 
-  it("keeps an interaction with no native id at the foot", () => {
-    // Nothing can correlate to it, so it belongs there by construction rather
-    // than by having survived a filter.
-    const loose = permission({ native: { id: null, detail: null } });
-    expect(footInteraction([loose], new Set(["perm-1"]))).toBe(loose);
+  it("keeps a model's own question at the foot even while calls are gated", () => {
+    // An `ask-user:` id is never the `ask:` derivation of any gated call, so
+    // it belongs there by construction rather than by having survived a filter.
+    const loose = permission({ id: "ask-user:call-1", native: { id: null, detail: null } });
+    expect(footInteraction([loose], new Set(["call-1"]))).toBe(loose);
   });
 });
 
