@@ -118,6 +118,13 @@ export interface ActiveSessionRow {
    */
   ticket: Ticket | null;
   title: string;
+  /**
+   * What is running here (`sessionSourceLabel`) — the harness, `Shell`, or the
+   * chat adapter. The row shows it in its hover `title`, and in its meta line
+   * only when there is no ticket whose status could stand there instead
+   * (`session-band-row.tsx`). Still built for every row either way: which one
+   * of those two it is, is the view's call and not the listing's.
+   */
   source: string;
   /** Never `null`: every row here speaks for a Session, and a Session is always in some state. */
   activity: SessionActivityState;

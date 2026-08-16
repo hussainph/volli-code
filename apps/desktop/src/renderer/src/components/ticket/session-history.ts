@@ -38,11 +38,13 @@ export interface TicketSessionRow {
 }
 
 /**
- * Truthful, compact source metadata: the sidebar's session rows print it, and
- * the rail's history search matches on it — the rail's own rows stopped drawing
- * it when they went to one line and put the kind in a leading glyph. Only agent
- * launches expose a harness. Bare shells and pre-metadata sessions never inherit the default
- * Claude label; split placement remains visible without becoming the title.
+ * Truthful, compact source metadata: the sidebar's session rows carry it in
+ * their hover `title` (their meta line now prints the ticket's status, which is
+ * what a long band is scanned by), and the rail's history search matches on it
+ * — the rail's own rows stopped drawing it when they went to one line and put
+ * the kind in a leading glyph. Only agent launches expose a harness. Bare
+ * shells and pre-metadata sessions never inherit the default Claude label;
+ * split placement remains visible without becoming the title.
  *
  * The harness named is the one RUNNING, not the one the session launched with:
  * a pane whose agent was quit and replaced reads as what is in it now. A shell
@@ -51,7 +53,9 @@ export interface TicketSessionRow {
  *
  * A chat row has none of that — no PTY, no launch — so it names the adapter
  * it attached instead and, the one thing worth saying about it, whether that
- * attachment is still open.
+ * attachment is still open. That `Live` reaches a reader's eye only on a
+ * ticketless sidebar row now: where there is a ticket, its status says where
+ * the Session lives more usefully than `Live` ever did.
  */
 export function sessionSourceLabel(row: SessionListingRow): string {
   if (row.kind === "chat") return row.record.live ? "Chat · Live" : "Chat";
