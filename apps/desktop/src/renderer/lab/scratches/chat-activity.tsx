@@ -485,7 +485,8 @@ const PERMISSION: SessionInteraction = {
       custom: false,
     },
   ],
-  native: { id: "perm-1", detail: null },
+  // The edge nulls `native` on everything it ships; fixtures model that.
+  native: { id: null, detail: null },
 };
 
 /**
@@ -513,7 +514,7 @@ const ESCALATION: SessionInteraction = {
       custom: false,
     },
   ],
-  native: { id: "esc-1", detail: null },
+  native: { id: null, detail: null },
 };
 
 /**
@@ -558,7 +559,7 @@ const QUESTION: SessionInteraction = {
       custom: true,
     },
   ],
-  native: { id: "q-1", detail: null },
+  native: { id: null, detail: null },
 };
 
 /* ------------------------------------------------------------- ask-user */
@@ -587,7 +588,7 @@ function ask(
     options: prompts.flatMap((prompt) => prompt.options),
     multiple: prompts.some((prompt) => prompt.multiple),
     prompts,
-    native: { id, detail: null },
+    native: { id: null, detail: null },
   };
 }
 

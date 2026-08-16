@@ -541,8 +541,11 @@ describe("Session tRPC router", () => {
     ]);
     expect(resolved.projection.liveExecutor).toEqual({ id: "attachment-1" });
     expect(
-      payloads[0]?.kind === "attachment.opened" ? payloads[0].attachment.native : undefined,
-    ).toBeUndefined();
+      payloads[0]?.kind === "attachment.opened" ? "native" in payloads[0].attachment : undefined,
+    ).toBe(false);
+    expect(
+      payloads[0]?.kind === "attachment.opened" ? "adapterId" in payloads[0].attachment : undefined,
+    ).toBe(false);
     expect(
       payloads[1]?.kind === "attachment.native_referenced" ? payloads[1].native : undefined,
     ).toEqual({
@@ -550,8 +553,8 @@ describe("Session tRPC router", () => {
       detail: null,
     });
     expect(
-      payloads[2]?.kind === "attachment.failed" ? payloads[2].attachment.native : undefined,
-    ).toBeUndefined();
+      payloads[2]?.kind === "attachment.failed" ? "native" in payloads[2].attachment : undefined,
+    ).toBe(false);
     expect(
       payloads[3]?.kind === "interaction.opened" ? payloads[3].interaction.native : undefined,
     ).toEqual({ id: null, detail: null });
@@ -581,8 +584,11 @@ describe("Session tRPC router", () => {
 
     const payloads = rendererFrames.map((item) => item.event.payload);
     expect(
-      payloads[0]?.kind === "attachment.opened" ? payloads[0].attachment.native : undefined,
-    ).toBeUndefined();
+      payloads[0]?.kind === "attachment.opened" ? "native" in payloads[0].attachment : undefined,
+    ).toBe(false);
+    expect(
+      payloads[0]?.kind === "attachment.opened" ? "adapterId" in payloads[0].attachment : undefined,
+    ).toBe(false);
     expect(
       payloads[1]?.kind === "attachment.native_referenced" ? payloads[1].native : undefined,
     ).toEqual({
@@ -590,8 +596,8 @@ describe("Session tRPC router", () => {
       detail: null,
     });
     expect(
-      payloads[2]?.kind === "attachment.failed" ? payloads[2].attachment.native : undefined,
-    ).toBeUndefined();
+      payloads[2]?.kind === "attachment.failed" ? "native" in payloads[2].attachment : undefined,
+    ).toBe(false);
     expect(
       payloads[3]?.kind === "interaction.opened" ? payloads[3].interaction.native : undefined,
     ).toEqual({ id: null, detail: null });

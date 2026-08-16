@@ -1,4 +1,8 @@
-import type { CommandReceipt, SessionProjection, SessionStartResult } from "@volli/shared";
+import type {
+  CommandReceipt,
+  SessionPresentationProjection,
+  SessionStartResult,
+} from "@volli/shared";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -39,20 +43,17 @@ const REFUSED = {
   receipt: REJECTED_RECEIPT,
 };
 
-const projection: SessionProjection = {
+// The presentation shape, exactly as the edge ships it — the full durable
+// projection (commands, receipts, attachments) never reaches this store.
+const projection: SessionPresentationProjection = {
   session: SESSION,
   status: "open",
-  commands: [],
-  receipts: [],
-  pendingExecutorStart: null,
-  attachments: [],
   liveExecutor: null,
   attention: { active: [], primary: null },
   interactions: { active: [], resolved: [] },
   signal: null,
   modelSelection: null,
   turnActive: false,
-  authorityDenials: 0,
   lastActivityAt: SESSION.createdAt,
   bornTicketless: SESSION.ticketId === null,
 };

@@ -19,6 +19,7 @@
  *     consent.
  */
 import {
+  askInteractionId,
   readInteractionAnswers,
   readInteractionPrompts,
   SESSION_ESCALATION_CONTINUE_ID,
@@ -833,18 +834,23 @@ export function interactionAdvance(
 /**
  * The open interaction a gated call is waiting on.
  *
- * Matched on the id the harness put on both sides: a harness keys a permission
- * by its own request id, the adapter stamps that id onto the gated part's
- * `approval` and mints the interaction as `permission:<id>` with the same value
- * in `native.id`. So the correlation is the harness's own, never a guess from
- * adjacency or from there happening to be exactly one of each.
+ * Matched on the interaction's own durable id: the runtime blocks exactly one
+ * question per gated call and mints its interaction as `ask:<toolCallId>` — a
+ * frozen derivation named once in `@volli/shared` — so the tool call id the
+ * part already carries is the whole correlation. It has to be, because it is
+ * the only identity that survives the product edge: `native` is an adapter's
+ * recovery locator and the edge nulls it on every frame, snapshot and
+ * projection, so a correlation keyed on `native.id` matched only in fixtures
+ * that hand-stamped one. Never a guess from adjacency or from there happening
+ * to be exactly one of each.
  */
 export function interactionForApproval(
   interactions: readonly SessionInteraction[],
-  approvalId: string | null,
+  toolCallId: string | null,
 ): SessionInteraction | null {
-  if (approvalId === null) return null;
-  return interactions.find((interaction) => interaction.native.id === approvalId) ?? null;
+  if (toolCallId === null) return null;
+  const interactionId = askInteractionId(toolCallId);
+  return interactions.find((interaction) => interaction.id === interactionId) ?? null;
 }
 
 /**
@@ -854,19 +860,16 @@ export function interactionForApproval(
  * A harness can have several open at once — a subagent's permission while the
  * parent turn waits on its own — and two blocking cards in the composer's slot
  * are two things each claiming to be the one thing to do next. An interaction
- * with no native id can never correlate to a call, so it belongs here by
- * construction rather than by exclusion.
+ * whose id is not the `ask:` derivation of a gated call on screen can never
+ * draw on a row — a model's own `ask-user:` question among them — so it
+ * belongs here by construction rather than by exclusion.
  */
 export function footInteraction(
   interactions: readonly SessionInteraction[],
-  gatedApprovalIds: ReadonlySet<string>,
+  gatedCallIds: ReadonlySet<string>,
 ): SessionInteraction | null {
-  return (
-    interactions.find(
-      (interaction) =>
-        interaction.native.id === null || !gatedApprovalIds.has(interaction.native.id),
-    ) ?? null
-  );
+  const drawn = new Set([...gatedCallIds].map(askInteractionId));
+  return interactions.find((interaction) => !drawn.has(interaction.id)) ?? null;
 }
 
 /* ---------------------------------------------------------------- receipt */

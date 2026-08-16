@@ -1358,29 +1358,33 @@ describe("one press of the control that moves the flow on", () => {
 });
 
 describe("where a card draws", () => {
-  it("pairs a gated call with its question on the harness's own id", () => {
-    const gated = permission();
-    const other = permission({ id: "permission:p2", native: { id: "perm-2", detail: null } });
-    expect(interactionForApproval([other, gated], "perm-1")).toBe(gated);
-    expect(interactionForApproval([other, gated], "perm-9")).toBe(null);
+  it("pairs a gated call with its question on the durable ask:<toolCallId> id", () => {
+    // The identity that survives the product edge: the runtime mints the
+    // interaction as `ask:<toolCallId>`, and the gated part carries the same
+    // tool call id. `native` is nulled on everything the edge ships, so it
+    // correlates nothing.
+    const gated = permission({ id: "ask:call-1" });
+    const other = permission({ id: "ask:call-2" });
+    expect(interactionForApproval([other, gated], "call-1")).toBe(gated);
+    expect(interactionForApproval([other, gated], "call-9")).toBe(null);
     // A row with no gate names no interaction — never the only open one by
     // adjacency, which would put a subagent's question on a parent's call.
     expect(interactionForApproval([gated], null)).toBe(null);
   });
 
   it("leaves the foot the oldest interaction no row is showing", () => {
-    const gated = permission();
+    const gated = permission({ id: "ask:call-1" });
     const asked = question([prompt()]);
-    expect(footInteraction([gated, asked], new Set(["perm-1"]))).toBe(asked);
+    expect(footInteraction([gated, asked], new Set(["call-1"]))).toBe(asked);
     expect(footInteraction([gated, asked], new Set())).toBe(gated);
-    expect(footInteraction([gated], new Set(["perm-1"]))).toBe(null);
+    expect(footInteraction([gated], new Set(["call-1"]))).toBe(null);
   });
 
-  it("keeps an interaction with no native id at the foot", () => {
-    // Nothing can correlate to it, so it belongs there by construction rather
-    // than by having survived a filter.
-    const loose = permission({ native: { id: null, detail: null } });
-    expect(footInteraction([loose], new Set(["perm-1"]))).toBe(loose);
+  it("keeps a model's own question at the foot even while calls are gated", () => {
+    // An `ask-user:` id is never the `ask:` derivation of any gated call, so
+    // it belongs there by construction rather than by having survived a filter.
+    const loose = permission({ id: "ask-user:call-1", native: { id: null, detail: null } });
+    expect(footInteraction([loose], new Set(["call-1"]))).toBe(loose);
   });
 });
 

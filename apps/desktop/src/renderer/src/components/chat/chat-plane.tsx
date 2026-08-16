@@ -37,8 +37,8 @@ import { FileMentionProvider } from "@renderer/components/ui/ai-elements/chat-ma
 import { Message, MessageContent } from "@renderer/components/ui/ai-elements/message";
 import { ReasoningLine } from "@renderer/components/ui/ai-elements/reasoning";
 import {
-  approvalId,
-  gatedApprovalIds,
+  gatedToolCallId,
+  gatedToolCallIds,
   groupTurns,
   isAwaitingFirstOutput,
   segmentTurn,
@@ -402,13 +402,13 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
    * two blocking cards stacked there are two things each claiming to be the one
    * thing to do next.
    *
-   * Asked only while something is waiting to be asked. `gatedApprovalIds` walks
+   * Asked only while something is waiting to be asked. `gatedToolCallIds` walks
    * every part of every message and the list is replaced on every batch, so a
    * memo on it misses every time; what it answers is only read in a blocked
    * state, and a blocked Session is not streaming anything to compete with.
    */
   const pending =
-    interactions.length > 0 ? footInteraction(interactions, gatedApprovalIds(messages)) : null;
+    interactions.length > 0 ? footInteraction(interactions, gatedToolCallIds(messages)) : null;
 
   // What the composer's two caret-driven pickers rank over. Both are
   // project-scoped: the file index is the one the editor's `@` already uses,
@@ -874,7 +874,7 @@ function renderSegment(
  * not invent one, and `footInteraction` draws it at the foot instead.
  */
 function GatedCall({ part, context }: { part: DynamicToolUIPart; context: TurnContext }) {
-  const interaction = interactionForApproval(context.open, approvalId(part));
+  const interaction = interactionForApproval(context.open, gatedToolCallId(part));
   return (
     <div className="space-y-1">
       <ToolRow part={part} onOpenFile={context.onOpenFile} />

@@ -1,6 +1,6 @@
 /**
  * The Session Event codec: one table owning every durable payload kind's
- * parse, exhaustive by construction.
+ * parse and its renderer-safe scrub, exhaustive by construction.
  *
  * `SessionEventPayload` in ./session-ledger stays the declared, documented
  * source of truth for what each kind carries; this table is checked against it
@@ -23,6 +23,16 @@
  * so intent, route, receipt and provenance decoding are this module's as well.
  * Encode stays a plain canonical `JSON.stringify` behind a strict JSON-safety
  * assertion — the codec never re-orders or rewrites what is already on disk.
+ *
+ * The renderer-safe form is the same table's other column. Each entry's
+ * `scrub` maps a durable payload onto what may cross the product edge to the
+ * renderer — runtime identity (`adapterId`) and adapter-native detail
+ * (recovery locators, diagnostics, provenance internals) stay behind it — and
+ * {@link RendererSessionEventPayload} is **derived from the scrub return
+ * types**, so the published renderer type and the runtime scrub cannot
+ * disagree. That derivation replaces a mapped type the edge once kept beside
+ * a hand-written switch, whose quiet divergence is exactly the failure mode
+ * this table exists to make impossible.
  */
 
 import { REASONING_LEVELS } from "./agent-runtime";
@@ -45,6 +55,7 @@ import type {
   SessionEvent,
   SessionEventPayload,
   SessionEventProvenance,
+  SessionExecutionVenue,
   SessionInteraction,
   SessionInteractionAnswer,
   SessionInteractionOption,
@@ -52,6 +63,7 @@ import type {
   SessionInteractionResolution,
   SessionNativeDetail,
   SessionNativeReference,
+  SessionProjection,
   TranscriptReference,
 } from "./session-ledger";
 
@@ -83,9 +95,15 @@ export class UnknownSessionEventKindError extends Error {
 type SessionEventKind = SessionEventPayload["kind"];
 type PayloadOf<Kind extends SessionEventKind> = Extract<SessionEventPayload, { kind: Kind }>;
 
-interface SessionEventKindCodec<Kind extends SessionEventKind> {
+interface SessionEventKindCodec<Kind extends SessionEventKind, Safe = unknown> {
   /** Durable JSON (already parsed) → typed payload. Loud `Error` on a malformed known kind. */
   decode(record: JsonRecord, context: string): PayloadOf<Kind>;
+  /**
+   * Durable payload → renderer-safe payload. Total and pure; the renderer
+   * union is derived from these return types, so what this returns *is* the
+   * published contract for its kind.
+   */
+  scrub(payload: PayloadOf<Kind>): Safe;
 }
 
 /**
@@ -100,27 +118,32 @@ const codecs = {
       kind: "command.recorded",
       command: decodeSessionCommand(record.command, `${context}.command`),
     }),
+    scrub: (payload) => ({ ...payload, command: scrubSessionCommand(payload.command) }),
   },
   "session.created": {
     decode: (record, context) => ({
       kind: "session.created",
       session: decodeSessionValue(record.session, `${context}.session`),
     }),
+    scrub: (payload) => payload,
   },
   "session.archived": {
     decode: () => ({ kind: "session.archived" }),
+    scrub: (payload) => payload,
   },
   "session.retitled": {
     decode: (record, context) => ({
       kind: "session.retitled",
       title: readNullableString(record.title, `${context}.title`),
     }),
+    scrub: (payload) => payload,
   },
   "model.selected": {
     decode: (record, context) => ({
       kind: "model.selected",
       selection: decodeModelSelection(record.selection, `${context}.selection`),
     }),
+    scrub: (payload) => payload,
   },
   "session.input.recorded": {
     decode: (record, context) => {
@@ -133,6 +156,7 @@ const codecs = {
         },
       };
     },
+    scrub: (payload) => payload,
   },
   "session.signaled": {
     decode: (record, context) => ({
@@ -140,12 +164,14 @@ const codecs = {
       signal: enumValue(record.signal, ["done", "blocked"], `${context}.signal`),
       reason: readNullableString(record.reason, `${context}.reason`),
     }),
+    scrub: (payload) => payload,
   },
   "attachment.opened": {
     decode: (record, context) => ({
       kind: "attachment.opened",
       attachment: decodeAttachment(record.attachment, `${context}.attachment`),
     }),
+    scrub: (payload) => ({ ...payload, attachment: scrubSessionAttachment(payload.attachment) }),
   },
   "attachment.native_referenced": {
     decode: (record, context) => ({
@@ -153,12 +179,18 @@ const codecs = {
       attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
       native: decodeNative(record.native, `${context}.native`),
     }),
+    scrub: (payload) => ({ ...payload, native: scrubbedNativeReference() }),
   },
   "attachment.failed": {
     decode: (record, context) => ({
       kind: "attachment.failed",
       attachment: decodeAttachment(record.attachment, `${context}.attachment`),
       failure: decodeFailure(record.failure, `${context}.failure`),
+    }),
+    scrub: (payload) => ({
+      ...payload,
+      attachment: scrubSessionAttachment(payload.attachment),
+      failure: scrubSessionAttachmentFailure(payload.failure),
     }),
   },
   "attachment.closed": {
@@ -171,6 +203,7 @@ const codecs = {
         `${context}.outcome`,
       ),
     }),
+    scrub: (payload) => payload,
   },
   "run.started": {
     decode: (record, context) => ({
@@ -178,6 +211,7 @@ const codecs = {
       attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
       runId: readString(record.runId, `${context}.runId`),
     }),
+    scrub: (payload) => payload,
   },
   "run.completed": {
     decode: (record, context) => ({
@@ -185,6 +219,7 @@ const codecs = {
       attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
       runId: readString(record.runId, `${context}.runId`),
     }),
+    scrub: (payload) => payload,
   },
   "turn.started": {
     decode: (record, context) => ({
@@ -192,6 +227,7 @@ const codecs = {
       attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
       turnId: readString(record.turnId, `${context}.turnId`),
     }),
+    scrub: (payload) => payload,
   },
   "turn.completed": {
     decode: (record, context) => ({
@@ -199,6 +235,7 @@ const codecs = {
       attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
       turnId: readString(record.turnId, `${context}.turnId`),
     }),
+    scrub: (payload) => payload,
   },
   "turn.interrupted": {
     decode: (record, context) => ({
@@ -206,6 +243,7 @@ const codecs = {
       attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
       turnId: readString(record.turnId, `${context}.turnId`),
     }),
+    scrub: (payload) => payload,
   },
   "transcript.referenced": {
     decode: (record, context) => ({
@@ -214,23 +252,30 @@ const codecs = {
       turnId: readNullableString(record.turnId, `${context}.turnId`),
       reference: decodeTranscriptReference(record.reference, `${context}.reference`),
     }),
+    scrub: (payload) => payload,
   },
   "attention.raised": {
     decode: (record, context) => ({
       kind: "attention.raised",
       attention: decodeAttention(record.attention, `${context}.attention`),
     }),
+    scrub: (payload) => ({ ...payload, attention: scrubSessionAttention(payload.attention) }),
   },
   "attention.cleared": {
     decode: (record, context) => ({
       kind: "attention.cleared",
       attentionId: readString(record.attentionId, `${context}.attentionId`),
     }),
+    scrub: (payload) => payload,
   },
   "interaction.opened": {
     decode: (record, context) => ({
       kind: "interaction.opened",
       interaction: decodeInteraction(record.interaction, `${context}.interaction`),
+    }),
+    scrub: (payload) => ({
+      ...payload,
+      interaction: scrubSessionInteraction(payload.interaction),
     }),
   },
   "interaction.resolved": {
@@ -240,6 +285,7 @@ const codecs = {
       interactionId: readString(record.interactionId, `${context}.interactionId`),
       resolution: decodeInteractionResolution(record.resolution, `${context}.resolution`),
     }),
+    scrub: (payload) => payload,
   },
   // No resolution is read back, because none was written: the reason is the
   // whole fact. Decoding one here would be inventing the decision the event
@@ -251,12 +297,14 @@ const codecs = {
       interactionId: readString(record.interactionId, `${context}.interactionId`),
       reason: enumValue(record.reason, SESSION_INTERACTION_CANCEL_REASONS, `${context}.reason`),
     }),
+    scrub: (payload) => payload,
   },
   "command.receipt.recorded": {
     decode: (record, context) => ({
       kind: "command.receipt.recorded",
       receipt: decodeCommandReceipt(record.receipt, `${context}.receipt`),
     }),
+    scrub: (payload) => payload,
   },
   // `cause` is read as a plain string, not checked against the live rule pack.
   // History outlives the pack that wrote it, and a decoder that rejected a
@@ -271,6 +319,9 @@ const codecs = {
       cause: readString(record.cause, `${context}.cause`),
       reason: readString(record.reason, `${context}.reason`),
     }),
+    // `authority.denied` crosses untouched — `tool`, `cause` and `reason` are
+    // Volli's own vocabulary already, not a harness's.
+    scrub: (payload) => payload,
   },
   "adapter.observed": {
     decode: (record, context) => ({
@@ -279,15 +330,191 @@ const codecs = {
       name: readString(record.name, `${context}.name`),
       native: decodeNativeDetail(record.native, `${context}.native`),
     }),
+    scrub: (payload) => ({ ...payload, native: null }),
   },
 } satisfies { [Kind in SessionEventKind]: SessionEventKindCodec<Kind> };
 
 /**
  * The table again, viewed by an arbitrary string kind. The widening is sound —
- * each entry's decode returns its own arm of the union — and it is what lets
- * an unknown kind be answered with the distinct error instead of a type hole.
+ * each entry's decode returns its own arm of the union and each scrub one arm
+ * of the derived renderer union — and it is what lets an unknown kind be
+ * answered with the distinct error instead of a type hole.
  */
-const codecByKind: Partial<Record<string, SessionEventKindCodec<SessionEventKind>>> = codecs;
+const codecByKind: Partial<
+  Record<string, SessionEventKindCodec<SessionEventKind, RendererSessionEventPayload>>
+> = codecs;
+
+/* ------------------------------------------------------- renderer-safe form */
+
+/**
+ * An adapter correlation reference as the renderer sees it: both halves
+ * removed. The Pi adapter stores an attachment's recovery locator (runtime
+ * session id, session file path) in `native`, which must never cross the
+ * product edge — and the type says so, rather than claiming a field survives
+ * that never arrives. Renderer correlation keys on durable ids instead
+ * (see `askInteractionId`).
+ */
+export interface RendererSessionNativeReference {
+  id: null;
+  detail: null;
+}
+
+/** An attachment without executor routing identity or its recovery locator. */
+export type RendererSessionAttachment = Omit<SessionAttachment, "adapterId" | "native">;
+
+export type RendererSessionAttachmentFailure = Omit<SessionAttachmentFailure, "diagnostic"> & {
+  diagnostic: null;
+};
+
+/** Distributes over the union so the rate-limit and quota arms keep their own fields. */
+type WithNulledDiagnostic<Attention> = Attention extends unknown
+  ? Omit<Attention, "diagnostic"> & { diagnostic: null }
+  : never;
+
+export type RendererSessionAttention = WithNulledDiagnostic<SessionAttention>;
+
+export type RendererSessionInteraction = Omit<SessionInteraction, "native"> & {
+  native: RendererSessionNativeReference;
+};
+
+type ScrubbedIntent<Intent> = Intent extends { kind: "executor.start" }
+  ? Omit<Intent, "adapterId">
+  : Intent;
+
+export type RendererSessionCommandIntent = ScrubbedIntent<SessionCommandIntent>;
+
+export type RendererSessionCommandRoute = Pick<SessionCommandRoute, "attachmentId">;
+
+export type RendererSessionCommand = Omit<SessionCommand, "intent" | "route"> & {
+  intent: RendererSessionCommandIntent;
+  route: RendererSessionCommandRoute | null;
+};
+
+/** Provenance with the adapter arm gone: the scrub rewrites it to a system source. */
+export interface RendererSessionEventProvenance {
+  source: { kind: "user" | "system"; id: string; detail: SessionNativeDetail | null };
+  venue: SessionExecutionVenue | null;
+}
+
+/**
+ * The renderer-safe payload union, **derived from the scrub return types** so
+ * the published type and the runtime scrub cannot disagree. A kind whose
+ * scrub is identity keeps its durable arm verbatim; a kind whose scrub strips
+ * something publishes exactly what is left.
+ */
+export type RendererSessionEventPayload = {
+  [Kind in SessionEventKind]: ReturnType<(typeof codecs)[Kind]["scrub"]>;
+}[SessionEventKind];
+
+export type RendererSessionEvent = Omit<SessionEvent, "provenance" | "payload"> & {
+  provenance: RendererSessionEventProvenance;
+  payload: RendererSessionEventPayload;
+};
+
+/** Durable payload → renderer-safe payload, through the owning kind's table entry. */
+export function scrubSessionEventPayload(
+  payload: SessionEventPayload,
+): RendererSessionEventPayload {
+  // Present for every kind the union can name; only an untyped caller could
+  // miss, and the parse owns that path.
+  return codecByKind[payload.kind]!.scrub(payload);
+}
+
+/** One whole event made renderer-safe: provenance and payload scrubbed together. */
+export function scrubSessionEvent(event: SessionEvent): RendererSessionEvent {
+  return {
+    ...event,
+    provenance: scrubSessionEventProvenance(event.provenance),
+    payload: scrubSessionEventPayload(event.payload),
+  };
+}
+
+export function scrubSessionEventProvenance(
+  provenance: SessionEventProvenance,
+): RendererSessionEventProvenance {
+  const { kind, id, detail } = provenance.source;
+  if (kind === "adapter") {
+    return {
+      source: { kind: "system", id: "session-runtime", detail: null },
+      venue: provenance.venue,
+    };
+  }
+  return { source: { kind, id, detail }, venue: provenance.venue };
+}
+
+export function scrubSessionAttachment(attachment: SessionAttachment): RendererSessionAttachment {
+  const { adapterId: _adapterId, native: _native, ...presentation } = attachment;
+  return presentation;
+}
+
+export function scrubSessionAttachmentFailure(
+  failure: SessionAttachmentFailure,
+): RendererSessionAttachmentFailure {
+  return { ...failure, diagnostic: null };
+}
+
+export function scrubSessionAttention(attention: SessionAttention): RendererSessionAttention {
+  return { ...attention, diagnostic: null };
+}
+
+export function scrubSessionInteraction(
+  interaction: SessionInteraction,
+): RendererSessionInteraction {
+  return { ...interaction, native: scrubbedNativeReference() };
+}
+
+export function scrubSessionCommand(command: SessionCommand): RendererSessionCommand {
+  const intent =
+    command.intent.kind === "executor.start"
+      ? (({ adapterId: _adapterId, ...presentation }) => presentation)(command.intent)
+      : command.intent;
+  return {
+    ...command,
+    intent,
+    route: command.route === null ? null : { attachmentId: command.route.attachmentId },
+  };
+}
+
+function scrubbedNativeReference(): RendererSessionNativeReference {
+  return { id: null, detail: null };
+}
+
+/* --------------------------------------------------- renderer-safe projection */
+
+export interface RendererSessionAttentionProjection {
+  active: readonly RendererSessionAttention[];
+  primary: RendererSessionAttention | null;
+}
+
+export interface RendererSessionInteractionProjection {
+  active: readonly RendererSessionInteraction[];
+  resolved: readonly {
+    interaction: RendererSessionInteraction;
+    resolution: SessionInteractionResolution;
+    resolvedAt: number;
+  }[];
+}
+
+/**
+ * Renderer-owned Session state with executor implementation details removed.
+ * Lives beside the scrubs it is built from so its attention and interaction
+ * fields are the same renderer-safe types the event stream publishes — one
+ * contract, not a projection-shaped restatement of it.
+ */
+export interface SessionPresentationProjection extends Pick<
+  SessionProjection,
+  | "session"
+  | "status"
+  | "signal"
+  | "modelSelection"
+  | "turnActive"
+  | "lastActivityAt"
+  | "bornTicketless"
+> {
+  attention: RendererSessionAttentionProjection;
+  interactions: RendererSessionInteractionProjection;
+  liveExecutor: { id: string } | null;
+}
 
 /**
  * Durable JSON → typed payload. Throws {@link UnknownSessionEventKindError}

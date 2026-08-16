@@ -6,10 +6,10 @@ import {
   ACTIVITY_PRESENTERS,
   activityContext,
   activityStatus,
-  approvalId,
+  gatedToolCallId,
   bestEffortSubject,
   bundleNeedsAttention,
-  gatedApprovalIds,
+  gatedToolCallIds,
   bundleSummary,
   compactSignature,
   describeActivity,
@@ -562,21 +562,23 @@ describe("bundle state", () => {
 });
 
 describe("the decision a call is gated on", () => {
-  it("reads the harness's own id off the gated state and nowhere else", () => {
-    expect(approvalId(tool("run-command", { state: "approval-requested" }))).toBe("approval-1");
-    expect(approvalId(tool("run-command", { state: "output-denied" }))).toBe(null);
-    expect(approvalId(tool("run-command"))).toBe(null);
+  it("reads the tool call id off the gated state and nowhere else", () => {
+    const gated = tool("run-command", { state: "approval-requested" });
+    expect(gatedToolCallId(gated)).toBe(gated.toolCallId);
+    expect(gatedToolCallId(tool("run-command", { state: "output-denied" }))).toBe(null);
+    expect(gatedToolCallId(tool("run-command"))).toBe(null);
   });
 
   it("collects every gate the transcript is already showing", () => {
     // What the foot slot subtracts. An interaction drawn on its row and again
     // under the composer is one question asked twice.
+    const gated = tool("run-command", { state: "approval-requested" });
     const messages = [
-      message("m1", [tool("read-file"), tool("run-command", { state: "approval-requested" })]),
+      message("m1", [tool("read-file"), gated]),
       message("m2", [{ type: "text", text: "waiting" }]),
     ];
-    expect([...gatedApprovalIds(messages)]).toEqual(["approval-1"]);
-    expect(gatedApprovalIds([message("m3", [tool("read-file")])]).size).toBe(0);
+    expect([...gatedToolCallIds(messages)]).toEqual([gated.toolCallId]);
+    expect(gatedToolCallIds([message("m3", [tool("read-file")])]).size).toBe(0);
   });
 });
 

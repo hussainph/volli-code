@@ -8,12 +8,7 @@
  * message that leaves exactly once — are all about *when* things happen, and
  * none of them is observable through a component.
  */
-import type {
-  CommandReceipt,
-  ModelSelection,
-  SessionAttachmentProjection,
-  SessionProjection,
-} from "@volli/shared";
+import type { CommandReceipt, ModelSelection, SessionPresentationProjection } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -75,38 +70,22 @@ const MODEL_POLICY: ModelSelection = {
   reasoningLevel: "high",
 };
 
-function attachmentFor(id: string, adapterId = "pi"): SessionAttachmentProjection {
-  return {
-    id,
-    sessionId: SESSION.id,
-    adapterId,
-    venue: { id: "local", kind: "local" },
-    continuity: "fresh",
-    native: null,
-    status: "open",
-    openedAt: 0,
-    closedAt: null,
-    outcome: null,
-    failure: null,
-  };
-}
-
-function projectionFor(attachmentId: string | null, adapterId = "pi"): SessionProjection {
-  const attachment = attachmentId === null ? null : attachmentFor(attachmentId, adapterId);
+/**
+ * A projection as it actually crosses the edge: the presentation shape, with
+ * executor identity reduced to `{ id }` and no command/receipt history. The
+ * full `SessionProjection` never reaches this client, so a fixture built from
+ * one would exercise fields the edge deliberately withholds.
+ */
+function projectionFor(attachmentId: string | null): SessionPresentationProjection {
   return {
     session: SESSION,
     status: "open",
-    commands: [],
-    receipts: [],
-    pendingExecutorStart: null,
-    attachments: attachment === null ? [] : [attachment],
-    liveExecutor: attachment,
+    liveExecutor: attachmentId === null ? null : { id: attachmentId },
     attention: { active: [], primary: null },
     interactions: { active: [], resolved: [] },
     signal: null,
     modelSelection: MODEL_POLICY,
     turnActive: false,
-    authorityDenials: 0,
     lastActivityAt: SESSION.createdAt,
     bornTicketless: SESSION.ticketId === null,
   };
@@ -1185,7 +1164,7 @@ describe("submit", () => {
 /* ---------------------------------------------------------- auto-titling */
 
 describe("auto-title on delivery", () => {
-  function projectionWithTitle(title: string | null): SessionProjection {
+  function projectionWithTitle(title: string | null): SessionPresentationProjection {
     return { ...projectionFor("attach-1"), session: { ...SESSION, title } };
   }
 

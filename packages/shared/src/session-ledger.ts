@@ -189,6 +189,45 @@ export function promptId(index: number): string {
 export const DEFAULT_INTERACTION_PROMPT_ID = promptId(0);
 
 /**
+ * The interaction id one blocked tool call is asked under.
+ *
+ * Durable, not live. This string lands inside
+ * `pi:interaction:<attachmentId>:<id>:opened` on disk, and every relaunch
+ * re-derives that event id from the same data and dedupes it by exact match — so
+ * changing how this is built would not fail, it would write a second copy of
+ * every question a Session ever asked. Keep the shape, and the `ask:` segment
+ * with it.
+ *
+ * The tool call id is the identity because the runtime blocks exactly one
+ * question per call it refuses — and because it is the one identity that
+ * survives the product edge: the renderer correlates a gated tool row to its
+ * interaction through this derivation, never through `native.id`, which the
+ * edge always nulls. Defined here, beside the interaction vocabulary, so the
+ * adapter that mints it and the renderer that matches it cannot drift.
+ */
+export function askInteractionId(toolCallId: string): string {
+  return `ask:${toolCallId}`;
+}
+
+/**
+ * The interaction id one `ask_user` call is asked under.
+ *
+ * Durable on the same terms as {@link askInteractionId}, and a second derivation
+ * rather than a widening of it: the `ask-user:` segment is frozen the moment it
+ * ships, because `pi:interaction:<attachmentId>:<id>:opened` is re-derived from
+ * live data on every relaunch and deduped by exact string match.
+ *
+ * Separate from `ask:` for a reason that outlives the ids. Both derive from a
+ * tool call id, and the two questions are answered differently — an escalation's
+ * option ids are read as a verdict, a model's are handed back untouched — so one
+ * shared prefix would not collide loudly, it would let either answer settle the
+ * other's wait.
+ */
+export function askUserInteractionId(toolCallId: string): string {
+  return `ask-user:${toolCallId}`;
+}
+
+/**
  * The questions an interaction asks, whether or not it was written with
  * `prompts`. A record without them is one prompt built from the flat fields;
  * no consumer should branch on their absence itself.
@@ -840,22 +879,6 @@ export interface SessionProjection {
    * today, but only the scratch one was ever meant to.
    */
   bornTicketless: boolean;
-}
-
-/** Renderer-owned Session state with executor implementation details removed. */
-export interface SessionPresentationProjection extends Pick<
-  SessionProjection,
-  | "session"
-  | "status"
-  | "attention"
-  | "interactions"
-  | "signal"
-  | "modelSelection"
-  | "turnActive"
-  | "lastActivityAt"
-  | "bornTicketless"
-> {
-  liveExecutor: { id: string } | null;
 }
 
 /**

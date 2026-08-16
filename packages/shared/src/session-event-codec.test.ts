@@ -2,6 +2,11 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   assertSession,
   assertSessionEvent,
+  scrubSessionCommand,
+  scrubSessionEvent,
+  scrubSessionEventPayload,
+  scrubSessionEventProvenance,
+  scrubSessionInteraction,
   decodeCommandReceipt,
   decodeSessionCommand,
   decodeSessionCommandIntent,
@@ -758,5 +763,202 @@ describe("encodeSessionJson", () => {
     expect(() => encodeSessionJson([Number.NaN])).toThrow(
       "JSON value[0] contains a non-finite number",
     );
+  });
+});
+
+describe("the renderer-safe scrub", () => {
+  it("strips executor identity and the recovery locator from attachments", () => {
+    const scrubbed = scrubSessionEventPayload({ kind: "attachment.opened", attachment });
+    expect(scrubbed).toEqual({
+      kind: "attachment.opened",
+      attachment: {
+        id: "attachment-1",
+        sessionId: "session-1",
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+      },
+    });
+    expect(scrubbed.kind === "attachment.opened" && "adapterId" in scrubbed.attachment).toBe(false);
+    expect(scrubbed.kind === "attachment.opened" && "native" in scrubbed.attachment).toBe(false);
+  });
+
+  it("nulls a failure's diagnostic beside its scrubbed attachment", () => {
+    const scrubbed = scrubSessionEventPayload({
+      kind: "attachment.failed",
+      attachment,
+      failure: { code: "spawn", detail: "no binary", diagnostic: { stderr: "boom" } },
+    });
+    expect(scrubbed).toMatchObject({
+      kind: "attachment.failed",
+      failure: { code: "spawn", detail: "no binary", diagnostic: null },
+    });
+  });
+
+  it("nulls native references, attention diagnostics, and adapter observations", () => {
+    expect(
+      scrubSessionEventPayload({
+        kind: "attachment.native_referenced",
+        attachmentId: "attachment-1",
+        native: { id: "native-1", detail: { path: "/tmp/session" } },
+      }),
+    ).toEqual({
+      kind: "attachment.native_referenced",
+      attachmentId: "attachment-1",
+      native: { id: null, detail: null },
+    });
+    expect(
+      scrubSessionEventPayload({
+        kind: "attention.raised",
+        attention: {
+          kind: "rate_limited",
+          id: "attention-1",
+          attachmentId: null,
+          detail: "slow down",
+          diagnostic: { status: 429 },
+          retryAt: 200,
+        },
+      }),
+    ).toEqual({
+      kind: "attention.raised",
+      // The arm keeps its own fields; only the diagnostic goes.
+      attention: {
+        kind: "rate_limited",
+        id: "attention-1",
+        attachmentId: null,
+        detail: "slow down",
+        diagnostic: null,
+        retryAt: 200,
+      },
+    });
+    expect(
+      scrubSessionEventPayload({
+        kind: "adapter.observed",
+        attachmentId: null,
+        name: "message",
+        native: { parts: ["text"] },
+      }),
+    ).toEqual({ kind: "adapter.observed", attachmentId: null, name: "message", native: null });
+  });
+
+  it("nulls an interaction's native reference and keeps its prompts", () => {
+    const scrubbed = scrubSessionInteraction({
+      ...interaction,
+      prompts: [
+        {
+          id: "prompt:0",
+          label: "Allow write?",
+          detail: null,
+          options: interaction.options,
+          multiple: false,
+          custom: false,
+        },
+      ],
+    });
+    expect(scrubbed.native).toEqual({ id: null, detail: null });
+    expect(scrubbed.prompts).toHaveLength(1);
+    expect(scrubbed.options).toEqual(interaction.options);
+  });
+
+  it("strips adapterId from an executor.start intent and its route, and only there", () => {
+    const scrubbed = scrubSessionEventPayload({ kind: "command.recorded", command });
+    expect(scrubbed).toEqual({
+      kind: "command.recorded",
+      command: {
+        id: "command-1",
+        sessionId: "session-1",
+        createdAt: 100,
+        intent: { kind: "executor.start", continuity: "fresh" },
+        route: { attachmentId: null },
+      },
+    });
+    const retitle = scrubSessionCommand({
+      ...command,
+      intent: { kind: "session.retitle", title: "Renamed" },
+      route: null,
+    });
+    expect(retitle.intent).toEqual({ kind: "session.retitle", title: "Renamed" });
+    expect(retitle.route).toBeNull();
+  });
+
+  it("passes every kind without adapter-native detail through untouched", () => {
+    const identity: SessionEventPayload[] = [
+      { kind: "session.created", session },
+      { kind: "session.archived" },
+      { kind: "session.retitled", title: "Renamed" },
+      {
+        kind: "model.selected",
+        selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
+      },
+      { kind: "session.input.recorded", input: { kind: "runtime-brief", text: "brief" } },
+      { kind: "session.signaled", signal: "done", reason: null },
+      { kind: "attachment.closed", attachmentId: "attachment-1", outcome: "completed" },
+      { kind: "run.started", attachmentId: "attachment-1", runId: "run-1" },
+      { kind: "run.completed", attachmentId: "attachment-1", runId: "run-1" },
+      { kind: "turn.started", attachmentId: "attachment-1", turnId: "turn-1" },
+      { kind: "turn.completed", attachmentId: "attachment-1", turnId: "turn-1" },
+      { kind: "turn.interrupted", attachmentId: "attachment-1", turnId: "turn-1" },
+      {
+        kind: "transcript.referenced",
+        attachmentId: null,
+        turnId: null,
+        reference: { id: "sha256:a", mediaType: null, digest: null },
+      },
+      { kind: "attention.cleared", attentionId: "attention-1" },
+      {
+        kind: "interaction.resolved",
+        attachmentId: "attachment-1",
+        interactionId: "ask:tool-1",
+        resolution: { optionIds: ["once"], response: null },
+      },
+      {
+        kind: "interaction.cancelled",
+        attachmentId: "attachment-1",
+        interactionId: "ask:tool-1",
+        reason: "abandoned",
+      },
+      { kind: "command.receipt.recorded", receipt },
+      // Volli's own vocabulary already, not a harness's.
+      {
+        kind: "authority.denied",
+        attachmentId: "attachment-1",
+        turnId: null,
+        tool: "bash",
+        cause: "command.destructive-removal",
+        reason: "refused",
+      },
+      { kind: "interaction.opened", interaction },
+    ];
+    for (const payload of identity) {
+      const scrubbed = scrubSessionEventPayload(payload);
+      if (payload.kind === "interaction.opened") continue; // asserted above
+      expect(scrubbed).toEqual(payload);
+    }
+  });
+
+  it("rewrites adapter provenance to a system source and keeps the rest", () => {
+    const event: SessionEvent = {
+      id: "event-1",
+      sessionId: "session-1",
+      sequence: 1,
+      occurredAt: 100,
+      recordedAt: 100,
+      provenance: {
+        source: { kind: "adapter", id: "pi", detail: { pid: 42 } },
+        venue: { id: "local", kind: "local" },
+      },
+      payload: { kind: "attachment.opened", attachment },
+    };
+    const scrubbed = scrubSessionEvent(event);
+    expect(scrubbed.provenance).toEqual({
+      source: { kind: "system", id: "session-runtime", detail: null },
+      venue: { id: "local", kind: "local" },
+    });
+    expect(scrubbed.payload.kind).toBe("attachment.opened");
+    expect(
+      scrubSessionEventProvenance({
+        source: { kind: "user", id: "person", detail: null },
+        venue: null,
+      }),
+    ).toEqual({ source: { kind: "user", id: "person", detail: null }, venue: null });
   });
 });
