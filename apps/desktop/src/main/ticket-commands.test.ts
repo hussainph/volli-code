@@ -208,6 +208,53 @@ describe("ticket-commands event emission", () => {
     });
   });
 
+  it("changes worktree scoping while no worktree has materialized, and records the change", () => {
+    seed();
+    createTicket("t1"); // usesWorktree defaults to true, worktree_path null
+
+    const updated = updateTicketFieldsCommand(
+      ctx.db,
+      { ticketId: "t1", usesWorktree: false },
+      { now: 2, actor: USER },
+    );
+
+    expect(updated.usesWorktree).toBe(false);
+    expect(eventOfKind("t1", "worktree_scope_changed")!.payload).toMatchObject({
+      from: true,
+      to: false,
+    });
+
+    // Setting the SAME value is a genuine no-op — no new events.
+    const before = listTicketEvents(ctx.db, "t1").length;
+    updateTicketFieldsCommand(
+      ctx.db,
+      { ticketId: "t1", usesWorktree: false },
+      { now: 3, actor: USER },
+    );
+    expect(listTicketEvents(ctx.db, "t1").length).toBe(before);
+  });
+
+  it("refuses to change worktree scoping once a worktree is stamped on the ticket", () => {
+    // A materialized worktree is a fact on disk — flipping the flag under it
+    // would strand the checkout (or silently rebind the Main checkout, #38).
+    seed();
+    createTicket("t1");
+    updateTicketFieldsCommand(
+      ctx.db,
+      { ticketId: "t1", worktreePath: "/wt/VC-1", branch: "volli/VC-1-x", baseBranch: "main" },
+      { now: 2, actor: AUTOMATION },
+    );
+
+    expect(() =>
+      updateTicketFieldsCommand(
+        ctx.db,
+        { ticketId: "t1", usesWorktree: false },
+        { now: 3, actor: USER },
+      ),
+    ).toThrow(/worktree already exists/i);
+    expect(getTicketRow(ctx.db, "t1")!.uses_worktree).toBe(1);
+  });
+
   it("emits priority_changed only on a real change", () => {
     seed();
     createTicket("t1", "backlog", { priority: "medium" });

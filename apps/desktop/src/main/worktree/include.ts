@@ -30,26 +30,39 @@
  * destination is required inside the project root / worktree root respectively.
  *
  * Performance note: matching an unanchored basename pattern is depth-agnostic,
- * so the walk visits the whole tree (skipping `.git` and not following
- * symlinked dirs). Acceptable for a once-per-worktree-creation step; a
- * scoped/ignore-aware walk is a future optimization.
+ * so the walk visits every directory it does not prune, and never follows
+ * symlinked dirs. Two are pruned: `.git`, which is git's own metadata and can
+ * never be transported, and the {@link DEFAULT_PRUNED_DIRS} below, which a
+ * `.worktreeinclude` line can ask for back by name. The walk and every copy run
+ * through `fs/promises` — this step executes on Electron main, and the
+ * synchronous version froze every window for the walk's whole duration on a
+ * large Main checkout (VC-16's rainbow wheel).
  */
-import {
-  copyFileSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  readlinkSync,
-  symlinkSync,
-} from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { copyFile, lstat, mkdir, readdir, readlink, symlink } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 
 import { isInside } from "./paths";
 
 /** Applied even with no `.worktreeinclude` file; a `!` line in the file can suppress them. */
 export const DEFAULT_INCLUDE_PATTERNS = [".env*", ".claude/settings.local.json"] as const;
+
+/**
+ * Directory names the walk does not descend into unless a `.worktreeinclude`
+ * line names one.
+ *
+ * `node_modules` is the whole list, and it earns the place twice over. It is
+ * the dominant cost of the walk on a JS checkout — the seconds VC-16 reported —
+ * and it is also a correctness trap: `.env*` is an unanchored default, packages
+ * ship `.env.example` files, and a depth-agnostic walk transported other
+ * people's samples into the agent's checkout. Nothing under here is local
+ * config a person wrote, which is the only thing this step exists to carry.
+ *
+ * Deliberately NOT a general ignore list. A directory that is merely large is
+ * still walked: this names the one whose contents are, by construction, not
+ * ours.
+ */
+export const DEFAULT_PRUNED_DIRS = ["node_modules"] as const;
 
 const INCLUDE_FILE_NAME = ".worktreeinclude";
 
@@ -168,15 +181,38 @@ interface WalkEntry {
   isSymlink: boolean;
 }
 
-/** Recursively yields every file/symlink under `root`, skipping `.git` and never following symlinked dirs. */
-function* walkFiles(root: string, dir: string): Generator<WalkEntry> {
-  for (const dirent of readdirSync(dir, { withFileTypes: true })) {
+/**
+ * The directory names to skip for THIS project, given its effective patterns:
+ * {@link DEFAULT_PRUNED_DIRS} minus every segment a non-negated pattern names.
+ *
+ * Only a non-negated line takes a directory off the list. A `!node_modules/`
+ * line can only ever exclude, so descending for it would buy nothing and make
+ * writing the line slower than omitting it — the one reading of it that is
+ * certainly not what its author meant.
+ */
+function prunedDirNames(patterns: readonly CompiledPattern[]): ReadonlySet<string> {
+  const pruned = new Set<string>(DEFAULT_PRUNED_DIRS);
+  for (const pattern of patterns) {
+    if (pattern.negate) continue;
+    for (const segment of pattern.raw.split("/")) pruned.delete(segment);
+  }
+  return pruned;
+}
+
+/** Recursively yields every file/symlink under `root`, skipping `.git` + `pruned` and never following symlinked dirs. */
+async function* walkFiles(
+  root: string,
+  dir: string,
+  pruned: ReadonlySet<string>,
+): AsyncGenerator<WalkEntry> {
+  for (const dirent of await readdir(dir, { withFileTypes: true })) {
     if (dirent.name === ".git") continue;
     const full = join(dir, dirent.name);
     if (dirent.isSymbolicLink()) {
       yield { full, relPath: toPosixRelative(root, full), isSymlink: true };
     } else if (dirent.isDirectory()) {
-      yield* walkFiles(root, full);
+      if (pruned.has(dirent.name)) continue;
+      yield* walkFiles(root, full, pruned);
     } else if (dirent.isFile()) {
       yield { full, relPath: toPosixRelative(root, full), isSymlink: false };
     }
@@ -194,11 +230,15 @@ export interface CopyResult {
  * covers tracked files). Symlinks are recreated as symlinks. Every source
  * location and destination is guarded inside its root.
  */
-export function copyIncludedFiles(projectRoot: string, worktreeRoot: string): CopyResult {
+export async function copyIncludedFiles(
+  projectRoot: string,
+  worktreeRoot: string,
+): Promise<CopyResult> {
   const patterns = loadIncludePatterns(projectRoot);
+  const pruned = prunedDirNames(patterns);
   const copied: string[] = [];
 
-  for (const entry of walkFiles(projectRoot, projectRoot)) {
+  for await (const entry of walkFiles(projectRoot, projectRoot, pruned)) {
     if (!isIncluded(patterns, entry.relPath)) continue;
 
     // Source guard: the file's LOCATION (not a symlink's target) must sit
@@ -214,20 +254,29 @@ export function copyIncludedFiles(projectRoot: string, worktreeRoot: string): Co
     }
     // Never overwrite (skips tracked files). `lstat` not `existsSync`: a
     // dangling symlink git may have materialized would read "absent" through
-    // `existsSync` (it follows the link), then `symlinkSync` below throws
+    // `existsSync` (it follows the link), then the `symlink` below throws
     // EEXIST and fails the whole ensure — lstat sees the link itself.
-    if (lstatSync(dest, { throwIfNoEntry: false }) !== undefined) continue;
+    if ((await lstatQuiet(dest)) !== null) continue;
 
-    mkdirSync(dirname(dest), { recursive: true });
+    await mkdir(dirname(dest), { recursive: true });
     if (entry.isSymlink) {
       // Recreate the link verbatim — never read through it, so a link pointing
       // outside the root transports the link, not the external contents.
-      symlinkSync(readlinkSync(entry.full), dest);
-    } else if (lstatSync(entry.full).isFile()) {
-      copyFileSync(entry.full, dest);
+      await symlink(await readlink(entry.full), dest);
+    } else if ((await lstat(entry.full)).isFile()) {
+      await copyFile(entry.full, dest);
     }
     copied.push(entry.relPath);
   }
 
   return { copied };
+}
+
+/** `lstat` that answers `null` for a missing path instead of throwing ENOENT. */
+async function lstatQuiet(path: string): Promise<Awaited<ReturnType<typeof lstat>> | null> {
+  try {
+    return await lstat(path);
+  } catch {
+    return null;
+  }
 }

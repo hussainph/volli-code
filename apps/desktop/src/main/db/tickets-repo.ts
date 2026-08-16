@@ -407,6 +407,12 @@ export interface TicketFieldUpdate {
   /** Durable draft-PR url (migration 009); `null` clears the field. */
   prUrl?: string | null;
   preferredHarnessId?: Ticket["preferredHarnessId"];
+  /**
+   * Worktree scoping (isolated worktree vs Main checkout). The COMMAND layer
+   * gates this to tickets whose worktree has not materialized — the repo layer
+   * just writes what it is handed, like every other field here.
+   */
+  usesWorktree?: boolean;
 }
 
 /**
@@ -449,6 +455,10 @@ export function updateTicketFields(
   if (fields.preferredHarnessId !== undefined) {
     sets.push("preferred_harness_id = ?");
     params.push(fields.preferredHarnessId);
+  }
+  if (fields.usesWorktree !== undefined) {
+    sets.push("uses_worktree = ?");
+    params.push(fields.usesWorktree ? 1 : 0);
   }
   if (sets.length === 0) return;
   sets.push("row_version = row_version + 1", "updated_at = ?");

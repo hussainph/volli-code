@@ -4,9 +4,12 @@
  * `.volli/attachments/` dir inside the SESSION's checkout — the worktree for
  * a worktree ticket, the main checkout for a worktree-opt-out one (see
  * `sessionAttachmentsDir`'s header for the boundary vs. `.volli/artifacts`).
- * `url` attachments have no bytes and pass through untouched. SYNCHRONOUS —
- * this runs inside the sync worktree `ensure` pipeline and pty.ts's sync
- * kickoff-command build, both of which are on the session-boot hot path.
+ * `url` attachments have no bytes and pass through untouched. ASYNC, through
+ * `fs/promises`, for the reason the `ensure` pipeline around it is (VC-16):
+ * both of its call sites are session boot on Electron main, and an attachment
+ * is whatever file a person dragged onto a ticket — a screen recording copies
+ * as slowly as a repo does, and `copyFileSync` would freeze every window for
+ * the duration.
  *
  * Idempotent by construction: an already-materialized destination is never
  * overwritten (mirrors `worktree/include.ts`'s copy semantics), so re-booting
@@ -16,7 +19,7 @@
  * silently hands the agent an incomplete spec (CLAUDE.md: surface every
  * failed mutation).
  */
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { access, copyFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
 import {
@@ -30,13 +33,23 @@ import {
 import { attachmentFilePath } from "./attachment-store";
 import { listAttachments } from "./db/attachments-repo";
 
-/** Creates `<sessionRoot>/.volli` and writes its self-gitignore if missing. Sync counterpart of `volli-fs.ts`'s `ensureVolliDir`; never touches the user's root `.gitignore`. */
-function ensureVolliDirSync(sessionRoot: string): void {
+/** Whether `path` exists, without throwing ENOENT at the caller. */
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Creates `<sessionRoot>/.volli` and writes its self-gitignore if missing. Mirrors `volli-fs.ts`'s `ensureVolliDir`; never touches the user's root `.gitignore`. */
+async function ensureVolliDir(sessionRoot: string): Promise<void> {
   const dir = volliDir(sessionRoot);
-  mkdirSync(dir, { recursive: true });
+  await mkdir(dir, { recursive: true });
   const gitignorePath = join(dir, ".gitignore");
-  if (!existsSync(gitignorePath)) {
-    writeFileSync(gitignorePath, VOLLI_GITIGNORE_CONTENT, "utf8");
+  if (!(await pathExists(gitignorePath))) {
+    await writeFile(gitignorePath, VOLLI_GITIGNORE_CONTENT, "utf8");
   }
 }
 
@@ -53,20 +66,24 @@ export interface MaterializedAttachments {
  * needs the full list. A ticket with no attachments is a cheap no-op that
  * touches nothing on disk (no `.volli/attachments`, no `.volli/.gitignore`).
  */
-export function materializeAttachments(
+export async function materializeAttachments(
   db: Database.Database,
   attachmentsRoot: string,
   ticketId: string,
   sessionRoot: string,
-): MaterializedAttachments {
+): Promise<MaterializedAttachments> {
   const attachments = listAttachments(db, ticketId);
   if (attachments.length === 0) return { files: [], urls: [] };
 
   const materializedNames = materializedAttachmentNames(attachments);
-  ensureVolliDirSync(sessionRoot);
+  await ensureVolliDir(sessionRoot);
   const destDir = sessionAttachmentsDir(sessionRoot);
-  mkdirSync(destDir, { recursive: true });
+  await mkdir(destDir, { recursive: true });
 
+  // Serial, not `Promise.all`: the failure below names the ONE attachment whose
+  // bytes are missing, and a parallel map would race a second rejection past it
+  // and report whichever lost. Attachment lists are short; ordering them costs
+  // nothing worth the ambiguity.
   for (const attachment of attachments) {
     if (attachment.kind !== "file") continue;
     const materializedName = materializedNames.get(attachment.id);
@@ -74,12 +91,12 @@ export function materializeAttachments(
     // attachment, and we're iterating that same list.
     if (materializedName === undefined) continue;
     const dest = join(destDir, materializedName);
-    if (existsSync(dest)) continue; // never overwrite — re-boot idempotence.
+    if (await pathExists(dest)) continue; // never overwrite — re-boot idempotence.
     const source = attachmentFilePath(attachmentsRoot, attachment.id, attachment.fileName);
-    if (!existsSync(source)) {
+    if (!(await pathExists(source))) {
       throw new Error(`Missing attachment file for "${attachment.label}" (expected at ${source})`);
     }
-    copyFileSync(source, dest);
+    await copyFile(source, dest);
   }
   // The prompt-ready shape is a pure function of the attachment rows alone
   // (relPath is deterministic from materializedAttachmentNames) — shared with

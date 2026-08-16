@@ -14,6 +14,8 @@ import { createChatSessionsStore } from "./chat-sessions";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
+const noop = (): void => undefined;
+
 const SESSION = { id: "durable-1", projectId: "p1", ticketId: "t1", title: "VC-1", createdAt: 0 };
 const ACCEPTED_RECEIPT: CommandReceipt = {
   id: "receipt-accepted",
@@ -68,11 +70,26 @@ function fakeTransport() {
   const commands: ChatCommandRequest[] = [];
   const ticketStarts: unknown[] = [];
   const projectStarts: unknown[] = [];
+  const attaches: unknown[] = [];
   const subscriptions: ChatStreamCursor[] = [];
   const state = {
     answer: (() => ACCEPTED) as (request: ChatCommandRequest) => CommandAnswer,
-    startAnswer: (() => ({ ...ACCEPTED, state: "ready", throughSequence: 2 })) as () => StartAnswer,
+    createAnswer: (() => ({ sessionId: SESSION.id })) as () => { sessionId: string },
+    attachAnswer: (() => ({
+      ...ACCEPTED,
+      state: "ready",
+      throughSequence: 2,
+    })) as () => StartAnswer,
     snapshotError: null as Error | null,
+  };
+  // The attach stays open while a test inspects the optimistic state, then
+  // releases — the create/attach split is the whole point of VC-16.
+  let attachGate: Promise<void> | null = null;
+  let releaseAttach: () => void = noop;
+  const holdAttach = () => {
+    attachGate = new Promise((resolve) => {
+      releaseAttach = resolve;
+    });
   };
   const rpc: ChatSessionRpc = {
     session: {
@@ -104,7 +121,7 @@ function fakeTransport() {
     rpc,
     scheduler: { schedule: () => () => undefined },
     newCommandId: () => `cmd-${++ids}`,
-    startSession: async (input) => {
+    createSession: async (input) => {
       if (input.ticketId === null) {
         projectStarts.push({
           operationId: input.operationId,
@@ -112,11 +129,25 @@ function fakeTransport() {
           title: input.title,
         });
       } else ticketStarts.push(input);
-      return state.startAnswer();
+      return state.createAnswer();
     },
-    attachSession: async () => ({ ...ACCEPTED, state: "ready", throughSequence: 2 }),
+    attachSession: async (input) => {
+      attaches.push(input);
+      if (attachGate !== null) await attachGate;
+      return state.attachAnswer();
+    },
   };
-  return { commands, projectStarts, subscriptions, state, ticketStarts, transport };
+  return {
+    attaches,
+    commands,
+    holdAttach,
+    projectStarts,
+    releaseAttach: () => releaseAttach(),
+    subscriptions,
+    state,
+    ticketStarts,
+    transport,
+  };
 }
 
 function fixture() {
@@ -139,8 +170,14 @@ afterEach(() => {
 });
 
 describe("createChatSession", () => {
-  it("starts a Ticket Session through the product route without runtime identity", async () => {
-    const { commands, store, subscriptions, ticketStarts } = fixture();
+  it("lands the Session id from the create-only route while the attach is still in flight", async () => {
+    // The optimistic open (VC-16): the id — and with it the tab — must not
+    // wait on the attach, which is where the Ticket worktree materializes and
+    // the Agent Runtime boots. The attach is held open across the await to
+    // prove the resolution order, not just observe it.
+    const { attaches, commands, holdAttach, releaseAttach, store, subscriptions, ticketStarts } =
+      fixture();
+    holdAttach();
 
     const sessionId = await store.getState().createChatSession({
       projectId: "p1",
@@ -157,19 +194,27 @@ describe("createChatSession", () => {
         title: "VC-1 · parser",
       },
     ]);
+    // The attach left on the create's heels — in flight, not awaited.
+    expect(attaches).toMatchObject([{ sessionId: SESSION.id, bornTicketless: false }]);
     expect(commands).toEqual([]);
     expect(subscriptions).toHaveLength(1);
+    // `starting` is the attach latch — the pane is open, the composer queues.
     expect(store.getState().sessions[SESSION.id]).toMatchObject({
-      lifecycle: "ready",
+      lifecycle: "starting",
       sessionError: null,
       queue: [],
       transcript: EMPTY_TRANSCRIPT,
     });
     expect(getChatClient(SESSION.id)).toBeDefined();
+
+    releaseAttach();
+    await vi.waitFor(() => {
+      expect(store.getState().sessions[SESSION.id]?.lifecycle).toBe("ready");
+    });
   });
 
-  it("starts a ticketless chat through the product project route", async () => {
-    const { commands, projectStarts, store } = fixture();
+  it("starts a ticketless chat through the create-only project route", async () => {
+    const { attaches, commands, projectStarts, store } = fixture();
 
     await store.getState().createChatSession({
       projectId: "p1",
@@ -179,13 +224,16 @@ describe("createChatSession", () => {
 
     expect(projectStarts).toEqual([{ operationId: "cmd-1", projectId: "p1", title: null }]);
     expect(commands).toEqual([]);
+    await vi.waitFor(() => {
+      expect(attaches).toMatchObject([{ sessionId: SESSION.id, bornTicketless: true }]);
+    });
   });
 
-  it("keeps the durable Session when the attach is refused", async () => {
-    // A refused attach does not un-create the Session: the id comes back so the
-    // retry addresses it, and the error sits on the Session it belongs to.
+  it("keeps the durable Session when the background attach is refused", async () => {
+    // A refused attach does not un-create the Session: the id came back before
+    // the attach settled, and the error lands on the Session it belongs to.
     const { state, store } = fixture();
-    state.startAnswer = () => ({ ...REFUSED, state: "needs-recovery", throughSequence: 2 });
+    state.attachAnswer = () => ({ ...REFUSED, state: "needs-recovery", throughSequence: 2 });
 
     const sessionId = await store.getState().createChatSession({
       projectId: "p1",
@@ -194,15 +242,17 @@ describe("createChatSession", () => {
     });
 
     expect(sessionId).toBe(SESSION.id);
-    expect(store.getState().sessions[SESSION.id]).toMatchObject({
-      lifecycle: "error",
-      sessionError: "Could not start Session: Pi is unavailable",
+    await vi.waitFor(() => {
+      expect(store.getState().sessions[SESSION.id]).toMatchObject({
+        lifecycle: "error",
+        sessionError: "Could not start Session: Pi is unavailable",
+      });
     });
   });
 
   it("uses a product recovery message when a ticketless attach has no receipt", async () => {
     const { state, store } = fixture();
-    state.startAnswer = () => ({
+    state.attachAnswer = () => ({
       sessionId: SESSION.id,
       state: "needs-recovery",
       receipt: null,
@@ -211,14 +261,40 @@ describe("createChatSession", () => {
 
     await store.getState().createChatSession({ projectId: "p1", ticketId: null, title: null });
 
-    expect(store.getState().sessions[SESSION.id]?.sessionError).toBe(
-      "Could not start Session: Runtime recovery is required.",
-    );
+    await vi.waitFor(() => {
+      expect(store.getState().sessions[SESSION.id]?.sessionError).toBe(
+        "Could not start Session: Runtime recovery is required.",
+      );
+    });
+  });
+
+  it("settles a background attach transport failure as the Session's own error", async () => {
+    // The create answered, so the Session exists — an attach that never reached
+    // main must surface on it rather than vanish into a rejected background
+    // promise (CLAUDE.md: no silently swallowed mutation).
+    const { state, store } = fixture();
+    state.attachAnswer = () => {
+      throw new Error("socket hang up");
+    };
+
+    const sessionId = await store.getState().createChatSession({
+      projectId: "p1",
+      ticketId: "t1",
+      title: null,
+    });
+
+    expect(sessionId).toBe(SESSION.id);
+    await vi.waitFor(() => {
+      expect(store.getState().sessions[SESSION.id]).toMatchObject({
+        lifecycle: "error",
+        sessionError: "Could not start Session: socket hang up",
+      });
+    });
   });
 
   it("lets durable Ticket Attention explain a refused attach without masking recovery", async () => {
     const { state, store } = fixture();
-    state.startAnswer = () => ({ ...REFUSED, state: "needs-recovery", throughSequence: 2 });
+    state.attachAnswer = () => ({ ...REFUSED, state: "needs-recovery", throughSequence: 2 });
 
     const sessionId = await store.getState().createChatSession({
       projectId: "p1",
@@ -227,15 +303,17 @@ describe("createChatSession", () => {
     });
 
     expect(sessionId).toBe(SESSION.id);
-    expect(store.getState().sessions[SESSION.id]).toMatchObject({
-      lifecycle: "ready",
-      sessionError: null,
+    await vi.waitFor(() => {
+      expect(store.getState().sessions[SESSION.id]).toMatchObject({
+        lifecycle: "ready",
+        sessionError: null,
+      });
     });
   });
 
   it("has no Session to keep when the create itself never answered", async () => {
     const { state, store } = fixture();
-    state.startAnswer = () => {
+    state.createAnswer = () => {
       throw new Error("socket hang up");
     };
 
@@ -257,7 +335,7 @@ describe("createChatSession", () => {
     const { state, store } = fixture();
     const refusal = "Choose a default model in Settings before starting a Session.";
 
-    state.startAnswer = () => {
+    state.createAnswer = () => {
       throw new Error(refusal);
     };
     await expect(

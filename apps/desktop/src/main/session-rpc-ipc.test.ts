@@ -642,6 +642,60 @@ describe("registerSessionRpcIpcHandlers", () => {
     ]);
     await registration.close();
   });
+
+  it("routes the create-only Session starts over IPC, answering identity alone", async () => {
+    // VC-16's optimistic open: these two are the fast half of a chat start, and
+    // what makes them fast is that they answer a Session id and nothing about
+    // an executor — the attach that materializes the worktree is its own route.
+    const fixture = runtimeFixture();
+    const calls: unknown[] = [];
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: fixture.runtime,
+      createTicketSession: async (input) => {
+        calls.push(["ticket.create", input]);
+        return { sessionId: "session-1" };
+      },
+      createProjectSession: async (input) => {
+        calls.push(["project.create", input]);
+        return { sessionId: "session-2" };
+      },
+    });
+
+    await expect(
+      invoke(sender(), {
+        procedure: "ticketSessions.create",
+        input: {
+          operationId: "ticket-create",
+          projectId: "project-1",
+          ticketId: "ticket-1",
+          title: "VC-1",
+        },
+      }),
+    ).resolves.toEqual({ ok: true, data: { sessionId: "session-1" } });
+    await expect(
+      invoke(sender(), {
+        procedure: "projectSessions.create",
+        input: { operationId: "project-create", projectId: "project-1", title: "Scratch" },
+      }),
+    ).resolves.toEqual({ ok: true, data: { sessionId: "session-2" } });
+
+    expect(calls).toEqual([
+      [
+        "ticket.create",
+        {
+          operationId: "ticket-create",
+          projectId: "project-1",
+          ticketId: "ticket-1",
+          title: "VC-1",
+        },
+      ],
+      [
+        "project.create",
+        { operationId: "project-create", projectId: "project-1", title: "Scratch" },
+      ],
+    ]);
+    await registration.close();
+  });
 });
 
 function emptyStream(): AsyncIterable<readonly [string, unknown]> {

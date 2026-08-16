@@ -326,7 +326,7 @@ async function adopted(prepare: (rpc: FakeRpc) => void = () => undefined) {
     rpc,
     scheduler,
     newCommandId: () => `cmd-${++commandIds}`,
-    startSession: async () => {
+    createSession: async () => {
       throw new Error("adopted fixtures do not start Sessions");
     },
     attachSession: async (input) => {
@@ -471,14 +471,14 @@ describe("browserChatTransport", () => {
     expect(typeof transport.rpc.session.snapshot.query).toBe("function");
     expect(transport.newCommandId()).not.toBe(transport.newCommandId());
     expect(typeof transport.scheduler.schedule(() => undefined)).toBe("function");
-    await transport.startSession({
-      operationId: "project-start",
+    await transport.createSession({
+      operationId: "project-create",
       projectId: "project-1",
       ticketId: null,
       title: "Scratch",
     });
-    await transport.startSession({
-      operationId: "ticket-start",
+    await transport.createSession({
+      operationId: "ticket-create",
       projectId: "project-1",
       ticketId: "ticket-1",
       title: "VC-1",
@@ -494,8 +494,8 @@ describe("browserChatTransport", () => {
       bornTicketless: false,
     });
     expect(procedures).toEqual([
-      "projectSessions.start",
-      "ticketSessions.start",
+      "projectSessions.create",
+      "ticketSessions.create",
       "projectSessions.attach",
       "ticketSessions.attach",
     ]);

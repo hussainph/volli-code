@@ -23,6 +23,7 @@ import {
   StructuredSessionsError,
   type StructuredSessionCommands,
 } from "./structured-sessions";
+import type { SessionCreateResult } from "./ticket-sessions";
 
 /**
  * The backfill's command id, derived from the Session rather than the attach.
@@ -52,6 +53,11 @@ export interface ProjectSessionAttachInput {
 }
 
 export interface ProjectSessions {
+  /**
+   * Mint the durable Session and record its model policy — and STOP there.
+   * The optimistic-open half of a chat start (VC-16); see `TicketSessions.create`.
+   */
+  create(input: ProjectSessionStartInput): Promise<SessionCreateResult>;
   start(input: ProjectSessionStartInput): Promise<SessionStartResult>;
   attach(input: ProjectSessionAttachInput): Promise<SessionStartResult>;
 }
@@ -65,23 +71,31 @@ export interface ProjectSessionsOptions {
 }
 
 export function createProjectSessions(options: ProjectSessionsOptions): ProjectSessions {
+  /** The shared create+model half; `start` attaches after it, `create` returns it as-is. */
+  async function mint(input: ProjectSessionStartInput): Promise<SessionCreateResult> {
+    const model = requireDefaultModel(options.readDefaultModel(), DEFAULT_MODEL_REQUIRED);
+    const created = await options.runtime.command({
+      commandId: `${input.operationId}:create`,
+      command: {
+        kind: "session.create",
+        projectId: input.projectId,
+        ticketId: null,
+        title: input.title,
+      },
+    });
+    await recordModelSelection(options.runtime, {
+      commandId: `${input.operationId}:model`,
+      sessionId: created.sessionId,
+      model,
+    });
+    return { sessionId: created.sessionId };
+  }
+
   return {
+    create: mint,
+
     async start(input) {
-      const model = requireDefaultModel(options.readDefaultModel(), DEFAULT_MODEL_REQUIRED);
-      const created = await options.runtime.command({
-        commandId: `${input.operationId}:create`,
-        command: {
-          kind: "session.create",
-          projectId: input.projectId,
-          ticketId: null,
-          title: input.title,
-        },
-      });
-      await recordModelSelection(options.runtime, {
-        commandId: `${input.operationId}:model`,
-        sessionId: created.sessionId,
-        model,
-      });
+      const created = await mint(input);
       return attachStructuredSession(options.runtime, input.operationId, created.sessionId);
     },
     async attach(input) {
