@@ -377,6 +377,36 @@ describe("startAutoUpdate", () => {
     handle.stop();
   });
 
+  it("a staged download is never demoted by a re-check — checking and errors keep the badge", async () => {
+    vi.useFakeTimers();
+    const harness = makeHarness();
+    const handle = harness.start();
+
+    harness.updater.emit("update-downloaded", { version: "0.2.0" });
+    expect(handle.state().phase).toBe("downloaded");
+
+    // The 4h schedule keeps checking after a download. Neither the check's
+    // start nor its failure (offline laptop, feed briefly gone) may hide the
+    // staged install: the badge is the "never invisible" guarantee, and
+    // `volli:update-install` gates on phase === "downloaded".
+    harness.updater.emit("checking-for-update");
+    expect(handle.state().phase).toBe("downloaded");
+
+    harness.updater.failNextCheckWith = new Error("offline");
+    await handle.checkNow();
+    expect(handle.state().phase).toBe("downloaded");
+    expect(harness.logs).toContain("[updater] check failed: offline");
+
+    harness.updater.emit("error", new Error("feed unreachable"));
+    expect(handle.state().phase).toBe("downloaded");
+
+    // A real outcome still moves the state: a newer version beginning to
+    // download supersedes the staged one.
+    harness.updater.emit("update-available", { version: "0.3.0" });
+    expect(handle.state()).toMatchObject({ phase: "downloading", targetVersion: "0.3.0" });
+    handle.stop();
+  });
+
   it("notifies once per downloaded version — quiet on a re-download, again for a newer one", () => {
     const harness = makeHarness();
     vi.useFakeTimers();

@@ -214,6 +214,11 @@ export function startAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
 
   updater.on("checking-for-update", () => {
     deps.log("[updater] checking for updates");
+    // A staged download stays visible through a re-check: the 4h schedule
+    // keeps running after a download, and `volli:update-install` gates on
+    // phase === "downloaded" — demoting it here would hide (and refuse) a
+    // perfectly valid staged install for the length of every check.
+    if (current.phase === "downloaded") return;
     setState({ phase: "checking", error: null });
   });
   updater.on("update-available", (info) => {
@@ -233,6 +238,11 @@ export function startAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
   });
   updater.on("error", (error) => {
     deps.log(`[updater] error: ${errorMessage(error)}`);
+    // Same guarantee: a failed RE-check (offline, feed briefly gone) must not
+    // hide a staged, installable update behind an error tint — `downloaded`
+    // is only left by a real outcome (a newer download starting, the feed
+    // answering up-to-date), never by a check that told us nothing new.
+    if (current.phase === "downloaded") return;
     setState({ phase: "error", percent: null, error: errorMessage(error) });
   });
 
@@ -263,7 +273,11 @@ export function startAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
   const checkNow = async (): Promise<void> => {
     // Eager, ahead of the `checking-for-update` event: the click must respond
     // even while electron-updater is still deciding whether to check at all.
-    setState({ phase: "checking", error: null });
+    // Unless a download is already staged — the badge outranks the spinner
+    // (the sidebar never offers a check in that phase anyway).
+    if (current.phase !== "downloaded") {
+      setState({ phase: "checking", error: null });
+    }
     try {
       await updater.checkForUpdates();
       // `checkForUpdates()` resolves null without any event when the updater
@@ -275,6 +289,7 @@ export function startAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
       }
     } catch (error) {
       deps.log(`[updater] check failed: ${errorMessage(error)}`);
+      if (current.phase === "downloaded") return;
       setState({ phase: "error", percent: null, error: errorMessage(error) });
     }
   };
