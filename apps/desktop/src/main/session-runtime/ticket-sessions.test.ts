@@ -413,6 +413,7 @@ describe("Ticket Sessions", () => {
     const ticketSessions = createTicketSessions({
       readBornTicketless: async () => false,
       ticketBelongsToProject: () => true,
+      skills: NO_SKILLS,
       runtime: { command: async (request) => result(request) },
       readDefaultModel,
       recordSessionStarted: (event) => startedEvents.push(event),
@@ -441,6 +442,7 @@ describe("Ticket Sessions", () => {
     const ticketSessions = createTicketSessions({
       readBornTicketless: async () => false,
       ticketBelongsToProject: () => true,
+      skills: NO_SKILLS,
       runtime: { command: async (request) => result(request) },
       readDefaultModel,
       recordSessionStarted: (event) => startedEvents.push(event),
@@ -462,6 +464,7 @@ describe("Ticket Sessions", () => {
     const ticketSessions = createTicketSessions({
       readBornTicketless: async () => false,
       ticketBelongsToProject: () => true,
+      skills: NO_SKILLS,
       runtime: { command: async (request) => result(request) },
       readDefaultModel,
       recordSessionStarted: (event) => startedEvents.push(event),
@@ -477,6 +480,7 @@ describe("Ticket Sessions", () => {
     const ticketSessions = createTicketSessions({
       readBornTicketless: async () => false,
       ticketBelongsToProject: () => true,
+      skills: NO_SKILLS,
       runtime: { command: async (request) => result(request) },
       readDefaultModel: () => null,
       recordSessionStarted: (event) => startedEvents.push(event),
@@ -492,6 +496,7 @@ describe("Ticket Sessions", () => {
     const ticketSessions = createTicketSessions({
       readBornTicketless: async () => false,
       ticketBelongsToProject: () => true,
+      skills: NO_SKILLS,
       runtime: {
         command: async (request) =>
           result(request, request.command.kind === "adapter.attach" ? "accepted" : "completed"),
@@ -541,6 +546,7 @@ describe("Ticket Sessions", () => {
       return createTicketSessions({
         readBornTicketless: async () => false,
         ticketBelongsToProject: () => true,
+        skills: NO_SKILLS,
         runtime: {
           command: async (request) => {
             commands.push(request);
@@ -653,6 +659,7 @@ describe("Ticket Sessions", () => {
       const ticketSessions = createTicketSessions({
         readBornTicketless: async () => false,
         ticketBelongsToProject: () => true,
+        skills: NO_SKILLS,
         runtime: {
           command: async (request) => {
             commands.push(request);
@@ -677,6 +684,7 @@ describe("Ticket Sessions", () => {
       const ticketSessions = createTicketSessions({
         readBornTicketless: async () => false,
         ticketBelongsToProject: () => true,
+        skills: NO_SKILLS,
         runtime: {
           command: async (request) => {
             commands.push(request);
