@@ -24,7 +24,7 @@ import { join } from "node:path";
 
 import { GitError, parseWorktreeList } from "./git";
 import { canonicalize, samePath } from "./paths";
-import { err, ok, type RunGit, type WorktreeResult } from "./types";
+import { err, ok, type RunGitAsync, type WorktreeResult } from "./types";
 
 /** Whether the add may proceed, and whether git metadata must be pruned first. */
 export type ReconcileDecision = { kind: "already-present" } | { kind: "create"; prune: boolean };
@@ -39,15 +39,15 @@ function looksLikeWorktree(dir: string): boolean {
   return existsSync(join(dir, ".git"));
 }
 
-export function reconcile(
-  git: RunGit,
+export async function reconcile(
+  git: RunGitAsync,
   input: { projectPath: string; worktreePath: string; branch: string },
-): WorktreeResult<ReconcileDecision> {
+): Promise<WorktreeResult<ReconcileDecision>> {
   const targetCanonical = canonicalize(input.worktreePath);
 
   let listOutput: string;
   try {
-    listOutput = git(["worktree", "list", "--porcelain"], input.projectPath);
+    listOutput = await git(["worktree", "list", "--porcelain"], input.projectPath);
   } catch (caught) {
     const detail = caught instanceof GitError ? caught.stderr || caught.message : String(caught);
     return err(`Couldn't read the project's worktrees: ${detail}`);

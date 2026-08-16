@@ -84,28 +84,29 @@ export function isBlocking(state: DynamicToolUIPart["state"]): boolean {
 }
 
 /**
- * The harness's own id for the decision a call is waiting on, which is the same
- * id the interaction carries in `native.id`. Null on every other state, so a row
- * can be asked without narrowing it first.
+ * The tool call a blocking decision is gating. Null on every other state, so a
+ * row can be asked without narrowing it first. The correlation to the open
+ * interaction goes through the durable `ask:<toolCallId>` derivation — never
+ * through `native.id`, which the product edge nulls on everything it ships.
  */
-export function approvalId(part: DynamicToolUIPart): string | null {
-  return part.state === "approval-requested" ? part.approval.id : null;
+export function gatedToolCallId(part: DynamicToolUIPart): string | null {
+  return part.state === "approval-requested" ? part.toolCallId : null;
 }
 
 /**
- * Every decision a transcript row is already showing.
+ * Every gated call a transcript row is already showing.
  *
  * The foot slot takes what is left. Without this an interaction correlated to a
  * visible call would be drawn twice — once on its row and once under the
  * composer — and answering one copy would leave the other on screen until the
  * projection caught up.
  */
-export function gatedApprovalIds(messages: readonly UIMessage[]): ReadonlySet<string> {
+export function gatedToolCallIds(messages: readonly UIMessage[]): ReadonlySet<string> {
   const ids = new Set<string>();
   for (const message of messages) {
     for (const part of message.parts) {
       if (part.type !== "dynamic-tool") continue;
-      const id = approvalId(part);
+      const id = gatedToolCallId(part);
       if (id !== null) ids.add(id);
     }
   }

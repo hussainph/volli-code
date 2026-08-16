@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  askInteractionId,
+  askUserInteractionId,
   DEFAULT_INTERACTION_PROMPT_ID,
   isSessionAttentionKind,
   isSessionAttachmentContinuity,
@@ -1289,5 +1291,18 @@ describe("sameSessionEventProvenance", () => {
         source: { ...systemProvenance.source, id: "other" },
       }),
     ).toBe(false);
+  });
+});
+
+describe("the frozen ask interaction id derivations", () => {
+  it("derives the exact durable strings both edges correlate on", () => {
+    // Frozen segments: these land inside durable event ids that are re-derived
+    // and deduped by exact match on every relaunch, and the renderer keys a
+    // gated tool row to its interaction through the same strings.
+    expect(askInteractionId("call-1")).toBe("ask:call-1");
+    expect(askUserInteractionId("call-1")).toBe("ask-user:call-1");
+    // Distinct prefixes on purpose: either answer settling the other's wait is
+    // the failure a shared prefix would not collide loudly on.
+    expect(askInteractionId("x")).not.toBe(askUserInteractionId("x"));
   });
 });

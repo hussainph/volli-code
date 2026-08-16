@@ -17,6 +17,7 @@
   "dependencies": {
     "@trpc/server": "^11.18.0",
     "@volli/session-engine": "workspace:*",
+    "@volli/shared": "workspace:*",
     "zod": "^4.4.3"
   },
   "devDependencies": {

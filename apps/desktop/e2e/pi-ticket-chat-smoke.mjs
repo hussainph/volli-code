@@ -964,13 +964,28 @@ async function main() {
         await abortMainBeforeEvidence(page, "worktree-absent");
         throw error;
       });
-      const row = await page.evaluate(async (pid) => {
-        const boot = await window.api.data.bootstrap();
-        if (!boot.ok) return null;
-        return (
-          (boot.data.ticketsByProject?.[pid] ?? []).find((t) => t.worktreePath !== null) ?? null
-        );
-      }, projectId);
+      // The stamp is POLLED, not read once. `git worktree add` creates the
+      // directory several steps before `ensure` persists the identity, and
+      // since VC-16 that pipeline is async — so main serves this very
+      // `bootstrap()` mid-pipeline and a single read races the stamp. The old
+      // read-immediately worked only because a synchronous `ensure` blocked
+      // every IPC until it finished, which is the freeze that was fixed.
+      const readStamp = async () =>
+        page.evaluate(async (pid) => {
+          const boot = await window.api.data.bootstrap();
+          if (!boot.ok) return null;
+          return (
+            (boot.data.ticketsByProject?.[pid] ?? []).find((t) => t.worktreePath !== null) ?? null
+          );
+        }, projectId);
+      const row = await waitUntil(
+        "the ticket's worktree identity to be stamped",
+        async () => {
+          const found = await readStamp();
+          return found !== null && found.worktreePath === worktreeDir ? found : false;
+        },
+        { timeout: 20000 },
+      ).catch(() => null);
       return {
         ok: row !== null && row.worktreePath === worktreeDir,
         detail: `dir=${worktreeDir} stamped=${row?.worktreePath ?? "none"}`,

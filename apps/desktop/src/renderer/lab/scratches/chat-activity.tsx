@@ -27,7 +27,7 @@ import {
   type ActivityDescriptor,
   type ActivityKind,
   type ActivityOutcome,
-  type SessionInteraction,
+  type RendererSessionInteraction,
   type SessionInteractionPrompt,
 } from "@volli/shared";
 import type { DynamicToolUIPart, ReasoningUIPart } from "ai";
@@ -459,7 +459,7 @@ const TALL_BUNDLE: BundleRow[] = toolRows([...CHECK_RUN, ...EXPLORE_RUN, ...SETT
  * card draws every option the harness stated rather than three buttons of its
  * own, so `always` — a standing grant — is here and reads secondary.
  */
-const PERMISSION: SessionInteraction = {
+const PERMISSION: RendererSessionInteraction = {
   id: "permission:perm-1",
   attachmentId: "attach-1",
   kind: "permission",
@@ -485,7 +485,8 @@ const PERMISSION: SessionInteraction = {
       custom: false,
     },
   ],
-  native: { id: "perm-1", detail: null },
+  // The edge nulls `native` on everything it ships; fixtures model that.
+  native: { id: null, detail: null },
 };
 
 /**
@@ -495,7 +496,7 @@ const PERMISSION: SessionInteraction = {
  * and no, so it keeps the verdict card. It is here because it is the case that
  * reads wrong the moment a card forks on `kind` alone.
  */
-const ESCALATION: SessionInteraction = {
+const ESCALATION: RendererSessionInteraction = {
   id: "question:esc-1",
   attachmentId: "attach-1",
   kind: "question",
@@ -513,7 +514,7 @@ const ESCALATION: SessionInteraction = {
       custom: false,
     },
   ],
-  native: { id: "esc-1", detail: null },
+  native: { id: null, detail: null },
 };
 
 /**
@@ -521,7 +522,7 @@ const ESCALATION: SessionInteraction = {
  * either on. The second declares `multiple` and `custom`, so it takes
  * checkboxes and a free-text answer of its own.
  */
-const QUESTION: SessionInteraction = {
+const QUESTION: RendererSessionInteraction = {
   id: "question:q-1",
   attachmentId: "attach-1",
   kind: "question",
@@ -558,7 +559,7 @@ const QUESTION: SessionInteraction = {
       custom: true,
     },
   ],
-  native: { id: "q-1", detail: null },
+  native: { id: null, detail: null },
 };
 
 /* ------------------------------------------------------------- ask-user */
@@ -577,7 +578,7 @@ function ask(
   id: string,
   headline: string,
   prompts: readonly SessionInteractionPrompt[],
-): SessionInteraction {
+): RendererSessionInteraction {
   return {
     id: `question:${id}`,
     attachmentId: "attach-1",
@@ -587,7 +588,7 @@ function ask(
     options: prompts.flatMap((prompt) => prompt.options),
     multiple: prompts.some((prompt) => prompt.multiple),
     prompts,
-    native: { id, detail: null },
+    native: { id: null, detail: null },
   };
 }
 

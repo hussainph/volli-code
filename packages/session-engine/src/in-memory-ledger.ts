@@ -1,3 +1,4 @@
+import { assertSessionEvent } from "@volli/shared";
 import type {
   CommandReceipt,
   ListLatestTicketSignalsQuery,
@@ -186,6 +187,11 @@ class InMemorySessionLedger implements SessionLedger {
   }
 
   #appendEvent(event: SessionEvent): void {
+    // Write parity with the SQLite ledger: the codec's write-side assertion is
+    // the same decode every durable read runs, so lab and test writes reject
+    // exactly what SQLite would instead of persisting an event this build
+    // could never read back.
+    assertSessionEvent(event, "Session event");
     this.#assertUnusedId(event.id);
     if (!this.#sessions.has(event.sessionId)) {
       throw new Error(`Session ${event.sessionId} was not found`);

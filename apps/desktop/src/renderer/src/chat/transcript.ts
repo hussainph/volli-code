@@ -13,7 +13,7 @@ import {
   type SessionStreamOverlay,
   type TranscriptOverlay,
 } from "@volli/session-engine";
-import type { SessionEvent, SessionInteraction } from "@volli/shared";
+import type { RendererSessionEvent, RendererSessionInteraction } from "@volli/shared";
 import type { UIMessage } from "ai";
 
 import { indexOpenedInteractions } from "@renderer/chat/interaction";
@@ -25,7 +25,12 @@ import {
 export interface ChatSessionFrame {
   sessionId: string;
   sequence: number;
-  event: SessionEvent;
+  /**
+   * The renderer-safe event, or null for a kind this build does not know — a
+   * writer newer than the reader. The envelope survives because its sequence
+   * must still advance the fold's cursor; the fold reads nothing from it.
+   */
+  event: RendererSessionEvent | null;
   transcript: { message: UIMessage } | null;
 }
 
@@ -88,10 +93,10 @@ export interface ChatTranscriptState {
   /** What the chat draws: the durable list with every live overlay laid over it. */
   messages: readonly UIMessage[];
   /** Every interaction this Session has opened, for the receipts they leave. */
-  openedInteractions: ReadonlyMap<string, SessionInteraction>;
+  openedInteractions: ReadonlyMap<string, RendererSessionInteraction>;
 }
 
-const EMPTY_INTERACTION_INDEX: ReadonlyMap<string, SessionInteraction> = new Map();
+const EMPTY_INTERACTION_INDEX: ReadonlyMap<string, RendererSessionInteraction> = new Map();
 const EMPTY_OVERLAY: TranscriptOverlay = new Map();
 const EMPTY_DURABLE_SEQUENCES: ReadonlyMap<string, number> = new Map();
 export const EMPTY_TRANSCRIPT: ChatTranscriptState = {
@@ -141,7 +146,7 @@ export function appendFrames(
   // length — the exact cost the delta contract exists to remove.
   let settled: Map<string, number> | null = null;
   for (const frame of fresh) {
-    const kind = frame.event.payload.kind;
+    const kind = frame.event?.payload.kind;
     if (kind === "turn.started" || kind === "turn.completed" || kind === "turn.interrupted") {
       turnActive = kind === "turn.started";
       turnEpoch += 1;
@@ -238,5 +243,9 @@ export function mergeTranscriptMessages(
  * boundary), so it earns its round trip.
  */
 export function movesProjection(frame: ChatSessionFrame): boolean {
+  // A kind this build does not know may well have moved the projection — the
+  // server that folded it is the newer writer — so the honest answer for a
+  // null event is to go and ask.
+  if (frame.event === null) return true;
   return frame.event.payload.kind !== "transcript.referenced";
 }

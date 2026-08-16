@@ -329,12 +329,18 @@ export interface ChatSessionTransport {
   rpc: ChatSessionRpc;
   scheduler: FlushScheduler;
   newCommandId(): string;
-  startSession(input: {
+  /**
+   * Mint the durable Session — create + model policy, NO attach. The fast half
+   * of a chat start: the store lands the tab on the id this resolves, and the
+   * attach (worktree ensure + Agent Runtime boot, the slow half) follows
+   * through {@link attachSession} off the caller's critical path (VC-16).
+   */
+  createSession(input: {
     operationId: string;
     projectId: string;
     ticketId: string | null;
     title: string | null;
-  }): Promise<ProductSessionResult>;
+  }): Promise<{ sessionId: string }>;
   attachSession(input: {
     operationId: string;
     sessionId: string;
@@ -355,14 +361,14 @@ export function browserChatTransport(): ChatSessionTransport {
     rpc,
     scheduler: racingFlushScheduler(window),
     newCommandId: () => crypto.randomUUID(),
-    startSession: (input) =>
+    createSession: (input) =>
       input.ticketId === null
-        ? rpc.projectSessions.start.mutate({
+        ? rpc.projectSessions.create.mutate({
             operationId: input.operationId,
             projectId: input.projectId,
             title: input.title,
           })
-        : rpc.ticketSessions.start.mutate({
+        : rpc.ticketSessions.create.mutate({
             operationId: input.operationId,
             projectId: input.projectId,
             ticketId: input.ticketId,

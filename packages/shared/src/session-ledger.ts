@@ -189,6 +189,45 @@ export function promptId(index: number): string {
 export const DEFAULT_INTERACTION_PROMPT_ID = promptId(0);
 
 /**
+ * The interaction id one blocked tool call is asked under.
+ *
+ * Durable, not live. This string lands inside
+ * `pi:interaction:<attachmentId>:<id>:opened` on disk, and every relaunch
+ * re-derives that event id from the same data and dedupes it by exact match — so
+ * changing how this is built would not fail, it would write a second copy of
+ * every question a Session ever asked. Keep the shape, and the `ask:` segment
+ * with it.
+ *
+ * The tool call id is the identity because the runtime blocks exactly one
+ * question per call it refuses — and because it is the one identity that
+ * survives the product edge: the renderer correlates a gated tool row to its
+ * interaction through this derivation, never through `native.id`, which the
+ * edge always nulls. Defined here, beside the interaction vocabulary, so the
+ * adapter that mints it and the renderer that matches it cannot drift.
+ */
+export function askInteractionId(toolCallId: string): string {
+  return `ask:${toolCallId}`;
+}
+
+/**
+ * The interaction id one `ask_user` call is asked under.
+ *
+ * Durable on the same terms as {@link askInteractionId}, and a second derivation
+ * rather than a widening of it: the `ask-user:` segment is frozen the moment it
+ * ships, because `pi:interaction:<attachmentId>:<id>:opened` is re-derived from
+ * live data on every relaunch and deduped by exact string match.
+ *
+ * Separate from `ask:` for a reason that outlives the ids. Both derive from a
+ * tool call id, and the two questions are answered differently — an escalation's
+ * option ids are read as a verdict, a model's are handed back untouched — so one
+ * shared prefix would not collide loudly, it would let either answer settle the
+ * other's wait.
+ */
+export function askUserInteractionId(toolCallId: string): string {
+  return `ask-user:${toolCallId}`;
+}
+
+/**
  * The questions an interaction asks, whether or not it was written with
  * `prompts`. A record without them is one prompt built from the flat fields;
  * no consumer should branch on their absence itself.
@@ -461,88 +500,53 @@ interface SessionObservationBase {
   commandId?: string | null;
 }
 
+/**
+ * The payload kinds external evidence can prove — the durable union minus the
+ * control plane's own facts (creation, commands, receipts, signals, model
+ * policy), which only the Session Engine writes.
+ */
+type ObservedSessionEventKind =
+  | "attachment.opened"
+  | "attachment.native_referenced"
+  | "attachment.failed"
+  | "attachment.closed"
+  | "run.started"
+  | "run.completed"
+  | "turn.started"
+  | "turn.completed"
+  | "turn.interrupted"
+  | "transcript.referenced"
+  | "attention.raised"
+  | "attention.cleared"
+  | "interaction.opened"
+  | "interaction.resolved"
+  | "interaction.cancelled"
+  | "authority.denied"
+  | "adapter.observed";
+
+/**
+ * Observed arms are the payload arms themselves under an observation envelope,
+ * derived rather than restated so a payload field added to the durable union
+ * cannot silently miss its observation twin. `command.receipt` stays
+ * hand-written: it is the one arm that is not a payload — it carries an
+ * *unstamped* receipt, and only the Session Engine may stamp one.
+ */
 export type SessionObservation =
-  | (SessionObservationBase & {
-      id: string;
-      kind: "attachment.opened";
-      attachment: SessionAttachment;
-    })
-  | (SessionObservationBase & {
-      kind: "attachment.native_referenced";
-      attachmentId: string;
-      native: SessionNativeReference;
-    })
-  | (SessionObservationBase & {
-      kind: "attachment.failed";
-      attachment: SessionAttachment;
-      failure: SessionAttachmentFailure;
-    })
-  | (SessionObservationBase & {
-      kind: "attachment.closed";
-      attachmentId: string;
-      outcome: "completed" | "failed" | "interrupted";
-    })
-  | (SessionObservationBase & { kind: "run.started"; attachmentId: string; runId: string })
-  | (SessionObservationBase & {
-      kind: "run.completed";
-      attachmentId: string;
-      runId: string;
-    })
-  | (SessionObservationBase & { kind: "turn.started"; attachmentId: string; turnId: string })
-  | (SessionObservationBase & {
-      kind: "turn.completed";
-      attachmentId: string;
-      turnId: string;
-    })
-  | (SessionObservationBase & {
-      kind: "turn.interrupted";
-      attachmentId: string;
-      turnId: string;
-    })
-  | (SessionObservationBase & {
-      kind: "transcript.referenced";
-      attachmentId: string | null;
-      turnId: string | null;
-      reference: TranscriptReference;
-    })
-  | (SessionObservationBase & {
-      kind: "attention.raised";
-      attention: SessionAttention;
-    })
-  | (SessionObservationBase & { kind: "attention.cleared"; attentionId: string })
-  | (SessionObservationBase & {
-      kind: "interaction.opened";
-      interaction: SessionInteraction;
-    })
-  | (SessionObservationBase & {
-      kind: "interaction.resolved";
-      attachmentId: string;
-      interactionId: string;
-      resolution: SessionInteractionResolution;
-    })
-  | (SessionObservationBase & {
-      kind: "interaction.cancelled";
-      attachmentId: string;
-      interactionId: string;
-      reason: SessionInteractionCancelReason;
-    })
-  | (SessionObservationBase & {
-      kind: "authority.denied";
-      attachmentId: string;
-      turnId: string | null;
-      tool: string;
-      cause: string;
-      reason: string;
-    })
-  | (SessionObservationBase & {
-      kind: "adapter.observed";
-      attachmentId: string | null;
-      name: string;
-      native: SessionNativeDetail | null;
-    })
+  | (SessionObservationBase & Extract<SessionEventPayload, { kind: ObservedSessionEventKind }>)
   | (SessionObservationBase & { kind: "command.receipt"; receipt: UnstampedCommandReceipt });
 
-/** Maps externally observed evidence to the durable event payload it proves. */
+/**
+ * Maps externally observed evidence to the durable event payload it proves.
+ *
+ * Still a per-kind switch even though the arms are now derived from the
+ * payload union: the envelope and the payload share field names
+ * (`attachmentId` is envelope routing on every observation and *also* a
+ * payload field on some kinds), so mechanical envelope-stripping would write
+ * stray envelope fields into payloads whose declared shape has none — and a
+ * persisted payload's bytes are compared by exact match on replay. Each arm
+ * names exactly what the durable payload declares, and the derived union
+ * makes a missing or misspelled field a compile error here.
+ */
 export function observationPayload(observation: SessionObservation): SessionEventPayload {
   switch (observation.kind) {
     case "attachment.opened":
@@ -840,22 +844,6 @@ export interface SessionProjection {
    * today, but only the scratch one was ever meant to.
    */
   bornTicketless: boolean;
-}
-
-/** Renderer-owned Session state with executor implementation details removed. */
-export interface SessionPresentationProjection extends Pick<
-  SessionProjection,
-  | "session"
-  | "status"
-  | "attention"
-  | "interactions"
-  | "signal"
-  | "modelSelection"
-  | "turnActive"
-  | "lastActivityAt"
-  | "bornTicketless"
-> {
-  liveExecutor: { id: string } | null;
 }
 
 /**

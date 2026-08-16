@@ -40,7 +40,7 @@ function seed(): { ticketId: string } {
 }
 
 describe("materializeAttachments", () => {
-  it("copies each file attachment's bytes into .volli/attachments and writes the self-gitignore", () => {
+  it("copies each file attachment's bytes into .volli/attachments and writes the self-gitignore", async () => {
     const { ticketId } = seed();
     const root = attachmentsRoot(tempDir("attachments-root"));
     const sessionRoot = tempDir("session-root");
@@ -56,7 +56,7 @@ describe("materializeAttachments", () => {
       200,
     );
 
-    const result = materializeAttachments(ctx.db, root, ticketId, sessionRoot);
+    const result = await materializeAttachments(ctx.db, root, ticketId, sessionRoot);
 
     const destPath = join(sessionRoot, ".volli", "attachments", "spec.png");
     expect(existsSync(destPath)).toBe(true);
@@ -72,7 +72,7 @@ describe("materializeAttachments", () => {
     });
   });
 
-  it("dedupes two same-basename file attachments using the shared naming rule", () => {
+  it("dedupes two same-basename file attachments using the shared naming rule", async () => {
     const { ticketId } = seed();
     const root = attachmentsRoot(tempDir("attachments-root"));
     const sessionRoot = tempDir("session-root");
@@ -88,7 +88,7 @@ describe("materializeAttachments", () => {
     writeFileSync(source2, "second");
     importAttachmentFile(root, a2.id, source2, "spec.png");
 
-    const result = materializeAttachments(ctx.db, root, ticketId, sessionRoot);
+    const result = await materializeAttachments(ctx.db, root, ticketId, sessionRoot);
 
     expect(result.files).toEqual([
       { relPath: ".volli/attachments/spec.png", label: "spec.png" },
@@ -102,7 +102,7 @@ describe("materializeAttachments", () => {
     );
   });
 
-  it("never overwrites an already-materialized destination — idempotent across re-boots", () => {
+  it("never overwrites an already-materialized destination — idempotent across re-boots", async () => {
     const { ticketId } = seed();
     const root = attachmentsRoot(tempDir("attachments-root"));
     const sessionRoot = tempDir("session-root");
@@ -112,19 +112,19 @@ describe("materializeAttachments", () => {
     writeFileSync(source, "original bytes");
     importAttachmentFile(root, a1.id, source, "spec.png");
 
-    materializeAttachments(ctx.db, root, ticketId, sessionRoot);
+    await materializeAttachments(ctx.db, root, ticketId, sessionRoot);
     // Simulate the worktree/agent having modified the materialized copy since
     // boot — a re-materialize (session re-open) must never clobber it.
     const destPath = join(sessionRoot, ".volli", "attachments", "spec.png");
     writeFileSync(destPath, "agent-edited bytes");
 
-    const result = materializeAttachments(ctx.db, root, ticketId, sessionRoot);
+    const result = await materializeAttachments(ctx.db, root, ticketId, sessionRoot);
 
     expect(readFileSync(destPath, "utf8")).toBe("agent-edited bytes");
     expect(result.files).toEqual([{ relPath: ".volli/attachments/spec.png", label: "spec.png" }]);
   });
 
-  it("throws naming the attachment's label when its stored bytes are missing", () => {
+  it("throws naming the attachment's label when its stored bytes are missing", async () => {
     const { ticketId } = seed();
     const root = attachmentsRoot(tempDir("attachments-root"));
     const sessionRoot = tempDir("session-root");
@@ -136,23 +136,23 @@ describe("materializeAttachments", () => {
     );
     // Bytes never imported — the id directory under `root` doesn't exist.
 
-    expect(() => materializeAttachments(ctx.db, root, ticketId, sessionRoot)).toThrow(
+    await expect(materializeAttachments(ctx.db, root, ticketId, sessionRoot)).rejects.toThrow(
       /homepage mock/,
     );
   });
 
-  it("is a cheap no-op that creates nothing for a ticket with no attachments", () => {
+  it("is a cheap no-op that creates nothing for a ticket with no attachments", async () => {
     const { ticketId } = seed();
     const root = attachmentsRoot(tempDir("attachments-root"));
     const sessionRoot = tempDir("session-root");
 
-    const result = materializeAttachments(ctx.db, root, ticketId, sessionRoot);
+    const result = await materializeAttachments(ctx.db, root, ticketId, sessionRoot);
 
     expect(result).toEqual({ files: [], urls: [] });
     expect(existsSync(join(sessionRoot, ".volli"))).toBe(false);
   });
 
-  it("does not rewrite an existing .volli/.gitignore", () => {
+  it("does not rewrite an existing .volli/.gitignore", async () => {
     const { ticketId } = seed();
     const root = attachmentsRoot(tempDir("attachments-root"));
     const sessionRoot = tempDir("session-root");
@@ -164,12 +164,12 @@ describe("materializeAttachments", () => {
       { ticketId, kind: "url", url: "https://example.com", label: "https://example.com" },
       100,
     );
-    materializeAttachments(ctx.db, root, ticketId, sessionRoot);
+    await materializeAttachments(ctx.db, root, ticketId, sessionRoot);
 
     expect(readFileSync(join(sessionRoot, ".volli", ".gitignore"), "utf8")).toBe("custom\n");
   });
 
-  it("throws helpfully naming the label even when other attachments materialize fine", () => {
+  it("throws helpfully naming the label even when other attachments materialize fine", async () => {
     const { ticketId } = seed();
     const root = attachmentsRoot(tempDir("attachments-root"));
     const sessionRoot = tempDir("session-root");
@@ -185,7 +185,7 @@ describe("materializeAttachments", () => {
       200,
     );
 
-    expect(() => materializeAttachments(ctx.db, root, ticketId, sessionRoot)).toThrow(
+    await expect(materializeAttachments(ctx.db, root, ticketId, sessionRoot)).rejects.toThrow(
       /the missing one/,
     );
   });

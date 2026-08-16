@@ -40,7 +40,7 @@ import {
   promptId,
   type IndexedFile,
   type PromptTemplate,
-  type SessionInteraction,
+  type RendererSessionInteraction,
 } from "@volli/shared";
 
 import {
@@ -104,7 +104,7 @@ const BRANCH_OPTIONS = [
   { id: "release", label: "release/2.1", description: null },
 ] as const;
 
-const QUESTION: SessionInteraction = {
+const QUESTION: RendererSessionInteraction = {
   id: "q1",
   attachmentId: "a1",
   kind: "question",
@@ -112,7 +112,7 @@ const QUESTION: SessionInteraction = {
   detail: null,
   options: BRANCH_OPTIONS,
   multiple: false,
-  native: { id: "n1", detail: null },
+  native: { id: null, detail: null },
 };
 
 /**
@@ -125,7 +125,7 @@ const QUESTION: SessionInteraction = {
  * each other. That one is allowed to animate, and this is where it proves it
  * animates the card and nothing outside it.
  */
-const PERMISSION: SessionInteraction = {
+const PERMISSION: RendererSessionInteraction = {
   id: "q2",
   attachmentId: "a2",
   kind: "permission",
@@ -165,7 +165,7 @@ const PERMISSION: SessionInteraction = {
       custom: true,
     },
   ],
-  native: { id: "n2", detail: null },
+  native: { id: null, detail: null },
 };
 
 /** Enough transcript to scroll, with the last line where a card would cover it. */
@@ -183,7 +183,7 @@ const FEED = [
 export default function ComposerPickerScratch() {
   const [value, setValue] = React.useState("");
   const [sent, setSent] = React.useState<string | null>(null);
-  const [interaction, setInteraction] = React.useState<SessionInteraction | null>(null);
+  const [interaction, setInteraction] = React.useState<RendererSessionInteraction | null>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const composerHeight = useMeasuredHeight<HTMLDivElement>();
   const feedRef = React.useRef<HTMLDivElement>(null);

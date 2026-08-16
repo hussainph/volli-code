@@ -13,7 +13,8 @@
  * outlive the settle it predates, and an orphan that must not become a message.
  */
 import type { SessionStreamOverlay, TranscriptDelta } from "@volli/session-engine";
-import type { SessionEvent, SessionInteraction } from "@volli/shared";
+import { scrubSessionEventPayload } from "@volli/shared";
+import type { SessionEvent, RendererSessionInteraction } from "@volli/shared";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -57,8 +58,9 @@ function append(text: string): TranscriptDelta {
 }
 
 /**
- * One committed frame. Only `payload` and `transcript` are read here, so the
- * envelope around them is the minimum a `SessionEvent` requires.
+ * One committed frame, in the renderer-safe shape frames actually arrive in —
+ * the durable payload run through the codec's scrub, an adapter source
+ * rewritten to a system one, exactly as the edge would have shipped it.
  */
 function frame(
   sequence: number,
@@ -77,10 +79,10 @@ function frame(
       attachmentId: "attachment-1",
       commandId: null,
       provenance: {
-        source: { kind: "adapter", id: "lab-scenarios", detail: null },
+        source: { kind: "system", id: "session-runtime", detail: null },
         venue: { id: "lab-machine", kind: "local" },
       },
-      payload,
+      payload: scrubSessionEventPayload(payload),
     },
     transcript: transcript === null ? null : { message: transcript },
   };
@@ -107,7 +109,7 @@ function turn(
 }
 
 function opening(sequence: number, id: string): ChatSessionFrame {
-  const interaction: SessionInteraction = {
+  const interaction: RendererSessionInteraction = {
     id,
     attachmentId: "attachment-1",
     kind: "permission",
@@ -115,7 +117,7 @@ function opening(sequence: number, id: string): ChatSessionFrame {
     detail: null,
     options: [],
     multiple: false,
-    native: { id, detail: null },
+    native: { id: null, detail: null },
   };
   return frame(sequence, { kind: "interaction.opened", interaction });
 }
@@ -354,5 +356,35 @@ describe("movesProjection", () => {
   it("reads every other fact as one that can move the projection", () => {
     expect(movesProjection(turn(1, "turn.started"))).toBe(true);
     expect(movesProjection(opening(1, "permission:1"))).toBe(true);
+  });
+
+  it("asks after a kind this build does not know — the newer writer may have moved it", () => {
+    expect(
+      movesProjection({ sessionId: "session-1", sequence: 9, event: null, transcript: null }),
+    ).toBe(true);
+  });
+});
+
+describe("a kind this build does not know", () => {
+  it("advances the cursor without contributing anything to the fold", () => {
+    // The mirror of the ledger's paging rule: the envelope survives so the
+    // cursor moves past it — an unmoved cursor would replay or truncate —
+    // while the null event opens no turn, no interaction, no message.
+    const unknown: ChatSessionFrame = {
+      sessionId: "session-1",
+      sequence: 5,
+      event: null,
+      transcript: null,
+    };
+    const state = appendFrames(EMPTY_TRANSCRIPT, [unknown]);
+    expect(state.throughSequence).toBe(5);
+    expect(state.turnActive).toBe(false);
+    expect(state.turnEpoch).toBe(0);
+    expect(state.messages).toEqual([]);
+    expect(state.openedInteractions.size).toBe(0);
+    // And the fold keeps going: a later, known frame still lands.
+    const caughtUp = appendFrames(state, [turn(6, "turn.started")]);
+    expect(caughtUp.turnActive).toBe(true);
+    expect(caughtUp.throughSequence).toBe(6);
   });
 });
