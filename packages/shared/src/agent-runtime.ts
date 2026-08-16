@@ -113,6 +113,11 @@ export interface ModelAccessModel {
   label: string;
   state: ModelAccessState;
   reasoningLevels: readonly ReasoningLevel[];
+  /**
+   * The model's total context window, in tokens. Omitted when the catalog does
+   * not report a usable size, so a reader never mistakes "unknown" for zero.
+   */
+  contextWindow?: number;
 }
 
 /** The complete sanitized Model Access view at one observation time. */
@@ -470,6 +475,15 @@ export interface RuntimeFailure {
 export interface SanitizedUsage {
   inputTokens?: number;
   outputTokens?: number;
+  /**
+   * Prompt tokens served from the provider's cache. Reported separately from
+   * `inputTokens` because providers price and count them apart — and because
+   * context occupancy is their sum: on a cached turn `inputTokens` alone is
+   * only the uncached sliver of what the model is actually holding.
+   */
+  cacheReadTokens?: number;
+  /** Prompt tokens written into the provider's cache this turn. */
+  cacheWriteTokens?: number;
   costUsd?: number;
 }
 

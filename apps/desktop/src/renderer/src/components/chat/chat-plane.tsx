@@ -45,6 +45,7 @@ import {
   type ChatSegment,
 } from "@renderer/chat/activity";
 import { isDeliverable, type MessageDelivery } from "@renderer/chat/client";
+import { sessionContextUsage } from "@renderer/chat/context-usage";
 import {
   footInteraction,
   interactionForApproval,
@@ -175,7 +176,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   // render re-renders the whole box once per streamed frame.
   const focusComposer = React.useCallback(() => textareaRef.current?.focus(), []);
 
-  const { messages, queue, working, deliverable, projection } = session;
+  const { messages, durableMessages, queue, working, deliverable, projection } = session;
   const modelSelection = projection?.modelSelection ?? null;
   const selection: ComposerModelSelection = modelSelection ?? EMPTY_MODEL_SELECTION;
   const liveExecutorId = projection?.liveExecutor?.id ?? null;
@@ -207,6 +208,26 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
       if (nextSelection !== null) void selectModel(nextSelection);
     },
     [selectModel],
+  );
+
+  // The window belongs to the Session's model, read from the same catalog the
+  // picker uses; null while the catalog has not answered or does not know.
+  const contextWindow = React.useMemo(() => {
+    if (modelSelection === null) return null;
+    const model = models.find(
+      (candidate) =>
+        candidate.providerId === modelSelection.providerId &&
+        candidate.modelId === modelSelection.modelId,
+    );
+    return model?.contextWindow ?? null;
+  }, [models, modelSelection]);
+  // Memoized on the durable transcript, deliberately not on `messages`: the
+  // live overlay replaces `messages` every frame of a streamed turn, and this
+  // object is a prop of the memoized composer. Usage only moves when a reply
+  // settles, so this recomputes exactly then.
+  const contextUsage = React.useMemo(
+    () => sessionContextUsage(durableMessages, contextWindow),
+    [contextWindow, durableMessages],
   );
 
   // The projection is replaced wholesale on every refresh, so its open
@@ -598,6 +619,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
               modelChoiceDisabled={working}
               working={working}
               ready={composable}
+              contextUsage={contextUsage}
               queued={strip}
               onQueuedChange={onQueuedChange}
               onSteerQueued={onSteerQueued}

@@ -321,6 +321,10 @@ function isSettledMessage(value: unknown): boolean {
     (isRecord(usage) &&
       optionalFiniteNumber(usage["inputTokens"]) &&
       optionalFiniteNumber(usage["outputTokens"]) &&
+      // Optional twice over: newly written markers carry the cache split, and
+      // markers persisted before it existed simply do not — both recover.
+      optionalFiniteNumber(usage["cacheReadTokens"]) &&
+      optionalFiniteNumber(usage["cacheWriteTokens"]) &&
       optionalFiniteNumber(usage["costUsd"]))
   );
 }

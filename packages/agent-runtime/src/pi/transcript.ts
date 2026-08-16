@@ -99,9 +99,21 @@ export function recoveryRefFor(
 function usageOf(usage: {
   input: number;
   output: number;
+  cacheRead: number;
+  cacheWrite: number;
   cost: { total: number };
 }): SanitizedUsage {
-  return { inputTokens: usage.input, outputTokens: usage.output, costUsd: usage.cost.total };
+  // Cache reads and writes travel beside `input` rather than folded into it:
+  // they are what the provider counts them as, and the sum of all four is the
+  // context the model was actually holding when it answered — the number the
+  // Session's context-usage surface is built on.
+  return {
+    inputTokens: usage.input,
+    outputTokens: usage.output,
+    cacheReadTokens: usage.cacheRead,
+    cacheWriteTokens: usage.cacheWrite,
+    costUsd: usage.cost.total,
+  };
 }
 
 /**
