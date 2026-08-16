@@ -535,6 +535,48 @@ describe("model access", () => {
     ]);
   });
 
+  it("withholds a context window the gateway cannot vouch for", async () => {
+    // Pi's catalog types `contextWindow` as required, but a gateway entry can
+    // still carry 0 or garbage, and "no window" must stay distinguishable
+    // from a zero-token one: the sanitized entry carries no field at all
+    // rather than a size no meter can divide by. A fractional size is
+    // floored, never reported at a precision the gateway did not have.
+    const faux = fauxProvider({
+      provider: "example",
+      models: [
+        { id: "zero-window", contextWindow: 0 },
+        { id: "garbage-window", contextWindow: Number.NaN },
+        { id: "fractional-window", contextWindow: 200_000.75 },
+      ],
+    });
+    const models = createModels();
+    models.setProvider({
+      ...faux.provider,
+      auth: {
+        apiKey: {
+          name: "Example API key",
+          resolve: async () => ({ auth: { apiKey: "configured" }, source: "EXAMPLE_API_KEY" }),
+        },
+      },
+    });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+    });
+
+    const access = await runtime.inspectModelAccess();
+
+    expect(access.models.map((model) => [model.modelId, model.contextWindow])).toEqual([
+      ["zero-window", undefined],
+      ["garbage-window", undefined],
+      ["fractional-window", 200_000],
+    ]);
+    // Absent, not `undefined`-valued: a serialized snapshot must not carry
+    // the key either.
+    expect(access.models[0]).not.toHaveProperty("contextWindow");
+    expect(access.models[1]).not.toHaveProperty("contextWindow");
+  });
+
   it("keeps credential-filtered models unavailable when their provider is usable", async () => {
     const faux = fauxProvider({
       provider: "subscription",
