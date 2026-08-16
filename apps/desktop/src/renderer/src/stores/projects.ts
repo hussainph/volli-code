@@ -73,6 +73,8 @@ export interface ProjectsGateway {
     baseBranch: string | null;
     /** `undefined` leaves it untouched; `null`/empty clears it (setup step is skipped). */
     setupCommand?: string | null;
+    /** `undefined` leaves it untouched; the per-project skills index consent otherwise. */
+    skillsAutoDisclosure?: boolean;
   }): Promise<ProjectUpdateResult>;
   remove(id: string): Promise<ProjectMutationResult>;
   reorder(orderedIds: string[]): Promise<ProjectMutationResult>;

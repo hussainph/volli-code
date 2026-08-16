@@ -46,6 +46,13 @@ const FRONTMATTER_FENCE = "---";
 
 interface Frontmatter {
   readonly description: unknown;
+  /**
+   * The spec's `metadata` map, unread and untyped at this layer. Templates
+   * ignore it; skills read one key out of it (`isUserInvokeOnly`). Surfaced
+   * here rather than parsed twice because this is the module that already
+   * holds the YAML.
+   */
+  readonly metadata: unknown;
   readonly body: string;
 }
 
@@ -64,19 +71,19 @@ interface Frontmatter {
 export function parsePromptTemplateFile(raw: string): Frontmatter {
   const normalized = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   if (!normalized.startsWith(FRONTMATTER_FENCE))
-    return { description: undefined, body: normalized };
+    return { description: undefined, metadata: undefined, body: normalized };
   const endIndex = normalized.indexOf(`\n${FRONTMATTER_FENCE}`, FRONTMATTER_FENCE.length);
-  if (endIndex === -1) return { description: undefined, body: normalized };
+  if (endIndex === -1) return { description: undefined, metadata: undefined, body: normalized };
   const body = normalized.slice(endIndex + 4).trim();
   try {
     const frontmatter: unknown = parseYaml(normalized.slice(4, endIndex));
-    const description =
+    const fields =
       typeof frontmatter === "object" && frontmatter !== null
-        ? (frontmatter as Record<string, unknown>)["description"]
+        ? (frontmatter as Record<string, unknown>)
         : undefined;
-    return { description, body };
+    return { description: fields?.["description"], metadata: fields?.["metadata"], body };
   } catch {
-    return { description: undefined, body };
+    return { description: undefined, metadata: undefined, body };
   }
 }
 

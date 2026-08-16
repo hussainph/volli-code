@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { IndexedFile, PromptTemplate } from "@volli/shared";
+import type { IndexedFile, PromptTemplate, SkillReference } from "@volli/shared";
 
 import {
   activePickerRow,
@@ -10,12 +10,25 @@ import {
   composerPickerToken,
   movePickerActive,
   rankCommandCompletions,
+  rankSkillCompletions,
   type ComposerPickerRow,
   type ComposerPickerState,
 } from "./composer-picker";
 
 function template(overrides: Partial<PromptTemplate> = {}): PromptTemplate {
   return { name: "review", description: "Review a file", content: "Review $1.", ...overrides };
+}
+
+function skill(overrides: Partial<SkillReference> = {}): SkillReference {
+  const name = overrides.name ?? "svg-logo-designer";
+  return {
+    name,
+    description: "Create professional SVG logos",
+    body: "# Logos\n\nDo the thing.",
+    userInvokeOnly: false,
+    root: `.agents/skills/${name}`,
+    ...overrides,
+  };
 }
 
 function indexed(relPath: string, artifact = false): IndexedFile {
@@ -224,6 +237,44 @@ describe("the picker, both halves composed", () => {
   });
 });
 
+describe("rankSkillCompletions", () => {
+  const SKILLS: readonly SkillReference[] = [
+    skill({ name: "svg-logo-designer" }),
+    skill({ name: "review", description: "Shadowed by the review template" }),
+    skill({ name: "audits", description: "Design review checklists" }),
+  ];
+
+  it("offers skills by slug, values prefixed so they can never collide with a command's", () => {
+    const rows = rankSkillCompletions({ query: "svg", skills: SKILLS, templates: TEMPLATES });
+
+    expect(rows).toMatchObject([
+      { kind: "skill", value: "skill:svg-logo-designer", label: "/svg-logo-designer" },
+    ]);
+  });
+
+  it("drops a skill a template's name shadows — the row would not do what it says", () => {
+    const rows = rankSkillCompletions({ query: "", skills: SKILLS, templates: TEMPLATES });
+
+    expect(rows.map((row) => row.value)).toEqual(["skill:audits", "skill:svg-logo-designer"]);
+  });
+
+  it("matches on the description at the lowest tier, like a command", () => {
+    const rows = rankSkillCompletions({ query: "checklists", skills: SKILLS, templates: [] });
+
+    expect(rows.map((row) => row.value)).toEqual(["skill:audits"]);
+  });
+
+  it("ranks a slug that merely contains the query below a prefix match", () => {
+    const rows = rankSkillCompletions({
+      query: "logo",
+      skills: [skill({ name: "logos", description: "" }), skill({ name: "svg-logo-designer" })],
+      templates: [],
+    });
+
+    expect(rows.map((row) => row.value)).toEqual(["skill:logos", "skill:svg-logo-designer"]);
+  });
+});
+
 describe("composerPickerRows", () => {
   it("ranks templates for a command token", () => {
     const rows = composerPickerRows({
@@ -246,6 +297,18 @@ describe("composerPickerRows", () => {
 
     expect(rows.map((row) => row.value)).toContain("src/app.ts");
     expect(rows.every((row) => row.kind === "file")).toBe(true);
+  });
+
+  it("appends skill rows after the command rows, matching the card's two groups", () => {
+    const rows = composerPickerRows({
+      mode: "command",
+      query: "rev",
+      templates: TEMPLATES,
+      skills: [skill({ name: "revisions" })],
+      files: FILES,
+    });
+
+    expect(rows.map((row) => row.value)).toEqual(["review", "preview", "skill:revisions"]);
   });
 
   it("ranks whatever query it is handed, which is how it may lag the caret", () => {
@@ -409,6 +472,24 @@ describe("applyPickerRow", () => {
     expect(applyPickerRow({ text, state, row: commandRow("review") })).toEqual({
       text: "/review args",
       caret: 7,
+    });
+  });
+
+  it("always stages `/name ` for a skill — the body expands at submit, never into the draft", () => {
+    const state = pick("/svg");
+    if (state === null) throw new Error("expected an open picker");
+    const picked = skill();
+    const row: ComposerPickerRow = {
+      kind: "skill",
+      value: `skill:${picked.name}`,
+      label: `/${picked.name}`,
+      detail: picked.description,
+      skill: picked,
+    };
+
+    expect(applyPickerRow({ text: "/svg", state, row })).toEqual({
+      text: "/svg-logo-designer ",
+      caret: 19,
     });
   });
 });

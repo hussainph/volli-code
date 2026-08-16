@@ -71,6 +71,7 @@ export interface ExportProject {
    */
   themeCanvas: string | null;
   themeAppearance: string | null;
+  /** Per-project skills auto-disclosure consent (migration 020), as the row's 0/1. */
   colorIndex: number;
   sortOrder: number;
   rowVersion: number;

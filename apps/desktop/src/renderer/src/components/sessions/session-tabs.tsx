@@ -7,6 +7,8 @@ import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
 import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 
+import type { SkillReference } from "@volli/shared";
+
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
 import {
   runOnLivePanes,
@@ -45,6 +47,10 @@ interface SessionTabsProps {
   onRename(tab: SessionTabDescriptor, title: string): void;
   onNewSession(): void;
   onNewChat(): void;
+  /** The project's skills — the "Chat with skill" submenu's rows. */
+  skills?: readonly SkillReference[];
+  /** Mints a chat Session with one named skill injected at attach time. */
+  onNewChatWithSkill?(name: string): void;
   /** A Session of either kind is already booting. */
   creating: boolean;
 }
@@ -69,6 +75,8 @@ export function SessionTabs({
   onRename,
   onNewSession,
   onNewChat,
+  skills,
+  onNewChatWithSkill,
   creating,
 }: SessionTabsProps) {
   const [editingId, setEditingId] = React.useState<string | null>(null);
@@ -92,7 +100,9 @@ export function SessionTabs({
           placement="strip"
           align="end"
           shortcuts
+          skills={skills}
           onNewChat={onNewChat}
+          onNewChatWithSkill={onNewChatWithSkill}
           onNewTerminal={onNewSession}
         />
       }

@@ -980,6 +980,59 @@ describe("Session tRPC router", () => {
     ).rejects.toThrow("Project Sessions are unavailable");
   });
 
+  it("carries skill slugs to BOTH start and create, and refuses one the grammar cannot spell", async () => {
+    const fixture = runtimeFixture();
+    const calls: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      startTicketSession: async (input) => {
+        calls.push(input);
+        return {
+          sessionId: "session-1",
+          state: "ready" as const,
+          receipt: null,
+          throughSequence: 6,
+        };
+      },
+      createTicketSession: async (input) => {
+        calls.push(input);
+        return { sessionId: "session-1" };
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await caller.ticketSessions.start({
+      operationId: "operation-1",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "VC-1",
+      skills: ["svg-logo-designer"],
+    });
+    // The optimistic-open route is the one that MINTS the Session, so it has
+    // to carry them too — `attach` composes from the record, never the input.
+    await caller.ticketSessions.create({
+      operationId: "operation-2",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "VC-1",
+      skills: ["svg-logo-designer"],
+    });
+    expect(calls).toEqual([
+      expect.objectContaining({ skills: ["svg-logo-designer"] }),
+      expect.objectContaining({ skills: ["svg-logo-designer"] }),
+    ]);
+
+    await expect(
+      caller.ticketSessions.start({
+        operationId: "operation-3",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        title: "VC-1",
+        skills: ["not a slug"],
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
   it("withholds executor creation and attachment commands from Electron renderers", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({

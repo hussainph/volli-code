@@ -5,8 +5,19 @@ import type {
 } from "@volli/session-engine";
 import type { SessionCommand } from "@volli/shared";
 
-import { STRUCTURED_ADAPTER_ID } from "./structured-sessions";
+import {
+  STRUCTURED_ADAPTER_ID,
+  StructuredSessionsError,
+  type SessionSkillPorts,
+} from "./structured-sessions";
 import { createTicketSessions } from "./ticket-sessions";
+
+/** Skill ports for the Sessions these tests start: none named, none opted in. */
+const NO_SKILLS: SessionSkillPorts = {
+  resolve: async () => [],
+  index: async () => null,
+  record: async () => undefined,
+};
 
 function result(
   request: SessionRuntimeCommandRequest,
@@ -87,6 +98,7 @@ describe("Ticket Sessions", () => {
         },
       },
       readDefaultModel,
+      skills: NO_SKILLS,
     });
 
     const created = await ticketSessions.create({
@@ -116,6 +128,7 @@ describe("Ticket Sessions", () => {
       ticketBelongsToProject: () => false,
       runtime: { command: async (request) => result(request) },
       readDefaultModel,
+      skills: NO_SKILLS,
     });
     await expect(
       refusingTicket.create({
@@ -137,6 +150,7 @@ describe("Ticket Sessions", () => {
         },
       },
       readDefaultModel: () => null,
+      skills: NO_SKILLS,
     });
     await expect(
       noModel.create({ operationId: "op", projectId: "project-1", ticketId: "t", title: null }),
@@ -148,6 +162,7 @@ describe("Ticket Sessions", () => {
   it("creates, records model policy, and privately attaches the singular runtime in order", async () => {
     const commands: SessionRuntimeCommandRequest[] = [];
     const ticketSessions = createTicketSessions({
+      skills: NO_SKILLS,
       readBornTicketless: async () => false,
       ticketBelongsToProject: () => true,
       runtime: {
@@ -189,6 +204,7 @@ describe("Ticket Sessions", () => {
   it("keeps a durable Session when the saved model now needs authentication", async () => {
     const commands: SessionRuntimeCommandRequest[] = [];
     const ticketSessions = createTicketSessions({
+      skills: NO_SKILLS,
       readBornTicketless: async () => false,
       ticketBelongsToProject: () => true,
       runtime: {
@@ -225,6 +241,7 @@ describe("Ticket Sessions", () => {
   it("keeps the durable Session id when model policy cannot be recorded", async () => {
     const commands: SessionRuntimeCommandRequest[] = [];
     const ticketSessions = createTicketSessions({
+      skills: NO_SKILLS,
       readBornTicketless: async () => false,
       ticketBelongsToProject: () => true,
       runtime: {
@@ -254,6 +271,7 @@ describe("Ticket Sessions", () => {
   it("preserves the durable Session for explicit recovery when attachment is rejected", async () => {
     const commands: SessionRuntimeCommandRequest[] = [];
     const ticketSessions = createTicketSessions({
+      skills: NO_SKILLS,
       readBornTicketless: async () => false,
       ticketBelongsToProject: () => true,
       runtime: {
@@ -285,6 +303,7 @@ describe("Ticket Sessions", () => {
   it("replays the same operation through stable idempotency keys", async () => {
     const commands: SessionRuntimeCommandRequest[] = [];
     const ticketSessions = createTicketSessions({
+      skills: NO_SKILLS,
       readBornTicketless: async () => false,
       ticketBelongsToProject: () => true,
       runtime: {
@@ -316,6 +335,7 @@ describe("Ticket Sessions", () => {
   it("reattaches an existing Ticket Session without exposing runtime identity", async () => {
     const commands: SessionRuntimeCommandRequest[] = [];
     const ticketSessions = createTicketSessions({
+      skills: NO_SKILLS,
       readBornTicketless: async () => false,
       ticketBelongsToProject: () => true,
       runtime: {
@@ -345,6 +365,7 @@ describe("Ticket Sessions", () => {
   it("requires a user-configured default before creating a Session", async () => {
     const commands: SessionRuntimeCommandRequest[] = [];
     const ticketSessions = createTicketSessions({
+      skills: NO_SKILLS,
       readBornTicketless: async () => false,
       ticketBelongsToProject: () => true,
       runtime: {
@@ -366,6 +387,7 @@ describe("Ticket Sessions", () => {
   it("refuses a ticket outside the requested project before creating a Session", async () => {
     const commands: SessionRuntimeCommandRequest[] = [];
     const ticketSessions = createTicketSessions({
+      skills: NO_SKILLS,
       readBornTicketless: async () => false,
       ticketBelongsToProject: () => false,
       runtime: {
@@ -389,6 +411,7 @@ describe("Ticket Sessions", () => {
   it("refuses to cross-attach a ticketless Session through the Pi route", async () => {
     const commands: SessionRuntimeCommandRequest[] = [];
     const ticketSessions = createTicketSessions({
+      skills: NO_SKILLS,
       readBornTicketless: async () => true,
       ticketBelongsToProject: () => true,
       runtime: {
@@ -404,6 +427,173 @@ describe("Ticket Sessions", () => {
       ticketSessions.attach({ operationId: "operation-cross-attach", sessionId: "scratch" }),
     ).rejects.toMatchObject({ code: "SESSION_NOT_TICKET_SESSION", sessionId: "scratch" });
     expect(commands).toEqual([]);
+  });
+
+  it("resolves named skills before creating and records them before attaching", async () => {
+    const trail: string[] = [];
+    const recorded: { sessionId: string; resources: readonly { name: string }[] }[] = [];
+    const ticketSessions = createTicketSessions({
+      skills: {
+        resolve: async (projectId, names) => {
+          trail.push(`resolve:${projectId}:${names.join(",")}`);
+          return names.map((name) => ({ name, text: `body of ${name}` }));
+        },
+        index: async (projectId, injectedNames) => {
+          trail.push(`index:${projectId}:${injectedNames.join(",")}`);
+          return null;
+        },
+        record: async (sessionId, resources) => {
+          trail.push("record");
+          recorded.push({ sessionId, resources });
+        },
+      },
+      readBornTicketless: async () => false,
+      ticketBelongsToProject: () => true,
+      runtime: {
+        command: async (request) => {
+          trail.push(request.command.kind);
+          return result(
+            request,
+            request.command.kind === "adapter.attach" ? "accepted" : "completed",
+          );
+        },
+      },
+      readDefaultModel,
+    });
+
+    const started = await ticketSessions.start({
+      ...startInput("operation-skills"),
+      skills: ["svg-logo-designer"],
+    });
+
+    expect(started).toMatchObject({ sessionId: "session-1", state: "ready" });
+    // Resolve fails BEFORE anything durable exists; record lands before the
+    // attach so the first system prompt already reads the durable record.
+    expect(trail).toEqual([
+      "resolve:project-1:svg-logo-designer",
+      // Asked with the resolved names, so the index never re-lists a skill
+      // whose full body already rides this Session.
+      "index:project-1:svg-logo-designer",
+      "session.create",
+      "model.select",
+      "record",
+      "adapter.attach",
+    ]);
+    expect(recorded).toEqual([
+      {
+        sessionId: "session-1",
+        resources: [{ name: "svg-logo-designer", text: "body of svg-logo-designer" }],
+      },
+    ]);
+  });
+
+  it("refuses a start naming a missing skill before anything durable exists", async () => {
+    const commands: SessionRuntimeCommandRequest[] = [];
+    const ticketSessions = createTicketSessions({
+      skills: {
+        resolve: async () => {
+          throw new StructuredSessionsError("SKILL_NOT_FOUND", "no such skill");
+        },
+        index: async () => null,
+        record: async () => undefined,
+      },
+      readBornTicketless: async () => false,
+      ticketBelongsToProject: () => true,
+      runtime: {
+        command: async (request) => {
+          commands.push(request);
+          return result(request);
+        },
+      },
+      readDefaultModel,
+    });
+
+    await expect(
+      ticketSessions.start({ ...startInput("operation-missing-skill"), skills: ["gone"] }),
+    ).rejects.toMatchObject({ code: "SKILL_NOT_FOUND" });
+    expect(commands).toEqual([]);
+  });
+
+  it("never resolves nor records when nothing is named and nothing opted in", async () => {
+    const indexAsks: string[] = [];
+    const ticketSessions = createTicketSessions({
+      skills: {
+        resolve: async () => {
+          throw new Error("resolve must not run");
+        },
+        index: async (projectId) => {
+          indexAsks.push(projectId);
+          return null;
+        },
+        record: async () => {
+          throw new Error("record must not run");
+        },
+      },
+      readBornTicketless: async () => false,
+      ticketBelongsToProject: () => true,
+      runtime: {
+        command: async (request) =>
+          result(request, request.command.kind === "adapter.attach" ? "accepted" : "completed"),
+      },
+      readDefaultModel,
+    });
+
+    await expect(ticketSessions.start(startInput("operation-plain"))).resolves.toMatchObject({
+      sessionId: "session-1",
+    });
+    // The index IS asked — opt-in disclosure has no other trigger — but a null
+    // answer leaves nothing to record.
+    expect(indexAsks).toEqual(["project-1"]);
+  });
+
+  it("records the opt-in index even when the start names no skills", async () => {
+    const recorded: { name: string; text: string }[][] = [];
+    const ticketSessions = createTicketSessions({
+      skills: {
+        resolve: async () => {
+          throw new Error("resolve must not run");
+        },
+        index: async () => ({ name: "skills index", text: "- a (.agents/skills/a/SKILL.md)" }),
+        record: async (_sessionId, resources) => {
+          recorded.push(resources.map((resource) => ({ ...resource })));
+        },
+      },
+      readBornTicketless: async () => false,
+      ticketBelongsToProject: () => true,
+      runtime: {
+        command: async (request) =>
+          result(request, request.command.kind === "adapter.attach" ? "accepted" : "completed"),
+      },
+      readDefaultModel,
+    });
+
+    await ticketSessions.start(startInput("operation-index"));
+
+    expect(recorded).toEqual([[{ name: "skills index", text: "- a (.agents/skills/a/SKILL.md)" }]]);
+  });
+
+  it("records the index behind the named bodies, specific material first", async () => {
+    const recorded: string[][] = [];
+    const ticketSessions = createTicketSessions({
+      skills: {
+        resolve: async (_projectId, names) => names.map((name) => ({ name, text: "body" })),
+        index: async () => ({ name: "skills index", text: "index" }),
+        record: async (_sessionId, resources) => {
+          recorded.push(resources.map((resource) => resource.name));
+        },
+      },
+      readBornTicketless: async () => false,
+      ticketBelongsToProject: () => true,
+      runtime: {
+        command: async (request) =>
+          result(request, request.command.kind === "adapter.attach" ? "accepted" : "completed"),
+      },
+      readDefaultModel,
+    });
+
+    await ticketSessions.start({ ...startInput("operation-both"), skills: ["named"] });
+
+    expect(recorded).toEqual([["named", "skills index"]]);
   });
 });
 

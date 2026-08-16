@@ -152,6 +152,31 @@ describe("SqliteSessionLedger", () => {
     ]);
   });
 
+  it("round-trips the prompt-resources input through SQLite", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-resources",
+      projectId,
+      ticketId: null,
+      title: "Skills",
+      provenance,
+    });
+    const input = {
+      kind: "prompt-resources" as const,
+      resources: [{ name: "svg-logo-designer", text: "# Logos\n\nDo the thing." }],
+    };
+
+    await expect(
+      control.getOrRecordSessionInput({ sessionId: created.session.id, input, provenance }),
+    ).resolves.toEqual(input);
+
+    expect(
+      (await control.listEvents({ sessionId: created.session.id })).filter(
+        (event) => event.payload.kind === "session.input.recorded",
+      ),
+    ).toEqual([expect.objectContaining({ payload: { kind: "session.input.recorded", input } })]);
+  });
+
   it("round-trips durable model selection through SQLite", async () => {
     const { control, projectId } = setup();
     const created = await control.createSession({

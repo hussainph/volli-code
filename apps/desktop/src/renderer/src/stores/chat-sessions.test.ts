@@ -230,6 +230,26 @@ describe("createChatSession", () => {
     });
   });
 
+  it("carries named skills onto the create, and only when the list has any", async () => {
+    const { store, ticketStarts } = fixture();
+
+    await store.getState().createChatSession({
+      projectId: "p1",
+      ticketId: "t1",
+      title: "VC-1",
+      skills: ["svg-logo-designer"],
+    });
+    await store.getState().createChatSession({
+      projectId: "p1",
+      ticketId: "t1",
+      title: "VC-1",
+      skills: [],
+    });
+
+    expect(ticketStarts[0]).toMatchObject({ skills: ["svg-logo-designer"] });
+    expect(ticketStarts[1]).not.toHaveProperty("skills");
+  });
+
   it("keeps the durable Session when the background attach is refused", async () => {
     // A refused attach does not un-create the Session: the id came back before
     // the attach settled, and the error lands on the Session it belongs to.

@@ -23,10 +23,12 @@
  * because a transition restarts from the computed value, and given overshoot
  * nowhere — none of these presses carries momentum.
  */
+import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import type { SkillReference } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -34,6 +36,9 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuShortcut,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import {
@@ -41,6 +46,9 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuShortcut,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
 import { cn } from "@renderer/lib/utils";
@@ -76,7 +84,9 @@ export function NewSessionControl({
   align = "start",
   shortcuts = false,
   className,
+  skills,
   onNewChat,
+  onNewChatWithSkill,
   onNewTerminal,
 }: {
   /** A Session of either kind is already booting. */
@@ -99,10 +109,23 @@ export function NewSessionControl({
    */
   shortcuts?: boolean;
   className?: string;
+  /**
+   * The project's skills (`.agents/skills/`), offered as "Chat with skill".
+   * Absent or empty simply hides the submenu — most projects have none, and a
+   * submenu of nothing is a promise the press cannot keep.
+   */
+  skills?: readonly SkillReference[];
   onNewChat(): void;
+  /**
+   * Start a chat with one named skill injected at attach time. Required only
+   * when {@link skills} is supplied — a surface that offers the rows must be
+   * able to honour a pick.
+   */
+  onNewChatWithSkill?(name: string): void;
   onNewTerminal(): void;
 }) {
   const drawing = DRAWING[placement];
+  const skillRows = onNewChatWithSkill === undefined || skills === undefined ? [] : skills;
 
   const items = (
     <>
@@ -111,6 +134,22 @@ export function NewSessionControl({
         Chat
         {shortcuts ? <DropdownMenuShortcut>{CHORD.chat}</DropdownMenuShortcut> : null}
       </DropdownMenuItem>
+      {skillRows.length > 0 ? (
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <BookOpenIcon />
+            Chat with skill
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            {skillRows.map((skill) => (
+              <DropdownMenuItem key={skill.name} onSelect={() => onNewChatWithSkill?.(skill.name)}>
+                <BookOpenIcon />
+                {skill.name}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+      ) : null}
       <DropdownMenuItem onSelect={onNewTerminal}>
         <TerminalWindowIcon />
         Terminal
@@ -199,6 +238,22 @@ export function NewSessionControl({
           Chat
           {shortcuts ? <ContextMenuShortcut>{CHORD.chat}</ContextMenuShortcut> : null}
         </ContextMenuItem>
+        {skillRows.length > 0 ? (
+          <ContextMenuSub>
+            <ContextMenuSubTrigger icon={BookOpenIcon}>Chat with skill</ContextMenuSubTrigger>
+            <ContextMenuSubContent>
+              {skillRows.map((skill) => (
+                <ContextMenuItem
+                  key={skill.name}
+                  icon={BookOpenIcon}
+                  onSelect={() => onNewChatWithSkill?.(skill.name)}
+                >
+                  {skill.name}
+                </ContextMenuItem>
+              ))}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        ) : null}
         <ContextMenuItem icon={TerminalWindowIcon} onSelect={onNewTerminal}>
           Terminal
           {shortcuts ? <ContextMenuShortcut>{CHORD.terminal}</ContextMenuShortcut> : null}

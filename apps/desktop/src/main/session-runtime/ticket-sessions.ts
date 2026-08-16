@@ -6,6 +6,7 @@ import {
   recordModelSelection,
   requireDefaultModel,
   StructuredSessionsError,
+  type SessionSkillPorts,
   type StructuredSessionCommands,
 } from "./structured-sessions";
 
@@ -14,6 +15,8 @@ export interface TicketSessionStartInput {
   projectId: string;
   ticketId: string;
   title: string | null;
+  /** Skill slugs to inject at attach time. Absent means none — never ambient. */
+  skills?: readonly string[];
 }
 
 export interface TicketSessionAttachInput {
@@ -47,6 +50,7 @@ export interface TicketSessionsOptions {
   readDefaultModel(): ModelSelection | null;
   readBornTicketless(sessionId: string): Promise<boolean>;
   ticketBelongsToProject(projectId: string, ticketId: string): boolean;
+  skills: SessionSkillPorts;
 }
 
 /** Product-owned Ticket Session commands over private adapter migration scaffolding. */
@@ -60,6 +64,20 @@ export function createTicketSessions(options: TicketSessionsOptions): TicketSess
       );
     }
     const model = requireDefaultModel(options.readDefaultModel(), DEFAULT_MODEL_REQUIRED);
+    // Resolved before anything durable exists: a missing skill refuses the
+    // start outright instead of stranding a Session that never attaches.
+    const explicit =
+      input.skills !== undefined && input.skills.length > 0
+        ? await options.skills.resolve(input.projectId, input.skills)
+        : [];
+    // The metadata index rides behind the named bodies — specific material
+    // first, then what else is installed. Best-effort by the port's contract:
+    // null costs the index, never the start.
+    const index = await options.skills.index(
+      input.projectId,
+      explicit.map((resource) => resource.name),
+    );
+    const resources = index === null ? explicit : [...explicit, index];
     const created = await options.runtime.command({
       commandId: `${input.operationId}:create`,
       command: {
@@ -74,6 +92,11 @@ export function createTicketSessions(options: TicketSessionsOptions): TicketSess
       sessionId: created.sessionId,
       model,
     });
+    // Durable inside MINT, not beside the attach: VC-16 split the start so a
+    // chat can open optimistically — `create` lands the tab and `attach`
+    // follows separately — and the record has to exist before whichever
+    // attach eventually composes the system prompt from it.
+    if (resources.length > 0) await options.skills.record(created.sessionId, resources);
     return { sessionId: created.sessionId };
   }
 

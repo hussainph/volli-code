@@ -260,4 +260,62 @@ describe("expandCommandInvocation", () => {
   it("lets a known command follow an unknown one on the same line", () => {
     expect(expandCommandInvocation("/nope /ship", templates)).toBe("/nope Ship it.");
   });
+
+  describe("with skills", () => {
+    const skills = [
+      {
+        name: "logos",
+        description: "Design logos",
+        body: "# Logos\n\nRun `awk '{print $1}'` first.",
+        userInvokeOnly: false,
+        root: ".agents/skills/logos",
+      },
+      {
+        name: "ship",
+        description: "Shadowed by the template",
+        body: "never delivered",
+        userInvokeOnly: false,
+        root: ".agents/skills/ship",
+      },
+    ];
+    const block = [
+      "--- BEGIN RESOURCE: logos ---",
+      "Skill directory: .agents/skills/logos/ — file references in this skill resolve relative to it.",
+      "",
+      "# Logos\n\nRun `awk '{print $1}'` first.",
+      "--- END RESOURCE: logos ---",
+    ].join("\n");
+
+    it("expands a skill reference into its delimited RESOURCE block", () => {
+      expect(expandCommandInvocation("/logos", templates, skills)).toBe(block);
+    });
+
+    it("keeps the invocation line's own words after the block", () => {
+      expect(expandCommandInvocation("/logos make a wordmark", templates, skills)).toBe(
+        `${block}\n\nmake a wordmark`,
+      );
+    });
+
+    it("leaves the skill body's placeholders alone — no argument substitution", () => {
+      expect(expandCommandInvocation("/logos arg", templates, skills)).toContain(
+        "awk '{print $1}'",
+      );
+    });
+
+    it("lets a template win a name a skill also claims", () => {
+      expect(expandCommandInvocation("/ship", templates, skills)).toBe("Ship it.");
+    });
+
+    it("consumes the skill's whole line, like any known command", () => {
+      expect(expandCommandInvocation("/logos then /ship", templates, skills)).toBe(
+        `${block}\n\nthen /ship`,
+      );
+    });
+
+    it("expands mid-draft, keeping prose before it and later lines after it", () => {
+      expect(expandCommandInvocation("please /logos\nthanks", templates, skills)).toBe(
+        `please ${block}\nthanks`,
+      );
+    });
+  });
 });

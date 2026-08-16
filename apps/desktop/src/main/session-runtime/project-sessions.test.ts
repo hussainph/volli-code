@@ -6,12 +6,23 @@ import type {
 import type { ModelSelection, SessionCommand } from "@volli/shared";
 
 import { createProjectSessions, type ProjectSessionsOptions } from "./project-sessions";
-import { STRUCTURED_ADAPTER_ID } from "./structured-sessions";
+import {
+  STRUCTURED_ADAPTER_ID,
+  StructuredSessionsError,
+  type SessionSkillPorts,
+} from "./structured-sessions";
 
 const MODEL: ModelSelection = {
   providerId: "openai-codex",
   modelId: "gpt-5.6-sol",
   reasoningLevel: "high",
+};
+
+/** Skill ports for the Sessions these tests start: none named, none opted in. */
+const NO_SKILLS: SessionSkillPorts = {
+  resolve: async () => [],
+  index: async () => null,
+  record: async () => undefined,
 };
 
 function sessions(
@@ -24,6 +35,7 @@ function sessions(
       readBornTicketless: async () => true,
       readDefaultModel: () => MODEL,
       readModelSelection: async () => MODEL,
+      skills: NO_SKILLS,
       runtime: {
         command: async (request) => {
           commands.push(request);
@@ -93,6 +105,103 @@ describe("project Sessions", () => {
     ]);
     // The runtime a project chat attaches stays behind the product facade.
     expect(JSON.stringify(started)).not.toMatch(/adapter|profile|pi|opencode/i);
+  });
+
+  it("resolves named skills before creating and records them before attaching", async () => {
+    const trail: string[] = [];
+    const recorded: { sessionId: string; resources: readonly { name: string }[] }[] = [];
+    const { projectSessions } = sessions({
+      skills: {
+        resolve: async (projectId, names) => {
+          trail.push(`resolve:${projectId}:${names.join(",")}`);
+          return names.map((name) => ({ name, text: `body of ${name}` }));
+        },
+        index: async (projectId, injectedNames) => {
+          trail.push(`index:${projectId}:${injectedNames.join(",")}`);
+          return null;
+        },
+        record: async (sessionId, resources) => {
+          trail.push("record");
+          recorded.push({ sessionId, resources });
+        },
+      },
+      runtime: {
+        command: async (request) => {
+          trail.push(request.command.kind);
+          return result(request);
+        },
+      },
+    });
+
+    const started = await projectSessions.start({
+      operationId: "project-skills",
+      projectId: "project-1",
+      title: null,
+      skills: ["svg-logo-designer"],
+    });
+
+    expect(started).toMatchObject({ sessionId: "session-1", state: "ready" });
+    expect(trail).toEqual([
+      "resolve:project-1:svg-logo-designer",
+      "index:project-1:svg-logo-designer",
+      "session.create",
+      "model.select",
+      "record",
+      "adapter.attach",
+    ]);
+    expect(recorded).toEqual([
+      {
+        sessionId: "session-1",
+        resources: [{ name: "svg-logo-designer", text: "body of svg-logo-designer" }],
+      },
+    ]);
+  });
+
+  it("refuses a start naming a missing skill before anything durable exists", async () => {
+    const commands: SessionRuntimeCommandRequest[] = [];
+    const { projectSessions } = sessions({
+      commands,
+      skills: {
+        resolve: async () => {
+          throw new StructuredSessionsError("SKILL_NOT_FOUND", "no such skill");
+        },
+        index: async () => null,
+        record: async () => undefined,
+      },
+    });
+
+    await expect(
+      projectSessions.start({
+        operationId: "project-missing-skill",
+        projectId: "project-1",
+        title: null,
+        skills: ["gone"],
+      }),
+    ).rejects.toMatchObject({ code: "SKILL_NOT_FOUND" });
+    expect(commands).toEqual([]);
+  });
+
+  it("records the opt-in index even when the start names no skills", async () => {
+    const recorded: { name: string; text: string }[][] = [];
+    const { projectSessions } = sessions({
+      skills: {
+        resolve: async () => {
+          throw new Error("resolve must not run");
+        },
+        index: async () => ({ name: "skills index", text: "- a (.agents/skills/a/SKILL.md)" }),
+        record: async (_sessionId, resources) => {
+          recorded.push(resources.map((resource) => ({ ...resource })));
+        },
+      },
+    });
+
+    await projectSessions.start({
+      operationId: "project-index",
+      projectId: "project-1",
+      title: null,
+    });
+
+    expect(recorded).toEqual([[{ name: "skills index", text: "- a (.agents/skills/a/SKILL.md)" }]]);
   });
 
   it("refuses to start without a default model rather than choosing one", async () => {

@@ -21,10 +21,15 @@ import {
   errorMessage,
   getHarnessAdapter,
   harnessAdapters,
+  globalSkillsDir,
+  projectSkillsDir,
   resolveShell,
+  skillPromptResource,
+  skillsIndexResource,
   ticketBranchName,
   VOLLI_USER_ZDOTDIR_ENV,
 } from "@volli/shared";
+import type { PromptResource, SessionEvent, SessionInput } from "@volli/shared";
 import type { HarnessAdapter, HarnessId, ResolvedAppearance } from "@volli/shared";
 import type { FirstPaintHint, VolliIpcChannel, VolliIpcEvent } from "../ipc/contract";
 import type { ManagedConflict } from "./harness-install";
@@ -54,6 +59,11 @@ import { ModelAccessSignInService } from "./model-access/sign-in-service";
 import { createPiRuntimeHost } from "./session-runtime/pi-adapter";
 import { createTicketSessions } from "./session-runtime/ticket-sessions";
 import { createProjectSessions } from "./session-runtime/project-sessions";
+import {
+  StructuredSessionsError,
+  type SessionSkillPorts,
+} from "./session-runtime/structured-sessions";
+import { loadSkills } from "./skills";
 import {
   assertDefaultModelAvailable,
   readDefaultModelSelection,
@@ -208,6 +218,36 @@ function isInternalNavigation(target: string): boolean {
     host: PACKAGED_RENDERER_HOST,
     pathname: "/index.html",
   });
+}
+
+/**
+ * The recorded brief's text. `getOrRecordSessionInput` is keyed by the input's
+ * kind, so a `runtime-brief` request can only ever answer with a
+ * `runtime-brief` record — any other kind here is ledger corruption, and the
+ * throw fails this attach loudly instead of briefing the Session on nothing.
+ */
+function briefText(input: SessionInput): string {
+  if (input.kind !== "runtime-brief") {
+    throw new Error(`Recorded runtime brief has kind ${input.kind}`);
+  }
+  return input.text;
+}
+
+/**
+ * The attach-time prompt resources this Session durably recorded, or none.
+ * One record per Session at most — `getOrRecordSessionInput` is kind-keyed —
+ * so the first hit is the whole answer.
+ */
+function recordedPromptResources(events: readonly SessionEvent[]): readonly PromptResource[] {
+  for (const event of events) {
+    if (
+      event.payload.kind === "session.input.recorded" &&
+      event.payload.input.kind === "prompt-resources"
+    ) {
+      return event.payload.input.resources;
+    }
+  }
+  return [];
 }
 
 /** Sends an http(s) URL to the user's default browser; ignores anything else. */
@@ -557,6 +597,14 @@ app.whenReady().then(async () => {
               projectId: project.id,
               rootThreadId: sessionRootThreadId(sessionId),
               model: projection.modelSelection,
+              // The skills this Session was started with, as recorded ahead of
+              // its first attachment (`SessionSkillPorts`). Read from the
+              // durable record on EVERY attach — never from disk — so a
+              // restart-recovery re-attach composes the same system prompt the
+              // first attach did, whatever `.agents/skills/` says today.
+              promptResources: recordedPromptResources(
+                await sessionEngine.listEvents({ sessionId }),
+              ),
             };
             // A ticketless Session is a Role, not a Ticket lookup that failed:
             // it briefs on the project root it already runs in.
@@ -570,7 +618,7 @@ app.whenReady().then(async () => {
                 ...shared,
                 role: "project",
                 ticketId: null,
-                brief: brief.text,
+                brief: briefText(brief),
                 location: "main-checkout",
               };
             }
@@ -592,7 +640,7 @@ app.whenReady().then(async () => {
               ...shared,
               role: "ticket",
               ticketId: ticket.id,
-              brief: brief.text,
+              brief: briefText(brief),
               // The same predicate `location.ts` binds the directory on: a Ticket
               // that never took a worktree runs in the project's Main checkout.
               location: ticket.usesWorktree ? "worktree" : "main-checkout",
@@ -610,8 +658,88 @@ app.whenReady().then(async () => {
         })
       : null;
   const sessionDb = dbHandle.ok ? dbHandle.db : null;
+  /**
+   * How a Session start turns skills into its durable prompt resources
+   * (`SessionSkillPorts`): resolve reads BOTH skill tiers — `.agents/skills/`
+   * off the project's main checkout, and the personal `~/.agents/skills/`,
+   * project winning a shared slug — and refuses the start when a named skill
+   * is in neither;
+   * index answers the metadata disclosure best-effort and only under the
+   * project's own consent (`skillsAutoDisclosure`, migration 020) — consent
+   * withheld, no project, no readable directory, no skills are all simply no
+   * index, because a disclosure nicety must never brick a chat; record writes
+   * everything resolved
+   * as the Session's own input event, ahead of the first attachment, which is
+   * the record `resolveRuntimeContext` composes the system prompt from ever
+   * after.
+   */
+  const sessionSkills: SessionSkillPorts | null =
+    sessionEngine !== null && sessionDb !== null
+      ? {
+          resolve: async (projectId, names) => {
+            const project = getProjectById(sessionDb, projectId);
+            if (!project) {
+              throw new StructuredSessionsError(
+                "SKILL_NOT_FOUND",
+                "The project for this Session was not found.",
+              );
+            }
+            const read = await loadSkills({
+              projectSkillsDir: projectSkillsDir(project.path),
+              globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
+            });
+            if (!read.ok) {
+              throw new StructuredSessionsError(
+                "SKILL_NOT_FOUND",
+                `The project's skills could not be read: ${read.error}`,
+              );
+            }
+            // Order and dedup follow the request, not the directory: the
+            // record should say what was asked for, once each.
+            return [...new Set(names)].map((name) => {
+              const skill = read.skills.find((candidate) => candidate.name === name);
+              if (!skill) {
+                throw new StructuredSessionsError(
+                  "SKILL_NOT_FOUND",
+                  `The skill "${name}" was not found in this project.`,
+                );
+              }
+              return skillPromptResource(skill);
+            });
+          },
+          index: async (projectId, injectedNames) => {
+            const project = getProjectById(sessionDb, projectId);
+            if (!project) return null;
+            // Both tiers, always. Metadata disclosure is the Agent Skills
+            // ladder's first rung -- the spec loads every skill's name and
+            // description at startup -- so Volli absorbs the toolkit the user
+            // installed rather than holding an opinion about it. A skill opts
+            // ITSELF out through its frontmatter (`skillsIndexResource`); no
+            // Volli-side switch decides for the user.
+            const read = await loadSkills({
+              projectSkillsDir: projectSkillsDir(project.path),
+              globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
+            });
+            if (!read.ok) return null;
+            return skillsIndexResource(read.skills, injectedNames);
+          },
+          record: async (sessionId, resources) => {
+            await sessionEngine.getOrRecordSessionInput({
+              sessionId,
+              input: { kind: "prompt-resources", resources },
+              provenance: {
+                source: { kind: "system", id: "pi-runtime", detail: null },
+                venue: { id: "local", kind: "local" },
+              },
+            });
+          },
+        }
+      : null;
   const ticketSessions =
-    sessionRuntime !== null && piRuntimeHost !== null && sessionDb !== null
+    sessionRuntime !== null &&
+    piRuntimeHost !== null &&
+    sessionDb !== null &&
+    sessionSkills !== null
       ? createTicketSessions({
           runtime: sessionRuntime,
           readDefaultModel: () => readDefaultModelSelection(sessionDb),
@@ -619,10 +747,14 @@ app.whenReady().then(async () => {
             getTicket(sessionDb, ticketId)?.projectId === projectId,
           readBornTicketless: async (sessionId) =>
             (await sessionRuntime.projection({ sessionId })).projection.bornTicketless,
+          skills: sessionSkills,
         })
       : null;
   const projectSessions =
-    sessionRuntime !== null && piRuntimeHost !== null && sessionDb !== null
+    sessionRuntime !== null &&
+    piRuntimeHost !== null &&
+    sessionDb !== null &&
+    sessionSkills !== null
       ? createProjectSessions({
           runtime: sessionRuntime,
           readDefaultModel: () => readDefaultModelSelection(sessionDb),
@@ -630,6 +762,7 @@ app.whenReady().then(async () => {
             (await sessionRuntime.projection({ sessionId })).projection.bornTicketless,
           readModelSelection: async (sessionId) =>
             (await sessionRuntime.projection({ sessionId })).projection.modelSelection,
+          skills: sessionSkills,
         })
       : null;
   const sessionRpc =
@@ -857,6 +990,7 @@ app.whenReady().then(async () => {
   // templates; same degraded-DB stance as registerDataIpcHandlers.
   registerFileIpcHandlers(dbHandle, {
     globalCommandsDir: join(fsDeps.userDataDir, "commands"),
+    globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
   });
   // Theming: resolved state, global theme, per-project override, and the
   // ghostty overlay write path. Same degraded-DB stance as the two above; the

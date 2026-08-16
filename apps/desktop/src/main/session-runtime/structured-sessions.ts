@@ -16,7 +16,7 @@
  */
 
 import type { SessionRuntime, SessionRuntimeCommandResult } from "@volli/session-engine";
-import type { ModelSelection, SessionStartResult } from "@volli/shared";
+import type { ModelSelection, PromptResource, SessionStartResult } from "@volli/shared";
 
 /**
  * The one adapter id the structured product attaches under.
@@ -43,6 +43,7 @@ export type StructuredSessionsErrorCode =
   | "MODEL_SELECTION_REJECTED"
   | "SESSION_NOT_TICKET_SESSION"
   | "SESSION_NOT_PROJECT_SESSION"
+  | "SKILL_NOT_FOUND"
   | "TICKET_NOT_IN_PROJECT";
 
 /** A refusal a caller can act on, never a bare string a surface has to parse. */
@@ -59,6 +60,33 @@ export class StructuredSessionsError extends Error {
 
 /** The single Session Engine verb these facades are allowed to reach. */
 export type StructuredSessionCommands = Pick<SessionRuntime, "command">;
+
+/**
+ * How a start turns skills into the durable resources the runtime injects —
+ * all halves implemented by the composition root, because only it holds the
+ * project table and the Session Engine.
+ *
+ * `resolve` and `index` both run BEFORE `session.create`, and their failure
+ * policies differ on purpose. A skill the user NAMED that is not on disk
+ * refuses the start while there is still nothing durable to strand —
+ * `resolve` throws {@link StructuredSessionsError} with `SKILL_NOT_FOUND`.
+ * The `index` — the opt-in metadata disclosure nobody named — is best-effort:
+ * an unreadable skills directory costs the index, never the chat, because a
+ * broken opt-in must not brick every Session in the project. `injectedNames`
+ * are the skills already resolved in full; the index skips them rather than
+ * telling the model to go read what it was already handed.
+ *
+ * `record` runs after create and before attach, writing everything resolved
+ * as the Session's own `prompt-resources` input: the attach composes the
+ * system prompt from that record, never from a second disk read, so a
+ * restart-recovery re-attach months later injects the same bytes this start
+ * did — index included.
+ */
+export interface SessionSkillPorts {
+  resolve(projectId: string, names: readonly string[]): Promise<readonly PromptResource[]>;
+  index(projectId: string, injectedNames: readonly string[]): Promise<PromptResource | null>;
+  record(sessionId: string, resources: readonly PromptResource[]): Promise<void>;
+}
 
 /** The app default, or the refusal that names what the user has to choose. */
 export function requireDefaultModel(

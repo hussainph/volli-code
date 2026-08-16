@@ -386,15 +386,17 @@ export function registerDataIpcHandlers(
 
     "volli:project-update": (input: ProjectUpdateInput): ProjectUpdateResult => {
       const now = Date.now();
-      const project = updateProjectBaseBranch(db, input.id, input.baseBranch, now);
+      let project = updateProjectBaseBranch(db, input.id, input.baseBranch, now);
       if (!project) return { ok: false, error: "Unknown project" };
-      if (input.setupCommand === undefined) return { ok: true, project };
-      // Same trim-to-null-on-empty semantics as the ticket-update worktree
-      // identity fields: an empty command means "skip the setup step".
-      const trimmed = input.setupCommand === null ? null : input.setupCommand.trim();
-      const normalized = trimmed === "" ? null : trimmed;
-      const updated = updateProjectSetupCommand(db, input.id, normalized, now);
-      return updated ? { ok: true, project: updated } : { ok: false, error: "Unknown project" };
+      if (input.setupCommand !== undefined) {
+        // Same trim-to-null-on-empty semantics as the ticket-update worktree
+        // identity fields: an empty command means "skip the setup step".
+        const trimmed = input.setupCommand === null ? null : input.setupCommand.trim();
+        const normalized = trimmed === "" ? null : trimmed;
+        project = updateProjectSetupCommand(db, input.id, normalized, now);
+        if (!project) return { ok: false, error: "Unknown project" };
+      }
+      return { ok: true, project };
     },
 
     "volli:project-reorder": (orderedIds: string[]): ProjectMutationResult => {

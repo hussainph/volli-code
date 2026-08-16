@@ -104,6 +104,19 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
       selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
     },
     { kind: "session.input.recorded", input: { kind: "runtime-brief", text: "brief" } },
+    // The attach-time skill record: names + whole delivered bodies, so a
+    // recovery re-attach composes the prompt the first attach composed.
+    {
+      kind: "session.input.recorded",
+      input: {
+        kind: "prompt-resources",
+        resources: [
+          { name: "svg-logo-designer", text: "Skill directory: .agents/skills/x/\n\nBody" },
+          { name: "skills index", text: "- a (.agents/skills/a/SKILL.md): does a" },
+        ],
+      },
+    },
+    { kind: "session.input.recorded", input: { kind: "prompt-resources", resources: [] } },
     { kind: "session.signaled", signal: "done", reason: null },
     { kind: "session.signaled", signal: "blocked", reason: "stuck" },
     { kind: "attachment.opened", attachment },
@@ -432,6 +445,29 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.input.text must be an integer".replace("an integer", "a string"));
+    // A prompt-resources record whose array is not an array, and one whose
+    // entry is malformed: corruption inside a known kind stays a loud throw.
+    expect(() =>
+      decodeSessionEventPayload(
+        { kind: "session.input.recorded", input: { kind: "prompt-resources", resources: {} } },
+        "payload",
+      ),
+    ).toThrow("payload.input.resources must be an array");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "session.input.recorded",
+          input: { kind: "prompt-resources", resources: [{ name: 7, text: "b" }] },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.input.resources[0].name must be a string");
+    expect(() =>
+      decodeSessionEventPayload(
+        { kind: "session.input.recorded", input: { kind: "not-a-kind", text: "x" } },
+        "payload",
+      ),
+    ).toThrow("payload.input.kind has an unsupported value");
     expect(() =>
       decodeSessionEventPayload(
         {

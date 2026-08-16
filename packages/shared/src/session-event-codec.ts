@@ -36,7 +36,7 @@
  */
 
 import { REASONING_LEVELS } from "./agent-runtime";
-import type { ModelSelection } from "./agent-runtime";
+import type { ModelSelection, PromptResource } from "./agent-runtime";
 import { errorMessage } from "./errors";
 import {
   SESSION_ATTACHMENT_CONTINUITIES,
@@ -161,12 +161,20 @@ const codecs = {
   "session.input.recorded": {
     decode: (record, context) => {
       const input = asRecord(record.input, `${context}.input`);
+      const kind = enumValue(
+        input.kind,
+        ["runtime-brief", "prompt-resources"],
+        `${context}.input.kind`,
+      );
       return {
         kind: "session.input.recorded",
-        input: {
-          kind: enumValue(input.kind, ["runtime-brief"], `${context}.input.kind`),
-          text: readString(input.text, `${context}.input.text`),
-        },
+        input:
+          kind === "runtime-brief"
+            ? { kind, text: readString(input.text, `${context}.input.text`) }
+            : {
+                kind,
+                resources: decodePromptResources(input.resources, `${context}.input.resources`),
+              },
       };
     },
     scrub: (payload) => payload,
@@ -923,6 +931,23 @@ function decodeReceiptResult(value: unknown, context: string): CommandReceiptRes
     `${context}.kind`,
   );
   return { kind, sessionId: readString(row.sessionId, `${context}.sessionId`) };
+}
+
+/**
+ * The attach-time skill record's resources. Each is a `{ name, text }` pair
+ * whose text is the whole delivered body, so a Session re-attaching months
+ * later composes the same system prompt it first composed — the record, never
+ * the skill file as it stands today.
+ */
+function decodePromptResources(value: unknown, context: string): readonly PromptResource[] {
+  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
+  return value.map((entry, index) => {
+    const row = asRecord(entry, `${context}[${index}]`);
+    return {
+      name: readString(row.name, `${context}[${index}].name`),
+      text: readString(row.text, `${context}[${index}].text`),
+    };
+  });
 }
 
 function decodeModelSelection(value: unknown, context: string): ModelSelection {

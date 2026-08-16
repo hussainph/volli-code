@@ -54,6 +54,7 @@ import { TicketTitle } from "@renderer/components/ticket/ticket-title";
 import { fileDocumentIdentity, type DocumentIdentity } from "@renderer/editor/document-identity";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
+import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
@@ -817,28 +818,37 @@ export function TicketDetail({
     if (sessionId !== null) setActiveTab(sessionId);
   }, [projectId, ticket.id, setActiveTab]);
 
+  // The project's skills, for the session-start control's "Chat with skill"
+  // submenu — the attach-time injection route, chosen at the moment of
+  // creation because promptResources are fixed once the runtime attaches.
+  const { skills } = usePromptTemplates(projectId);
+
   // Mints one durable chat Session on this ticket and opens its tab, through
   // the same boot guard the terminal path uses: one create per ticket at a
   // time, none at all into a project the renderer has stopped tracking, and the
   // landing below re-checked against fresh state after the await.
-  const createChat = React.useCallback(async () => {
-    await bootChatSession(ticketScope(projectId, ticket.id), {
-      // The terminal path's own convention — the count that exists, plus one.
-      title: `Chat ${nextChatOrdinal(durableChatIds?.length ?? 0, openChatIds.length)}`,
-      land: (sessionId) => {
-        // The ticket itself may have been deleted while the create was in
-        // flight; a tab on a card that no longer exists is unreachable, so let
-        // the Session go (its durable row stands — see `bootChatSession`).
-        const tickets = useBoardStore.getState().ticketsByProject[projectId] ?? [];
-        if (!tickets.some((candidate) => candidate.id === ticket.id)) return false;
-        useChatSessionsStore.getState().openChatTab(ticket.id, sessionId);
-        setActiveTab(chatTabId(sessionId));
-        // So the rail's row for it appears without waiting on a terminal event.
-        void useTicketSessionRecordsStore.getState().refresh(ticket.id);
-        return true;
-      },
-    });
-  }, [durableChatIds?.length, openChatIds.length, projectId, setActiveTab, ticket.id]);
+  const createChat = React.useCallback(
+    async (chatSkills?: readonly string[]) => {
+      await bootChatSession(ticketScope(projectId, ticket.id), {
+        // The terminal path's own convention — the count that exists, plus one.
+        title: `Chat ${nextChatOrdinal(durableChatIds?.length ?? 0, openChatIds.length)}`,
+        skills: chatSkills,
+        land: (sessionId) => {
+          // The ticket itself may have been deleted while the create was in
+          // flight; a tab on a card that no longer exists is unreachable, so let
+          // the Session go (its durable row stands — see `bootChatSession`).
+          const tickets = useBoardStore.getState().ticketsByProject[projectId] ?? [];
+          if (!tickets.some((candidate) => candidate.id === ticket.id)) return false;
+          useChatSessionsStore.getState().openChatTab(ticket.id, sessionId);
+          setActiveTab(chatTabId(sessionId));
+          // So the rail's row for it appears without waiting on a terminal event.
+          void useTicketSessionRecordsStore.getState().refresh(ticket.id);
+          return true;
+        },
+      });
+    },
+    [durableChatIds?.length, openChatIds.length, projectId, setActiveTab, ticket.id],
+  );
 
   // A rail row for a Session with no live client adopts it; one already open
   // just comes to the front. `adoptChatSession` is idempotent, so this is the
@@ -938,6 +948,8 @@ export function TicketDetail({
             }}
             onNewSession={() => void createSession()}
             onNewChat={() => void createChat()}
+            skills={skills}
+            onNewChatWithSkill={(name) => void createChat([name])}
             railCollapsed={railCollapsed}
             onToggleRail={toggleRailCollapsed}
           />
@@ -1037,6 +1049,8 @@ export function TicketDetail({
                 creating={creating || creatingChat}
                 onNewSession={() => void createSession()}
                 onNewChat={() => void createChat()}
+                skills={skills}
+                onNewChatWithSkill={(name) => void createChat([name])}
                 onActivateSession={setActiveTab}
                 onActivateChat={activateChat}
                 activeTabId={activeTabId}

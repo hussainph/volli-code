@@ -70,6 +70,11 @@ export interface TicketSessionStartInput {
   projectId: string;
   ticketId: string;
   title: string | null;
+  /**
+   * Skill slugs to inject at attach time as system-prompt RESOURCE sections.
+   * Absent means none — injection is explicit selection, never ambient.
+   */
+  skills?: readonly string[];
 }
 
 export interface SessionAttachInput {
@@ -81,6 +86,8 @@ export interface ProjectSessionStartInput {
   operationId: string;
   projectId: string;
   title: string | null;
+  /** See {@link TicketSessionStartInput.skills}. */
+  skills?: readonly string[];
 }
 
 /** A create-only start's answer: durable identity, nothing about an executor. */
@@ -292,6 +299,18 @@ const sseCursor = z
   .regex(/^(?:0|[1-9]\d*)$/)
   .refine((value) => Number.isSafeInteger(Number(value)), "Expected a safe non-negative integer");
 const nullableString = z.string().nullable();
+
+/**
+ * The skill slugs a start may name. The count cap is a sanity bound, not a
+ * product rule — nobody scrolls twenty system-prompt documents — and the slug
+ * grammar is the `/name` character class from `@volli/shared`, checked here so
+ * a slug main could never have loaded is refused at the edge rather than
+ * surfacing as a missing-skill start failure.
+ */
+const skillSlugs = z
+  .array(nonEmptyString.refine((value) => /^[A-Za-z0-9_:-]+$/.test(value), "Expected a skill slug"))
+  .max(20)
+  .optional();
 const uiMessageSchema = z.custom<RpcUiMessage>(isUiMessage, "Expected an AI SDK UIMessage");
 const modelSelectionSchema = z.object({
   providerId: nonEmptyString,
@@ -508,6 +527,7 @@ export function createSessionRouter() {
             projectId: nonEmptyString,
             ticketId: nonEmptyString,
             title: nullableString,
+            skills: skillSlugs,
           }),
         )
         .mutation(async ({ ctx, input }) => {
@@ -523,6 +543,10 @@ export function createSessionRouter() {
             projectId: nonEmptyString,
             ticketId: nonEmptyString,
             title: nullableString,
+            // The optimistic-open path mints the Session, so it is the path
+            // that has to carry the skills: `attach` composes the prompt from
+            // the record `create` wrote, and never sees this input.
+            skills: skillSlugs,
           }),
         )
         .mutation(async ({ ctx, input }) => {
@@ -547,6 +571,7 @@ export function createSessionRouter() {
             operationId: nonEmptyString,
             projectId: nonEmptyString,
             title: nullableString,
+            skills: skillSlugs,
           }),
         )
         .mutation(async ({ ctx, input }) => {
@@ -561,6 +586,8 @@ export function createSessionRouter() {
             operationId: nonEmptyString,
             projectId: nonEmptyString,
             title: nullableString,
+            /** See `ticketSessions.create`. */
+            skills: skillSlugs,
           }),
         )
         .mutation(async ({ ctx, input }) => {

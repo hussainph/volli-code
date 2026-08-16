@@ -83,6 +83,7 @@ import {
   type DeliveryOutcome,
   type ModelSelection,
   type ModelSelectionOutcome,
+  type PromptResource,
   type RuntimeAskChoice,
   type RuntimeAskRequest,
   type RuntimeAskUserRequest,
@@ -171,6 +172,14 @@ interface PiRuntimeContextFields {
    * the correct answer to a question the re-architecture still asks.
    */
   location: WorkLocationKind;
+  /**
+   * The skills this Session was explicitly started with, read from its own
+   * durable `prompt-resources` record — never from disk at attach time, so a
+   * recovery re-attach composes the exact system prompt the first attach did.
+   * Empty for the ordinary Session, and empty stays empty: nothing is ever
+   * injected that the start did not name.
+   */
+  promptResources: readonly PromptResource[];
 }
 
 /**
@@ -466,6 +475,11 @@ class PiBinding implements BindingHandle {
       // replaces the policy this adapter used to pin and keeps the mechanism,
       // including the `ask` port still wired below.
       brief: { text: this.#context.brief },
+      // The seam `composeSystemPrompt` renders as delimited RESOURCE sections.
+      // Omitted rather than empty when the Session named no skills, so a spec
+      // with no resources is a spec with no resources field — same shape the
+      // runtime's own tests pin.
+      ...(context.promptResources.length === 0 ? {} : { promptResources: context.promptResources }),
       tools: { tools: [...PI_TOOLS.tools] },
       ...(this.#recovery === undefined ? {} : { recovery: this.#recovery }),
       signal: this.#abort.signal,

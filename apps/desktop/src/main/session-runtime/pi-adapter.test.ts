@@ -45,6 +45,7 @@ const context: PiRuntimeContext = {
     modelId: "gpt-5.6-sol",
     reasoningLevel: "high",
   },
+  promptResources: [],
 };
 
 function attachmentSpec(overrides: Partial<NativeAttachmentSpec> = {}): NativeAttachmentSpec {
@@ -401,6 +402,8 @@ describe("Pi native adapter attach", () => {
     expect(spec.authority).toBeUndefined();
     expect(spec.tools).toEqual({ tools: ["read", "edit", "write", "execute"] });
     expect(spec.brief).toEqual({ text: "VC-12: Host the Pi runtime" });
+    // No skills named at start — the field is absent, not an empty list.
+    expect("promptResources" in spec).toBe(false);
     expect(spec.signal?.aborted).toBe(false);
     // Session 4 reopens the sidecar from exactly these three fields.
     expect(binding.native).toEqual({
@@ -411,6 +414,15 @@ describe("Pi native adapter attach", () => {
         sessionFilePath: "/data/pi-sessions/pi-session-9.jsonl",
       },
     });
+  });
+
+  it("carries the Session's recorded skills into the spec's promptResources", async () => {
+    const resources = [{ name: "svg-logo-designer", text: "# Logos\n\nDo the thing." }];
+    const { runtime } = await attached({
+      resolveRuntimeContext: async () => ({ ...context, promptResources: resources }),
+    });
+
+    expect(runtime.spec.promptResources).toEqual(resources);
   });
 
   it("passes the injected model collection and session directory to the runtime factory", async () => {
@@ -472,6 +484,7 @@ describe("Pi native adapter attach", () => {
           rootThreadId: sessionRootThreadId(SESSION_ID),
           brief: "A project-scoped chat Session.",
           model: context.model,
+          promptResources: [],
         }),
       },
       attachmentSpec({ directory: "/work/volli" }),

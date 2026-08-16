@@ -33,6 +33,7 @@ import {
   isValidNewArtifactName,
   projectArtifactsDir,
   projectCommandsDir,
+  projectSkillsDir,
   VOLLI_ARTIFACTS_REL_DIR,
   VOLLI_GITIGNORE_CONTENT,
   volliDir,
@@ -67,6 +68,7 @@ import type { TicketRow } from "./db/tickets-repo";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
 import { loadPromptTemplates } from "./prompt-templates";
+import { loadSkills } from "./skills";
 
 const execFileAsync = promisify(execFile);
 
@@ -1089,6 +1091,12 @@ export interface FileIpcOptions {
    * that may call `app.getPath("userData")`.
    */
   globalCommandsDir: string;
+  /**
+   * `<home>/.agents/skills` — the personal tier of the `/` picker's skills,
+   * injected for `globalCommandsDir`'s reason: the home directory is resolved
+   * once, in `index.ts`, and handed down rather than read here.
+   */
+  globalSkillsDir: string;
 }
 
 /**
@@ -1207,21 +1215,30 @@ export function registerFileIpcHandlers(
       return { ok: true };
     },
 
-    // The `/` picker's supply. Project-keyed like the file index and for the
-    // same reason: `.volli` is self-gitignored, so keying a ticket session's
-    // commands to its worktree would hide exactly the templates the project
-    // author wrote (see `projectCommandsDir`).
+    // The `/` picker's supply — templates AND skills, one fetch. Project-keyed
+    // like the file index and for the same reason: `.volli` is self-gitignored,
+    // so keying a ticket session's commands to its worktree would hide exactly
+    // the templates the project author wrote (see `projectCommandsDir`). The
+    // three reads are independent, and any one tier that exists but cannot be
+    // read is still an error the composer says out loud.
     "volli:prompt-templates": async (
       input: PromptTemplateIndexInput,
     ): Promise<PromptTemplateIndexResult> => {
       const project = resolveProjectPath(db, input.projectId);
       if (!project.ok) return project;
-      const loaded = await loadPromptTemplates({
-        projectCommandsDir: projectCommandsDir(project.projectPath),
-        globalCommandsDir: options.globalCommandsDir,
-      });
+      const [loaded, skills] = await Promise.all([
+        loadPromptTemplates({
+          projectCommandsDir: projectCommandsDir(project.projectPath),
+          globalCommandsDir: options.globalCommandsDir,
+        }),
+        loadSkills({
+          projectSkillsDir: projectSkillsDir(project.projectPath),
+          globalSkillsDir: options.globalSkillsDir,
+        }),
+      ]);
       if (!loaded.ok) return loaded;
-      return { ok: true, templates: [...loaded.templates] };
+      if (!skills.ok) return skills;
+      return { ok: true, templates: [...loaded.templates], skills: [...skills.skills] };
     },
   };
 

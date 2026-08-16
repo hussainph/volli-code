@@ -21,6 +21,7 @@ import {
   recordModelSelection,
   requireDefaultModel,
   StructuredSessionsError,
+  type SessionSkillPorts,
   type StructuredSessionCommands,
 } from "./structured-sessions";
 import type { SessionCreateResult } from "./ticket-sessions";
@@ -45,6 +46,8 @@ export interface ProjectSessionStartInput {
   operationId: string;
   projectId: string;
   title: string | null;
+  /** Skill slugs to inject at attach time. Absent means none — never ambient. */
+  skills?: readonly string[];
 }
 
 export interface ProjectSessionAttachInput {
@@ -68,12 +71,25 @@ export interface ProjectSessionsOptions {
   readBornTicketless(sessionId: string): Promise<boolean>;
   /** This Session's durable model policy, or `null` when it has never recorded one. */
   readModelSelection(sessionId: string): Promise<ModelSelection | null>;
+  skills: SessionSkillPorts;
 }
 
 export function createProjectSessions(options: ProjectSessionsOptions): ProjectSessions {
   /** The shared create+model half; `start` attaches after it, `create` returns it as-is. */
   async function mint(input: ProjectSessionStartInput): Promise<SessionCreateResult> {
     const model = requireDefaultModel(options.readDefaultModel(), DEFAULT_MODEL_REQUIRED);
+    // Named bodies resolved before anything durable exists, then the
+    // best-effort index behind them, then recorded inside mint so the
+    // optimistic `create` path carries it too — see ticket-sessions.ts.
+    const explicit =
+      input.skills !== undefined && input.skills.length > 0
+        ? await options.skills.resolve(input.projectId, input.skills)
+        : [];
+    const index = await options.skills.index(
+      input.projectId,
+      explicit.map((resource) => resource.name),
+    );
+    const resources = index === null ? explicit : [...explicit, index];
     const created = await options.runtime.command({
       commandId: `${input.operationId}:create`,
       command: {
@@ -88,6 +104,7 @@ export function createProjectSessions(options: ProjectSessionsOptions): ProjectS
       sessionId: created.sessionId,
       model,
     });
+    if (resources.length > 0) await options.skills.record(created.sessionId, resources);
     return { sessionId: created.sessionId };
   }
 
