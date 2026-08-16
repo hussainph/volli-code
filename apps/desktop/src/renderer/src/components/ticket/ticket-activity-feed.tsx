@@ -70,6 +70,7 @@ const EVENT_ICON: Record<TicketEventKind, PhosphorIcon> = {
   unarchived: ArrowCounterClockwiseIcon,
   commented: ChatCircleIcon,
   worktree_changed: GitBranchIcon,
+  worktree_scope_changed: GitBranchIcon,
   worktree_failed: WarningCircleIcon,
   worktree_committed: GitCommitIcon,
   pr_opened: GitPullRequestIcon,

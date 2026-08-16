@@ -8,12 +8,7 @@
  * message that leaves exactly once — are all about *when* things happen, and
  * none of them is observable through a component.
  */
-import type {
-  CommandReceipt,
-  ModelSelection,
-  SessionAttachmentProjection,
-  SessionProjection,
-} from "@volli/shared";
+import type { CommandReceipt, ModelSelection, SessionPresentationProjection } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -75,53 +70,92 @@ const MODEL_POLICY: ModelSelection = {
   reasoningLevel: "high",
 };
 
-function attachmentFor(id: string, adapterId = "pi"): SessionAttachmentProjection {
-  return {
-    id,
-    sessionId: SESSION.id,
-    adapterId,
-    venue: { id: "local", kind: "local" },
-    continuity: "fresh",
-    native: null,
-    status: "open",
-    openedAt: 0,
-    closedAt: null,
-    outcome: null,
-    failure: null,
-  };
-}
-
-function projectionFor(attachmentId: string | null, adapterId = "pi"): SessionProjection {
-  const attachment = attachmentId === null ? null : attachmentFor(attachmentId, adapterId);
+/**
+ * A projection as it actually crosses the edge: the presentation shape, with
+ * executor identity reduced to `{ id }` and no command/receipt history. The
+ * full `SessionProjection` never reaches this client, so a fixture built from
+ * one would exercise fields the edge deliberately withholds.
+ */
+function projectionFor(attachmentId: string | null): SessionPresentationProjection {
   return {
     session: SESSION,
     status: "open",
-    commands: [],
-    receipts: [],
-    pendingExecutorStart: null,
-    attachments: attachment === null ? [] : [attachment],
-    liveExecutor: attachment,
+    liveExecutor: attachmentId === null ? null : { id: attachmentId },
     attention: { active: [], primary: null },
     interactions: { active: [], resolved: [] },
     signal: null,
     modelSelection: MODEL_POLICY,
     turnActive: false,
-    authorityDenials: 0,
     lastActivityAt: SESSION.createdAt,
     bornTicketless: SESSION.ticketId === null,
   };
 }
 
+/** The renderer-safe payload each kind actually crosses the edge with. */
+function payloadOf(kind: string): Record<string, unknown> {
+  switch (kind) {
+    case "turn.started":
+    case "turn.completed":
+    case "turn.interrupted":
+      return { kind, attachmentId: "attach-1", turnId: "turn-1" };
+    case "interaction.opened":
+      return {
+        kind,
+        interaction: {
+          id: "ask:call-1",
+          attachmentId: "attach-1",
+          kind: "permission",
+          title: "Allow write?",
+          detail: null,
+          options: [],
+          multiple: false,
+          native: { id: null, detail: null },
+        },
+      };
+    case "attention.raised":
+      return {
+        kind,
+        attention: {
+          kind: "input_required",
+          id: "attention-1",
+          attachmentId: null,
+          detail: null,
+          diagnostic: null,
+        },
+      };
+    case "transcript.referenced":
+      return {
+        kind,
+        attachmentId: null,
+        turnId: null,
+        reference: { id: "sha256:artifact", mediaType: null, digest: null },
+      };
+    default:
+      return { kind };
+  }
+}
+
 /** A durable frame as it crosses the edge: loose JSON the wire reader validates. */
 function frameOf(sequence: number, kind: string): unknown {
-  return { sessionId: SESSION.id, sequence, event: { payload: { kind } }, transcript: null };
+  return {
+    sessionId: SESSION.id,
+    sequence,
+    event: {
+      id: `event-${sequence}`,
+      sessionId: SESSION.id,
+      sequence,
+      occurredAt: sequence,
+      recordedAt: sequence,
+      provenance: { source: { kind: "system", id: "session-runtime", detail: null }, venue: null },
+      payload: payloadOf(kind),
+    },
+    transcript: null,
+  };
 }
 
 function transcriptFrameOf(sequence: number, messageId: string): unknown {
   return {
-    sessionId: SESSION.id,
-    sequence,
-    event: { payload: { kind: "transcript.referenced" } },
+    ...(frameOf(sequence, "transcript.referenced") as Record<string, unknown>),
     transcript: {
       message: { id: messageId, role: "assistant", parts: [{ type: "text", text: "settled" }] },
     },
@@ -326,7 +360,7 @@ async function adopted(prepare: (rpc: FakeRpc) => void = () => undefined) {
     rpc,
     scheduler,
     newCommandId: () => `cmd-${++commandIds}`,
-    startSession: async () => {
+    createSession: async () => {
       throw new Error("adopted fixtures do not start Sessions");
     },
     attachSession: async (input) => {
@@ -471,14 +505,14 @@ describe("browserChatTransport", () => {
     expect(typeof transport.rpc.session.snapshot.query).toBe("function");
     expect(transport.newCommandId()).not.toBe(transport.newCommandId());
     expect(typeof transport.scheduler.schedule(() => undefined)).toBe("function");
-    await transport.startSession({
-      operationId: "project-start",
+    await transport.createSession({
+      operationId: "project-create",
       projectId: "project-1",
       ticketId: null,
       title: "Scratch",
     });
-    await transport.startSession({
-      operationId: "ticket-start",
+    await transport.createSession({
+      operationId: "ticket-create",
       projectId: "project-1",
       ticketId: "ticket-1",
       title: "VC-1",
@@ -494,8 +528,8 @@ describe("browserChatTransport", () => {
       bornTicketless: false,
     });
     expect(procedures).toEqual([
-      "projectSessions.start",
-      "ticketSessions.start",
+      "projectSessions.create",
+      "ticketSessions.create",
       "projectSessions.attach",
       "ticketSessions.attach",
     ]);
@@ -1185,7 +1219,7 @@ describe("submit", () => {
 /* ---------------------------------------------------------- auto-titling */
 
 describe("auto-title on delivery", () => {
-  function projectionWithTitle(title: string | null): SessionProjection {
+  function projectionWithTitle(title: string | null): SessionPresentationProjection {
     return { ...projectionFor("attach-1"), session: { ...SESSION, title } };
   }
 

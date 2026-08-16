@@ -74,6 +74,7 @@ export interface BoardGateway {
     worktreePath?: string | null;
     branch?: string | null;
     baseBranch?: string | null;
+    usesWorktree?: boolean;
   }): Promise<TicketResult>;
   setLabels(input: { ticketId: string; labels: string[] }): Promise<TicketResult>;
   setLabelColor(input: { labelId: string; color: string | null }): Promise<LabelResult>;
@@ -221,6 +222,8 @@ interface BoardState {
     worktreePath?: string | null;
     branch?: string | null;
     baseBranch?: string | null;
+    /** Worktree scoping — honored by main only while no worktree has materialized (VC-16). */
+    usesWorktree?: boolean;
   }): Promise<void>;
   /**
    * Replaces a ticket's labels wholesale via `api.tickets.setLabels`. Same
@@ -593,6 +596,8 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
           optimisticFields.worktreePath = changes.worktreePath;
         if (changes.branch !== undefined) optimisticFields.branch = changes.branch;
         if (changes.baseBranch !== undefined) optimisticFields.baseBranch = changes.baseBranch;
+        if (changes.usesWorktree !== undefined)
+          optimisticFields.usesWorktree = changes.usesWorktree;
 
         await optimisticTicketPatch(ticketId, optimisticFields, "update ticket", () =>
           gateway.updateTicket(input),

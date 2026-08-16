@@ -124,6 +124,18 @@ describe("describeEvent", () => {
     );
   });
 
+  it("names both directions of a worktree scoping flip", () => {
+    // VC-16: the flip is only settable before a worktree materializes, so the
+    // feed is the only lasting record of which destination was chosen — both
+    // readings have to say which one, not just that something changed.
+    expect(describeEvent({ kind: "worktree_scope_changed", from: false, to: true })).toBe(
+      "scoped the ticket to a new worktree",
+    );
+    expect(describeEvent({ kind: "worktree_scope_changed", from: true, to: false })).toBe(
+      "scoped the ticket to the main checkout",
+    );
+  });
+
   it("describes a worktree_failed event with the last non-blank stderr line, truncated at 160 chars", () => {
     // Git's real diagnosis lands last; blank progress lines around it are skipped.
     expect(
@@ -186,6 +198,7 @@ describe("EVENT_KIND_PRIORITY", () => {
       "attachment_added",
       "attachment_removed",
       "worktree_changed",
+      "worktree_scope_changed",
       "archived",
       "unarchived",
       "body_edited",

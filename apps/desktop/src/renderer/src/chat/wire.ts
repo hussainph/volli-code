@@ -8,7 +8,7 @@
  * rather than drawn, or thrown from inside a React state updater.
  */
 import type { SessionStreamOverlay, TranscriptDelta } from "@volli/session-engine";
-import type { SessionEvent } from "@volli/shared";
+import { parseRendererSessionEvent } from "@volli/shared";
 import type { UIMessage } from "ai";
 
 import type { ChatSessionFrame } from "@renderer/chat/transcript";
@@ -17,18 +17,32 @@ export function chatSessionFrame(value: unknown): ChatSessionFrame | null {
   if (
     !isRecord(value) ||
     typeof value.sessionId !== "string" ||
-    typeof value.sequence !== "number" ||
-    !isRecord(value.event) ||
-    !isRecord(value.event.payload)
+    typeof value.sequence !== "number"
   ) {
     return null;
   }
   const transcript = chatTranscript(value.transcript);
   if (transcript === undefined) return null;
+  // The codec's tolerant parse, in its non-throwing form — this runs inside
+  // React state updaters, where a throw takes the chat surface down instead of
+  // losing one frame. The two failure arms answer differently on purpose:
+  //
+  //  - `unknown-kind` means the writer was newer than this build (live on the
+  //    lab HTTP transport, and on any replay). The envelope is kept so its
+  //    sequence still advances the fold's cursor — the mirror of the ledger's
+  //    paging rule, where an empty answer would read as the end of the Session
+  //    — while a null event contributes nothing to what is drawn.
+  //  - `malformed` is corruption of a known kind, surfaced loudly and dropped:
+  //    a half-read event drawn as fact is worse than a frame lost.
+  const parsed = parseRendererSessionEvent(value.event, "frame.event");
+  if (!parsed.ok && parsed.reason === "malformed") {
+    console.error(`[chat-wire] dropped a malformed session frame: ${parsed.message}`);
+    return null;
+  }
   return {
     sessionId: value.sessionId,
     sequence: value.sequence,
-    event: value.event as unknown as SessionEvent,
+    event: parsed.ok ? parsed.event : null,
     transcript,
   };
 }

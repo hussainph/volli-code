@@ -208,7 +208,7 @@ export async function resolveScope(
     if (!usesWorktree && kickoff !== undefined) {
       let prompt = kickoff.prompt;
       try {
-        const materialized = materializeAttachments(
+        const materialized = await materializeAttachments(
           db,
           attachmentsRootPath,
           request.ticket.ticketId,

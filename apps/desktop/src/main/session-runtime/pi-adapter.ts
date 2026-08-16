@@ -75,6 +75,8 @@ import { NativeAttachmentError } from "@volli/session-engine";
 import {
   askChoice,
   askOffer,
+  askInteractionId,
+  askUserInteractionId,
   DEFAULT_INTERACTION_PROMPT_ID,
   errorMessage,
   type AgentRuntime,
@@ -341,41 +343,10 @@ function piNativeAdapter(
   };
 }
 
-/**
- * The interaction id one blocked tool call is asked under.
- *
- * Durable, not live. This string lands inside
- * `pi:interaction:<attachmentId>:<id>:opened` on disk, and every relaunch
- * re-derives that event id from the same data and dedupes it by exact match — so
- * changing how this is built would not fail, it would write a second copy of
- * every question a Session ever asked. Keep the shape, and the `ask:` segment
- * with it.
- *
- * The tool call id is the identity because the runtime blocks exactly one
- * question per call it refuses, and because a question that cannot name the call
- * that raised it can only ever be shown at the foot of a transcript.
- */
-function askInteractionId(toolCallId: string): string {
-  return `ask:${toolCallId}`;
-}
-
-/**
- * The interaction id one `ask_user` call is asked under.
- *
- * Durable on the same terms as {@link askInteractionId}, and a second derivation
- * rather than a widening of it: the `ask-user:` segment is frozen the moment it
- * ships, because `pi:interaction:<attachmentId>:<id>:opened` is re-derived from
- * live data on every relaunch and deduped by exact string match.
- *
- * Separate from `ask:` for a reason that outlives the ids. Both derive from a
- * tool call id, and the two questions are answered differently — an escalation's
- * option ids are read as a verdict, a model's are handed back untouched — so one
- * shared prefix would not collide loudly, it would let either answer settle the
- * other's wait.
- */
-function askUserInteractionId(toolCallId: string): string {
-  return `ask-user:${toolCallId}`;
-}
+// The `ask:` / `ask-user:` interaction id derivations are frozen durable
+// segments and live in @volli/shared beside the interaction vocabulary, so the
+// renderer that correlates on them and this adapter that mints them cannot
+// drift. See `askInteractionId` / `askUserInteractionId` there.
 
 /**
  * What the question says, in the two shapes an escalation arrives in.

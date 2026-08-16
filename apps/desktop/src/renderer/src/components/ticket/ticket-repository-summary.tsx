@@ -313,6 +313,51 @@ function InlineTextField({
 }
 
 /**
+ * The scoping control the composer's destination chip leaves behind (VC-16):
+ * the same two options — an isolated worktree, or the project's Main checkout
+ * — readable and changeable from the identity popover for exactly as long as
+ * the choice is still cheap to change. It renders NOTHING once
+ * `ticket.worktreePath` is stamped: a materialized worktree is a fact on disk,
+ * and main refuses the flip from then on (`updateTicketFieldsCommand`), so a
+ * control would only offer an error. Exported for the rail suite — the popover
+ * it lives in portals out of a static render.
+ */
+export function WorktreeDestinationControl({ ticket }: { ticket: Ticket }) {
+  if (ticket.worktreePath !== null) return null;
+  const label = ticket.usesWorktree ? "New worktree" : "Project checkout";
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          data-testid="ticket-worktree-destination"
+          aria-label={`Working destination: ${label}`}
+          className="w-fit gap-1 border border-border px-2 text-ui text-foreground"
+        >
+          {ticket.usesWorktree ? <GitBranchIcon /> : <FolderOpenIcon />}
+          {label}
+          <CaretDownIcon className="size-3 text-muted-foreground" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        <DropdownMenuRadioGroup
+          value={ticket.usesWorktree ? "worktree" : "checkout"}
+          onValueChange={(next) =>
+            void useBoardStore
+              .getState()
+              .updateTicket({ ticketId: ticket.id, usesWorktree: next === "worktree" })
+          }
+        >
+          <DropdownMenuRadioItem value="worktree">New worktree</DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="checkout">Project checkout</DropdownMenuRadioItem>
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
  * The base-branch picker: while `ticket.baseBranch` is unset, a chip trigger +
  * `DropdownMenuRadioGroup` replaces the free-text field, offering the project's
  * local branches (fetched lazily — only on the picker's first open, then cached
@@ -437,6 +482,12 @@ function RepositoryPopoverContent({ projectId, ticket }: { projectId: string; ti
 
   return (
     <PopoverContent align="start" className="flex w-72 flex-col gap-4 p-4">
+      {ticket.worktreePath === null ? (
+        <div className="flex flex-col gap-1">
+          <SectionHeading as="p">Destination</SectionHeading>
+          <WorktreeDestinationControl ticket={ticket} />
+        </div>
+      ) : null}
       <div className="flex flex-col gap-1">
         <SectionHeading as="p">Base branch</SectionHeading>
         {ticket.baseBranch ? (
@@ -867,9 +918,15 @@ export function TicketRepositorySummary({
   const fault = loadError ?? watchError;
   // No worktree means no read to wait for: `refreshStatusAndDiff` returns early
   // and `diff` stays null for good, so "No changes" would be a permanent lie.
+  // What CAN be said honestly is the ticket's worktree scoping (VC-16): before
+  // the first Session boots, a worktree ticket and a Main-checkout ticket used
+  // to read identically here, which made the composer's destination choice
+  // unreadable everywhere after creation.
   const loadingChanges = hasWorktree && diff === null && fault === null;
   const changesLabel = !hasWorktree
-    ? "No worktree yet"
+    ? ticket.usesWorktree
+      ? "New worktree on first session"
+      : "Runs in the main checkout"
     : diff === null
       ? // Never got a snapshot: the banner below carries the fault and its
         // Retry, so the row states the noun rather than the failure again.
