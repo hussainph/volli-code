@@ -623,9 +623,10 @@ app.whenReady().then(async () => {
           // override (the CLI's --model/--reasoning); the saved default was
           // validated when it was chosen.
           inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}),
-          // One creation path, one event (VC-13 decision 3): a start from the
-          // renderer's RPC door and one from the agent socket both land here,
-          // each carrying the actor its own door derived.
+          // One creation path, one event (VC-13 decision 3): the renderer's
+          // optimistic-open `create` (VC-16) and the agent socket's `start`
+          // both mint through the same path, each carrying the actor its own
+          // door derived.
           recordSessionStarted: ({ ticketId, sessionId, actor }) => {
             recordTicketEvent(
               sessionDb,
@@ -665,8 +666,10 @@ app.whenReady().then(async () => {
                 }
               : undefined,
           startTicketSession: ticketSessions?.start,
+          createTicketSession: ticketSessions?.create,
           attachTicketSession: ticketSessions?.attach,
           startProjectSession: projectSessions?.start,
+          createProjectSession: projectSessions?.create,
           attachProjectSession: projectSessions?.attach,
         });
   // Signing in is a Model Access task, not a Session one, so it gets its own

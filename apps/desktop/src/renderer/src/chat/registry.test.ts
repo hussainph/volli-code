@@ -45,7 +45,7 @@ function deps(): ChatSessionClientDeps {
     store: { getState: () => writes, subscribe: () => () => undefined },
     scheduler: { schedule: () => () => undefined },
     newCommandId: () => "cmd",
-    startSession: unreachable,
+    createSession: unreachable,
     attachSession: unreachable,
   };
 }

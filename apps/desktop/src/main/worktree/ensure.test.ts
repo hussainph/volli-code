@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
@@ -36,6 +36,13 @@ function tempDir(prefix: string): string {
 
 const BRANCH = "volli/VC-12-mcp-server";
 
+// The sync runner is `execFileSync` in production: one call from the ensure
+// pipeline freezes every window (VC-16's rainbow wheel). Poisoning it is the
+// seam-level statement that ensure never touches it.
+const poisonedSyncGit = (): string => {
+  throw new Error("ensure must not use the blocking sync git runner");
+};
+
 /** Seeds a doing ticket in a real temp project dir with `base_branch = main`. */
 function seed(projectPath: string) {
   const project = testProject({ id: "proj-abcdef12", path: projectPath, baseBranch: "main" });
@@ -65,17 +72,37 @@ function happyGit(projectPath: string) {
 }
 
 describe("ensure — success", () => {
+  it("materializes the worktree through the async git runner alone — the sync runner would block the main process", async () => {
+    const projectPath = tempDir("proj");
+    seed(projectPath);
+    const home = tempDir("home");
+    const { gitAsync, countMatching } = happyGit(projectPath);
+
+    const result = await ensure(
+      { db: ctx.db, git: poisonedSyncGit, gitAsync, home, attachmentsRoot: "unused" },
+      "ticket-1",
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.created).toBe(true);
+      expect(result.value.identity.branch).toBe(BRANCH);
+    }
+    expect(countMatching(["worktree", "add", "-b", BRANCH])).toBe(1);
+  });
+
   it("runs the pipeline, transitions phases, persists identity, and returns it", async () => {
     const projectPath = tempDir("proj");
     seed(projectPath);
     const home = tempDir("home");
-    const { git, countMatching } = happyGit(projectPath);
+    const { git, gitAsync, countMatching } = happyGit(projectPath);
     const phases: WorktreePhase[] = [];
 
     const result = await ensure(
       {
         db: ctx.db,
         git,
+        gitAsync,
         home,
         onPhase: (_, phase) => phases.push(phase),
         attachmentsRoot: "unused",
@@ -108,12 +135,56 @@ describe("ensure — success", () => {
     expect(kinds).toContain("worktree_changed");
   });
 
+  it("skips the Main-checkout copy walk on a reuse boot — the walk belongs to creation only", async () => {
+    const projectPath = tempDir("proj");
+    seed(projectPath);
+    const home = tempDir("home");
+
+    // First ensure materializes the identity (git faked — create the dir it stamped).
+    const first = happyGit(projectPath);
+    const created = await ensure(
+      { db: ctx.db, git: first.git, gitAsync: first.gitAsync, home, attachmentsRoot: "unused" },
+      "ticket-1",
+    );
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const worktreePath = created.value.identity.worktreePath!;
+    mkdirSync(worktreePath, { recursive: true });
+
+    // A NEW include-matched file lands in the Main checkout afterwards…
+    writeFileSync(join(projectPath, ".env"), "SECRET=1");
+
+    // …and a later Session boots into the EXISTING worktree. That boot ran the
+    // full Main-checkout walk on every start — the multisecond stall the ticket's
+    // follow-up comment reports — so the copy step must not run here at all.
+    const reuse = scriptedGit((args) => {
+      if (args[0] === "worktree" && args[1] === "list") {
+        return (
+          `worktree ${projectPath}\nHEAD abc\nbranch refs/heads/main\n` +
+          `worktree ${worktreePath}\nHEAD def\nbranch refs/heads/${BRANCH}\n`
+        );
+      }
+      if (args[0] === "rev-parse" && args[1] === "--verify") return "sha\n";
+      return "";
+    });
+    const result = await ensure(
+      { db: ctx.db, git: reuse.git, gitAsync: reuse.gitAsync, home, attachmentsRoot: "unused" },
+      "ticket-1",
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.created).toBe(false);
+    expect(reuse.countMatching(["worktree", "add"])).toBe(0);
+    // The new .env stays untransported — the copy step is a creation step.
+    expect(existsSync(join(worktreePath, ".env"))).toBe(false);
+  });
+
   it("is single-flight: two concurrent ensures run the pipeline once, and only the leader reports created", async () => {
     const projectPath = tempDir("proj");
     seed(projectPath);
     const home = tempDir("home");
-    const { git, countMatching } = happyGit(projectPath);
-    const deps = { db: ctx.db, git, home, attachmentsRoot: "unused" };
+    const { git, gitAsync, countMatching } = happyGit(projectPath);
+    const deps = { db: ctx.db, git, gitAsync, home, attachmentsRoot: "unused" };
 
     const [a, b] = await Promise.all([ensure(deps, "ticket-1"), ensure(deps, "ticket-1")]);
 
@@ -137,7 +208,7 @@ describe("ensure — failure", () => {
     const home = tempDir("home");
     const phases: WorktreePhase[] = [];
     // The ticket branch is checked out elsewhere → hard fail at the create stage.
-    const { git } = scriptedGit((args) => {
+    const { git, gitAsync } = scriptedGit((args) => {
       if (args[0] === "worktree" && args[1] === "list") {
         return `worktree ${projectPath}\nHEAD abc\nbranch refs/heads/main\nworktree /elsewhere\nHEAD def\nbranch refs/heads/${BRANCH}\n`;
       }
@@ -148,6 +219,7 @@ describe("ensure — failure", () => {
       {
         db: ctx.db,
         git,
+        gitAsync,
         home,
         onPhase: (_, phase) => phases.push(phase),
         attachmentsRoot: "unused",
@@ -172,9 +244,12 @@ describe("ensure — failure", () => {
     // step's walk of the main checkout throws ENOENT → copy-stage failure.
     seed("/volli-nonexistent-project-dir");
     const home = tempDir("home");
-    const { git } = happyGit("/volli-nonexistent-project-dir");
+    const { git, gitAsync } = happyGit("/volli-nonexistent-project-dir");
 
-    const result = await ensure({ db: ctx.db, git, home, attachmentsRoot: "unused" }, "ticket-1");
+    const result = await ensure(
+      { db: ctx.db, git, gitAsync, home, attachmentsRoot: "unused" },
+      "ticket-1",
+    );
 
     expect(result.ok).toBe(false);
     const failed = listTicketEvents(ctx.db, "ticket-1").find(
@@ -184,8 +259,8 @@ describe("ensure — failure", () => {
   });
 
   it("errors on an unknown ticket without touching phases", async () => {
-    const { git } = scriptedGit(() => "");
-    const result = await ensure({ db: ctx.db, git, attachmentsRoot: "unused" }, "nope");
+    const { git, gitAsync } = scriptedGit(() => "");
+    const result = await ensure({ db: ctx.db, git, gitAsync, attachmentsRoot: "unused" }, "nope");
     expect(result).toEqual({ ok: false, error: "Unknown ticket" });
   });
 });
@@ -195,7 +270,7 @@ describe("ensure — attachments stage", () => {
     const projectPath = tempDir("proj");
     const { ticket } = seed(projectPath);
     const home = tempDir("home");
-    const { git } = happyGit(projectPath);
+    const { git, gitAsync } = happyGit(projectPath);
     const attachmentsRootDir = attachmentsRoot(tempDir("userdata"));
 
     const attachment = createAttachment(
@@ -208,7 +283,7 @@ describe("ensure — attachments stage", () => {
     importAttachmentFile(attachmentsRootDir, attachment.id, source, "spec.png");
 
     const result = await ensure(
-      { db: ctx.db, git, home, attachmentsRoot: attachmentsRootDir },
+      { db: ctx.db, git, gitAsync, home, attachmentsRoot: attachmentsRootDir },
       "ticket-1",
     );
 
@@ -223,14 +298,14 @@ describe("ensure — attachments stage", () => {
     const projectPath = tempDir("proj");
     seed(projectPath);
     const home = tempDir("home");
-    const { git } = happyGit(projectPath);
+    const { git, gitAsync } = happyGit(projectPath);
     const attachmentsRootDir = attachmentsRoot(tempDir("userdata"));
 
     createAttachment(ctx.db, { ticketId: "ticket-1", kind: "file", fileName: "spec.png" }, 100);
     // Bytes never imported — the missing-source guard fires.
 
     const result = await ensure(
-      { db: ctx.db, git, home, attachmentsRoot: attachmentsRootDir },
+      { db: ctx.db, git, gitAsync, home, attachmentsRoot: attachmentsRootDir },
       "ticket-1",
     );
 
@@ -251,11 +326,11 @@ describe("ensure — attachments stage", () => {
     const projectPath = tempDir("proj");
     seed(projectPath);
     const home = tempDir("home");
-    const { git } = happyGit(projectPath);
+    const { git, gitAsync } = happyGit(projectPath);
     const attachmentsRootDir = attachmentsRoot(tempDir("userdata"));
 
     const result = await ensure(
-      { db: ctx.db, git, home, attachmentsRoot: attachmentsRootDir },
+      { db: ctx.db, git, gitAsync, home, attachmentsRoot: attachmentsRootDir },
       "ticket-1",
     );
 

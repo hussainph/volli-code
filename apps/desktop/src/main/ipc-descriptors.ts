@@ -256,7 +256,8 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
         (input["body"] === undefined || typeof input["body"] === "string") &&
         isOptionalNullableString(input["worktreePath"]) &&
         isOptionalNullableString(input["branch"]) &&
-        isOptionalNullableString(input["baseBranch"])
+        isOptionalNullableString(input["baseBranch"]) &&
+        (input["usesWorktree"] === undefined || typeof input["usesWorktree"] === "boolean")
       );
     },
     invalidError: "Invalid ticket update",

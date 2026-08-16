@@ -244,6 +244,19 @@ export function updateTicketFieldsCommand(
     ) {
       fields.preferredHarnessId = input.preferredHarnessId;
     }
+    const rowUsesWorktree = row.uses_worktree !== 0;
+    if (input.usesWorktree !== undefined && input.usesWorktree !== rowUsesWorktree) {
+      // Settable only until a worktree materializes: the stamp is a fact on
+      // disk, and flipping the flag under it would either strand the checkout
+      // or silently rebind Sessions to the Main checkout (#38). The rail's
+      // destination control disappears at the same boundary.
+      if (row.worktree_path !== null) {
+        throw new Error(
+          "The ticket's worktree already exists, so its worktree scoping can no longer change.",
+        );
+      }
+      fields.usesWorktree = input.usesWorktree;
+    }
     const worktreeTouched =
       fields.worktreePath !== undefined ||
       fields.branch !== undefined ||
@@ -270,6 +283,15 @@ export function updateTicketFieldsCommand(
           from: row.preferred_harness_id as HarnessId,
           to: fields.preferredHarnessId,
         },
+        context.now,
+        context.actor,
+      );
+    }
+    if (fields.usesWorktree !== undefined) {
+      recordTicketEvent(
+        db,
+        input.ticketId,
+        { kind: "worktree_scope_changed", from: rowUsesWorktree, to: fields.usesWorktree },
         context.now,
         context.actor,
       );

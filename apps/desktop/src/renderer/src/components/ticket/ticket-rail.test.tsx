@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { Ticket } from "@volli/shared";
 
 import { TicketRail } from "./ticket-rail";
+import { WorktreeDestinationControl } from "./ticket-repository-summary";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -152,18 +153,53 @@ describe("TicketRail's repository card before the first read lands", () => {
     expect(html).not.toContain("No changes");
   });
 
-  it("says a worktree-less ticket has no worktree, permanently and honestly", () => {
-    // Nothing is ever fetched here (`refreshStatusAndDiff` returns early), so
-    // "No changes" would not have been a slow frame — it would have been the
-    // ticket's whole answer, contradicting the Diffs page beside it.
+  it("signals the pending worktree on a worktree-scoped ticket, not a bare 'no worktree yet'", () => {
+    // VC-16: before the worktree materializes, a worktree-scoped ticket and a
+    // Main-checkout ticket were pixel-identical — the card said "No worktree
+    // yet" for both, and the scoping chosen in the composer was unreadable
+    // everywhere. The row now states the scoping while it still matters.
     const html = render(ticketWithoutWorktree);
 
-    expect(html).toContain('aria-label="No worktree yet, show Diffs"');
+    expect(html).toContain('aria-label="New worktree on first session, show Diffs"');
+    expect(html).not.toContain("No worktree yet");
     expect(html).not.toContain("No changes");
     expect(html).not.toContain('data-testid="ticket-repository-changes-loading"');
   });
 
+  it("says a Main-checkout ticket runs in the main checkout, permanently and honestly", () => {
+    // Nothing is ever fetched here (`refreshStatusAndDiff` returns early), so
+    // "No changes" would not have been a slow frame — it would have been the
+    // ticket's whole answer, contradicting the Diffs page beside it.
+    const html = render({ ...ticketWithoutWorktree, usesWorktree: false });
+
+    expect(html).toContain('aria-label="Runs in the main checkout, show Diffs"');
+    expect(html).not.toContain("No worktree yet");
+    expect(html).not.toContain("No changes");
+  });
+
   it("offers no publish controls until the ticket has a worktree", () => {
     expect(render(ticketWithoutWorktree)).not.toContain('aria-label="More repository actions"');
+  });
+});
+
+const renderControl = (subject: Ticket) =>
+  renderToStaticMarkup(
+    <TooltipProvider>
+      <WorktreeDestinationControl ticket={subject} />
+    </TooltipProvider>,
+  );
+
+describe("the worktree destination control", () => {
+  it("names the ticket's scoping while no worktree has materialized", () => {
+    // The same two options the composer's destination chip offers, so the
+    // choice made at creation stays readable — and changeable — afterwards.
+    expect(renderControl(ticketWithoutWorktree)).toContain("New worktree");
+    expect(renderControl({ ...ticketWithoutWorktree, usesWorktree: false })).toContain(
+      "Project checkout",
+    );
+  });
+
+  it("disappears once the worktree is a fact on disk — the flag is frozen with it", () => {
+    expect(renderControl(ticket)).toBe("");
   });
 });

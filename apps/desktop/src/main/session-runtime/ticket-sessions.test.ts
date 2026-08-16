@@ -75,6 +75,76 @@ function intentFor(request: SessionRuntimeCommandRequest): SessionCommand["inten
 }
 
 describe("Ticket Sessions", () => {
+  it("create mints the durable Session and records model policy WITHOUT attaching — the optimistic-open half", async () => {
+    const commands: SessionRuntimeCommandRequest[] = [];
+    const ticketSessions = createTicketSessions({
+      readBornTicketless: async () => false,
+      ticketBelongsToProject: () => true,
+      runtime: {
+        command: async (request) => {
+          commands.push(request);
+          return result(request);
+        },
+      },
+      readDefaultModel,
+    });
+
+    const created = await ticketSessions.create({
+      operationId: "operation-create",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "VC-1",
+    });
+
+    // The Session is durable and addressable NOW — the chat pane lands on this
+    // id while the attach (worktree ensure + Agent Runtime) follows separately,
+    // off the renderer's critical path (VC-16).
+    expect(created).toEqual({ sessionId: "session-1" });
+    expect(commands.map((request) => request.command.kind)).toEqual([
+      "session.create",
+      "model.select",
+    ]);
+    expect(commands.map((request) => request.commandId)).toEqual([
+      "operation-create:create",
+      "operation-create:model",
+    ]);
+  });
+
+  it("create refuses a ticket outside the project and a missing default model, exactly as start does", async () => {
+    const refusingTicket = createTicketSessions({
+      readBornTicketless: async () => false,
+      ticketBelongsToProject: () => false,
+      runtime: { command: async (request) => result(request) },
+      readDefaultModel,
+    });
+    await expect(
+      refusingTicket.create({
+        operationId: "op",
+        projectId: "project-1",
+        ticketId: "ticket-elsewhere",
+        title: null,
+      }),
+    ).rejects.toMatchObject({ code: "TICKET_NOT_IN_PROJECT" });
+
+    const commands: SessionRuntimeCommandRequest[] = [];
+    const noModel = createTicketSessions({
+      readBornTicketless: async () => false,
+      ticketBelongsToProject: () => true,
+      runtime: {
+        command: async (request) => {
+          commands.push(request);
+          return result(request);
+        },
+      },
+      readDefaultModel: () => null,
+    });
+    await expect(
+      noModel.create({ operationId: "op", projectId: "project-1", ticketId: "t", title: null }),
+    ).rejects.toMatchObject({ code: "DEFAULT_MODEL_REQUIRED" });
+    // Refused before anything durable: no session.create ever reached the runtime.
+    expect(commands).toEqual([]);
+  });
+
   it("creates, records model policy, and privately attaches the singular runtime in order", async () => {
     const commands: SessionRuntimeCommandRequest[] = [];
     const ticketSessions = createTicketSessions({
@@ -336,6 +406,31 @@ describe("Ticket Sessions", () => {
         ticketId: "ticket-1",
         sessionId: "session-1",
         actor: { kind: "session", sessionId: "driver-session", ticketId: "ticket-9" },
+      },
+    ]);
+  });
+
+  it("records session_started from the create door too — the renderer's optimistic open", async () => {
+    // The renderer never calls `start` since VC-16 (create → attach is its
+    // whole path), so the planner event has to ride `mint`, the one creation
+    // path under both doors — otherwise an app-UI start would vanish from
+    // history while a CLI start recorded (VC-13 acceptance).
+    const startedEvents: { ticketId: string; sessionId: string; actor: TicketEventActor }[] = [];
+    const ticketSessions = createTicketSessions({
+      readBornTicketless: async () => false,
+      ticketBelongsToProject: () => true,
+      runtime: { command: async (request) => result(request) },
+      readDefaultModel,
+      recordSessionStarted: (event) => startedEvents.push(event),
+    });
+
+    await ticketSessions.create(startInput("operation-create-event"));
+
+    expect(startedEvents).toEqual([
+      {
+        ticketId: "ticket-1",
+        sessionId: "session-1",
+        actor: { kind: "user" },
       },
     ]);
   });

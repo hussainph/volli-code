@@ -59,7 +59,7 @@ import {
   type ActivityDescriptor,
   type ActivityKind,
   type ActivityOutcome,
-  type SessionInteraction,
+  type RendererSessionInteraction,
 } from "@volli/shared";
 import type { DynamicToolUIPart, ReasoningUIPart, UIMessage } from "ai";
 
@@ -1240,8 +1240,8 @@ function buildTranscript(turnCount: number): UIMessage[] {
 
 /* ------------------------------------------------------------- transcript */
 
-const EMPTY_OPEN: readonly SessionInteraction[] = [];
-const EMPTY_INDEX: ReadonlyMap<string, SessionInteraction> = new Map();
+const EMPTY_OPEN: readonly RendererSessionInteraction[] = [];
+const EMPTY_INDEX: ReadonlyMap<string, RendererSessionInteraction> = new Map();
 const EMPTY_RESOLVING: ReadonlySet<string> = new Set();
 const MESSAGE_GAP = "flex flex-col gap-3";
 

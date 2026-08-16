@@ -46,10 +46,26 @@ export interface TicketSessionAttachInput {
   sessionId: string;
 }
 
+/** The durable identity a create-only call resolves — nothing about an executor. */
+export interface SessionCreateResult {
+  sessionId: string;
+}
+
 /** The start result plus the model policy the Session durably recorded. */
 export type TicketSessionStartResult = SessionStartResult & { model: ModelSelection };
 
 export interface TicketSessions {
+  /**
+   * Mint the durable Session and record its model policy — and STOP there.
+   *
+   * The optimistic-open half of a chat start (VC-16): both commands are local
+   * DB writes, so the renderer gets an addressable Session id in milliseconds
+   * and lands its tab, while `attach` — which materializes the Ticket worktree
+   * and boots the Agent Runtime — follows as its own call off that critical
+   * path. Same refusals as `start`: an unknown ticket or a missing default
+   * model refuses before anything durable exists.
+   */
+  create(input: TicketSessionStartInput): Promise<SessionCreateResult>;
   start(input: TicketSessionStartInput): Promise<TicketSessionStartResult>;
   attach(input: TicketSessionAttachInput): Promise<SessionStartResult>;
 }
@@ -67,10 +83,11 @@ export interface TicketSessionsOptions {
    */
   inspectModelAccess?(): Promise<ModelAccessSnapshot>;
   /**
-   * Records the `session_started` ticket event. Living here — the one shared
-   * creation path — is what makes a start from the app's own UI and one from
-   * the CLI socket land in planner history identically, with the actor each
-   * door derived (VC-13 decision 3). Absent in tests means no planner write.
+   * Records the `session_started` ticket event. Living in `mint` — the one
+   * shared creation path under BOTH `create` (the renderer's optimistic open)
+   * and `start` (the agent socket) — is what makes every door's start land in
+   * planner history identically, with the actor each door derived (VC-13
+   * decision 3). Absent in tests means no planner write.
    */
   recordSessionStarted?(event: {
     ticketId: string;
@@ -135,42 +152,55 @@ async function resolveModelSelection(
 
 /** Product-owned Ticket Session commands over private adapter migration scaffolding. */
 export function createTicketSessions(options: TicketSessionsOptions): TicketSessions {
-  return {
-    async start(input) {
-      if (!options.ticketBelongsToProject(input.projectId, input.ticketId)) {
-        throw new StructuredSessionsError(
-          "TICKET_NOT_IN_PROJECT",
-          "The requested Ticket was not found in this project.",
-        );
-      }
-      const model = await resolveModelSelection(options, input.modelOverride);
-      const created = await options.runtime.command({
-        commandId: `${input.operationId}:create`,
-        command: {
-          kind: "session.create",
-          projectId: input.projectId,
-          ticketId: input.ticketId,
-          title: input.title,
-        },
-      });
-      // The Session now exists durably, so planner history says so — whatever
-      // the model record or attach below do next, the app carries the recovery.
-      options.recordSessionStarted?.({
+  /** The shared create+model half; `start` attaches after it, `create` returns it as-is. */
+  async function mint(
+    input: TicketSessionStartInput,
+  ): Promise<SessionCreateResult & { model: ModelSelection }> {
+    if (!options.ticketBelongsToProject(input.projectId, input.ticketId)) {
+      throw new StructuredSessionsError(
+        "TICKET_NOT_IN_PROJECT",
+        "The requested Ticket was not found in this project.",
+      );
+    }
+    const model = await resolveModelSelection(options, input.modelOverride);
+    const created = await options.runtime.command({
+      commandId: `${input.operationId}:create`,
+      command: {
+        kind: "session.create",
+        projectId: input.projectId,
         ticketId: input.ticketId,
-        sessionId: created.sessionId,
-        actor: input.actor ?? { kind: "user" },
-      });
-      await recordModelSelection(options.runtime, {
-        commandId: `${input.operationId}:model`,
-        sessionId: created.sessionId,
-        model,
-      });
+        title: input.title,
+      },
+    });
+    // The Session now exists durably, so planner history says so — whatever
+    // the model record or a later attach do next, the app carries the recovery.
+    options.recordSessionStarted?.({
+      ticketId: input.ticketId,
+      sessionId: created.sessionId,
+      actor: input.actor ?? { kind: "user" },
+    });
+    await recordModelSelection(options.runtime, {
+      commandId: `${input.operationId}:model`,
+      sessionId: created.sessionId,
+      model,
+    });
+    return { sessionId: created.sessionId, model };
+  }
+
+  return {
+    async create(input) {
+      const created = await mint(input);
+      return { sessionId: created.sessionId };
+    },
+
+    async start(input) {
+      const created = await mint(input);
       const attached = await attachStructuredSession(
         options.runtime,
         input.operationId,
         created.sessionId,
       );
-      return { ...attached, model };
+      return { ...attached, model: created.model };
     },
     async attach(input) {
       if (await options.readBornTicketless(input.sessionId)) {

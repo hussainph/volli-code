@@ -33,12 +33,26 @@ function keyedMessage(parts: readonly unknown[]): unknown {
   return { id: "m1", role: "assistant", parts };
 }
 
+/** One renderer-safe event exactly as the edge ships it, with every field overridable. */
+function wireEvent(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: "event-1",
+    sessionId: "session-1",
+    sequence: 1,
+    occurredAt: 1,
+    recordedAt: 1,
+    provenance: { source: { kind: "system", id: "session-runtime", detail: null }, venue: null },
+    payload: { kind: "turn.started", attachmentId: "attachment-1", turnId: "turn-1" },
+    ...overrides,
+  };
+}
+
 /** One durable frame exactly as it arrives, with every field overridable. */
 function wireFrame(overrides: Record<string, unknown> = {}): unknown {
   return {
     sessionId: "session-1",
     sequence: 1,
-    event: { payload: { kind: "turn.started", attachmentId: "attachment-1", turnId: "turn-1" } },
+    event: wireEvent(),
     transcript: null,
     ...overrides,
   };
@@ -49,7 +63,7 @@ describe("chatSessionFrame", () => {
     expect(chatSessionFrame(wireFrame())).toEqual({
       sessionId: "session-1",
       sequence: 1,
-      event: { payload: { kind: "turn.started", attachmentId: "attachment-1", turnId: "turn-1" } },
+      event: wireEvent(),
       transcript: null,
     });
   });
@@ -81,7 +95,56 @@ describe("chatSessionFrame", () => {
   });
 
   it("refuses a frame whose event payload is not a record", () => {
-    expect(chatSessionFrame(wireFrame({ event: { payload: "turn.started" } }))).toBeNull();
+    expect(
+      chatSessionFrame(wireFrame({ event: wireEvent({ payload: "turn.started" }) })),
+    ).toBeNull();
+  });
+
+  it("refuses a malformed field inside a known kind — corruption stays loud, not drawn", () => {
+    const malformed = wireEvent({
+      payload: { kind: "turn.started", attachmentId: "attachment-1", turnId: 7 },
+    });
+    expect(chatSessionFrame(wireFrame({ event: malformed }))).toBeNull();
+  });
+
+  it("keeps the envelope of a kind this build does not know, folding nothing from it", () => {
+    // The writer was newer than the reader — live on the lab HTTP transport
+    // and on any replay. The sequence must still advance the fold's cursor,
+    // so the frame survives with a null event rather than vanishing.
+    const newer = wireEvent({ payload: { kind: "capabilities.retired" } });
+    expect(chatSessionFrame(wireFrame({ event: newer }))).toEqual({
+      sessionId: "session-1",
+      sequence: 1,
+      event: null,
+      transcript: null,
+    });
+  });
+
+  it("re-scrubs what it reads: a leaked adapter source or diagnostic never survives the parse", () => {
+    const leaked = wireEvent({
+      provenance: { source: { kind: "adapter", id: "pi", detail: { pid: 42 } }, venue: null },
+      payload: {
+        kind: "attention.raised",
+        attention: {
+          kind: "auth_required",
+          id: "attention-1",
+          attachmentId: null,
+          detail: null,
+          diagnostic: { credentialPath: "/Users/someone/.pi/auth.json" },
+        },
+      },
+    });
+    const parsed = chatSessionFrame(wireFrame({ event: leaked }));
+    expect(parsed?.event?.provenance.source).toEqual({
+      kind: "system",
+      id: "session-runtime",
+      detail: null,
+    });
+    expect(
+      parsed?.event?.payload.kind === "attention.raised"
+        ? parsed.event.payload.attention.diagnostic
+        : "unread",
+    ).toBeNull();
   });
 
   it("refuses a frame whose transcript is malformed", () => {

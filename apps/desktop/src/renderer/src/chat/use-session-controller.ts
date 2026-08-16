@@ -16,7 +16,7 @@
 import * as React from "react";
 import type {
   ModelSelection,
-  SessionInteraction,
+  RendererSessionInteraction,
   SessionInteractionResolution,
   SessionPresentationProjection,
 } from "@volli/shared";
@@ -34,7 +34,7 @@ import { useChatSessionsStore, type ChatSessionsState } from "@renderer/stores/c
 
 const NO_MESSAGES: readonly UIMessage[] = [];
 const NO_QUEUE: readonly QueuedMessage[] = [];
-const NO_OPENED: ReadonlyMap<string, SessionInteraction> = new Map();
+const NO_OPENED: ReadonlyMap<string, RendererSessionInteraction> = new Map();
 
 /**
  * One Session's resident state, read field by field.
@@ -59,7 +59,7 @@ export interface SessionView {
   projection: SessionPresentationProjection | null;
   messages: readonly UIMessage[];
   /** Every interaction opened this Session, for the receipts they left behind. */
-  openedInteractions: ReadonlyMap<string, SessionInteraction>;
+  openedInteractions: ReadonlyMap<string, RendererSessionInteraction>;
   /** The Session's lifecycle is `working` — a turn is live. */
   working: boolean;
   /** A message typed now could actually leave — see {@link isDeliverable}. */

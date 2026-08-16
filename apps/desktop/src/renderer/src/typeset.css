@@ -23,8 +23,11 @@
  * 18.9px while a dialog title beside it was 18, an <h1> 22.4 against the title
  * step's 24, and inline code 12.6 against a UI step of 13. Six sizes, none of
  * them the app's, which is what made markdown read as a different product on
- * the same page. Only the RATIOS are still local (`--typeset-leading`, the flow,
- * the heading leading): those are this document's rhythm, not the app's scale.
+ * the same page. Only the RATIOS stay ratios rather than sizes — and the body
+ * leading is no longer even local: it is the app's one prose rhythm
+ * (`--leading-prose`, globals.css), shared with the chat transcript so a reply
+ * in the feed and the ticket beside it read at the same rate. The flow and the
+ * heading leading remain this document's own.
  *
  * Six markdown levels do not fit five rungs, and the mapping does not invent a
  * sixth. h1 and h2 take the two steps above body; h3 takes body itself and is a
@@ -40,7 +43,7 @@
   /* The body step (14px). Named rather than restated so the document measure
      cannot drift from the app's prose size. */
   --typeset-size: var(--text-sm);
-  --typeset-leading: 1.7;
+  --typeset-leading: var(--leading-prose);
   --typeset-flow: 1em;
 
   font-family: var(--typeset-font-body);

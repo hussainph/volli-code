@@ -28,10 +28,19 @@ export const Message = ({ className, from, ...props }: MessageProps) => (
 
 export type MessageContentProps = HTMLAttributes<HTMLDivElement>;
 
+/*
+ * `leading-prose` rides next to `text-sm` because the pair is one decision:
+ * this surface is paragraphs, not rows, and `text-sm`'s paired 20px leading is
+ * the single-line rung. Set on the container rather than per markdown element
+ * so Streamdown's bare <p>s and the markdown-boundary fallback inherit one
+ * rhythm — while the tool rows and cards inside a turn keep their own, because
+ * every sized utility (`text-ui`, `text-sm`) restates its paired line-height
+ * and `--tw-leading` is registered non-inherited.
+ */
 export const MessageContent = ({ children, className, ...props }: MessageContentProps) => (
   <div
     className={cn(
-      "is-user:dark flex w-fit min-w-0 max-w-full flex-col gap-2 overflow-hidden text-sm",
+      "is-user:dark flex w-fit min-w-0 max-w-full flex-col gap-2 overflow-hidden text-sm leading-prose",
       "group-[.is-user]:ml-auto group-[.is-user]:rounded-lg group-[.is-user]:bg-muted group-[.is-user]:px-4 group-[.is-user]:py-4 group-[.is-user]:text-foreground",
       "group-[.is-assistant]:text-foreground",
       className,
