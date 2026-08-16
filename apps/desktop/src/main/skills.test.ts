@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vite-plus/test";
 
-import { readProjectSkills } from "./skills";
+import { skillRootDir } from "@volli/shared";
+
+import { loadSkills, readSkillDir } from "./skills";
+
+/** The project tier's root spelling — what every `readSkillDir` case below reads under. */
+const readProjectSkills = (dir: string) => readSkillDir(dir, skillRootDir);
 
 const tempDirs: string[] = [];
 
@@ -47,6 +52,7 @@ describe("readProjectSkills", () => {
           name: "svg-logo-designer",
           description: "Draw logos",
           body: "# Logos\n\nDo the thing.",
+          root: ".agents/skills/svg-logo-designer",
         },
       ],
     });
@@ -117,7 +123,7 @@ describe("readProjectSkills", () => {
 
     expect(result).toEqual({
       ok: true,
-      skills: [{ name: "flagged", description: "d", body: "Body" }],
+      skills: [{ name: "flagged", description: "d", body: "Body", root: ".agents/skills/flagged" }],
     });
   });
 
@@ -138,6 +144,72 @@ describe("readProjectSkills", () => {
       expect(result.ok).toBe(false);
     } finally {
       chmodSync(dir, 0o755);
+    }
+  });
+});
+
+describe("loadSkills", () => {
+  it("offers both tiers, and roots each the way its tier is addressed", async () => {
+    const project = makeSkillsDir({ vendored: "---\ndescription: p\n---\nProject body" });
+    const global = makeSkillsDir({ personal: "---\ndescription: g\n---\nPersonal body" });
+
+    const result = await loadSkills({ projectSkillsDir: project, globalSkillsDir: global });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.skills.map((skill) => skill.name)).toEqual(["personal", "vendored"]);
+    // A project skill is workspace-relative; a personal one has to be
+    // absolute, because no workspace-relative path reaches `~`.
+    expect(result.skills.find((skill) => skill.name === "vendored")?.root).toBe(
+      ".agents/skills/vendored",
+    );
+    expect(result.skills.find((skill) => skill.name === "personal")?.root).toBe(
+      `${global}/personal`,
+    );
+  });
+
+  it("lets the project tier win a slug the personal tier also defines", async () => {
+    const project = makeSkillsDir({ shared: "---\ndescription: from project\n---\nProject body" });
+    const global = makeSkillsDir({ shared: "---\ndescription: from home\n---\nPersonal body" });
+
+    const result = await loadSkills({ projectSkillsDir: project, globalSkillsDir: global });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.skills).toEqual([
+      {
+        name: "shared",
+        description: "from project",
+        body: "Project body",
+        root: ".agents/skills/shared",
+      },
+    ]);
+  });
+
+  it("treats either tier's absence as an empty tier", async () => {
+    const global = makeSkillsDir({ personal: "body" });
+
+    await expect(
+      loadSkills({ projectSkillsDir: missingDir(), globalSkillsDir: global }),
+    ).resolves.toMatchObject({ ok: true, skills: [{ name: "personal" }] });
+    await expect(
+      loadSkills({ projectSkillsDir: missingDir(), globalSkillsDir: missingDir() }),
+    ).resolves.toEqual({ ok: true, skills: [] });
+  });
+
+  it("surfaces an unreadable tier — either one — rather than silently dropping it", async () => {
+    const readable = makeSkillsDir({ fine: "body" });
+    const locked = makeSkillsDir();
+    chmodSync(locked, 0o000);
+    try {
+      await expect(
+        loadSkills({ projectSkillsDir: locked, globalSkillsDir: readable }),
+      ).resolves.toMatchObject({ ok: false });
+      await expect(
+        loadSkills({ projectSkillsDir: readable, globalSkillsDir: locked }),
+      ).resolves.toMatchObject({ ok: false });
+    } finally {
+      chmodSync(locked, 0o755);
     }
   });
 });

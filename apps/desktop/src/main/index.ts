@@ -20,6 +20,7 @@ import {
   errorMessage,
   getHarnessAdapter,
   harnessAdapters,
+  globalSkillsDir,
   projectSkillsDir,
   resolveShell,
   skillPromptResource,
@@ -61,7 +62,7 @@ import {
   StructuredSessionsError,
   type SessionSkillPorts,
 } from "./session-runtime/structured-sessions";
-import { readProjectSkills } from "./skills";
+import { loadSkills } from "./skills";
 import {
   assertDefaultModelAvailable,
   readDefaultModelSelection,
@@ -657,8 +658,10 @@ app.whenReady().then(async () => {
   const sessionDb = dbHandle.ok ? dbHandle.db : null;
   /**
    * How a Session start turns skills into its durable prompt resources
-   * (`SessionSkillPorts`): resolve reads `.agents/skills/` off the project's
-   * main checkout and refuses the start when a named skill is not there;
+   * (`SessionSkillPorts`): resolve reads BOTH skill tiers — `.agents/skills/`
+   * off the project's main checkout, and the personal `~/.agents/skills/`,
+   * project winning a shared slug — and refuses the start when a named skill
+   * is in neither;
    * index answers the metadata disclosure best-effort and only under the
    * project's own consent (`skillsAutoDisclosure`, migration 020) — consent
    * withheld, no project, no readable directory, no skills are all simply no
@@ -679,7 +682,10 @@ app.whenReady().then(async () => {
                 "The project for this Session was not found.",
               );
             }
-            const read = await readProjectSkills(projectSkillsDir(project.path));
+            const read = await loadSkills({
+              projectSkillsDir: projectSkillsDir(project.path),
+              globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
+            });
             if (!read.ok) {
               throw new StructuredSessionsError(
                 "SKILL_NOT_FOUND",
@@ -705,7 +711,13 @@ app.whenReady().then(async () => {
             // never a repo file, so a cloned repository cannot authorize its
             // own skills' disclosure by committing a flag beside them.
             if (!project || project.skillsAutoDisclosure !== true) return null;
-            const read = await readProjectSkills(projectSkillsDir(project.path));
+            // Both tiers: consent governs WHETHER this project discloses, not
+            // which tier it may name. Listing only the vendored half would
+            // hide exactly the skills the convention installs by default.
+            const read = await loadSkills({
+              projectSkillsDir: projectSkillsDir(project.path),
+              globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
+            });
             if (!read.ok) return null;
             return skillsIndexResource(read.skills, injectedNames);
           },
@@ -974,6 +986,7 @@ app.whenReady().then(async () => {
   // templates; same degraded-DB stance as registerDataIpcHandlers.
   registerFileIpcHandlers(dbHandle, {
     globalCommandsDir: join(fsDeps.userDataDir, "commands"),
+    globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
   });
   // Theming: resolved state, global theme, per-project override, and the
   // ghostty overlay write path. Same degraded-DB stance as the two above; the

@@ -2,10 +2,15 @@
  * Skills — per-project instruction documents a Session can be handed, as pure
  * data and path rules.
  *
- * A skill is a directory under the project's `.agents/skills/` holding a
- * `SKILL.md` (the `npx skills add` convention this repo already vendors —
- * see `skills-lock.json`): frontmatter with a name and description, body of
- * instructions. Volli never loads one silently — so a skill's BODY reaches a
+ * A skill is a directory holding a `SKILL.md` (the `npx skills add`
+ * convention this repo already vendors — see `skills-lock.json`):
+ * frontmatter with a name and description, body of instructions. It lives in
+ * one of the convention's TWO tiers — the project's own `.agents/skills/`,
+ * or the personal `~/.agents/skills/` that the same installer writes and that
+ * Volli's harness surface already populates (`harness/core.ts`). Both are
+ * offered; the project tier wins a name they share ({@link mergeSkills}),
+ * which is the precedence prompt templates already use for their two tiers.
+ * Volli never loads one silently — so a skill's BODY reaches a
  * model one of three ways, each visible in the prompt or the transcript: a
  * `/slug` reference in the composer (expanded at submit into a delimited
  * RESOURCE block, `prompt-resource.ts`), an attach-time selection that rides
@@ -51,16 +56,26 @@ export interface SkillReference {
   readonly description: string;
   /** The instructions themselves: the SKILL.md body, frontmatter stripped. */
   readonly body: string;
+  /**
+   * The skill's own directory, spelled the way the MODEL must address it —
+   * and therefore tier-dependent, which is the whole reason it is carried as
+   * data instead of derived from the name. A project skill is workspace-
+   * relative (`.agents/skills/<slug>`) because every Session runs in a
+   * checkout that has its own copy; a personal one is the absolute
+   * `<home>/.agents/skills/<slug>`, because no workspace-relative path
+   * reaches it. Deriving this from the slug alone — as this module briefly
+   * did — silently pointed every personal skill at a workspace directory that
+   * does not exist, dangling its bundled `scripts/` and `references/`.
+   */
+  readonly root: string;
 }
 
 /**
- * A skill's directory, relative to the Session's workspace. One spelling for
- * the two places the model is handed it — the index entry and the injected
- * body's header — because the whole point of the path is that the model's
- * `read` tool can follow it, and its bundled `scripts/`, `references/` and
- * `assets/` resolve relative to it. Workspace-relative on purpose: `.agents`
- * is committed, so a worktree Session and a main-checkout Session each read
- * their own copy without either needing an absolute path composed for it.
+ * A PROJECT skill's directory, relative to the Session's workspace — the
+ * {@link SkillReference.root} of the project tier. Workspace-relative on
+ * purpose: `.agents` is committed, so a worktree Session and a main-checkout
+ * Session each read their own copy without either needing an absolute path
+ * composed for it.
  */
 export function skillRootDir(name: string): string {
   return `.agents/skills/${name}`;
@@ -78,6 +93,40 @@ export function skillRootDir(name: string): string {
 export function projectSkillsDir(projectPath: string): string {
   const root = projectPath.endsWith("/") ? projectPath.slice(0, -1) : projectPath;
   return `${root}/.agents/skills`;
+}
+
+/**
+ * The personal skills directory: `<home>/.agents/skills`.
+ *
+ * The convention's other half, and not a Volli invention: it is where
+ * `npx skills add` installs a skill that is not vendored into a repository,
+ * and where Volli's own harness surface already writes the volli skill
+ * (`harness/core.ts`). Reading only the project tier would have made Volli
+ * blind to the skills the standard installs by default — including its own.
+ */
+export function globalSkillsDir(homeDir: string): string {
+  const root = homeDir.endsWith("/") ? homeDir.slice(0, -1) : homeDir;
+  return `${root}/.agents/skills`;
+}
+
+/**
+ * The two tiers merged into the one list every surface sees: a project skill
+ * wins a slug the personal tier also defines.
+ *
+ * Precedence is by name and it replaces outright, `mergePromptTemplates`'
+ * rule for `mergePromptTemplates`' reason — two rows spelled `/review` are
+ * two rows the user cannot tell apart, and the one the repository vendored is
+ * the one its Sessions mean. Name-sorted so the list does not reorder itself
+ * as a tier lands.
+ */
+export function mergeSkills(input: {
+  project: readonly SkillReference[];
+  global: readonly SkillReference[];
+}): readonly SkillReference[] {
+  const byName = new Map<string, SkillReference>();
+  for (const skill of input.global) byName.set(skill.name, skill);
+  for (const skill of input.project) byName.set(skill.name, skill);
+  return [...byName.values()].toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
 /**
@@ -120,7 +169,7 @@ export function visibleSkills(
 export function skillPromptResource(skill: SkillReference): PromptResource {
   return {
     name: skill.name,
-    text: `Skill directory: ${skillRootDir(skill.name)}/ — file references in this skill resolve relative to it.\n\n${skill.body}`,
+    text: `Skill directory: ${skill.root}/ — file references in this skill resolve relative to it.\n\n${skill.body}`,
   };
 }
 
@@ -174,7 +223,7 @@ export function skillsIndexResource(
     .toSorted((a, b) => a.name.localeCompare(b.name));
   if (rows.length === 0) return null;
   const entries = rows.map((skill) => {
-    const location = `${skillRootDir(skill.name)}/SKILL.md`;
+    const location = `${skill.root}/SKILL.md`;
     const description = clampIndexDescription(skill.description);
     return description === ""
       ? `- ${skill.name} (${location})`

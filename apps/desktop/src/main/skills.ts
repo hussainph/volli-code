@@ -2,8 +2,10 @@
  * Reading per-project skills off disk — the `/` picker's second supply, and
  * the attach-time injection's source of bodies.
  *
- * One directory, one shape: `<projectPath>/.agents/skills/<slug>/SKILL.md`,
- * the `npx skills add` convention this repo already vendors. The slug — the
+ * Two directories, one shape: `<projectPath>/.agents/skills/<slug>/SKILL.md`
+ * and `<home>/.agents/skills/<slug>/SKILL.md` — the project and personal
+ * tiers of the `npx skills add` convention this repo already vendors, merged
+ * project-over-personal by `mergeSkills`. The slug — the
  * directory name — is the skill's whole identity here (`@volli/shared`'s
  * `skill.ts` says why the frontmatter `name` cannot be), so a slug the `/name`
  * grammar cannot spell is skipped rather than offered unreachably. The
@@ -26,7 +28,9 @@ import { join } from "node:path";
 import {
   errorMessage,
   isSkillName,
+  mergeSkills,
   promptTemplateDescription,
+  skillRootDir,
   type SkillReference,
 } from "@volli/shared";
 
@@ -42,6 +46,9 @@ const MAX_SKILLS_PER_DIR = 200;
 /** The one file that makes a directory a skill. */
 const SKILL_FILE = "SKILL.md";
 
+/** Both tiers' reads, and what one of them failing means. */
+export type SkillReadResult = { ok: true; skills: SkillReference[] } | { ok: false; error: string };
+
 /**
  * Every skill under `dir`, name-sorted.
  *
@@ -49,10 +56,16 @@ const SKILL_FILE = "SKILL.md";
  * anything else in the directory — READMEs, assets, `custom/` extensions — is
  * the skill's own business, delivered by reference if the skill's body points
  * at it, never inlined here.
+ *
+ * `rootFor` spells the directory the MODEL is given for a slug, which is the
+ * one thing the two tiers do not share: workspace-relative for a project
+ * skill, absolute for a personal one. The reader takes it rather than
+ * deriving it, because only the caller knows which tier `dir` is.
  */
-export async function readProjectSkills(
+export async function readSkillDir(
   dir: string,
-): Promise<{ ok: true; skills: SkillReference[] } | { ok: false; error: string }> {
+  rootFor: (slug: string) => string,
+): Promise<SkillReadResult> {
   let entries: Dirent[];
   try {
     entries = await fsp.readdir(dir, { withFileTypes: true });
@@ -86,9 +99,32 @@ export async function readProjectSkills(
       name: slug,
       description: promptTemplateDescription({ body, frontmatterDescription: description }),
       body,
+      root: rootFor(slug),
     });
   }
   return { ok: true, skills };
+}
+
+/**
+ * Both tiers, merged into the list every surface sees — `loadPromptTemplates`'
+ * shape, and its failure policy verbatim: the two reads are independent, so
+ * one tier's ABSENCE is simply an empty tier, while a directory that exists
+ * and cannot be read is a real fault either surface says out loud. Personal
+ * skills are addressed absolutely because no workspace-relative path reaches
+ * `~`; project skills stay workspace-relative so a worktree Session reads its
+ * own checkout's copy.
+ */
+export async function loadSkills(input: {
+  projectSkillsDir: string;
+  globalSkillsDir: string;
+}): Promise<{ ok: true; skills: readonly SkillReference[] } | { ok: false; error: string }> {
+  const [project, global] = await Promise.all([
+    readSkillDir(input.projectSkillsDir, skillRootDir),
+    readSkillDir(input.globalSkillsDir, (slug) => `${input.globalSkillsDir}/${slug}`),
+  ]);
+  if (!project.ok) return project;
+  if (!global.ok) return global;
+  return { ok: true, skills: mergeSkills({ project: project.skills, global: global.skills }) };
 }
 
 /** ENOENT/ENOTDIR — the directory is absent, which this surface treats as empty. */

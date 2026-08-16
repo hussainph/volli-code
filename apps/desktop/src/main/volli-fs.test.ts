@@ -1110,6 +1110,7 @@ function setupDbAndHandlers(projectPath: string = makeGitRepoDir()): {
   ticketId: string;
   projectPath: string;
   globalCommandsDir: string;
+  globalSkillsDir: string;
 } {
   const ctx = openTestDb();
   const project = testProject({ path: projectPath });
@@ -1119,8 +1120,18 @@ function setupDbAndHandlers(projectPath: string = makeGitRepoDir()): {
   // A real path inside a collected temp dir, so the global tier is genuinely
   // absent rather than accidentally pointing at someone's userData.
   const globalCommandsDir = join(makeTempProjectDir(), "commands");
-  registerFileIpcHandlers({ ok: true, db: ctx.db }, { globalCommandsDir });
-  return { ctx, projectId: project.id, ticketId: ticket.id, projectPath, globalCommandsDir };
+  // Same stance for the personal skills tier: a real but absent path, never
+  // the running user's own `~/.agents/skills`.
+  const globalSkillsDir = join(makeTempProjectDir(), ".agents", "skills");
+  registerFileIpcHandlers({ ok: true, db: ctx.db }, { globalCommandsDir, globalSkillsDir });
+  return {
+    ctx,
+    projectId: project.id,
+    ticketId: ticket.id,
+    projectPath,
+    globalCommandsDir,
+    globalSkillsDir,
+  };
 }
 
 function invoke<T>(channel: VolliIpcChannel, sender: unknown, ...args: unknown[]): T {
@@ -1658,7 +1669,7 @@ describe("registerFileIpcHandlers", () => {
     expect(result.templates?.find((entry) => entry.name === "review")?.content).toBe("Review $1.");
   });
 
-  it("answers prompt-templates with the project's skills beside the templates", async () => {
+  it("answers prompt-templates with BOTH skill tiers beside the templates", async () => {
     const setup = setupDbAndHandlers();
     ctx = setup.ctx;
     mkdirSync(join(setup.projectPath, ".agents", "skills", "logos"), { recursive: true });
@@ -1667,14 +1678,34 @@ describe("registerFileIpcHandlers", () => {
       "---\ndescription: Draw logos\n---\n# Logos\n",
       "utf8",
     );
+    // The personal tier the same picker has to offer.
+    mkdirSync(join(setup.globalSkillsDir, "pdf"), { recursive: true });
+    writeFileSync(
+      join(setup.globalSkillsDir, "pdf", "SKILL.md"),
+      "---\ndescription: Fill PDFs\n---\n# PDF\n",
+      "utf8",
+    );
 
     const result = await invoke<{
       ok: boolean;
-      skills?: { name: string; description: string; body: string }[];
+      skills?: { name: string; description: string; body: string; root: string }[];
     }>("volli:prompt-templates", {}, { projectId: setup.projectId });
 
     expect(result.ok).toBe(true);
-    expect(result.skills).toEqual([{ name: "logos", description: "Draw logos", body: "# Logos" }]);
+    expect(result.skills).toEqual([
+      {
+        name: "logos",
+        description: "Draw logos",
+        body: "# Logos",
+        root: ".agents/skills/logos",
+      },
+      {
+        name: "pdf",
+        description: "Fill PDFs",
+        body: "# PDF",
+        root: `${setup.globalSkillsDir}/pdf`,
+      },
+    ]);
   });
 
   it("answers prompt-templates with an empty list when neither directory exists", async () => {
@@ -1714,7 +1745,10 @@ describe("registerFileIpcHandlers", () => {
 
   it("degrades every channel to a typed error when the db failed to open", async () => {
     handlers.clear();
-    registerFileIpcHandlers({ ok: false, error: "disk full" }, { globalCommandsDir: "/nowhere" });
+    registerFileIpcHandlers(
+      { ok: false, error: "disk full" },
+      { globalCommandsDir: "/nowhere", globalSkillsDir: "/nowhere/skills" },
+    );
     const result = await invoke<{ ok: boolean; error?: string }>(
       "volli:file-index",
       {},

@@ -20,10 +20,12 @@ function template(overrides: Partial<PromptTemplate> = {}): PromptTemplate {
 }
 
 function skill(overrides: Partial<SkillReference> = {}): SkillReference {
+  const name = overrides.name ?? "svg-logo-designer";
   return {
-    name: "svg-logo-designer",
+    name,
     description: "Create professional SVG logos",
     body: "# Logos\n\nDo the thing.",
+    root: `.agents/skills/${name}`,
     ...overrides,
   };
 }

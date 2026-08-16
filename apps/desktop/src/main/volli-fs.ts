@@ -68,7 +68,7 @@ import type { TicketRow } from "./db/tickets-repo";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
 import { loadPromptTemplates } from "./prompt-templates";
-import { readProjectSkills } from "./skills";
+import { loadSkills } from "./skills";
 
 const execFileAsync = promisify(execFile);
 
@@ -1091,6 +1091,12 @@ export interface FileIpcOptions {
    * that may call `app.getPath("userData")`.
    */
   globalCommandsDir: string;
+  /**
+   * `<home>/.agents/skills` — the personal tier of the `/` picker's skills,
+   * injected for `globalCommandsDir`'s reason: the home directory is resolved
+   * once, in `index.ts`, and handed down rather than read here.
+   */
+  globalSkillsDir: string;
 }
 
 /**
@@ -1225,11 +1231,14 @@ export function registerFileIpcHandlers(
           projectCommandsDir: projectCommandsDir(project.projectPath),
           globalCommandsDir: options.globalCommandsDir,
         }),
-        readProjectSkills(projectSkillsDir(project.projectPath)),
+        loadSkills({
+          projectSkillsDir: projectSkillsDir(project.projectPath),
+          globalSkillsDir: options.globalSkillsDir,
+        }),
       ]);
       if (!loaded.ok) return loaded;
       if (!skills.ok) return skills;
-      return { ok: true, templates: [...loaded.templates], skills: skills.skills };
+      return { ok: true, templates: [...loaded.templates], skills: [...skills.skills] };
     },
   };
 

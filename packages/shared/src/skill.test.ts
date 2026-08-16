@@ -3,7 +3,9 @@ import { describe, expect, it } from "vite-plus/test";
 import { promptResourceBlock } from "./prompt-resource";
 import type { PromptTemplate } from "./prompt-template";
 import {
+  globalSkillsDir,
   isSkillName,
+  mergeSkills,
   projectSkillsDir,
   skillInvocationText,
   skillPromptResource,
@@ -20,10 +22,14 @@ function rootHeader(name: string): string {
 }
 
 function skill(overrides: Partial<SkillReference> = {}): SkillReference {
+  // Root follows the name by default, the way the project-tier reader spells
+  // it, so a test that renames a skill does not have to restate its directory.
+  const name = overrides.name ?? "svg-logo-designer";
   return {
-    name: "svg-logo-designer",
+    name,
     description: "Create professional SVG logos",
     body: "# SVG Logo Designer\n\nUse `awk '{print $1}'` when needed.",
+    root: `.agents/skills/${name}`,
     ...overrides,
   };
 }
@@ -39,6 +45,36 @@ describe("projectSkillsDir", () => {
 
   it("tolerates a single trailing slash", () => {
     expect(projectSkillsDir("/repo/")).toBe("/repo/.agents/skills");
+  });
+});
+
+describe("globalSkillsDir", () => {
+  it("is the convention's personal tier under the home directory", () => {
+    expect(globalSkillsDir("/Users/me")).toBe("/Users/me/.agents/skills");
+  });
+
+  it("tolerates a single trailing slash", () => {
+    expect(globalSkillsDir("/Users/me/")).toBe("/Users/me/.agents/skills");
+  });
+});
+
+describe("mergeSkills", () => {
+  it("lets a project skill replace the personal skill of the same slug", () => {
+    const project = skill({ name: "shared", description: "vendored" });
+    const global = skill({
+      name: "shared",
+      description: "personal",
+      root: "/home/.agents/skills/shared",
+    });
+
+    expect(mergeSkills({ project: [project], global: [global] })).toEqual([project]);
+  });
+
+  it("keeps both tiers when their slugs differ, name-sorted", () => {
+    const project = skill({ name: "vendored" });
+    const global = skill({ name: "personal", root: "/home/.agents/skills/personal" });
+
+    expect(mergeSkills({ project: [project], global: [global] })).toEqual([global, project]);
   });
 });
 
@@ -83,6 +119,15 @@ describe("skillPromptResource", () => {
       text: `${rootHeader("svg-logo-designer")}\n\n${reference.body}`,
     });
   });
+
+  it("hands a personal-tier skill its OWN absolute root, not a workspace path", () => {
+    // Deriving the header from the slug would point `~/.agents/skills/pdf` at
+    // a workspace directory that does not exist, dangling its bundled files.
+    const reference = skill({ name: "pdf", root: "/Users/me/.agents/skills/pdf" });
+    expect(skillPromptResource(reference).text).toContain(
+      "Skill directory: /Users/me/.agents/skills/pdf/ —",
+    );
+  });
 });
 
 describe("skillInvocationText", () => {
@@ -124,6 +169,17 @@ describe("skillsIndexResource", () => {
 
   it("is null for no skills at all, so the prompt composes exactly as before", () => {
     expect(skillsIndexResource([])).toBeNull();
+  });
+
+  it("points a personal-tier entry at its absolute SKILL.md", () => {
+    const personal = skill({
+      name: "pdf",
+      description: "Fill PDFs",
+      root: "/home/.agents/skills/pdf",
+    });
+    expect(skillsIndexResource([personal])?.text).toContain(
+      "- pdf (/home/.agents/skills/pdf/SKILL.md): Fill PDFs",
+    );
   });
 
   it("tells the model how to activate a skill and where its files resolve", () => {

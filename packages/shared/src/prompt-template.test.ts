@@ -267,8 +267,14 @@ describe("expandCommandInvocation", () => {
         name: "logos",
         description: "Design logos",
         body: "# Logos\n\nRun `awk '{print $1}'` first.",
+        root: ".agents/skills/logos",
       },
-      { name: "ship", description: "Shadowed by the template", body: "never delivered" },
+      {
+        name: "ship",
+        description: "Shadowed by the template",
+        body: "never delivered",
+        root: ".agents/skills/ship",
+      },
     ];
     const block = [
       "--- BEGIN RESOURCE: logos ---",
