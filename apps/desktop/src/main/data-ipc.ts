@@ -230,8 +230,9 @@ function busyRefusal(site: BusyWorktreeSite): string {
  * PRECEDENCE: a Session that has ever opened a terminal attachment renders as
  * its terminal row, byte-for-byte what `terminalSessionRecord` always
  * returned; only an attachment-less or structured-only Session renders as a
- * chat row. This is the one place that precedence is decided — the CLI socket
- * (`agent-commands.ts`) stays terminal-only on purpose and never reaches here.
+ * chat row. The CLI socket (`agent-commands.ts`) applies the same precedence
+ * to its own `session.list` since VC-13; its ADDRESSABLE snapshot (identify,
+ * peek, the hooks) stays terminal-only on purpose and never reaches here.
  */
 function sessionListingRows(sessions: readonly SessionProjection[]): SessionListingRow[] {
   return sessions.map((session): SessionListingRow => {
