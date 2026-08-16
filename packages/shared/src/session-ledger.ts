@@ -500,88 +500,53 @@ interface SessionObservationBase {
   commandId?: string | null;
 }
 
+/**
+ * The payload kinds external evidence can prove — the durable union minus the
+ * control plane's own facts (creation, commands, receipts, signals, model
+ * policy), which only the Session Engine writes.
+ */
+type ObservedSessionEventKind =
+  | "attachment.opened"
+  | "attachment.native_referenced"
+  | "attachment.failed"
+  | "attachment.closed"
+  | "run.started"
+  | "run.completed"
+  | "turn.started"
+  | "turn.completed"
+  | "turn.interrupted"
+  | "transcript.referenced"
+  | "attention.raised"
+  | "attention.cleared"
+  | "interaction.opened"
+  | "interaction.resolved"
+  | "interaction.cancelled"
+  | "authority.denied"
+  | "adapter.observed";
+
+/**
+ * Observed arms are the payload arms themselves under an observation envelope,
+ * derived rather than restated so a payload field added to the durable union
+ * cannot silently miss its observation twin. `command.receipt` stays
+ * hand-written: it is the one arm that is not a payload — it carries an
+ * *unstamped* receipt, and only the Session Engine may stamp one.
+ */
 export type SessionObservation =
-  | (SessionObservationBase & {
-      id: string;
-      kind: "attachment.opened";
-      attachment: SessionAttachment;
-    })
-  | (SessionObservationBase & {
-      kind: "attachment.native_referenced";
-      attachmentId: string;
-      native: SessionNativeReference;
-    })
-  | (SessionObservationBase & {
-      kind: "attachment.failed";
-      attachment: SessionAttachment;
-      failure: SessionAttachmentFailure;
-    })
-  | (SessionObservationBase & {
-      kind: "attachment.closed";
-      attachmentId: string;
-      outcome: "completed" | "failed" | "interrupted";
-    })
-  | (SessionObservationBase & { kind: "run.started"; attachmentId: string; runId: string })
-  | (SessionObservationBase & {
-      kind: "run.completed";
-      attachmentId: string;
-      runId: string;
-    })
-  | (SessionObservationBase & { kind: "turn.started"; attachmentId: string; turnId: string })
-  | (SessionObservationBase & {
-      kind: "turn.completed";
-      attachmentId: string;
-      turnId: string;
-    })
-  | (SessionObservationBase & {
-      kind: "turn.interrupted";
-      attachmentId: string;
-      turnId: string;
-    })
-  | (SessionObservationBase & {
-      kind: "transcript.referenced";
-      attachmentId: string | null;
-      turnId: string | null;
-      reference: TranscriptReference;
-    })
-  | (SessionObservationBase & {
-      kind: "attention.raised";
-      attention: SessionAttention;
-    })
-  | (SessionObservationBase & { kind: "attention.cleared"; attentionId: string })
-  | (SessionObservationBase & {
-      kind: "interaction.opened";
-      interaction: SessionInteraction;
-    })
-  | (SessionObservationBase & {
-      kind: "interaction.resolved";
-      attachmentId: string;
-      interactionId: string;
-      resolution: SessionInteractionResolution;
-    })
-  | (SessionObservationBase & {
-      kind: "interaction.cancelled";
-      attachmentId: string;
-      interactionId: string;
-      reason: SessionInteractionCancelReason;
-    })
-  | (SessionObservationBase & {
-      kind: "authority.denied";
-      attachmentId: string;
-      turnId: string | null;
-      tool: string;
-      cause: string;
-      reason: string;
-    })
-  | (SessionObservationBase & {
-      kind: "adapter.observed";
-      attachmentId: string | null;
-      name: string;
-      native: SessionNativeDetail | null;
-    })
+  | (SessionObservationBase & Extract<SessionEventPayload, { kind: ObservedSessionEventKind }>)
   | (SessionObservationBase & { kind: "command.receipt"; receipt: UnstampedCommandReceipt });
 
-/** Maps externally observed evidence to the durable event payload it proves. */
+/**
+ * Maps externally observed evidence to the durable event payload it proves.
+ *
+ * Still a per-kind switch even though the arms are now derived from the
+ * payload union: the envelope and the payload share field names
+ * (`attachmentId` is envelope routing on every observation and *also* a
+ * payload field on some kinds), so mechanical envelope-stripping would write
+ * stray envelope fields into payloads whose declared shape has none — and a
+ * persisted payload's bytes are compared by exact match on replay. Each arm
+ * names exactly what the durable payload declares, and the derived union
+ * makes a missing or misspelled field a compile error here.
+ */
 export function observationPayload(observation: SessionObservation): SessionEventPayload {
   switch (observation.kind) {
     case "attachment.opened":
