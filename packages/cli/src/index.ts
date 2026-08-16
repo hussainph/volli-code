@@ -135,7 +135,15 @@ function readStdinPayload(timeoutMs: number): Promise<string> {
  * once.
  */
 function timeoutForCommand(command: string): number {
-  return command === "session.harness" ? 2_000 : 10_000;
+  if (command === "session.harness") return 2_000;
+  // `session.start` is the one command with a worktree ensure queued ahead of
+  // its reply: a fresh ticket's checkout is materialized during adapter attach,
+  // and `git worktree add` plus the include-copy on a large repo can honestly
+  // outlast the ordinary bound. The Session is durable before the wait either
+  // way, so a timeout here would report a failure the app then contradicts —
+  // give the attach room instead.
+  if (command === "session.start") return 30_000;
+  return 10_000;
 }
 
 async function main(): Promise<void> {

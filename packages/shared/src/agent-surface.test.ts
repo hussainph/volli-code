@@ -334,5 +334,9 @@ describe("agent error vocabulary", () => {
     expect(AGENT_ERROR_CODES).toContain("BODY_MATCH_FAILED");
     expect(AGENT_ERROR_CODES).toContain("APP_UNREACHABLE");
     expect(AGENT_ERROR_CODES).toContain("DB_UNAVAILABLE");
+    // `session start`'s model vocabulary: no default and no --model, and an
+    // override Model Access cannot honor. Both are plain failures (exit 1).
+    expect(AGENT_ERROR_CODES).toContain("MODEL_REQUIRED");
+    expect(AGENT_ERROR_CODES).toContain("MODEL_UNAVAILABLE");
   });
 });

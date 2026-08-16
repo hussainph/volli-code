@@ -53,6 +53,9 @@ describe("describeEvent", () => {
     expect(describeEvent({ kind: "body_edited" })).toBe("edited the description");
     expect(describeEvent({ kind: "archived" })).toBe("archived the ticket");
     expect(describeEvent({ kind: "unarchived" })).toBe("restored the ticket");
+    expect(describeEvent({ kind: "session_started", sessionId: "session-1" })).toBe(
+      "started a session",
+    );
   });
 
   it("returns null for a commented event (rendered as its comment instead)", () => {
@@ -179,6 +182,7 @@ describe("EVENT_KIND_PRIORITY", () => {
       "pr_merged",
       "pr_opened",
       "created",
+      "session_started",
       "retitled",
       "priority_changed",
       "harness_changed",

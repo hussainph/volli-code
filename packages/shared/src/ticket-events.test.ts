@@ -32,6 +32,7 @@ describe("TICKET_EVENT_KINDS", () => {
       "pr_merged",
       "attachment_added",
       "attachment_removed",
+      "session_started",
     ]);
   });
 
@@ -67,6 +68,7 @@ describe("TicketEventPayload", () => {
       { kind: "pr_merged", url: "https://github.com/acme/repo/pull/7" },
       { kind: "attachment_added", attachmentId: "attach-1", label: "spec.pdf" },
       { kind: "attachment_removed", attachmentId: "attach-1", label: "spec.pdf" },
+      { kind: "session_started", sessionId: "session-1" },
     ];
     expect(payloads.map((p) => p.kind)).toEqual(TICKET_EVENT_KINDS);
   });

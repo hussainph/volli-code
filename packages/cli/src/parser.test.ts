@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { COLUMN_VOCABULARY } from "@volli/shared";
+import { COLUMN_VOCABULARY, REASONING_LEVELS } from "@volli/shared";
 
 import { COMMAND_HELP, HARNESS_VOCABULARY, parseCliArgs, PRIORITY_VOCABULARY } from "./parser";
 
@@ -180,6 +180,80 @@ describe("parseCliArgs", () => {
         args: { id: "harness-uuid-123" },
         json: true,
       },
+    });
+  });
+
+  it("parses session start with kickoff, model, and reasoning overrides", () => {
+    expect(parseCliArgs(["session", "start", "VC-4"])).toEqual({
+      ok: true,
+      invocation: { command: "session.start", args: { id: "VC-4" }, json: false },
+    });
+    expect(
+      parseCliArgs([
+        "session",
+        "start",
+        "VC-4",
+        "-m",
+        "Focus on the failing tests",
+        "--model",
+        "openai-codex/gpt-5.2-sol",
+        "--reasoning",
+        "high",
+        "--json",
+      ]),
+    ).toEqual({
+      ok: true,
+      invocation: {
+        command: "session.start",
+        args: {
+          id: "VC-4",
+          message: "Focus on the failing tests",
+          model: { providerId: "openai-codex", modelId: "gpt-5.2-sol" },
+          reasoning: "high",
+        },
+        json: true,
+      },
+    });
+    // --message stays the hidden alias every other message flag has.
+    expect(parseCliArgs(["session", "start", "VC-4", "--message", "go"])).toMatchObject({
+      ok: true,
+      invocation: { args: { id: "VC-4", message: "go" } },
+    });
+  });
+
+  it("splits --model on the FIRST slash so a model id may itself contain one", () => {
+    expect(
+      parseCliArgs(["session", "start", "VC-4", "--model", "gateway/vendor/model-x"]),
+    ).toMatchObject({
+      ok: true,
+      invocation: { args: { model: { providerId: "gateway", modelId: "vendor/model-x" } } },
+    });
+  });
+
+  it.each(["gpt-5", "/gpt-5", "openai/", "/"])(
+    "rejects the malformed --model %j and teaches the shape",
+    (raw) => {
+      expect(parseCliArgs(["session", "start", "VC-4", "--model", raw])).toEqual({
+        ok: false,
+        code: "USAGE",
+        message: `Invalid model ${JSON.stringify(raw)} (expected <provider>/<model>)`,
+      });
+    },
+  );
+
+  it("rejects an unknown --reasoning level and enumerates the vocabulary", () => {
+    expect(parseCliArgs(["session", "start", "VC-4", "--reasoning", "ultra"])).toEqual({
+      ok: false,
+      code: "USAGE",
+      message: `Unknown reasoning level "ultra" (valid: ${REASONING_LEVELS.join(", ")})`,
+    });
+  });
+
+  it("requires the ticket id positional for session start", () => {
+    expect(parseCliArgs(["session", "start"])).toEqual({
+      ok: false,
+      code: "USAGE",
+      message: "session start requires <id>",
     });
   });
 

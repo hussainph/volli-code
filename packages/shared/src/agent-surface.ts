@@ -18,6 +18,12 @@ export const AGENT_COMMANDS = [
   "label.list",
   "session.list",
   "session.peek",
+  // Attended-only Session start (VC-13): rides the app-owned product start
+  // route (the ticketSessions facade) over the socket. The CLI's only
+  // transport is that socket and the Pi runtime lives in Electron main, so
+  // there is deliberately no headless path — app not running is
+  // APP_UNREACHABLE, and `volli app launch` is the sanctioned recovery.
+  "session.start",
   "session.done",
   "session.blocked",
   "session.link",
@@ -59,6 +65,11 @@ export const AGENT_ERROR_CODES = [
   "INVALID_PRIORITY",
   "ARCHIVED_TICKET",
   "SESSION_ENDED",
+  // `session start`'s model vocabulary: no configured default and no --model
+  // override; and an override Model Access cannot honor (unknown model,
+  // sign-in required, or an unsupported reasoning level).
+  "MODEL_REQUIRED",
+  "MODEL_UNAVAILABLE",
   "PREFIX_CONFLICT",
   "FILE_READ_FAILED",
   "MUTATION_FAILED",

@@ -12,9 +12,12 @@ import { toast } from "sonner";
 
 import App from "./App";
 import { interruptToastModel } from "./components/sessions/interrupt-toast";
+import { sessionStartToastModel } from "./components/sessions/session-start-toast";
+import { chatTabId } from "./components/ticket/ticket-chat-tab";
 import { boot, refreshPlanningData } from "./lib/boot";
 import { toastError } from "./lib/toast";
 import { useBoardStore } from "./stores/board";
+import { useChatSessionsStore } from "./stores/chat-sessions";
 import { useProjectsStore } from "./stores/projects";
 import { useThemeStore } from "./stores/theme";
 import { useWorkspaceStore } from "./stores/workspace";
@@ -113,6 +116,29 @@ async function main() {
                 useWorkspaceStore.getState().openTicketWorkspace(target.projectId, target.ticketId),
             },
           }),
+    });
+  });
+
+  // Socket-originated Session starts (VC-13): the app must not navigate or
+  // steal focus when a `volli session start` lands — the toast names the actor
+  // and ticket, and its action is the only door into the new session's tab
+  // (the same adopt + open pair the sidebar's chat rows make).
+  window.api.sessions.onStarted((notice) => {
+    const model = sessionStartToastModel(notice);
+    const target = model.target;
+    toast(model.message, {
+      duration: INTERRUPT_TOAST_DURATION_MS,
+      action: {
+        label: "Open session",
+        onClick: () => {
+          const chat = useChatSessionsStore.getState();
+          chat.adoptChatSession(target.sessionId);
+          chat.openChatTab(target.ticketId, target.sessionId);
+          useWorkspaceStore.getState().openTicketWorkspace(target.projectId, target.ticketId, {
+            tabId: chatTabId(target.sessionId),
+          });
+        },
+      },
     });
   });
 

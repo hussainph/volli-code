@@ -104,6 +104,14 @@ describe("renderHelp command detail", () => {
     expect(diff).toContain("Default range is the merge-base diff");
   });
 
+  it("renders session start with the reasoning vocabulary and hides the -m alias", () => {
+    const detail = renderHelp(["session", "start"]);
+    expect(detail).toContain("Usage: volli session start <id> [options]");
+    expect(detail).toContain("--model <provider/model>");
+    expect(detail).toContain("(valid: off, minimal, low, medium, high, xhigh, max)");
+    expect(detail).not.toContain("--message");
+  });
+
   it("carries a command's extra usage tail into its detail", () => {
     const detail = renderHelp(["help"]);
     expect(detail).toContain("Usage: volli help [<command> | <topic>]");

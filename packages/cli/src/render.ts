@@ -291,6 +291,13 @@ function renderStableLines(command: string, data: unknown): string | null {
     if (data["degraded"] === true) lines.push("degraded  true");
     return lines.join("\n");
   }
+  if (command === "session.start") {
+    // The short id leads: it is the acceptance's one required output and the
+    // handle every follow-up (session list/peek) addresses by. `state` names a
+    // failed attach honestly — the Session is durable and the app carries its
+    // Retry — and the model/reasoning pair echoes what the session records.
+    return `${terminalSafeInline(data["session"])}  ${terminalSafeInline(data["ticket"])}  ${terminalSafeInline(data["state"])}  ${terminalSafeInline(data["model"])} ${terminalSafeInline(data["reasoning"])}`;
+  }
   if (command === "session.done" || command === "session.blocked") {
     return `${terminalSafeInline(data["session"])}  ${terminalSafeInline(data["signal"])}`;
   }

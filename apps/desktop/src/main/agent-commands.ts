@@ -23,6 +23,7 @@ import {
   isFirstClassHarnessId,
   isValidBranchName,
   parseHarnessId,
+  REASONING_LEVELS,
   resolveAgentContext,
   runDoctorChecks,
   shortSessionId,
@@ -42,6 +43,7 @@ import type {
   HarnessId,
   Observed,
   Project,
+  ReasoningLevel,
   SessionActivityState,
   SessionRecord,
   TicketEventActor,
@@ -52,6 +54,7 @@ import type {
   DataChangedEvent,
   HarnessEventNotice,
   SessionHarnessNotice,
+  SessionStartedNotice,
   WorktreeDiffMode,
 } from "../ipc/contract";
 
@@ -63,11 +66,14 @@ import { getRegisteredHarness } from "./db/harness-registry-repo";
 import { listAllLabels } from "./db/labels-repo";
 import { listProjects } from "./db/projects-repo";
 import {
+  chatSessionRecord,
   latestTerminalAttachment,
   readTerminalAttachmentDetail,
   terminalNativeReference,
   terminalSessionRecord,
 } from "./session-control";
+import { StructuredSessionsError } from "./session-runtime/structured-sessions";
+import type { TicketSessions } from "./session-runtime/ticket-sessions";
 import { getTicket, listArchivedTicketsByProject, listTicketsByProject } from "./db/tickets-repo";
 import { recordHarnessDelivery } from "./harness-registry";
 import { readWorktreeDiff, readWorktreeStatus, runGitCapturing } from "./worktree";
@@ -143,6 +149,18 @@ export function composeProjectBrief(input: { project: Pick<Project, "path"> }): 
   return `This is a project-scoped chat Session with no Ticket. Your working directory is the project root at ${input.project.path}.\n\nBoard coordination goes through the bundled \`volli\` CLI. Run \`volli help\` when you need its reference (and the volli skill, when installed, for norms).`;
 }
 
+/**
+ * The kickoff turn `session.start` submits when the caller sends no `-m`.
+ *
+ * A fresh structured Session idles until its first message — the Runtime Brief
+ * is prepended to the FIRST delivered message, not sent on attach — so this is
+ * what makes the agent begin as the session opens. Deliberately the manual,
+ * one-off shape of an Automation sending its Instructions; the wording assumes
+ * only what the Brief guarantees is above it.
+ */
+export const DEFAULT_KICKOFF_MESSAGE =
+  "Begin work on this ticket. Your assignment is the Ticket Brief above.";
+
 export interface AgentCommandServiceOptions {
   db: Database.Database;
   /** The app composition root's one durable Session Engine. */
@@ -170,6 +188,29 @@ export interface AgentCommandServiceOptions {
     lines: number,
   ) => { status: SessionActivityState; output: string } | undefined;
   notify?: (title: string, message: string) => void;
+  /**
+   * The product Ticket Session start route (VC-13) — the same facade the
+   * renderer's `ticketSessions.start` RPC rides, threaded in the way
+   * {@link sessionEngine} is so no parallel creation path can grow here. Raw
+   * `session.create` over this door stays FORBIDDEN. Absent means the Session
+   * runtime never came up this launch, which the verb reports as retryable.
+   */
+  ticketSessions?: Pick<TicketSessions, "start">;
+  /**
+   * Submits one user message to a structured Session — the kickoff turn. The
+   * runtime answers a `message.submit` only when the TURN it started ends, so
+   * the door fires this detached and replies as the session opens; a refusal
+   * lands in the log and in the Session's own durable state, never in the
+   * caller's exit code.
+   */
+  submitSessionMessage?: (input: { sessionId: string; text: string }) => Promise<void>;
+  /**
+   * Called after `session.start` opens a Session, with everything the
+   * renderer's toast says and targets. A notice, not a navigation: the app
+   * must never move or steal focus because a start landed — the toast's
+   * action is the only door into the new session's tab.
+   */
+  onSessionStarted?: (notice: SessionStartedNotice) => void;
   /**
    * Interrupts every live agent attachment of a ticket after a committed
    * backward move. Its command and receipt are Session evidence; Esc leaves
@@ -633,7 +674,15 @@ function publicEvent(
   const contextProject = contextTicket
     ? projects.find(({ id }) => id === contextTicket.projectId)
     : undefined;
-  const payload = event.payload.kind === "commented" ? { kind: "commented" } : event.payload;
+  // Internal ids never cross the socket: a comment's row id is dropped, and a
+  // session_started's cited Session travels as the short public handle — the
+  // same one `session list` prints and `session peek` addresses.
+  const payload =
+    event.payload.kind === "commented"
+      ? { kind: "commented" }
+      : event.payload.kind === "session_started"
+        ? { kind: "session_started", session: shortSessionId(event.payload.sessionId) }
+        : event.payload;
   return {
     actor: event.actor,
     actorContext: event.actorContext
@@ -807,6 +856,24 @@ function firingHarnessId(
  */
 function declaresInputNeeded(harnessId: HarnessId): boolean {
   return adapterDeclaresInputNeeded(getHarnessAdapter(harnessId));
+}
+
+/**
+ * The provider/model pair a `session.start` override names — shape only, like
+ * every other raw-socket argument here. Whether Model Access can actually run
+ * it is the facade's judgement, refused as MODEL_UNAVAILABLE.
+ */
+function isModelRef(value: unknown): value is { providerId: string; modelId: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "providerId" in value &&
+    typeof value.providerId === "string" &&
+    value.providerId.length > 0 &&
+    "modelId" in value &&
+    typeof value.modelId === "string" &&
+    value.modelId.length > 0
+  );
 }
 
 function isBodyMutation(value: unknown): value is TicketBodyMutation {
@@ -1123,7 +1190,34 @@ export function createAgentCommandService(
               ageMs: Math.max(0, now() - session.createdAt),
             };
           });
-        return { v: 1, ok: true, data: { sessions: projectSessions } };
+        // Structured chat rows (VC-13 decision 4): `session start` must never
+        // open a session its own caller cannot see. Precedence mirrors the
+        // renderer's listing — a Session that ever opened a terminal is its
+        // terminal row above; only structured-only Sessions land here. The
+        // addressable snapshot (identify/peek/rename) stays terminal-only:
+        // a chat has no PTY to peek and exports no VOLLI_SESSION of its own.
+        const chatRows = (
+          await sessionEngine.listSessions({ projectId: project.id, scope: "all" })
+        ).flatMap((projection) => {
+          if (terminalSessionRecord(projection) !== null) return [];
+          const record = chatSessionRecord(projection);
+          if (ticketResolution?.ok && record.ticketId !== ticketResolution.ticket.id) return [];
+          const ticket = record.ticketId ? getTicket(options.db, record.ticketId) : undefined;
+          const ticketProject = ticket ? projectById.get(ticket.projectId) : undefined;
+          return [
+            {
+              id: shortSessionId(record.sessionId),
+              kind: "chat",
+              ticket:
+                ticket && ticketProject
+                  ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)
+                  : null,
+              title: record.title,
+              ageMs: Math.max(0, now() - record.createdAt),
+            },
+          ];
+        });
+        return { v: 1, ok: true, data: { sessions: [...projectSessions, ...chatRows] } };
       }
       if (request.cmd === "session.peek") {
         const resolved = sessionForPublicId(sessions, request.args["id"]);
@@ -1145,6 +1239,116 @@ export function createAgentCommandService(
             output: observation.output,
           },
         };
+      }
+      if (request.cmd === "session.start") {
+        // Attended-only by structure (VC-13): this door's only transport is the
+        // app-owned socket and the Pi runtime lives in Electron main, so an
+        // unreachable app already failed as APP_UNREACHABLE before this line.
+        // A launch whose Session runtime never came up reports the same
+        // retryable class — relaunching the app is the sanctioned recovery.
+        const ticketSessions = options.ticketSessions;
+        if (!ticketSessions) {
+          return failure("APP_UNREACHABLE", "The Session runtime is not available this launch.");
+        }
+        const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
+        if (!resolved.ok) return resolved.response;
+        const actor = requestActor(request, sessions);
+        if (!actor.ok) return actor.response;
+        const message = request.args["message"];
+        const model = request.args["model"];
+        const reasoning = request.args["reasoning"];
+        if (
+          (message !== undefined && (typeof message !== "string" || message.trim().length === 0)) ||
+          (model !== undefined && !isModelRef(model)) ||
+          (reasoning !== undefined && !(REASONING_LEVELS as readonly unknown[]).includes(reasoning))
+        ) {
+          return failure("INVALID_REQUEST", "Invalid session start arguments.");
+        }
+        const displayId = displayTicketId(
+          resolved.project.ticketPrefix,
+          resolved.ticket.ticketNumber,
+        );
+        try {
+          const started = await ticketSessions.start({
+            operationId: newId(),
+            projectId: resolved.project.id,
+            ticketId: resolved.ticket.id,
+            // Null on purpose: the surfaces own default naming (acceptance
+            // allows it), and a CLI-invented title would fight the renderer's
+            // "Chat N" convention.
+            title: null,
+            actor: actor.actor,
+            ...(model !== undefined || reasoning !== undefined
+              ? {
+                  modelOverride: {
+                    ...(isModelRef(model) ? { model } : {}),
+                    ...(reasoning !== undefined
+                      ? { reasoningLevel: reasoning as ReasoningLevel }
+                      : {}),
+                  },
+                }
+              : {}),
+          });
+          // The kickoff rides only a ready attach — a Session that needs
+          // recovery holds the first turn for the app's Retry — and it is
+          // deliberately detached: the runtime answers a `message.submit` when
+          // the TURN it started ends, and this reply is due as the session
+          // opens, not when the agent finishes.
+          if (started.state === "ready") {
+            const kickoff = typeof message === "string" ? message : DEFAULT_KICKOFF_MESSAGE;
+            void Promise.resolve()
+              .then(() =>
+                options.submitSessionMessage?.({ sessionId: started.sessionId, text: kickoff }),
+              )
+              .catch((error: unknown) => {
+                console.error(
+                  `[volli] kickoff for session ${shortSessionId(started.sessionId)} was not delivered: ${errorMessage(error)}`,
+                );
+              });
+          }
+          options.onMutation?.({
+            ticketId: resolved.ticket.id,
+            projectId: resolved.project.id,
+            kind: "session",
+          });
+          options.onSessionStarted?.({
+            sessionId: started.sessionId,
+            projectId: resolved.project.id,
+            ticketId: resolved.ticket.id,
+            ticketDisplayId: displayId,
+            actor: actor.actor.kind,
+            actorTicket:
+              actor.actor.kind === "session"
+                ? actorSessionTicketDisplay(options.db, projects, actor.actor.ticketId)
+                : null,
+            at: now(),
+          });
+          return {
+            v: 1,
+            ok: true,
+            data: {
+              session: shortSessionId(started.sessionId),
+              ticket: displayId,
+              state: started.state,
+              model: `${started.model.providerId}/${started.model.modelId}`,
+              reasoning: started.model.reasoningLevel,
+            },
+          };
+        } catch (error) {
+          // The facade's refusals land in the fixed vocabulary: the two model
+          // errors keep their own names (exit class 1, auto-rendered into
+          // `volli help exit-codes`); everything else failed to mutate.
+          if (error instanceof StructuredSessionsError) {
+            if (error.code === "DEFAULT_MODEL_REQUIRED") {
+              return failure("MODEL_REQUIRED", error.message);
+            }
+            if (error.code === "MODEL_UNAVAILABLE") {
+              return failure("MODEL_UNAVAILABLE", error.message);
+            }
+            return failure("MUTATION_FAILED", error.message);
+          }
+          return failure("MUTATION_FAILED", errorMessage(error));
+        }
       }
       if (request.cmd === "notify") {
         const message = request.args["message"];

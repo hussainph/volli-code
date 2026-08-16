@@ -54,6 +54,14 @@ export const TICKET_EVENT_KINDS = [
   // is just enough for the event log to read without a join).
   "attachment_added",
   "attachment_removed",
+  // A structured chat Session started on this ticket (VC-13). Written in the
+  // shared Ticket Session creation path, so a start from the app's own UI and
+  // one from the CLI socket both land in planner history with door-derived
+  // provenance (the actor). The legacy terminal-era kind of this name was
+  // purged in migration 018, so re-minting it is clean. The payload cites the
+  // started Session; surfaces shorten the id before showing it (full Session
+  // UUIDs never cross the socket).
+  "session_started",
 ] as const;
 
 export type TicketEventKind = (typeof TICKET_EVENT_KINDS)[number];
@@ -113,7 +121,8 @@ export type TicketEventPayload =
   | { kind: "pr_opened"; url: string }
   | { kind: "pr_merged"; url: string }
   | { kind: "attachment_added"; attachmentId: string; label: string }
-  | { kind: "attachment_removed"; attachmentId: string; label: string };
+  | { kind: "attachment_removed"; attachmentId: string; label: string }
+  | { kind: "session_started"; sessionId: string };
 
 /**
  * The `ensure`-pipeline stage a `worktree_failed` event aborted at

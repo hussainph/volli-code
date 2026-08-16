@@ -4,6 +4,7 @@ import {
   isTicketPriority,
   parseColumnToken,
   parseHarnessId,
+  REASONING_LEVELS,
   TICKET_PRIORITIES,
 } from "@volli/shared";
 
@@ -63,6 +64,32 @@ const harnessValue: ValueParser = (raw) => {
       }
     : { ok: true, value: parsed };
 };
+
+/**
+ * `--model` splits on the FIRST `/` into providerId/modelId: a provider id
+ * never contains one, while a gateway-routed model id may. Whether the pair
+ * names a model this profile can actually run is Model Access's judgement,
+ * made in the app — the parser only vets the shape, exactly like `--harness`.
+ */
+const modelValue: ValueParser = (raw) => {
+  const slash = raw.indexOf("/");
+  const providerId = slash === -1 ? "" : raw.slice(0, slash);
+  const modelId = slash === -1 ? "" : raw.slice(slash + 1);
+  return providerId.length === 0 || modelId.length === 0
+    ? {
+        ok: false,
+        message: `Invalid model ${JSON.stringify(raw)} (expected <provider>/<model>)`,
+      }
+    : { ok: true, value: { providerId, modelId } };
+};
+
+const reasoningValue: ValueParser = (raw) =>
+  (REASONING_LEVELS as readonly string[]).includes(raw)
+    ? { ok: true, value: raw }
+    : {
+        ok: false,
+        message: `Unknown reasoning level ${JSON.stringify(raw)} (valid: ${REASONING_LEVELS.join(", ")})`,
+      };
 
 const columnValue: ValueParser = (raw) => {
   const result = parseColumnToken(raw);
@@ -490,6 +517,57 @@ const SESSION_BLOCKED_SPEC = sessionSignalSpec(
   ["Acts on VOLLI_SESSION; needs a Volli session."],
 );
 
+/**
+ * `volli session start <ticket>` — the attended-only start verb (VC-13). It
+ * rides the app-owned product start route over the socket; the Pi runtime
+ * lives in Electron main, so there is deliberately no headless path — with the
+ * app closed this exits 3 (`volli app launch` is the recovery). The kickoff/
+ * model/reasoning surface deliberately mirrors an Automation sending its
+ * Instructions, so triggering Automations through the CLI can extend it later.
+ */
+const SESSION_START_SPEC: CommandSpec = {
+  summary: "Start an agent chat session on a ticket.",
+  example: 'volli session start VC-12 -m "Fix the flaky auth test"',
+  notes: [
+    "Runs in the app: attended-only, never headless; the board does not move.",
+    "Submits a kickoff turn; -m replaces the default kickoff text.",
+    "--model/--reasoning override the app default for this session.",
+  ],
+  positionalId: { label: "session start" },
+  options: {
+    "-m": {
+      kind: "value",
+      key: "message",
+      placeholder: "<text>",
+      group: "message",
+      help: "Kickoff message.",
+    },
+    "--message": {
+      kind: "value",
+      key: "message",
+      placeholder: "<text>",
+      group: "message",
+      hidden: true,
+      help: "Alias for -m.",
+    },
+    "--model": {
+      kind: "value",
+      key: "model",
+      parse: modelValue,
+      placeholder: "<provider/model>",
+      help: "Model override.",
+    },
+    "--reasoning": {
+      kind: "value",
+      key: "reasoning",
+      parse: reasoningValue,
+      placeholder: "<level>",
+      values: `valid: ${REASONING_LEVELS.join(", ")}`,
+      help: "Reasoning level override.",
+    },
+  },
+};
+
 const SESSION_LINK_SPEC: CommandSpec = {
   summary: "Record the harness's own session id on the current Volli session.",
   example: "volli session link 4f1c9a2e-8b7d-4e5a-9c3f-2a1b0d6e5f4c",
@@ -797,6 +875,7 @@ export const COMMAND_HELP: readonly CommandHelpEntry[] = [
   { name: "ticket move", group: "Write", spec: TICKET_MOVE_SPEC },
   { name: "ticket comment", group: "Write", spec: TICKET_COMMENT_SPEC },
   { name: "ticket archive", group: "Write", spec: TICKET_ARCHIVE_SPEC },
+  { name: "session start", group: "Session", spec: SESSION_START_SPEC },
   { name: "session list", group: "Session", spec: SESSION_LIST_SPEC },
   { name: "session peek", group: "Session", spec: SESSION_PEEK_SPEC },
   { name: "session done", group: "Session", spec: SESSION_DONE_SPEC },
@@ -851,6 +930,9 @@ export function parseCliArgs(argv: readonly string[]): CliParseResult {
   }
   if (argv[0] === "worktree" && argv[1] === "diff") {
     return parseWithSpec("worktree.diff", argv.slice(2), WORKTREE_DIFF_SPEC);
+  }
+  if (argv[0] === "session" && argv[1] === "start") {
+    return parseWithSpec("session.start", argv.slice(2), SESSION_START_SPEC);
   }
   if (argv[0] === "session" && argv[1] === "peek") {
     return parseWithSpec("session.peek", argv.slice(2), SESSION_PEEK_SPEC);

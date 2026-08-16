@@ -62,6 +62,7 @@ export const EVENT_KIND_PRIORITY: readonly TicketEventKind[] = [
   "pr_merged",
   "pr_opened",
   "created",
+  "session_started",
   "retitled",
   "priority_changed",
   "harness_changed",
@@ -215,6 +216,8 @@ export function describeEvent(payload: TicketEventPayload): string | null {
       return "pull request merged";
     case "commented":
       return null;
+    case "session_started":
+      return "started a session";
     case "attachment_added":
       return `attached "${payload.label}"`;
     case "attachment_removed":
