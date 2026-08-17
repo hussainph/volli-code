@@ -42,7 +42,10 @@ import { toastError } from "@renderer/lib/toast";
  * (components/pages/configure-page.tsx); everything here applies across every
  * project. Grouped into categories via the shared {@link SettingsShell}.
  */
-export function SettingsPage({ initialCategoryKey }: { initialCategoryKey?: string } = {}) {
+export function SettingsPage({
+  initialCategoryKey,
+  initialSignInProviderId,
+}: { initialCategoryKey?: string; initialSignInProviderId?: string } = {}) {
   const categories: readonly SettingsCategory[] = [
     {
       key: "general",
@@ -57,10 +60,13 @@ export function SettingsPage({ initialCategoryKey }: { initialCategoryKey?: stri
       content: <AppearanceSettings />,
     },
     {
-      key: "agent",
-      label: "Agent",
+      // "Model Access" is the canonical name (VC-42): the docs, the code and
+      // this pane say the same words. The key doubles as the chat blocker's
+      // deep-link target — see stores/ui.ts `settingsCategory`.
+      key: "model-access",
+      label: "Model Access",
       icon: CpuIcon,
-      content: <ModelAccessSettings />,
+      content: <ModelAccessSettings autoSignInProviderId={initialSignInProviderId} />,
     },
     {
       key: "harness",

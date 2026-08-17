@@ -77,11 +77,19 @@ const COPY_FEEDBACK_MS = 1200;
 export function ModelAccessAccounts({
   providers,
   loading,
+  autoSignInProviderId,
   onRecover,
   onChanged,
 }: {
   providers: readonly ModelAccessProvider[];
   loading: boolean;
+  /**
+   * A provider a blocker sent the user here to sign in to (VC-53). The
+   * matching row starts its one sign-in method on arrival — or opens the
+   * method choice when the provider offers several, because two methods are
+   * two accounts with two bills and neither may be picked for the user.
+   */
+  autoSignInProviderId?: string;
   /** The `retry` half of recovery — a refresh of the whole snapshot. */
   onRecover(provider: ModelAccessProvider): void | Promise<void>;
   /** A credential was stored or removed; the snapshot no longer describes the profile. */
@@ -95,6 +103,7 @@ export function ModelAccessAccounts({
           key={provider.id}
           provider={provider}
           loading={loading}
+          autoSignIn={provider.id === autoSignInProviderId}
           onRecover={onRecover}
           onChanged={onChanged}
         />
@@ -106,11 +115,13 @@ export function ModelAccessAccounts({
 function ProviderAccount({
   provider,
   loading,
+  autoSignIn,
   onRecover,
   onChanged,
 }: {
   provider: ModelAccessProvider;
   loading: boolean;
+  autoSignIn: boolean;
   onRecover(provider: ModelAccessProvider): void | Promise<void>;
   onChanged(): void | Promise<void>;
 }) {
@@ -135,6 +146,20 @@ function ProviderAccount({
   );
 
   const busy = loading || starting || signingOut;
+
+  // The deep-linked sign-in, honored once. A row with exactly one method
+  // starts it — the click that sent the user here already said "sign in to
+  // this provider" — while several methods keep the choice with the user via
+  // the control's own menu, opened rather than answered.
+  const autoStarted = React.useRef(false);
+  const startSignInRef = React.useRef(startSignIn);
+  startSignInRef.current = startSignIn;
+  React.useEffect(() => {
+    if (!autoSignIn || autoStarted.current) return;
+    autoStarted.current = true;
+    const only = provider.signIn.length === 1 ? provider.signIn[0] : undefined;
+    if (only !== undefined) void startSignInRef.current(only.type);
+  }, [autoSignIn, provider.signIn]);
 
   async function startSignIn(type: ModelAccessSignInType): Promise<void> {
     if (client === null || session !== null || starting) return;
@@ -221,6 +246,7 @@ function ProviderAccount({
             <SignInControl
               provider={provider}
               busy={busy}
+              autoOpenChoice={autoSignIn && provider.signIn.length > 1}
               onRetry={() => void onRecover(provider)}
               onSignIn={(type) => void startSignIn(type)}
             />
@@ -250,11 +276,14 @@ function ProviderAccount({
 function SignInControl({
   provider,
   busy,
+  autoOpenChoice = false,
   onRetry,
   onSignIn,
 }: {
   provider: ModelAccessProvider;
   busy: boolean;
+  /** A deep-linked arrival lands with the method menu already open. */
+  autoOpenChoice?: boolean;
   onRetry(): void;
   onSignIn(type: ModelAccessSignInType): void;
 }) {
@@ -276,7 +305,7 @@ function SignInControl({
     );
   }
   return (
-    <DropdownMenu>
+    <DropdownMenu defaultOpen={autoOpenChoice}>
       <DropdownMenuTrigger asChild>
         <Button size="sm" variant="secondary" disabled={busy}>
           Sign in

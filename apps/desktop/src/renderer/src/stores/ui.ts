@@ -200,6 +200,15 @@ interface UiState {
    * the user land on General and go find it would be withholding it.
    */
   settingsCategory: string | null;
+  /**
+   * A provider the opener wants signed in to, alongside `settingsCategory`.
+   *
+   * Same lifetime and same one-shot contract as the category: set by a chat
+   * blocker that already knows WHICH provider is blocking typing, read once by
+   * the Model Access pane, which auto-starts (or offers) that provider's
+   * sign-in — the "straight to sign-in" half of first-run onboarding (VC-53).
+   */
+  settingsSignInProviderId: string | null;
   /** Session-only — never persisted; see module doc. */
   newTicketOpen: boolean;
   /** Project/workspace switcher rail hidden? Persisted app-wide (see module doc). */
@@ -225,7 +234,7 @@ interface UiState {
   setRailWidth(width: number): void;
   stepUiScale(delta: 1 | -1): void;
   resetUiScale(): void;
-  setSettingsOpen(open: boolean, category?: string): void;
+  setSettingsOpen(open: boolean, category?: string, signInProviderId?: string): void;
   setNewTicketOpen(open: boolean): void;
   toggleWorkspaceRailHidden(): void;
   setWorkspaceRailHidden(hidden: boolean): void;
@@ -291,6 +300,7 @@ export function createUiStore(storage?: StateStorage) {
         uiScale: UI_SCALE_DEFAULT,
         settingsOpen: false,
         settingsCategory: null,
+        settingsSignInProviderId: null,
         newTicketOpen: false,
         workspaceRailHidden: false,
         sidebarPinned: true,
@@ -303,8 +313,12 @@ export function createUiStore(storage?: StateStorage) {
         setRailWidth: (width) => set({ railWidth: clampRailWidth(width) }),
         stepUiScale: (delta) => set((state) => ({ uiScale: steppedScale(state.uiScale, delta) })),
         resetUiScale: () => set({ uiScale: UI_SCALE_DEFAULT }),
-        setSettingsOpen: (open, category) =>
-          set({ settingsOpen: open, settingsCategory: category ?? null }),
+        setSettingsOpen: (open, category, signInProviderId) =>
+          set({
+            settingsOpen: open,
+            settingsCategory: category ?? null,
+            settingsSignInProviderId: signInProviderId ?? null,
+          }),
         setNewTicketOpen: (open) => set({ newTicketOpen: open }),
         toggleWorkspaceRailHidden: () =>
           set((state) => ({ workspaceRailHidden: !state.workspaceRailHidden })),

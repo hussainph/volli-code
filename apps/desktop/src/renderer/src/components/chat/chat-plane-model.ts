@@ -36,6 +36,8 @@ export function composerModelSelection(input: {
 
 /** This Session's durable model, weighed against what the profile can run. */
 export interface SessionModelStanding {
+  /** The id a sign-in deep-link needs; the label is what a person reads. */
+  providerId: string;
   /** Named rather than the model, because signing in is per provider. */
   providerLabel: string;
   state: ModelAccessState;
@@ -66,7 +68,7 @@ export function sessionModelStanding(
     (candidate) =>
       candidate.providerId === selection.providerId && candidate.modelId === selection.modelId,
   );
-  return { providerLabel, state: model?.state ?? "unavailable" };
+  return { providerId: selection.providerId, providerLabel, state: model?.state ?? "unavailable" };
 }
 
 /* -------------------------------------------------------------- answering */
@@ -439,6 +441,22 @@ export interface SessionBlockerAction {
   act(): void;
 }
 
+/** One provider the first-run blocker can offer sign-in for. */
+export interface SignInProviderOption {
+  id: string;
+  label: string;
+}
+
+/**
+ * The blocker's provider-choice menu — the true first-run case, where no
+ * provider is named yet and "go sign in" needs a WHO before it can be an act.
+ */
+export interface SessionBlockerSignInMenu {
+  label: string;
+  options: readonly SignInProviderOption[];
+  choose(providerId: string): void;
+}
+
 export interface SessionBlockerState {
   message: string;
   /** The harness's own wording. It qualifies the headline; it is never it. */
@@ -451,6 +469,8 @@ export interface SessionBlockerState {
    */
   action: SessionBlockerAction | null;
   secondaryAction?: SessionBlockerAction | null;
+  /** Present only on the unconfigured first-run row; see {@link SessionBlockerSignInMenu}. */
+  signInMenu?: SessionBlockerSignInMenu;
 }
 
 /** What the plane reads to decide whether anything is stopping the typing. */
@@ -462,12 +482,19 @@ export interface SessionBlockerInput {
   catalogError: string | null;
   /** This Session's model against the catalog — see {@link sessionModelStanding}. */
   sessionModel: SessionModelStanding | null;
+  /**
+   * Providers offering an in-app sign-in, for the first-run menu. Empty is
+   * honest — the row then offers Settings alone, exactly as before.
+   */
+  signInProviders: readonly SignInProviderOption[];
 }
 
 export interface SessionBlockerActs {
   recover(): void;
   retryRuntime(): void;
   openSettings(): void;
+  /** Opens Model Access AT the named provider's sign-in — never merely the category. */
+  signIn(providerId: string): void;
 }
 
 /** Select the user's existing ticket terminal tab without creating a new one. */
@@ -529,13 +556,14 @@ export function sessionBlocker(
     return sessionModel.state === "authentication-required"
       ? {
           // The same fact the harness reports as `auth_required`, read before a
-          // message is spent on it instead of after — so it goes to the same
-          // place. What it does NOT carry is the exact-run Retry beside it:
-          // nothing has run.
+          // message is spent on it instead of after. The action goes STRAIGHT
+          // to this provider's sign-in — the row already knows who — rather
+          // than to a category the user would then have to search. What it
+          // does NOT carry is the exact-run Retry beside it: nothing has run.
           message: `Sign-in required for ${sessionModel.providerLabel}`,
           detail: null,
           tone: "error",
-          action: settings,
+          action: { label: "Sign in", act: () => acts.signIn(sessionModel.providerId) },
         }
       : {
           // No action, because the two this row could offer are both wrong.
@@ -557,12 +585,25 @@ export function sessionBlocker(
   }
   // Only a catalog that has actually answered can say a person configured
   // nothing; `loading` looks identical from here and is not a blocked state.
+  // This is the first-run row, so its primary act is provider sign-in: the
+  // catalog names no provider to fix, which is why the act is a menu — the
+  // provider choice IS the missing fact. Settings stays beside it for the
+  // rest of the pane (defaults, visibility, the full account list).
   if (input.catalogState === "empty" && !asked) {
     return {
       message: "No models configured",
       detail: null,
       tone: "unconfigured",
       action: settings,
+      ...(input.signInProviders.length > 0
+        ? {
+            signInMenu: {
+              label: "Sign in",
+              options: input.signInProviders,
+              choose: acts.signIn,
+            },
+          }
+        : {}),
     };
   }
   // The model list failing to refresh, which is a different fact from there

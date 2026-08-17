@@ -167,8 +167,19 @@ describe("setSettingsOpen", () => {
     const store = createUiStore(createMemoryStorage());
     expect(store.getState().settingsCategory).toBeNull();
 
-    store.getState().setSettingsOpen(true, "agent");
-    expect(store.getState().settingsCategory).toBe("agent");
+    store.getState().setSettingsOpen(true, "model-access");
+    expect(store.getState().settingsCategory).toBe("model-access");
+  });
+
+  it("carries the provider a blocker wants signed in to, one-shot like the category", () => {
+    const store = createUiStore(createMemoryStorage());
+    expect(store.getState().settingsSignInProviderId).toBeNull();
+
+    store.getState().setSettingsOpen(true, "model-access", "anthropic");
+    expect(store.getState().settingsSignInProviderId).toBe("anthropic");
+
+    store.getState().setSettingsOpen(true, "model-access");
+    expect(store.getState().settingsSignInProviderId).toBeNull();
   });
 
   it("forgets the category on the next opening that names none", () => {
@@ -176,10 +187,11 @@ describe("setSettingsOpen", () => {
     // would send the NEXT visitor somewhere the surface that opened it never
     // asked for.
     const store = createUiStore(createMemoryStorage());
-    store.getState().setSettingsOpen(true, "agent");
+    store.getState().setSettingsOpen(true, "model-access", "anthropic");
 
     store.getState().setSettingsOpen(false);
     expect(store.getState().settingsCategory).toBeNull();
+    expect(store.getState().settingsSignInProviderId).toBeNull();
 
     store.getState().setSettingsOpen(true);
     expect(store.getState().settingsCategory).toBeNull();

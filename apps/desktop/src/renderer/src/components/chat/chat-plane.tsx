@@ -20,12 +20,13 @@ import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
 import { ClockIcon } from "@phosphor-icons/react/dist/csr/Clock";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import type {
+  HiddenModelRef,
   ModelAccessModel,
   ModelAccessProvider,
   SessionAttentionProjection,
   RendererSessionInteraction,
 } from "@volli/shared";
-import { errorMessage } from "@volli/shared";
+import { errorMessage, visibleModels } from "@volli/shared";
 import type { DynamicToolUIPart, UIMessage } from "ai";
 
 import {
@@ -82,6 +83,7 @@ import {
   type CatalogState,
   type SessionBlockerActs,
   type SessionBlockerState,
+  type SignInProviderOption,
 } from "@renderer/components/chat/chat-plane-model";
 import {
   SessionComposer,
@@ -97,6 +99,12 @@ import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@renderer/components/ui/dropdown-menu";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { useMeasuredHeight } from "@renderer/hooks/use-measured-height";
@@ -116,6 +124,7 @@ const NO_INTERACTIONS: readonly RendererSessionInteraction[] = [];
 const NO_QUEUE: readonly QueuedMessage[] = [];
 const NO_HELD: readonly HeldMessage[] = [];
 const NO_MODELS: readonly ModelAccessModel[] = [];
+const NO_HIDDEN: readonly HiddenModelRef[] = [];
 const EMPTY_MODEL_SELECTION: ComposerModelSelection = {
   providerId: "",
   modelId: "",
@@ -182,23 +191,28 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
   const modelSelection = projection?.modelSelection ?? null;
   const selection: ComposerModelSelection = modelSelection ?? EMPTY_MODEL_SELECTION;
   const liveExecutorId = projection?.liveExecutor?.id ?? null;
-  const { models, providers, catalogState, catalogError } = useModelAccess(projection !== null);
+  const { models, providers, hidden, catalogState, catalogError } = useModelAccess(
+    projection !== null,
+  );
   // A durable model is not enough to type: the row that says this Session is
   // pinned to something nobody can run waits on the catalog, and until the
   // catalog answers there is nothing to say it with. A box that takes a message
   // in that window spends it before the warning it was owed — which is the one
   // thing knowing the model early was for.
   const composable = modelSelection !== null && catalogState !== "loading";
-  // Signed-in models only. Pi's catalog is every provider it knows — around a
-  // thousand models against the handful this profile has credentials for — and
-  // a picker that lists the rest is a picker whose first "GPT-5.6 Luna" is
-  // whichever provider sorted first. What you cannot send to is not an option.
+  // Signed-in models only, minus the user's visibility curation. Pi's catalog
+  // is every provider it knows — around a thousand models against the handful
+  // this profile has credentials for — and a picker that lists the rest is a
+  // picker whose first "GPT-5.6 Luna" is whichever provider sorted first. What
+  // you cannot send to is not an option, and what you toggled off in Model
+  // Access is not one either (VC-53).
   const composerModels = React.useMemo(
     () =>
-      models
-        .filter((model) => model.state === "available")
-        .map((model) => composerModel(model, providers)),
-    [models, providers],
+      visibleModels(
+        models.filter((model) => model.state === "available"),
+        hidden,
+      ).map((model) => composerModel(model, providers)),
+    [hidden, models, providers],
   );
   const sessionModel = React.useMemo(
     () => sessionModelStanding(modelSelection, models, providers),
@@ -510,9 +524,22 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
       // provider that needs signing in, and landing on General would make the
       // user go find it — a short trip, but one this row already knows the
       // answer to.
-      openSettings: () => setSettingsOpen(true, "agent"),
+      openSettings: () => setSettingsOpen(true, "model-access"),
+      // And when the row knows WHICH provider, straight to its sign-in: the
+      // pane auto-starts (or offers) that provider's flow on arrival.
+      signIn: (providerId) => setSettingsOpen(true, "model-access", providerId),
     }),
     [liveExecutorId, recover, retryRuntime, setSettingsOpen],
+  );
+  // The providers a first-run "Sign in" can offer — the ones with an in-app
+  // flow, in the same reachable-first order the Accounts list uses.
+  const signInProviders = React.useMemo<readonly SignInProviderOption[]>(
+    () =>
+      providers
+        .filter((provider) => provider.signIn.length > 0)
+        .toSorted((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }))
+        .map((provider) => ({ id: provider.id, label: provider.label })),
+    [providers],
   );
   const blocker = sessionBlocker(
     {
@@ -521,6 +548,7 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
       catalogState,
       catalogError,
       sessionModel,
+      signInProviders,
     },
     blockerActs,
     interactions.length > 0,
@@ -663,34 +691,39 @@ export function ChatPlane({ sessionId, projectId, onOpenFile, store }: ChatPlane
 function useModelAccess(active: boolean): {
   models: readonly ModelAccessModel[];
   providers: readonly ModelAccessProvider[];
+  hidden: readonly HiddenModelRef[];
   catalogState: CatalogState;
   catalogError: string | null;
 } {
   const modelAccess = useModelAccessClient();
   const [models, setModels] = React.useState<readonly ModelAccessModel[]>(NO_MODELS);
   const [providers, setProviders] = React.useState<readonly ModelAccessProvider[]>([]);
+  const [hidden, setHidden] = React.useState<readonly HiddenModelRef[]>(NO_HIDDEN);
   const [catalogState, setCatalogState] = React.useState<CatalogState>("loading");
   const [catalogError, setCatalogError] = React.useState<string | null>(null);
   const inspect = modelAccess?.inspect;
+  const hiddenModels = modelAccess?.hiddenModels;
   const revision = modelAccess?.revision ?? 0;
 
   React.useEffect(() => {
     if (!active) return;
     setCatalogState("loading");
     setCatalogError(null);
-    if (inspect === undefined) {
+    if (inspect === undefined || hiddenModels === undefined) {
       setModels(NO_MODELS);
       setProviders([]);
+      setHidden(NO_HIDDEN);
       setCatalogState("error");
       setCatalogError("Model Access is unavailable");
       return;
     }
     let current = true;
-    void inspect({})
-      .then((access) => {
+    void Promise.all([inspect({}), hiddenModels()])
+      .then(([access, curated]) => {
         if (!current) return;
         setModels(access.models);
         setProviders(access.providers);
+        setHidden(curated);
         setCatalogError(null);
         setCatalogState(
           access.models.some((model) => model.state === "available") ? "ready" : "empty",
@@ -704,11 +737,17 @@ function useModelAccess(active: boolean): {
     return () => {
       current = false;
     };
-  }, [active, inspect, revision]);
+  }, [active, hiddenModels, inspect, revision]);
 
   return active
-    ? { models, providers, catalogState, catalogError }
-    : { models: NO_MODELS, providers: [], catalogState: "pinned", catalogError: null };
+    ? { models, providers, hidden, catalogState, catalogError }
+    : {
+        models: NO_MODELS,
+        providers: [],
+        hidden: NO_HIDDEN,
+        catalogState: "pinned",
+        catalogError: null,
+      };
 }
 
 function composerModel(
@@ -763,6 +802,28 @@ function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
           </p>
         ) : null}
       </div>
+      {/* The first-run provider menu, ahead of the plain action: choosing who
+          to sign in to IS the recovery, and Settings beside it stays the
+          long way around for everything else the pane holds. */}
+      {blocker.signInMenu ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="xs" variant="secondary" className="shrink-0">
+              {blocker.signInMenu.label}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="max-h-72 overflow-y-auto">
+            {blocker.signInMenu.options.map((option) => (
+              <DropdownMenuItem
+                key={option.id}
+                onSelect={() => blocker.signInMenu?.choose(option.id)}
+              >
+                {option.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
       {blocker.action ? (
         <Button size="xs" variant="ghost" className="shrink-0" onClick={blocker.action.act}>
           {blocker.action.label}
