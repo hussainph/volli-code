@@ -146,7 +146,7 @@ export function CliSettings() {
                 </span>
                 {row.detail ? (
                   <span
-                    className="break-all text-right font-mono text-xs text-muted-foreground"
+                    className="break-all text-right font-mono text-ui text-muted-foreground"
                     title={row.detail}
                   >
                     {row.detail}
@@ -222,9 +222,9 @@ function DoctorBody({ doctor, onFix }: { doctor: DoctorState; onFix: () => void 
             <Mark weight="fill" className={`mt-0.5 size-4 shrink-0 ${mark.className}`} />
             <div className="min-w-0">
               <p className="text-ui text-foreground">{check.title}</p>
-              <p className="break-words text-xs text-muted-foreground">{check.detail}</p>
+              <p className="break-words text-ui text-muted-foreground">{check.detail}</p>
               {check.remedy ? (
-                <p className="text-xs text-muted-foreground">→ {check.remedy}</p>
+                <p className="text-ui text-muted-foreground">→ {check.remedy}</p>
               ) : null}
             </div>
           </div>
