@@ -1242,8 +1242,8 @@ describe("auto-title on delivery", () => {
     });
   }
 
-  it("renames a Session still on its creation default once a message delivers", async () => {
-    const { client, sessionId } = await readyWithTitle("Chat 1");
+  it("names an untitled Session once its first message delivers", async () => {
+    const { client, sessionId } = await readyWithTitle(null);
     const renameMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
 
@@ -1265,35 +1265,21 @@ describe("auto-title on delivery", () => {
     const { store, sessionId } = await adopted((fake) => {
       fake.snapshotProjection = {
         ...projectionFor(null),
-        session: { ...SESSION, title: "Chat 1" },
+        session: { ...SESSION, title: null },
       };
     });
     store.getState().enqueue(sessionId, { id: "q1", text: "Fix the parser" });
     expect(renameMock).not.toHaveBeenCalled();
 
-    store.getState().setProjection(sessionId, projectionWithTitle("Chat 1"));
+    store.getState().setProjection(sessionId, projectionWithTitle(null));
     await settle();
 
     expect(renameMock).toHaveBeenCalledWith({ sessionId, title: "Fix the parser" });
     vi.unstubAllGlobals();
   });
 
-  it("leaves a title a person (or an earlier delivery) already gave it alone", async () => {
-    const { client } = await readyWithTitle("Migration plan");
-    const renameMock = vi.fn().mockResolvedValue({ ok: true });
-    vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
-
-    await expect(client.submit({ id: "m1", text: "Fix the parser" }, "steer")).resolves.toBe(
-      "delivered",
-    );
-    await settle();
-
-    expect(renameMock).not.toHaveBeenCalled();
-    vi.unstubAllGlobals();
-  });
-
-  it("has no title to read from a Session whose projection carries none, and renames nothing", async () => {
-    const { client } = await readyWithTitle(null);
+  it("leaves every user title alone, including one that resembles the old default", async () => {
+    const { client } = await readyWithTitle("Chat 1");
     const renameMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
 
@@ -1307,7 +1293,7 @@ describe("auto-title on delivery", () => {
   });
 
   it("never delivers, and never renames, a blank message", async () => {
-    const { client } = await readyWithTitle("Chat 1");
+    const { client } = await readyWithTitle(null);
     const renameMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
 
@@ -1318,7 +1304,7 @@ describe("auto-title on delivery", () => {
   });
 
   it("does not fail the submit when the rename itself fails", async () => {
-    const { client } = await readyWithTitle("Chat 1");
+    const { client } = await readyWithTitle(null);
     const renameMock = vi.fn().mockRejectedValue(new Error("ipc down"));
     vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
 

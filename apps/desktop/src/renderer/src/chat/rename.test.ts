@@ -11,7 +11,7 @@ import { EMPTY_TRANSCRIPT } from "@renderer/chat/transcript";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 
-import { autoTitleFromMessage, isDefaultChatTitle, renameChatSession } from "./rename";
+import { isUntitledChatSession, renameChatSession } from "./rename";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
@@ -224,56 +224,10 @@ describe("renameChatSession rollback", () => {
   });
 });
 
-describe("isDefaultChatTitle", () => {
-  it("matches the creation default at any ordinal", () => {
-    expect(isDefaultChatTitle("Chat 1")).toBe(true);
-    expect(isDefaultChatTitle("Chat 42")).toBe(true);
-  });
-
-  it("matches the bare fallback label", () => {
-    expect(isDefaultChatTitle("Chat")).toBe(true);
-  });
-
-  it("rejects a title a person (or an earlier auto-title) gave it", () => {
-    expect(isDefaultChatTitle("Migration plan")).toBe(false);
-    expect(isDefaultChatTitle("Chat about the parser")).toBe(false);
-    expect(isDefaultChatTitle("Chat 1 ")).toBe(false);
-    expect(isDefaultChatTitle("Chat -1")).toBe(false);
-    expect(isDefaultChatTitle("")).toBe(false);
-  });
-});
-
-describe("autoTitleFromMessage", () => {
-  it("picks the first line", () => {
-    expect(autoTitleFromMessage("Fix the parser\n\nDetails below.")).toBe("Fix the parser");
-  });
-
-  it("skips leading blank lines to find the first non-empty one", () => {
-    expect(autoTitleFromMessage("\n   \nFix the parser")).toBe("Fix the parser");
-  });
-
-  it("collapses internal whitespace runs to a single space", () => {
-    expect(autoTitleFromMessage("Fix   the\tparser  please")).toBe("Fix the parser please");
-  });
-
-  it("cuts a long first line at a word boundary and appends an ellipsis", () => {
-    const line = "Investigate why the worktree exec socket keeps dropping mid session";
-    expect(autoTitleFromMessage(line)).toBe("Investigate why the worktree exec socket keeps…");
-  });
-
-  it("returns an exact 48-character line unchanged, with no ellipsis", () => {
-    const line = "a".repeat(48);
-    expect(autoTitleFromMessage(line)).toBe(line);
-    expect(autoTitleFromMessage(line)).not.toMatch(/…$/);
-  });
-
-  it("hard-cuts a single word longer than the limit and appends an ellipsis", () => {
-    const line = "a".repeat(60);
-    expect(autoTitleFromMessage(line)).toBe(`${"a".repeat(48)}…`);
-  });
-
-  it("is null for blank or whitespace-only text", () => {
-    expect(autoTitleFromMessage("")).toBeNull();
-    expect(autoTitleFromMessage("   \n  \n\t")).toBeNull();
+describe("isUntitledChatSession", () => {
+  it("makes only a missing title eligible for auto-naming", () => {
+    expect(isUntitledChatSession(null)).toBe(true);
+    expect(isUntitledChatSession("Chat 1")).toBe(false);
+    expect(isUntitledChatSession("Migration plan")).toBe(false);
   });
 });

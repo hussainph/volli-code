@@ -184,6 +184,13 @@ describe("renderCliSuccess", () => {
         options,
       ),
     ).toBe("abcdef12  ticket  running  Work\n");
+    expect(
+      renderCliSuccess(
+        "session.list",
+        { sessions: [{ id: "fedcba98", kind: "chat", ticket: "VC-52", title: "Validate VC-52" }] },
+        options,
+      ),
+    ).toBe("fedcba98  chat  VC-52  Validate VC-52\n");
     expect(renderCliSuccess("ticket.events", { events: [{ kind: "created" }] }, options)).toBe(
       '{"kind":"created"}\n',
     );

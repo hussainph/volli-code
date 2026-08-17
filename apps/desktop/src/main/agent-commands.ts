@@ -5,6 +5,7 @@ import type Database from "better-sqlite3";
 import type { SessionEngine } from "@volli/session-engine";
 import {
   applyTicketBodyMutation,
+  autoTitleFromKickoff,
   attachmentsSectionInput,
   composeAttachmentsSection,
   composeTicketPrompt,
@@ -1255,10 +1256,12 @@ export function createAgentCommandService(
         const actor = requestActor(request, sessions);
         if (!actor.ok) return actor.response;
         const message = request.args["message"];
+        const title = request.args["title"];
         const model = request.args["model"];
         const reasoning = request.args["reasoning"];
         if (
           (message !== undefined && (typeof message !== "string" || message.trim().length === 0)) ||
+          (title !== undefined && (typeof title !== "string" || title.trim().length === 0)) ||
           (model !== undefined && !isModelRef(model)) ||
           (reasoning !== undefined && !(REASONING_LEVELS as readonly unknown[]).includes(reasoning))
         ) {
@@ -1268,15 +1271,18 @@ export function createAgentCommandService(
           resolved.project.ticketPrefix,
           resolved.ticket.ticketNumber,
         );
+        const kickoff = typeof message === "string" ? message : DEFAULT_KICKOFF_MESSAGE;
+        const sessionTitle =
+          typeof title === "string" ? title.trim() : autoTitleFromKickoff(kickoff, displayId);
         try {
           const started = await sessionsFacade.start({
             operationId: newId(),
             projectId: resolved.project.id,
             ticketId: resolved.ticket.id,
-            // Null on purpose: the surfaces own default naming (acceptance
-            // allows it), and a CLI-invented title would fight the renderer's
-            // "Chat N" convention.
-            title: null,
+            // The explicit --title is already a user-set string. Otherwise the
+            // deterministic kickoff heuristic gives the CLI door a meaningful
+            // durable title before its detached first exchange begins.
+            title: sessionTitle,
             actor: actor.actor,
             ...(model !== undefined || reasoning !== undefined
               ? {
@@ -1295,7 +1301,6 @@ export function createAgentCommandService(
           // the TURN it started ends, and this reply is due as the session
           // opens, not when the agent finishes.
           if (started.state === "ready") {
-            const kickoff = typeof message === "string" ? message : DEFAULT_KICKOFF_MESSAGE;
             void Promise.resolve()
               .then(() =>
                 options.submitSessionMessage?.({ sessionId: started.sessionId, text: kickoff }),

@@ -11,7 +11,7 @@
  */
 import { errorMessage, type HarnessId, type Project } from "@volli/shared";
 
-import { chatTabId, nextChatOrdinal } from "@renderer/components/ticket/ticket-chat-tab";
+import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
@@ -285,7 +285,6 @@ export async function createTerminalSplit(
 
 /** How a chat create lands once the Session is durable. */
 export interface ChatBoot {
-  title: string;
   /**
    * Skill slugs the Session starts with. Carried through to the start RPC,
    * where main resolves the bodies and records them ahead of the attach —
@@ -326,7 +325,9 @@ function abandonChat(sessionId: string): void {
  * resolves the id even when the executor refuses to start, because the Session
  * exists either way and the tab it opens carries its own Retry. Only a failed
  * `session.create` — which has already toasted, and left nothing durable behind
- * — resolves null, and only that skips the tab.
+ * — resolves null, and only that skips the tab. New chats deliberately start
+ * with `title: null`: their first delivered message names them, while any
+ * human rename makes the durable title non-null and therefore protected.
  */
 /* -------------------------------------------------------------------------- */
 /* The project's ticketless Sessions — one path per kind                       */
@@ -356,18 +357,14 @@ export async function startScratchTerminal(projectId: string): Promise<void> {
 /**
  * The chat half of {@link startScratchTerminal}.
  *
- * The ordinal counts only what is OPEN, because that is all this surface has: a
- * project's ticketless chats have no durable listing the way a ticket's do. Read
- * at call time rather than passed in, so a chord fired from another page counts
- * the same tabs the strip would have.
+ * The Session starts untitled. Its first delivered message supplies the name;
+ * until then the strip's neutral `Chat` fallback is all the UI shows.
  */
 export async function startScratchChat(
   projectId: string,
   skills?: readonly string[],
 ): Promise<void> {
-  const openChats = useChatSessionsStore.getState().openTabs[projectId]?.length ?? 0;
   await bootChatSession(scratchScope(projectId), {
-    title: `Chat ${nextChatOrdinal(0, openChats)}`,
     skills,
     land: (sessionId) => {
       useChatSessionsStore.getState().openChatTab(projectId, sessionId);
@@ -405,21 +402,15 @@ export async function startTicketTerminal(projectId: string, ticketId: string): 
 /**
  * The chat half of {@link startTicketTerminal}.
  *
- * Both counts are read at call time rather than passed in, so a chord fired
- * without the rail on screen numbers the chat off the same two facts the strip
- * would have: the ticket's durable chat rows, and the tabs currently open on it.
+ * A ticket chat also starts untitled. The Session's first delivered message is
+ * the one subject this surface records; no per-ticket ordinal is needed.
  */
 export async function startTicketChat(
   projectId: string,
   ticketId: string,
   skills?: readonly string[],
 ): Promise<void> {
-  const openChats = useChatSessionsStore.getState().openTabs[ticketId]?.length ?? 0;
-  const durableChats = (useTicketSessionRecordsStore.getState().byTicket[ticketId] ?? []).filter(
-    (row) => row.kind === "chat",
-  ).length;
   await bootChatSession(ticketScope(projectId, ticketId), {
-    title: `Chat ${nextChatOrdinal(durableChats, openChats)}`,
     skills,
     land: (sessionId) => {
       // The ticket itself may have been deleted while the create was in flight;
@@ -438,14 +429,14 @@ export async function startTicketChat(
 
 export async function bootChatSession(
   scope: SessionScope,
-  { title, skills, land }: ChatBoot,
+  { skills, land }: ChatBoot,
 ): Promise<string | null> {
   return underOwnerGuard(scope, chatStarting, async () => {
     try {
       const sessionId = await useChatSessionsStore.getState().createChatSession({
         projectId: scope.projectId,
         ticketId: scope.kind === "ticket" ? scope.ticketId : null,
-        title,
+        title: null,
         ...(skills !== undefined && skills.length > 0 ? { skills } : {}),
       });
       if (sessionId === null) return null;

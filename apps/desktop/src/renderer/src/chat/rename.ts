@@ -25,35 +25,13 @@ import { toastError } from "@renderer/lib/toast";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 
-/** The creation default (`Chat ${n}`) and its bare fallback — never a title a person chose. */
-const DEFAULT_CHAT_TITLE_PATTERN = /^Chat \d+$/;
-
-/** A chat's untouched creation title — the only title an auto-title may replace. */
-export function isDefaultChatTitle(title: string): boolean {
-  return title === "Chat" || DEFAULT_CHAT_TITLE_PATTERN.test(title);
-}
-
-/** How much of a message's first line survives into a title before it is cut. */
-const AUTO_TITLE_MAX_LENGTH = 48;
-
 /**
- * A title guessed from a message, or `null` when nothing usable survives.
- *
- * Only the first line with visible content is read — a prompt's subject lives
- * in its opening sentence, and pulling from further down would title a chat
- * off its own body. Runs of whitespace collapse to one space so a pasted,
- * wrapped paragraph reads as prose rather than as its literal line breaks.
+ * A new renderer chat has no durable title until its first delivered message.
+ * Any string, including a human-entered `Chat 1`, is an explicit title and is
+ * never eligible for automatic replacement.
  */
-export function autoTitleFromMessage(text: string): string | null {
-  for (const line of text.split(/\r?\n/)) {
-    const collapsed = line.replace(/\s+/g, " ").trim();
-    if (collapsed.length === 0) continue;
-    if (collapsed.length <= AUTO_TITLE_MAX_LENGTH) return collapsed;
-    const cut = collapsed.slice(0, AUTO_TITLE_MAX_LENGTH);
-    const wordBoundary = cut.lastIndexOf(" ");
-    return `${wordBoundary === -1 ? cut : cut.slice(0, wordBoundary)}…`;
-  }
-  return null;
+export function isUntitledChatSession(title: string | null): boolean {
+  return title === null;
 }
 
 /**

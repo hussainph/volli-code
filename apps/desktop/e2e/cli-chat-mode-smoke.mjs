@@ -343,7 +343,7 @@ async function main() {
           },
         );
         // The first delivered message names the Session (`chat/client.ts`'s
-        // `#autoTitle`), so the "Chat 1" captured at creation is no longer what
+        // `#autoTitle`), so the neutral `Chat` fallback captured at creation is no longer what
         // the tab is called. Re-read it, or the relaunch below looks for a tab
         // that stopped existing the moment the prompt landed.
         chatTabLabel = await activeTabLabel(page, TICKET_TAB_STRIP);
