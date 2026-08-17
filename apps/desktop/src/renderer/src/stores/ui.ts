@@ -203,10 +203,17 @@ interface UiState {
   /**
    * A provider the opener wants signed in to, alongside `settingsCategory`.
    *
-   * Same lifetime and same one-shot contract as the category: set by a chat
-   * blocker that already knows WHICH provider is blocking typing, read once by
-   * the Model Access pane, which auto-starts (or offers) that provider's
-   * sign-in — the "straight to sign-in" half of first-run onboarding (VC-53).
+   * Set by a chat blocker that already knows WHICH provider is blocking typing,
+   * taken by the Model Access pane, which auto-starts (or offers) that
+   * provider's sign-in — the "straight to sign-in" half of first-run onboarding
+   * (VC-53).
+   *
+   * Unlike the category it travels with, this one is SPENT on arrival
+   * ({@link UiState.consumeSettingsSignIn}), and spending it is the contract
+   * rather than bookkeeping. The shell unmounts a pane when you switch
+   * category, so a request still standing here starts a provider's browser auth
+   * flow again every time you walk back past Model Access — an external act
+   * nobody asked for the second time. One press, one launch.
    */
   settingsSignInProviderId: string | null;
   /** Session-only — never persisted; see module doc. */
@@ -235,6 +242,16 @@ interface UiState {
   stepUiScale(delta: 1 | -1): void;
   resetUiScale(): void;
   setSettingsOpen(open: boolean, category?: string, signInProviderId?: string): void;
+  /**
+   * Spend the deep-linked sign-in request: the Model Access pane calls this as
+   * it takes {@link UiState.settingsSignInProviderId}, so its next mount arrives
+   * asking for nothing.
+   *
+   * Leaves `settingsCategory` alone. That one is read by the shell once per
+   * opening and never re-read, and re-reading it would cost a selected rail row
+   * anyway — not an auth flow.
+   */
+  consumeSettingsSignIn(): void;
   setNewTicketOpen(open: boolean): void;
   toggleWorkspaceRailHidden(): void;
   setWorkspaceRailHidden(hidden: boolean): void;
@@ -319,6 +336,7 @@ export function createUiStore(storage?: StateStorage) {
             settingsCategory: category ?? null,
             settingsSignInProviderId: signInProviderId ?? null,
           }),
+        consumeSettingsSignIn: () => set({ settingsSignInProviderId: null }),
         setNewTicketOpen: (open) => set({ newTicketOpen: open }),
         toggleWorkspaceRailHidden: () =>
           set((state) => ({ workspaceRailHidden: !state.workspaceRailHidden })),

@@ -44,6 +44,7 @@ import { Spinner } from "@renderer/components/ui/spinner";
 import { Switch } from "@renderer/components/ui/switch";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { toastError } from "@renderer/lib/toast";
+import { useUiStore } from "@renderer/stores/ui";
 
 /** The rows of the Default models section, in resolution order. */
 const PURPOSE_ROWS: readonly { purpose: ModelPurpose; label: string }[] = [
@@ -59,6 +60,19 @@ export function ModelAccessSettings({
   autoSignInProviderId,
 }: { autoSignInProviderId?: string } = {}) {
   const client = useModelAccessClient();
+  // The deep-linked sign-in, taken once and spent as it is taken.
+  //
+  // Held as this mount's own initial value, not read live: the store field is
+  // cleared immediately (below), and the row underneath still needs the answer
+  // for the rest of THIS visit. Switching category unmounts the pane, so the
+  // next visit initializes from a field that now says nothing and starts no
+  // auth flow — which is the point. A provider's browser sign-in is an external
+  // act and belongs to the press that asked for it, not to the pane's mounting.
+  const [deepLinkedProviderId] = React.useState(autoSignInProviderId);
+  const consumeSignInRequest = useUiStore((state) => state.consumeSettingsSignIn);
+  React.useEffect(() => {
+    if (deepLinkedProviderId !== undefined) consumeSignInRequest();
+  }, [deepLinkedProviderId, consumeSignInRequest]);
   const [models, setModels] = React.useState<readonly ModelAccessModel[]>([]);
   const [providers, setProviders] = React.useState<readonly ModelAccessProvider[]>([]);
   const [defaults, setDefaults] = React.useState<ModelAccessDefaults>(EMPTY_MODEL_ACCESS_DEFAULTS);
@@ -199,7 +213,7 @@ export function ModelAccessSettings({
       <ModelAccessAccounts
         providers={providers}
         loading={loading}
-        autoSignInProviderId={autoSignInProviderId}
+        autoSignInProviderId={deepLinkedProviderId}
         onRecover={() => void retry()}
         onChanged={() => load(true)}
       />
