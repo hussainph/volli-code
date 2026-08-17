@@ -6,27 +6,40 @@
  * screen together — which is exactly what the real board cannot give you,
  * because it shows one view mode at a time.
  *
+ * ── THE TWO STATES DIFFER BY MOTION, NOT ONLY HUE ─────────────────────────
+ * `working` travels; `waiting` is the same ring standing still. Something
+ * moves on the card exactly when something is moving in the Session, so the
+ * pair is legible in peripheral vision before the eye has resolved a colour —
+ * and a board with four blocked agents on it holds still instead of crawling
+ * in four places at once. The hues (`--positive`, `--attention`) come from
+ * `ui/status-dot.tsx`'s map, which every other Session surface already obeys;
+ * the selected card is in the set below because ember was the obvious
+ * alternative and this is why it lost — a selected card and an active card two
+ * pixels apart in the same colour.
+ *
  * ── WHAT TO ACTUALLY LOOK AT ──────────────────────────────────────────────
- * The ring is the thing to be sceptical about, and there are three ways it can
- * be wrong that a still screenshot will not show:
+ * Three ways this can be wrong that a still screenshot will not show:
  *
  *   • SPEED. 2.6s per lap. Faster reads as a spinner — urgency, "you are
  *     waiting on this" — which is wrong for something that may be lit for ten
  *     minutes. Slower stops reading as motion and starts reading as a
  *     gradient someone forgot to finish.
- *   • LOUDNESS AT REST. Look away, then back. The row of quiet cards below is
- *     here for that: if your eye keeps being pulled to the ring while you are
- *     trying to read a different card's title, it is too bright, and the fix
- *     is the arc's width in the conic gradient rather than its opacity.
- *   • THE CORNERS. Watch one full lap at a corner. The sweep is an oversized
- *     square rotating behind a mask, so a coverage bug shows up as the
- *     highlight thinning or dropping out at 45°, and only there.
+ *   • LOUDNESS AT REST. Look away, then back. The quiet cards between the lit
+ *     ones are here for that: if your eye keeps being pulled to the ring while
+ *     you are trying to read a different card's title, it is too bright, and
+ *     the fix is the arc's width in the conic gradient rather than its opacity.
+ *   • THE CORNERS. The waiting card is the one to check, because its ring is
+ *     lit the whole way round and holds still — so its curve can be compared
+ *     against the card's own border directly. They must be concentric with no
+ *     dark line between them. (They were not: `inset: 0` on an absolutely
+ *     positioned box lands on the PADDING box, one pixel inside the border,
+ *     while `border-radius: inherit` still described the border box. A 1px
+ *     offset invisible along an edge, obvious at a corner.)
  *
- * The two colours are not a preference: `--positive` for working and
- * `--attention` for waiting come from `ui/status-dot.tsx`'s map, which every
- * other Session surface already obeys. The selected card is in the set below
- * because ember was the obvious alternative and this is why it lost — a
- * selected card and an active card two pixels apart in the same colour.
+ * Both hues clear 4.5:1 against `--card` in both appearances — about 9:1 dark,
+ * 5.5:1 light. They still read differently, and that is the generated token
+ * set doing its job rather than a bug: ink on a light canvas, light on a dark
+ * one. Toggle Light/Dark above and judge them separately.
  *
  * Static, and deliberately so: there is no store behind these, because what is
  * under review is the drawing rather than the derivation. The derivation has

@@ -801,12 +801,26 @@
  * rastered at its full size, so 220% would have cost twice the texture for
  * margin nothing uses.
  *
- * ── WHY IT SITS INSIDE THE BOX ────────────────────────────────────────────
- * `inset: 0`, not the lab's `-2px`. Selection on this card colours the border
- * rather than drawing a ring for a reason recorded in `ticket-card.tsx`: the
- * column scroller clips anything drawn outside the first card's top edge. An
- * outset glow would be cut in half on exactly the card at the top of Doing,
- * which is the one most likely to be running something.
+ * ── WHY IT SITS ON THE BORDER LINE, AND WHY `inset` IS NEGATIVE ────────────
+ * Not the lab's `-2px`. Selection on this card colours the border rather than
+ * drawing a ring for a reason recorded in `ticket-card.tsx`: the column
+ * scroller clips anything drawn outside the first card's top edge. An outset
+ * glow would be cut in half on exactly the card at the top of Doing, which is
+ * the one most likely to be running something. So the ring lands ON the card's
+ * own border rather than around it.
+ *
+ * `-1px` is what puts it there, and it is arithmetic rather than nudging. An
+ * absolutely positioned box is offset from its containing block's PADDING box,
+ * which sits inside the card's 1px border — so `inset: 0` drew the ring one
+ * pixel in, while `border-radius: inherit` still gave it the 12px radius of the
+ * border box it was no longer on. Along a straight edge that is a 1px offset
+ * nobody sees; at a corner the two curves have different radii and the ring
+ * visibly peels away from the border. Cancelling the border width puts the ring
+ * exactly on the border box, where its inherited radius is the right one.
+ *
+ * It is therefore coupled to the card's border being 1px. That is the one fact
+ * this rule needs from its caller, and it is worth the coupling: the
+ * alternative is re-deriving the corner every time the radius ladder moves.
  *
  * ── APPEARING AND LEAVING ─────────────────────────────────────────────────
  * `display` transitions with `allow-discrete`, so the ring fades in AND out
@@ -816,6 +830,20 @@
  * span is always rendered rather than mounted on demand: React cannot animate
  * an unmount without help, and the fade out is worth more here than the node.
  *
+ * ── MOTION IS THE STATE, NOT JUST THE COLOUR ────────────────────────────
+ * Only `working` travels. `waiting` is the same ring standing still.
+ *
+ * That is the honest mapping rather than a decoration: something is MOVING on
+ * that card exactly when something is moving in the Session, and a blocked
+ * agent has stopped. Told apart by hue alone the two states were one signal
+ * wearing two colours, which asks the reader to know the colour code before
+ * the card means anything; told apart by motion they are legible in
+ * peripheral vision, before the eye has resolved either.
+ *
+ * It also lets the loud one stay rare. A board with four blocked agents on it
+ * has four still outlines instead of four things crawling, and the one that is
+ * genuinely producing is the only thing in the grid that moves.
+ *
  * ── COLOUR ────────────────────────────────────────────────────────────────
  * From `ui/status-dot.tsx`'s map, not from the accent the lab used: `working`
  * is `--positive` and `waiting` is `--attention`. Ember would have put an
@@ -823,11 +851,22 @@
  * pixels away on the same edge) — the exact collision that map was written to
  * end, one component over.
  *
- * Reduced motion parks it as a steady ring rather than dropping it, because
+ * Both clear 4.5:1 against `--card` in both appearances (measured: ~9:1 dark,
+ * ~5.5:1 light). They read differently by construction rather than by
+ * accident — the generated set makes these ink colours on a light canvas and
+ * light colours on a dark one, so the same ring is a neon filament in dark and
+ * a drawn line in light. Correct both times: a glow on paper IS a line, and a
+ * lighter one would have less contrast, not more.
+ *
+ * Reduced motion parks the travelling ring rather than dropping it, because
  * here the mark IS the information: a card with an agent on it must still be
- * findable when the travelling is gone. The two sweeps above drop themselves
- * instead, and correctly — a frozen highlight halfway along a word reads as a
- * bug, while a still outline reads as an outline. */
+ * findable when the travelling is gone. That does collapse `working` and
+ * `waiting` onto one drawing separated only by hue — the same thing
+ * `status-dot-live` already accepts when its breath stops, and the right trade,
+ * since the alternative is a card that stops saying anything at all. The two
+ * sweeps above drop themselves instead, and correctly — a frozen highlight
+ * halfway along a word reads as a bug, while a still outline reads as an
+ * outline. */
 @keyframes session-ring-sweep {
   from {
     transform: translate(-50%, -50%) rotate(0turn);
@@ -839,7 +878,8 @@
 
 .session-ring {
   position: absolute;
-  inset: 0;
+  /* Cancels the card's 1px border — see WHY `inset` IS NEGATIVE above. */
+  inset: -1px;
   border-radius: inherit;
   /* The visible thickness of the ring, and the only thing the mask leaves. */
   padding: 1.5px;
@@ -876,6 +916,14 @@
 
 .session-ring[data-activity="waiting"] {
   --session-ring-color: var(--attention);
+}
+
+/* Waiting stands still — see MOTION IS THE STATE above. The whole perimeter is
+ * lit rather than one arc parked somewhere on it: a stopped comet reads as an
+ * animation that died, while a closed ring reads as a ring. */
+.session-ring[data-activity="waiting"]::before {
+  animation: none;
+  background: var(--session-ring-color);
 }
 
 .session-ring::before {
