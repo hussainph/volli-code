@@ -196,7 +196,7 @@ describe("createChatSession", () => {
       },
     ]);
     // The attach left on the create's heels — in flight, not awaited.
-    expect(attaches).toMatchObject([{ sessionId: SESSION.id, bornTicketless: false }]);
+    expect(attaches).toMatchObject([{ sessionId: SESSION.id }]);
     expect(commands).toEqual([]);
     expect(subscriptions).toHaveLength(1);
     // `starting` is the attach latch — the pane is open, the composer queues.
@@ -226,7 +226,7 @@ describe("createChatSession", () => {
     expect(projectStarts).toEqual([{ operationId: "cmd-1", projectId: "p1", title: null }]);
     expect(commands).toEqual([]);
     await vi.waitFor(() => {
-      expect(attaches).toMatchObject([{ sessionId: SESSION.id, bornTicketless: true }]);
+      expect(attaches).toMatchObject([{ sessionId: SESSION.id }]);
     });
   });
 

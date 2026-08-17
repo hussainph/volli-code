@@ -211,8 +211,29 @@ function renderWorktreeDiff(data: Record<string, unknown>): string {
   return lines.join("\n");
 }
 
+/**
+ * The prompt.baseline report: one header with the honest rollup, one row per
+ * composed section, and the named remainder the estimate deliberately excludes.
+ */
+function renderPromptBaseline(data: Record<string, unknown>): string | null {
+  const sections = recordsAt(data, "sections");
+  const total = data["total"];
+  if (sections === null || !isRecord(total)) return null;
+  const header = `prompt baseline  ${terminalSafeInline(data["role"])}  ~${terminalSafeInline(total["tokens"])} tokens  ${terminalSafeInline(total["chars"])} chars  (est. at ${terminalSafeInline(data["charsPerToken"])} chars/token)`;
+  const rows = sections.map(
+    (section) =>
+      `  ${terminalSafeInline(section["id"])}  ~${terminalSafeInline(section["tokens"])} tokens  ${terminalSafeInline(section["chars"])} chars`,
+  );
+  const excluded =
+    typeof data["excluded"] === "string"
+      ? [`excluded  ${terminalSafeInline(data["excluded"])}`]
+      : [];
+  return [header, ...rows, ...excluded].join("\n");
+}
+
 function renderStableLines(command: string, data: unknown): string | null {
   if (!isRecord(data)) return null;
+  if (command === "prompt.baseline") return renderPromptBaseline(data);
   if (command === "worktree.status") return renderWorktreeStatus(data);
   if (command === "worktree.diff") return renderWorktreeDiff(data);
   if (["ticket.create", "ticket.update", "ticket.move"].includes(command)) {

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 
 import type Database from "better-sqlite3";
+import { promptBaseline } from "@volli/agent-runtime";
 import type { SessionEngine } from "@volli/session-engine";
 import {
   applyTicketBodyMutation,
@@ -43,6 +44,7 @@ import type {
   HarnessId,
   Observed,
   Project,
+  PromptResource,
   ReasoningLevel,
   SessionActivityState,
   SessionRecord,
@@ -72,8 +74,9 @@ import {
   terminalNativeReference,
   terminalSessionRecord,
 } from "./session-control";
-import { StructuredSessionsError } from "./session-runtime/structured-sessions";
-import type { TicketSessions } from "./session-runtime/ticket-sessions";
+import { PI_TOOLS } from "./session-runtime/pi-adapter";
+import { StructuredSessionsError } from "./session-runtime/sessions";
+import type { Sessions } from "./session-runtime/sessions";
 import { getTicket, listArchivedTicketsByProject, listTicketsByProject } from "./db/tickets-repo";
 import { recordHarnessDelivery } from "./harness-registry";
 import { readWorktreeDiff, readWorktreeStatus, runGitCapturing } from "./worktree";
@@ -189,13 +192,13 @@ export interface AgentCommandServiceOptions {
   ) => { status: SessionActivityState; output: string } | undefined;
   notify?: (title: string, message: string) => void;
   /**
-   * The product Ticket Session start route (VC-13) — the same facade the
-   * renderer's `ticketSessions.start` RPC rides, threaded in the way
-   * {@link sessionEngine} is so no parallel creation path can grow here. Raw
-   * `session.create` over this door stays FORBIDDEN. Absent means the Session
-   * runtime never came up this launch, which the verb reports as retryable.
+   * The product Session start route (VC-13) — the same facade the renderer's
+   * `sessions.create` RPC rides, threaded in the way {@link sessionEngine} is
+   * so no parallel creation path can grow here. Raw `session.create` over
+   * this door stays FORBIDDEN. Absent means the Session runtime never came up
+   * this launch, which the verb reports as retryable.
    */
-  ticketSessions?: Pick<TicketSessions, "start">;
+  sessions?: Pick<Sessions, "start">;
   /**
    * Submits one user message to a structured Session — the kickoff turn. The
    * runtime answers a `message.submit` only when the TURN it started ends, so
@@ -257,6 +260,16 @@ export interface AgentCommandServiceOptions {
    * so `--fix` is never destructive and never needs confirming.
    */
   doctorRepair?: () => Promise<void>;
+  /**
+   * The skills index a fresh Session with no explicit skills would carry — the
+   * SAME port `session start` composes through (`SessionSkillPorts.index` with
+   * nothing injected), threaded in so `prompt baseline` prices the index a real
+   * start would record rather than a reconstruction that could drift. `null`
+   * means no index (no skills, unreadable tier): a real, smaller baseline.
+   * Absent (tests, runtime never up) makes the command refuse rather than
+   * report a baseline it knows is missing a section.
+   */
+  skillsIndex?: (projectId: string) => Promise<PromptResource | null>;
 }
 
 export interface AgentCommandService {
@@ -1246,8 +1259,8 @@ export function createAgentCommandService(
         // unreachable app already failed as APP_UNREACHABLE before this line.
         // A launch whose Session runtime never came up reports the same
         // retryable class — relaunching the app is the sanctioned recovery.
-        const ticketSessions = options.ticketSessions;
-        if (!ticketSessions) {
+        const sessionsFacade = options.sessions;
+        if (!sessionsFacade) {
           return failure("APP_UNREACHABLE", "The Session runtime is not available this launch.");
         }
         const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
@@ -1269,7 +1282,7 @@ export function createAgentCommandService(
           resolved.ticket.ticketNumber,
         );
         try {
-          const started = await ticketSessions.start({
+          const started = await sessionsFacade.start({
             operationId: newId(),
             projectId: resolved.project.id,
             ticketId: resolved.ticket.id,
@@ -1855,6 +1868,63 @@ export function createAgentCommandService(
               ticket: resolved.ticket,
               attachments: listAttachments(options.db, resolved.ticket.id),
             }),
+          },
+        };
+      }
+      if (request.cmd === "prompt.baseline") {
+        // The diagnostic must price what a real start composes, and the index
+        // port is how a real start composes it — no port, no honest number.
+        if (!options.skillsIndex) {
+          return failure("APP_UNREACHABLE", "The session runtime is not available this launch.");
+        }
+        const ticketArg = request.args["ticket"];
+        let role: "ticket" | "project";
+        let project: Project;
+        let workspacePath: string;
+        let brief: string;
+        if (ticketArg !== undefined) {
+          const resolved = ticketForDisplayId(options.db, projects, ticketArg);
+          if (!resolved.ok) return resolved.response;
+          role = "ticket";
+          project = resolved.project;
+          // The directory a fresh attach would run in: the stamped worktree
+          // when the ticket has one, the main checkout when it never will.
+          workspacePath = resolved.ticket.worktreePath ?? project.path;
+          brief = composeTicketBrief({
+            project,
+            ticket: resolved.ticket,
+            attachments: listAttachments(options.db, resolved.ticket.id),
+          });
+        } else {
+          const resolved = projectForCreate(options.db, projects, sessions, request);
+          if (!resolved.ok) return resolved.response;
+          role = "project";
+          project = resolved.project;
+          workspacePath = project.path;
+          brief = composeProjectBrief({ project });
+        }
+        // A start with no named skills carries the index alone — the fresh-
+        // session baseline this command exists to price. `null` is a real
+        // measurement: a prompt with no resources section at all.
+        const index = await options.skillsIndex(project.id);
+        const baseline = promptBaseline({
+          role,
+          workspacePath,
+          tools: { tools: [...PI_TOOLS.tools] },
+          ...(index === null ? {} : { promptResources: [index] }),
+          brief: { text: brief },
+        });
+        return {
+          v: 1,
+          ok: true,
+          data: {
+            project: { name: project.name, prefix: project.ticketPrefix },
+            role,
+            workspace: workspacePath,
+            ...baseline,
+            // Named rather than guessed: these are serialized provider-side and
+            // no count Volli invents for them would be a measurement.
+            excluded: "tool definitions, the user's first message, and provider overhead",
           },
         };
       }

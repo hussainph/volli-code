@@ -229,8 +229,7 @@ class FakeRpc implements ChatSessionRpc {
   readonly cancels: { sessionId: string; interactionId: string }[] = [];
   readonly reconciles: { sessionId: string; attachmentId: string }[] = [];
   readonly streams: FakeStream[] = [];
-  readonly attaches: Array<{ operationId: string; sessionId: string; bornTicketless: boolean }> =
-    [];
+  readonly attaches: Array<{ operationId: string; sessionId: string }> = [];
   projectionQueries = 0;
 
   snapshotFrames: readonly unknown[] = [];
@@ -540,21 +539,23 @@ describe("browserChatTransport", () => {
     await transport.attachSession({
       operationId: "project-retry",
       sessionId: "session-1",
-      bornTicketless: true,
     });
     await transport.attachSession({
       operationId: "ticket-retry",
       sessionId: "session-2",
-      bornTicketless: false,
     });
+    // One procedure per verb, whatever the Role: the nullable ticketId rides
+    // the create input, and the attach carries no Role at all.
     expect(procedures).toEqual([
-      "projectSessions.create",
-      "ticketSessions.create",
-      "projectSessions.create",
-      "ticketSessions.create",
-      "projectSessions.attach",
-      "ticketSessions.attach",
+      "sessions.create",
+      "sessions.create",
+      "sessions.create",
+      "sessions.create",
+      "sessions.attach",
+      "sessions.attach",
     ]);
+    expect(inputs[0]).toMatchObject({ ticketId: null });
+    expect(inputs[1]).toMatchObject({ ticketId: "ticket-1" });
     expect(inputs[0]).not.toHaveProperty("skills");
     expect(inputs[1]).not.toHaveProperty("skills");
     expect(inputs[2]).toMatchObject({ skills: ["svg-logo-designer"] });
@@ -937,27 +938,13 @@ describe("retryAttach", () => {
 
     await expect(client.retryAttach()).resolves.toBe(true);
 
-    expect(rpc.attaches).toEqual([
-      { operationId: expect.any(String), sessionId, bornTicketless: true },
-    ]);
+    expect(rpc.attaches).toEqual([{ operationId: expect.any(String), sessionId }]);
     expect(rpc.commands).toEqual([]);
     expect(rpc.streams).toHaveLength(2);
     expect(slice()!.lifecycle).toBe("ready");
   });
 
-  it("routes recovery from durable Session birth rather than executor identity", async () => {
-    const { client, rpc } = await adopted((fake) => {
-      fake.snapshotProjection = { ...projectionFor(null), bornTicketless: false };
-    });
-
-    await expect(client.retryAttach()).resolves.toBe(true);
-
-    expect(rpc.attaches).toEqual([
-      { operationId: expect.any(String), sessionId: expect.any(String), bornTicketless: false },
-    ]);
-  });
-
-  it("does not guess a runtime route before durable Session origin is known", async () => {
+  it("waits for the durable Session state before another attachment attempt", async () => {
     const { client, rpc } = await adopted((fake) => {
       fake.snapshotError = new Error("snapshot unavailable");
     });

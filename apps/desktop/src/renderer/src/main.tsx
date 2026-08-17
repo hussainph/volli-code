@@ -20,6 +20,7 @@ import { useBoardStore } from "./stores/board";
 import { useChatSessionsStore } from "./stores/chat-sessions";
 import { useProjectsStore } from "./stores/projects";
 import { useThemeStore } from "./stores/theme";
+import { useUpdateStore } from "./stores/update";
 import { useWorkspaceStore } from "./stores/workspace";
 import { watchSystemAppearance } from "./theme/canvas-paint";
 import { initTerminalAppearance } from "./terminal/appearance";
@@ -141,6 +142,22 @@ async function main() {
       },
     });
   });
+
+  // Self-update state (VC-59): subscribe FIRST, then prime with a one-time
+  // read — a download that finished before this window existed must still
+  // light the badge. The prime only fills an empty store: a push that raced
+  // ahead of it is newer by construction and must not be clobbered.
+  window.api.updates.onState((state) => useUpdateStore.getState().receive(state));
+  window.api.updates
+    .state()
+    .then((read) => {
+      if (read.ok && useUpdateStore.getState().state === null) {
+        useUpdateStore.getState().receive(read.state);
+      }
+    })
+    .catch(() => {
+      // A failed boot read leaves the icon unrendered; the next push heals it.
+    });
 
   window.api.data.onChanged((event) => {
     // Forward the payload's scope (affected ticket/project, or untargeted) so

@@ -12,7 +12,47 @@ import {
   MODEL_ACCESS_IPC,
   THEME_CHANNELS,
   THEME_IPC,
+  UPDATE_CHANNELS,
+  UPDATE_IPC,
 } from "./ipc-descriptors";
+
+describe("UPDATE_IPC descriptor table", () => {
+  // Every update request is argument-less: the state is main's to own and the
+  // commands carry no caller data, so each guard only refuses stray payloads.
+  for (const channel of UPDATE_CHANNELS) {
+    describe(`${channel} (no-arg request)`, () => {
+      const { guard, invalidError } = UPDATE_IPC[channel];
+
+      it("accepts an empty args tuple", () => {
+        expect(guard([])).toBe(true);
+      });
+
+      it("rejects stray arguments", () => {
+        expect(guard(["junk"])).toBe(false);
+        expect(guard([{}])).toBe(false);
+      });
+
+      it("carries the handler's exact invalid-input message", () => {
+        expect(invalidError).toBe("Invalid request");
+      });
+    });
+  }
+
+  describe("UPDATE_CHANNELS derivation", () => {
+    it("derives from the descriptor table's keys", () => {
+      expect(UPDATE_CHANNELS).toEqual(Object.keys(UPDATE_IPC));
+    });
+
+    it("covers the whole self-update surface", () => {
+      expect(UPDATE_CHANNELS).toEqual([
+        "volli:update-state-get",
+        "volli:update-check",
+        "volli:update-install",
+        "volli:update-live-work",
+      ]);
+    });
+  });
+});
 
 describe("DATA_IPC descriptor table", () => {
   describe("volli:data-bootstrap (no-arg request)", () => {

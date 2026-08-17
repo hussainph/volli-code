@@ -13,6 +13,7 @@ import type {
   SessionHarnessNotice,
   SessionsInterruptedEvent,
   SessionStartedNotice,
+  UpdateUiState,
   VolliIpcEvent,
 } from "../ipc/contract";
 
@@ -100,6 +101,21 @@ export function broadcastSessionStarted(notice: SessionStartedNotice): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.webContents.isDestroyed()) continue;
     window.webContents.send("volli:session-started" satisfies VolliIpcEvent, notice);
+  }
+}
+
+/**
+ * Fans one updater state transition (VC-59) out to every window: the sidebar's
+ * download icon is per-window chrome, and every window must render the same
+ * truth — a badge lit in one window and dark in another would make "is an
+ * update ready?" depend on where you happen to be looking. Each push carries
+ * the FULL snapshot, never a delta, so a window that missed earlier
+ * transitions (it was still loading) is whole again on the next one.
+ */
+export function broadcastUpdateState(state: UpdateUiState): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.webContents.isDestroyed()) continue;
+    window.webContents.send("volli:update-state" satisfies VolliIpcEvent, state);
   }
 }
 

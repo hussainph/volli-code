@@ -31,6 +31,7 @@ import type {
   IpcArgs,
   ModelAccessIpcChannel,
   ThemeIpcChannel,
+  UpdateIpcChannel,
   VolliInvokeContract,
 } from "../ipc/contract";
 
@@ -872,3 +873,29 @@ export const MODEL_ACCESS_IPC: {
 export const MODEL_ACCESS_CHANNELS = Object.keys(
   MODEL_ACCESS_IPC,
 ) as readonly ModelAccessIpcChannel[];
+
+// ---- self-update descriptor table (VC-59) ---------------------------------
+// Every update request is argument-less — the state is main's to own and the
+// commands carry no caller data — so the guards only refuse stray payloads.
+
+export const UPDATE_IPC: { readonly [C in UpdateIpcChannel]: IpcRequestDescriptor<C> } = {
+  "volli:update-state-get": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid request",
+  },
+  "volli:update-check": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid request",
+  },
+  "volli:update-install": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid request",
+  },
+  "volli:update-live-work": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid request",
+  },
+};
+
+/** Every channel the self-update surface owns, derived — never hand-synced. */
+export const UPDATE_CHANNELS = Object.keys(UPDATE_IPC) as readonly UpdateIpcChannel[];

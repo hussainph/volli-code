@@ -19,7 +19,7 @@ export const AGENT_COMMANDS = [
   "session.list",
   "session.peek",
   // Attended-only Session start (VC-13): rides the app-owned product start
-  // route (the ticketSessions facade) over the socket. The CLI's only
+  // route (the Sessions facade) over the socket. The CLI's only
   // transport is that socket and the Pi runtime lives in Electron main, so
   // there is deliberately no headless path — app not running is
   // APP_UNREACHABLE, and `volli app launch` is the sanctioned recovery.
@@ -41,6 +41,11 @@ export const AGENT_COMMANDS = [
   // Diagnostics, not agent surface: what the harness integration is actually
   // doing on this machine, measured from inside the environment under test.
   "doctor",
+  // Diagnostics too: what a fresh structured Session's composed prompt costs,
+  // per section, before the user types a word (VC-66). Main answers it because
+  // main owns the composition — the same layers, index and Brief a real start
+  // assembles — so the breakdown is reproducible rather than a one-off count.
+  "prompt.baseline",
 ] as const;
 
 export type AgentCommand = (typeof AGENT_COMMANDS)[number];
