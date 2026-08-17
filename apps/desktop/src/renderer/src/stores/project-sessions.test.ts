@@ -2,7 +2,11 @@ import type { ChatSessionRecord, SessionListingRow, SessionRecord } from "@volli
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 
-import { createProjectSessionsStore } from "./project-sessions";
+import {
+  createProjectSessionsStore,
+  subscribeProjectSessionActivity,
+  useProjectSessionsStore,
+} from "./project-sessions";
 import type { SessionActivityNotice } from "../../../ipc/contract";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
@@ -97,16 +101,43 @@ describe("project-sessions store", () => {
     expect(store.getState().byProject.p1).toBeUndefined();
   });
 
-  it("upserts a pushed row over the fetched one", async () => {
-    stubList([{ kind: "chat", record: chatRecord() }]);
+  it("surfaces a thrown listing read the same way as a refused one", async () => {
+    const list = vi.fn().mockRejectedValue(new Error("bridge gone"));
+    Object.assign(globalThis, { window: { api: { sessions: { list } } } });
+    const store = createProjectSessionsStore();
+
+    await store.getState().refresh("p1");
+
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't load sessions: bridge gone",
+      expect.anything(),
+    );
+    expect(store.getState().byProject.p1).toBeUndefined();
+  });
+
+  it("upserts a pushed row over the fetched one, in either shape", async () => {
+    // Two rows per shape, so the upsert has to leave the untouched sibling
+    // exactly as it was rather than rewriting the whole list.
+    stubList([
+      { kind: "chat", record: chatRecord() },
+      { kind: "chat", record: chatRecord({ sessionId: "c2" }) },
+      { kind: "terminal", record: record() },
+      { kind: "terminal", record: record({ id: "s2" }) },
+    ]);
     const store = createProjectSessionsStore();
     await store.getState().refresh("p1");
 
     store
       .getState()
       .applyActivity(notice({ kind: "chat", record: chatRecord({ activity: "working" }) }));
+    store
+      .getState()
+      .applyActivity(notice({ kind: "terminal", record: record({ title: "Renamed" }) }));
 
-    expect(store.getState().byProject.p1?.chat).toEqual([chatRecord({ activity: "working" })]);
+    expect(store.getState().byProject.p1).toEqual({
+      terminal: [record({ title: "Renamed" }), record({ id: "s2" })],
+      chat: [chatRecord({ activity: "working" }), chatRecord({ sessionId: "c2" })],
+    });
   });
 
   it("appends a Session the baseline never saw", async () => {
@@ -149,6 +180,44 @@ describe("project-sessions store", () => {
 
     expect(store.getState().byProject.p1).toEqual({ terminal: [], chat: [] });
     expect(store.getState().byProject.p2).toBeUndefined();
+  });
+
+  it("ensures the baseline at most once, however many surfaces ask", async () => {
+    const list = stubList([]);
+    const store = createProjectSessionsStore();
+
+    // Both surfaces asking on the same frame, before either fetch resolves.
+    await Promise.all([store.getState().ensure("p1"), store.getState().ensure("p1")]);
+    expect(list).toHaveBeenCalledTimes(1);
+
+    // And again once the baseline is there — pushes carry it from here.
+    await store.getState().ensure("p1");
+    expect(list).toHaveBeenCalledTimes(1);
+
+    // A failed ensure leaves nothing behind, so the next asker really retries.
+    list.mockResolvedValue({ ok: false, error: "db closed" });
+    await store.getState().ensure("p2");
+    await store.getState().ensure("p2");
+    expect(list).toHaveBeenCalledTimes(3);
+  });
+
+  it("folds a pushed notice through the app-wide subscription", () => {
+    const off = vi.fn();
+    let push: ((notice: SessionActivityNotice) => void) | null = null;
+    const onActivity = vi.fn((callback: (notice: SessionActivityNotice) => void) => {
+      push = callback;
+      return off;
+    });
+    Object.assign(globalThis, { window: { api: { sessions: { onActivity } } } });
+    useProjectSessionsStore.setState({ byProject: { p1: { terminal: [], chat: [] } } });
+
+    const unsubscribe = subscribeProjectSessionActivity();
+    push!(notice({ kind: "chat", record: chatRecord() }));
+
+    expect(useProjectSessionsStore.getState().byProject.p1?.chat).toEqual([chatRecord()]);
+    unsubscribe();
+    expect(off).toHaveBeenCalledTimes(1);
+    useProjectSessionsStore.setState({ byProject: {} });
   });
 
   it("repoints a terminal row's running harness, and holds identity when nothing moved", async () => {

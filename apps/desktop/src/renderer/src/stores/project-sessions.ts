@@ -57,6 +57,16 @@ interface ProjectSessionsState {
    */
   refresh(projectId: string): Promise<void>;
   /**
+   * {@link refresh}, but at most once per project and never twice at a time.
+   *
+   * Two surfaces now need this project's rows and neither owns the other: the
+   * sidebar's bands and the board's active-session indicator mount together and
+   * would otherwise each issue the same baseline fetch on the same frame. The
+   * guard is on the FETCH rather than on the result, because two calls racing
+   * before the first resolves is exactly the shape the collision takes.
+   */
+  ensure(projectId: string): Promise<void>;
+  /**
    * Folds one pushed row in, replacing any row with the same Session id.
    *
    * A notice for a project this store has never fetched is DROPPED rather than
@@ -93,7 +103,14 @@ function upsert<Row>(
 
 /** Factory so tests get isolated instances (the store module's own convention). */
 export function createProjectSessionsStore() {
-  return create<ProjectSessionsState>()((set) => ({
+  /**
+   * Baseline fetches in flight, per project. Module-scope-per-store rather than
+   * store state: nothing renders from it, and putting it in state would make
+   * every consumer re-render twice per fetch for a fact none of them show.
+   */
+  const inFlight = new Map<string, Promise<void>>();
+
+  return create<ProjectSessionsState>()((set, get) => ({
     byProject: {},
 
     async refresh(projectId) {
@@ -111,6 +128,17 @@ export function createProjectSessionsStore() {
       } catch (error) {
         toastError(`Couldn't load sessions: ${errorMessage(error)}`);
       }
+    },
+
+    ensure(projectId) {
+      if (get().byProject[projectId] !== undefined) return Promise.resolve();
+      const existing = inFlight.get(projectId);
+      if (existing !== undefined) return existing;
+      const pending = get()
+        .refresh(projectId)
+        .finally(() => inFlight.delete(projectId));
+      inFlight.set(projectId, pending);
+      return pending;
     },
 
     applyActivity(notice) {

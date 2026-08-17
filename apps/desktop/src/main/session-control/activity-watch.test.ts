@@ -1,8 +1,25 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { SessionEngine } from "@volli/session-engine";
-import type { SessionProjection } from "@volli/shared";
+import type { SessionAttachmentProjection, SessionProjection } from "@volli/shared";
 
 import { watchSessionActivity } from "./activity-watch";
+
+/** An open structured attachment — what turns `turnActive` into a `working` row. */
+function openAttachment(): SessionAttachmentProjection {
+  return {
+    id: "attach-1",
+    sessionId: "session-1",
+    adapterId: "pi",
+    venue: { id: "local", kind: "local" },
+    continuity: "fresh",
+    native: null,
+    status: "open",
+    openedAt: 1,
+    closedAt: null,
+    outcome: null,
+    failure: null,
+  };
+}
 
 function projection(overrides: Partial<SessionProjection> = {}): SessionProjection {
   return {
@@ -105,15 +122,11 @@ describe("watchSessionActivity", () => {
     await write();
     expect(publish).toHaveBeenCalledTimes(1);
 
-    live = projection({ turnActive: true, liveExecutor: { id: "pi" } });
+    live = projection({ turnActive: true });
     await write();
     expect(publish).toHaveBeenCalledTimes(1); // no OPEN attachment yet — still idle
 
-    live = projection({
-      turnActive: true,
-      liveExecutor: { id: "pi" },
-      attachments: [{ id: "attach-1", adapterId: "pi", status: "open" } as never],
-    });
+    live = projection({ turnActive: true, attachments: [openAttachment()] });
     await write();
     expect(publish).toHaveBeenCalledTimes(2);
     expect(publish.mock.calls[1]![0].row.record.activity).toBe("working");
@@ -181,9 +194,74 @@ describe("watchSessionActivity", () => {
     expect(publish).not.toHaveBeenCalled();
   });
 
+  it("marks the Session behind every mutating method, not only the two obvious ones", async () => {
+    const publish = vi.fn();
+    const engine = stubEngine(() => projection());
+    const watch = watchSessionActivity(engine, { publish });
+
+    await watch.engine.createSession({} as never);
+    await watch.engine.getOrRecordSessionInput({ sessionId: "session-1" } as never);
+    await watch.engine.completeModelSelection({ sessionId: "session-1" } as never);
+    await watch.flush();
+
+    // All three reach the same Session, so they coalesce into one publish — the
+    // point of the assertion is that none of them was forgotten, which a
+    // `getSession` that never ran would have hidden.
+    expect(engine.getSession).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledTimes(1);
+    watch.stop();
+  });
+
+  it("publishes on its own timer, with no one calling flush", async () => {
+    const publish = vi.fn();
+    const watch = watchSessionActivity(
+      stubEngine(() => projection()),
+      {
+        publish,
+        coalesceMs: 0,
+      },
+    );
+
+    await watch.engine.observe({} as never);
+    await vi.waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
+    watch.stop();
+  });
+
+  it("cancels a pending flush when stopped mid-window", async () => {
+    const publish = vi.fn();
+    const watch = watchSessionActivity(
+      stubEngine(() => projection()),
+      {
+        publish,
+        coalesceMs: 5,
+      },
+    );
+
+    await watch.engine.observe({} as never);
+    watch.stop();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("reports a fold failure through console.warn when given no diagnostics seam", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const engine = stubEngine(() => projection());
+    (engine.getSession as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("ledger gone"));
+    const watch = watchSessionActivity(engine, { publish: vi.fn() });
+
+    await watch.engine.observe({} as never);
+    await watch.flush();
+
+    expect(warn).toHaveBeenCalledWith("[volli] session activity watch:", expect.any(Error));
+    warn.mockRestore();
+    watch.stop();
+  });
+
   it("forwards every read to the wrapped engine untouched", async () => {
     const engine = stubEngine(() => projection());
     const reads = {
+      getSession: vi.fn(async () => null),
       getBaseSession: vi.fn(async () => null),
       listSessions: vi.fn(async () => []),
       countSessions: vi.fn(async () => 0),
@@ -193,6 +271,7 @@ describe("watchSessionActivity", () => {
     Object.assign(engine, reads);
     const watch = watchSessionActivity(engine, { publish: vi.fn() });
 
+    await watch.engine.getSession({ sessionId: "session-1" });
     await watch.engine.getBaseSession({ sessionId: "session-1" });
     await watch.engine.listSessions({ projectId: "project-1", scope: "all" });
     await watch.engine.countSessions({ projectId: "project-1", scope: "all" });

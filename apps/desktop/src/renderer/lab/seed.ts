@@ -31,6 +31,7 @@ import type {
 import { EMPTY_NAV_HISTORY } from "@renderer/lib/nav-history";
 import { useBoardStore } from "@renderer/stores/board";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { useThemeStore } from "@renderer/stores/theme";
 import { useUiStore } from "@renderer/stores/ui";
@@ -200,4 +201,8 @@ export function seedApp(): void {
     uiScale: 1,
   });
   useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, lastOutputAt: {}, parkState: {} });
+  // Same rule as the sessions store above, one surface further out: the board's
+  // active-session ring and the sidebar's bands both read this, and a scratch
+  // that left a project's rows behind would light cards on the next one.
+  useProjectSessionsStore.setState({ byProject: {} });
 }
