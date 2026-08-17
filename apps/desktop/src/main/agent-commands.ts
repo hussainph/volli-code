@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 
 import type Database from "better-sqlite3";
+import { promptBaseline } from "@volli/agent-runtime";
 import type { SessionEngine } from "@volli/session-engine";
 import {
   applyTicketBodyMutation,
@@ -44,6 +45,7 @@ import type {
   ModelAccessSnapshot,
   Observed,
   Project,
+  PromptResource,
   ReasoningLevel,
   SessionActivityState,
   SessionRecord,
@@ -73,6 +75,7 @@ import {
   terminalNativeReference,
   terminalSessionRecord,
 } from "./session-control";
+import { PI_TOOLS } from "./session-runtime/pi-adapter";
 import { StructuredSessionsError } from "./session-runtime/sessions";
 import type { Sessions } from "./session-runtime/sessions";
 import { readDefaultModelSelection } from "./session-runtime/model-access-preferences";
@@ -277,6 +280,16 @@ export interface AgentCommandServiceOptions {
    * so `--fix` is never destructive and never needs confirming.
    */
   doctorRepair?: () => Promise<void>;
+  /**
+   * The skills index a fresh Session with no explicit skills would carry — the
+   * SAME port `session start` composes through (`SessionSkillPorts.index` with
+   * nothing injected), threaded in so `prompt baseline` prices the index a real
+   * start would record rather than a reconstruction that could drift. `null`
+   * means no index (no skills, unreadable tier): a real, smaller baseline.
+   * Absent (tests, runtime never up) makes the command refuse rather than
+   * report a baseline it knows is missing a section.
+   */
+  skillsIndex?: (projectId: string) => Promise<PromptResource | null>;
 }
 
 export interface AgentCommandService {
@@ -1982,6 +1995,63 @@ export function createAgentCommandService(
               ticket: resolved.ticket,
               attachments: listAttachments(options.db, resolved.ticket.id),
             }),
+          },
+        };
+      }
+      if (request.cmd === "prompt.baseline") {
+        // The diagnostic must price what a real start composes, and the index
+        // port is how a real start composes it — no port, no honest number.
+        if (!options.skillsIndex) {
+          return failure("APP_UNREACHABLE", "The session runtime is not available this launch.");
+        }
+        const ticketArg = request.args["ticket"];
+        let role: "ticket" | "project";
+        let project: Project;
+        let workspacePath: string;
+        let brief: string;
+        if (ticketArg !== undefined) {
+          const resolved = ticketForDisplayId(options.db, projects, ticketArg);
+          if (!resolved.ok) return resolved.response;
+          role = "ticket";
+          project = resolved.project;
+          // The directory a fresh attach would run in: the stamped worktree
+          // when the ticket has one, the main checkout when it never will.
+          workspacePath = resolved.ticket.worktreePath ?? project.path;
+          brief = composeTicketBrief({
+            project,
+            ticket: resolved.ticket,
+            attachments: listAttachments(options.db, resolved.ticket.id),
+          });
+        } else {
+          const resolved = projectForCreate(options.db, projects, sessions, request);
+          if (!resolved.ok) return resolved.response;
+          role = "project";
+          project = resolved.project;
+          workspacePath = project.path;
+          brief = composeProjectBrief({ project });
+        }
+        // A start with no named skills carries the index alone — the fresh-
+        // session baseline this command exists to price. `null` is a real
+        // measurement: a prompt with no resources section at all.
+        const index = await options.skillsIndex(project.id);
+        const baseline = promptBaseline({
+          role,
+          workspacePath,
+          tools: { tools: [...PI_TOOLS.tools] },
+          ...(index === null ? {} : { promptResources: [index] }),
+          brief: { text: brief },
+        });
+        return {
+          v: 1,
+          ok: true,
+          data: {
+            project: { name: project.name, prefix: project.ticketPrefix },
+            role,
+            workspace: workspacePath,
+            ...baseline,
+            // Named rather than guessed: these are serialized provider-side and
+            // no count Volli invents for them would be a measurement.
+            excluded: "tool definitions, the user's first message, and provider overhead",
           },
         };
       }

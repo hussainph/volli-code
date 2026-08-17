@@ -3197,6 +3197,143 @@ describe("doctor", () => {
   });
 });
 
+describe("prompt.baseline", () => {
+  const INDEX_RESOURCE = {
+    name: "skills index",
+    text: "- svg (.agents/skills/svg/SKILL.md): draws vectors",
+  };
+
+  function baselineService(
+    options: Partial<AgentCommandServiceOptions> = {},
+  ): (args: Record<string, unknown>) => Promise<AgentResponse> {
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      skillsIndex: async () => INDEX_RESOURCE,
+      ...options,
+    });
+    return (args) =>
+      service.execute({
+        v: 1,
+        cmd: "prompt.baseline",
+        args,
+        ctx: { cwd: "/outside", env: {} },
+      });
+  }
+
+  it("refuses without the index port rather than pricing a prompt it knows is incomplete", async () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1", path: "/repo/volli", ticketPrefix: "VC" }));
+    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.0.0" });
+    const response = await service.execute({
+      v: 1,
+      cmd: "prompt.baseline",
+      args: { project: "/repo/volli" },
+      ctx: { cwd: "/outside", env: {} },
+    });
+    expect(response).toMatchObject({ ok: false, error: { code: "APP_UNREACHABLE" } });
+  });
+
+  it("prices a fresh project chat: every composed layer, the index, the Brief, and an honest total", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "p1", name: "Volli Code", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    const asked: string[] = [];
+    const response = await baselineService({
+      skillsIndex: async (projectId) => {
+        asked.push(projectId);
+        return INDEX_RESOURCE;
+      },
+    })({ project: "/repo/volli" });
+
+    expect(asked).toEqual(["p1"]);
+    expect(response.ok).toBe(true);
+    if (!response.ok) throw new Error("expected success");
+    const data = response.data as Record<string, unknown>;
+    expect(data["project"]).toEqual({ name: "Volli Code", prefix: "VC" });
+    expect(data["role"]).toBe("project");
+    expect(data["workspace"]).toBe("/repo/volli");
+    expect(data["charsPerToken"]).toBe(4);
+    const sections = data["sections"] as { id: string; chars: number; tokens: number }[];
+    expect(sections.map((section) => section.id)).toEqual([
+      "operating",
+      "role",
+      "authority",
+      "workspace",
+      "resources-header",
+      "resource:skills index",
+      "brief",
+    ]);
+    for (const section of sections) {
+      expect(section.chars).toBeGreaterThan(0);
+      expect(section.tokens).toBe(Math.ceil(section.chars / 4));
+    }
+    const system = data["system"] as { chars: number; tokens: number };
+    const brief = data["brief"] as { chars: number; tokens: number };
+    const total = data["total"] as { chars: number; tokens: number };
+    expect(total.chars).toBe(system.chars + brief.chars);
+    expect(total.tokens).toBe(system.tokens + brief.tokens);
+    // The Brief priced is the project Brief a real ticketless start composes.
+    expect(brief.chars).toBeGreaterThan(
+      composeProjectBrief({ project: { path: "/repo/volli" } }).length,
+    );
+    expect(data["excluded"]).toBe(
+      "tool definitions, the user's first message, and provider overhead",
+    );
+  });
+
+  it("a null index is a real, smaller baseline — no resources section at all", async () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1", path: "/repo/volli", ticketPrefix: "VC" }));
+    const response = await baselineService({ skillsIndex: async () => null })({
+      project: "/repo/volli",
+    });
+    expect(response.ok).toBe(true);
+    if (!response.ok) throw new Error("expected success");
+    const sections = (response.data as Record<string, unknown>)["sections"] as { id: string }[];
+    expect(sections.map((section) => section.id)).toEqual([
+      "operating",
+      "role",
+      "authority",
+      "workspace",
+      "brief",
+    ]);
+  });
+
+  it("--ticket prices a Ticket Session in its stamped worktree, Brief included", async () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1", path: "/repo/volli", ticketPrefix: "VC" }));
+    insertTicket(
+      ctx.db,
+      testTicket("p1", {
+        id: "t1",
+        ticketNumber: 12,
+        title: "Ship CLI",
+        worktreePath: "/worktrees/VC-12-ship-cli",
+        branch: "volli/VC-12-ship-cli",
+      }),
+    );
+    const response = await baselineService()({ ticket: "VC-12" });
+    expect(response.ok).toBe(true);
+    if (!response.ok) throw new Error("expected success");
+    const data = response.data as Record<string, unknown>;
+    expect(data["role"]).toBe("ticket");
+    expect(data["workspace"]).toBe("/worktrees/VC-12-ship-cli");
+    const sections = (data["sections"] as { id: string }[]).map((section) => section.id);
+    expect(sections).toContain("resource:skills index");
+    expect(sections).toContain("brief");
+  });
+
+  it("refuses an unknown ticket the way every ticket verb does", async () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1", path: "/repo/volli", ticketPrefix: "VC" }));
+    const response = await baselineService()({ ticket: "VC-99" });
+    expect(response).toMatchObject({ ok: false, error: { code: "TICKET_NOT_FOUND" } });
+  });
+});
+
 describe("composeProjectBrief", () => {
   it("names the ticketless Session, its project root, and the one CLI instruction", () => {
     expect(composeProjectBrief({ project: { path: "/code/volli" } })).toMatchInlineSnapshot(`

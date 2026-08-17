@@ -1461,6 +1461,12 @@ app.whenReady().then(async () => {
                   piRuntimeHost.inspectModelAccess(input),
               }
             : {}),
+          // `prompt baseline` (VC-66) prices the index through the SAME port a
+          // real start records it through — nothing injected, so the answer is
+          // the fresh-session default. Absent with the runtime, same as above.
+          ...(sessionSkills !== null
+            ? { skillsIndex: (projectId: string) => sessionSkills.index(projectId, []) }
+            : {}),
           // The kickoff turn's delivery seam. `message.submit` resolves when
           // the TURN ends, so the door fires it detached; a refusal lands in
           // the Session's own durable state and the log.

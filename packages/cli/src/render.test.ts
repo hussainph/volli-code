@@ -585,6 +585,54 @@ describe("renderCliSuccess", () => {
   });
 });
 
+describe("renderCliSuccess — prompt.baseline", () => {
+  const data = {
+    project: { name: "Volli Code", prefix: "VC" },
+    role: "project",
+    workspace: "/repo/volli",
+    charsPerToken: 4,
+    sections: [
+      { id: "operating", chars: 420, tokens: 105 },
+      { id: "resource:skills index", chars: 40000, tokens: 10000 },
+      { id: "brief", chars: 300, tokens: 75 },
+    ],
+    system: { chars: 44000, tokens: 11000 },
+    brief: { chars: 300, tokens: 75 },
+    total: { chars: 44300, tokens: 11075 },
+    excluded: "tool definitions, the user's first message, and provider overhead",
+  };
+
+  it("renders the rollup, one row per section, and the named exclusions", () => {
+    const text = renderCliSuccess("prompt.baseline", data, { json: false });
+    expect(text).toContain("prompt baseline  project  ~11075 tokens  44300 chars");
+    expect(text).toContain("(est. at 4 chars/token)");
+    expect(text).toContain("  operating  ~105 tokens  420 chars");
+    expect(text).toContain("  resource:skills index  ~10000 tokens  40000 chars");
+    expect(text).toContain("  brief  ~75 tokens  300 chars");
+    expect(text).toContain(
+      "excluded  tool definitions, the user's first message, and provider overhead",
+    );
+  });
+
+  it("passes the structured breakdown straight through with --json", () => {
+    expect(JSON.parse(renderCliSuccess("prompt.baseline", data, { json: true }))).toEqual(data);
+  });
+
+  it("falls back to the generic renderer when the reply is not a breakdown", () => {
+    expect(() =>
+      renderCliSuccess("prompt.baseline", { unexpected: true }, { json: false }),
+    ).not.toThrow();
+    expect(() => renderCliSuccess("prompt.baseline", null, { json: false })).not.toThrow();
+  });
+
+  it("omits the excluded line when the server names no exclusions", () => {
+    const { excluded: _excluded, ...withoutExcluded } = data;
+    const text = renderCliSuccess("prompt.baseline", withoutExcluded, { json: false });
+    expect(text).toContain("prompt baseline  project");
+    expect(text).not.toContain("excluded");
+  });
+});
+
 describe("renderCliSuccess — doctor", () => {
   const data = {
     checks: [
