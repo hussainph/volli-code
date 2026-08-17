@@ -24,11 +24,42 @@ const row: DynamicToolUIPart = {
   toolMetadata: { [ACTIVITY_METADATA_KEY]: descriptor } as DynamicToolUIPart["toolMetadata"],
 };
 
+const bashRow: DynamicToolUIPart = {
+  type: "dynamic-tool",
+  toolName: "bash",
+  toolCallId: "bash-1",
+  state: "output-available",
+  input: { command: "pnpm run typecheck &&\npnpm run test" },
+  output: { content: [{ type: "text", text: "Typecheck passed\nTests passed" }] },
+  toolMetadata: {
+    [ACTIVITY_METADATA_KEY]: {
+      ...descriptor,
+      kind: "run-command",
+      nativeToolName: "bash",
+      // The input is what actually ran. This deliberately disagrees with the
+      // descriptor to keep the UI's command source honest.
+      subject: { label: "validation", path: null, lineRange: null },
+    },
+  } as DynamicToolUIPart["toolMetadata"],
+};
+
 describe("ToolRow copy control", () => {
   it("renders a copy control for an activity object", () => {
     const html = renderToStaticMarkup(<ToolRow part={row} />);
 
     expect(html).toContain('aria-label="Copy"');
+  });
+
+  it("keeps the command inline and gives it a visible disclosure control", () => {
+    const html = renderToStaticMarkup(<ToolRow part={bashRow} />);
+
+    expect(html).toContain("pnpm run typecheck &amp;&amp;\npnpm run test");
+    expect(html).toContain('class="min-w-0 truncate font-mono text-ui text-foreground"');
+    expect(html).toContain("cursor-pointer hover:bg-muted/30 hover:text-foreground");
+    expect(html).toContain('aria-label="Show details"');
+    expect(html).toContain('title="Show details"');
+    expect(html).toContain("size-5");
+    expect(html).toContain("motion-reduce:transition-none opacity-100");
   });
 
   it("reports a fulfilled clipboard write as copied", async () => {

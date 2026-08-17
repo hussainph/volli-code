@@ -115,11 +115,14 @@ function Caret({
     // node `transition-opacity` would win the merge and the rotation would snap.
     <span
       className={cn(
-        // Zed's `visible_on_hover`. A caret on every row is a column of
-        // permanent weight for something you only need when you reach for it.
-        // An open row keeps its caret — the way back out is never hidden.
-        "shrink-0 opacity-0 transition-opacity duration-150 ease-swift group-focus-within/row:opacity-100 group-hover/row:opacity-100 motion-reduce:transition-none",
-        (open || pinned) && "opacity-100",
+        "shrink-0 transition-opacity duration-150 ease-swift motion-reduce:transition-none",
+        // A disclosure is an available action, not hidden information: tool
+        // calls keep their caret on screen so the way into their command and
+        // output is visible before the row is reached. Non-disclosures retain
+        // the slot invisibly, which keeps every row's right edge aligned.
+        open || pinned
+          ? "opacity-100"
+          : "opacity-0 group-focus-within/row:opacity-100 group-hover/row:opacity-100",
         hidden && "invisible",
         className,
       )}
@@ -167,7 +170,7 @@ function hasTextSelection(): boolean {
  */
 const ROW_CLASS =
   "group/row flex w-full min-w-0 items-center gap-1 rounded-md py-1 text-left text-ui text-muted-foreground outline-none transition-colors";
-const ROW_INTERACTIVE = "cursor-pointer hover:text-foreground";
+const ROW_INTERACTIVE = "cursor-pointer hover:bg-muted/30 hover:text-foreground";
 /** Only for rows that are themselves a control — a tool row's ring is on its caret. */
 const ROW_FOCUSABLE = "focus-visible:ring-1 focus-visible:ring-ring";
 
@@ -205,35 +208,41 @@ function useRowToggle(expandable: boolean) {
 /**
  * The disclosure as a real control.
  *
- * Labelled by the row's own verb rather than a string of its own — the caret
- * discloses what that word names, so a screen reader should say "Ran command,
- * button, collapsed" and nothing we had to invent. `stopPropagation` keeps the
- * row's pointer handler from undoing this one's toggle.
+ * The caret is always drawn on an expandable row and its 20px target matches
+ * the smallest control rung. The surrounding header keeps its generous pointer
+ * target; this is the keyboard and precision-pointer route into the same
+ * action. `stopPropagation` keeps it from toggling the row twice.
  */
 function RowDisclosure({
   open,
   expandable,
-  labelId,
   onToggle,
 }: {
   open: boolean;
   expandable: boolean;
-  labelId: string;
   onToggle(): void;
 }) {
-  if (!expandable) return <Caret open={false} hidden />;
+  if (!expandable) {
+    return (
+      <span aria-hidden className="flex size-5 shrink-0 items-center justify-center">
+        <Caret open={false} hidden />
+      </span>
+    );
+  }
+  const label = open ? "Hide details" : "Show details";
   return (
     <button
       type="button"
       aria-expanded={open}
-      aria-labelledby={labelId}
+      aria-label={label}
+      title={label}
       onClick={(event) => {
         event.stopPropagation();
         onToggle();
       }}
-      className="flex shrink-0 rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted/30 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
     >
-      <Caret open={open} />
+      <Caret open={open} pinned />
     </button>
   );
 }
@@ -394,19 +403,19 @@ export const ToolRow = React.memo(function ToolRow({
   className?: string;
 }) {
   const row = describeActivity(part);
-  const expandable = row.detail !== null;
+  // A bash command always earns its own disclosure: the header is one line by
+  // design, while the body is the untruncated command beside whatever it
+  // printed. Other rows only need a disclosure when their presenter has detail.
+  const expandable = row.detail !== null || row.command !== null;
   const { open, toggle, rowProps } = useRowToggle(expandable);
-  const verbId = React.useId();
 
   return (
     <div className={cn("group/row not-prose", className)}>
       <div {...rowProps} className={cn(ROW_CLASS, expandable && ROW_INTERACTIVE)}>
         <RowGlyph kind={row.kind} status={row.status} />
-        <span id={verbId} className="shrink-0">
-          {row.verb}
-        </span>
+        <span className="shrink-0">{row.verb}</span>
         {row.object ? <RowObject row={row} onOpenFile={onOpenFile} /> : null}
-        <RowDisclosure open={open} expandable={expandable} labelId={verbId} onToggle={toggle} />
+        <RowDisclosure open={open} expandable={expandable} onToggle={toggle} />
         <RowActions row={row} />
         {row.meta ? (
           <span
@@ -417,9 +426,9 @@ export const ToolRow = React.memo(function ToolRow({
           </span>
         ) : null}
       </div>
-      {row.detail ? (
+      {expandable ? (
         <Disclosure open={open}>
-          <ToolDetail detail={row.detail} />
+          <ToolDetail command={row.command} detail={row.detail} />
         </Disclosure>
       ) : null}
     </div>
@@ -435,7 +444,10 @@ function RowObject({ row, onOpenFile }: { row: ActivityRow; onOpenFile?(path: st
   const openPath = row.openPath;
   if (!openPath || !onOpenFile) {
     return (
-      <code className="min-w-0 truncate font-mono text-ui text-foreground">
+      <code
+        className="min-w-0 truncate font-mono text-ui text-foreground"
+        title={row.kind === "run-command" ? object : undefined}
+      >
         <ObjectText value={object} />
       </code>
     );
@@ -566,7 +578,26 @@ function DetailFrame({
   );
 }
 
-function ToolDetail({ detail }: { detail: ActivityDetail }) {
+function ToolDetail({
+  command,
+  detail,
+}: {
+  command: string | null;
+  detail: ActivityDetail | null;
+}) {
+  return (
+    <>
+      {command !== null ? (
+        <DetailFrame revision={command.length} className="whitespace-pre-wrap text-foreground">
+          {command}
+        </DetailFrame>
+      ) : null}
+      {detail !== null ? <ActivityOutputDetail detail={detail} /> : null}
+    </>
+  );
+}
+
+function ActivityOutputDetail({ detail }: { detail: ActivityDetail }) {
   switch (detail.view) {
     case "diff":
       return (
@@ -798,7 +829,6 @@ const ReasoningRow = React.memo(function ReasoningRow({
   const body = reasoningBody(part.text);
   const expandable = body !== null;
   const { open, toggle, rowProps } = useRowToggle(expandable);
-  const verbId = React.useId();
 
   return (
     <div className="group/row not-prose">
@@ -808,10 +838,8 @@ const ReasoningRow = React.memo(function ReasoningRow({
         ) : (
           <GaugeIcon aria-hidden className={GLYPH_CLASS} />
         )}
-        <span id={verbId} className="min-w-0 truncate">
-          {status.verb}
-        </span>
-        <RowDisclosure open={open} expandable={expandable} labelId={verbId} onToggle={toggle} />
+        <span className="min-w-0 truncate">{status.verb}</span>
+        <RowDisclosure open={open} expandable={expandable} onToggle={toggle} />
         <span className="ml-auto" />
         {status.meta ? (
           <span className="shrink-0 font-mono tabular-nums text-muted-foreground/70">
