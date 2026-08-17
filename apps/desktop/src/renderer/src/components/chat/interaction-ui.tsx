@@ -47,16 +47,19 @@
  * Decision logic lives in `interaction.ts`. Everything here is presentation
  * plus the handful of things only a mounted card can own: whether a text answer
  * takes focus, that the reader asked for a box that was not already open, that
- * the last decision did not land, where focus goes when the step changes, and
- * which keys this surface can act on. No gesture here throws a pending decision
- * away: the card is left, never dismissed.
+ * the last decision did not land, where focus goes when the step changes,
+ * whether the card is standing out of the transcript's way, and which keys this
+ * surface can act on. No gesture here throws a pending decision away: the card
+ * is left, never dismissed — minimising least of all.
  */
 import * as React from "react";
 import {
   ArrowRightIcon,
+  CaretDownIcon,
   CaretLeftIcon,
   CheckIcon,
   CaretRightIcon,
+  CaretUpIcon,
   HandPalmIcon,
   WarningIcon,
   XCircleIcon,
@@ -487,7 +490,7 @@ function DecisionCard({
  * the row *is* the control, one click answers and advances, and the counter
  * says how much is left without a sentence saying so.
  *
- * Three things this card owns that `interaction.ts` cannot:
+ * Four things this card owns that `interaction.ts` cannot:
  *
  *  - **Where focus goes on a step.** Only when the reader is already driving the
  *    card. Mounting never takes focus: the composer is still there, still
@@ -499,6 +502,10 @@ function DecisionCard({
  *    pressing the row; arrows move and choose without committing; Enter is the
  *    commit. The always-open box takes Enter as its own commit only where the
  *    options beside it mean plain Enter is not a newline anyone wanted.
+ *  - **Whether the card is standing out of the way.** See {@link MinimizedQuestion}.
+ *    Nothing durable turns on it, and nothing below the card can decide it: it
+ *    is one reader wanting to see the transcript behind a card, and it lasts
+ *    exactly as long as this question does.
  */
 function QuestionCard({
   interaction,
@@ -517,6 +524,11 @@ function QuestionCard({
   const [direction, setDirection] = React.useState(1);
   // What the last press was waiting for, cleared by the edit that answers it.
   const [blocked, setBlocked] = React.useState<string | null>(null);
+  // Put away, not answered. A question mounts open every time — this is
+  // `useState` on a card the request's own id remounts, so a new question is
+  // never inherited already minimised by the one before it.
+  const [collapsed, setCollapsed] = React.useState(false);
+  const stageId = React.useId();
   const { failed, send } = useDelivery(onResolve);
   const reducedMotion = useReducedMotion() ?? false;
   const stageRef = React.useRef<HTMLDivElement>(null);
@@ -578,6 +590,12 @@ function QuestionCard({
       go(next.at);
       return;
     }
+    // A blocked press is the one press that has something to show, so the card
+    // comes back up to show it. "Choose an option" under a strip with no options
+    // on it is a requirement reported through a closed door — the same fault as
+    // a blocked Submit reporting on a question the reader had stepped past,
+    // which the two lines below already walk back to.
+    setCollapsed(false);
     // Blocked where the reader already is: say so and leave focus on the control
     // they pressed. Blocked somewhere else — a question stepped past — is a move,
     // and the notice travels with it.
@@ -638,29 +656,53 @@ function QuestionCard({
         // taken out of flow the moment it starts, so the arriving one alone sets
         // the height and the frame tweens to it instead of the card jumping a
         // question's worth of rows.
-        <motion.div ref={stageRef} layout={!reducedMotion} transition={transition}>
+        //
+        // Minimising is that same swap at the card's own scale — the strip is
+        // simply what arrives — so it needs no second frame, no height to
+        // measure and no motion contract of its own. It is also the one place
+        // that frame earns its keep twice over: the height it tweens here is
+        // the transcript's clearance (`--composer-height`), so the feed the
+        // reader minimised the card to read opens at the speed the card closes
+        // rather than appearing under a jump cut.
+        <motion.div ref={stageRef} id={stageId} layout={!reducedMotion} transition={transition}>
           <AnimatePresence initial={false} mode="popLayout">
-            <motion.div
-              key={step.question.prompt.id}
-              initial={{ opacity: 0, transform: `translateX(${direction * offset}px)` }}
-              animate={{ opacity: 1, transform: "translateX(0px)" }}
-              exit={{ opacity: 0, transform: `translateX(${direction * -offset}px)` }}
-              transition={transition}
-              className="px-4 pt-4"
-            >
-              <QuestionStep
-                step={step}
-                interaction={interaction}
-                draft={draft}
-                disabled={resolving}
-                composerAnswers={composerAnswers}
-                onBack={() => go(step.index - 1)}
-                onChoose={choose}
-                onMark={mark}
-                onWrite={write}
-                onAdvance={() => advance()}
-              />
-            </motion.div>
+            {collapsed ? (
+              // No `translateX`: the horizontal slide is what a walk between two
+              // questions means, and this is one question standing down. It
+              // crosses on opacity alone while the frame carries the height.
+              <motion.div
+                key="minimized"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={transition}
+                className="px-4 pt-4"
+              >
+                <MinimizedQuestion step={step} />
+              </motion.div>
+            ) : (
+              <motion.div
+                key={step.question.prompt.id}
+                initial={{ opacity: 0, transform: `translateX(${direction * offset}px)` }}
+                animate={{ opacity: 1, transform: "translateX(0px)" }}
+                exit={{ opacity: 0, transform: `translateX(${direction * -offset}px)` }}
+                transition={transition}
+                className="px-4 pt-4"
+              >
+                <QuestionStep
+                  step={step}
+                  interaction={interaction}
+                  draft={draft}
+                  disabled={resolving}
+                  composerAnswers={composerAnswers}
+                  onBack={() => go(step.index - 1)}
+                  onChoose={choose}
+                  onMark={mark}
+                  onWrite={write}
+                  onAdvance={() => advance()}
+                />
+              </motion.div>
+            )}
           </AnimatePresence>
         </motion.div>
       ) : null}
@@ -673,6 +715,39 @@ function QuestionCard({
           step && "mt-1 border-t border-border/70",
         )}
       >
+        {/* The card standing out of its own transcript's way.
+
+            It leads the footer because it is the only control on this card that
+            does not touch the question: Cancel request withdraws it, Reject
+            refuses it, the cluster on the right answers it, and this one only
+            decides how much of the pane the card is holding while all three
+            stay exactly where they were. Nothing durable moves, so it keeps its
+            place in both states rather than rearranging the footer under a
+            reader who is going to press it twice.
+
+            A glyph, not a word — and the glyph is spatial rather than
+            metaphorical. The card is the last thing above a bottom-anchored
+            composer and grows upward, so up is literally the direction it opens
+            in and down is where it goes to get out of the way.
+
+            Live while a decision is in flight, alone among these controls,
+            because it is not one: `resolving` gates the acts that would send a
+            second verdict, and how tall a card is while it waits for the first
+            is not a verdict. */}
+        {step ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="-ml-1 text-muted-foreground"
+            aria-expanded={!collapsed}
+            aria-controls={stageId}
+            aria-label={collapsed ? "Expand question" : "Minimize question"}
+            onClick={() => setCollapsed((standing) => !standing)}
+          >
+            {collapsed ? <CaretUpIcon /> : <CaretDownIcon />}
+          </Button>
+        ) : null}
         {onWithdraw ? (
           <Button
             type="button"
@@ -744,6 +819,54 @@ function QuestionCard({
         </div>
       </div>
     </form>
+  );
+}
+
+/**
+ * The question with its card put away.
+ *
+ * **Why this exists at all is geometry, not preference.** The foot mount is an
+ * opaque box anchored to the bottom of the plane, the transcript clears exactly
+ * its measured height (`--composer-height`), and nothing caps how tall a card
+ * inside it can grow. A question with five stacked options runs past 400px
+ * before the composer under it is counted, which on a short window leaves the
+ * transcript no viewport at all — and the reader who wants the paragraph that
+ * explains *why* they are being asked is looking for it in exactly the rows
+ * the card is standing on. The only gesture that used to clear a card was
+ * Cancel request, which throws the question away to read the sentence behind
+ * it. This is the same relief without the loss.
+ *
+ * One line and the counter — a window title, which is what a put-away card is.
+ * The heading truncates rather than wrapping because a predictable, one-line
+ * floor is the whole of what was asked for: a reader who minimised a three-line
+ * question to see the turn above it did not ask for a three-line strip. The
+ * full sentence stays one hover away, and one press.
+ *
+ * Nothing here is a control. The draft, the step, the notice and every act in
+ * the footer survive untouched — minimising is the card taking up less room,
+ * never the question becoming less answerable, and where `allowOther` holds it
+ * is still answerable from the composer directly below without expanding at all.
+ */
+function MinimizedQuestion({ step }: { step: InteractionStep }) {
+  return (
+    <div className="flex min-w-0 items-baseline gap-2">
+      {/* The same rung the open card's ask stands at, so expanding and
+          minimising read as one sentence changing length rather than two
+          different things being said. */}
+      <p
+        className="min-w-0 flex-1 truncate text-sm font-medium text-foreground"
+        title={step.heading}
+      >
+        {step.heading}
+      </p>
+      {/* Where the walk is, in the counter's own type — a card put away mid-walk
+          must not lose the one number that says how much is left. */}
+      {step.count > 1 ? (
+        <span className="shrink-0 font-mono text-ui text-muted-foreground tabular-nums">
+          {step.index + 1} of {step.count}
+        </span>
+      ) : null}
+    </div>
   );
 }
 

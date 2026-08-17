@@ -148,6 +148,20 @@ function buttonVariant(html: string, label: string): string | null {
   return button?.match(/data-variant="([^"]+)"/)?.[1] ?? null;
 }
 
+/**
+ * The opening tag of the button wearing an `aria-label`, for the controls that
+ * carry a glyph instead of a word.
+ *
+ * {@link buttonVariant} matches on text content, which an icon control has none
+ * of — and the attributes are the whole of what one of those has to say.
+ */
+function labelledControl(html: string, label: string): string | null {
+  const button = html
+    .split("<button")
+    .find((fragment) => fragment.startsWith(" ") && fragment.includes(`aria-label="${label}"`));
+  return button === undefined ? null : button.slice(0, button.indexOf(">"));
+}
+
 describe("the card's controls", () => {
   it("draws request withdrawal and refusal at different weights", () => {
     // Withdrawing the request and rejecting it are different durable acts. Both
@@ -382,6 +396,74 @@ function optionRow(html: string, label: string): string {
   if (row === undefined) throw new Error(`no option row labelled ${label}`);
   return row;
 }
+
+describe("the question that stands out of the transcript's way", () => {
+  it("opens showing the question, and offers to put it away", () => {
+    // Mounting minimised would hide the thing the card interrupted the reader
+    // for. The gesture is the reader's, every time, and the control that takes
+    // it says which way it goes.
+    const html = drawn(ask([askPrompt()]));
+    const control = labelledControl(html, "Minimize question");
+
+    expect(control).not.toBeNull();
+    expect(control).toContain('aria-expanded="true"');
+    expect(labelledControl(html, "Expand question")).toBeNull();
+    // Still the open card, not a strip: the rows are drawn.
+    expect(html).toContain("ships on the next tag");
+  });
+
+  it("points the control at the part of the card it closes", () => {
+    // `aria-controls` is the only thing tying a disclosure to what it discloses,
+    // and the id is `useId`'s — so this asserts they agree rather than asserting
+    // any particular string.
+    const html = drawn(ask([askPrompt()]));
+    const controls = labelledControl(html, "Minimize question")?.match(
+      /aria-controls="([^"]+)"/,
+    )?.[1];
+
+    expect(controls).toBeTruthy();
+    expect(html).toContain(`<div id="${controls}"`);
+  });
+
+  it("keeps it a view control rather than one more answer", () => {
+    // Ghost and muted, beneath withdrawal in the same way withdrawal is beneath
+    // the verdict: how much room a card takes up is not a decision about the
+    // question, and a control at the weight of one would say it was.
+    const html = renderToStaticMarkup(
+      <InteractionCard
+        interaction={ask([askPrompt()])}
+        onResolve={() => undefined}
+        onWithdraw={() => undefined}
+      />,
+    );
+
+    expect(labelledControl(html, "Minimize question")).toContain('data-variant="ghost"');
+    // And it changed neither of the acts it now stands beside.
+    expect(buttonVariant(html, "Cancel request")).toBe("ghost");
+    expect(buttonVariant(html, "Reject")).toBe("outline");
+  });
+
+  it("leaves the verdict card alone", () => {
+    // A permission is bounded — inline rows, few of them, a detail capped at
+    // `max-h-32` — so it never grows into the transcript the way a walk through
+    // stacked options does. Nothing here is asking to be put away.
+    const html = renderToStaticMarkup(
+      <InteractionCard interaction={permission()} onResolve={() => undefined} />,
+    );
+
+    expect(labelledControl(html, "Minimize question")).toBeNull();
+  });
+
+  it("offers nothing to put away on a request that asks nothing", () => {
+    // A request with no questions is all footer. There is no stage to close,
+    // and a control pointing at one that was never drawn is a broken
+    // `aria-controls` on top of a control that does nothing.
+    const html = drawn(ask([]));
+
+    expect(labelledControl(html, "Minimize question")).toBeNull();
+    expect(labelledControl(html, "Expand question")).toBeNull();
+  });
+});
 
 describe("the two cards as one family", () => {
   it("draws both lists of answers with the same row", () => {
