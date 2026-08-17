@@ -3,7 +3,7 @@ import type { DynamicToolUIPart } from "ai";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { copyActivityObject, ToolRow } from "./activity-ui";
+import { ActivityBundle, copyActivityObject, ToolRow } from "./activity-ui";
 
 const descriptor: ActivityDescriptor = {
   kind: "read-file",
@@ -23,6 +23,32 @@ const row: DynamicToolUIPart = {
   output: "export {};",
   toolMetadata: { [ACTIVITY_METADATA_KEY]: descriptor } as DynamicToolUIPart["toolMetadata"],
 };
+
+describe("ActivityBundle scroll window", () => {
+  it("caps the open bundle without trapping the wheel inside it (VC-32)", () => {
+    // A failed row opens the bundle on its own (`bundleNeedsAttention`), so
+    // the capped window is in the markup without any click. The cap must
+    // stay — an uncapped payload shoves the feed off screen — but
+    // `overscroll-contain` must not come back: it turned the cap's edges
+    // into a dead zone where the transcript ignored the wheel entirely.
+    const failed: DynamicToolUIPart = {
+      type: "dynamic-tool",
+      toolName: "read",
+      toolCallId: "read-2",
+      state: "output-error",
+      input: null,
+      errorText: "boom",
+      toolMetadata: { [ACTIVITY_METADATA_KEY]: descriptor } as DynamicToolUIPart["toolMetadata"],
+    };
+    const html = renderToStaticMarkup(
+      <ActivityBundle rows={[{ kind: "tool", part: failed, key: "read-2" }]} />,
+    );
+
+    expect(html).toContain("max-h-96");
+    expect(html).toContain("overflow-auto");
+    expect(html).not.toContain("overscroll-contain");
+  });
+});
 
 describe("ToolRow copy control", () => {
   it("renders a copy control for an activity object", () => {

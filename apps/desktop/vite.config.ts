@@ -117,6 +117,10 @@ export default defineConfig(({ mode }) => ({
         // report as view glue, but the roving-tabindex arithmetic left a
         // component file precisely so the gate could reach it.
         "src/components/ui/tab-focus.ts",
+        // Same shape: the wheel-detach decision for the conversation (VC-32)
+        // is a pure `.ts` beside `ui/ai-elements/conversation.tsx` so the
+        // gate can reach it; the `.tsx` glue that calls it stays outside.
+        "src/components/ui/ai-elements/scroll-chaining.ts",
         "src/lib/boundary-timer.ts",
         "src/lib/project-shortcut.ts",
         "src/lib/new-session-shortcut.ts",
