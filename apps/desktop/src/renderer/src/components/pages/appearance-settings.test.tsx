@@ -29,7 +29,7 @@ describe("Settings → Appearance", () => {
 
   it("gives light/dark/auto its own section, scoped separately from the canvas", () => {
     // The canvas does not name a mode — the per-mode dials exist so ONE canvas
-    // renders in both — and the two are independently overridable per workspace.
+    // renders in both — and the two are independently overridable per project.
     const html = renderToStaticMarkup(<AppearanceSettings />);
 
     expect(html).toContain("Light &amp; dark");

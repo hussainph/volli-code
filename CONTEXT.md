@@ -233,7 +233,8 @@ planner-level consequences only; executor conversation facts live in the
 Session Event ledger. A Ticket Event may cite a Session as provenance.
 
 **Project**:
-A tracked codebase folder: name, path, ticket prefix, rail position. Removing one from Volli never touches the folder on disk.
+A tracked codebase folder: name, path, ticket prefix, rail position. Removing one from Volli never touches the folder on disk. **The one user-facing word for a rail entry** (VC-57 ruling): every surface says "project" — "project switcher", "Project override", "Set by this project" — and it anchors the session language too (project-level vs ticket-level sessions). The design lineage is Arc's Spaces, but the word is not borrowed with it. Internal identifiers (`useWorkspaceStore`, `workspaceRailHidden`) are wire format, not copy.
+_Avoid_: workspace (claimed by Ticket workspace — the ticket surface), space
 
 **Ticket worktree**:
 The isolated git checkout a ticket works in: branch `volli/<DISPLAY-ID>-<slug>`, directory `~/.volli/worktrees/<project-dirname>-<short-id>/<DISPLAY-ID>-<slug>/`. App-owned (outside both the repo and Electron's `userData`), named once at creation — neither branch nor directory is renamed when the ticket title changes.
