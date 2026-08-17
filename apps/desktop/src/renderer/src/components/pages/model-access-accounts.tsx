@@ -161,8 +161,10 @@ function ProviderAccount({
   // one whose refresh merely needs retrying — is left alone; see
   // `deepLinkedAction`.
   //
-  // The ref is the second half of the one-shot and guards a remount within one
-  // visit; the store spending the request guards the next visit.
+  // The ref is the second half of the one-shot: it holds across a snapshot
+  // reload or a cancelled attempt, so nothing re-fires while this row stays
+  // mounted. The store spending the request is what guards the NEXT visit,
+  // where a fresh row would arrive with a fresh ref.
   const startOnArrival = onArrival === "sign-in" ? (provider.signIn[0]?.type ?? null) : null;
   const autoStarted = React.useRef(false);
   const startSignInRef = React.useRef(startSignIn);
