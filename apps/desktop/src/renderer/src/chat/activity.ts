@@ -478,6 +478,14 @@ export interface ActivityRow extends ActivityFacts {
   kind: ActivityKind;
   status: ActivityStatus;
   nativeToolName: string;
+  /**
+   * The shell command retained on the tool call itself, including newlines.
+   *
+   * `object` is what every row renders inline; this separate value is the
+   * disclosure's source, so a long bash invocation is not reduced to the
+   * single-line summary the header needs.
+   */
+  command: string | null;
   errorText: string | null;
 }
 
@@ -504,9 +512,13 @@ export const ACTIVITY_PRESENTERS: Record<ActivityKind, ActivityParse> = {
   "run-command": (context) => {
     const exitCode = context.descriptor.outcome?.exitCode ?? null;
     const failed = exitCode !== null && exitCode !== 0;
+    // The descriptor is a durable summary; the call input is the command Pi was
+    // asked to run. Prefer that source so a stale or abbreviated descriptor can
+    // never hide the actual bash invocation from the person reviewing it.
+    const command = commandInput(context.input);
     return {
       verb: "Ran",
-      object: context.descriptor.subject.label,
+      object: command ?? context.descriptor.subject.label,
       openPath: null,
       // The command is already the headline; the meta is the cost, or the exit.
       meta: failed ? `exit ${exitCode}` : durationMeta(context),
@@ -666,13 +678,20 @@ export function describeActivity(part: DynamicToolUIPart): ActivityRow {
 function buildActivityRow(part: DynamicToolUIPart): ActivityRow {
   const context = activityContext(part);
   const facts = ACTIVITY_PRESENTERS[context.descriptor.kind](context);
+  const command = context.descriptor.kind === "run-command" ? facts.object : null;
   return {
     ...facts,
     kind: context.descriptor.kind,
     status: context.status,
     nativeToolName: context.descriptor.nativeToolName,
+    command,
     errorText: context.errorText,
   };
+}
+
+function commandInput(input: unknown): string | null {
+  if (!isRecord(input) || typeof input.command !== "string") return null;
+  return input.command.trim().length > 0 ? input.command : null;
 }
 
 /* --------------------------------------------------------------- formatters */
@@ -981,11 +1000,26 @@ export function bestEffortSubject(input: unknown): string | null {
 function readableText(value: unknown): string | null {
   if (typeof value === "string") return value.trim().length > 0 ? value : null;
   if (!isRecord(value)) return null;
-  for (const key of ["output", "text", "content", "stdout", "result", "body"]) {
+  const content = contentText(value.content);
+  if (content !== null) return content;
+  for (const key of ["output", "text", "stdout", "result", "body"]) {
     const nested = value[key];
     if (typeof nested === "string" && nested.trim().length > 0) return nested;
   }
   return null;
+}
+
+/** Pi returns bash stdout as text blocks, not the string-shaped fixture output. */
+function contentText(value: unknown): string | null {
+  if (!Array.isArray(value)) return null;
+  const text = value
+    .flatMap((block) =>
+      isRecord(block) && block.type === "text" && typeof block.text === "string"
+        ? [block.text]
+        : [],
+    )
+    .join("\n");
+  return text.trim().length > 0 ? text : null;
 }
 
 function clampLines(text: string, budget = DETAIL_LINE_BUDGET): string {

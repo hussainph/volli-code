@@ -637,6 +637,37 @@ describe("presenters", () => {
     expect(row.meta).toBe("2.4s");
   });
 
+  it("keeps bash's actual command and content-block output together", () => {
+    const command = "pnpm run typecheck &&\npnpm run test";
+    const row = describeActivity(
+      tool("run-command", {
+        input: { command },
+        output: { content: [{ type: "text", text: "Typecheck passed\nTests passed" }] },
+        // A descriptor is a summary of the activity, not a second source of
+        // truth for the command a runtime actually received.
+        descriptor: {
+          subject: { label: "validation", path: null, lineRange: null },
+        },
+      }),
+    );
+
+    expect(row.object).toBe(command);
+    expect(row.command).toBe(command);
+    expect(row.detail).toEqual({ view: "output", text: "Typecheck passed\nTests passed" });
+  });
+
+  it("falls back to the durable command when the call has no command text", () => {
+    const row = describeActivity(
+      tool("run-command", {
+        input: { command: "   " },
+        descriptor: { subject: { label: "pnpm test", path: null, lineRange: null } },
+      }),
+    );
+
+    expect(row.object).toBe("pnpm test");
+    expect(row.command).toBe("pnpm test");
+  });
+
   it("run-command reports a non-zero exit in the danger tone", () => {
     const row = describeActivity(
       tool("run-command", {
@@ -999,6 +1030,23 @@ describe("presenters", () => {
   it("reads output text from any of the harness's common field names", () => {
     const row = describeActivity(tool("run-command", { output: { text: "   ", stdout: "ok\n" } }));
     expect(row.detail).toEqual({ view: "output", text: "ok\n" });
+  });
+
+  it("drops non-text and blank content blocks", () => {
+    const row = describeActivity(
+      tool("run-command", {
+        output: {
+          content: [
+            null,
+            { type: "image", text: "ignored" },
+            { type: "text" },
+            { type: "text", text: "  " },
+          ],
+        },
+      }),
+    );
+
+    expect(row.detail).toBeNull();
   });
 
   it("treats blank output as no output at all", () => {
