@@ -4,6 +4,7 @@ import type { OpenNativeBinding } from "@volli/session-engine";
 import {
   agentSitesWithin,
   agentTurnOpenWithin,
+  countOpenAgentTurns,
   releaseAgentSites,
   type AgentSiteRuntime,
 } from "./agent-sites";
@@ -80,6 +81,33 @@ describe("agentSitesWithin", () => {
       "at-target",
       "nested",
     ]);
+  });
+});
+
+describe("countOpenAgentTurns", () => {
+  it("counts every binding with a turn open, wherever it lives — idle attachments are not busy", async () => {
+    const runtime = fakeRuntime({
+      working: { attachmentId: "a-1", directory: "/w/VC-1", turnActive: true },
+      idle: { attachmentId: "a-2", directory: "/w/VC-2" },
+      elsewhere: { attachmentId: "a-3", directory: "/repo", turnActive: true },
+    });
+
+    expect(await countOpenAgentTurns(runtime, swallow)).toBe(2);
+  });
+
+  it("an unreadable Session is reported and not counted — fail-open, like the worktree gate", async () => {
+    const failures: string[] = [];
+    const runtime = fakeRuntime({
+      broken: {
+        attachmentId: "a-1",
+        directory: "/w/VC-1",
+        projectionFailure: new Error("ledger unreadable"),
+      },
+      working: { attachmentId: "a-2", directory: "/w/VC-2", turnActive: true },
+    });
+
+    expect(await countOpenAgentTurns(runtime, (sessionId) => failures.push(sessionId))).toBe(1);
+    expect(failures).toEqual(["broken"]);
   });
 });
 

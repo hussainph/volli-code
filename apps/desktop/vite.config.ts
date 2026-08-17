@@ -110,6 +110,7 @@ export default defineConfig(({ mode }) => ({
         "src/components/theme/project-appearance-model.ts",
         "src/components/theme/terminal-settings-model.ts",
         "src/components/ticket/activity.ts",
+        "src/components/update/live-work-copy.ts",
         "src/components/ticket/session-history.ts",
         "src/components/ticket/ticket-chat-tab.ts",
         // Pure `.ts` beside a `ui/` primitive: `ui/**` .tsx stays outside the
@@ -161,6 +162,7 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/pty.ts",
         "**/src/main/park.ts",
         "**/src/main/quit-gate.ts",
+        "**/src/main/update-ipc.ts",
         "**/src/main/shutdown-deadline.ts",
         "**/src/main/fs-deps.ts",
         "**/src/main/auto-update.ts",
@@ -173,9 +175,7 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/db/export.ts",
         "**/src/main/db/theme-repo.ts",
         "**/src/main/session-rpc-ipc.ts",
-        "**/src/main/session-runtime/structured-sessions.ts",
-        "**/src/main/session-runtime/ticket-sessions.ts",
-        "**/src/main/session-runtime/project-sessions.ts",
+        "**/src/main/session-runtime/sessions.ts",
       ],
       // Global bar only — vitest applies global thresholds to every included
       // file even when per-glob entries exist, so partial carve-outs can't

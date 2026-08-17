@@ -34,6 +34,8 @@ import type { HarnessAdapter, HarnessId, ResolvedAppearance } from "@volli/share
 import type { FirstPaintHint, VolliIpcChannel, VolliIpcEvent } from "../ipc/contract";
 import type { ManagedConflict } from "./harness-install";
 import {
+  abandonAcceptedUpdateInstall,
+  beginAcceptedUpdateInstall,
   clearUnsavedDocumentsOnWindowClosed,
   planUnsavedQuit,
   quitAlreadyRefused,
@@ -42,6 +44,7 @@ import {
   registerAcceptedQuitCoordinator,
   refuseQuit,
   unsavedDocumentNames,
+  updateInstallQuitInFlight,
 } from "./quit-gate";
 import { isInternalNavigationTarget } from "./navigation";
 import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
@@ -58,12 +61,11 @@ import { sessionRootThreadId } from "@volli/session-engine";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { ModelAccessSignInService } from "./model-access/sign-in-service";
 import { createPiRuntimeHost } from "./session-runtime/pi-adapter";
-import { createTicketSessions } from "./session-runtime/ticket-sessions";
-import { createProjectSessions } from "./session-runtime/project-sessions";
 import {
+  createSessions,
   StructuredSessionsError,
   type SessionSkillPorts,
-} from "./session-runtime/structured-sessions";
+} from "./session-runtime/sessions";
 import { loadSkills } from "./skills";
 import {
   assertDefaultModelAvailable,
@@ -90,9 +92,15 @@ import {
   broadcastSessionsInterrupted,
   broadcastSessionStarted,
   broadcastSystemAppearance,
+  broadcastUpdateState,
 } from "./broadcast";
 import { startOrphanSweep } from "./orphan-sweep";
-import { agentTurnOpenWithin, releaseAgentSites as releaseWorktreeAgentSites } from "./worktree";
+import { registerUpdateIpcHandlers } from "./update-ipc";
+import {
+  agentTurnOpenWithin,
+  countOpenAgentTurns,
+  releaseAgentSites as releaseWorktreeAgentSites,
+} from "./worktree";
 import type { AgentSiteReleaseReport } from "./worktree";
 import { worktreeDeps } from "./worktree-runtime";
 import { getRetentionWatcher } from "./retention-runtime";
@@ -344,6 +352,13 @@ function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): Brows
   let closeConfirmed = false;
   mainWindow.on("close", (event) => {
     if (closeConfirmed) return;
+    // An accepted update install (VC-59): its dialog already named the unsaved
+    // drafts and busy terminals this close destroys, and Electron's native
+    // quitAndInstall closes every window BEFORE before-quit fires — a confirm
+    // here would be the second prompt the one-dialog decision forbids, and a
+    // Cancel would leave Squirrel already instructed to relaunch over a still-
+    // running app.
+    if (updateInstallQuitInFlight()) return;
     // Unsaved editor drafts are asked about FIRST and separately from the busy
     // terminals: closing the window destroys the renderer holding those drafts
     // exactly as finally as quitting does, and unlike a killed shell there is
@@ -737,18 +752,18 @@ app.whenReady().then(async () => {
           },
         }
       : null;
-  const ticketSessions =
+  const sessions =
     sessionRuntime !== null &&
     piRuntimeHost !== null &&
     sessionDb !== null &&
     sessionSkills !== null
-      ? createTicketSessions({
+      ? createSessions({
           runtime: sessionRuntime,
           readDefaultModel: () => readDefaultModelSelection(sessionDb),
           ticketBelongsToProject: (projectId, ticketId) =>
             getTicket(sessionDb, ticketId)?.projectId === projectId,
-          readBornTicketless: async (sessionId) =>
-            (await sessionRuntime.projection({ sessionId })).projection.bornTicketless,
+          readModelSelection: async (sessionId) =>
+            (await sessionRuntime.projection({ sessionId })).projection.modelSelection,
           skills: sessionSkills,
           // Consulted only when a start carries an invocation-time model
           // override (the CLI's --model/--reasoning); the saved default was
@@ -769,21 +784,6 @@ app.whenReady().then(async () => {
           },
         })
       : null;
-  const projectSessions =
-    sessionRuntime !== null &&
-    piRuntimeHost !== null &&
-    sessionDb !== null &&
-    sessionSkills !== null
-      ? createProjectSessions({
-          runtime: sessionRuntime,
-          readDefaultModel: () => readDefaultModelSelection(sessionDb),
-          readBornTicketless: async (sessionId) =>
-            (await sessionRuntime.projection({ sessionId })).projection.bornTicketless,
-          readModelSelection: async (sessionId) =>
-            (await sessionRuntime.projection({ sessionId })).projection.modelSelection,
-          skills: sessionSkills,
-        })
-      : null;
   const sessionRpc =
     sessionRuntime === null
       ? null
@@ -800,12 +800,8 @@ app.whenReady().then(async () => {
                   writeDefaultModelSelection(sessionDb, selection, Date.now());
                 }
               : undefined,
-          startTicketSession: ticketSessions?.start,
-          createTicketSession: ticketSessions?.create,
-          attachTicketSession: ticketSessions?.attach,
-          startProjectSession: projectSessions?.start,
-          createProjectSession: projectSessions?.create,
-          attachProjectSession: projectSessions?.attach,
+          createSession: sessions?.create,
+          attachSession: sessions?.attach,
         });
   // Signing in is a Model Access task, not a Session one, so it gets its own
   // surface rather than a Session RPC namespace — see the contract in
@@ -1174,6 +1170,10 @@ app.whenReady().then(async () => {
   // teardown until this gate and the terminal gate have recorded their verdict.
   app.on("before-quit", (event) => {
     if (quitAlreadyRefused(event)) return;
+    // An accepted update install already carried the unsaved-drafts warning in
+    // its own dialog (VC-59's one-prompt decision) — asking again here would
+    // stack a second modal on an answer the user has given.
+    if (updateInstallQuitInFlight()) return;
     const names = unsavedDocumentNames();
     const step = planUnsavedQuit({
       names,
@@ -1231,12 +1231,38 @@ app.whenReady().then(async () => {
   // Wired OUTSIDE the dbHandle.ok block: a broken db must not also strand
   // the install on a stale build (an update may well be what fixes it), so
   // that case just falls back to the default prerelease policy (off).
-  startAutoUpdate({
+  const autoUpdate = startAutoUpdate({
     isPackaged: app.isPackaged,
     updater: autoUpdater,
     allowPrerelease: dbHandle.ok ? readAllowPrerelease(dbHandle.db) : false,
+    currentVersion: app.getVersion(),
     notify: (title, body) => new Notification({ title, body }).show(),
     log: (line) => console.info(line),
+    onStateChange: broadcastUpdateState,
+    // The double-notify guard: with a window open the sidebar badge/dialog
+    // owns the "downloaded" announcement; the native notification only speaks
+    // when no window is left to show it (macOS keeps the app alive).
+    hasUpdateSurface: () =>
+      BrowserWindow.getAllWindows().some((window) => !window.webContents.isDestroyed()),
+  });
+  // The sidebar's door onto that updater (VC-59) — same guarded invoke
+  // surface as everything else, and like startAutoUpdate itself deliberately
+  // OUTSIDE dbHandle.ok: the update UI must survive exactly the broken-db
+  // case the updater was built to survive. The live-work readers answer from
+  // what exists this launch — no session runtime truthfully means no open
+  // agent turns.
+  registerUpdateIpcHandlers({
+    update: autoUpdate,
+    busyCommands: () => ptyManager.busySessions().map((busy) => busy.process),
+    openAgentTurns: () =>
+      sessionRuntime === null
+        ? Promise.resolve(0)
+        : countOpenAgentTurns(sessionRuntime, (sessionId, error) => {
+            console.warn(`[volli] could not read Session ${sessionId}:`, errorMessage(error));
+          }),
+    unsavedDrafts: unsavedDocumentNames,
+    beginInstall: beginAcceptedUpdateInstall,
+    abandonInstall: abandonAcceptedUpdateInstall,
   });
 
   let shimPath = join(runtimePaths.binDir, "volli");
@@ -1420,11 +1446,11 @@ app.whenReady().then(async () => {
           appVersion: app.getVersion(),
           observeSession: (sessionId, lines) => ptyManager.peek(sessionId, lines),
           notify: (title, message) => new Notification({ title, body: message }).show(),
-          // The product Ticket Session start route (VC-13): the same facade the
-          // renderer's `ticketSessions.start` RPC rides — no parallel creation
+          // The product Session start route (VC-13): the same facade the
+          // renderer's `sessions.create` RPC rides — no parallel creation
           // path. Absent when the Session runtime never came up this launch,
           // which the verb answers as retryable APP_UNREACHABLE.
-          ...(ticketSessions !== null ? { ticketSessions } : {}),
+          ...(sessions !== null ? { sessions } : {}),
           // `prompt baseline` (VC-66) prices the index through the SAME port a
           // real start records it through — nothing injected, so the answer is
           // the fresh-session default. Absent with the runtime, same as above.

@@ -75,8 +75,8 @@ import {
   terminalSessionRecord,
 } from "./session-control";
 import { PI_TOOLS } from "./session-runtime/pi-adapter";
-import { StructuredSessionsError } from "./session-runtime/structured-sessions";
-import type { TicketSessions } from "./session-runtime/ticket-sessions";
+import { StructuredSessionsError } from "./session-runtime/sessions";
+import type { Sessions } from "./session-runtime/sessions";
 import { getTicket, listArchivedTicketsByProject, listTicketsByProject } from "./db/tickets-repo";
 import { recordHarnessDelivery } from "./harness-registry";
 import { readWorktreeDiff, readWorktreeStatus, runGitCapturing } from "./worktree";
@@ -192,13 +192,13 @@ export interface AgentCommandServiceOptions {
   ) => { status: SessionActivityState; output: string } | undefined;
   notify?: (title: string, message: string) => void;
   /**
-   * The product Ticket Session start route (VC-13) — the same facade the
-   * renderer's `ticketSessions.start` RPC rides, threaded in the way
-   * {@link sessionEngine} is so no parallel creation path can grow here. Raw
-   * `session.create` over this door stays FORBIDDEN. Absent means the Session
-   * runtime never came up this launch, which the verb reports as retryable.
+   * The product Session start route (VC-13) — the same facade the renderer's
+   * `sessions.create` RPC rides, threaded in the way {@link sessionEngine} is
+   * so no parallel creation path can grow here. Raw `session.create` over
+   * this door stays FORBIDDEN. Absent means the Session runtime never came up
+   * this launch, which the verb reports as retryable.
    */
-  ticketSessions?: Pick<TicketSessions, "start">;
+  sessions?: Pick<Sessions, "start">;
   /**
    * Submits one user message to a structured Session — the kickoff turn. The
    * runtime answers a `message.submit` only when the TURN it started ends, so
@@ -1259,8 +1259,8 @@ export function createAgentCommandService(
         // unreachable app already failed as APP_UNREACHABLE before this line.
         // A launch whose Session runtime never came up reports the same
         // retryable class — relaunching the app is the sanctioned recovery.
-        const ticketSessions = options.ticketSessions;
-        if (!ticketSessions) {
+        const sessionsFacade = options.sessions;
+        if (!sessionsFacade) {
           return failure("APP_UNREACHABLE", "The Session runtime is not available this launch.");
         }
         const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
@@ -1282,7 +1282,7 @@ export function createAgentCommandService(
           resolved.ticket.ticketNumber,
         );
         try {
-          const started = await ticketSessions.start({
+          const started = await sessionsFacade.start({
             operationId: newId(),
             projectId: resolved.project.id,
             ticketId: resolved.ticket.id,

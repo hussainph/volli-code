@@ -3,6 +3,7 @@ import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 import { ActiveSessions } from "@renderer/components/sidebar/active-sessions";
 import { FileTree } from "@renderer/components/sidebar/file-tree";
 import { NavList } from "@renderer/components/sidebar/nav-list";
+import { UpdateButton } from "@renderer/components/sidebar/update-button";
 import { SidebarScrollArea } from "@renderer/components/sidebar/sidebar-scroll";
 import {
   SidebarContent,
@@ -94,7 +95,16 @@ export function PrimarySidebar() {
         )}
 
         <SidebarFooter>
-          <SettingsMenuButton active={settingsOpen} onSelect={() => setSettingsOpen(true)} />
+          {/* Settings keeps the wide row; the updater (VC-59) is the square
+              beside it — a rare, occasionally-important control that must not
+              compete with a daily one. UpdateButton renders null in dev and
+              until main's first snapshot, leaving the row exactly as it was. */}
+          <div className="flex items-center gap-1">
+            <div className="min-w-0 flex-1">
+              <SettingsMenuButton active={settingsOpen} onSelect={() => setSettingsOpen(true)} />
+            </div>
+            <UpdateButton />
+          </div>
         </SidebarFooter>
       </div>
     </div>

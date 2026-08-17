@@ -121,6 +121,9 @@ import type {
   TicketsResult,
   UiZoomCommand,
   UnsavedDocumentsReport,
+  UpdateLiveWorkResult,
+  UpdateStateResult,
+  UpdateUiState,
   VolliInvokeContract,
   VolliIpcChannel,
   VolliIpcEvent,
@@ -694,6 +697,28 @@ const api = {
       invoke("volli:retention-ttl-set", { days }),
     /** Triggers an immediate merge-watch poll (e.g. on window focus / manual refresh). */
     poll: (): Promise<RetentionPollResult> => invoke("volli:retention-poll"),
+  },
+  updates: {
+    /** The updater's current snapshot (VC-59) — primes the sidebar's store on boot. */
+    state: (): Promise<UpdateStateResult> => invoke("volli:update-state-get"),
+    /** Fire-and-forget explicit check (the idle icon's click); outcomes arrive over `onState`. */
+    check: (): Promise<Result> => invoke("volli:update-check"),
+    /**
+     * The confirmed install — the ONE prompt's accept. Main raises the quit
+     * latch and hands the staged update to Squirrel; on success the app is
+     * already restarting by the time this resolves.
+     */
+    install: (): Promise<Result> => invoke("volli:update-install"),
+    /** The live work the install dialog must name: busy PTYs, open agent Sessions, unsaved drafts. */
+    liveWork: (): Promise<UpdateLiveWorkResult> => invoke("volli:update-live-work"),
+    /** Subscribes to updater state transitions; returns the unsubscribe function. */
+    onState: (callback: (state: UpdateUiState) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: UpdateUiState) =>
+        callback(payload);
+      ipcRenderer.on("volli:update-state" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:update-state" satisfies VolliIpcEvent, listener);
+    },
   },
   fs: {
     listDirectory: (absPath: string): Promise<ListDirectoryResult> =>
